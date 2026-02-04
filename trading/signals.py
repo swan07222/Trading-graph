@@ -7,9 +7,6 @@ from enum import Enum
 import numpy as np
 
 from config import CONFIG
-from models.predictor import Prediction, Signal
-from analysis.technical import TechnicalAnalyzer, TechnicalSummary, TrendDirection
-from analysis.sentiment import SentimentAnalyzer, NewsScraper
 from utils.logger import log
 
 
@@ -31,12 +28,12 @@ class TradingSignal:
     current_price: float
     
     # Signal
-    signal: Signal
+    signal: str  # Signal enum value
     signal_strength: float
     confidence: SignalConfidence
     
     # AI prediction
-    ai_signal: Signal
+    ai_signal: str
     ai_confidence: float
     ai_prob_up: float
     ai_prob_down: float
@@ -44,7 +41,7 @@ class TradingSignal:
     # Technical analysis
     tech_signal: str
     tech_score: float
-    trend: TrendDirection
+    trend: str
     
     # Sentiment
     sentiment_score: float
@@ -86,12 +83,28 @@ class SignalGenerator:
     }
     
     def __init__(self):
-        self.tech_analyzer = TechnicalAnalyzer()
-        self.sentiment_analyzer = SentimentAnalyzer()
-        self.news_scraper = NewsScraper()
+        self.tech_analyzer = None
+        self.sentiment_analyzer = None
+        self.news_scraper = None
+        self._init_analyzers()
+    
+    def _init_analyzers(self):
+        """Initialize analyzers lazily"""
+        try:
+            from analysis.technical import TechnicalAnalyzer
+            self.tech_analyzer = TechnicalAnalyzer()
+        except Exception as e:
+            log.warning(f"Could not init technical analyzer: {e}")
+        
+        try:
+            from analysis.sentiment import SentimentAnalyzer, NewsScraper
+            self.sentiment_analyzer = SentimentAnalyzer()
+            self.news_scraper = NewsScraper()
+        except Exception as e:
+            log.warning(f"Could not init sentiment analyzer: {e}")
     
     def generate(self, 
-                 prediction: Prediction,
+                 prediction,
                  df=None,
                  include_sentiment: bool = True) -> TradingSignal:
         """
@@ -105,19 +118,26 @@ class SignalGenerator:
         Returns:
             TradingSignal with complete analysis
         """
-        reasons = prediction.reasons.copy()
-        warnings = prediction.warnings.copy()
+        from models.predictor import Signal
+        from analysis.technical import TrendDirection
+        
+        reasons = prediction.reasons.copy() if hasattr(prediction, 'reasons') else []
+        warnings = prediction.warnings.copy() if hasattr(prediction, 'warnings') else []
         
         # === AI Score ===
         ai_score = self._calculate_ai_score(prediction)
         
         # === Technical Score ===
-        if df is not None and len(df) >= 60:
+        tech_score = 0
+        tech_signal = "neutral"
+        trend = "sideways"
+        
+        if df is not None and len(df) >= 60 and self.tech_analyzer:
             try:
                 tech_summary = self.tech_analyzer.analyze(df)
                 tech_score = tech_summary.overall_score
                 tech_signal = tech_summary.overall_signal
-                trend = tech_summary.trend
+                trend = tech_summary.trend.value if hasattr(tech_summary.trend, 'value') else str(tech_summary.trend)
                 
                 # Add technical reasons
                 for sig in tech_summary.signals[:3]:
@@ -126,16 +146,13 @@ class SignalGenerator:
                 
             except Exception as e:
                 log.warning(f"Technical analysis failed: {e}")
-                tech_score = 0
-                tech_signal = "neutral"
-                trend = TrendDirection.SIDEWAYS
-        else:
-            tech_score = 0
-            tech_signal = "neutral"
-            trend = TrendDirection.SIDEWAYS
         
         # === Sentiment Score ===
-        if include_sentiment:
+        sentiment_score = 0
+        sentiment_label = "neutral"
+        news_count = 0
+        
+        if include_sentiment and self.news_scraper:
             try:
                 sent_score, sent_conf = self.news_scraper.get_stock_sentiment(
                     prediction.stock_code
@@ -143,7 +160,7 @@ class SignalGenerator:
                 market_sent = self.news_scraper.get_market_sentiment()
                 
                 sentiment_score = sent_score * 100  # Convert to -100 to +100
-                sentiment_label = market_sent.get('label', 'neutral')
+                sentiment_label = "positive" if sent_score > 0.15 else ("negative" if sent_score < -0.15 else "neutral")
                 news_count = market_sent.get('news_count', 0)
                 
                 if abs(sent_score) > 0.3:
@@ -152,13 +169,6 @@ class SignalGenerator:
                 
             except Exception as e:
                 log.warning(f"Sentiment analysis failed: {e}")
-                sentiment_score = 0
-                sentiment_label = "neutral"
-                news_count = 0
-        else:
-            sentiment_score = 0
-            sentiment_label = "neutral"
-            news_count = 0
         
         # === Combined Score ===
         combined_score = (
@@ -187,20 +197,20 @@ class SignalGenerator:
         if abs(tech_score) < 20:
             warnings.append("Weak technical signals")
         
-        if trend == TrendDirection.STRONG_DOWN and final_signal in [Signal.BUY, Signal.STRONG_BUY]:
+        if trend == "strong_downtrend" and final_signal in [Signal.BUY, Signal.STRONG_BUY]:
             warnings.append("Buying against strong downtrend")
         
-        if trend == TrendDirection.STRONG_UP and final_signal in [Signal.SELL, Signal.STRONG_SELL]:
+        if trend == "strong_uptrend" and final_signal in [Signal.SELL, Signal.STRONG_SELL]:
             warnings.append("Selling in strong uptrend")
         
         return TradingSignal(
             stock_code=prediction.stock_code,
             stock_name=prediction.stock_name,
             current_price=prediction.current_price,
-            signal=final_signal,
+            signal=final_signal.value,
             signal_strength=signal_strength,
             confidence=confidence,
-            ai_signal=prediction.signal,
+            ai_signal=prediction.signal.value,
             ai_confidence=prediction.confidence,
             ai_prob_up=prediction.prob_up,
             ai_prob_down=prediction.prob_down,
@@ -222,7 +232,7 @@ class SignalGenerator:
             warnings=warnings
         )
     
-    def _calculate_ai_score(self, prediction: Prediction) -> float:
+    def _calculate_ai_score(self, prediction) -> float:
         """Calculate AI component score"""
         # Base score from probabilities
         score = (prediction.prob_up - prediction.prob_down) * 100
@@ -235,10 +245,10 @@ class SignalGenerator:
         
         return score
     
-    def _determine_signal(self, 
-                          combined_score: float,
-                          prediction: Prediction) -> Tuple[Signal, float]:
+    def _determine_signal(self, combined_score: float, prediction) -> Tuple:
         """Determine final signal from combined score"""
+        from models.predictor import Signal
+        
         # Signal strength (0-1)
         strength = min(abs(combined_score) / 80, 1.0)
         
@@ -282,20 +292,14 @@ class SignalGenerator:
             return SignalConfidence.VERY_LOW
     
     def scan_stocks(self, 
-                    predictions: List[Prediction],
+                    predictions: List,
                     min_signal_strength: float = 0.5,
                     signal_type: str = "all") -> List[TradingSignal]:
         """
         Scan multiple stocks and filter by signal criteria
-        
-        Args:
-            predictions: List of AI predictions
-            min_signal_strength: Minimum signal strength to include
-            signal_type: "buy", "sell", or "all"
-            
-        Returns:
-            Filtered and sorted list of trading signals
         """
+        from models.predictor import Signal
+        
         signals = []
         
         for pred in predictions:
@@ -308,10 +312,10 @@ class SignalGenerator:
                 
                 # Filter by type
                 if signal_type == "buy":
-                    if signal.signal not in [Signal.BUY, Signal.STRONG_BUY]:
+                    if signal.signal not in [Signal.BUY.value, Signal.STRONG_BUY.value]:
                         continue
                 elif signal_type == "sell":
-                    if signal.signal not in [Signal.SELL, Signal.STRONG_SELL]:
+                    if signal.signal not in [Signal.SELL.value, Signal.STRONG_SELL.value]:
                         continue
                 
                 signals.append(signal)
@@ -321,7 +325,7 @@ class SignalGenerator:
         
         # Sort by combined score (absolute value)
         signals.sort(key=lambda s: (
-            s.signal in [Signal.STRONG_BUY, Signal.STRONG_SELL],
+            s.signal in [Signal.STRONG_BUY.value, Signal.STRONG_SELL.value],
             abs(s.combined_score),
             s.signal_strength
         ), reverse=True)
@@ -329,18 +333,15 @@ class SignalGenerator:
         return signals
     
     def get_top_opportunities(self,
-                              predictions: List[Prediction],
+                              predictions: List,
                               n: int = 5) -> Dict[str, List[TradingSignal]]:
-        """
-        Get top buy and sell opportunities
+        """Get top buy and sell opportunities"""
+        from models.predictor import Signal
         
-        Returns:
-            Dict with 'buy' and 'sell' lists
-        """
         all_signals = self.scan_stocks(predictions)
         
-        buy_signals = [s for s in all_signals if s.signal in [Signal.BUY, Signal.STRONG_BUY]]
-        sell_signals = [s for s in all_signals if s.signal in [Signal.SELL, Signal.STRONG_SELL]]
+        buy_signals = [s for s in all_signals if s.signal in [Signal.BUY.value, Signal.STRONG_BUY.value]]
+        sell_signals = [s for s in all_signals if s.signal in [Signal.SELL.value, Signal.STRONG_SELL.value]]
         
         return {
             'buy': buy_signals[:n],

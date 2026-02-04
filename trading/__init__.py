@@ -1,20 +1,44 @@
-from .signals import SignalGenerator
+"""
+Trading Module - Unified imports
+"""
+from .broker import (
+    # Enums
+    OrderSide,
+    OrderType,
+    OrderStatus,
+    # Dataclasses
+    Order,
+    Position,
+    Account,
+    # Classes
+    BrokerInterface,
+    SimulatorBroker,
+    THSBroker,
+    # Factory
+    create_broker,
+)
 from .risk import RiskManager
 from .portfolio import Portfolio
-from .broker_base import BrokerInterface, Order, Position, Account
-from .broker_sim import SimulatorBroker
-from .broker_ths import THSBroker
+from .signals import SignalGenerator
 from .executor import ExecutionEngine
 
 __all__ = [
-    'SignalGenerator',
-    'RiskManager', 
-    'Portfolio',
-    'BrokerInterface',
+    # Enums
+    'OrderSide',
+    'OrderType',
+    'OrderStatus',
+    # Dataclasses
     'Order',
-    'Position', 
+    'Position',
     'Account',
+    # Broker classes
+    'BrokerInterface',
     'SimulatorBroker',
     'THSBroker',
-    'ExecutionEngine'
+    'create_broker',
+    # Other modules
+    'RiskManager',
+    'Portfolio',
+    'SignalGenerator',
+    'ExecutionEngine',
 ]

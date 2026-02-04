@@ -2,8 +2,6 @@
 Feature Engineering - Technical indicators WITHOUT look-ahead bias
 
 FIXED: Removed all center=True and future-looking operations
-
-Author: AI Trading System v3.0
 """
 import pandas as pd
 import numpy as np

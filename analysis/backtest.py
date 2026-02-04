@@ -2,14 +2,10 @@
 Walk-Forward Backtesting System v3.0
 
 FIXED Issues:
-- Proper embargo gap between train and test
-- Scaler fitted only on training data per fold
-- Correct trade counting (entries, not bars)
-- Realistic A-share rules (no shorting by default)
-- Proper 1-day returns for PnL calculation
-- Per-fold temporal alignment
-
-Author: AI Trading System v3.0
+- Proper time-aligned returns across stocks (by DATE)
+- Correct benchmark calculation (buy-hold compounded)
+- Trade counting by entries, not bars
+- Realistic A-share rules
 """
 import numpy as np
 import pandas as pd
@@ -32,7 +28,7 @@ class BacktestTrade:
     entry_date: datetime
     exit_date: Optional[datetime]
     stock_code: str
-    side: str  # 'long' or 'short'
+    side: str
     entry_price: float
     exit_price: float = 0.0
     quantity: int = 0
@@ -45,19 +41,14 @@ class BacktestTrade:
 @dataclass
 class BacktestResult:
     """Complete backtest results"""
-    # Returns
     total_return: float
     benchmark_return: float
     excess_return: float
-    
-    # Risk metrics
     sharpe_ratio: float
     max_drawdown: float
     max_drawdown_pct: float
     calmar_ratio: float
     volatility: float
-    
-    # Trading metrics
     total_trades: int
     winning_trades: int
     losing_trades: int
@@ -66,13 +57,9 @@ class BacktestResult:
     avg_win: float
     avg_loss: float
     avg_holding_days: float
-    
-    # Walk-forward metrics
     num_folds: int
     avg_fold_accuracy: float
     fold_results: List[Dict] = field(default_factory=list)
-    
-    # Equity curve
     equity_curve: List[float] = field(default_factory=list)
     dates: List[datetime] = field(default_factory=list)
     
@@ -121,16 +108,7 @@ class BacktestResult:
 
 
 class Backtester:
-    """
-    Walk-Forward Backtesting with proper methodology.
-    
-    Key features:
-    - Rolling train/test windows
-    - Proper embargo between train and test
-    - Scaler fitted per fold on training data only
-    - Realistic trading simulation
-    - No look-ahead bias
-    """
+    """Walk-Forward Backtesting with proper methodology."""
     
     def __init__(self):
         self.fetcher = DataFetcher()
@@ -144,19 +122,7 @@ class Backtester:
         min_data_days: int = 500,
         initial_capital: float = None
     ) -> BacktestResult:
-        """
-        Run walk-forward backtest.
-        
-        Args:
-            stock_codes: Stocks to backtest
-            train_months: Training period in months
-            test_months: Testing period in months  
-            min_data_days: Minimum days of data required per stock
-            initial_capital: Starting capital
-            
-        Returns:
-            BacktestResult with complete metrics
-        """
+        """Run walk-forward backtest."""
         stocks = stock_codes or CONFIG.STOCK_POOL[:5]
         capital = initial_capital or CONFIG.CAPITAL
         
@@ -187,8 +153,9 @@ class Backtester:
         
         # Run backtest
         all_trades = []
-        all_daily_returns = []
-        all_daily_dates = []
+        # FIXED: Store returns by date for proper alignment
+        daily_returns_by_date: Dict[datetime, List[float]] = defaultdict(list)
+        benchmark_returns_by_date: Dict[datetime, List[float]] = defaultdict(list)
         fold_accuracies = []
         fold_results = []
         
@@ -204,10 +171,15 @@ class Backtester:
             )
             
             if result is not None:
-                trades, daily_returns, dates, accuracy = result
+                trades, returns_dict, benchmark_dict, accuracy = result
                 all_trades.extend(trades)
-                all_daily_returns.extend(daily_returns)
-                all_daily_dates.extend(dates)
+                
+                # FIXED: Aggregate returns by date
+                for dt, ret in returns_dict.items():
+                    daily_returns_by_date[dt].append(ret)
+                for dt, ret in benchmark_dict.items():
+                    benchmark_returns_by_date[dt].append(ret)
+                
                 fold_accuracies.append(accuracy)
                 
                 fold_results.append({
@@ -221,14 +193,26 @@ class Backtester:
                     'return': sum(t.pnl_pct for t in trades) if trades else 0
                 })
         
-        if not all_daily_returns:
+        if not daily_returns_by_date:
             raise ValueError("No predictions generated during backtest")
+        
+        # FIXED: Calculate properly time-aligned returns
+        sorted_dates = sorted(daily_returns_by_date.keys())
+        
+        # Average returns across stocks for each date
+        daily_returns = np.array([
+            np.mean(daily_returns_by_date[dt]) for dt in sorted_dates
+        ])
+        benchmark_daily = np.array([
+            np.mean(benchmark_returns_by_date.get(dt, [0])) for dt in sorted_dates
+        ])
         
         # Calculate metrics
         result = self._calculate_metrics(
             trades=all_trades,
-            daily_returns=np.array(all_daily_returns),
-            dates=all_daily_dates,
+            daily_returns=daily_returns,
+            benchmark_daily=benchmark_daily,
+            dates=sorted_dates,
             capital=capital,
             num_folds=len(folds),
             fold_accuracies=fold_accuracies,
@@ -237,11 +221,7 @@ class Backtester:
         
         return result
     
-    def _collect_data(
-        self, 
-        stocks: List[str], 
-        min_days: int
-    ) -> Dict[str, pd.DataFrame]:
+    def _collect_data(self, stocks: List[str], min_days: int) -> Dict[str, pd.DataFrame]:
         """Collect and validate data for all stocks"""
         all_data = {}
         
@@ -253,7 +233,6 @@ class Backtester:
                     log.warning(f"Insufficient data for {code}: {len(df)} days")
                     continue
                 
-                # Create features
                 df = self.feature_engine.create_features(df)
                 
                 if len(df) >= CONFIG.SEQUENCE_LENGTH + 50:
@@ -274,14 +253,12 @@ class Backtester:
     ) -> List[Tuple]:
         """Generate walk-forward folds with proper separation"""
         folds = []
-        embargo_days = CONFIG.EMBARGO_BARS  # Gap between train and test
+        embargo_days = CONFIG.EMBARGO_BARS
         
         train_start = min_date
         
         while True:
             train_end = train_start + pd.DateOffset(months=train_months)
-            
-            # Apply embargo
             test_start = train_end + pd.Timedelta(days=embargo_days)
             test_end = test_start + pd.DateOffset(months=test_months)
             
@@ -289,8 +266,6 @@ class Backtester:
                 break
             
             folds.append((train_start, train_end, test_start, test_end))
-            
-            # Roll forward by test period
             train_start = train_start + pd.DateOffset(months=test_months)
         
         return folds
@@ -306,11 +281,10 @@ class Backtester:
     ) -> Optional[Tuple]:
         """Run single fold of walk-forward backtest"""
         
-        # Create fresh processor for this fold
         processor = DataProcessor()
         feature_cols = self.feature_engine.get_feature_columns()
         
-        # ===== PHASE 1: Collect training data =====
+        # Collect training features for scaler
         train_features_list = []
         
         for code, df in all_data.items():
@@ -324,11 +298,11 @@ class Backtester:
             log.warning("No training data for this fold")
             return None
         
-        # Fit scaler on training data ONLY
+        # Fit scaler on training data
         combined_train = np.concatenate(train_features_list)
         processor.fit_scaler(combined_train)
         
-        # ===== PHASE 2: Prepare training sequences =====
+        # Prepare training sequences
         X_train, y_train = [], []
         
         for code, df in all_data.items():
@@ -338,9 +312,7 @@ class Backtester:
             fold_df = df_labeled[mask]
             
             if len(fold_df) >= CONFIG.SEQUENCE_LENGTH + 10:
-                X, y, _ = processor.prepare_sequences(
-                    fold_df, feature_cols, fit_scaler=False
-                )
+                X, y, _ = processor.prepare_sequences(fold_df, feature_cols, fit_scaler=False)
                 if len(X) > 0:
                     X_train.append(X)
                     y_train.append(y)
@@ -352,23 +324,22 @@ class Backtester:
         X_train = np.concatenate(X_train)
         y_train = np.concatenate(y_train)
         
-        # ===== PHASE 3: Train model =====
+        # Train model
         input_size = X_train.shape[2]
         model = EnsembleModel(input_size, model_names=['lstm', 'gru', 'tcn'])
         
-        # Use 85% for training, 15% for validation (within training period)
         split = int(len(X_train) * 0.85)
-        
         model.train(
             X_train[:split], y_train[:split],
             X_train[split:], y_train[split:],
-            epochs=30  # Shorter for backtest
+            epochs=30
         )
         
-        # ===== PHASE 4: Test on out-of-sample data =====
+        # Test
         trades = []
-        daily_returns = []
-        daily_dates = []
+        # FIXED: Returns indexed by date
+        returns_by_date: Dict[datetime, float] = {}
+        benchmark_by_date: Dict[datetime, float] = {}
         predictions = []
         actuals = []
         
@@ -381,15 +352,12 @@ class Backtester:
             if len(fold_df) < CONFIG.SEQUENCE_LENGTH + 5:
                 continue
             
-            X, y, returns = processor.prepare_sequences(
-                fold_df, feature_cols, fit_scaler=False
-            )
+            X, y, returns = processor.prepare_sequences(fold_df, feature_cols, fit_scaler=False)
             
             if len(X) == 0:
                 continue
             
-            # Get predictions and simulate trading
-            code_trades, code_returns, code_dates = self._simulate_trading(
+            code_trades, code_returns, code_benchmark = self._simulate_trading(
                 model=model,
                 X=X,
                 y=y,
@@ -397,23 +365,34 @@ class Backtester:
                 dates=fold_df.index[-len(X):],
                 prices=fold_df['close'].values[-len(X):],
                 stock_code=code,
-                capital=capital / len(all_data)  # Equal allocation
+                capital=capital / len(all_data)
             )
             
             trades.extend(code_trades)
-            daily_returns.extend(code_returns)
-            daily_dates.extend(code_dates)
+            
+            # FIXED: Store by date
+            for dt, ret in code_returns.items():
+                if dt in returns_by_date:
+                    returns_by_date[dt] = (returns_by_date[dt] + ret) / 2
+                else:
+                    returns_by_date[dt] = ret
+            
+            for dt, ret in code_benchmark.items():
+                if dt in benchmark_by_date:
+                    benchmark_by_date[dt] = (benchmark_by_date[dt] + ret) / 2
+                else:
+                    benchmark_by_date[dt] = ret
+            
             predictions.extend([model.predict(X[i:i+1]).predicted_class for i in range(len(X))])
             actuals.extend(y.tolist())
         
-        # Calculate fold accuracy
         if actuals:
             accuracy = np.mean(np.array(predictions) == np.array(actuals))
             log.info(f"  Fold accuracy: {accuracy:.2%}")
         else:
             accuracy = 0
         
-        return trades, daily_returns, daily_dates, accuracy
+        return trades, returns_by_date, benchmark_by_date, accuracy
     
     def _simulate_trading(
         self,
@@ -425,43 +404,41 @@ class Backtester:
         prices: np.ndarray,
         stock_code: str,
         capital: float
-    ) -> Tuple[List[BacktestTrade], List[float], List[datetime]]:
-        """
-        Simulate realistic trading based on predictions.
-        
-        Uses 1-day forward returns for PnL calculation.
-        Respects A-share rules (no shorting unless configured).
-        """
+    ) -> Tuple[List[BacktestTrade], Dict[datetime, float], Dict[datetime, float]]:
+        """Simulate realistic trading."""
         trades = []
-        daily_returns = []
-        daily_dates = []
+        # FIXED: Return dict indexed by date
+        strategy_returns: Dict[datetime, float] = {}
+        benchmark_returns: Dict[datetime, float] = {}
         
-        position = 0  # 0: flat, 1: long
+        position = 0
         entry_price = 0
         entry_date = None
         entry_confidence = 0
         
-        for i in range(len(X) - 1):  # -1 because we need next day's price
+        costs_pct = (CONFIG.COMMISSION * 2 + CONFIG.SLIPPAGE * 2) * 100
+        
+        for i in range(len(X) - 1):
             pred = model.predict(X[i:i+1])
             current_price = prices[i]
             next_price = prices[i + 1]
             current_date = dates[i]
             
-            # Calculate 1-day return
+            # Daily return
             daily_return_pct = (next_price / current_price - 1) * 100
             
-            # Trading costs (applied when position changes)
-            costs_pct = (CONFIG.COMMISSION * 2 + CONFIG.SLIPPAGE * 2) * 100
+            # Benchmark: buy-hold return
+            benchmark_returns[current_date] = daily_return_pct
             
             # Decision logic
             signal = None
             
             if pred.confidence >= CONFIG.MIN_CONFIDENCE:
-                if pred.predicted_class == 2 and position == 0:  # UP signal, not in position
+                if pred.predicted_class == 2 and position == 0:
                     signal = 'enter_long'
-                elif pred.predicted_class == 0 and position == 1:  # DOWN signal, in position
+                elif pred.predicted_class == 0 and position == 1:
                     signal = 'exit_long'
-                elif pred.predicted_class == 1 and position == 1:  # NEUTRAL, consider exit
+                elif pred.predicted_class == 1 and position == 1:
                     signal = 'exit_long'
             
             # Execute signals
@@ -472,10 +449,9 @@ class Backtester:
                 entry_price = current_price
                 entry_date = current_date
                 entry_confidence = pred.confidence
-                strategy_return = daily_return_pct - costs_pct / 2  # Entry cost
+                strategy_return = daily_return_pct - costs_pct / 2
                 
             elif signal == 'exit_long' and position == 1:
-                # Record trade
                 exit_price = current_price
                 pnl_pct = (exit_price / entry_price - 1) * 100 - costs_pct
                 
@@ -492,16 +468,14 @@ class Backtester:
                 ))
                 
                 position = 0
-                strategy_return = -costs_pct / 2  # Exit cost
+                strategy_return = -costs_pct / 2
                 
             elif position == 1:
-                # Holding position
                 strategy_return = daily_return_pct
             
-            daily_returns.append(strategy_return)
-            daily_dates.append(current_date)
+            strategy_returns[current_date] = strategy_return
         
-        # Close any open position at end
+        # Close any open position
         if position == 1 and len(prices) > 0:
             exit_price = prices[-1]
             pnl_pct = (exit_price / entry_price - 1) * 100 - costs_pct
@@ -518,12 +492,13 @@ class Backtester:
                 signal_confidence=entry_confidence
             ))
         
-        return trades, daily_returns, daily_dates
+        return trades, strategy_returns, benchmark_returns
     
     def _calculate_metrics(
         self,
         trades: List[BacktestTrade],
         daily_returns: np.ndarray,
+        benchmark_daily: np.ndarray,
         dates: List,
         capital: float,
         num_folds: int,
@@ -536,15 +511,15 @@ class Backtester:
         equity = [capital]
         for ret in daily_returns:
             equity.append(equity[-1] * (1 + ret / 100))
+        equity = np.array(equity[1:])
         
-        equity = np.array(equity[1:])  # Remove initial capital
-        
-        # Total return
         total_return = (equity[-1] / capital - 1) * 100 if len(equity) > 0 else 0
         
-        # Benchmark: buy and hold (average of all stocks)
-        # Simplified: assume daily returns average
-        benchmark_return = np.sum(daily_returns) if len(daily_returns) > 0 else 0
+        # FIXED: Proper benchmark calculation (compounded)
+        benchmark_equity = [capital]
+        for ret in benchmark_daily:
+            benchmark_equity.append(benchmark_equity[-1] * (1 + ret / 100))
+        benchmark_return = (benchmark_equity[-1] / capital - 1) * 100 if len(benchmark_equity) > 1 else 0
         
         # Sharpe ratio
         if len(daily_returns) > 1 and np.std(daily_returns) > 0:

@@ -6,8 +6,6 @@ CRITICAL FIXES:
 - Proper embargo gap between splits  
 - Labels truncated at split boundaries
 - Consistent sequence construction
-
-Author: AI Trading System v3.0
 """
 import numpy as np
 import pandas as pd
@@ -70,8 +68,8 @@ class DataProcessor:
         df['future_return'] = future_return
         
         # Mark last horizon rows as invalid (no future data)
-        df.loc[df.index[-horizon:], 'label'] = np.nan
-        df.loc[df.index[-horizon:], 'future_return'] = np.nan
+        df.iloc[-horizon:, df.columns.get_loc('label')] = np.nan
+        df.iloc[-horizon:, df.columns.get_loc('future_return')] = np.nan
         
         return df
     
@@ -218,6 +216,22 @@ class DataProcessor:
         
         return features[np.newaxis, :, :]
     
+    # Alias for backward compatibility
+    def prepare_single_sequence(self, df: pd.DataFrame, feature_cols: List[str]) -> np.ndarray:
+        """Alias for prepare_inference_sequence"""
+        return self.prepare_inference_sequence(df, feature_cols)
+    
+    def split_temporal(
+        self,
+        df: pd.DataFrame,
+        feature_cols: List[str],
+        fit_scaler_on_train: bool = True
+    ) -> Dict[str, Tuple[np.ndarray, np.ndarray, np.ndarray]]:
+        """
+        Alias for split_temporal_single_stock for backward compatibility
+        """
+        return self.split_temporal_single_stock(df, feature_cols, fit_scaler_on_train)
+    
     def split_temporal_single_stock(
         self,
         df: pd.DataFrame,
@@ -238,7 +252,7 @@ class DataProcessor:
         val_end = int(n * (CONFIG.TRAIN_RATIO + CONFIG.VAL_RATIO))
         
         # Split raw data BEFORE labeling
-        # Subtract horizon+embargo from train_end to ensure no leakage
+        # Subtract horizon+embargo from boundaries to ensure no leakage
         train_df = df.iloc[:train_end - horizon - embargo].copy()
         val_df = df.iloc[train_end:val_end - horizon - embargo].copy()
         test_df = df.iloc[val_end:].copy()

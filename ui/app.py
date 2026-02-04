@@ -23,7 +23,7 @@ from config import CONFIG, TradingMode
 from models.predictor import Predictor, Prediction, Signal
 from models.trainer import Trainer
 from trading.executor import ExecutionEngine
-from trading.broker_base import OrderSide
+from trading.broker import OrderSide
 from .widgets import SignalPanel, PositionTable, LogWidget
 from .charts import StockChart
 from utils.logger import log

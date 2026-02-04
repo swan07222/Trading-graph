@@ -7,6 +7,7 @@ from .helpers import (
     calculate_sharpe,
     calculate_max_drawdown,
 )
+from .cancellation import CancellationToken, CancelledException, cancellable_operation
 
 __all__ = [
     "log",
@@ -16,4 +17,7 @@ __all__ = [
     "get_trading_dates",
     "calculate_sharpe",
     "calculate_max_drawdown",
+    "CancellationToken",
+    "CancelledException",
+    "cancellable_operation",
 ]

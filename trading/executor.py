@@ -1,5 +1,5 @@
 """
-Execution Engine - Handles order execution
+Execution Engine - Handles order execution with unified broker types
 """
 import threading
 import queue
@@ -8,11 +8,11 @@ from typing import Dict, List, Optional, Callable
 from dataclasses import dataclass
 
 from config import CONFIG, TradingMode
-from .broker_base import BrokerInterface, Order, OrderSide, OrderStatus
-from .broker_sim import SimulatorBroker
-from .broker_ths import THSBroker
+from .broker import (
+    BrokerInterface, SimulatorBroker, THSBroker,
+    Order, OrderSide, OrderStatus, create_broker
+)
 from .risk import RiskManager
-from models.predictor import Prediction, Signal
 from utils.logger import log
 
 
@@ -38,11 +38,8 @@ class ExecutionEngine:
     def __init__(self, mode: TradingMode = None):
         self.mode = mode or CONFIG.TRADING_MODE
         
-        # Create broker
-        if self.mode == TradingMode.LIVE:
-            self.broker = THSBroker()
-        else:
-            self.broker = SimulatorBroker()
+        # Create broker using factory
+        self.broker = create_broker(self.mode.value)
         
         self.risk_manager: Optional[RiskManager] = None
         
@@ -81,9 +78,17 @@ class ExecutionEngine:
     
     def submit(self, signal: TradeSignal) -> bool:
         """Submit trade signal"""
+        # Get price for validation
+        price = signal.price
+        if price is None or price <= 0:
+            price = self.broker.get_quote(signal.stock_code)
+            if price is None or price <= 0:
+                log.error(f"Cannot get price for {signal.stock_code}")
+                return False
+        
         # Risk check
         passed, msg = self.risk_manager.check_order(
-            signal.stock_code, signal.side, signal.quantity, signal.price or 0
+            signal.stock_code, signal.side, signal.quantity, price
         )
         
         if not passed:
@@ -99,8 +104,10 @@ class ExecutionEngine:
         log.info(f"Signal queued: {signal.side.value} {signal.quantity} {signal.stock_code}")
         return True
     
-    def submit_from_prediction(self, pred: Prediction) -> bool:
+    def submit_from_prediction(self, pred) -> bool:
         """Create signal from prediction"""
+        from models.predictor import Signal
+        
         if pred.signal == Signal.HOLD:
             return False
         
@@ -149,7 +156,9 @@ class ExecutionEngine:
             result = self.broker.submit_order(order)
             
             if result.status == OrderStatus.FILLED:
-                log.info(f"Filled: {result.side.value} {result.filled_qty} @ ¥{result.filled_price:.2f}")
+                log.info(f"Filled: {result.side.value.upper()} {result.filled_qty} @ ¥{result.filled_price:.2f}")
+                if self.risk_manager:
+                    self.risk_manager.record_trade()
                 if self.on_fill:
                     self.on_fill(result)
                     

@@ -3,8 +3,6 @@ Cooperative Cancellation Support
 
 Provides thread-safe cancellation mechanism for long-running operations.
 Use instead of QThread.terminate() which is unsafe.
-
-Author: AI Trading System v3.0
 """
 import threading
 from typing import Callable, Optional
@@ -67,10 +65,13 @@ class CancellationToken:
     def wait(self, timeout: float = None) -> bool:
         """
         Wait for cancellation.
-        
         Returns True if cancelled, False if timeout.
         """
         return self._cancelled.wait(timeout)
+    
+    def __call__(self) -> bool:
+        """Allow using token as callable stop_flag"""
+        return self.is_cancelled
 
 
 class CancelledException(Exception):
@@ -90,7 +91,6 @@ def cancellable_operation(token: Optional[CancellationToken] = None):
                 # ... do work ...
     """
     if token is None:
-        # No cancellation support
         yield lambda: None
     else:
         def check():

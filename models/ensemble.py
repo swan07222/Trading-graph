@@ -6,14 +6,12 @@ FIXED Issues:
 - Proper confidence calculation (from softmax, not untrained head)
 - Thread-safe operations
 - Clean save/load
-
-Author: AI Trading System v3.0
 """
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Callable
 from pathlib import Path
 from dataclasses import dataclass
 from torch.utils.data import DataLoader, TensorDataset
@@ -54,15 +52,6 @@ class EnsemblePrediction:
 class EnsembleModel:
     """
     Ensemble of multiple neural networks with weighted voting.
-    
-    Models:
-    - LSTM with attention
-    - Transformer
-    - GRU  
-    - TCN (Temporal Convolutional Network)
-    - Hybrid CNN-LSTM
-    
-    Weights are updated based on validation performance.
     """
     
     MODEL_CLASSES = {
@@ -82,24 +71,20 @@ class EnsembleModel:
         self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
         self._lock = threading.Lock()
         
-        # Default models
         model_names = model_names or ['lstm', 'transformer', 'gru', 'tcn']
         
         self.models: Dict[str, nn.Module] = {}
         self.weights: Dict[str, float] = {}
         
-        # Initialize models
         for name in model_names:
             if name in self.MODEL_CLASSES:
                 self._init_model(name)
         
-        # Set uniform weights
         self._normalize_weights()
         
         log.info(f"Ensemble initialized: {list(self.models.keys())} on {self.device}")
     
     def _init_model(self, name: str):
-        """Initialize a single model"""
         try:
             model_class = self.MODEL_CLASSES[name]
             model = model_class(
@@ -110,13 +95,12 @@ class EnsembleModel:
             )
             model.to(self.device)
             self.models[name] = model
-            self.weights[name] = 1.0  # Will be normalized
+            self.weights[name] = 1.0
             log.debug(f"Initialized {name} model")
         except Exception as e:
             log.error(f"Failed to initialize {name}: {e}")
     
     def _normalize_weights(self):
-        """Normalize weights to sum to 1"""
         if not self.weights:
             return
         total = sum(self.weights.values())
@@ -131,27 +115,13 @@ class EnsembleModel:
         y_val: np.ndarray,
         epochs: int = None,
         batch_size: int = None,
-        callback=None,
-        stop_flag=None  # Callable returning bool for cooperative cancellation
+        callback: Callable = None,
+        stop_flag: Callable = None
     ) -> Dict:
-        """
-        Train all models in the ensemble.
-        
-        Args:
-            X_train, y_train: Training data
-            X_val, y_val: Validation data
-            epochs: Number of epochs
-            batch_size: Batch size
-            callback: Progress callback(model_name, epoch, val_acc)
-            stop_flag: Optional callable that returns True to stop training
-            
-        Returns:
-            Training history dict
-        """
+        """Train all models in the ensemble."""
         epochs = epochs or CONFIG.EPOCHS
         batch_size = batch_size or CONFIG.BATCH_SIZE
         
-        # Create data loaders
         train_dataset = TensorDataset(
             torch.FloatTensor(X_train),
             torch.LongTensor(y_train)
@@ -194,7 +164,6 @@ class EnsembleModel:
             history[name] = model_history
             val_accuracies[name] = best_acc
         
-        # Update weights based on validation accuracy
         self._update_weights(val_accuracies)
         
         return history
@@ -207,8 +176,8 @@ class EnsembleModel:
         val_loader: DataLoader,
         class_weights: torch.Tensor,
         epochs: int,
-        callback=None,
-        stop_flag=None
+        callback: Callable = None,
+        stop_flag: Callable = None
     ) -> Tuple[Dict, float]:
         """Train a single model"""
         
@@ -230,7 +199,6 @@ class EnsembleModel:
         best_state = None
         
         for epoch in range(epochs):
-            # Check stop flag
             if stop_flag and stop_flag():
                 break
             
@@ -276,7 +244,7 @@ class EnsembleModel:
             
             train_loss = np.mean(train_losses)
             val_loss = np.mean(val_losses)
-            val_acc = correct / total
+            val_acc = correct / total if total > 0 else 0
             
             history['train_loss'].append(train_loss)
             history['val_loss'].append(val_loss)
@@ -293,7 +261,6 @@ class EnsembleModel:
                     log.info(f"{name}: Early stopping at epoch {epoch+1}")
                     break
             
-            # Callback
             if callback:
                 callback(name, epoch, val_acc)
             
@@ -313,10 +280,8 @@ class EnsembleModel:
         if not val_accuracies:
             return
         
-        # Use softmax of accuracies for smoother weighting
         accs = np.array([val_accuracies.get(name, 0.5) for name in self.models.keys()])
         
-        # Temperature scaling
         temp = 0.5
         weights = np.exp(accs / temp)
         weights = weights / weights.sum()
@@ -326,12 +291,7 @@ class EnsembleModel:
         log.info(f"Updated weights: {self.weights}")
     
     def predict(self, X: np.ndarray) -> EnsemblePrediction:
-        """
-        Get ensemble prediction with uncertainty quantification.
-        
-        Confidence is derived from the softmax probabilities,
-        NOT from a separate confidence head.
-        """
+        """Get ensemble prediction with uncertainty quantification."""
         if X.ndim == 2:
             X = X[np.newaxis, :]
         
@@ -354,21 +314,17 @@ class EnsembleModel:
                 weight = self.weights.get(name, 1.0 / len(self.models))
                 weighted_probs += probs * weight
             
-            # Normalize (should already sum to 1, but ensure)
             weighted_probs = weighted_probs / (weighted_probs.sum() + 1e-8)
             
-            # Predicted class
             predicted_class = int(np.argmax(weighted_probs))
-            
-            # Confidence: max probability
             confidence = float(np.max(weighted_probs))
             
-            # Entropy: uncertainty measure
+            # Entropy
             entropy = -np.sum(weighted_probs * np.log(weighted_probs + 1e-8))
             max_entropy = np.log(CONFIG.NUM_CLASSES)
             normalized_entropy = entropy / max_entropy
             
-            # Agreement: how many models agree on the prediction
+            # Agreement
             predictions = [np.argmax(p) for p in all_probs.values()]
             if predictions:
                 most_common = max(set(predictions), key=predictions.count)
@@ -419,7 +375,6 @@ class EnsembleModel:
                 
                 self.input_size = state['input_size']
                 
-                # Reinitialize models with correct architecture
                 model_names = state.get('model_names', list(state['models'].keys()))
                 
                 self.models = {}
@@ -431,7 +386,6 @@ class EnsembleModel:
                         self.models[name].load_state_dict(state['models'][name])
                         self.models[name].eval()
                 
-                # Load weights
                 saved_weights = state.get('weights', {})
                 for name in self.models.keys():
                     self.weights[name] = saved_weights.get(name, 1.0)

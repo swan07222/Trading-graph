@@ -1,5 +1,6 @@
 """
 Portfolio Management - Track positions and performance
+Uses unified broker types
 """
 import json
 from datetime import datetime, date, timedelta
@@ -9,7 +10,7 @@ from pathlib import Path
 import numpy as np
 
 from config import CONFIG
-from .broker_base import Position, Account
+from .broker import Position, Account
 from utils.logger import log
 
 
@@ -129,6 +130,8 @@ class Portfolio:
     
     @property
     def total_pnl_pct(self) -> float:
+        if self.initial_capital <= 0:
+            return 0
         return (self.equity / self.initial_capital - 1) * 100
     
     def update_from_account(self, account: Account):
@@ -142,10 +145,8 @@ class Portfolio:
         """Record a completed trade"""
         self.trades.append(trade)
         
-        if trade.side == "buy":
-            self.cash -= trade.value + trade.commission
-        else:
-            self.cash += trade.value - trade.commission - trade.stamp_tax
+        # Note: Don't update cash here if using update_from_account
+        # The broker account is the source of truth
         
         self._update_equity()
         self._save()
@@ -161,9 +162,10 @@ class Portfolio:
         if current_equity > self._peak_equity:
             self._peak_equity = current_equity
         
-        drawdown = (self._peak_equity - current_equity) / self._peak_equity
-        if drawdown > self._max_drawdown:
-            self._max_drawdown = drawdown
+        if self._peak_equity > 0:
+            drawdown = (self._peak_equity - current_equity) / self._peak_equity
+            if drawdown > self._max_drawdown:
+                self._max_drawdown = drawdown
         
         # Check for new day
         today = date.today()
@@ -292,7 +294,7 @@ class Portfolio:
             return np.array([])
         
         equities = [e[1] for e in self.equity_history]
-        returns = np.diff(equities) / equities[:-1]
+        returns = np.diff(equities) / np.array(equities[:-1])
         return returns
     
     def _get_equity_at_date(self, target_date: date) -> float:
@@ -355,8 +357,11 @@ class Portfolio:
             'saved_at': datetime.now().isoformat()
         }
         
-        with open(path, 'w') as f:
-            json.dump(data, f, indent=2)
+        try:
+            with open(path, 'w') as f:
+                json.dump(data, f, indent=2)
+        except Exception as e:
+            log.warning(f"Failed to save portfolio: {e}")
     
     def _load(self):
         """Load saved portfolio state"""

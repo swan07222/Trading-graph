@@ -44,14 +44,16 @@ def calculate_sharpe(returns: np.ndarray, risk_free: float = 0.03) -> float:
         return 0
     
     excess = returns - risk_free / 252
-    if excess.std() == 0:
+    if np.std(excess) == 0:
         return 0
     
-    return excess.mean() / excess.std() * np.sqrt(252)
+    return np.mean(excess) / np.std(excess) * np.sqrt(252)
 
 
 def calculate_max_drawdown(equity: np.ndarray) -> float:
     """Calculate maximum drawdown"""
+    if len(equity) == 0:
+        return 0
     running_max = np.maximum.accumulate(equity)
-    drawdown = (equity - running_max) / running_max
-    return abs(drawdown.min())
+    drawdown = (equity - running_max) / (running_max + 1e-8)
+    return abs(np.min(drawdown))

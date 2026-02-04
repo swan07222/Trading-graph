@@ -143,6 +143,9 @@ class Config:
     
     def set_risk_profile(self, profile: RiskProfile):
         """Apply a predefined risk profile"""
+        if isinstance(profile, str):
+            profile = RiskProfile(profile)
+        
         profiles = {
             RiskProfile.CONSERVATIVE: {
                 'MAX_POSITION_PCT': 10.0,

@@ -7,8 +7,7 @@ This module contains:
 - Abstract BrokerInterface
 - SimulatorBroker implementation
 - THSBroker implementation (via easytrader)
-
-Author: AI Trading System v3.0
+- Factory function
 """
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
@@ -403,6 +402,20 @@ class SimulatorBroker(BrokerInterface):
             if total > self._cash:
                 return False, f"Insufficient funds: need ¥{total:,.2f}, have ¥{self._cash:,.2f}"
             
+            # Check position limit (including existing position)
+            existing_value = 0.0
+            existing_pos = self._positions.get(order.stock_code)
+            if existing_pos:
+                existing_value = existing_pos.quantity * price
+            
+            new_total_value = existing_value + (order.quantity * price)
+            equity = self._cash + sum(p.market_value for p in self._positions.values())
+            
+            if equity > 0:
+                position_pct = new_total_value / equity * 100
+                if position_pct > CONFIG.MAX_POSITION_PCT:
+                    return False, f"Position too large: {position_pct:.1f}% (max: {CONFIG.MAX_POSITION_PCT}%)"
+            
         else:  # SELL
             pos = self._positions.get(order.stock_code)
             
@@ -459,8 +472,11 @@ class SimulatorBroker(BrokerInterface):
             self._cash += (trade_value - total_cost)
             
             pos = self._positions[order.stock_code]
-            realized = (fill_price - pos.avg_cost) * fill_qty
-            pos.realized_pnl += realized
+            if order.side == OrderSide.SELL:
+                # Include all costs in realized PnL
+                gross_pnl = (fill_price - pos.avg_cost) * fill_qty
+                realized = gross_pnl - total_cost  # Subtract commission + stamp tax
+                pos.realized_pnl += realized
             pos.quantity -= fill_qty
             pos.available_qty -= fill_qty
             
@@ -733,7 +749,7 @@ class THSBroker(BrokerInterface):
             return False
         
         order = self._orders.get(order_id)
-        if not order or not order.message:  # message contains broker order ID
+        if not order or not order.message:
             return False
         
         try:

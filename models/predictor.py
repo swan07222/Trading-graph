@@ -3,11 +3,9 @@ Stock Predictor - Generate Trading Signals
 
 FIXED Issues:
 - Uses saved scaler from training (no normalization mismatch)
+- Uses correct method name (prepare_inference_sequence)
 - Proper error handling
 - Consistent with training pipeline
-
-Author: AI Trading System
-Version: 2.0
 """
 import numpy as np
 from typing import Dict, List, Tuple, Optional
@@ -106,10 +104,6 @@ class Predictor:
     
     IMPORTANT: Uses the same scaler that was fitted during training
     to ensure consistent normalization.
-    
-    Usage:
-        predictor = Predictor()
-        prediction = predictor.predict("600519")
     """
     
     def __init__(self, capital: float = None):
@@ -165,12 +159,6 @@ class Predictor:
     def predict(self, stock_code: str) -> Prediction:
         """
         Generate complete prediction for a stock
-        
-        Args:
-            stock_code: Stock code (e.g., "600519")
-            
-        Returns:
-            Prediction object with all analysis
         """
         if not self.is_ready():
             raise RuntimeError(
@@ -201,7 +189,8 @@ class Predictor:
         feature_cols = self.feature_engine.get_feature_columns()
         
         try:
-            X = self.processor.prepare_single_sequence(df, feature_cols)
+            # FIXED: Use correct method name
+            X = self.processor.prepare_inference_sequence(df, feature_cols)
         except Exception as e:
             log.error(f"Failed to prepare sequence: {e}")
             raise
@@ -209,7 +198,7 @@ class Predictor:
         # Get ensemble prediction
         ensemble_pred = self.ensemble.predict(X[0])
         
-        # Extract technical indicators
+        # Extract technical indicators from features
         rsi = self._get_indicator(df, 'rsi_14', default=50)
         macd = self._get_indicator(df, 'macd_hist', default=0)
         ma_ratio = self._get_indicator(df, 'ma_ratio_5_20', default=0)
@@ -273,11 +262,13 @@ class Predictor:
                 return float(val)
         return default
     
-    def _calculate_signal(self,
-                          pred: EnsemblePrediction,
-                          rsi: float,
-                          macd: float,
-                          ma_ratio: float) -> Tuple[Signal, float, List[str]]:
+    def _calculate_signal(
+        self,
+        pred: EnsemblePrediction,
+        rsi: float,
+        macd: float,
+        ma_ratio: float
+    ) -> Tuple[Signal, float, List[str]]:
         """Calculate trading signal with scoring"""
         reasons = []
         score = 0
@@ -363,10 +354,12 @@ class Predictor:
         
         return signal, strength, reasons
     
-    def _calculate_levels(self,
-                          price: float,
-                          atr: float,
-                          signal: Signal) -> TradeLevels:
+    def _calculate_levels(
+        self,
+        price: float,
+        atr: float,
+        signal: Signal
+    ) -> TradeLevels:
         """Calculate trading levels"""
         is_buy = signal in [Signal.STRONG_BUY, Signal.BUY]
         multiplier = 2.0 if signal in [Signal.STRONG_BUY, Signal.STRONG_SELL] else 2.5
@@ -399,12 +392,14 @@ class Predictor:
             risk_reward=round(rr, 2)
         )
     
-    def _calculate_position(self,
-                            signal: Signal,
-                            strength: float,
-                            price: float,
-                            levels: TradeLevels,
-                            confidence: float) -> PositionSize:
+    def _calculate_position(
+        self,
+        signal: Signal,
+        strength: float,
+        price: float,
+        levels: TradeLevels,
+        confidence: float
+    ) -> PositionSize:
         """Calculate position size"""
         if signal == Signal.HOLD or confidence < CONFIG.MIN_CONFIDENCE:
             return PositionSize(0, 0, 0, 0)
@@ -446,10 +441,12 @@ class Predictor:
             risk_amount=round(risk, 2)
         )
     
-    def _generate_price_forecast(self,
-                                  current_price: float,
-                                  pred: EnsemblePrediction,
-                                  atr_pct: float) -> List[float]:
+    def _generate_price_forecast(
+        self,
+        current_price: float,
+        pred: EnsemblePrediction,
+        atr_pct: float
+    ) -> List[float]:
         """Generate price forecast for visualization"""
         horizon = CONFIG.PREDICTION_HORIZON
         volatility = atr_pct / 100
@@ -466,9 +463,11 @@ class Predictor:
         
         return prices
     
-    def _generate_warnings(self,
-                           pred: EnsemblePrediction,
-                           rsi: float) -> List[str]:
+    def _generate_warnings(
+        self,
+        pred: EnsemblePrediction,
+        rsi: float
+    ) -> List[str]:
         """Generate warnings"""
         warnings = []
         
@@ -505,10 +504,12 @@ class Predictor:
         
         return predictions
     
-    def get_top_picks(self,
-                      codes: List[str] = None,
-                      n: int = 5,
-                      signal_type: str = "buy") -> List[Prediction]:
+    def get_top_picks(
+        self,
+        codes: List[str] = None,
+        n: int = 5,
+        signal_type: str = "buy"
+    ) -> List[Prediction]:
         """Get top N stock picks"""
         codes = codes or CONFIG.STOCK_POOL
         predictions = self.batch_predict(codes)
