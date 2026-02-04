@@ -18,3 +18,19 @@
 
 2026-02-04 01:24:37 | ERROR | models.auto_learner:find_top_gainers:154 - find_top_gainers error: HTTPSConnectionPool(host='82.push2.eastmoney.com', port=443): Read timed out. (read timeout=15)
 
+2026-02-04 01:51:30 | ERROR | data.fetcher:wrapper:63 - get_history failed after 3 attempts: ('Connection aborted.', ConnectionResetError(10054, 'An existing connection was forcibly closed by the remote host', None, 10054, None))
+
+2026-02-04 01:58:24 | ERROR | data.fetcher:wrapper:63 - get_history failed after 3 attempts: ('Connection aborted.', ConnectionResetError(10054, 'An existing connection was forcibly closed by the remote host', None, 10054, None))
+
+2026-02-04 02:03:54 | ERROR | models.auto_learner:find_top_gainers:215 - find_top_gainers error: HTTPSConnectionPool(host='82.push2.eastmoney.com', port=443): Read timed out. (read timeout=15)
+
+2026-02-04 02:04:47 | ERROR | models.auto_learner:find_top_losers:249 - find_top_losers error: HTTPSConnectionPool(host='82.push2.eastmoney.com', port=443): Read timed out. (read timeout=15)
+
+2026-02-04 02:05:40 | ERROR | models.auto_learner:find_top_volume:284 - find_top_volume error: HTTPSConnectionPool(host='82.push2.eastmoney.com', port=443): Read timed out. (read timeout=15)
+
+2026-02-04 02:17:07 | ERROR | models.auto_learner:find_top_gainers:215 - find_top_gainers error: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+
+2026-02-04 02:17:13 | ERROR | models.auto_learner:find_top_losers:249 - find_top_losers error: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+
+2026-02-04 02:17:20 | ERROR | models.auto_learner:find_top_volume:284 - find_top_volume error: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+

@@ -20,3 +20,529 @@
 2026-02-04 01:22:55 | INFO     | models.auto_learner:_learning_loop:560 - Valid stocks with data: 0
 2026-02-04 01:24:37 | ERROR    | models.auto_learner:find_top_gainers:154 - find_top_gainers error: HTTPSConnectionPool(host='82.push2.eastmoney.com', port=443): Read timed out. (read timeout=15)
 2026-02-04 01:24:37 | INFO     | models.auto_learner:find_all_stocks:113 - Found 0 stocks from 涨幅榜
+2026-02-04 01:44:44 | INFO     | data.fetcher:_check_availability:171 - AkShare data source initialized
+2026-02-04 01:44:44 | INFO     | data.fetcher:_init_sources:481 -   ✓ akshare available
+2026-02-04 01:44:44 | INFO     | data.fetcher:_check_availability:328 - Yahoo Finance data source initialized
+2026-02-04 01:44:44 | INFO     | data.fetcher:_init_sources:481 -   ✓ yahoo available
+2026-02-04 01:44:44 | INFO     | data.fetcher:__init__:466 - DataFetcher initialized with 2 sources
+2026-02-04 01:44:44 | INFO     | models.trainer:train:233 - ======================================================================
+2026-02-04 01:44:44 | INFO     | models.trainer:train:234 - STARTING TRAINING PIPELINE
+2026-02-04 01:44:44 | INFO     | models.trainer:train:235 - ======================================================================
+2026-02-04 01:44:44 | INFO     | models.trainer:prepare_data:74 - Preparing data for 20 stocks...
+2026-02-04 01:44:44 | INFO     | models.trainer:prepare_data:75 - Temporal split: Train=70%, Val=15%, Test=15%
+2026-02-04 01:44:44 | INFO     | data.fetcher:get_history:549 - Trying akshare for 600519...
+2026-02-04 01:44:44 | DEBUG    | data.fetcher:get_history:195 - AkShare: Fetching 600519 from 20191208 to 20260204
+2026-02-04 01:46:56 | WARNING  | data.fetcher:wrapper:56 - get_history attempt 1/3 failed: ('Connection aborted.', ConnectionResetError(10054, 'An existing connection was forcibly closed by the remote host', None, 10054, None)). Retrying in 3.0s...
+2026-02-04 01:46:59 | DEBUG    | data.fetcher:get_history:195 - AkShare: Fetching 600519 from 20191208 to 20260204
+2026-02-04 01:49:11 | WARNING  | data.fetcher:wrapper:56 - get_history attempt 2/3 failed: ('Connection aborted.', ConnectionResetError(10054, 'An existing connection was forcibly closed by the remote host', None, 10054, None)). Retrying in 6.0s...
+2026-02-04 01:49:17 | DEBUG    | data.fetcher:get_history:195 - AkShare: Fetching 600519 from 20191208 to 20260204
+2026-02-04 01:51:30 | ERROR    | data.fetcher:wrapper:63 - get_history failed after 3 attempts: ('Connection aborted.', ConnectionResetError(10054, 'An existing connection was forcibly closed by the remote host', None, 10054, None))
+2026-02-04 01:51:30 | WARNING  | data.fetcher:get_history:565 - akshare failed for 600519: ('Connection aborted.', ConnectionResetError(10054, 'An existing connection was forcibly closed by the remote host', None, 10054, None))
+2026-02-04 01:51:30 | INFO     | data.fetcher:get_history:549 - Trying yahoo for 600519...
+2026-02-04 01:51:30 | DEBUG    | data.fetcher:get_history:352 - Yahoo: Fetching 600519.SS
+2026-02-04 01:51:37 | INFO     | data.fetcher:get_history:382 - Yahoo: Got 1493 bars for 600519
+2026-02-04 01:51:37 | INFO     | data.fetcher:get_history:553 - Got 1493 bars from yahoo
+2026-02-04 01:51:37 | DEBUG    | data.fetcher:_save_disk_cache:664 - Cached 600519 to disk
+2026-02-04 01:51:37 | INFO     | data.features:create_features:158 - Created 36 features, 1434 samples
+2026-02-04 01:51:37 | INFO     | data.fetcher:get_history:549 - Trying akshare for 601318...
+2026-02-04 01:51:37 | DEBUG    | data.fetcher:get_history:195 - AkShare: Fetching 601318 from 20191208 to 20260204
+2026-02-04 01:53:49 | WARNING  | data.fetcher:wrapper:56 - get_history attempt 1/3 failed: ('Connection aborted.', ConnectionResetError(10054, 'An existing connection was forcibly closed by the remote host', None, 10054, None)). Retrying in 3.0s...
+2026-02-04 01:53:52 | DEBUG    | data.fetcher:get_history:195 - AkShare: Fetching 601318 from 20191208 to 20260204
+2026-02-04 01:56:04 | WARNING  | data.fetcher:wrapper:56 - get_history attempt 2/3 failed: ('Connection aborted.', ConnectionResetError(10054, 'An existing connection was forcibly closed by the remote host', None, 10054, None)). Retrying in 6.0s...
+2026-02-04 01:56:10 | DEBUG    | data.fetcher:get_history:195 - AkShare: Fetching 601318 from 20191208 to 20260204
+2026-02-04 01:58:24 | WARNING  | data.fetcher:_record_error:144 - Data source akshare disabled due to repeated errors
+2026-02-04 01:58:24 | ERROR    | data.fetcher:wrapper:63 - get_history failed after 3 attempts: ('Connection aborted.', ConnectionResetError(10054, 'An existing connection was forcibly closed by the remote host', None, 10054, None))
+2026-02-04 01:58:24 | WARNING  | data.fetcher:get_history:565 - akshare failed for 601318: ('Connection aborted.', ConnectionResetError(10054, 'An existing connection was forcibly closed by the remote host', None, 10054, None))
+2026-02-04 01:58:24 | INFO     | data.fetcher:get_history:549 - Trying yahoo for 601318...
+2026-02-04 01:58:24 | DEBUG    | data.fetcher:get_history:352 - Yahoo: Fetching 601318.SS
+2026-02-04 01:58:27 | INFO     | data.fetcher:get_history:382 - Yahoo: Got 1493 bars for 601318
+2026-02-04 01:58:27 | INFO     | data.fetcher:get_history:553 - Got 1493 bars from yahoo
+2026-02-04 01:58:27 | DEBUG    | data.fetcher:_save_disk_cache:664 - Cached 601318 to disk
+2026-02-04 01:58:27 | INFO     | data.features:create_features:158 - Created 36 features, 1434 samples
+2026-02-04 01:58:27 | INFO     | data.fetcher:get_history:549 - Trying yahoo for 600036...
+2026-02-04 01:58:27 | DEBUG    | data.fetcher:get_history:352 - Yahoo: Fetching 600036.SS
+2026-02-04 01:58:28 | INFO     | data.fetcher:get_history:382 - Yahoo: Got 1493 bars for 600036
+2026-02-04 01:58:28 | INFO     | data.fetcher:get_history:553 - Got 1493 bars from yahoo
+2026-02-04 01:58:28 | DEBUG    | data.fetcher:_save_disk_cache:664 - Cached 600036 to disk
+2026-02-04 01:58:28 | INFO     | data.features:create_features:158 - Created 36 features, 1434 samples
+2026-02-04 01:58:28 | INFO     | data.fetcher:get_history:549 - Trying yahoo for 000858...
+2026-02-04 01:58:28 | DEBUG    | data.fetcher:get_history:352 - Yahoo: Fetching 000858.SZ
+2026-02-04 01:58:29 | INFO     | data.fetcher:get_history:382 - Yahoo: Got 1494 bars for 000858
+2026-02-04 01:58:29 | INFO     | data.fetcher:get_history:553 - Got 1494 bars from yahoo
+2026-02-04 01:58:29 | DEBUG    | data.fetcher:_save_disk_cache:664 - Cached 000858 to disk
+2026-02-04 01:58:29 | INFO     | data.features:create_features:158 - Created 36 features, 1435 samples
+2026-02-04 01:58:29 | INFO     | data.fetcher:get_history:549 - Trying yahoo for 600900...
+2026-02-04 01:58:29 | DEBUG    | data.fetcher:get_history:352 - Yahoo: Fetching 600900.SS
+2026-02-04 01:58:31 | INFO     | data.fetcher:get_history:382 - Yahoo: Got 1482 bars for 600900
+2026-02-04 01:58:31 | INFO     | data.fetcher:get_history:553 - Got 1482 bars from yahoo
+2026-02-04 01:58:31 | DEBUG    | data.fetcher:_save_disk_cache:664 - Cached 600900 to disk
+2026-02-04 01:58:31 | INFO     | data.features:create_features:158 - Created 36 features, 1423 samples
+2026-02-04 01:58:31 | INFO     | data.fetcher:get_history:549 - Trying yahoo for 002594...
+2026-02-04 01:58:31 | DEBUG    | data.fetcher:get_history:352 - Yahoo: Fetching 002594.SZ
+2026-02-04 01:58:32 | INFO     | data.fetcher:get_history:382 - Yahoo: Got 1494 bars for 002594
+2026-02-04 01:58:32 | INFO     | data.fetcher:get_history:553 - Got 1494 bars from yahoo
+2026-02-04 01:58:32 | DEBUG    | data.fetcher:_save_disk_cache:664 - Cached 002594 to disk
+2026-02-04 01:58:32 | INFO     | data.features:create_features:158 - Created 36 features, 1435 samples
+2026-02-04 01:58:32 | INFO     | data.fetcher:get_history:549 - Trying yahoo for 300750...
+2026-02-04 01:58:32 | DEBUG    | data.fetcher:get_history:352 - Yahoo: Fetching 300750.SZ
+2026-02-04 01:58:33 | INFO     | data.fetcher:get_history:382 - Yahoo: Got 1494 bars for 300750
+2026-02-04 01:58:33 | INFO     | data.fetcher:get_history:553 - Got 1494 bars from yahoo
+2026-02-04 01:58:33 | DEBUG    | data.fetcher:_save_disk_cache:664 - Cached 300750 to disk
+2026-02-04 01:58:33 | INFO     | data.features:create_features:158 - Created 36 features, 1435 samples
+2026-02-04 01:58:33 | INFO     | data.fetcher:get_history:549 - Trying yahoo for 002475...
+2026-02-04 01:58:33 | DEBUG    | data.fetcher:get_history:352 - Yahoo: Fetching 002475.SZ
+2026-02-04 01:58:34 | INFO     | data.fetcher:get_history:382 - Yahoo: Got 1494 bars for 002475
+2026-02-04 01:58:34 | INFO     | data.fetcher:get_history:553 - Got 1494 bars from yahoo
+2026-02-04 01:58:34 | DEBUG    | data.fetcher:_save_disk_cache:664 - Cached 002475 to disk
+2026-02-04 01:58:34 | INFO     | data.features:create_features:158 - Created 36 features, 1435 samples
+2026-02-04 01:58:34 | INFO     | data.fetcher:get_history:549 - Trying yahoo for 300059...
+2026-02-04 01:58:34 | DEBUG    | data.fetcher:get_history:352 - Yahoo: Fetching 300059.SZ
+2026-02-04 01:58:35 | INFO     | data.fetcher:get_history:382 - Yahoo: Got 1494 bars for 300059
+2026-02-04 01:58:35 | INFO     | data.fetcher:get_history:553 - Got 1494 bars from yahoo
+2026-02-04 01:58:35 | DEBUG    | data.fetcher:_save_disk_cache:664 - Cached 300059 to disk
+2026-02-04 01:58:35 | INFO     | data.features:create_features:158 - Created 36 features, 1435 samples
+2026-02-04 01:58:35 | INFO     | data.fetcher:get_history:549 - Trying yahoo for 002230...
+2026-02-04 01:58:35 | DEBUG    | data.fetcher:get_history:352 - Yahoo: Fetching 002230.SZ
+2026-02-04 01:58:36 | INFO     | data.fetcher:get_history:382 - Yahoo: Got 1494 bars for 002230
+2026-02-04 01:58:36 | INFO     | data.fetcher:get_history:553 - Got 1494 bars from yahoo
+2026-02-04 01:58:36 | DEBUG    | data.fetcher:_save_disk_cache:664 - Cached 002230 to disk
+2026-02-04 01:58:36 | INFO     | data.features:create_features:158 - Created 36 features, 1435 samples
+2026-02-04 01:58:36 | INFO     | data.fetcher:get_history:549 - Trying yahoo for 000333...
+2026-02-04 01:58:36 | DEBUG    | data.fetcher:get_history:352 - Yahoo: Fetching 000333.SZ
+2026-02-04 01:58:37 | INFO     | data.fetcher:get_history:382 - Yahoo: Got 1494 bars for 000333
+2026-02-04 01:58:37 | INFO     | data.fetcher:get_history:553 - Got 1494 bars from yahoo
+2026-02-04 01:58:37 | DEBUG    | data.fetcher:_save_disk_cache:664 - Cached 000333 to disk
+2026-02-04 01:58:37 | INFO     | data.features:create_features:158 - Created 36 features, 1435 samples
+2026-02-04 01:58:37 | INFO     | data.fetcher:get_history:549 - Trying yahoo for 000651...
+2026-02-04 01:58:37 | DEBUG    | data.fetcher:get_history:352 - Yahoo: Fetching 000651.SZ
+2026-02-04 01:58:38 | INFO     | data.fetcher:get_history:382 - Yahoo: Got 1494 bars for 000651
+2026-02-04 01:58:38 | INFO     | data.fetcher:get_history:553 - Got 1494 bars from yahoo
+2026-02-04 01:58:38 | DEBUG    | data.fetcher:_save_disk_cache:664 - Cached 000651 to disk
+2026-02-04 01:58:38 | INFO     | data.features:create_features:158 - Created 36 features, 1435 samples
+2026-02-04 01:58:38 | INFO     | data.fetcher:get_history:549 - Trying yahoo for 600887...
+2026-02-04 01:58:38 | DEBUG    | data.fetcher:get_history:352 - Yahoo: Fetching 600887.SS
+2026-02-04 01:58:38 | INFO     | data.fetcher:get_history:382 - Yahoo: Got 1493 bars for 600887
+2026-02-04 01:58:38 | INFO     | data.fetcher:get_history:553 - Got 1493 bars from yahoo
+2026-02-04 01:58:38 | DEBUG    | data.fetcher:_save_disk_cache:664 - Cached 600887 to disk
+2026-02-04 01:58:38 | INFO     | data.features:create_features:158 - Created 36 features, 1434 samples
+2026-02-04 01:58:38 | INFO     | data.fetcher:get_history:549 - Trying yahoo for 603288...
+2026-02-04 01:58:38 | DEBUG    | data.fetcher:get_history:352 - Yahoo: Fetching 603288.SS
+2026-02-04 01:58:39 | INFO     | data.fetcher:get_history:382 - Yahoo: Got 1493 bars for 603288
+2026-02-04 01:58:39 | INFO     | data.fetcher:get_history:553 - Got 1493 bars from yahoo
+2026-02-04 01:58:39 | DEBUG    | data.fetcher:_save_disk_cache:664 - Cached 603288 to disk
+2026-02-04 01:58:39 | INFO     | data.features:create_features:158 - Created 36 features, 1434 samples
+2026-02-04 01:58:39 | INFO     | data.fetcher:get_history:549 - Trying yahoo for 600276...
+2026-02-04 01:58:39 | DEBUG    | data.fetcher:get_history:352 - Yahoo: Fetching 600276.SS
+2026-02-04 01:58:40 | INFO     | data.fetcher:get_history:382 - Yahoo: Got 1493 bars for 600276
+2026-02-04 01:58:40 | INFO     | data.fetcher:get_history:553 - Got 1493 bars from yahoo
+2026-02-04 01:58:40 | DEBUG    | data.fetcher:_save_disk_cache:664 - Cached 600276 to disk
+2026-02-04 01:58:40 | INFO     | data.features:create_features:158 - Created 36 features, 1434 samples
+2026-02-04 01:58:40 | INFO     | data.fetcher:get_history:549 - Trying yahoo for 300760...
+2026-02-04 01:58:40 | DEBUG    | data.fetcher:get_history:352 - Yahoo: Fetching 300760.SZ
+2026-02-04 01:58:41 | INFO     | data.fetcher:get_history:382 - Yahoo: Got 1494 bars for 300760
+2026-02-04 01:58:41 | INFO     | data.fetcher:get_history:553 - Got 1494 bars from yahoo
+2026-02-04 01:58:41 | DEBUG    | data.fetcher:_save_disk_cache:664 - Cached 300760 to disk
+2026-02-04 01:58:41 | INFO     | data.features:create_features:158 - Created 36 features, 1435 samples
+2026-02-04 01:58:41 | INFO     | data.fetcher:get_history:549 - Trying yahoo for 300015...
+2026-02-04 01:58:41 | DEBUG    | data.fetcher:get_history:352 - Yahoo: Fetching 300015.SZ
+2026-02-04 01:58:42 | INFO     | data.fetcher:get_history:382 - Yahoo: Got 1493 bars for 300015
+2026-02-04 01:58:42 | INFO     | data.fetcher:get_history:553 - Got 1493 bars from yahoo
+2026-02-04 01:58:42 | DEBUG    | data.fetcher:_save_disk_cache:664 - Cached 300015 to disk
+2026-02-04 01:58:42 | INFO     | data.features:create_features:158 - Created 36 features, 1434 samples
+2026-02-04 01:58:42 | INFO     | data.fetcher:get_history:549 - Trying yahoo for 601166...
+2026-02-04 01:58:42 | DEBUG    | data.fetcher:get_history:352 - Yahoo: Fetching 601166.SS
+2026-02-04 01:58:43 | INFO     | data.fetcher:get_history:382 - Yahoo: Got 1493 bars for 601166
+2026-02-04 01:58:43 | INFO     | data.fetcher:get_history:553 - Got 1493 bars from yahoo
+2026-02-04 01:58:43 | DEBUG    | data.fetcher:_save_disk_cache:664 - Cached 601166 to disk
+2026-02-04 01:58:43 | INFO     | data.features:create_features:158 - Created 36 features, 1434 samples
+2026-02-04 01:58:43 | INFO     | data.fetcher:get_history:549 - Trying yahoo for 601398...
+2026-02-04 01:58:43 | DEBUG    | data.fetcher:get_history:352 - Yahoo: Fetching 601398.SS
+2026-02-04 01:58:44 | INFO     | data.fetcher:get_history:382 - Yahoo: Got 1493 bars for 601398
+2026-02-04 01:58:44 | INFO     | data.fetcher:get_history:553 - Got 1493 bars from yahoo
+2026-02-04 01:58:44 | DEBUG    | data.fetcher:_save_disk_cache:664 - Cached 601398 to disk
+2026-02-04 01:58:44 | INFO     | data.features:create_features:158 - Created 36 features, 1434 samples
+2026-02-04 01:58:44 | INFO     | data.fetcher:get_history:549 - Trying yahoo for 600030...
+2026-02-04 01:58:44 | DEBUG    | data.fetcher:get_history:352 - Yahoo: Fetching 600030.SS
+2026-02-04 01:58:45 | INFO     | data.fetcher:get_history:382 - Yahoo: Got 1487 bars for 600030
+2026-02-04 01:58:45 | INFO     | data.fetcher:get_history:553 - Got 1487 bars from yahoo
+2026-02-04 01:58:45 | DEBUG    | data.fetcher:_save_disk_cache:664 - Cached 600030 to disk
+2026-02-04 01:58:45 | INFO     | data.features:create_features:158 - Created 36 features, 1428 samples
+2026-02-04 01:58:45 | INFO     | models.trainer:prepare_data:114 - Successfully loaded 20 stocks
+2026-02-04 01:58:45 | INFO     | models.trainer:prepare_data:117 - Fitting scaler on training data...
+2026-02-04 01:58:45 | INFO     | data.processor:fit_scaler:99 - Scaler fitted on 19988 samples with 36 features
+2026-02-04 01:58:45 | INFO     | models.trainer:prepare_data:135 - Scaler fitted on 19988 training samples
+2026-02-04 01:58:45 | DEBUG    | data.processor:prepare_sequences:174 - Created 940 sequences of shape (60, 36)
+2026-02-04 01:58:45 | DEBUG    | data.processor:prepare_sequences:174 - Created 154 sequences of shape (60, 36)
+2026-02-04 01:58:45 | DEBUG    | data.processor:prepare_sequences:174 - Created 155 sequences of shape (60, 36)
+2026-02-04 01:58:45 | DEBUG    | data.processor:prepare_sequences:174 - Created 940 sequences of shape (60, 36)
+2026-02-04 01:58:45 | DEBUG    | data.processor:prepare_sequences:174 - Created 154 sequences of shape (60, 36)
+2026-02-04 01:58:45 | DEBUG    | data.processor:prepare_sequences:174 - Created 155 sequences of shape (60, 36)
+2026-02-04 01:58:45 | DEBUG    | data.processor:prepare_sequences:174 - Created 940 sequences of shape (60, 36)
+2026-02-04 01:58:45 | DEBUG    | data.processor:prepare_sequences:174 - Created 154 sequences of shape (60, 36)
+2026-02-04 01:58:45 | DEBUG    | data.processor:prepare_sequences:174 - Created 155 sequences of shape (60, 36)
+2026-02-04 01:58:45 | DEBUG    | data.processor:prepare_sequences:174 - Created 940 sequences of shape (60, 36)
+2026-02-04 01:58:45 | DEBUG    | data.processor:prepare_sequences:174 - Created 155 sequences of shape (60, 36)
+2026-02-04 01:58:45 | DEBUG    | data.processor:prepare_sequences:174 - Created 155 sequences of shape (60, 36)
+2026-02-04 01:58:45 | DEBUG    | data.processor:prepare_sequences:174 - Created 932 sequences of shape (60, 36)
+2026-02-04 01:58:45 | DEBUG    | data.processor:prepare_sequences:174 - Created 153 sequences of shape (60, 36)
+2026-02-04 01:58:45 | DEBUG    | data.processor:prepare_sequences:174 - Created 153 sequences of shape (60, 36)
+2026-02-04 01:58:45 | DEBUG    | data.processor:prepare_sequences:174 - Created 940 sequences of shape (60, 36)
+2026-02-04 01:58:45 | DEBUG    | data.processor:prepare_sequences:174 - Created 155 sequences of shape (60, 36)
+2026-02-04 01:58:45 | DEBUG    | data.processor:prepare_sequences:174 - Created 155 sequences of shape (60, 36)
+2026-02-04 01:58:45 | DEBUG    | data.processor:prepare_sequences:174 - Created 940 sequences of shape (60, 36)
+2026-02-04 01:58:45 | DEBUG    | data.processor:prepare_sequences:174 - Created 155 sequences of shape (60, 36)
+2026-02-04 01:58:45 | DEBUG    | data.processor:prepare_sequences:174 - Created 155 sequences of shape (60, 36)
+2026-02-04 01:58:45 | DEBUG    | data.processor:prepare_sequences:174 - Created 940 sequences of shape (60, 36)
+2026-02-04 01:58:45 | DEBUG    | data.processor:prepare_sequences:174 - Created 155 sequences of shape (60, 36)
+2026-02-04 01:58:45 | DEBUG    | data.processor:prepare_sequences:174 - Created 155 sequences of shape (60, 36)
+2026-02-04 01:58:45 | DEBUG    | data.processor:prepare_sequences:174 - Created 940 sequences of shape (60, 36)
+2026-02-04 01:58:45 | DEBUG    | data.processor:prepare_sequences:174 - Created 155 sequences of shape (60, 36)
+2026-02-04 01:58:45 | DEBUG    | data.processor:prepare_sequences:174 - Created 155 sequences of shape (60, 36)
+2026-02-04 01:58:45 | DEBUG    | data.processor:prepare_sequences:174 - Created 940 sequences of shape (60, 36)
+2026-02-04 01:58:45 | DEBUG    | data.processor:prepare_sequences:174 - Created 155 sequences of shape (60, 36)
+2026-02-04 01:58:45 | DEBUG    | data.processor:prepare_sequences:174 - Created 155 sequences of shape (60, 36)
+2026-02-04 01:58:45 | DEBUG    | data.processor:prepare_sequences:174 - Created 940 sequences of shape (60, 36)
+2026-02-04 01:58:45 | DEBUG    | data.processor:prepare_sequences:174 - Created 155 sequences of shape (60, 36)
+2026-02-04 01:58:45 | DEBUG    | data.processor:prepare_sequences:174 - Created 155 sequences of shape (60, 36)
+2026-02-04 01:58:45 | DEBUG    | data.processor:prepare_sequences:174 - Created 940 sequences of shape (60, 36)
+2026-02-04 01:58:45 | DEBUG    | data.processor:prepare_sequences:174 - Created 155 sequences of shape (60, 36)
+2026-02-04 01:58:45 | DEBUG    | data.processor:prepare_sequences:174 - Created 155 sequences of shape (60, 36)
+2026-02-04 01:58:45 | DEBUG    | data.processor:prepare_sequences:174 - Created 940 sequences of shape (60, 36)
+2026-02-04 01:58:45 | DEBUG    | data.processor:prepare_sequences:174 - Created 154 sequences of shape (60, 36)
+2026-02-04 01:58:45 | DEBUG    | data.processor:prepare_sequences:174 - Created 155 sequences of shape (60, 36)
+2026-02-04 01:58:45 | DEBUG    | data.processor:prepare_sequences:174 - Created 940 sequences of shape (60, 36)
+2026-02-04 01:58:45 | DEBUG    | data.processor:prepare_sequences:174 - Created 154 sequences of shape (60, 36)
+2026-02-04 01:58:45 | DEBUG    | data.processor:prepare_sequences:174 - Created 155 sequences of shape (60, 36)
+2026-02-04 01:58:45 | DEBUG    | data.processor:prepare_sequences:174 - Created 940 sequences of shape (60, 36)
+2026-02-04 01:58:45 | DEBUG    | data.processor:prepare_sequences:174 - Created 154 sequences of shape (60, 36)
+2026-02-04 01:58:45 | DEBUG    | data.processor:prepare_sequences:174 - Created 155 sequences of shape (60, 36)
+2026-02-04 01:58:45 | DEBUG    | data.processor:prepare_sequences:174 - Created 940 sequences of shape (60, 36)
+2026-02-04 01:58:45 | DEBUG    | data.processor:prepare_sequences:174 - Created 155 sequences of shape (60, 36)
+2026-02-04 01:58:45 | DEBUG    | data.processor:prepare_sequences:174 - Created 155 sequences of shape (60, 36)
+2026-02-04 01:58:45 | DEBUG    | data.processor:prepare_sequences:174 - Created 940 sequences of shape (60, 36)
+2026-02-04 01:58:45 | DEBUG    | data.processor:prepare_sequences:174 - Created 154 sequences of shape (60, 36)
+2026-02-04 01:58:45 | DEBUG    | data.processor:prepare_sequences:174 - Created 155 sequences of shape (60, 36)
+2026-02-04 01:58:45 | DEBUG    | data.processor:prepare_sequences:174 - Created 940 sequences of shape (60, 36)
+2026-02-04 01:58:45 | DEBUG    | data.processor:prepare_sequences:174 - Created 154 sequences of shape (60, 36)
+2026-02-04 01:58:45 | DEBUG    | data.processor:prepare_sequences:174 - Created 155 sequences of shape (60, 36)
+2026-02-04 01:58:45 | DEBUG    | data.processor:prepare_sequences:174 - Created 940 sequences of shape (60, 36)
+2026-02-04 01:58:45 | DEBUG    | data.processor:prepare_sequences:174 - Created 154 sequences of shape (60, 36)
+2026-02-04 01:58:45 | DEBUG    | data.processor:prepare_sequences:174 - Created 155 sequences of shape (60, 36)
+2026-02-04 01:58:45 | DEBUG    | data.processor:prepare_sequences:174 - Created 936 sequences of shape (60, 36)
+2026-02-04 01:58:45 | DEBUG    | data.processor:prepare_sequences:174 - Created 153 sequences of shape (60, 36)
+2026-02-04 01:58:45 | DEBUG    | data.processor:prepare_sequences:174 - Created 154 sequences of shape (60, 36)
+2026-02-04 01:58:46 | INFO     | models.trainer:prepare_data:190 - Data prepared:
+2026-02-04 01:58:46 | INFO     | models.trainer:prepare_data:191 -   Train: 18788 samples
+2026-02-04 01:58:46 | INFO     | models.trainer:prepare_data:192 -   Val:   3087 samples
+2026-02-04 01:58:46 | INFO     | models.trainer:prepare_data:193 -   Test:  3097 samples
+2026-02-04 01:58:46 | INFO     | models.trainer:prepare_data:194 -   Input size: 36 features
+2026-02-04 01:58:46 | INFO     | models.trainer:prepare_data:199 -   Class distribution: DOWN=5660, NEUTRAL=7583, UP=5545
+2026-02-04 01:58:46 | INFO     | data.processor:save_scaler:232 - Scaler saved to F:\Trading app\Trading-graph\saved_models\scaler.pkl
+2026-02-04 01:58:46 | DEBUG    | models.ensemble:_init_model:91 - Initialized lstm model
+2026-02-04 01:58:46 | DEBUG    | models.ensemble:_init_model:91 - Initialized transformer model
+2026-02-04 01:58:46 | DEBUG    | models.ensemble:_init_model:91 - Initialized gru model
+2026-02-04 01:58:46 | DEBUG    | models.ensemble:_init_model:91 - Initialized tcn model
+2026-02-04 01:58:46 | INFO     | models.ensemble:__init__:76 - Ensemble initialized with 4 models on cpu
+2026-02-04 01:58:46 | INFO     | models.trainer:train:253 - Training ensemble with 4 models...
+2026-02-04 01:58:46 | INFO     | models.trainer:train:254 - Epochs: 100, Batch size: 64
+2026-02-04 01:58:46 | INFO     | models.ensemble:train:131 - Training lstm...
+2026-02-04 02:03:54 | ERROR    | models.auto_learner:find_top_gainers:215 - find_top_gainers error: HTTPSConnectionPool(host='82.push2.eastmoney.com', port=443): Read timed out. (read timeout=15)
+2026-02-04 02:03:54 | INFO     | models.auto_learner:find_all_stocks:166 - Found 0 valid stocks from 涨幅榜 (Top Gainers)
+2026-02-04 02:04:47 | ERROR    | models.auto_learner:find_top_losers:249 - find_top_losers error: HTTPSConnectionPool(host='82.push2.eastmoney.com', port=443): Read timed out. (read timeout=15)
+2026-02-04 02:04:47 | INFO     | models.auto_learner:find_all_stocks:166 - Found 0 valid stocks from 跌幅榜 (Top Losers)
+2026-02-04 02:05:40 | ERROR    | models.auto_learner:find_top_volume:284 - find_top_volume error: HTTPSConnectionPool(host='82.push2.eastmoney.com', port=443): Read timed out. (read timeout=15)
+2026-02-04 02:05:40 | INFO     | models.auto_learner:find_all_stocks:166 - Found 0 valid stocks from 成交额榜 (High Volume)
+2026-02-04 02:07:50 | WARNING  | models.auto_learner:find_analyst_picks:329 - find_analyst_picks error: ('Connection aborted.', ConnectionAbortedError(10053, 'An established connection was aborted by the software in your host machine', None, 10053, None))
+2026-02-04 02:07:50 | INFO     | models.auto_learner:find_all_stocks:166 - Found 0 valid stocks from 机构推荐 (Analyst Picks)
+2026-02-04 02:07:50 | INFO     | models.auto_learner:find_all_stocks:179 - Total unique valid stocks found: 0
+2026-02-04 02:07:50 | WARNING  | models.auto_learner:_learning_loop:470 - Insufficient stocks from internet, using fallback
+2026-02-04 02:07:50 | INFO     | models.auto_learner:get_fallback_stocks:334 - Using fallback stock pool from config
+2026-02-04 02:07:50 | INFO     | models.auto_learner:_learning_loop:481 - Selected 20 stocks for training
+2026-02-04 02:07:50 | INFO     | data.fetcher:_check_availability:171 - AkShare data source initialized
+2026-02-04 02:07:50 | INFO     | data.fetcher:_init_sources:481 -   ✓ akshare available
+2026-02-04 02:07:51 | INFO     | data.fetcher:_check_availability:328 - Yahoo Finance data source initialized
+2026-02-04 02:07:51 | INFO     | data.fetcher:_init_sources:481 -   ✓ yahoo available
+2026-02-04 02:07:51 | INFO     | data.fetcher:__init__:466 - DataFetcher initialized with 2 sources
+2026-02-04 02:07:51 | DEBUG    | data.fetcher:get_history:536 - Disk cache hit for 600519
+2026-02-04 02:07:51 | DEBUG    | models.auto_learner:_learning_loop:511 - Downloaded 600519: 1493 bars
+2026-02-04 02:07:51 | DEBUG    | data.fetcher:get_history:536 - Disk cache hit for 601318
+2026-02-04 02:07:51 | DEBUG    | models.auto_learner:_learning_loop:511 - Downloaded 601318: 1493 bars
+2026-02-04 02:07:51 | DEBUG    | data.fetcher:get_history:536 - Disk cache hit for 600036
+2026-02-04 02:07:51 | DEBUG    | models.auto_learner:_learning_loop:511 - Downloaded 600036: 1493 bars
+2026-02-04 02:07:51 | DEBUG    | data.fetcher:get_history:536 - Disk cache hit for 000858
+2026-02-04 02:07:51 | DEBUG    | models.auto_learner:_learning_loop:511 - Downloaded 000858: 1494 bars
+2026-02-04 02:07:51 | DEBUG    | data.fetcher:get_history:536 - Disk cache hit for 600900
+2026-02-04 02:07:51 | DEBUG    | models.auto_learner:_learning_loop:511 - Downloaded 600900: 1482 bars
+2026-02-04 02:07:51 | DEBUG    | data.fetcher:get_history:536 - Disk cache hit for 002594
+2026-02-04 02:07:51 | DEBUG    | models.auto_learner:_learning_loop:511 - Downloaded 002594: 1494 bars
+2026-02-04 02:07:51 | DEBUG    | data.fetcher:get_history:536 - Disk cache hit for 300750
+2026-02-04 02:07:51 | DEBUG    | models.auto_learner:_learning_loop:511 - Downloaded 300750: 1494 bars
+2026-02-04 02:07:51 | DEBUG    | data.fetcher:get_history:536 - Disk cache hit for 002475
+2026-02-04 02:07:51 | DEBUG    | models.auto_learner:_learning_loop:511 - Downloaded 002475: 1494 bars
+2026-02-04 02:07:51 | DEBUG    | data.fetcher:get_history:536 - Disk cache hit for 300059
+2026-02-04 02:07:51 | DEBUG    | models.auto_learner:_learning_loop:511 - Downloaded 300059: 1494 bars
+2026-02-04 02:07:51 | DEBUG    | data.fetcher:get_history:536 - Disk cache hit for 002230
+2026-02-04 02:07:51 | DEBUG    | models.auto_learner:_learning_loop:511 - Downloaded 002230: 1494 bars
+2026-02-04 02:07:51 | DEBUG    | data.fetcher:get_history:536 - Disk cache hit for 000333
+2026-02-04 02:07:51 | DEBUG    | models.auto_learner:_learning_loop:511 - Downloaded 000333: 1494 bars
+2026-02-04 02:07:51 | DEBUG    | data.fetcher:get_history:536 - Disk cache hit for 000651
+2026-02-04 02:07:51 | DEBUG    | models.auto_learner:_learning_loop:511 - Downloaded 000651: 1494 bars
+2026-02-04 02:07:51 | DEBUG    | data.fetcher:get_history:536 - Disk cache hit for 600887
+2026-02-04 02:07:51 | DEBUG    | models.auto_learner:_learning_loop:511 - Downloaded 600887: 1493 bars
+2026-02-04 02:07:51 | DEBUG    | data.fetcher:get_history:536 - Disk cache hit for 603288
+2026-02-04 02:07:51 | DEBUG    | models.auto_learner:_learning_loop:511 - Downloaded 603288: 1493 bars
+2026-02-04 02:07:51 | DEBUG    | data.fetcher:get_history:536 - Disk cache hit for 600276
+2026-02-04 02:07:51 | DEBUG    | models.auto_learner:_learning_loop:511 - Downloaded 600276: 1493 bars
+2026-02-04 02:07:51 | DEBUG    | data.fetcher:get_history:536 - Disk cache hit for 300760
+2026-02-04 02:07:51 | DEBUG    | models.auto_learner:_learning_loop:511 - Downloaded 300760: 1494 bars
+2026-02-04 02:07:51 | DEBUG    | data.fetcher:get_history:536 - Disk cache hit for 300015
+2026-02-04 02:07:51 | DEBUG    | models.auto_learner:_learning_loop:511 - Downloaded 300015: 1493 bars
+2026-02-04 02:07:51 | DEBUG    | data.fetcher:get_history:536 - Disk cache hit for 601166
+2026-02-04 02:07:51 | DEBUG    | models.auto_learner:_learning_loop:511 - Downloaded 601166: 1493 bars
+2026-02-04 02:07:51 | DEBUG    | data.fetcher:get_history:536 - Disk cache hit for 601398
+2026-02-04 02:07:51 | DEBUG    | models.auto_learner:_learning_loop:511 - Downloaded 601398: 1493 bars
+2026-02-04 02:07:51 | DEBUG    | data.fetcher:get_history:536 - Disk cache hit for 600030
+2026-02-04 02:07:51 | DEBUG    | models.auto_learner:_learning_loop:511 - Downloaded 600030: 1487 bars
+2026-02-04 02:07:51 | INFO     | models.auto_learner:_learning_loop:520 - Valid stocks with data: 20
+2026-02-04 02:07:51 | INFO     | data.features:create_features:158 - Created 36 features, 1434 samples
+2026-02-04 02:07:51 | INFO     | data.features:create_features:158 - Created 36 features, 1434 samples
+2026-02-04 02:07:51 | INFO     | data.features:create_features:158 - Created 36 features, 1434 samples
+2026-02-04 02:07:51 | INFO     | data.features:create_features:158 - Created 36 features, 1435 samples
+2026-02-04 02:07:51 | INFO     | data.features:create_features:158 - Created 36 features, 1423 samples
+2026-02-04 02:07:51 | INFO     | data.features:create_features:158 - Created 36 features, 1435 samples
+2026-02-04 02:07:51 | INFO     | data.features:create_features:158 - Created 36 features, 1435 samples
+2026-02-04 02:07:51 | INFO     | data.features:create_features:158 - Created 36 features, 1435 samples
+2026-02-04 02:07:52 | INFO     | data.features:create_features:158 - Created 36 features, 1435 samples
+2026-02-04 02:07:52 | INFO     | data.features:create_features:158 - Created 36 features, 1435 samples
+2026-02-04 02:07:52 | INFO     | data.features:create_features:158 - Created 36 features, 1435 samples
+2026-02-04 02:07:52 | INFO     | data.features:create_features:158 - Created 36 features, 1435 samples
+2026-02-04 02:07:52 | INFO     | data.features:create_features:158 - Created 36 features, 1434 samples
+2026-02-04 02:07:52 | INFO     | data.features:create_features:158 - Created 36 features, 1434 samples
+2026-02-04 02:07:52 | INFO     | data.features:create_features:158 - Created 36 features, 1434 samples
+2026-02-04 02:07:52 | INFO     | data.features:create_features:158 - Created 36 features, 1435 samples
+2026-02-04 02:07:52 | INFO     | data.features:create_features:158 - Created 36 features, 1434 samples
+2026-02-04 02:07:52 | INFO     | data.features:create_features:158 - Created 36 features, 1434 samples
+2026-02-04 02:07:52 | INFO     | data.features:create_features:158 - Created 36 features, 1434 samples
+2026-02-04 02:07:53 | INFO     | data.features:create_features:158 - Created 36 features, 1428 samples
+2026-02-04 02:07:53 | INFO     | data.processor:fit_scaler:99 - Scaler fitted on 19988 samples with 36 features
+2026-02-04 02:07:53 | DEBUG    | data.processor:prepare_sequences:174 - Created 940 sequences of shape (60, 36)
+2026-02-04 02:07:53 | DEBUG    | data.processor:prepare_sequences:174 - Created 154 sequences of shape (60, 36)
+2026-02-04 02:07:53 | DEBUG    | data.processor:prepare_sequences:174 - Created 155 sequences of shape (60, 36)
+2026-02-04 02:07:53 | DEBUG    | data.processor:prepare_sequences:174 - Created 940 sequences of shape (60, 36)
+2026-02-04 02:07:53 | DEBUG    | data.processor:prepare_sequences:174 - Created 154 sequences of shape (60, 36)
+2026-02-04 02:07:53 | DEBUG    | data.processor:prepare_sequences:174 - Created 155 sequences of shape (60, 36)
+2026-02-04 02:07:53 | DEBUG    | data.processor:prepare_sequences:174 - Created 940 sequences of shape (60, 36)
+2026-02-04 02:07:53 | DEBUG    | data.processor:prepare_sequences:174 - Created 154 sequences of shape (60, 36)
+2026-02-04 02:07:53 | DEBUG    | data.processor:prepare_sequences:174 - Created 155 sequences of shape (60, 36)
+2026-02-04 02:07:53 | DEBUG    | data.processor:prepare_sequences:174 - Created 940 sequences of shape (60, 36)
+2026-02-04 02:07:53 | DEBUG    | data.processor:prepare_sequences:174 - Created 155 sequences of shape (60, 36)
+2026-02-04 02:07:53 | DEBUG    | data.processor:prepare_sequences:174 - Created 155 sequences of shape (60, 36)
+2026-02-04 02:07:53 | DEBUG    | data.processor:prepare_sequences:174 - Created 932 sequences of shape (60, 36)
+2026-02-04 02:07:53 | DEBUG    | data.processor:prepare_sequences:174 - Created 153 sequences of shape (60, 36)
+2026-02-04 02:07:53 | DEBUG    | data.processor:prepare_sequences:174 - Created 153 sequences of shape (60, 36)
+2026-02-04 02:07:53 | DEBUG    | data.processor:prepare_sequences:174 - Created 940 sequences of shape (60, 36)
+2026-02-04 02:07:53 | DEBUG    | data.processor:prepare_sequences:174 - Created 155 sequences of shape (60, 36)
+2026-02-04 02:07:53 | DEBUG    | data.processor:prepare_sequences:174 - Created 155 sequences of shape (60, 36)
+2026-02-04 02:07:53 | DEBUG    | data.processor:prepare_sequences:174 - Created 940 sequences of shape (60, 36)
+2026-02-04 02:07:53 | DEBUG    | data.processor:prepare_sequences:174 - Created 155 sequences of shape (60, 36)
+2026-02-04 02:07:53 | DEBUG    | data.processor:prepare_sequences:174 - Created 155 sequences of shape (60, 36)
+2026-02-04 02:07:53 | DEBUG    | data.processor:prepare_sequences:174 - Created 940 sequences of shape (60, 36)
+2026-02-04 02:07:53 | DEBUG    | data.processor:prepare_sequences:174 - Created 155 sequences of shape (60, 36)
+2026-02-04 02:07:53 | DEBUG    | data.processor:prepare_sequences:174 - Created 155 sequences of shape (60, 36)
+2026-02-04 02:07:53 | DEBUG    | data.processor:prepare_sequences:174 - Created 940 sequences of shape (60, 36)
+2026-02-04 02:07:53 | DEBUG    | data.processor:prepare_sequences:174 - Created 155 sequences of shape (60, 36)
+2026-02-04 02:07:53 | DEBUG    | data.processor:prepare_sequences:174 - Created 155 sequences of shape (60, 36)
+2026-02-04 02:07:53 | DEBUG    | data.processor:prepare_sequences:174 - Created 940 sequences of shape (60, 36)
+2026-02-04 02:07:53 | DEBUG    | data.processor:prepare_sequences:174 - Created 155 sequences of shape (60, 36)
+2026-02-04 02:07:53 | DEBUG    | data.processor:prepare_sequences:174 - Created 155 sequences of shape (60, 36)
+2026-02-04 02:07:53 | DEBUG    | data.processor:prepare_sequences:174 - Created 940 sequences of shape (60, 36)
+2026-02-04 02:07:53 | DEBUG    | data.processor:prepare_sequences:174 - Created 155 sequences of shape (60, 36)
+2026-02-04 02:07:53 | DEBUG    | data.processor:prepare_sequences:174 - Created 155 sequences of shape (60, 36)
+2026-02-04 02:07:53 | DEBUG    | data.processor:prepare_sequences:174 - Created 940 sequences of shape (60, 36)
+2026-02-04 02:07:53 | DEBUG    | data.processor:prepare_sequences:174 - Created 155 sequences of shape (60, 36)
+2026-02-04 02:07:53 | DEBUG    | data.processor:prepare_sequences:174 - Created 155 sequences of shape (60, 36)
+2026-02-04 02:07:53 | DEBUG    | data.processor:prepare_sequences:174 - Created 940 sequences of shape (60, 36)
+2026-02-04 02:07:53 | DEBUG    | data.processor:prepare_sequences:174 - Created 154 sequences of shape (60, 36)
+2026-02-04 02:07:53 | DEBUG    | data.processor:prepare_sequences:174 - Created 155 sequences of shape (60, 36)
+2026-02-04 02:07:53 | DEBUG    | data.processor:prepare_sequences:174 - Created 940 sequences of shape (60, 36)
+2026-02-04 02:07:53 | DEBUG    | data.processor:prepare_sequences:174 - Created 154 sequences of shape (60, 36)
+2026-02-04 02:07:53 | DEBUG    | data.processor:prepare_sequences:174 - Created 155 sequences of shape (60, 36)
+2026-02-04 02:07:53 | DEBUG    | data.processor:prepare_sequences:174 - Created 940 sequences of shape (60, 36)
+2026-02-04 02:07:53 | DEBUG    | data.processor:prepare_sequences:174 - Created 154 sequences of shape (60, 36)
+2026-02-04 02:07:53 | DEBUG    | data.processor:prepare_sequences:174 - Created 155 sequences of shape (60, 36)
+2026-02-04 02:07:53 | DEBUG    | data.processor:prepare_sequences:174 - Created 940 sequences of shape (60, 36)
+2026-02-04 02:07:53 | DEBUG    | data.processor:prepare_sequences:174 - Created 155 sequences of shape (60, 36)
+2026-02-04 02:07:53 | DEBUG    | data.processor:prepare_sequences:174 - Created 155 sequences of shape (60, 36)
+2026-02-04 02:07:53 | DEBUG    | data.processor:prepare_sequences:174 - Created 940 sequences of shape (60, 36)
+2026-02-04 02:07:53 | DEBUG    | data.processor:prepare_sequences:174 - Created 154 sequences of shape (60, 36)
+2026-02-04 02:07:53 | DEBUG    | data.processor:prepare_sequences:174 - Created 155 sequences of shape (60, 36)
+2026-02-04 02:07:53 | DEBUG    | data.processor:prepare_sequences:174 - Created 940 sequences of shape (60, 36)
+2026-02-04 02:07:53 | DEBUG    | data.processor:prepare_sequences:174 - Created 154 sequences of shape (60, 36)
+2026-02-04 02:07:53 | DEBUG    | data.processor:prepare_sequences:174 - Created 155 sequences of shape (60, 36)
+2026-02-04 02:07:53 | DEBUG    | data.processor:prepare_sequences:174 - Created 940 sequences of shape (60, 36)
+2026-02-04 02:07:53 | DEBUG    | data.processor:prepare_sequences:174 - Created 154 sequences of shape (60, 36)
+2026-02-04 02:07:53 | DEBUG    | data.processor:prepare_sequences:174 - Created 155 sequences of shape (60, 36)
+2026-02-04 02:07:53 | DEBUG    | data.processor:prepare_sequences:174 - Created 936 sequences of shape (60, 36)
+2026-02-04 02:07:53 | DEBUG    | data.processor:prepare_sequences:174 - Created 153 sequences of shape (60, 36)
+2026-02-04 02:07:53 | DEBUG    | data.processor:prepare_sequences:174 - Created 154 sequences of shape (60, 36)
+2026-02-04 02:07:53 | INFO     | models.auto_learner:_learning_loop:629 - Data: Train=18788, Val=3087, Test=3097
+2026-02-04 02:07:53 | INFO     | data.processor:save_scaler:232 - Scaler saved to F:\Trading app\Trading-graph\saved_models\scaler.pkl
+2026-02-04 02:07:53 | DEBUG    | models.ensemble:_init_model:91 - Initialized lstm model
+2026-02-04 02:07:53 | DEBUG    | models.ensemble:_init_model:91 - Initialized transformer model
+2026-02-04 02:07:53 | DEBUG    | models.ensemble:_init_model:91 - Initialized gru model
+2026-02-04 02:07:53 | DEBUG    | models.ensemble:_init_model:91 - Initialized tcn model
+2026-02-04 02:07:53 | INFO     | models.ensemble:__init__:76 - Ensemble initialized with 4 models on cpu
+2026-02-04 02:07:53 | WARNING  | models.ensemble:load:336 - No saved model at F:\Trading app\Trading-graph\saved_models\ensemble.pt
+2026-02-04 02:07:53 | DEBUG    | models.ensemble:_init_model:91 - Initialized lstm model
+2026-02-04 02:07:53 | DEBUG    | models.ensemble:_init_model:91 - Initialized transformer model
+2026-02-04 02:07:53 | DEBUG    | models.ensemble:_init_model:91 - Initialized gru model
+2026-02-04 02:07:53 | DEBUG    | models.ensemble:_init_model:91 - Initialized tcn model
+2026-02-04 02:07:53 | INFO     | models.ensemble:__init__:76 - Ensemble initialized with 4 models on cpu
+2026-02-04 02:07:53 | INFO     | models.ensemble:train:131 - Training lstm...
+2026-02-04 02:17:07 | ERROR    | models.auto_learner:find_top_gainers:215 - find_top_gainers error: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-02-04 02:17:07 | INFO     | models.auto_learner:find_all_stocks:166 - Found 0 valid stocks from 涨幅榜 (Top Gainers)
+2026-02-04 02:17:13 | ERROR    | models.auto_learner:find_top_losers:249 - find_top_losers error: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-02-04 02:17:13 | INFO     | models.auto_learner:find_all_stocks:166 - Found 0 valid stocks from 跌幅榜 (Top Losers)
+2026-02-04 02:17:20 | ERROR    | models.auto_learner:find_top_volume:284 - find_top_volume error: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-02-04 02:17:20 | INFO     | models.auto_learner:find_all_stocks:166 - Found 0 valid stocks from 成交额榜 (High Volume)
+2026-02-04 02:17:21 | INFO     | models.auto_learner:find_all_stocks:166 - Found 0 valid stocks from 机构推荐 (Analyst Picks)
+2026-02-04 02:17:21 | INFO     | models.auto_learner:find_all_stocks:179 - Total unique valid stocks found: 0
+2026-02-04 02:17:21 | WARNING  | models.auto_learner:_learning_loop:470 - Insufficient stocks from internet, using fallback
+2026-02-04 02:17:21 | INFO     | models.auto_learner:get_fallback_stocks:334 - Using fallback stock pool from config
+2026-02-04 02:17:21 | INFO     | models.auto_learner:_learning_loop:481 - Selected 20 stocks for training
+2026-02-04 02:17:21 | INFO     | data.fetcher:_check_availability:171 - AkShare data source initialized
+2026-02-04 02:17:21 | INFO     | data.fetcher:_init_sources:481 -   ✓ akshare available
+2026-02-04 02:17:21 | INFO     | data.fetcher:_check_availability:328 - Yahoo Finance data source initialized
+2026-02-04 02:17:21 | INFO     | data.fetcher:_init_sources:481 -   ✓ yahoo available
+2026-02-04 02:17:21 | INFO     | data.fetcher:__init__:466 - DataFetcher initialized with 2 sources
+2026-02-04 02:17:21 | DEBUG    | data.fetcher:get_history:536 - Disk cache hit for 600519
+2026-02-04 02:17:21 | DEBUG    | models.auto_learner:_learning_loop:511 - Downloaded 600519: 1493 bars
+2026-02-04 02:17:21 | DEBUG    | data.fetcher:get_history:536 - Disk cache hit for 601318
+2026-02-04 02:17:21 | DEBUG    | models.auto_learner:_learning_loop:511 - Downloaded 601318: 1493 bars
+2026-02-04 02:17:21 | DEBUG    | data.fetcher:get_history:536 - Disk cache hit for 600036
+2026-02-04 02:17:21 | DEBUG    | models.auto_learner:_learning_loop:511 - Downloaded 600036: 1493 bars
+2026-02-04 02:17:21 | DEBUG    | data.fetcher:get_history:536 - Disk cache hit for 000858
+2026-02-04 02:17:21 | DEBUG    | models.auto_learner:_learning_loop:511 - Downloaded 000858: 1494 bars
+2026-02-04 02:17:21 | DEBUG    | data.fetcher:get_history:536 - Disk cache hit for 600900
+2026-02-04 02:17:21 | DEBUG    | models.auto_learner:_learning_loop:511 - Downloaded 600900: 1482 bars
+2026-02-04 02:17:21 | DEBUG    | data.fetcher:get_history:536 - Disk cache hit for 002594
+2026-02-04 02:17:21 | DEBUG    | models.auto_learner:_learning_loop:511 - Downloaded 002594: 1494 bars
+2026-02-04 02:17:21 | DEBUG    | data.fetcher:get_history:536 - Disk cache hit for 300750
+2026-02-04 02:17:21 | DEBUG    | models.auto_learner:_learning_loop:511 - Downloaded 300750: 1494 bars
+2026-02-04 02:17:21 | DEBUG    | data.fetcher:get_history:536 - Disk cache hit for 002475
+2026-02-04 02:17:21 | DEBUG    | models.auto_learner:_learning_loop:511 - Downloaded 002475: 1494 bars
+2026-02-04 02:17:21 | DEBUG    | data.fetcher:get_history:536 - Disk cache hit for 300059
+2026-02-04 02:17:21 | DEBUG    | models.auto_learner:_learning_loop:511 - Downloaded 300059: 1494 bars
+2026-02-04 02:17:21 | DEBUG    | data.fetcher:get_history:536 - Disk cache hit for 002230
+2026-02-04 02:17:21 | DEBUG    | models.auto_learner:_learning_loop:511 - Downloaded 002230: 1494 bars
+2026-02-04 02:17:21 | DEBUG    | data.fetcher:get_history:536 - Disk cache hit for 000333
+2026-02-04 02:17:21 | DEBUG    | models.auto_learner:_learning_loop:511 - Downloaded 000333: 1494 bars
+2026-02-04 02:17:21 | DEBUG    | data.fetcher:get_history:536 - Disk cache hit for 000651
+2026-02-04 02:17:21 | DEBUG    | models.auto_learner:_learning_loop:511 - Downloaded 000651: 1494 bars
+2026-02-04 02:17:21 | DEBUG    | data.fetcher:get_history:536 - Disk cache hit for 600887
+2026-02-04 02:17:21 | DEBUG    | models.auto_learner:_learning_loop:511 - Downloaded 600887: 1493 bars
+2026-02-04 02:17:21 | DEBUG    | data.fetcher:get_history:536 - Disk cache hit for 603288
+2026-02-04 02:17:21 | DEBUG    | models.auto_learner:_learning_loop:511 - Downloaded 603288: 1493 bars
+2026-02-04 02:17:21 | DEBUG    | data.fetcher:get_history:536 - Disk cache hit for 600276
+2026-02-04 02:17:21 | DEBUG    | models.auto_learner:_learning_loop:511 - Downloaded 600276: 1493 bars
+2026-02-04 02:17:21 | DEBUG    | data.fetcher:get_history:536 - Disk cache hit for 300760
+2026-02-04 02:17:21 | DEBUG    | models.auto_learner:_learning_loop:511 - Downloaded 300760: 1494 bars
+2026-02-04 02:17:21 | DEBUG    | data.fetcher:get_history:536 - Disk cache hit for 300015
+2026-02-04 02:17:21 | DEBUG    | models.auto_learner:_learning_loop:511 - Downloaded 300015: 1493 bars
+2026-02-04 02:17:21 | DEBUG    | data.fetcher:get_history:536 - Disk cache hit for 601166
+2026-02-04 02:17:21 | DEBUG    | models.auto_learner:_learning_loop:511 - Downloaded 601166: 1493 bars
+2026-02-04 02:17:21 | DEBUG    | data.fetcher:get_history:536 - Disk cache hit for 601398
+2026-02-04 02:17:21 | DEBUG    | models.auto_learner:_learning_loop:511 - Downloaded 601398: 1493 bars
+2026-02-04 02:17:21 | DEBUG    | data.fetcher:get_history:536 - Disk cache hit for 600030
+2026-02-04 02:17:21 | DEBUG    | models.auto_learner:_learning_loop:511 - Downloaded 600030: 1487 bars
+2026-02-04 02:17:21 | INFO     | models.auto_learner:_learning_loop:520 - Valid stocks with data: 20
+2026-02-04 02:17:21 | INFO     | data.features:create_features:158 - Created 36 features, 1434 samples
+2026-02-04 02:17:21 | INFO     | data.features:create_features:158 - Created 36 features, 1434 samples
+2026-02-04 02:17:21 | INFO     | data.features:create_features:158 - Created 36 features, 1434 samples
+2026-02-04 02:17:21 | INFO     | data.features:create_features:158 - Created 36 features, 1435 samples
+2026-02-04 02:17:21 | INFO     | data.features:create_features:158 - Created 36 features, 1423 samples
+2026-02-04 02:17:21 | INFO     | data.features:create_features:158 - Created 36 features, 1435 samples
+2026-02-04 02:17:21 | INFO     | data.features:create_features:158 - Created 36 features, 1435 samples
+2026-02-04 02:17:21 | INFO     | data.features:create_features:158 - Created 36 features, 1435 samples
+2026-02-04 02:17:22 | INFO     | data.features:create_features:158 - Created 36 features, 1435 samples
+2026-02-04 02:17:22 | INFO     | data.features:create_features:158 - Created 36 features, 1435 samples
+2026-02-04 02:17:22 | INFO     | data.features:create_features:158 - Created 36 features, 1435 samples
+2026-02-04 02:17:22 | INFO     | data.features:create_features:158 - Created 36 features, 1435 samples
+2026-02-04 02:17:22 | INFO     | data.features:create_features:158 - Created 36 features, 1434 samples
+2026-02-04 02:17:22 | INFO     | data.features:create_features:158 - Created 36 features, 1434 samples
+2026-02-04 02:17:22 | INFO     | data.features:create_features:158 - Created 36 features, 1434 samples
+2026-02-04 02:17:22 | INFO     | data.features:create_features:158 - Created 36 features, 1435 samples
+2026-02-04 02:17:22 | INFO     | data.features:create_features:158 - Created 36 features, 1434 samples
+2026-02-04 02:17:22 | INFO     | data.features:create_features:158 - Created 36 features, 1434 samples
+2026-02-04 02:17:22 | INFO     | data.features:create_features:158 - Created 36 features, 1434 samples
+2026-02-04 02:17:22 | INFO     | data.features:create_features:158 - Created 36 features, 1428 samples
+2026-02-04 02:17:22 | INFO     | data.processor:fit_scaler:99 - Scaler fitted on 19988 samples with 36 features
+2026-02-04 02:17:22 | DEBUG    | data.processor:prepare_sequences:174 - Created 940 sequences of shape (60, 36)
+2026-02-04 02:17:22 | DEBUG    | data.processor:prepare_sequences:174 - Created 154 sequences of shape (60, 36)
+2026-02-04 02:17:22 | DEBUG    | data.processor:prepare_sequences:174 - Created 155 sequences of shape (60, 36)
+2026-02-04 02:17:22 | DEBUG    | data.processor:prepare_sequences:174 - Created 940 sequences of shape (60, 36)
+2026-02-04 02:17:22 | DEBUG    | data.processor:prepare_sequences:174 - Created 154 sequences of shape (60, 36)
+2026-02-04 02:17:22 | DEBUG    | data.processor:prepare_sequences:174 - Created 155 sequences of shape (60, 36)
+2026-02-04 02:17:22 | DEBUG    | data.processor:prepare_sequences:174 - Created 940 sequences of shape (60, 36)
+2026-02-04 02:17:22 | DEBUG    | data.processor:prepare_sequences:174 - Created 154 sequences of shape (60, 36)
+2026-02-04 02:17:22 | DEBUG    | data.processor:prepare_sequences:174 - Created 155 sequences of shape (60, 36)
+2026-02-04 02:17:22 | DEBUG    | data.processor:prepare_sequences:174 - Created 940 sequences of shape (60, 36)
+2026-02-04 02:17:22 | DEBUG    | data.processor:prepare_sequences:174 - Created 155 sequences of shape (60, 36)
+2026-02-04 02:17:22 | DEBUG    | data.processor:prepare_sequences:174 - Created 155 sequences of shape (60, 36)
+2026-02-04 02:17:22 | DEBUG    | data.processor:prepare_sequences:174 - Created 932 sequences of shape (60, 36)
+2026-02-04 02:17:22 | DEBUG    | data.processor:prepare_sequences:174 - Created 153 sequences of shape (60, 36)
+2026-02-04 02:17:22 | DEBUG    | data.processor:prepare_sequences:174 - Created 153 sequences of shape (60, 36)
+2026-02-04 02:17:22 | DEBUG    | data.processor:prepare_sequences:174 - Created 940 sequences of shape (60, 36)
+2026-02-04 02:17:22 | DEBUG    | data.processor:prepare_sequences:174 - Created 155 sequences of shape (60, 36)
+2026-02-04 02:17:22 | DEBUG    | data.processor:prepare_sequences:174 - Created 155 sequences of shape (60, 36)
+2026-02-04 02:17:22 | DEBUG    | data.processor:prepare_sequences:174 - Created 940 sequences of shape (60, 36)
+2026-02-04 02:17:22 | DEBUG    | data.processor:prepare_sequences:174 - Created 155 sequences of shape (60, 36)
+2026-02-04 02:17:22 | DEBUG    | data.processor:prepare_sequences:174 - Created 155 sequences of shape (60, 36)
+2026-02-04 02:17:22 | DEBUG    | data.processor:prepare_sequences:174 - Created 940 sequences of shape (60, 36)
+2026-02-04 02:17:22 | DEBUG    | data.processor:prepare_sequences:174 - Created 155 sequences of shape (60, 36)
+2026-02-04 02:17:22 | DEBUG    | data.processor:prepare_sequences:174 - Created 155 sequences of shape (60, 36)
+2026-02-04 02:17:22 | DEBUG    | data.processor:prepare_sequences:174 - Created 940 sequences of shape (60, 36)
+2026-02-04 02:17:22 | DEBUG    | data.processor:prepare_sequences:174 - Created 155 sequences of shape (60, 36)
+2026-02-04 02:17:22 | DEBUG    | data.processor:prepare_sequences:174 - Created 155 sequences of shape (60, 36)
+2026-02-04 02:17:22 | DEBUG    | data.processor:prepare_sequences:174 - Created 940 sequences of shape (60, 36)
+2026-02-04 02:17:22 | DEBUG    | data.processor:prepare_sequences:174 - Created 155 sequences of shape (60, 36)
+2026-02-04 02:17:22 | DEBUG    | data.processor:prepare_sequences:174 - Created 155 sequences of shape (60, 36)
+2026-02-04 02:17:22 | DEBUG    | data.processor:prepare_sequences:174 - Created 940 sequences of shape (60, 36)
+2026-02-04 02:17:22 | DEBUG    | data.processor:prepare_sequences:174 - Created 155 sequences of shape (60, 36)
+2026-02-04 02:17:22 | DEBUG    | data.processor:prepare_sequences:174 - Created 155 sequences of shape (60, 36)
+2026-02-04 02:17:22 | DEBUG    | data.processor:prepare_sequences:174 - Created 940 sequences of shape (60, 36)
+2026-02-04 02:17:22 | DEBUG    | data.processor:prepare_sequences:174 - Created 155 sequences of shape (60, 36)
+2026-02-04 02:17:22 | DEBUG    | data.processor:prepare_sequences:174 - Created 155 sequences of shape (60, 36)
+2026-02-04 02:17:22 | DEBUG    | data.processor:prepare_sequences:174 - Created 940 sequences of shape (60, 36)
+2026-02-04 02:17:22 | DEBUG    | data.processor:prepare_sequences:174 - Created 154 sequences of shape (60, 36)
+2026-02-04 02:17:22 | DEBUG    | data.processor:prepare_sequences:174 - Created 155 sequences of shape (60, 36)
+2026-02-04 02:17:22 | DEBUG    | data.processor:prepare_sequences:174 - Created 940 sequences of shape (60, 36)
+2026-02-04 02:17:22 | DEBUG    | data.processor:prepare_sequences:174 - Created 154 sequences of shape (60, 36)
+2026-02-04 02:17:22 | DEBUG    | data.processor:prepare_sequences:174 - Created 155 sequences of shape (60, 36)
+2026-02-04 02:17:22 | DEBUG    | data.processor:prepare_sequences:174 - Created 940 sequences of shape (60, 36)
+2026-02-04 02:17:22 | DEBUG    | data.processor:prepare_sequences:174 - Created 154 sequences of shape (60, 36)
+2026-02-04 02:17:22 | DEBUG    | data.processor:prepare_sequences:174 - Created 155 sequences of shape (60, 36)
+2026-02-04 02:17:22 | DEBUG    | data.processor:prepare_sequences:174 - Created 940 sequences of shape (60, 36)
+2026-02-04 02:17:22 | DEBUG    | data.processor:prepare_sequences:174 - Created 155 sequences of shape (60, 36)
+2026-02-04 02:17:22 | DEBUG    | data.processor:prepare_sequences:174 - Created 155 sequences of shape (60, 36)
+2026-02-04 02:17:22 | DEBUG    | data.processor:prepare_sequences:174 - Created 940 sequences of shape (60, 36)
+2026-02-04 02:17:22 | DEBUG    | data.processor:prepare_sequences:174 - Created 154 sequences of shape (60, 36)
+2026-02-04 02:17:22 | DEBUG    | data.processor:prepare_sequences:174 - Created 155 sequences of shape (60, 36)
+2026-02-04 02:17:22 | DEBUG    | data.processor:prepare_sequences:174 - Created 940 sequences of shape (60, 36)
+2026-02-04 02:17:22 | DEBUG    | data.processor:prepare_sequences:174 - Created 154 sequences of shape (60, 36)
+2026-02-04 02:17:22 | DEBUG    | data.processor:prepare_sequences:174 - Created 155 sequences of shape (60, 36)
+2026-02-04 02:17:22 | DEBUG    | data.processor:prepare_sequences:174 - Created 940 sequences of shape (60, 36)
+2026-02-04 02:17:22 | DEBUG    | data.processor:prepare_sequences:174 - Created 154 sequences of shape (60, 36)
+2026-02-04 02:17:22 | DEBUG    | data.processor:prepare_sequences:174 - Created 155 sequences of shape (60, 36)
+2026-02-04 02:17:22 | DEBUG    | data.processor:prepare_sequences:174 - Created 936 sequences of shape (60, 36)
+2026-02-04 02:17:22 | DEBUG    | data.processor:prepare_sequences:174 - Created 153 sequences of shape (60, 36)
+2026-02-04 02:17:22 | DEBUG    | data.processor:prepare_sequences:174 - Created 154 sequences of shape (60, 36)
+2026-02-04 02:17:22 | INFO     | models.auto_learner:_learning_loop:629 - Data: Train=18788, Val=3087, Test=3097
+2026-02-04 02:17:22 | INFO     | data.processor:save_scaler:232 - Scaler saved to F:\Trading app\Trading-graph\saved_models\scaler.pkl
+2026-02-04 02:17:22 | DEBUG    | models.ensemble:_init_model:91 - Initialized lstm model
+2026-02-04 02:17:22 | DEBUG    | models.ensemble:_init_model:91 - Initialized transformer model
+2026-02-04 02:17:22 | DEBUG    | models.ensemble:_init_model:91 - Initialized gru model
+2026-02-04 02:17:22 | DEBUG    | models.ensemble:_init_model:91 - Initialized tcn model
+2026-02-04 02:17:22 | INFO     | models.ensemble:__init__:76 - Ensemble initialized with 4 models on cpu
+2026-02-04 02:17:22 | WARNING  | models.ensemble:load:336 - No saved model at F:\Trading app\Trading-graph\saved_models\ensemble.pt
+2026-02-04 02:17:22 | DEBUG    | models.ensemble:_init_model:91 - Initialized lstm model
