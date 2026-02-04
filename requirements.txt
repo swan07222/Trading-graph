@@ -1,29 +1,46 @@
-# Core
+# requirements.txt - Professional Version
+
+# Core ML
 torch>=2.0.0
 numpy>=1.24.0
 pandas>=2.0.0
 scikit-learn>=1.3.0
-
-# Data
-akshare>=1.10.0
-requests>=2.31.0
-websocket-client>=1.6.0
+scipy>=1.11.0
 
 # Technical Analysis
-ta>=0.10.2
+ta>=0.10.0
+
+# Data Sources
+akshare>=1.10.0
 
 # GUI
 PyQt6>=6.5.0
-pyqtgraph>=0.13.3
+pyqtgraph>=0.13.0
+
+# Logging
+loguru>=0.7.0
+tqdm>=4.65.0
+
+# HTTP/Web
+requests>=2.31.0
+beautifulsoup4>=4.12.0
 
 # Broker Integration
-easytrader>=0.22.0
+easytrader>=0.21.0
+playwright>=1.40.0  # For web brokers
+pyautogui>=0.9.54   # For GUI automation
+pygetwindow>=0.0.9
+pytesseract>=0.3.10
 
-# Utilities
-loguru>=0.7.0
-python-dotenv>=1.0.0
-tqdm>=4.65.0
+# NLP/Sentiment
+transformers>=4.30.0
+jieba>=0.42.1
 
 # Visualization
 matplotlib>=3.7.0
-mplfinance>=0.12.9
+seaborn>=0.12.0
+
+# Development
+pytest>=7.4.0
+black>=23.7.0
+isort>=5.12.0
