@@ -1,1 +1,41 @@
 2026-02-03 19:27:17 | WARNING  | models.predictor:_load_model:121 - No trained model found. Train a model first.
+2026-02-03 21:22:58 | WARNING  | trading.broker_ths:<module>:21 - easytrader not installed. Live trading unavailable.
+2026-02-03 21:22:59 | WARNING  | models.predictor:_load_model:121 - No trained model found. Train a model first.
+2026-02-03 21:23:51 | INFO     | trading.broker_sim:connect:54 - Simulator connected with ¥100,000.00
+2026-02-03 21:23:51 | INFO     | trading.executor:start:71 - Execution engine started (simulation)
+2026-02-03 21:23:55 | INFO     | trading.broker_sim:disconnect:59 - Simulator disconnected
+2026-02-03 21:23:55 | INFO     | trading.executor:stop:80 - Execution engine stopped
+2026-02-03 21:26:06 | ERROR    | models.auto_learner:find_top_gainers:154 - find_top_gainers error: HTTPSConnectionPool(host='82.push2.eastmoney.com', port=443): Read timed out. (read timeout=15)
+2026-02-03 21:26:06 | INFO     | models.auto_learner:find_all_stocks:113 - Found 0 stocks from 涨幅榜
+2026-02-03 21:26:58 | ERROR    | models.auto_learner:find_top_losers:182 - find_top_losers error: HTTPSConnectionPool(host='82.push2.eastmoney.com', port=443): Read timed out. (read timeout=15)
+2026-02-03 21:26:58 | INFO     | models.auto_learner:find_all_stocks:113 - Found 0 stocks from 跌幅榜
+2026-02-03 21:27:23 | ERROR    | models.auto_learner:find_top_volume:211 - find_top_volume error: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-02-03 21:27:23 | INFO     | models.auto_learner:find_all_stocks:113 - Found 0 stocks from 成交额榜
+2026-02-03 21:27:24 | INFO     | models.auto_learner:find_all_stocks:113 - Found 0 stocks from 热门股票
+2026-02-03 21:27:24 | INFO     | models.auto_learner:find_all_stocks:113 - Found 30 stocks from 机构推荐
+2026-02-03 21:27:31 | WARNING  | models.auto_learner:find_sector_leaders:311 - find_sector_leaders error: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-02-03 21:27:31 | INFO     | models.auto_learner:find_all_stocks:113 - Found 0 stocks from 行业龙头
+2026-02-03 21:27:37 | WARNING  | models.auto_learner:find_new_highs:343 - find_new_highs error: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-02-03 21:27:37 | INFO     | models.auto_learner:find_all_stocks:113 - Found 0 stocks from 创新高
+2026-02-03 21:27:44 | WARNING  | models.auto_learner:find_volume_breakouts:374 - find_volume_breakouts error: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-02-03 21:27:44 | INFO     | models.auto_learner:find_all_stocks:113 - Found 0 stocks from 放量突破
+2026-02-03 21:27:44 | INFO     | models.auto_learner:find_all_stocks:125 - Total unique stocks found: 1
+2026-02-03 21:27:44 | INFO     | models.auto_learner:_learning_loop:508 - Selected 1 stocks for training
+2026-02-03 21:27:44 | INFO     | models.auto_learner:_learning_loop:539 - Valid stocks with data: 0
+2026-02-03 21:27:59 | ERROR    | models.auto_learner:find_top_gainers:154 - find_top_gainers error: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-02-03 21:27:59 | INFO     | models.auto_learner:find_all_stocks:113 - Found 0 stocks from 涨幅榜
+2026-02-03 21:28:06 | ERROR    | models.auto_learner:find_top_losers:182 - find_top_losers error: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-02-03 21:28:06 | INFO     | models.auto_learner:find_all_stocks:113 - Found 0 stocks from 跌幅榜
+2026-02-03 21:28:11 | ERROR    | models.auto_learner:find_top_volume:211 - find_top_volume error: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-02-03 21:28:11 | INFO     | models.auto_learner:find_all_stocks:113 - Found 0 stocks from 成交额榜
+2026-02-03 21:28:12 | INFO     | models.auto_learner:find_all_stocks:113 - Found 0 stocks from 热门股票
+2026-02-03 21:28:13 | INFO     | models.auto_learner:find_all_stocks:113 - Found 30 stocks from 机构推荐
+2026-02-03 21:28:20 | WARNING  | models.auto_learner:find_sector_leaders:311 - find_sector_leaders error: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-02-03 21:28:20 | INFO     | models.auto_learner:find_all_stocks:113 - Found 0 stocks from 行业龙头
+2026-02-03 21:28:27 | WARNING  | models.auto_learner:find_new_highs:343 - find_new_highs error: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-02-03 21:28:27 | INFO     | models.auto_learner:find_all_stocks:113 - Found 0 stocks from 创新高
+2026-02-03 21:28:32 | WARNING  | models.auto_learner:find_volume_breakouts:374 - find_volume_breakouts error: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-02-03 21:28:32 | INFO     | models.auto_learner:find_all_stocks:113 - Found 0 stocks from 放量突破
+2026-02-03 21:28:32 | INFO     | models.auto_learner:find_all_stocks:125 - Total unique stocks found: 1
+2026-02-03 21:28:32 | INFO     | models.auto_learner:_learning_loop:508 - Selected 1 stocks for training
+2026-02-03 21:28:33 | INFO     | models.auto_learner:_learning_loop:539 - Valid stocks with data: 0
