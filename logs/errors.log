@@ -10,3 +10,11 @@
 
 2026-02-03 21:28:11 | ERROR | models.auto_learner:find_top_volume:211 - find_top_volume error: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
 
+2026-02-04 01:22:21 | ERROR | models.auto_learner:find_top_gainers:154 - find_top_gainers error: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+
+2026-02-04 01:22:27 | ERROR | models.auto_learner:find_top_losers:182 - find_top_losers error: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+
+2026-02-04 01:22:33 | ERROR | models.auto_learner:find_top_volume:211 - find_top_volume error: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+
+2026-02-04 01:24:37 | ERROR | models.auto_learner:find_top_gainers:154 - find_top_gainers error: HTTPSConnectionPool(host='82.push2.eastmoney.com', port=443): Read timed out. (read timeout=15)
+

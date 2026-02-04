@@ -1,0 +1,22 @@
+2026-02-04 01:22:21 | ERROR    | models.auto_learner:find_top_gainers:154 - find_top_gainers error: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-02-04 01:22:21 | INFO     | models.auto_learner:find_all_stocks:113 - Found 0 stocks from 涨幅榜
+2026-02-04 01:22:27 | ERROR    | models.auto_learner:find_top_losers:182 - find_top_losers error: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-02-04 01:22:27 | INFO     | models.auto_learner:find_all_stocks:113 - Found 0 stocks from 跌幅榜
+2026-02-04 01:22:33 | ERROR    | models.auto_learner:find_top_volume:211 - find_top_volume error: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-02-04 01:22:33 | INFO     | models.auto_learner:find_all_stocks:113 - Found 0 stocks from 成交额榜
+2026-02-04 01:22:34 | INFO     | models.auto_learner:find_all_stocks:113 - Found 0 stocks from 热门股票
+2026-02-04 01:22:35 | INFO     | models.auto_learner:find_all_stocks:113 - Found 0 stocks from 机构推荐
+2026-02-04 01:22:42 | WARNING  | models.auto_learner:find_sector_leaders:332 - find_sector_leaders error: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-02-04 01:22:42 | INFO     | models.auto_learner:find_all_stocks:113 - Found 0 stocks from 行业龙头
+2026-02-04 01:22:49 | WARNING  | models.auto_learner:find_new_highs:364 - find_new_highs error: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-02-04 01:22:49 | INFO     | models.auto_learner:find_all_stocks:113 - Found 0 stocks from 创新高
+2026-02-04 01:22:55 | WARNING  | models.auto_learner:find_volume_breakouts:395 - find_volume_breakouts error: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-02-04 01:22:55 | INFO     | models.auto_learner:find_all_stocks:113 - Found 0 stocks from 放量突破
+2026-02-04 01:22:55 | INFO     | models.auto_learner:find_all_stocks:125 - Total unique stocks found: 0
+2026-02-04 01:22:55 | INFO     | models.auto_learner:_learning_loop:529 - Selected 0 stocks for training
+2026-02-04 01:22:55 | INFO     | data.fetcher:__init__:135 - AkShare data source initialized
+2026-02-04 01:22:55 | INFO     | data.fetcher:__init__:260 - Yahoo Finance data source initialized
+2026-02-04 01:22:55 | INFO     | data.fetcher:__init__:375 - Data fetcher initialized with 2 sources: ['akshare', 'yahoo']
+2026-02-04 01:22:55 | INFO     | models.auto_learner:_learning_loop:560 - Valid stocks with data: 0
+2026-02-04 01:24:37 | ERROR    | models.auto_learner:find_top_gainers:154 - find_top_gainers error: HTTPSConnectionPool(host='82.push2.eastmoney.com', port=443): Read timed out. (read timeout=15)
+2026-02-04 01:24:37 | INFO     | models.auto_learner:find_all_stocks:113 - Found 0 stocks from 涨幅榜
