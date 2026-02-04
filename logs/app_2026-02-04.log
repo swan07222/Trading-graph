@@ -546,3 +546,8 @@
 2026-02-04 02:17:22 | INFO     | models.ensemble:__init__:76 - Ensemble initialized with 4 models on cpu
 2026-02-04 02:17:22 | WARNING  | models.ensemble:load:336 - No saved model at F:\Trading app\Trading-graph\saved_models\ensemble.pt
 2026-02-04 02:17:22 | DEBUG    | models.ensemble:_init_model:91 - Initialized lstm model
+2026-02-04 02:17:22 | DEBUG    | models.ensemble:_init_model:91 - Initialized transformer model
+2026-02-04 02:17:22 | DEBUG    | models.ensemble:_init_model:91 - Initialized gru model
+2026-02-04 02:17:22 | DEBUG    | models.ensemble:_init_model:91 - Initialized tcn model
+2026-02-04 02:17:22 | INFO     | models.ensemble:__init__:76 - Ensemble initialized with 4 models on cpu
+2026-02-04 02:17:22 | INFO     | models.ensemble:train:131 - Training lstm...
