@@ -551,3 +551,24 @@
 2026-02-04 02:17:22 | DEBUG    | models.ensemble:_init_model:91 - Initialized tcn model
 2026-02-04 02:17:22 | INFO     | models.ensemble:__init__:76 - Ensemble initialized with 4 models on cpu
 2026-02-04 02:17:22 | INFO     | models.ensemble:train:131 - Training lstm...
+2026-02-04 02:59:51 | INFO     | models.ensemble:_train_single_model:236 - lstm Epoch 10: val_acc=37.29%
+2026-02-04 03:40:11 | INFO     | models.ensemble:_train_single_model:228 - lstm: Early stopping at epoch 18
+2026-02-04 03:40:11 | INFO     | models.ensemble:_train_single_model:243 - lstm training complete. Best accuracy: 42.18%
+2026-02-04 03:40:11 | INFO     | models.ensemble:train:131 - Training transformer...
+2026-02-04 04:14:44 | INFO     | models.ensemble:_train_single_model:236 - transformer Epoch 10: val_acc=35.92%
+2026-02-04 04:52:58 | INFO     | models.ensemble:_train_single_model:236 - transformer Epoch 20: val_acc=39.42%
+2026-02-04 05:35:42 | INFO     | models.ensemble:_train_single_model:236 - transformer Epoch 30: val_acc=38.91%
+2026-02-04 06:17:05 | INFO     | models.ensemble:_train_single_model:228 - transformer: Early stopping at epoch 40
+2026-02-04 06:17:05 | INFO     | models.ensemble:_train_single_model:243 - transformer training complete. Best accuracy: 40.07%
+2026-02-04 06:17:05 | INFO     | models.ensemble:train:131 - Training gru...
+2026-02-04 06:32:48 | INFO     | models.ensemble:_train_single_model:236 - gru Epoch 10: val_acc=36.48%
+2026-02-04 06:44:02 | INFO     | models.ensemble:_train_single_model:228 - gru: Early stopping at epoch 17
+2026-02-04 06:44:02 | INFO     | models.ensemble:_train_single_model:243 - gru training complete. Best accuracy: 40.27%
+2026-02-04 06:44:02 | INFO     | models.ensemble:train:131 - Training tcn...
+2026-02-04 06:56:29 | INFO     | models.ensemble:_train_single_model:236 - tcn Epoch 10: val_acc=36.31%
+2026-02-04 07:07:47 | INFO     | models.ensemble:_train_single_model:228 - tcn: Early stopping at epoch 19
+2026-02-04 07:07:47 | INFO     | models.ensemble:_train_single_model:243 - tcn training complete. Best accuracy: 39.91%
+2026-02-04 07:07:47 | INFO     | models.ensemble:_update_weights:260 - Updated weights: {'lstm': 0.25967291583566016, 'transformer': 0.24670921420023934, 'gru': 0.24790586358197048, 'tcn': 0.24571200638213003}
+2026-02-04 07:08:10 | INFO     | models.auto_learner:_learning_loop:697 - Test accuracy: 57.30%
+2026-02-04 07:08:10 | INFO     | models.ensemble:save:329 - Ensemble saved to F:\Trading app\Trading-graph\saved_models\ensemble.pt
+2026-02-04 07:08:10 | INFO     | models.auto_learner:_learning_loop:736 - Auto-learning completed in 291.2 minutes!
