@@ -14,7 +14,7 @@ from PyQt6.QtGui import QFont, QColor
 
 from models.auto_learner import AutoLearner, LearningProgress, ContinuousLearner
 from utils.logger import log
-
+from datetime import datetime
 
 class AutoLearnDialog(QDialog):
     """

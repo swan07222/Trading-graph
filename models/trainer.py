@@ -1,11 +1,11 @@
 """
-Model Trainer - Complete training pipeline with proper data handling
+Model Trainer - Complete Training Pipeline
 
-Key Features:
-1. Proper temporal train/val/test splits (no data leakage)
-2. Scaler fitted only on training data
-3. Walk-forward validation option
-4. Comprehensive metrics and logging
+FIXED Issues:
+- Proper temporal split per stock (no data leakage)
+- Scaler fitted only on training data
+- No shuffling of time series data
+- Scaler saved with model for inference
 
 Author: AI Trading System
 Version: 2.0
@@ -27,16 +27,19 @@ from utils.logger import log
 
 class Trainer:
     """
-    Training pipeline with proper data handling.
+    Complete training pipeline with proper data handling
+    
+    Features:
+    - Multi-stock data collection
+    - Proper temporal train/val/test split (no leakage)
+    - Scaler fitting only on training data
+    - Model training with callbacks
+    - Performance evaluation
+    - Model persistence
     
     Usage:
         trainer = Trainer()
-        results = trainer.train(stock_codes=['600519', '000858'])
-        
-    The trainer ensures:
-    1. Each stock is split temporally (early data for training, recent for testing)
-    2. Scaler is fitted ONLY on training data
-    3. No future information leaks into training
+        results = trainer.train(stock_codes=['600519', '000858'], epochs=100)
     """
     
     def __init__(self):
@@ -46,38 +49,43 @@ class Trainer:
         
         self.ensemble: Optional[EnsembleModel] = None
         self.history: Dict = {}
+        self.input_size: int = 0
     
-    def prepare_data(self, 
+    def prepare_data(self,
                      stock_codes: List[str] = None,
+                     min_samples_per_stock: int = 100,
                      verbose: bool = True) -> Tuple:
         """
-        Prepare training data with proper temporal splits.
+        Prepare training data with proper temporal split
         
-        CRITICAL: Each stock is split temporally, then splits are combined.
-        This prevents the model from learning from "future" data.
+        CRITICAL: Each stock is split temporally BEFORE combining.
+        This prevents any data leakage between train/val/test sets.
         
         Args:
             stock_codes: List of stock codes to use
-            verbose: Whether to show progress
+            min_samples_per_stock: Minimum samples required per stock
+            verbose: Show progress bar
             
         Returns:
             Tuple of (X_train, y_train, r_train, X_val, y_val, r_val, X_test, y_test, r_test)
         """
         stocks = stock_codes or CONFIG.STOCK_POOL
-        log.info(f"Preparing data for {len(stocks)} stocks...")
         
-        # Step 1: Load and process all stocks
-        stock_data = {}
-        feature_cols = self.feature_engine.get_feature_columns()
+        log.info(f"Preparing data for {len(stocks)} stocks...")
+        log.info(f"Temporal split: Train={CONFIG.TRAIN_RATIO:.0%}, "
+                f"Val={CONFIG.VAL_RATIO:.0%}, Test={CONFIG.TEST_RATIO:.0%}")
+        
+        # Phase 1: Collect and process data for each stock
+        stock_data: Dict[str, Dict] = {}
         
         iterator = tqdm(stocks, desc="Loading stocks") if verbose else stocks
         
         for code in iterator:
             try:
-                # Get historical data
+                # Fetch historical data
                 df = self.fetcher.get_history(code, days=1500)
                 
-                if len(df) < CONFIG.SEQUENCE_LENGTH + 100:
+                if len(df) < CONFIG.SEQUENCE_LENGTH + min_samples_per_stock:
                     log.warning(f"Insufficient data for {code}: {len(df)} bars")
                     continue
                 
@@ -87,99 +95,112 @@ class Trainer:
                 # Create labels
                 df = self.processor.create_labels(df)
                 
-                # Verify we have required columns
-                missing_cols = set(feature_cols) - set(df.columns)
-                if missing_cols:
-                    log.warning(f"{code} missing features: {missing_cols}")
+                # Check if we have enough data after processing
+                if len(df) < CONFIG.SEQUENCE_LENGTH + 50:
+                    log.warning(f"Insufficient processed data for {code}")
                     continue
                 
-                stock_data[code] = df
+                stock_data[code] = {
+                    'df': df,
+                    'samples': len(df) - CONFIG.SEQUENCE_LENGTH
+                }
                 
             except Exception as e:
                 log.error(f"Error processing {code}: {e}")
         
-        if len(stock_data) < 3:
-            raise ValueError(f"Not enough stocks with valid data: {len(stock_data)}")
+        if not stock_data:
+            raise ValueError("No valid stock data available for training")
         
         log.info(f"Successfully loaded {len(stock_data)} stocks")
         
-        # Step 2: Fit scaler on ALL training data (from all stocks)
+        # Phase 2: Fit scaler on training portion of ALL stocks
         log.info("Fitting scaler on training data...")
+        
+        feature_cols = self.feature_engine.get_feature_columns()
         all_train_features = []
         
-        for code, df in stock_data.items():
+        for code, data in stock_data.items():
+            df = data['df']
             n = len(df)
             train_end = int(n * CONFIG.TRAIN_RATIO)
-            train_df = df.iloc[:train_end]
             
-            if len(train_df) > CONFIG.SEQUENCE_LENGTH:
-                all_train_features.append(train_df[feature_cols].values)
+            train_df = df.iloc[:train_end]
+            train_features = train_df[feature_cols].values
+            all_train_features.append(train_features)
         
-        if not all_train_features:
-            raise ValueError("No training data available")
-        
-        combined_train_features = np.concatenate(all_train_features)
+        # Combine and fit scaler
+        combined_train_features = np.concatenate(all_train_features, axis=0)
         self.processor.fit_scaler(combined_train_features)
         
-        # Step 3: Prepare sequences for each split
-        log.info("Creating sequences...")
-        all_train_X, all_train_y, all_train_r = [], [], []
-        all_val_X, all_val_y, all_val_r = [], [], []
-        all_test_X, all_test_y, all_test_r = [], [], []
+        log.info(f"Scaler fitted on {len(combined_train_features)} training samples")
         
-        for code, df in stock_data.items():
+        # Phase 3: Create sequences for each split
+        all_train = {'X': [], 'y': [], 'r': []}
+        all_val = {'X': [], 'y': [], 'r': []}
+        all_test = {'X': [], 'y': [], 'r': []}
+        
+        for code, data in stock_data.items():
+            df = data['df']
             n = len(df)
+            
+            # Temporal split points
             train_end = int(n * CONFIG.TRAIN_RATIO)
             val_end = int(n * (CONFIG.TRAIN_RATIO + CONFIG.VAL_RATIO))
             
-            # Split temporally
+            # Split dataframes
             train_df = df.iloc[:train_end]
             val_df = df.iloc[train_end:val_end]
             test_df = df.iloc[val_end:]
             
-            # Create sequences (scaler already fitted)
-            for split_df, X_list, y_list, r_list in [
-                (train_df, all_train_X, all_train_y, all_train_r),
-                (val_df, all_val_X, all_val_y, all_val_r),
-                (test_df, all_test_X, all_test_y, all_test_r)
+            # Create sequences for each split
+            for split_name, split_df, storage in [
+                ('train', train_df, all_train),
+                ('val', val_df, all_val),
+                ('test', test_df, all_test)
             ]:
                 if len(split_df) >= CONFIG.SEQUENCE_LENGTH + 5:
                     X, y, r = self.processor.prepare_sequences(
-                        split_df, feature_cols, fit_scaler=False
+                        split_df, 
+                        feature_cols, 
+                        fit_scaler=False  # Already fitted!
                     )
                     if len(X) > 0:
-                        X_list.append(X)
-                        y_list.append(y)
-                        r_list.append(r)
+                        storage['X'].append(X)
+                        storage['y'].append(y)
+                        storage['r'].append(r)
         
-        # Step 4: Combine all stocks
-        def safe_concat(arrays):
-            return np.concatenate(arrays) if arrays else np.array([])
+        # Phase 4: Combine all stocks
+        def combine_arrays(storage: Dict) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+            if not storage['X']:
+                return np.array([]), np.array([]), np.array([])
+            return (
+                np.concatenate(storage['X']),
+                np.concatenate(storage['y']),
+                np.concatenate(storage['r'])
+            )
         
-        X_train = safe_concat(all_train_X)
-        y_train = safe_concat(all_train_y)
-        r_train = safe_concat(all_train_r)
+        X_train, y_train, r_train = combine_arrays(all_train)
+        X_val, y_val, r_val = combine_arrays(all_val)
+        X_test, y_test, r_test = combine_arrays(all_test)
         
-        X_val = safe_concat(all_val_X)
-        y_val = safe_concat(all_val_y)
-        r_val = safe_concat(all_val_r)
-        
-        X_test = safe_concat(all_test_X)
-        y_test = safe_concat(all_test_y)
-        r_test = safe_concat(all_test_r)
-        
-        # Save scaler for inference
-        self.processor.save_scaler()
+        # Store input size for model creation
+        self.input_size = X_train.shape[2] if len(X_train) > 0 else 0
         
         # Log statistics
-        log.info(f"Data prepared successfully:")
+        log.info(f"Data prepared:")
         log.info(f"  Train: {len(X_train)} samples")
         log.info(f"  Val:   {len(X_val)} samples")
         log.info(f"  Test:  {len(X_test)} samples")
+        log.info(f"  Input size: {self.input_size} features")
         
+        # Log class distribution
         if len(y_train) > 0:
-            dist = np.bincount(y_train, minlength=3)
-            log.info(f"  Train class distribution: DOWN={dist[0]}, NEUTRAL={dist[1]}, UP={dist[2]}")
+            dist = self.processor.get_class_distribution(y_train)
+            log.info(f"  Class distribution: DOWN={dist['DOWN']}, "
+                    f"NEUTRAL={dist['NEUTRAL']}, UP={dist['UP']}")
+        
+        # Save scaler for inference
+        self.processor.save_scaler()
         
         return (X_train, y_train, r_train,
                 X_val, y_val, r_val,
@@ -188,81 +209,94 @@ class Trainer:
     def train(self,
               stock_codes: List[str] = None,
               epochs: int = None,
+              batch_size: int = None,
+              model_names: List[str] = None,
               callback: Callable = None,
               save_model: bool = True) -> Dict:
         """
-        Train the ensemble model.
+        Train the ensemble model
         
         Args:
             stock_codes: Stocks to train on (default: CONFIG.STOCK_POOL)
-            epochs: Number of training epochs
+            epochs: Training epochs (default: CONFIG.EPOCHS)
+            batch_size: Batch size (default: CONFIG.BATCH_SIZE)
+            model_names: Which models to train (default: all)
             callback: Progress callback(model_name, epoch, val_acc)
             save_model: Whether to save the trained model
             
         Returns:
-            Training results including history and metrics
+            Training results dict with history and metrics
         """
         epochs = epochs or CONFIG.EPOCHS
+        batch_size = batch_size or CONFIG.BATCH_SIZE
         
         log.info("=" * 70)
-        log.info("TRAINING PIPELINE")
+        log.info("STARTING TRAINING PIPELINE")
         log.info("=" * 70)
-        log.info(f"Epochs: {epochs}")
-        log.info(f"Stocks: {len(stock_codes or CONFIG.STOCK_POOL)}")
-        log.info(f"Device: {'CUDA' if torch.cuda.is_available() else 'CPU'}")
+        
+        start_time = datetime.now()
         
         # Prepare data
         (X_train, y_train, r_train,
          X_val, y_val, r_val,
          X_test, y_test, r_test) = self.prepare_data(stock_codes)
         
-        if len(X_train) < 100:
-            raise ValueError(f"Not enough training samples: {len(X_train)}")
-        
-        input_size = X_train.shape[2]
-        log.info(f"Input size: {input_size} features")
+        if len(X_train) == 0:
+            raise ValueError("No training data available")
         
         # Initialize ensemble
-        self.ensemble = EnsembleModel(input_size)
+        self.ensemble = EnsembleModel(
+            input_size=self.input_size,
+            model_names=model_names
+        )
+        
+        log.info(f"Training ensemble with {len(self.ensemble.models)} models...")
+        log.info(f"Epochs: {epochs}, Batch size: {batch_size}")
         
         # Train
-        log.info("Training ensemble...")
         self.history = self.ensemble.train(
             X_train, y_train,
             X_val, y_val,
             epochs=epochs,
+            batch_size=batch_size,
             callback=callback
         )
         
         # Evaluate on test set
         log.info("Evaluating on test set...")
-        metrics = self._evaluate(X_test, y_test, r_test)
+        test_metrics = self._evaluate(X_test, y_test, r_test)
         
         # Save model
         if save_model:
             self.ensemble.save()
-            log.info(f"Model saved to {CONFIG.MODEL_DIR}")
+        
+        # Calculate training time
+        training_time = (datetime.now() - start_time).total_seconds() / 60
         
         # Compile results
         best_accuracy = max(
-            max(h['val_acc']) if h['val_acc'] else 0
+            max(h.get('val_acc', [0])) if h.get('val_acc') else 0
             for h in self.history.values()
         )
         
         results = {
             'history': self.history,
-            'best_accuracy': best_accuracy,
-            'test_metrics': metrics,
-            'input_size': input_size,
+            'best_val_accuracy': best_accuracy,
+            'test_metrics': test_metrics,
+            'input_size': self.input_size,
             'num_models': len(self.ensemble.models),
+            'training_time_minutes': training_time,
+            'epochs': epochs,
             'train_samples': len(X_train),
-            'test_samples': len(X_test),
+            'val_samples': len(X_val),
+            'test_samples': len(X_test)
         }
         
         log.info("=" * 70)
-        log.info("TRAINING COMPLETE")
-        log.info(f"Best Validation Accuracy: {best_accuracy:.2%}")
-        log.info(f"Test Accuracy: {metrics.get('accuracy', 0):.2%}")
+        log.info(f"TRAINING COMPLETE")
+        log.info(f"  Best Val Accuracy: {best_accuracy:.2%}")
+        log.info(f"  Test Accuracy: {test_metrics.get('accuracy', 0):.2%}")
+        log.info(f"  Training Time: {training_time:.1f} minutes")
         log.info("=" * 70)
         
         return results
@@ -272,12 +306,13 @@ class Trainer:
         if len(X) == 0:
             return {'accuracy': 0, 'trading': {}}
         
+        # Get predictions
         predictions = self.ensemble.predict_batch(X)
         
         pred_classes = np.array([p.predicted_class for p in predictions])
         confidences = np.array([p.confidence for p in predictions])
         
-        # Classification accuracy
+        # Classification metrics
         accuracy = np.mean(pred_classes == y)
         
         # Per-class accuracy
@@ -286,41 +321,47 @@ class Trainer:
             mask = y == c
             if mask.sum() > 0:
                 class_acc[c] = np.mean(pred_classes[mask] == c)
+            else:
+                class_acc[c] = 0
         
         # Trading simulation
         trading_metrics = self._simulate_trading(pred_classes, confidences, r)
         
         return {
-            'accuracy': float(accuracy),
+            'accuracy': accuracy,
             'class_accuracy': class_acc,
-            'mean_confidence': float(np.mean(confidences)),
+            'mean_confidence': np.mean(confidences),
             'trading': trading_metrics
         }
     
-    def _simulate_trading(self, 
+    def _simulate_trading(self,
                           preds: np.ndarray,
                           confs: np.ndarray,
                           returns: np.ndarray) -> Dict:
         """Simulate trading based on predictions"""
         # Only trade when confident
-        mask = confs >= CONFIG.MIN_CONFIDENCE
+        confidence_mask = confs >= CONFIG.MIN_CONFIDENCE
         
         # Position: +1 for UP, -1 for DOWN, 0 for NEUTRAL
         position = np.zeros_like(preds, dtype=float)
-        position[preds == 2] = 1   # UP → Long
-        position[preds == 0] = -1  # DOWN → Short/Avoid
+        position[preds == 2] = 1   # UP -> Long
+        position[preds == 0] = -1  # DOWN -> Short/Avoid
         
         # Apply confidence filter
-        position = position * mask
+        position = position * confidence_mask
         
-        # Calculate returns with transaction costs
+        # Calculate returns with costs
         costs = CONFIG.COMMISSION * 2 + CONFIG.SLIPPAGE * 2 + CONFIG.STAMP_TAX
         
         strategy_returns = position * returns / 100
-        trade_costs = np.abs(np.diff(position, prepend=0)) * costs
+        
+        # Trading costs only when position changes
+        position_changes = np.abs(np.diff(position, prepend=0))
+        trade_costs = position_changes * costs
+        
         net_returns = strategy_returns - trade_costs
         
-        # Benchmark: buy & hold
+        # Buy & hold benchmark
         buy_hold = returns / 100
         
         # Cumulative returns
@@ -338,8 +379,8 @@ class Trainer:
             wins = (trade_returns > 0).sum()
             win_rate = wins / trades
             
-            gross_profit = trade_returns[trade_returns > 0].sum() if len(trade_returns[trade_returns > 0]) > 0 else 0
-            gross_loss = abs(trade_returns[trade_returns < 0].sum()) if len(trade_returns[trade_returns < 0]) > 0 else 0
+            gross_profit = trade_returns[trade_returns > 0].sum()
+            gross_loss = abs(trade_returns[trade_returns < 0].sum())
             profit_factor = gross_profit / (gross_loss + 1e-8)
         else:
             win_rate = 0
@@ -354,22 +395,50 @@ class Trainer:
         # Max drawdown
         if len(cum_strategy) > 0:
             running_max = np.maximum.accumulate(cum_strategy)
-            drawdown = (cum_strategy - running_max) / running_max
+            drawdown = (cum_strategy - running_max) / (running_max + 1e-8)
             max_drawdown = abs(drawdown.min())
         else:
             max_drawdown = 0
         
         return {
-            'total_return': float(total_return),
-            'buyhold_return': float(buyhold_return),
-            'excess_return': float(total_return - buyhold_return),
+            'total_return': total_return,
+            'buyhold_return': buyhold_return,
+            'excess_return': total_return - buyhold_return,
             'trades': int(trades),
-            'win_rate': float(win_rate),
-            'profit_factor': float(profit_factor),
-            'sharpe_ratio': float(sharpe),
-            'max_drawdown': float(max_drawdown)
+            'win_rate': win_rate,
+            'profit_factor': profit_factor,
+            'sharpe_ratio': sharpe,
+            'max_drawdown': max_drawdown
         }
     
     def get_ensemble(self) -> Optional[EnsembleModel]:
         """Get the trained ensemble model"""
         return self.ensemble
+    
+    def save_training_report(self, results: Dict, path: str = None):
+        """Save training report to file"""
+        import json
+        
+        path = path or str(CONFIG.DATA_DIR / "training_report.json")
+        
+        # Convert numpy types to Python types
+        def convert(obj):
+            if isinstance(obj, np.ndarray):
+                return obj.tolist()
+            if isinstance(obj, (np.int64, np.int32)):
+                return int(obj)
+            if isinstance(obj, (np.float64, np.float32)):
+                return float(obj)
+            if isinstance(obj, dict):
+                return {k: convert(v) for k, v in obj.items()}
+            if isinstance(obj, list):
+                return [convert(v) for v in obj]
+            return obj
+        
+        report = convert(results)
+        report['timestamp'] = datetime.now().isoformat()
+        
+        with open(path, 'w') as f:
+            json.dump(report, f, indent=2)
+        
+        log.info(f"Training report saved to {path}")

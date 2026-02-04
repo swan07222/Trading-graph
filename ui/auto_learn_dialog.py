@@ -1,6 +1,6 @@
 """
 Auto-Learning Dialog
-GUI for automatic AI learning with real-time progress
+GUI for automatic AI learning with real-time progress tracking
 """
 from datetime import datetime
 from typing import Optional
@@ -19,60 +19,41 @@ from config import CONFIG
 from utils.logger import log
 
 
-class LearningWorker(QThread):
+class AutoLearnWorker(QThread):
     """Background worker for auto-learning"""
-    progress_update = pyqtSignal(str, float, str)  # stage, progress%, message
+    progress_updated = pyqtSignal(object)
     log_message = pyqtSignal(str, str)  # message, level
     finished = pyqtSignal(bool, str)  # success, message
-    stats_update = pyqtSignal(int, int, float)  # stocks_found, stocks_processed, accuracy
     
-    def __init__(self, auto_search: bool, max_stocks: int, epochs: int, incremental: bool):
+    def __init__(self, settings: dict):
         super().__init__()
-        self.auto_search = auto_search
-        self.max_stocks = max_stocks
-        self.epochs = epochs
-        self.incremental = incremental
+        self.settings = settings
         self._stop_requested = False
     
-    def stop(self):
-        self._stop_requested = True
-    
     def run(self):
+        """Main learning loop"""
         try:
             from models.auto_learner import AutoLearner, LearningProgress
             
             learner = AutoLearner()
             
-            # Custom callback to emit signals
             def on_progress(progress: LearningProgress):
                 if self._stop_requested:
                     return
+                self.progress_updated.emit(progress)
                 
-                self.progress_update.emit(
-                    progress.stage,
-                    progress.progress,
-                    progress.message
-                )
-                
-                self.stats_update.emit(
-                    progress.stocks_found,
-                    progress.stocks_processed,
-                    progress.training_accuracy
-                )
-                
-                for error in progress.errors:
-                    self.log_message.emit(f"⚠️ {error}", "warning")
+                if progress.message:
+                    level = "error" if "error" in progress.stage.lower() else "info"
+                    self.log_message.emit(progress.message, level)
             
             learner.add_callback(on_progress)
             
-            self.log_message.emit("🚀 Starting auto-learning process...", "info")
-            
-            # Start learning (blocking in this thread)
+            # Start learning in this thread (blocking)
             learner.start_learning(
-                auto_search=self.auto_search,
-                max_stocks=self.max_stocks,
-                epochs=self.epochs,
-                incremental=self.incremental
+                auto_search=self.settings.get('auto_search', True),
+                max_stocks=self.settings.get('max_stocks', 80),
+                epochs=self.settings.get('epochs', 100),
+                incremental=self.settings.get('incremental', True)
             )
             
             # Wait for completion
@@ -81,16 +62,18 @@ class LearningWorker(QThread):
                 time.sleep(0.5)
             
             if self._stop_requested:
-                learner.stop_learning()
                 self.finished.emit(False, "Learning stopped by user")
             elif learner.progress.stage == 'complete':
                 self.finished.emit(True, f"Training complete! Accuracy: {learner.progress.training_accuracy:.1%}")
             else:
-                self.finished.emit(False, f"Learning failed: {learner.progress.message}")
+                self.finished.emit(False, f"Training failed: {learner.progress.message}")
                 
         except Exception as e:
-            self.log_message.emit(f"❌ Error: {str(e)}", "error")
-            self.finished.emit(False, str(e))
+            self.finished.emit(False, f"Error: {str(e)}")
+    
+    def stop(self):
+        """Request stop"""
+        self._stop_requested = True
 
 
 class AutoLearnDialog(QDialog):
@@ -98,10 +81,10 @@ class AutoLearnDialog(QDialog):
     Dialog for auto-learning AI model
     
     Features:
-    - One-click learning from internet data
-    - Real-time progress visualization
-    - Learning history tracking
-    - Customizable settings
+    - One-click learning
+    - Progress visualization
+    - Learning history
+    - Settings customization
     """
     
     def __init__(self, parent=None):
@@ -109,14 +92,16 @@ class AutoLearnDialog(QDialog):
         self.setWindowTitle("🤖 AI Auto-Learning System")
         self.setMinimumSize(900, 700)
         
-        self.worker: Optional[LearningWorker] = None
+        self.worker: Optional[AutoLearnWorker] = None
+        self._progress_stage = "idle"
+        self._progress_pct = 0
+        self._progress_message = ""
         
         self._setup_ui()
         self._apply_style()
-        self._load_history()
     
     def _setup_ui(self):
-        """Setup the user interface"""
+        """Setup UI components"""
         layout = QVBoxLayout(self)
         layout.setSpacing(15)
         layout.setContentsMargins(20, 20, 20, 20)
@@ -130,11 +115,12 @@ class AutoLearnDialog(QDialog):
         
         # Description
         desc = QLabel(
-            "Automatically search the internet for stocks, download data, "
-            "and train AI models with one click."
+            "Automatically search for stocks, download data, and train AI models. "
+            "The system uses multiple data sources with fallback for reliability."
         )
+        desc.setWordWrap(True)
         desc.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        desc.setStyleSheet("color: #888; font-size: 12px; margin-bottom: 10px;")
+        desc.setStyleSheet("color: #888; font-size: 12px; padding: 5px;")
         layout.addWidget(desc)
         
         # Tabs
@@ -148,16 +134,17 @@ class AutoLearnDialog(QDialog):
         progress_group = QGroupBox("Learning Progress")
         progress_layout = QVBoxLayout(progress_group)
         
-        # Stage indicator
-        stage_row = QHBoxLayout()
-        self.stage_label = QLabel("Status: Ready")
-        self.stage_label.setFont(QFont("Segoe UI", 12, QFont.Weight.Bold))
-        stage_row.addWidget(self.stage_label)
-        stage_row.addStretch()
-        self.time_label = QLabel("")
-        self.time_label.setStyleSheet("color: #888;")
-        stage_row.addWidget(self.time_label)
-        progress_layout.addLayout(stage_row)
+        # Status row
+        status_row = QHBoxLayout()
+        self.status_icon = QLabel("⏸️")
+        self.status_icon.setFont(QFont("Segoe UI", 16))
+        status_row.addWidget(self.status_icon)
+        
+        self.status_label = QLabel("Ready to start")
+        self.status_label.setFont(QFont("Segoe UI", 12, QFont.Weight.Bold))
+        status_row.addWidget(self.status_label)
+        status_row.addStretch()
+        progress_layout.addLayout(status_row)
         
         # Progress bar
         self.progress_bar = QProgressBar()
@@ -165,315 +152,288 @@ class AutoLearnDialog(QDialog):
         self.progress_bar.setMaximum(100)
         self.progress_bar.setValue(0)
         self.progress_bar.setTextVisible(True)
-        self.progress_bar.setFormat("%p%")
+        self.progress_bar.setFormat("%p% - %v/100")
         progress_layout.addWidget(self.progress_bar)
-        
-        # Current action
-        self.message_label = QLabel("")
-        self.message_label.setWordWrap(True)
-        self.message_label.setStyleSheet("color: #aaa;")
-        progress_layout.addWidget(self.message_label)
         
         # Stats row
         stats_frame = QFrame()
-        stats_frame.setStyleSheet("""
-            QFrame {
-                background: #1a1a3e;
-                border-radius: 8px;
-                padding: 10px;
-            }
-        """)
         stats_layout = QHBoxLayout(stats_frame)
+        stats_layout.setContentsMargins(0, 10, 0, 0)
         
-        self.stocks_found_label = self._create_stat_widget("Stocks Found", "0")
-        self.stocks_processed_label = self._create_stat_widget("Processed", "0")
-        self.accuracy_label = self._create_stat_widget("Accuracy", "--")
-        
-        stats_layout.addWidget(self.stocks_found_label)
-        stats_layout.addWidget(self.stocks_processed_label)
-        stats_layout.addWidget(self.accuracy_label)
+        self.stat_labels = {}
+        for key, label in [
+            ('stocks', '📈 Stocks Found'),
+            ('processed', '✅ Processed'),
+            ('accuracy', '🎯 Accuracy')
+        ]:
+            container = QWidget()
+            cont_layout = QVBoxLayout(container)
+            cont_layout.setContentsMargins(10, 5, 10, 5)
+            
+            title = QLabel(label)
+            title.setStyleSheet("color: #888; font-size: 11px;")
+            title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            
+            value = QLabel("--")
+            value.setStyleSheet("color: #00E5FF; font-size: 18px; font-weight: bold;")
+            value.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            
+            cont_layout.addWidget(title)
+            cont_layout.addWidget(value)
+            stats_layout.addWidget(container)
+            self.stat_labels[key] = value
         
         progress_layout.addWidget(stats_frame)
         layout.addWidget(progress_group)
         
-        # Log section
-        log_group = QGroupBox("Activity Log")
+        # Log
+        log_group = QGroupBox("📋 Activity Log")
         log_layout = QVBoxLayout(log_group)
         
         self.log_text = QTextEdit()
         self.log_text.setReadOnly(True)
         self.log_text.setMaximumHeight(150)
         self.log_text.setFont(QFont("Consolas", 9))
-        self.log_text.setStyleSheet("""
-            QTextEdit {
-                background: #0a0a1a;
-                color: #0f0;
-                border: 1px solid #2a2a5a;
-                border-radius: 5px;
-            }
-        """)
         log_layout.addWidget(self.log_text)
         
         layout.addWidget(log_group)
         
-        # Action buttons
+        # Buttons
         btn_layout = QHBoxLayout()
+        btn_layout.setSpacing(15)
         
         self.start_btn = QPushButton("🚀 Start Learning")
-        self.start_btn.setStyleSheet("""
-            QPushButton {
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                    stop:0 #00E5FF, stop:1 #00BCD4);
-                color: white;
-                border: none;
-                padding: 15px 50px;
-                border-radius: 8px;
-                font-size: 16px;
-                font-weight: bold;
-            }
-            QPushButton:hover {
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                    stop:0 #00BCD4, stop:1 #0097A7);
-            }
-            QPushButton:disabled {
-                background: #333;
-                color: #666;
-            }
-        """)
+        self.start_btn.setMinimumHeight(50)
+        self.start_btn.setFont(QFont("Segoe UI", 12, QFont.Weight.Bold))
         self.start_btn.clicked.connect(self._start_learning)
         btn_layout.addWidget(self.start_btn)
         
         self.stop_btn = QPushButton("⏹️ Stop")
+        self.stop_btn.setMinimumHeight(50)
         self.stop_btn.setEnabled(False)
-        self.stop_btn.setStyleSheet("""
-            QPushButton {
-                background: #F44336;
-                color: white;
-                border: none;
-                padding: 15px 30px;
-                border-radius: 8px;
-                font-size: 14px;
-                font-weight: bold;
-            }
-            QPushButton:hover {
-                background: #D32F2F;
-            }
-            QPushButton:disabled {
-                background: #333;
-                color: #666;
-            }
-        """)
         self.stop_btn.clicked.connect(self._stop_learning)
         btn_layout.addWidget(self.stop_btn)
         
         self.close_btn = QPushButton("Close")
+        self.close_btn.setMinimumHeight(50)
         self.close_btn.clicked.connect(self.close)
         btn_layout.addWidget(self.close_btn)
         
         layout.addLayout(btn_layout)
-        
-        # Timer for elapsed time
-        self.elapsed_timer = QTimer()
-        self.elapsed_timer.timeout.connect(self._update_elapsed_time)
-        self.start_time = None
-    
-    def _create_stat_widget(self, title: str, value: str) -> QWidget:
-        """Create a statistics display widget"""
-        widget = QWidget()
-        layout = QVBoxLayout(widget)
-        layout.setContentsMargins(10, 5, 10, 5)
-        
-        title_label = QLabel(title)
-        title_label.setStyleSheet("color: #888; font-size: 11px;")
-        title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        
-        value_label = QLabel(value)
-        value_label.setStyleSheet("color: #00E5FF; font-size: 18px; font-weight: bold;")
-        value_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        value_label.setObjectName("value")
-        
-        layout.addWidget(title_label)
-        layout.addWidget(value_label)
-        
-        return widget
     
     def _create_learn_tab(self) -> QWidget:
-        """Create the quick learn tab"""
+        """Create quick learn tab"""
         widget = QWidget()
         layout = QVBoxLayout(widget)
+        layout.setSpacing(15)
         
-        # Steps explanation
-        steps_group = QGroupBox("Learning Process")
-        steps_layout = QVBoxLayout(steps_group)
+        # Info card
+        info_frame = QFrame()
+        info_frame.setStyleSheet("""
+            QFrame {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
+                    stop:0 #1a237e, stop:1 #0d47a1);
+                border-radius: 12px;
+                padding: 20px;
+            }
+        """)
+        info_layout = QVBoxLayout(info_frame)
+        
+        info_title = QLabel("🎯 What Auto-Learning Does")
+        info_title.setFont(QFont("Segoe UI", 14, QFont.Weight.Bold))
+        info_title.setStyleSheet("color: white;")
+        info_layout.addWidget(info_title)
         
         steps = [
-            ("1. 🔍 Search Internet", "Find trending stocks from financial websites"),
-            ("2. 📥 Download Data", "Get historical price data for selected stocks"),
-            ("3. 🧮 Create Features", "Calculate 80+ technical indicators"),
-            ("4. 🧠 Train Models", "Train 6 neural network models"),
-            ("5. ✅ Save & Validate", "Save best model and validate performance"),
+            ("1️⃣", "Search Internet", "Find trending stocks from multiple sources"),
+            ("2️⃣", "Download Data", "Get historical price data with fallback sources"),
+            ("3️⃣", "Create Features", "Generate 80+ technical indicators"),
+            ("4️⃣", "Train Models", "Train ensemble of 6 neural networks"),
+            ("5️⃣", "Save & Evaluate", "Save best model and show performance"),
         ]
         
-        for title, desc in steps:
-            step_row = QHBoxLayout()
+        for icon, title, desc in steps:
+            step_layout = QHBoxLayout()
+            
+            icon_label = QLabel(icon)
+            icon_label.setFont(QFont("Segoe UI", 14))
+            icon_label.setFixedWidth(30)
+            step_layout.addWidget(icon_label)
+            
+            text_layout = QVBoxLayout()
             title_label = QLabel(title)
-            title_label.setStyleSheet("color: #00E5FF; font-weight: bold; min-width: 150px;")
+            title_label.setFont(QFont("Segoe UI", 11, QFont.Weight.Bold))
+            title_label.setStyleSheet("color: #64b5f6;")
+            text_layout.addWidget(title_label)
+            
             desc_label = QLabel(desc)
-            desc_label.setStyleSheet("color: #888;")
-            step_row.addWidget(title_label)
-            step_row.addWidget(desc_label)
-            step_row.addStretch()
-            steps_layout.addLayout(step_row)
+            desc_label.setStyleSheet("color: #90caf9; font-size: 10px;")
+            text_layout.addWidget(desc_label)
+            
+            step_layout.addLayout(text_layout)
+            step_layout.addStretch()
+            info_layout.addLayout(step_layout)
         
-        layout.addWidget(steps_group)
+        layout.addWidget(info_frame)
         
         # Quick settings
         settings_group = QGroupBox("Quick Settings")
         settings_layout = QGridLayout(settings_group)
         
         settings_layout.addWidget(QLabel("Training Epochs:"), 0, 0)
-        self.quick_epochs = QSpinBox()
-        self.quick_epochs.setRange(30, 300)
-        self.quick_epochs.setValue(100)
-        self.quick_epochs.setToolTip("Number of training iterations. More = better but slower.")
-        settings_layout.addWidget(self.quick_epochs, 0, 1)
+        self.epochs_spin = QSpinBox()
+        self.epochs_spin.setRange(20, 500)
+        self.epochs_spin.setValue(100)
+        self.epochs_spin.setToolTip("More epochs = longer training but potentially better results")
+        settings_layout.addWidget(self.epochs_spin, 0, 1)
         
         settings_layout.addWidget(QLabel("Max Stocks:"), 0, 2)
-        self.quick_stocks = QSpinBox()
-        self.quick_stocks.setRange(10, 200)
-        self.quick_stocks.setValue(50)
-        self.quick_stocks.setToolTip("Maximum number of stocks to include in training.")
-        settings_layout.addWidget(self.quick_stocks, 0, 3)
+        self.stocks_spin = QSpinBox()
+        self.stocks_spin.setRange(10, 200)
+        self.stocks_spin.setValue(50)
+        self.stocks_spin.setToolTip("Number of stocks to use for training")
+        settings_layout.addWidget(self.stocks_spin, 0, 3)
         
-        self.quick_search = QCheckBox("Search internet for stocks")
-        self.quick_search.setChecked(True)
-        self.quick_search.setToolTip("If unchecked, uses default stock pool from config.")
-        settings_layout.addWidget(self.quick_search, 1, 0, 1, 2)
+        self.search_check = QCheckBox("Search internet for stocks")
+        self.search_check.setChecked(True)
+        self.search_check.setToolTip("If unchecked, uses default stock pool")
+        settings_layout.addWidget(self.search_check, 1, 0, 1, 2)
         
-        self.quick_incremental = QCheckBox("Incremental learning (keep old knowledge)")
-        self.quick_incremental.setChecked(False)
-        self.quick_incremental.setToolTip("Continue training from existing model instead of starting fresh.")
-        settings_layout.addWidget(self.quick_incremental, 1, 2, 1, 2)
+        self.incremental_check = QCheckBox("Incremental learning (keep old knowledge)")
+        self.incremental_check.setChecked(True)
+        self.incremental_check.setToolTip("Build on existing model instead of training from scratch")
+        settings_layout.addWidget(self.incremental_check, 1, 2, 1, 2)
         
         layout.addWidget(settings_group)
         
-        # Estimated time
-        time_label = QLabel("⏱️ Estimated time: 30-60 minutes depending on settings and network speed")
-        time_label.setStyleSheet("color: #888; font-style: italic;")
-        layout.addWidget(time_label)
+        # Time estimate
+        estimate_label = QLabel("⏱️ Estimated time: 30-60 minutes depending on settings and network speed")
+        estimate_label.setStyleSheet("color: #888; font-style: italic;")
+        estimate_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(estimate_label)
         
         layout.addStretch()
-        
         return widget
     
     def _create_settings_tab(self) -> QWidget:
-        """Create the settings tab"""
+        """Create settings tab"""
         widget = QWidget()
         layout = QVBoxLayout(widget)
         
-        # Training parameters
-        train_group = QGroupBox("Training Parameters")
-        train_layout = QGridLayout(train_group)
-        
-        train_layout.addWidget(QLabel("Epochs:"), 0, 0)
-        self.epochs_spin = QSpinBox()
-        self.epochs_spin.setRange(10, 500)
-        self.epochs_spin.setValue(CONFIG.EPOCHS)
-        train_layout.addWidget(self.epochs_spin, 0, 1)
-        
-        train_layout.addWidget(QLabel("Batch Size:"), 0, 2)
-        self.batch_spin = QSpinBox()
-        self.batch_spin.setRange(16, 256)
-        self.batch_spin.setValue(CONFIG.BATCH_SIZE)
-        train_layout.addWidget(self.batch_spin, 0, 3)
-        
-        train_layout.addWidget(QLabel("Learning Rate:"), 1, 0)
-        self.lr_label = QLabel(f"{CONFIG.LEARNING_RATE}")
-        train_layout.addWidget(self.lr_label, 1, 1)
-        
-        train_layout.addWidget(QLabel("Sequence Length:"), 1, 2)
-        self.seq_label = QLabel(f"{CONFIG.SEQUENCE_LENGTH} days")
-        train_layout.addWidget(self.seq_label, 1, 3)
-        
-        layout.addWidget(train_group)
-        
         # Data sources
-        data_group = QGroupBox("Data Sources to Search")
+        data_group = QGroupBox("📊 Data Sources")
         data_layout = QVBoxLayout(data_group)
         
-        self.source_gainers = QCheckBox("Top Gainers (涨幅榜)")
-        self.source_gainers.setChecked(True)
-        data_layout.addWidget(self.source_gainers)
+        self.akshare_check = QCheckBox("AkShare (Primary - Chinese A-shares)")
+        self.akshare_check.setChecked(True)
+        self.akshare_check.setEnabled(False)  # Always enabled
+        data_layout.addWidget(self.akshare_check)
         
-        self.source_losers = QCheckBox("Top Losers (跌幅榜)")
-        self.source_losers.setChecked(True)
-        data_layout.addWidget(self.source_losers)
+        self.yahoo_check = QCheckBox("Yahoo Finance (Fallback)")
+        self.yahoo_check.setChecked(True)
+        data_layout.addWidget(self.yahoo_check)
         
-        self.source_volume = QCheckBox("High Volume (成交额榜)")
-        self.source_volume.setChecked(True)
-        data_layout.addWidget(self.source_volume)
-        
-        self.source_hot = QCheckBox("Hot Stocks (热门股票)")
-        self.source_hot.setChecked(True)
-        data_layout.addWidget(self.source_hot)
-        
-        self.source_analyst = QCheckBox("Analyst Picks (机构推荐)")
-        self.source_analyst.setChecked(True)
-        data_layout.addWidget(self.source_analyst)
+        data_note = QLabel("Note: System automatically falls back to working sources")
+        data_note.setStyleSheet("color: #888; font-size: 10px; font-style: italic;")
+        data_layout.addWidget(data_note)
         
         layout.addWidget(data_group)
         
-        # Model selection
-        model_group = QGroupBox("Models to Train")
-        model_layout = QVBoxLayout(model_group)
+        # Model settings
+        model_group = QGroupBox("🧠 Model Settings")
+        model_layout = QGridLayout(model_group)
         
-        self.model_lstm = QCheckBox("LSTM with Attention")
-        self.model_lstm.setChecked(True)
-        model_layout.addWidget(self.model_lstm)
+        model_layout.addWidget(QLabel("Hidden Size:"), 0, 0)
+        self.hidden_spin = QSpinBox()
+        self.hidden_spin.setRange(64, 512)
+        self.hidden_spin.setValue(CONFIG.HIDDEN_SIZE)
+        self.hidden_spin.setSingleStep(64)
+        model_layout.addWidget(self.hidden_spin, 0, 1)
         
-        self.model_transformer = QCheckBox("Transformer")
-        self.model_transformer.setChecked(True)
-        model_layout.addWidget(self.model_transformer)
+        model_layout.addWidget(QLabel("Sequence Length:"), 0, 2)
+        self.seq_spin = QSpinBox()
+        self.seq_spin.setRange(20, 120)
+        self.seq_spin.setValue(CONFIG.SEQUENCE_LENGTH)
+        model_layout.addWidget(self.seq_spin, 0, 3)
         
-        self.model_gru = QCheckBox("GRU")
-        self.model_gru.setChecked(True)
-        model_layout.addWidget(self.model_gru)
+        model_layout.addWidget(QLabel("Batch Size:"), 1, 0)
+        self.batch_spin = QSpinBox()
+        self.batch_spin.setRange(16, 256)
+        self.batch_spin.setValue(CONFIG.BATCH_SIZE)
+        model_layout.addWidget(self.batch_spin, 1, 1)
         
-        self.model_tcn = QCheckBox("TCN (Temporal Convolutional)")
-        self.model_tcn.setChecked(True)
-        model_layout.addWidget(self.model_tcn)
+        model_layout.addWidget(QLabel("Learning Rate:"), 1, 2)
+        self.lr_label = QLabel(f"{CONFIG.LEARNING_RATE}")
+        model_layout.addWidget(self.lr_label, 1, 3)
         
         layout.addWidget(model_group)
         
-        layout.addStretch()
+        # Stock discovery
+        discovery_group = QGroupBox("🔍 Stock Discovery")
+        discovery_layout = QVBoxLayout(discovery_group)
         
+        self.gainers_check = QCheckBox("Top Gainers (涨幅榜)")
+        self.gainers_check.setChecked(True)
+        discovery_layout.addWidget(self.gainers_check)
+        
+        self.losers_check = QCheckBox("Top Losers (跌幅榜)")
+        self.losers_check.setChecked(True)
+        discovery_layout.addWidget(self.losers_check)
+        
+        self.volume_check = QCheckBox("High Volume (成交额榜)")
+        self.volume_check.setChecked(True)
+        discovery_layout.addWidget(self.volume_check)
+        
+        self.analyst_check = QCheckBox("Analyst Picks (机构推荐)")
+        self.analyst_check.setChecked(True)
+        discovery_layout.addWidget(self.analyst_check)
+        
+        layout.addWidget(discovery_group)
+        
+        layout.addStretch()
         return widget
     
     def _create_history_tab(self) -> QWidget:
-        """Create the history tab"""
+        """Create history tab"""
         widget = QWidget()
         layout = QVBoxLayout(widget)
         
-        # Summary stats
-        summary_frame = QFrame()
-        summary_frame.setStyleSheet("""
+        # Stats cards
+        stats_frame = QFrame()
+        stats_frame.setStyleSheet("""
             QFrame {
                 background: #1a1a3e;
                 border-radius: 10px;
                 padding: 15px;
             }
         """)
-        summary_layout = QHBoxLayout(summary_frame)
+        stats_layout = QHBoxLayout(stats_frame)
         
-        self.total_sessions_label = self._create_stat_widget("Total Sessions", "0")
-        self.best_accuracy_label = self._create_stat_widget("Best Accuracy", "0%")
-        self.total_stocks_label = self._create_stat_widget("Stocks Trained", "0")
+        # Load history stats
+        stats = self._load_history_stats()
         
-        summary_layout.addWidget(self.total_sessions_label)
-        summary_layout.addWidget(self.best_accuracy_label)
-        summary_layout.addWidget(self.total_stocks_label)
+        for title, value, color in [
+            ("Total Sessions", str(stats.get('sessions', 0)), "#00E5FF"),
+            ("Best Accuracy", f"{stats.get('best_accuracy', 0)*100:.1f}%", "#4CAF50"),
+            ("Stocks Learned", str(stats.get('total_stocks', 0)), "#FF9800"),
+        ]:
+            card = QWidget()
+            card_layout = QVBoxLayout(card)
+            card_layout.setContentsMargins(20, 10, 20, 10)
+            
+            title_label = QLabel(title)
+            title_label.setStyleSheet("color: #888; font-size: 11px;")
+            title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            
+            value_label = QLabel(value)
+            value_label.setStyleSheet(f"color: {color}; font-size: 24px; font-weight: bold;")
+            value_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            
+            card_layout.addWidget(title_label)
+            card_layout.addWidget(value_label)
+            stats_layout.addWidget(card)
         
-        layout.addWidget(summary_frame)
+        layout.addWidget(stats_frame)
         
         # History table
         self.history_table = QTableWidget()
@@ -483,76 +443,87 @@ class AutoLearnDialog(QDialog):
         ])
         self.history_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         self.history_table.setAlternatingRowColors(True)
+        
+        self._load_history_table()
+        
         layout.addWidget(self.history_table)
         
         # Refresh button
         refresh_btn = QPushButton("🔄 Refresh History")
-        refresh_btn.clicked.connect(self._load_history)
+        refresh_btn.clicked.connect(self._load_history_table)
         layout.addWidget(refresh_btn)
         
         return widget
     
-    def _load_history(self):
-        """Load learning history from file"""
+    def _load_history_stats(self) -> dict:
+        """Load history statistics"""
         try:
             import json
-            history_path = CONFIG.DATA_DIR / "learning_history.json"
+            path = CONFIG.DATA_DIR / "learning_history.json"
+            if path.exists():
+                with open(path, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                return {
+                    'sessions': len(data.get('sessions', [])),
+                    'best_accuracy': data.get('best_accuracy', 0),
+                    'total_stocks': data.get('total_stocks', 0)
+                }
+        except Exception as e:
+            log.warning(f"Failed to load history: {e}")
+        return {'sessions': 0, 'best_accuracy': 0, 'total_stocks': 0}
+    
+    def _load_history_table(self):
+        """Load history into table"""
+        try:
+            import json
+            path = CONFIG.DATA_DIR / "learning_history.json"
             
-            if not history_path.exists():
+            if not path.exists():
+                self.history_table.setRowCount(0)
                 return
             
-            with open(history_path, 'r', encoding='utf-8') as f:
-                history = json.load(f)
+            with open(path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
             
-            # Update summary
-            sessions = history.get('sessions', [])
-            best_acc = history.get('best_accuracy', 0)
-            total_stocks = history.get('total_stocks', 0)
-            
-            self._update_stat_label(self.total_sessions_label, str(len(sessions)))
-            self._update_stat_label(self.best_accuracy_label, f"{best_acc*100:.1f}%")
-            self._update_stat_label(self.total_stocks_label, str(total_stocks))
-            
-            # Populate table
+            sessions = data.get('sessions', [])
             self.history_table.setRowCount(len(sessions))
             
             for i, session in enumerate(reversed(sessions)):
-                self.history_table.setItem(i, 0, QTableWidgetItem(
-                    session.get('timestamp', '')[:16]
-                ))
+                # Date/Time
+                timestamp = session.get('timestamp', '')[:16]
+                self.history_table.setItem(i, 0, QTableWidgetItem(timestamp))
+                
+                # Stocks
                 self.history_table.setItem(i, 1, QTableWidgetItem(
                     str(session.get('stocks_used', 0))
                 ))
+                
+                # Samples
                 self.history_table.setItem(i, 2, QTableWidgetItem(
-                    str(session.get('samples', 0))
+                    f"{session.get('samples', 0):,}"
                 ))
+                
+                # Epochs
                 self.history_table.setItem(i, 3, QTableWidgetItem(
                     str(session.get('epochs', 0))
                 ))
                 
+                # Accuracy
                 acc = session.get('test_accuracy', 0) * 100
                 acc_item = QTableWidgetItem(f"{acc:.1f}%")
-                if acc > 55:
-                    acc_item.setForeground(QColor("#4CAF50"))
-                elif acc < 45:
-                    acc_item.setForeground(QColor("#FF5252"))
+                acc_item.setForeground(QColor("#4CAF50" if acc > 50 else "#FF5252"))
                 self.history_table.setItem(i, 4, acc_item)
                 
+                # Duration
                 self.history_table.setItem(i, 5, QTableWidgetItem(
                     f"{session.get('duration_minutes', 0):.1f} min"
                 ))
                 
         except Exception as e:
-            self._log(f"Failed to load history: {e}", "warning")
-    
-    def _update_stat_label(self, widget: QWidget, value: str):
-        """Update the value in a stat widget"""
-        value_label = widget.findChild(QLabel, "value")
-        if value_label:
-            value_label.setText(value)
+            log.warning(f"Failed to load history table: {e}")
     
     def _apply_style(self):
-        """Apply dark theme styling"""
+        """Apply dialog styling"""
         self.setStyleSheet("""
             QDialog {
                 background: #0a0a1a;
@@ -569,7 +540,7 @@ class AutoLearnDialog(QDialog):
             QGroupBox::title {
                 subcontrol-origin: margin;
                 left: 12px;
-                padding: 0 5px;
+                padding: 0 8px;
             }
             QLabel {
                 color: #ddd;
@@ -577,9 +548,12 @@ class AutoLearnDialog(QDialog):
             QSpinBox, QCheckBox {
                 color: #fff;
                 background: #1a1a3e;
-                border: 1px solid #2a2a5a;
-                border-radius: 4px;
+                border: 1px solid #3a3a6a;
+                border-radius: 5px;
                 padding: 5px;
+            }
+            QSpinBox:focus {
+                border-color: #00E5FF;
             }
             QProgressBar {
                 border: none;
@@ -588,7 +562,6 @@ class AutoLearnDialog(QDialog):
                 text-align: center;
                 color: #fff;
                 height: 30px;
-                font-size: 14px;
                 font-weight: bold;
             }
             QProgressBar::chunk {
@@ -596,65 +569,90 @@ class AutoLearnDialog(QDialog):
                     stop:0 #00E5FF, stop:1 #00BCD4);
                 border-radius: 8px;
             }
+            QTextEdit {
+                background: #0a0a1a;
+                color: #0f0;
+                border: 1px solid #2a2a5a;
+                border-radius: 8px;
+                font-family: Consolas;
+            }
             QTableWidget {
-                background: #1a1a3e;
+                background: #0f0f2a;
                 color: #fff;
                 border: none;
                 gridline-color: #2a2a5a;
+                selection-background-color: #2a2a5a;
             }
             QTableWidget::item {
                 padding: 8px;
             }
             QHeaderView::section {
-                background: #2a2a5a;
+                background: #1a1a3e;
                 color: #00E5FF;
                 padding: 10px;
                 border: none;
                 font-weight: bold;
             }
             QPushButton {
-                background: #3a3a7a;
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                    stop:0 #3a3a7a, stop:1 #2a2a5a);
                 color: white;
                 border: none;
-                padding: 10px 20px;
-                border-radius: 5px;
+                padding: 12px 25px;
+                border-radius: 8px;
                 font-weight: bold;
+                font-size: 12px;
             }
             QPushButton:hover {
-                background: #4a4a9a;
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                    stop:0 #4a4a9a, stop:1 #3a3a7a);
             }
             QPushButton:disabled {
                 background: #222;
                 color: #555;
             }
+            QPushButton#start_btn {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                    stop:0 #00E5FF, stop:1 #00BCD4);
+            }
+            QPushButton#start_btn:hover {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                    stop:0 #00BCD4, stop:1 #0097A7);
+            }
             QTabWidget::pane {
                 border: 2px solid #2a2a5a;
                 background: #0a0a1a;
-                border-radius: 8px;
+                border-radius: 10px;
             }
             QTabBar::tab {
                 background: #1a1a3e;
                 color: #888;
                 padding: 12px 25px;
-                border-top-left-radius: 6px;
-                border-top-right-radius: 6px;
-                margin-right: 2px;
+                border-top-left-radius: 8px;
+                border-top-right-radius: 8px;
+                margin-right: 3px;
             }
             QTabBar::tab:selected {
                 background: #2a2a5a;
                 color: #00E5FF;
             }
         """)
+        
+        # Apply specific button styles
+        self.start_btn.setObjectName("start_btn")
     
     def _start_learning(self):
-        """Start the auto-learning process"""
+        """Start the learning process"""
         reply = QMessageBox.question(
             self,
-            "Start Learning",
+            "Start Auto-Learning",
             "The AI will automatically:\n\n"
-            "1. Search the internet for stocks\n"
-            "2. Download historical data\n"
-            "3. Train neural network models\n\n"
+            "• Search for stocks online\n"
+            "• Download historical data\n"
+            "• Train neural network models\n\n"
+            f"Settings:\n"
+            f"• Epochs: {self.epochs_spin.value()}\n"
+            f"• Max stocks: {self.stocks_spin.value()}\n\n"
             "This may take 30-60 minutes.\n\n"
             "Continue?",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
@@ -667,106 +665,131 @@ class AutoLearnDialog(QDialog):
         # Update UI state
         self.start_btn.setEnabled(False)
         self.stop_btn.setEnabled(True)
-        self.log_text.clear()
         self.progress_bar.setValue(0)
+        self.log_text.clear()
         
-        # Start timer
-        self.start_time = datetime.now()
-        self.elapsed_timer.start(1000)
+        self._log("🚀 Starting auto-learning process...", "info")
+        self._update_status("searching", "Initializing...")
         
-        # Create and start worker
-        self.worker = LearningWorker(
-            auto_search=self.quick_search.isChecked(),
-            max_stocks=self.quick_stocks.value(),
-            epochs=self.quick_epochs.value(),
-            incremental=self.quick_incremental.isChecked()
-        )
+        # Prepare settings
+        settings = {
+            'auto_search': self.search_check.isChecked(),
+            'max_stocks': self.stocks_spin.value(),
+            'epochs': self.epochs_spin.value(),
+            'incremental': self.incremental_check.isChecked()
+        }
         
-        self.worker.progress_update.connect(self._on_progress)
+        # Start worker
+        self.worker = AutoLearnWorker(settings)
+        self.worker.progress_updated.connect(self._on_progress)
         self.worker.log_message.connect(self._log)
-        self.worker.stats_update.connect(self._on_stats)
         self.worker.finished.connect(self._on_finished)
-        
         self.worker.start()
     
     def _stop_learning(self):
         """Stop the learning process"""
-        if self.worker:
-            self._log("⏹️ Stopping learning...", "warning")
-            self.worker.stop()
+        if self.worker and self.worker.isRunning():
+            reply = QMessageBox.question(
+                self,
+                "Stop Learning",
+                "Are you sure you want to stop the learning process?\n\n"
+                "Progress will be lost.",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No
+            )
+            
+            if reply == QMessageBox.StandardButton.Yes:
+                self.worker.stop()
+                self._log("⏹️ Stopping...", "warning")
     
-    def _on_progress(self, stage: str, progress: float, message: str):
-        """Handle progress update from worker"""
-        stage_text = {
-            'idle': '⏸️ Idle',
-            'searching': '🔍 Searching',
-            'downloading': '📥 Downloading',
-            'preparing': '🧮 Preparing',
-            'training': '🧠 Training',
-            'evaluating': '📊 Evaluating',
-            'complete': '✅ Complete',
-            'error': '❌ Error'
-        }
+    def _on_progress(self, progress):
+        """Handle progress update"""
+        self._progress_stage = progress.stage
+        self._progress_pct = progress.progress
+        self._progress_message = progress.message
         
-        self.stage_label.setText(f"Status: {stage_text.get(stage, stage)}")
-        self.progress_bar.setValue(int(progress))
-        self.message_label.setText(message)
+        # Update progress bar
+        self.progress_bar.setValue(int(progress.progress))
         
-        # Color based on stage
-        if stage == 'complete':
-            self.stage_label.setStyleSheet("color: #4CAF50; font-weight: bold;")
-        elif stage == 'error':
-            self.stage_label.setStyleSheet("color: #FF5252; font-weight: bold;")
-        elif stage == 'training':
-            self.stage_label.setStyleSheet("color: #FFD54F; font-weight: bold;")
-        else:
-            self.stage_label.setStyleSheet("color: #00E5FF; font-weight: bold;")
-    
-    def _on_stats(self, stocks_found: int, stocks_processed: int, accuracy: float):
-        """Handle stats update"""
-        self._update_stat_label(self.stocks_found_label, str(stocks_found))
-        self._update_stat_label(self.stocks_processed_label, str(stocks_processed))
+        # Update stats
+        self.stat_labels['stocks'].setText(str(progress.stocks_found))
+        self.stat_labels['processed'].setText(str(progress.stocks_processed))
         
-        if accuracy > 0:
-            self._update_stat_label(self.accuracy_label, f"{accuracy:.1%}")
+        if progress.training_accuracy > 0:
+            self.stat_labels['accuracy'].setText(f"{progress.training_accuracy:.1%}")
+        
+        # Update status
+        self._update_status(progress.stage, progress.message)
     
     def _on_finished(self, success: bool, message: str):
-        """Handle learning completion"""
-        self.elapsed_timer.stop()
+        """Handle completion"""
         self.start_btn.setEnabled(True)
         self.stop_btn.setEnabled(False)
         
         if success:
             self._log(f"✅ {message}", "success")
-            self._load_history()
-            QMessageBox.information(self, "Success", message)
+            self._update_status("complete", message)
+            self.progress_bar.setValue(100)
+            
+            QMessageBox.information(
+                self,
+                "Learning Complete",
+                f"Auto-learning completed successfully!\n\n{message}"
+            )
         else:
             self._log(f"❌ {message}", "error")
-            if "stopped" not in message.lower():
-                QMessageBox.warning(self, "Learning Failed", message)
+            self._update_status("error", message)
+        
+        # Refresh history
+        self._load_history_table()
+        
+        self.worker = None
     
-    def _update_elapsed_time(self):
-        """Update elapsed time display"""
-        if self.start_time:
-            elapsed = datetime.now() - self.start_time
-            minutes = int(elapsed.total_seconds() // 60)
-            seconds = int(elapsed.total_seconds() % 60)
-            self.time_label.setText(f"Elapsed: {minutes:02d}:{seconds:02d}")
+    def _update_status(self, stage: str, message: str):
+        """Update status display"""
+        icons = {
+            'idle': '⏸️',
+            'searching': '🔍',
+            'downloading': '📥',
+            'preparing': '🔧',
+            'training': '🧠',
+            'evaluating': '📊',
+            'complete': '✅',
+            'error': '❌'
+        }
+        
+        colors = {
+            'idle': '#888',
+            'searching': '#2196F3',
+            'downloading': '#FF9800',
+            'preparing': '#9C27B0',
+            'training': '#00E5FF',
+            'evaluating': '#4CAF50',
+            'complete': '#4CAF50',
+            'error': '#F44336'
+        }
+        
+        icon = icons.get(stage, '⏳')
+        color = colors.get(stage, '#888')
+        
+        self.status_icon.setText(icon)
+        self.status_label.setText(message[:50] + "..." if len(message) > 50 else message)
+        self.status_label.setStyleSheet(f"color: {color}; font-weight: bold;")
     
     def _log(self, message: str, level: str = "info"):
-        """Add log message with timestamp"""
+        """Add log message"""
         timestamp = datetime.now().strftime("%H:%M:%S")
         
         colors = {
-            "info": "#7ee787",
-            "warning": "#d29922",
-            "error": "#f85149",
-            "success": "#3fb950"
+            "info": "#888",
+            "success": "#4CAF50",
+            "warning": "#FF9800",
+            "error": "#F44336"
         }
-        color = colors.get(level, "#c9d1d9")
+        color = colors.get(level, "#888")
         
         self.log_text.append(
-            f'<span style="color:#484f58">[{timestamp}]</span> '
+            f'<span style="color:#555">[{timestamp}]</span> '
             f'<span style="color:{color}">{message}</span>'
         )
         
@@ -775,19 +798,19 @@ class AutoLearnDialog(QDialog):
         scrollbar.setValue(scrollbar.maximum())
     
     def closeEvent(self, event):
-        """Handle dialog close"""
+        """Handle close"""
         if self.worker and self.worker.isRunning():
             reply = QMessageBox.question(
                 self,
-                "Learning in Progress",
-                "Learning is still in progress. Stop and close?",
+                "Close",
+                "Learning is in progress. Stop and close?",
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                 QMessageBox.StandardButton.No
             )
             
             if reply == QMessageBox.StandardButton.Yes:
                 self.worker.stop()
-                self.worker.wait(5000)
+                self.worker.wait(3000)
                 event.accept()
             else:
                 event.ignore()

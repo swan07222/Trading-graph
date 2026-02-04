@@ -37,6 +37,7 @@ class Config:
     NUM_HEADS: int = 8                 # Attention heads (Transformer)
     DROPOUT: float = 0.3               # Regularization dropout
     NUM_CLASSES: int = 3               # UP, NEUTRAL, DOWN
+    EPOCHS = 100
     
     # === Training Parameters ===
     LEARNING_RATE: float = 0.0005
