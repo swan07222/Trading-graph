@@ -1,11 +1,11 @@
 """
 Data Processor - Prepare data for training WITHOUT data leakage
 
-FIXED Issues:
+CRITICAL FIXES:
 - Scaler fitted ONLY on training data
-- Proper embargo gap between splits
-- Consistent sequence construction for train and inference
-- No look-ahead bias
+- Proper embargo gap between splits  
+- Labels truncated at split boundaries
+- Consistent sequence construction
 
 Author: AI Trading System v3.0
 """
@@ -23,21 +23,18 @@ from utils.logger import log
 
 class DataProcessor:
     """
-    Thread-safe data processor with proper scaler handling.
+    Thread-safe data processor with proper leakage prevention.
     
     CRITICAL RULES:
     1. fit_scaler() must be called ONLY with training data
-    2. transform() uses the fitted scaler for all splits
-    3. Embargo gap prevents label leakage at split boundaries
-    4. Sequence construction is identical for train and inference
+    2. Labels near split boundaries are invalidated
+    3. Embargo gap prevents any information flow
     """
     
     def __init__(self):
         self.scaler: Optional[RobustScaler] = None
         self._fitted = False
         self._lock = threading.Lock()
-        
-        # Store statistics for validation
         self._n_features: Optional[int] = None
         self._fit_samples: int = 0
     
@@ -54,8 +51,7 @@ class DataProcessor:
             1 = NEUTRAL (down_thresh < return < up_thresh)
             2 = UP (return >= up_thresh)
         
-        IMPORTANT: The last `horizon` rows will have NaN labels
-        and should be excluded from training.
+        IMPORTANT: The last `horizon` rows will have NaN labels.
         """
         horizon = horizon or CONFIG.PREDICTION_HORIZON
         up_thresh = up_thresh or CONFIG.UP_THRESHOLD
@@ -82,20 +78,25 @@ class DataProcessor:
     def fit_scaler(self, features: np.ndarray) -> 'DataProcessor':
         """
         Fit scaler on training data ONLY.
-        
-        This must be called with training features BEFORE any transform() calls.
         Thread-safe.
         """
         with self._lock:
             if features.ndim != 2:
                 raise ValueError(f"Features must be 2D, got shape {features.shape}")
             
+            # Remove any NaN rows before fitting
+            valid_mask = ~np.isnan(features).any(axis=1)
+            clean_features = features[valid_mask]
+            
+            if len(clean_features) < 10:
+                raise ValueError(f"Insufficient valid samples for scaler: {len(clean_features)}")
+            
             self.scaler = RobustScaler()
-            self.scaler.fit(features)
+            self.scaler.fit(clean_features)
             
             self._fitted = True
             self._n_features = features.shape[1]
-            self._fit_samples = features.shape[0]
+            self._fit_samples = len(clean_features)
             
             log.info(f"Scaler fitted on {self._fit_samples} samples, {self._n_features} features")
         
@@ -104,15 +105,11 @@ class DataProcessor:
     def transform(self, features: np.ndarray) -> np.ndarray:
         """
         Transform features using the fitted scaler.
-        
-        Clips extreme values to [-5, 5] for numerical stability.
-        Thread-safe.
+        Clips extreme values to [-5, 5] for stability.
         """
         with self._lock:
             if not self._fitted:
-                raise RuntimeError(
-                    "Scaler not fitted! Call fit_scaler() with training data first."
-                )
+                raise RuntimeError("Scaler not fitted! Call fit_scaler() first.")
             
             if features.shape[-1] != self._n_features:
                 raise ValueError(
@@ -120,16 +117,21 @@ class DataProcessor:
                     f"got {features.shape[-1]}"
                 )
             
-            # Handle both 2D and 3D inputs
             original_shape = features.shape
             if features.ndim == 3:
-                # Reshape (batch, seq, features) -> (batch*seq, features)
                 features_2d = features.reshape(-1, features.shape[-1])
             else:
                 features_2d = features
             
+            # Handle NaN values
+            nan_mask = np.isnan(features_2d)
+            features_2d = np.nan_to_num(features_2d, nan=0.0)
+            
             transformed = self.scaler.transform(features_2d)
             transformed = np.clip(transformed, -5, 5)
+            
+            # Restore NaN positions
+            transformed[nan_mask] = 0.0
             
             if len(original_shape) == 3:
                 transformed = transformed.reshape(original_shape)
@@ -145,24 +147,12 @@ class DataProcessor:
         """
         Prepare sequences for training or inference.
         
-        SEQUENCE CONSTRUCTION (consistent for train and inference):
+        SEQUENCE CONSTRUCTION:
         - For each valid label at index i, the input sequence is:
-          features[i - seq_len + 1 : i + 1]  (includes row i)
-        - This means the sequence ENDS at the row where we make the prediction
-        
-        Args:
-            df: DataFrame with features and labels
-            feature_cols: List of feature column names
-            fit_scaler: If True, fit scaler on this data (ONLY for training!)
-            
-        Returns:
-            X: (n_samples, seq_len, n_features)
-            y: (n_samples,) labels
-            r: (n_samples,) future returns for backtesting
+          features[i - seq_len + 1 : i + 1]
         """
         seq_len = CONFIG.SEQUENCE_LENGTH
         
-        # Validate
         missing_cols = set(feature_cols) - set(df.columns)
         if missing_cols:
             raise ValueError(f"Missing feature columns: {missing_cols}")
@@ -170,35 +160,26 @@ class DataProcessor:
         if 'label' not in df.columns:
             raise ValueError("DataFrame must have 'label' column. Call create_labels() first.")
         
-        # Extract arrays
         features = df[feature_cols].values.astype(np.float32)
         labels = df['label'].values
         returns = df['future_return'].values if 'future_return' in df.columns else np.zeros(len(df))
         
-        # Fit scaler if requested (training data only!)
         if fit_scaler:
-            # Only fit on rows with valid labels
             valid_mask = ~np.isnan(labels)
             self.fit_scaler(features[valid_mask])
         
-        # Transform features
         if self._fitted:
             features = self.transform(features)
-        else:
-            log.warning("Scaler not fitted - using raw features (not recommended)")
         
-        # Create sequences
         X, y, r = [], [], []
         
         for i in range(seq_len - 1, len(features)):
-            # Skip if label is invalid (NaN)
             if np.isnan(labels[i]):
                 continue
             
-            # Sequence: [i - seq_len + 1, i] inclusive
             seq = features[i - seq_len + 1 : i + 1]
             
-            if len(seq) == seq_len:
+            if len(seq) == seq_len and not np.isnan(seq).any():
                 X.append(seq)
                 y.append(int(labels[i]))
                 r.append(float(returns[i]) if not np.isnan(returns[i]) else 0.0)
@@ -219,82 +200,72 @@ class DataProcessor:
     ) -> np.ndarray:
         """
         Prepare a single sequence for inference.
-        
-        Uses the last SEQUENCE_LENGTH rows of the DataFrame.
-        Consistent with training sequence construction.
-        
-        Returns:
-            X: (1, seq_len, n_features)
+        Uses the last SEQUENCE_LENGTH rows.
         """
         seq_len = CONFIG.SEQUENCE_LENGTH
         
         if len(df) < seq_len:
-            raise ValueError(
-                f"Need at least {seq_len} rows for inference, got {len(df)}"
-            )
+            raise ValueError(f"Need at least {seq_len} rows, got {len(df)}")
         
-        # Take last seq_len rows
         df_seq = df.tail(seq_len)
         features = df_seq[feature_cols].values.astype(np.float32)
         
-        # Transform
         if self._fitted:
             features = self.transform(features)
         else:
-            log.warning("Scaler not fitted - inference may be inaccurate")
+            log.warning("Scaler not fitted - using raw features")
             features = np.clip(features, -5, 5)
         
         return features[np.newaxis, :, :]
     
-    def split_temporal(
+    def split_temporal_single_stock(
         self,
         df: pd.DataFrame,
-        feature_cols: List[str]
+        feature_cols: List[str],
+        fit_scaler_on_train: bool = True
     ) -> Dict[str, Tuple[np.ndarray, np.ndarray, np.ndarray]]:
         """
-        Split data temporally with proper embargo.
+        Split a single stock's data temporally with proper embargo.
         
-        CRITICAL: 
-        - No shuffling (time series!)
-        - Embargo gap between splits prevents label leakage
-        - Scaler fitted only on training portion
-        
-        Returns:
-            Dict with 'train', 'val', 'test' keys, each containing (X, y, r)
+        CRITICAL: Labels are created WITHIN each split to prevent leakage.
         """
         n = len(df)
+        horizon = CONFIG.PREDICTION_HORIZON
         embargo = CONFIG.EMBARGO_BARS
         
         # Calculate split points
         train_end = int(n * CONFIG.TRAIN_RATIO)
         val_end = int(n * (CONFIG.TRAIN_RATIO + CONFIG.VAL_RATIO))
         
-        # Apply embargo: skip EMBARGO_BARS after train and val boundaries
-        train_df = df.iloc[:train_end - embargo]
-        val_df = df.iloc[train_end:val_end - embargo]
-        test_df = df.iloc[val_end:]
+        # Split raw data BEFORE labeling
+        # Subtract horizon+embargo from train_end to ensure no leakage
+        train_df = df.iloc[:train_end - horizon - embargo].copy()
+        val_df = df.iloc[train_end:val_end - horizon - embargo].copy()
+        test_df = df.iloc[val_end:].copy()
         
-        log.info(f"Temporal split with embargo={embargo}:")
-        log.info(f"  Train: rows 0-{train_end - embargo - 1} ({len(train_df)} rows)")
-        log.info(f"  Val: rows {train_end}-{val_end - embargo - 1} ({len(val_df)} rows)")
-        log.info(f"  Test: rows {val_end}-{n-1} ({len(test_df)} rows)")
+        # Create labels within each split
+        train_df = self.create_labels(train_df)
+        val_df = self.create_labels(val_df)
+        test_df = self.create_labels(test_df)
+        
+        log.debug(f"Split sizes: train={len(train_df)}, val={len(val_df)}, test={len(test_df)}")
         
         # Fit scaler on training data only
-        train_features = train_df[feature_cols].values
-        valid_mask = ~train_df['label'].isna()
-        self.fit_scaler(train_features[valid_mask])
+        if fit_scaler_on_train and len(train_df) >= CONFIG.SEQUENCE_LENGTH:
+            train_features = train_df[feature_cols].values
+            valid_mask = ~train_df['label'].isna()
+            if valid_mask.sum() > 10:
+                self.fit_scaler(train_features[valid_mask])
         
-        # Prepare sequences for each split
         results = {}
-        
         for name, split_df in [('train', train_df), ('val', val_df), ('test', test_df)]:
-            if len(split_df) >= CONFIG.SEQUENCE_LENGTH:
+            if len(split_df) >= CONFIG.SEQUENCE_LENGTH + 5:
                 X, y, r = self.prepare_sequences(split_df, feature_cols, fit_scaler=False)
                 results[name] = (X, y, r)
-                log.info(f"  {name}: {len(X)} sequences")
+                log.debug(f"  {name}: {len(X)} sequences")
             else:
                 results[name] = (np.array([]), np.array([]), np.array([]))
-                log.warning(f"  {name}: insufficient data for sequences")
+                log.debug(f"  {name}: insufficient data")
         
         return results
     
@@ -345,6 +316,8 @@ class DataProcessor:
     
     def get_class_distribution(self, y: np.ndarray) -> Dict[str, int]:
         """Get class distribution for logging"""
+        if len(y) == 0:
+            return {'DOWN': 0, 'NEUTRAL': 0, 'UP': 0, 'total': 0}
         counts = np.bincount(y.astype(int), minlength=CONFIG.NUM_CLASSES)
         return {
             'DOWN': int(counts[0]),
@@ -352,9 +325,3 @@ class DataProcessor:
             'UP': int(counts[2]),
             'total': int(len(y))
         }
-    
-    def get_class_weights(self, y: np.ndarray) -> np.ndarray:
-        """Calculate balanced class weights"""
-        counts = np.bincount(y.astype(int), minlength=CONFIG.NUM_CLASSES)
-        weights = 1.0 / (counts + 1)
-        return weights / weights.sum()
