@@ -1,19 +1,23 @@
 """
-Main Application Window
+AI Stock Trading System - Professional Desktop Application
+Real-time trading signals with custom AI model
 """
 import sys
 from datetime import datetime
-from typing import Optional, Dict
+from typing import Optional, Dict, List
+import threading
+import time
 
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QLabel, QLineEdit, QGroupBox, QProgressBar,
     QTabWidget, QStatusBar, QTextEdit, QDoubleSpinBox, QSpinBox,
     QSplitter, QComboBox, QMessageBox, QListWidget, QGridLayout,
-    QFrame
+    QFrame, QTableWidget, QTableWidgetItem, QHeaderView, QToolBar,
+    QDockWidget, QSystemTrayIcon, QMenu
 )
-from PyQt6.QtCore import Qt, QTimer, QThread, pyqtSignal
-from PyQt6.QtGui import QFont
+from PyQt6.QtCore import Qt, QTimer, QThread, pyqtSignal, QSize
+from PyQt6.QtGui import QFont, QColor, QIcon, QAction, QPalette
 
 from config import CONFIG, TradingMode
 from models.predictor import Predictor, Prediction, Signal
@@ -25,8 +29,57 @@ from .charts import StockChart
 from utils.logger import log
 
 
+class RealTimeMonitor(QThread):
+    """
+    Real-time market monitoring thread
+    Continuously checks for trading signals
+    """
+    signal_detected = pyqtSignal(object)  # Prediction
+    price_updated = pyqtSignal(str, float)  # code, price
+    error_occurred = pyqtSignal(str)
+    
+    def __init__(self, predictor: Predictor, watch_list: List[str]):
+        super().__init__()
+        self.predictor = predictor
+        self.watch_list = watch_list
+        self.running = False
+        self.interval = 30  # seconds
+    
+    def run(self):
+        """Main monitoring loop"""
+        self.running = True
+        
+        while self.running:
+            for code in self.watch_list:
+                if not self.running:
+                    break
+                
+                try:
+                    pred = self.predictor.predict(code)
+                    self.price_updated.emit(code, pred.current_price)
+                    
+                    # Emit signal if strong enough
+                    if pred.signal in [Signal.STRONG_BUY, Signal.STRONG_SELL]:
+                        if pred.confidence >= CONFIG.MIN_CONFIDENCE:
+                            self.signal_detected.emit(pred)
+                    
+                except Exception as e:
+                    self.error_occurred.emit(f"{code}: {str(e)}")
+                
+                time.sleep(2)  # Rate limit
+            
+            # Wait before next cycle
+            for _ in range(self.interval):
+                if not self.running:
+                    break
+                time.sleep(1)
+    
+    def stop(self):
+        self.running = False
+
+
 class WorkerThread(QThread):
-    """Generic worker thread"""
+    """Generic worker thread for background tasks"""
     finished = pyqtSignal(object)
     error = pyqtSignal(str)
     progress = pyqtSignal(int, str)
@@ -47,35 +100,148 @@ class WorkerThread(QThread):
 
 class MainApp(QMainWindow):
     """
-    Main Application Window
+    Professional AI Stock Trading Application
     
     Features:
-    - Stock analysis with AI predictions
-    - Price charts with predictions
-    - Portfolio management
-    - Order execution
+    - Real-time signal monitoring
+    - Custom AI model with 6 neural networks
+    - Professional dark theme
+    - Live/Paper trading support
+    - Comprehensive risk management
     """
     
     def __init__(self):
         super().__init__()
         
-        self.setWindowTitle("AI Stock Trading Advisor")
-        self.setGeometry(50, 50, 1600, 900)
+        self.setWindowTitle("AI Stock Trading System v2.0")
+        self.setGeometry(50, 50, 1800, 1000)
         
         # State
         self.predictor: Optional[Predictor] = None
         self.executor: Optional[ExecutionEngine] = None
         self.current_prediction: Optional[Prediction] = None
         self.workers: Dict = {}
+        self.monitor: Optional[RealTimeMonitor] = None
+        self.watch_list: List[str] = CONFIG.STOCK_POOL[:10]
         
         # Setup
+        self._setup_menubar()
+        self._setup_toolbar()
         self._setup_ui()
+        self._setup_statusbar()
         self._setup_timers()
-        self._apply_style()
+        self._apply_professional_style()
         self._init_components()
     
+    def _setup_menubar(self):
+        """Setup professional menu bar"""
+        menubar = self.menuBar()
+        
+        # File Menu
+        file_menu = menubar.addMenu("&File")
+        
+        new_action = QAction("&New Workspace", self)
+        new_action.setShortcut("Ctrl+N")
+        file_menu.addAction(new_action)
+        
+        file_menu.addSeparator()
+        
+        exit_action = QAction("E&xit", self)
+        exit_action.setShortcut("Ctrl+Q")
+        exit_action.triggered.connect(self.close)
+        file_menu.addAction(exit_action)
+        
+        # Trading Menu
+        trading_menu = menubar.addMenu("&Trading")
+        
+        connect_action = QAction("&Connect Broker", self)
+        connect_action.triggered.connect(self._toggle_trading)
+        trading_menu.addAction(connect_action)
+        
+        trading_menu.addSeparator()
+        
+        paper_action = QAction("&Paper Trading Mode", self)
+        paper_action.setCheckable(True)
+        paper_action.setChecked(True)
+        trading_menu.addAction(paper_action)
+        
+        live_action = QAction("&Live Trading Mode", self)
+        live_action.setCheckable(True)
+        trading_menu.addAction(live_action)
+        
+        # AI Menu
+        ai_menu = menubar.addMenu("&AI Model")
+        
+        train_action = QAction("&Train Model", self)
+        train_action.setShortcut("Ctrl+T")
+        train_action.triggered.connect(self._start_training)
+        ai_menu.addAction(train_action)
+        
+        auto_learn_action = QAction("&Auto Learn", self)
+        auto_learn_action.triggered.connect(self._show_auto_learn)
+        ai_menu.addAction(auto_learn_action)
+        
+        ai_menu.addSeparator()
+        
+        backtest_action = QAction("&Backtest", self)
+        backtest_action.triggered.connect(self._show_backtest)
+        ai_menu.addAction(backtest_action)
+        
+        # View Menu
+        view_menu = menubar.addMenu("&View")
+        
+        # Help Menu
+        help_menu = menubar.addMenu("&Help")
+        
+        about_action = QAction("&About", self)
+        about_action.triggered.connect(self._show_about)
+        help_menu.addAction(about_action)
+    
+    def _setup_toolbar(self):
+        """Setup professional toolbar"""
+        toolbar = QToolBar("Main Toolbar")
+        toolbar.setIconSize(QSize(24, 24))
+        toolbar.setMovable(False)
+        self.addToolBar(toolbar)
+        
+        # Analyze button
+        self.analyze_action = QAction("🔍 Analyze", self)
+        self.analyze_action.triggered.connect(self._analyze_stock)
+        toolbar.addAction(self.analyze_action)
+        
+        toolbar.addSeparator()
+        
+        # Real-time monitoring toggle
+        self.monitor_action = QAction("📡 Start Monitoring", self)
+        self.monitor_action.setCheckable(True)
+        self.monitor_action.triggered.connect(self._toggle_monitoring)
+        toolbar.addAction(self.monitor_action)
+        
+        toolbar.addSeparator()
+        
+        # Quick scan
+        scan_action = QAction("🔎 Scan All", self)
+        scan_action.triggered.connect(self._scan_stocks)
+        toolbar.addAction(scan_action)
+        
+        toolbar.addSeparator()
+        
+        # Spacer
+        spacer = QWidget()
+        spacer.setSizePolicy(spacer.sizePolicy().horizontalPolicy(), 
+                            spacer.sizePolicy().verticalPolicy())
+        toolbar.addWidget(spacer)
+        
+        # Stock input in toolbar
+        toolbar.addWidget(QLabel("  Stock: "))
+        self.stock_input = QLineEdit()
+        self.stock_input.setPlaceholderText("Enter code (e.g., 600519)")
+        self.stock_input.setFixedWidth(150)
+        self.stock_input.returnPressed.connect(self._analyze_stock)
+        toolbar.addWidget(self.stock_input)
+    
     def _setup_ui(self):
-        """Setup UI components"""
+        """Setup main UI with professional layout"""
         central = QWidget()
         self.setCentralWidget(central)
         
@@ -83,174 +249,183 @@ class MainApp(QMainWindow):
         layout.setSpacing(10)
         layout.setContentsMargins(10, 10, 10, 10)
         
-        splitter = QSplitter(Qt.Orientation.Horizontal)
+        # Main splitter
+        main_splitter = QSplitter(Qt.Orientation.Horizontal)
         
-        # Left panel
-        left = self._create_left_panel()
+        # Left Panel - Control & Watchlist
+        left_panel = self._create_left_panel()
         
-        # Center panel
-        center = self._create_center_panel()
+        # Center Panel - Charts & Signals
+        center_panel = self._create_center_panel()
         
-        # Right panel
-        right = self._create_right_panel()
+        # Right Panel - Portfolio & Orders
+        right_panel = self._create_right_panel()
         
-        splitter.addWidget(left)
-        splitter.addWidget(center)
-        splitter.addWidget(right)
-        splitter.setSizes([350, 700, 450])
+        main_splitter.addWidget(left_panel)
+        main_splitter.addWidget(center_panel)
+        main_splitter.addWidget(right_panel)
+        main_splitter.setSizes([300, 900, 500])
         
-        layout.addWidget(splitter)
-        
-        # Status bar
-        self._setup_status_bar()
+        layout.addWidget(main_splitter)
     
     def _create_left_panel(self) -> QWidget:
         """Create left control panel"""
         panel = QWidget()
-        panel.setMaximumWidth(400)
+        panel.setMaximumWidth(350)
         layout = QVBoxLayout(panel)
         layout.setSpacing(10)
         
-        # Stock input
-        input_group = QGroupBox("Stock Analysis")
-        input_layout = QVBoxLayout()
+        # Watchlist
+        watchlist_group = QGroupBox("📋 Watchlist")
+        watchlist_layout = QVBoxLayout()
         
-        code_layout = QHBoxLayout()
-        self.stock_input = QLineEdit()
-        self.stock_input.setPlaceholderText("Enter stock code (e.g., 600519)")
-        self.stock_input.returnPressed.connect(self._analyze_stock)
-        code_layout.addWidget(self.stock_input)
+        self.watchlist = QTableWidget()
+        self.watchlist.setColumnCount(4)
+        self.watchlist.setHorizontalHeaderLabels(["Code", "Price", "Change", "Signal"])
+        self.watchlist.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        self.watchlist.setMaximumHeight(250)
+        self.watchlist.cellDoubleClicked.connect(self._on_watchlist_click)
         
-        self.analyze_btn = QPushButton("Analyze")
-        self.analyze_btn.clicked.connect(self._analyze_stock)
-        self.analyze_btn.setStyleSheet("""
-            QPushButton {
-                background: #2196F3;
-                color: white;
-                border: none;
-                padding: 8px 20px;
-                border-radius: 5px;
-                font-weight: bold;
-            }
-            QPushButton:hover { background: #1976D2; }
-        """)
-        code_layout.addWidget(self.analyze_btn)
+        # Populate initial watchlist
+        self._update_watchlist()
         
-        input_layout.addLayout(code_layout)
-        input_group.setLayout(input_layout)
-        layout.addWidget(input_group)
+        watchlist_layout.addWidget(self.watchlist)
         
-        # Stock list
-        list_group = QGroupBox("Stock List")
-        list_layout = QVBoxLayout()
+        # Add/Remove buttons
+        btn_layout = QHBoxLayout()
+        add_btn = QPushButton("+ Add")
+        add_btn.clicked.connect(self._add_to_watchlist)
+        remove_btn = QPushButton("- Remove")
+        remove_btn.clicked.connect(self._remove_from_watchlist)
+        btn_layout.addWidget(add_btn)
+        btn_layout.addWidget(remove_btn)
+        watchlist_layout.addLayout(btn_layout)
         
-        self.stock_list = QListWidget()
-        for code in CONFIG.STOCK_POOL[:10]:
-            self.stock_list.addItem(code)
-        self.stock_list.setMaximumHeight(150)
-        self.stock_list.itemDoubleClicked.connect(
-            lambda item: (self.stock_input.setText(item.text()), self._analyze_stock())
-        )
-        list_layout.addWidget(self.stock_list)
+        watchlist_group.setLayout(watchlist_layout)
+        layout.addWidget(watchlist_group)
         
-        scan_btn = QPushButton("🔍 Scan All")
-        scan_btn.clicked.connect(self._scan_stocks)
-        list_layout.addWidget(scan_btn)
+        # Trading Settings
+        settings_group = QGroupBox("⚙️ Trading Settings")
+        settings_layout = QGridLayout()
         
-        list_group.setLayout(list_layout)
-        layout.addWidget(list_group)
-        
-        # Trading mode
-        mode_group = QGroupBox("Trading Mode")
-        mode_layout = QVBoxLayout()
-        
+        settings_layout.addWidget(QLabel("Mode:"), 0, 0)
         self.mode_combo = QComboBox()
-        self.mode_combo.addItems(["Simulation", "Live Trading"])
-        mode_layout.addWidget(self.mode_combo)
+        self.mode_combo.addItems(["Paper Trading", "Live Trading"])
+        settings_layout.addWidget(self.mode_combo, 0, 1)
         
-        capital_layout = QHBoxLayout()
-        capital_layout.addWidget(QLabel("Capital:"))
+        settings_layout.addWidget(QLabel("Capital:"), 1, 0)
         self.capital_spin = QDoubleSpinBox()
         self.capital_spin.setRange(10000, 100000000)
         self.capital_spin.setValue(CONFIG.CAPITAL)
         self.capital_spin.setPrefix("¥ ")
-        capital_layout.addWidget(self.capital_spin)
-        mode_layout.addLayout(capital_layout)
+        settings_layout.addWidget(self.capital_spin, 1, 1)
         
-        self.connect_btn = QPushButton("Connect Trading")
+        settings_layout.addWidget(QLabel("Risk/Trade:"), 2, 0)
+        self.risk_spin = QDoubleSpinBox()
+        self.risk_spin.setRange(0.5, 5.0)
+        self.risk_spin.setValue(CONFIG.RISK_PER_TRADE)
+        self.risk_spin.setSuffix(" %")
+        settings_layout.addWidget(self.risk_spin, 2, 1)
+        
+        settings_group.setLayout(settings_layout)
+        layout.addWidget(settings_group)
+        
+        # Connection Status
+        connection_group = QGroupBox("🔌 Connection")
+        connection_layout = QVBoxLayout()
+        
+        self.connection_status = QLabel("● Disconnected")
+        self.connection_status.setStyleSheet("color: #FF5252; font-weight: bold;")
+        connection_layout.addWidget(self.connection_status)
+        
+        self.connect_btn = QPushButton("Connect to Broker")
         self.connect_btn.clicked.connect(self._toggle_trading)
         self.connect_btn.setStyleSheet("""
             QPushButton {
                 background: #4CAF50;
                 color: white;
                 border: none;
-                padding: 10px;
-                border-radius: 5px;
+                padding: 12px;
+                border-radius: 6px;
                 font-weight: bold;
             }
             QPushButton:hover { background: #388E3C; }
         """)
-        mode_layout.addWidget(self.connect_btn)
+        connection_layout.addWidget(self.connect_btn)
         
-        mode_group.setLayout(mode_layout)
-        layout.addWidget(mode_group)
+        connection_group.setLayout(connection_layout)
+        layout.addWidget(connection_group)
         
-        # Training
-        train_group = QGroupBox("Model Training")
-        train_layout = QVBoxLayout()
+        # AI Model Status
+        ai_group = QGroupBox("🧠 AI Model")
+        ai_layout = QVBoxLayout()
         
-        epochs_layout = QHBoxLayout()
-        epochs_layout.addWidget(QLabel("Epochs:"))
-        self.epochs_spin = QSpinBox()
-        self.epochs_spin.setRange(10, 500)
-        self.epochs_spin.setValue(CONFIG.EPOCHS)
-        epochs_layout.addWidget(self.epochs_spin)
-        train_layout.addLayout(epochs_layout)
+        self.model_status = QLabel("Model: Not Loaded")
+        ai_layout.addWidget(self.model_status)
         
         self.train_btn = QPushButton("🎓 Train Model")
         self.train_btn.clicked.connect(self._start_training)
-        train_layout.addWidget(self.train_btn)
+        ai_layout.addWidget(self.train_btn)
+        
+        self.auto_learn_btn = QPushButton("🤖 Auto Learn")
+        self.auto_learn_btn.setStyleSheet("""
+            QPushButton {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                    stop:0 #667eea, stop:1 #764ba2);
+                color: white;
+                border: none;
+                padding: 12px;
+                border-radius: 6px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                    stop:0 #764ba2, stop:1 #667eea);
+            }
+        """)
+        self.auto_learn_btn.clicked.connect(self._show_auto_learn)
+        ai_layout.addWidget(self.auto_learn_btn)
         
         self.train_progress = QProgressBar()
         self.train_progress.setVisible(False)
-        train_layout.addWidget(self.train_progress)
+        ai_layout.addWidget(self.train_progress)
         
-        train_group.setLayout(train_layout)
-        layout.addWidget(train_group)
+        ai_group.setLayout(ai_layout)
+        layout.addWidget(ai_group)
         
         layout.addStretch()
         
         return panel
     
     def _create_center_panel(self) -> QWidget:
-        """Create center panel with chart and signal"""
+        """Create center panel with charts and signals"""
         panel = QWidget()
         layout = QVBoxLayout(panel)
         layout.setSpacing(10)
         
-        # Signal panel
+        # Signal Display
         self.signal_panel = SignalPanel()
         layout.addWidget(self.signal_panel)
         
         # Chart
-        chart_group = QGroupBox("Price Chart & Prediction")
+        chart_group = QGroupBox("📈 Price Chart & AI Prediction")
         chart_layout = QVBoxLayout()
         
         self.chart = StockChart()
-        self.chart.setMinimumHeight(350)
+        self.chart.setMinimumHeight(400)
         chart_layout.addWidget(self.chart)
         
         chart_group.setLayout(chart_layout)
         layout.addWidget(chart_group)
         
-        # Analysis details
-        details_group = QGroupBox("Analysis Details")
+        # Analysis Details
+        details_group = QGroupBox("📊 Analysis Details")
         details_layout = QVBoxLayout()
         
         self.details_text = QTextEdit()
         self.details_text.setReadOnly(True)
         self.details_text.setFont(QFont("Consolas", 10))
-        self.details_text.setMaximumHeight(180)
+        self.details_text.setMaximumHeight(200)
         details_layout.addWidget(self.details_text)
         
         details_group.setLayout(details_layout)
@@ -267,17 +442,18 @@ class MainApp(QMainWindow):
         # Tabs
         tabs = QTabWidget()
         
-        # Portfolio tab
+        # Portfolio Tab
         portfolio_tab = QWidget()
         portfolio_layout = QVBoxLayout(portfolio_tab)
         
-        # Account summary
+        # Account Summary
         account_frame = QFrame()
         account_frame.setStyleSheet("""
             QFrame {
-                background: #1a1a3e;
-                border-radius: 8px;
-                padding: 10px;
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
+                    stop:0 #1a1a3e, stop:1 #2a2a5a);
+                border-radius: 10px;
+                padding: 15px;
             }
         """)
         account_layout = QGridLayout(account_frame)
@@ -285,9 +461,9 @@ class MainApp(QMainWindow):
         self.account_labels = {}
         labels = [
             ('equity', 'Total Equity', 0, 0),
-            ('available', 'Available', 0, 1),
-            ('market_value', 'Market Value', 1, 0),
-            ('total_pnl', 'Total P&L', 1, 1),
+            ('cash', 'Available Cash', 0, 1),
+            ('positions', 'Positions Value', 1, 0),
+            ('pnl', 'Total P&L', 1, 1),
         ]
         
         for key, text, row, col in labels:
@@ -298,7 +474,7 @@ class MainApp(QMainWindow):
             title = QLabel(text)
             title.setStyleSheet("color: #888; font-size: 11px;")
             value = QLabel("--")
-            value.setStyleSheet("color: #00E5FF; font-size: 16px; font-weight: bold;")
+            value.setStyleSheet("color: #00E5FF; font-size: 18px; font-weight: bold;")
             
             cont_layout.addWidget(title)
             cont_layout.addWidget(value)
@@ -308,31 +484,44 @@ class MainApp(QMainWindow):
         
         portfolio_layout.addWidget(account_frame)
         
-        # Positions table
+        # Positions Table
         self.positions_table = PositionTable()
         portfolio_layout.addWidget(self.positions_table)
         
-        tabs.addTab(portfolio_tab, "Portfolio")
+        tabs.addTab(portfolio_tab, "💼 Portfolio")
         
-        # History tab
+        # Real-time Signals Tab
+        signals_tab = QWidget()
+        signals_layout = QVBoxLayout(signals_tab)
+        
+        self.signals_table = QTableWidget()
+        self.signals_table.setColumnCount(6)
+        self.signals_table.setHorizontalHeaderLabels([
+            "Time", "Code", "Signal", "Confidence", "Price", "Action"
+        ])
+        self.signals_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        signals_layout.addWidget(self.signals_table)
+        
+        tabs.addTab(signals_tab, "📡 Live Signals")
+        
+        # History Tab
         history_tab = QWidget()
         history_layout = QVBoxLayout(history_tab)
         
-        from PyQt6.QtWidgets import QTableWidget, QHeaderView
         self.history_table = QTableWidget()
         self.history_table.setColumnCount(6)
         self.history_table.setHorizontalHeaderLabels([
-            'Time', 'Code', 'Signal', 'Prob UP', 'Confidence', 'Result'
+            "Time", "Code", "Signal", "Prob UP", "Confidence", "Result"
         ])
         self.history_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         history_layout.addWidget(self.history_table)
         
-        tabs.addTab(history_tab, "History")
+        tabs.addTab(history_tab, "📜 History")
         
         layout.addWidget(tabs)
         
         # Log
-        log_group = QGroupBox("System Log")
+        log_group = QGroupBox("📋 System Log")
         log_layout = QVBoxLayout()
         
         self.log_widget = LogWidget()
@@ -341,19 +530,27 @@ class MainApp(QMainWindow):
         log_group.setLayout(log_layout)
         layout.addWidget(log_group)
         
-        # Action buttons
-        action_layout = QHBoxLayout()
+        # Action Buttons
+        action_frame = QFrame()
+        action_frame.setStyleSheet("""
+            QFrame {
+                background: #1a1a3e;
+                border-radius: 8px;
+                padding: 10px;
+            }
+        """)
+        action_layout = QHBoxLayout(action_frame)
         
-        self.buy_btn = QPushButton("BUY")
+        self.buy_btn = QPushButton("📈 BUY")
         self.buy_btn.setStyleSheet("""
             QPushButton {
                 background: #4CAF50;
                 color: white;
                 border: none;
-                padding: 12px 30px;
-                border-radius: 5px;
+                padding: 15px 40px;
+                border-radius: 6px;
                 font-weight: bold;
-                font-size: 14px;
+                font-size: 16px;
             }
             QPushButton:hover { background: #388E3C; }
             QPushButton:disabled { background: #333; color: #666; }
@@ -361,16 +558,16 @@ class MainApp(QMainWindow):
         self.buy_btn.clicked.connect(self._execute_buy)
         self.buy_btn.setEnabled(False)
         
-        self.sell_btn = QPushButton("SELL")
+        self.sell_btn = QPushButton("📉 SELL")
         self.sell_btn.setStyleSheet("""
             QPushButton {
                 background: #F44336;
                 color: white;
                 border: none;
-                padding: 12px 30px;
-                border-radius: 5px;
+                padding: 15px 40px;
+                border-radius: 6px;
                 font-weight: bold;
-                font-size: 14px;
+                font-size: 16px;
             }
             QPushButton:hover { background: #D32F2F; }
             QPushButton:disabled { background: #333; color: #666; }
@@ -381,27 +578,36 @@ class MainApp(QMainWindow):
         action_layout.addWidget(self.buy_btn)
         action_layout.addWidget(self.sell_btn)
         
-        layout.addLayout(action_layout)
+        layout.addWidget(action_frame)
         
         return panel
     
-    def _setup_status_bar(self):
+    def _setup_statusbar(self):
         """Setup status bar"""
         self.statusBar = QStatusBar()
         self.setStatusBar(self.statusBar)
         
+        # Progress bar
         self.progress = QProgressBar()
         self.progress.setMaximumWidth(200)
         self.progress.setMaximumHeight(15)
         self.progress.hide()
         self.statusBar.addPermanentWidget(self.progress)
         
+        # Status
         self.status_label = QLabel("Ready")
         self.statusBar.addWidget(self.status_label)
         
+        # Market status
         self.market_label = QLabel("")
         self.statusBar.addPermanentWidget(self.market_label)
         
+        # Monitoring status
+        self.monitor_label = QLabel("Monitoring: OFF")
+        self.monitor_label.setStyleSheet("color: #888;")
+        self.statusBar.addPermanentWidget(self.monitor_label)
+        
+        # Clock
         self.time_label = QLabel("")
         self.statusBar.addPermanentWidget(self.time_label)
     
@@ -422,24 +628,53 @@ class MainApp(QMainWindow):
         self.portfolio_timer.timeout.connect(self._refresh_portfolio)
         self.portfolio_timer.start(5000)
         
+        # Watchlist refresh
+        self.watchlist_timer = QTimer()
+        self.watchlist_timer.timeout.connect(self._update_watchlist)
+        self.watchlist_timer.start(30000)
+        
         self._update_market_status()
     
-    def _apply_style(self):
-        """Apply application style"""
+    def _apply_professional_style(self):
+        """Apply professional dark theme"""
         self.setStyleSheet("""
             QMainWindow {
-                background: #0a0a1a;
+                background: #0d1117;
+            }
+            
+            QMenuBar {
+                background: #161b22;
+                color: #c9d1d9;
+                border-bottom: 1px solid #30363d;
+            }
+            QMenuBar::item:selected {
+                background: #21262d;
+            }
+            QMenu {
+                background: #161b22;
+                color: #c9d1d9;
+                border: 1px solid #30363d;
+            }
+            QMenu::item:selected {
+                background: #21262d;
+            }
+            
+            QToolBar {
+                background: #161b22;
+                border-bottom: 1px solid #30363d;
+                spacing: 10px;
+                padding: 5px;
             }
             
             QGroupBox {
                 font-weight: bold;
                 font-size: 12px;
-                border: 2px solid #2a2a5a;
-                border-radius: 10px;
+                border: 1px solid #30363d;
+                border-radius: 8px;
                 margin-top: 12px;
                 padding-top: 12px;
-                color: #00E5FF;
-                background: #0f0f2a;
+                color: #58a6ff;
+                background: #0d1117;
             }
             QGroupBox::title {
                 subcontrol-origin: margin;
@@ -448,128 +683,115 @@ class MainApp(QMainWindow):
             }
             
             QLabel {
-                color: #ddd;
+                color: #c9d1d9;
                 font-size: 12px;
             }
             
             QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox {
                 padding: 8px;
-                border: 2px solid #2a2a5a;
+                border: 1px solid #30363d;
                 border-radius: 6px;
-                background: #1a1a3e;
-                color: #fff;
+                background: #21262d;
+                color: #c9d1d9;
                 font-size: 12px;
             }
             QLineEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus {
-                border-color: #00E5FF;
-            }
-            
-            QListWidget {
-                background: #1a1a3e;
-                color: #fff;
-                border: 1px solid #2a2a5a;
-                border-radius: 6px;
-            }
-            QListWidget::item {
-                padding: 6px;
-            }
-            QListWidget::item:selected {
-                background: #3a3a7a;
-            }
-            QListWidget::item:hover {
-                background: #2a2a5a;
+                border-color: #58a6ff;
             }
             
             QTableWidget {
-                background: #1a1a3e;
-                color: #fff;
+                background: #0d1117;
+                color: #c9d1d9;
                 border: none;
-                gridline-color: #2a2a5a;
+                gridline-color: #30363d;
+                selection-background-color: #21262d;
             }
             QTableWidget::item {
-                padding: 5px;
-            }
-            QTableWidget::item:selected {
-                background: #3a3a7a;
-            }
-            
-            QHeaderView::section {
-                background: #2a2a5a;
-                color: #00E5FF;
                 padding: 8px;
+            }
+            QHeaderView::section {
+                background: #21262d;
+                color: #58a6ff;
+                padding: 10px;
                 border: none;
                 font-weight: bold;
             }
             
             QTabWidget::pane {
-                border: 2px solid #2a2a5a;
-                background: #0a0a1a;
+                border: 1px solid #30363d;
+                background: #0d1117;
                 border-radius: 8px;
             }
             QTabBar::tab {
-                background: #1a1a3e;
-                color: #888;
+                background: #161b22;
+                color: #8b949e;
                 padding: 10px 20px;
                 border-top-left-radius: 6px;
                 border-top-right-radius: 6px;
                 margin-right: 2px;
             }
             QTabBar::tab:selected {
-                background: #2a2a5a;
-                color: #00E5FF;
+                background: #21262d;
+                color: #58a6ff;
             }
             
             QPushButton {
-                background: #3a3a7a;
-                color: white;
-                border: none;
+                background: #21262d;
+                color: #c9d1d9;
+                border: 1px solid #30363d;
                 padding: 8px 16px;
-                border-radius: 5px;
+                border-radius: 6px;
                 font-weight: bold;
             }
             QPushButton:hover {
-                background: #4a4a9a;
+                background: #30363d;
+                border-color: #58a6ff;
             }
             QPushButton:disabled {
-                background: #222;
-                color: #555;
+                background: #161b22;
+                color: #484f58;
+                border-color: #21262d;
             }
             
             QProgressBar {
                 border: none;
-                background: #1a1a3e;
-                border-radius: 5px;
+                background: #21262d;
+                border-radius: 4px;
                 text-align: center;
-                color: #fff;
+                color: #c9d1d9;
             }
             QProgressBar::chunk {
                 background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                    stop:0 #00E5FF, stop:1 #00BCD4);
-                border-radius: 5px;
+                    stop:0 #238636, stop:1 #2ea043);
+                border-radius: 4px;
             }
             
             QStatusBar {
-                background: #0f0f2a;
-                color: #888;
-                border-top: 1px solid #2a2a5a;
+                background: #161b22;
+                color: #8b949e;
+                border-top: 1px solid #30363d;
             }
             
             QTextEdit {
-                background: #0a0a1a;
-                color: #0f0;
-                border: 1px solid #2a2a5a;
-                border-radius: 5px;
+                background: #0d1117;
+                color: #7ee787;
+                border: 1px solid #30363d;
+                border-radius: 6px;
+                font-family: 'Consolas', monospace;
             }
             
             QScrollBar:vertical {
-                background: #1a1a3e;
+                background: #161b22;
                 width: 10px;
                 border-radius: 5px;
             }
             QScrollBar::handle:vertical {
-                background: #3a3a7a;
+                background: #30363d;
                 border-radius: 5px;
                 min-height: 30px;
+            }
+            QScrollBar::handle:vertical:hover {
+                background: #484f58;
             }
         """)
     
@@ -578,16 +800,149 @@ class MainApp(QMainWindow):
         try:
             self.predictor = Predictor(self.capital_spin.value())
             if self.predictor.ensemble:
+                self.model_status.setText("✅ Model: Loaded (6 networks)")
+                self.model_status.setStyleSheet("color: #4CAF50;")
                 self.log("AI model loaded successfully", "success")
             else:
+                self.model_status.setText("⚠️ Model: Not trained")
+                self.model_status.setStyleSheet("color: #FFD54F;")
                 self.log("No trained model found. Please train a model.", "warning")
         except Exception as e:
             self.log(f"Failed to load model: {e}", "error")
             self.predictor = None
         
-        self.log("System initialized", "info")
+        self.log("System initialized - Ready for trading", "info")
     
-    # ==================== Event Handlers ====================
+    # ==================== Real-time Monitoring ====================
+    
+    def _toggle_monitoring(self, checked):
+        """Toggle real-time monitoring"""
+        if checked:
+            self._start_monitoring()
+        else:
+            self._stop_monitoring()
+    
+    def _start_monitoring(self):
+        """Start real-time signal monitoring"""
+        if self.predictor is None or self.predictor.ensemble is None:
+            self.log("Cannot start monitoring: No model loaded", "error")
+            self.monitor_action.setChecked(False)
+            return
+        
+        self.monitor = RealTimeMonitor(self.predictor, self.watch_list)
+        self.monitor.signal_detected.connect(self._on_signal_detected)
+        self.monitor.price_updated.connect(self._on_price_updated)
+        self.monitor.error_occurred.connect(lambda e: self.log(f"Monitor: {e}", "warning"))
+        self.monitor.start()
+        
+        self.monitor_label.setText("📡 Monitoring: ACTIVE")
+        self.monitor_label.setStyleSheet("color: #4CAF50; font-weight: bold;")
+        self.monitor_action.setText("⏹️ Stop Monitoring")
+        
+        self.log(f"Real-time monitoring started for {len(self.watch_list)} stocks", "success")
+    
+    def _stop_monitoring(self):
+        """Stop real-time monitoring"""
+        if self.monitor:
+            self.monitor.stop()
+            self.monitor.wait(3000)
+            self.monitor = None
+        
+        self.monitor_label.setText("Monitoring: OFF")
+        self.monitor_label.setStyleSheet("color: #888;")
+        self.monitor_action.setText("📡 Start Monitoring")
+        
+        self.log("Real-time monitoring stopped", "info")
+    
+    def _on_signal_detected(self, pred: Prediction):
+        """Handle detected trading signal"""
+        # Add to signals table
+        row = 0
+        self.signals_table.insertRow(row)
+        
+        self.signals_table.setItem(row, 0, QTableWidgetItem(
+            pred.timestamp.strftime("%H:%M:%S")
+        ))
+        self.signals_table.setItem(row, 1, QTableWidgetItem(
+            f"{pred.stock_code} - {pred.stock_name}"
+        ))
+        
+        signal_item = QTableWidgetItem(pred.signal.value)
+        if pred.signal in [Signal.STRONG_BUY, Signal.BUY]:
+            signal_item.setForeground(QColor("#4CAF50"))
+        else:
+            signal_item.setForeground(QColor("#F44336"))
+        self.signals_table.setItem(row, 2, signal_item)
+        
+        self.signals_table.setItem(row, 3, QTableWidgetItem(f"{pred.confidence:.0%}"))
+        self.signals_table.setItem(row, 4, QTableWidgetItem(f"¥{pred.current_price:.2f}"))
+        
+        # Action button
+        action_btn = QPushButton("Trade")
+        action_btn.clicked.connect(lambda: self._quick_trade(pred))
+        self.signals_table.setCellWidget(row, 5, action_btn)
+        
+        # Keep only last 50 signals
+        while self.signals_table.rowCount() > 50:
+            self.signals_table.removeRow(self.signals_table.rowCount() - 1)
+        
+        # Notification
+        self.log(
+            f"🔔 SIGNAL: {pred.signal.value} - {pred.stock_code} @ ¥{pred.current_price:.2f}",
+            "success"
+        )
+        
+        # Flash the window if minimized
+        QApplication.alert(self)
+    
+    def _on_price_updated(self, code: str, price: float):
+        """Update price in watchlist"""
+        for row in range(self.watchlist.rowCount()):
+            if self.watchlist.item(row, 0).text() == code:
+                self.watchlist.setItem(row, 1, QTableWidgetItem(f"¥{price:.2f}"))
+                break
+    
+    def _quick_trade(self, pred: Prediction):
+        """Quick trade from signal"""
+        self.stock_input.setText(pred.stock_code)
+        self._analyze_stock()
+    
+    # ==================== Watchlist ====================
+    
+    def _update_watchlist(self):
+        """Update watchlist display"""
+        self.watchlist.setRowCount(len(self.watch_list))
+        
+        for row, code in enumerate(self.watch_list):
+            self.watchlist.setItem(row, 0, QTableWidgetItem(code))
+            self.watchlist.setItem(row, 1, QTableWidgetItem("--"))
+            self.watchlist.setItem(row, 2, QTableWidgetItem("--"))
+            self.watchlist.setItem(row, 3, QTableWidgetItem("--"))
+    
+    def _on_watchlist_click(self, row, col):
+        """Handle watchlist double-click"""
+        code = self.watchlist.item(row, 0).text()
+        self.stock_input.setText(code)
+        self._analyze_stock()
+    
+    def _add_to_watchlist(self):
+        """Add stock to watchlist"""
+        code = self.stock_input.text().strip()
+        if code and code not in self.watch_list:
+            self.watch_list.append(code)
+            self._update_watchlist()
+            self.log(f"Added {code} to watchlist", "info")
+    
+    def _remove_from_watchlist(self):
+        """Remove selected stock from watchlist"""
+        row = self.watchlist.currentRow()
+        if row >= 0:
+            code = self.watchlist.item(row, 0).text()
+            self.watch_list.remove(code)
+            self._update_watchlist()
+            self.log(f"Removed {code} from watchlist", "info")
+    
+    # ==================== Analysis ====================
     
     def _analyze_stock(self):
         """Analyze stock"""
@@ -600,7 +955,7 @@ class MainApp(QMainWindow):
             self.log("No model loaded. Please train a model first.", "error")
             return
         
-        self.analyze_btn.setEnabled(False)
+        self.analyze_action.setEnabled(False)
         self.signal_panel.reset()
         self.status_label.setText(f"Analyzing {code}...")
         self.progress.setRange(0, 0)
@@ -617,7 +972,7 @@ class MainApp(QMainWindow):
     
     def _on_analysis_done(self, pred: Prediction):
         """Handle analysis completion"""
-        self.analyze_btn.setEnabled(True)
+        self.analyze_action.setEnabled(True)
         self.progress.hide()
         self.status_label.setText("Ready")
         
@@ -645,7 +1000,7 @@ class MainApp(QMainWindow):
         # Add to history
         self._add_to_history(pred)
         
-        # Enable buttons
+        # Enable buttons based on signal
         self.buy_btn.setEnabled(pred.signal in [Signal.STRONG_BUY, Signal.BUY])
         self.sell_btn.setEnabled(pred.signal in [Signal.STRONG_SELL, Signal.SELL])
         
@@ -660,7 +1015,7 @@ class MainApp(QMainWindow):
     
     def _on_analysis_error(self, error: str):
         """Handle analysis error"""
-        self.analyze_btn.setEnabled(True)
+        self.analyze_action.setEnabled(True)
         self.progress.hide()
         self.status_label.setText("Ready")
         
@@ -671,25 +1026,26 @@ class MainApp(QMainWindow):
             del self.workers['analyze']
     
     def _update_details(self, pred: Prediction):
-        """Update analysis details text"""
+        """Update analysis details"""
         signal_colors = {
-            Signal.STRONG_BUY: "#00E676",
-            Signal.BUY: "#69F0AE",
-            Signal.HOLD: "#FFD54F",
-            Signal.SELL: "#FF8A80",
-            Signal.STRONG_SELL: "#FF1744",
+            Signal.STRONG_BUY: "#2ea043",
+            Signal.BUY: "#3fb950",
+            Signal.HOLD: "#d29922",
+            Signal.SELL: "#f85149",
+            Signal.STRONG_SELL: "#da3633",
         }
         
-        color = signal_colors.get(pred.signal, "#fff")
+        color = signal_colors.get(pred.signal, "#c9d1d9")
         
         html = f"""
         <style>
-            body {{ color: #ddd; font-family: Consolas; }}
-            .signal {{ color: {color}; font-size: 16px; font-weight: bold; }}
-            .section {{ margin: 8px 0; }}
-            .label {{ color: #888; }}
-            .positive {{ color: #4CAF50; }}
-            .negative {{ color: #FF5252; }}
+            body {{ color: #c9d1d9; font-family: Consolas; }}
+            .signal {{ color: {color}; font-size: 18px; font-weight: bold; }}
+            .section {{ margin: 10px 0; }}
+            .label {{ color: #8b949e; }}
+            .positive {{ color: #3fb950; }}
+            .negative {{ color: #f85149; }}
+            .neutral {{ color: #d29922; }}
         </style>
         
         <div class="section">
@@ -699,9 +1055,9 @@ class MainApp(QMainWindow):
         </div>
         
         <div class="section">
-            <span class="label">AI Probabilities: </span>
+            <span class="label">AI Prediction: </span>
             <span class="positive">UP {pred.prob_up:.0%}</span> | 
-            <span>NEUTRAL {pred.prob_neutral:.0%}</span> | 
+            <span class="neutral">NEUTRAL {pred.prob_neutral:.0%}</span> | 
             <span class="negative">DOWN {pred.prob_down:.0%}</span>
         </div>
         
@@ -716,6 +1072,12 @@ class MainApp(QMainWindow):
             Stop: ¥{pred.levels.stop_loss:.2f} ({pred.levels.stop_loss_pct:+.1f}%)<br/>
             Target 1: ¥{pred.levels.target_1:.2f} ({pred.levels.target_1_pct:+.1f}%) |
             Target 2: ¥{pred.levels.target_2:.2f} ({pred.levels.target_2_pct:+.1f}%)
+        </div>
+        
+        <div class="section">
+            <span class="label">Position:</span>
+            {pred.position.shares:,} shares | ¥{pred.position.value:,.2f} | 
+            Risk: ¥{pred.position.risk_amount:,.2f}
         </div>
         
         <div class="section">
@@ -739,23 +1101,20 @@ class MainApp(QMainWindow):
         row = 0
         self.history_table.insertRow(row)
         
-        from PyQt6.QtWidgets import QTableWidgetItem
-        from PyQt6.QtGui import QColor
-        
         self.history_table.setItem(row, 0, QTableWidgetItem(
             pred.timestamp.strftime("%H:%M:%S")
         ))
         self.history_table.setItem(row, 1, QTableWidgetItem(pred.stock_code))
         
         signal_item = QTableWidgetItem(pred.signal.value)
-        signal_item.setForeground(QColor("#00E5FF"))
+        signal_item.setForeground(QColor("#58a6ff"))
         self.history_table.setItem(row, 2, signal_item)
         
         self.history_table.setItem(row, 3, QTableWidgetItem(f"{pred.prob_up:.0%}"))
         self.history_table.setItem(row, 4, QTableWidgetItem(f"{pred.confidence:.0%}"))
         self.history_table.setItem(row, 5, QTableWidgetItem("--"))
         
-        while self.history_table.rowCount() > 50:
+        while self.history_table.rowCount() > 100:
             self.history_table.removeRow(self.history_table.rowCount() - 1)
     
     def _scan_stocks(self):
@@ -764,12 +1123,12 @@ class MainApp(QMainWindow):
             self.log("No model loaded", "error")
             return
         
-        self.log("Scanning stocks...", "info")
+        self.log("Scanning stocks for trading signals...", "info")
         self.progress.setRange(0, 0)
         self.progress.show()
         
         def scan():
-            return self.predictor.get_top_picks(CONFIG.STOCK_POOL, n=5, signal_type="buy")
+            return self.predictor.get_top_picks(CONFIG.STOCK_POOL, n=10, signal_type="buy")
         
         worker = WorkerThread(scan)
         worker.finished.connect(self._on_scan_done)
@@ -782,15 +1141,15 @@ class MainApp(QMainWindow):
         self.progress.hide()
         
         if not picks:
-            self.log("No buy signals found", "info")
+            self.log("No strong buy signals found", "info")
             return
         
         self.log(f"Found {len(picks)} buy signals:", "success")
         
         for pred in picks:
             self.log(
-                f"  {pred.stock_code} {pred.stock_name}: "
-                f"{pred.signal.value} (conf: {pred.confidence:.0%})",
+                f"  📈 {pred.stock_code} {pred.stock_name}: "
+                f"{pred.signal.value} (confidence: {pred.confidence:.0%})",
                 "info"
             )
         
@@ -801,6 +1160,8 @@ class MainApp(QMainWindow):
         
         if 'scan' in self.workers:
             del self.workers['scan']
+    
+    # ==================== Trading ====================
     
     def _toggle_trading(self):
         """Toggle trading connection"""
@@ -815,9 +1176,10 @@ class MainApp(QMainWindow):
         
         if mode == TradingMode.LIVE:
             reply = QMessageBox.warning(
-                self, "Warning",
-                "You are switching to LIVE trading mode!\n\n"
-                "This will use REAL money. Are you sure?",
+                self, "⚠️ Live Trading Warning",
+                "You are switching to LIVE TRADING mode!\n\n"
+                "This will use REAL MONEY.\n\n"
+                "Are you absolutely sure?",
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                 QMessageBox.StandardButton.No
             )
@@ -830,14 +1192,16 @@ class MainApp(QMainWindow):
         self.executor.on_reject = self._on_order_rejected
         
         if self.executor.start():
+            self.connection_status.setText("● Connected")
+            self.connection_status.setStyleSheet("color: #4CAF50; font-weight: bold;")
             self.connect_btn.setText("Disconnect")
             self.connect_btn.setStyleSheet("""
                 QPushButton {
                     background: #F44336;
                     color: white;
                     border: none;
-                    padding: 10px;
-                    border-radius: 5px;
+                    padding: 12px;
+                    border-radius: 6px;
                     font-weight: bold;
                 }
                 QPushButton:hover { background: #D32F2F; }
@@ -847,7 +1211,7 @@ class MainApp(QMainWindow):
             self._refresh_portfolio()
         else:
             self.executor = None
-            self.log("Failed to connect", "error")
+            self.log("Failed to connect to broker", "error")
     
     def _disconnect_trading(self):
         """Disconnect from trading"""
@@ -855,20 +1219,22 @@ class MainApp(QMainWindow):
             self.executor.stop()
             self.executor = None
         
-        self.connect_btn.setText("Connect Trading")
+        self.connection_status.setText("● Disconnected")
+        self.connection_status.setStyleSheet("color: #FF5252; font-weight: bold;")
+        self.connect_btn.setText("Connect to Broker")
         self.connect_btn.setStyleSheet("""
             QPushButton {
                 background: #4CAF50;
                 color: white;
                 border: none;
-                padding: 10px;
-                border-radius: 5px;
+                padding: 12px;
+                border-radius: 6px;
                 font-weight: bold;
             }
             QPushButton:hover { background: #388E3C; }
         """)
         
-        self.log("Disconnected from trading", "info")
+        self.log("Disconnected from broker", "info")
     
     def _execute_buy(self):
         """Execute buy order"""
@@ -878,12 +1244,13 @@ class MainApp(QMainWindow):
         pred = self.current_prediction
         
         reply = QMessageBox.question(
-            self, "Confirm Buy",
-            f"Buy {pred.stock_code} - {pred.stock_name}?\n\n"
-            f"Quantity: {pred.position.shares:,} shares\n"
-            f"Price: ¥{pred.levels.entry:.2f}\n"
-            f"Value: ¥{pred.position.value:,.2f}\n"
-            f"Stop Loss: ¥{pred.levels.stop_loss:.2f}",
+            self, "Confirm Buy Order",
+            f"<b>Buy {pred.stock_code} - {pred.stock_name}</b><br><br>"
+            f"Quantity: {pred.position.shares:,} shares<br>"
+            f"Price: ¥{pred.levels.entry:.2f}<br>"
+            f"Value: ¥{pred.position.value:,.2f}<br>"
+            f"Stop Loss: ¥{pred.levels.stop_loss:.2f}<br>"
+            f"Target: ¥{pred.levels.target_2:.2f}",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No
         )
@@ -893,7 +1260,7 @@ class MainApp(QMainWindow):
             if success:
                 self.log(f"Buy order submitted: {pred.stock_code}", "info")
             else:
-                self.log("Buy order failed", "error")
+                self.log("Buy order failed risk checks", "error")
     
     def _execute_sell(self):
         """Execute sell order"""
@@ -909,9 +1276,9 @@ class MainApp(QMainWindow):
             return
         
         reply = QMessageBox.question(
-            self, "Confirm Sell",
-            f"Sell {pred.stock_code} - {pred.stock_name}?\n\n"
-            f"Available: {position.available_qty:,} shares\n"
+            self, "Confirm Sell Order",
+            f"<b>Sell {pred.stock_code} - {pred.stock_name}</b><br><br>"
+            f"Available: {position.available_qty:,} shares<br>"
             f"Current Price: ¥{position.current_price:.2f}",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No
@@ -936,7 +1303,7 @@ class MainApp(QMainWindow):
     def _on_order_filled(self, order):
         """Handle order fill"""
         self.log(
-            f"Filled: {order.side.value.upper()} {order.filled_qty} "
+            f"✅ Order Filled: {order.side.value.upper()} {order.filled_qty} "
             f"{order.stock_code} @ ¥{order.filled_price:.2f}",
             "success"
         )
@@ -944,7 +1311,7 @@ class MainApp(QMainWindow):
     
     def _on_order_rejected(self, order, reason):
         """Handle order rejection"""
-        self.log(f"Rejected: {order.stock_code} - {reason}", "error")
+        self.log(f"❌ Order Rejected: {order.stock_code} - {reason}", "error")
     
     def _refresh_portfolio(self):
         """Refresh portfolio display"""
@@ -955,13 +1322,13 @@ class MainApp(QMainWindow):
             account = self.executor.get_account()
             
             self.account_labels['equity'].setText(f"¥{account.equity:,.2f}")
-            self.account_labels['available'].setText(f"¥{account.available:,.2f}")
-            self.account_labels['market_value'].setText(f"¥{account.market_value:,.2f}")
+            self.account_labels['cash'].setText(f"¥{account.available:,.2f}")
+            self.account_labels['positions'].setText(f"¥{account.market_value:,.2f}")
             
-            pnl_color = "#4CAF50" if account.total_pnl >= 0 else "#FF5252"
-            self.account_labels['total_pnl'].setText(f"¥{account.total_pnl:,.2f}")
-            self.account_labels['total_pnl'].setStyleSheet(
-                f"color: {pnl_color}; font-size: 16px; font-weight: bold;"
+            pnl_color = "#3fb950" if account.total_pnl >= 0 else "#f85149"
+            self.account_labels['pnl'].setText(f"¥{account.total_pnl:,.2f}")
+            self.account_labels['pnl'].setStyleSheet(
+                f"color: {pnl_color}; font-size: 18px; font-weight: bold;"
             )
             
             self.positions_table.update_positions(account.positions)
@@ -969,12 +1336,16 @@ class MainApp(QMainWindow):
         except Exception as e:
             log.warning(f"Failed to refresh portfolio: {e}")
     
+    # ==================== Training ====================
+    
     def _start_training(self):
         """Start model training"""
         reply = QMessageBox.question(
-            self, "Confirm Training",
-            f"Start training with {self.epochs_spin.value()} epochs?\n\n"
-            "This may take a while.",
+            self, "Train AI Model",
+            f"Start training with the following settings?\n\n"
+            f"This will train 6 neural networks (LSTM, Transformer, GRU, TCN, Hybrid)\n"
+            f"and may take 30-60 minutes.\n\n"
+            f"Continue?",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No
         )
@@ -982,57 +1353,52 @@ class MainApp(QMainWindow):
         if reply != QMessageBox.StandardButton.Yes:
             return
         
-        self.train_btn.setEnabled(False)
-        self.train_progress.setVisible(True)
-        self.train_progress.setRange(0, 0)
-        self.log("Starting model training...", "info")
+        from .dialogs import TrainingDialog
+        dialog = TrainingDialog(self)
+        dialog.exec()
         
-        def train():
-            trainer = Trainer()
-            return trainer.train(epochs=self.epochs_spin.value())
-        
-        worker = WorkerThread(train)
-        worker.finished.connect(self._on_training_done)
-        worker.error.connect(self._on_training_error)
-        self.workers['train'] = worker
-        worker.start()
-    
-    def _on_training_done(self, results):
-        """Handle training completion"""
-        self.train_btn.setEnabled(True)
-        self.train_progress.setVisible(False)
-        
-        accuracy = results.get('best_accuracy', 0)
-        self.log(f"Training complete! Accuracy: {accuracy:.2%}", "success")
-        
-        # Show trading metrics
-        if 'test_metrics' in results and 'trading' in results['test_metrics']:
-            tm = results['test_metrics']['trading']
-            self.log(
-                f"Strategy return: {tm.get('total_return', 0):.1f}%, "
-                f"Win rate: {tm.get('win_rate', 0):.1%}, "
-                f"Sharpe: {tm.get('sharpe_ratio', 0):.2f}",
-                "info"
-            )
-        
-        # Reload model
+        # Reload model after training
         self._init_components()
-        
-        if 'train' in self.workers:
-            del self.workers['train']
     
-    def _on_training_error(self, error):
-        """Handle training error"""
-        self.train_btn.setEnabled(True)
-        self.train_progress.setVisible(False)
-        self.log(f"Training failed: {error}", "error")
+    def _show_auto_learn(self):
+        """Show auto-learning dialog"""
+        from .auto_learn_dialog import show_auto_learn_dialog
+        show_auto_learn_dialog(self)
         
-        if 'train' in self.workers:
-            del self.workers['train']
+        # Reload model after learning
+        self._init_components()
+    
+    def _show_backtest(self):
+        """Show backtest dialog"""
+        from .dialogs import BacktestDialog
+        dialog = BacktestDialog(self)
+        dialog.exec()
+    
+    def _show_about(self):
+        """Show about dialog"""
+        QMessageBox.about(
+            self,
+            "About AI Stock Trading System",
+            "<h2>AI Stock Trading System v2.0</h2>"
+            "<p>Professional AI-powered stock trading application</p>"
+            "<h3>Features:</h3>"
+            "<ul>"
+            "<li>Custom AI model with 6 neural networks</li>"
+            "<li>Real-time signal monitoring</li>"
+            "<li>Automatic stock discovery from internet</li>"
+            "<li>Paper and live trading support</li>"
+            "<li>Comprehensive risk management</li>"
+            "</ul>"
+            "<p><b>⚠️ Risk Warning:</b></p>"
+            "<p>Stock trading involves risk. Past performance does not guarantee future results. "
+            "Only trade with money you can afford to lose.</p>"
+        )
+    
+    # ==================== Utilities ====================
     
     def _update_clock(self):
         """Update clock"""
-        self.time_label.setText(datetime.now().strftime("%H:%M:%S"))
+        self.time_label.setText(datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
     
     def _update_market_status(self):
         """Update market status"""
@@ -1040,10 +1406,10 @@ class MainApp(QMainWindow):
         
         if is_open:
             self.market_label.setText("🟢 Market Open")
-            self.market_label.setStyleSheet("color: #4CAF50;")
+            self.market_label.setStyleSheet("color: #3fb950; font-weight: bold;")
         else:
             self.market_label.setText("🔴 Market Closed")
-            self.market_label.setStyleSheet("color: #FF5252;")
+            self.market_label.setStyleSheet("color: #f85149;")
     
     def log(self, message: str, level: str = "info"):
         """Log message"""
@@ -1051,6 +1417,11 @@ class MainApp(QMainWindow):
     
     def closeEvent(self, event):
         """Handle window close"""
+        # Stop monitoring
+        if self.monitor:
+            self.monitor.stop()
+            self.monitor.wait(3000)
+        
         # Stop workers
         for worker in self.workers.values():
             worker.quit()
@@ -1064,6 +1435,7 @@ class MainApp(QMainWindow):
         self.clock_timer.stop()
         self.market_timer.stop()
         self.portfolio_timer.stop()
+        self.watchlist_timer.stop()
         
         event.accept()
 
@@ -1073,7 +1445,8 @@ def run_app():
     app = QApplication(sys.argv)
     app.setStyle('Fusion')
     
-    font = QFont("Arial", 10)
+    # Set application-wide font
+    font = QFont("Segoe UI", 10)
     app.setFont(font)
     
     window = MainApp()

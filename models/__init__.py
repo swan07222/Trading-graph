@@ -1,8 +1,16 @@
+"""
+Models Module
+"""
 from .layers import *
 from .networks import *
-from .ensemble import EnsembleModel
+from .ensemble import EnsembleModel, EnsemblePrediction
 from .trainer import Trainer
-from .predictor import Predictor
+
+# Optional imports that may fail
+try:
+    from .predictor import Predictor
+except ImportError:
+    pass
 
 __all__ = [
     'MultiHeadAttention',
@@ -14,6 +22,7 @@ __all__ = [
     'GRUModel',
     'TCNModel',
     'EnsembleModel',
+    'EnsemblePrediction',
     'Trainer',
     'Predictor'
 ]

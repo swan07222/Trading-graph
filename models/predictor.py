@@ -8,10 +8,12 @@ from datetime import datetime
 from enum import Enum
 from pathlib import Path
 
+import torch
+
 from config import CONFIG
 from data.fetcher import DataFetcher
 from data.features import FeatureEngine
-from models.advanced_ensemble import AdvancedEnsembleModel, AdvancedPrediction
+from models.ensemble import EnsembleModel, EnsemblePrediction
 from utils.logger import log
 
 
@@ -119,14 +121,18 @@ class Predictor:
             log.warning("No trained model found. Train a model first.")
             return
         
-        # Load to get input size
-        state = torch.load(model_path, map_location='cpu')
-        input_size = state.get('input_size', len(FeatureEngine.FEATURE_NAMES))
-        
-        self.ensemble = EnsembleModel(input_size)
-        if self.ensemble.load(str(model_path)):
-            log.info("Prediction model loaded successfully")
-        else:
+        try:
+            # Load to get input size
+            state = torch.load(model_path, map_location='cpu')
+            input_size = state.get('input_size', len(FeatureEngine.FEATURE_NAMES))
+            
+            self.ensemble = EnsembleModel(input_size)
+            if self.ensemble.load(str(model_path)):
+                log.info("Prediction model loaded successfully")
+            else:
+                self.ensemble = None
+        except Exception as e:
+            log.error(f"Failed to load model: {e}")
             self.ensemble = None
     
     def predict(self, stock_code: str) -> Prediction:
@@ -225,11 +231,13 @@ class Predictor:
             predicted_prices=predicted_prices
         )
     
-    def _calculate_signal(self,
-                          pred: EnsemblePrediction,
-                          rsi: float,
-                          macd: float,
-                          ma_ratio: float) -> Tuple[Signal, float, List[str]]:
+    def _calculate_signal(
+        self,
+        pred: EnsemblePrediction,
+        rsi: float,
+        macd: float,
+        ma_ratio: float
+    ) -> Tuple[Signal, float, List[str]]:
         """Calculate trading signal with scoring system"""
         reasons = []
         score = 0
@@ -319,10 +327,12 @@ class Predictor:
         
         return signal, strength, reasons
     
-    def _calculate_levels(self, 
-                          price: float, 
-                          atr: float, 
-                          signal: Signal) -> TradeLevels:
+    def _calculate_levels(
+        self, 
+        price: float, 
+        atr: float, 
+        signal: Signal
+    ) -> TradeLevels:
         """Calculate entry, stop loss, and take profit levels"""
         is_buy = signal in [Signal.STRONG_BUY, Signal.BUY]
         
@@ -357,12 +367,14 @@ class Predictor:
             risk_reward=round(rr, 2)
         )
     
-    def _calculate_position(self,
-                            signal: Signal,
-                            strength: float,
-                            price: float,
-                            levels: TradeLevels,
-                            confidence: float) -> PositionSize:
+    def _calculate_position(
+        self,
+        signal: Signal,
+        strength: float,
+        price: float,
+        levels: TradeLevels,
+        confidence: float
+    ) -> PositionSize:
         """Calculate position size using risk-based sizing"""
         if signal == Signal.HOLD or confidence < CONFIG.MIN_CONFIDENCE:
             return PositionSize(0, 0, 0, 0)
@@ -409,10 +421,12 @@ class Predictor:
             risk_amount=round(risk, 2)
         )
     
-    def _generate_price_forecast(self,
-                                  current_price: float,
-                                  pred: EnsemblePrediction,
-                                  atr_pct: float) -> List[float]:
+    def _generate_price_forecast(
+        self,
+        current_price: float,
+        pred: EnsemblePrediction,
+        atr_pct: float
+    ) -> List[float]:
         """Generate future price predictions for visualization"""
         horizon = CONFIG.PREDICTION_HORIZON
         volatility = atr_pct / 100
@@ -432,9 +446,11 @@ class Predictor:
         
         return prices
     
-    def _generate_warnings(self, 
-                           pred: EnsemblePrediction, 
-                           rsi: float) -> List[str]:
+    def _generate_warnings(
+        self, 
+        pred: EnsemblePrediction, 
+        rsi: float
+    ) -> List[str]:
         """Generate warning messages"""
         warnings = []
         
@@ -471,10 +487,12 @@ class Predictor:
         
         return predictions
     
-    def get_top_picks(self, 
-                      codes: List[str] = None, 
-                      n: int = 5,
-                      signal_type: str = "buy") -> List[Prediction]:
+    def get_top_picks(
+        self, 
+        codes: List[str] = None, 
+        n: int = 5,
+        signal_type: str = "buy"
+    ) -> List[Prediction]:
         """Get top N stock picks"""
         codes = codes or CONFIG.STOCK_POOL
         predictions = self.batch_predict(codes)
@@ -487,7 +505,3 @@ class Predictor:
             filtered = predictions
         
         return filtered[:n]
-
-
-# Import torch at the end to avoid issues
-import torch
