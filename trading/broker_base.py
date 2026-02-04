@@ -1,9 +1,11 @@
+# trading/broker_base.py - SINGLE unified version
+
 """
-Broker Interface - Abstract base for all brokers
+Unified Broker Interface
 """
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from datetime import datetime, date
+from datetime import datetime
 from enum import Enum
 from typing import Dict, List, Optional, Callable
 
@@ -33,6 +35,7 @@ class Order:
     """Order representation"""
     id: str = ""
     stock_code: str = ""
+    stock_name: str = ""
     side: OrderSide = OrderSide.BUY
     order_type: OrderType = OrderType.LIMIT
     quantity: int = 0
@@ -41,8 +44,10 @@ class Order:
     status: OrderStatus = OrderStatus.PENDING
     filled_qty: int = 0
     filled_price: float = 0.0
+    commission: float = 0.0
     created_at: datetime = field(default_factory=datetime.now)
     updated_at: datetime = field(default_factory=datetime.now)
+    broker_order_id: str = ""
     message: str = ""
     
     @property
@@ -60,7 +65,8 @@ class Position:
     stock_code: str
     stock_name: str = ""
     quantity: int = 0
-    available_qty: int = 0  # Available for selling (T+1)
+    available_qty: int = 0
+    frozen_qty: int = 0
     avg_cost: float = 0.0
     current_price: float = 0.0
     unrealized_pnl: float = 0.0
@@ -81,6 +87,7 @@ class Position:
 @dataclass
 class Account:
     """Account state"""
+    broker: str = ""
     cash: float = 0.0
     available: float = 0.0
     frozen: float = 0.0
@@ -91,18 +98,11 @@ class Account:
     @property
     def equity(self) -> float:
         return self.cash + self.market_value
-    
-    @property
-    def position_ratio(self) -> float:
-        if self.equity <= 0:
-            return 0
-        return self.market_value / self.equity * 100
 
 
 class BrokerInterface(ABC):
-    """Abstract broker interface"""
+    """Abstract broker interface - ONE interface for all brokers"""
     
-    # Callbacks
     on_order_update: Optional[Callable[[Order], None]] = None
     on_trade: Optional[Callable[[Order], None]] = None
     on_error: Optional[Callable[[str], None]] = None
@@ -110,52 +110,42 @@ class BrokerInterface(ABC):
     @property
     @abstractmethod
     def name(self) -> str:
-        """Broker name"""
         pass
     
     @property
     @abstractmethod
     def is_connected(self) -> bool:
-        """Connection status"""
         pass
     
     @abstractmethod
-    def connect(self) -> bool:
-        """Connect to broker"""
+    def connect(self, **kwargs) -> bool:
         pass
     
     @abstractmethod
     def disconnect(self):
-        """Disconnect from broker"""
         pass
     
     @abstractmethod
     def get_account(self) -> Account:
-        """Get account information"""
         pass
     
     @abstractmethod
     def get_positions(self) -> Dict[str, Position]:
-        """Get all positions"""
         pass
     
     @abstractmethod
     def submit_order(self, order: Order) -> Order:
-        """Submit order"""
         pass
     
     @abstractmethod
     def cancel_order(self, order_id: str) -> bool:
-        """Cancel order"""
         pass
     
     @abstractmethod
     def get_orders(self) -> List[Order]:
-        """Get active orders"""
         pass
     
     def buy(self, code: str, qty: int, price: float = None) -> Order:
-        """Convenience buy method"""
         order = Order(
             stock_code=code,
             side=OrderSide.BUY,
@@ -166,7 +156,6 @@ class BrokerInterface(ABC):
         return self.submit_order(order)
     
     def sell(self, code: str, qty: int, price: float = None) -> Order:
-        """Convenience sell method"""
         order = Order(
             stock_code=code,
             side=OrderSide.SELL,

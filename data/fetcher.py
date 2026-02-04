@@ -1,6 +1,15 @@
-# data/fetcher.py - COMPLETE REWRITE
 """
-Robust Data Fetcher with Multiple Sources and Fallback
+Robust Data Fetcher - Real Data with Multiple Sources and Fallback
+
+Features:
+- Multiple data source fallback (AkShare → Yahoo Finance)
+- Automatic retry with exponential backoff
+- Intelligent caching (memory + disk)
+- Rate limiting to avoid API bans
+- Proper error handling and logging
+
+Author: AI Trading System
+Version: 2.0
 """
 import pandas as pd
 import numpy as np
@@ -9,35 +18,48 @@ from typing import Optional, Dict, List, Tuple
 from dataclasses import dataclass
 import time
 import pickle
-import json
+import hashlib
 from pathlib import Path
-import requests
 from functools import wraps
+import requests
 
 from loguru import logger
 
 from config import CONFIG
 
 
-def retry_on_failure(max_retries: int = 3, delay: float = 1.0, backoff: float = 2.0):
-    """Decorator for retry logic with exponential backoff"""
+def retry_with_backoff(max_retries: int = 3, base_delay: float = 1.0, max_delay: float = 30.0):
+    """
+    Decorator for retry logic with exponential backoff.
+    
+    Args:
+        max_retries: Maximum number of retry attempts
+        base_delay: Initial delay between retries (seconds)
+        max_delay: Maximum delay between retries (seconds)
+    """
     def decorator(func):
         @wraps(func)
         def wrapper(*args, **kwargs):
             last_exception = None
-            current_delay = delay
+            delay = base_delay
             
-            for attempt in range(max_retries):
+            for attempt in range(max_retries + 1):
                 try:
                     return func(*args, **kwargs)
                 except Exception as e:
                     last_exception = e
-                    logger.warning(f"{func.__name__} attempt {attempt + 1} failed: {e}")
-                    if attempt < max_retries - 1:
-                        time.sleep(current_delay)
-                        current_delay *= backoff
+                    
+                    if attempt < max_retries:
+                        # Log warning and retry
+                        logger.warning(
+                            f"{func.__name__} attempt {attempt + 1}/{max_retries + 1} failed: {e}. "
+                            f"Retrying in {delay:.1f}s..."
+                        )
+                        time.sleep(delay)
+                        delay = min(delay * 2, max_delay)  # Exponential backoff with cap
+                    else:
+                        logger.error(f"{func.__name__} failed after {max_retries + 1} attempts: {e}")
             
-            logger.error(f"{func.__name__} failed after {max_retries} attempts")
             raise last_exception
         return wrapper
     return decorator
@@ -45,7 +67,21 @@ def retry_on_failure(max_retries: int = 3, delay: float = 1.0, backoff: float = 
 
 @dataclass
 class Quote:
-    """Real-time quote data"""
+    """
+    Real-time quote data structure.
+    
+    Attributes:
+        code: Stock code (e.g., "600519")
+        name: Stock name (e.g., "贵州茅台")
+        price: Current price
+        open: Opening price
+        high: Day high
+        low: Day low
+        volume: Trading volume (shares)
+        amount: Trading amount (currency)
+        change_pct: Price change percentage
+        timestamp: Quote timestamp
+    """
     code: str
     name: str
     price: float
@@ -58,184 +94,244 @@ class Quote:
     timestamp: datetime
 
 
-class DataSource:
-    """Base class for data sources"""
+class DataSourceBase:
+    """Base class for all data sources"""
     name: str = "base"
+    priority: int = 0  # Lower = higher priority
     
     def get_history(self, code: str, days: int) -> pd.DataFrame:
+        """Get historical OHLCV data"""
         raise NotImplementedError
     
     def get_realtime(self, code: str) -> Optional[Quote]:
+        """Get real-time quote"""
         raise NotImplementedError
+    
+    def is_available(self) -> bool:
+        """Check if this data source is available"""
+        return True
 
 
-class AkShareSource(DataSource):
-    """AkShare data source for Chinese A-shares"""
+class AkShareDataSource(DataSourceBase):
+    """
+    AkShare data source for Chinese A-shares.
+    Primary data source with comprehensive coverage.
+    """
     name = "akshare"
+    priority = 1
     
     def __init__(self):
+        self._available = False
         self._session = requests.Session()
         self._session.headers.update({
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            'Accept': 'application/json, text/plain, */*',
         })
-        # Increase timeout
-        self._timeout = 30
-    
-    @retry_on_failure(max_retries=3, delay=2.0)
-    def get_history(self, code: str, days: int) -> pd.DataFrame:
-        try:
-            import akshare as ak
-        except ImportError:
-            logger.warning("akshare not installed")
-            return pd.DataFrame()
         
         try:
-            end_date = datetime.now().strftime("%Y%m%d")
-            start_date = (datetime.now() - timedelta(days=days * 1.5)).strftime("%Y%m%d")
-            
-            # Use longer timeout
-            df = ak.stock_zh_a_hist(
-                symbol=code,
-                period="daily",
-                start_date=start_date,
-                end_date=end_date,
-                adjust="qfq"
-            )
-            
-            if df is None or df.empty:
-                return pd.DataFrame()
-            
-            # Standardize columns
-            df = df.rename(columns={
-                '日期': 'date',
-                '开盘': 'open',
-                '收盘': 'close',
-                '最高': 'high',
-                '最低': 'low',
-                '成交量': 'volume',
-                '成交额': 'amount',
-                '涨跌幅': 'change_pct',
-                '换手率': 'turnover'
-            })
-            
-            df['date'] = pd.to_datetime(df['date'])
-            df = df.set_index('date').sort_index()
-            
-            # Ensure numeric
-            for col in ['open', 'high', 'low', 'close', 'volume', 'amount']:
-                if col in df.columns:
-                    df[col] = pd.to_numeric(df[col], errors='coerce')
-            
-            df = df.dropna(subset=['close', 'volume'])
-            df = df[df['high'] >= df['low']]
-            
-            return df.tail(days)
-            
-        except Exception as e:
-            logger.error(f"AkShare fetch failed for {code}: {e}")
-            raise
+            import akshare
+            self._ak = akshare
+            self._available = True
+            logger.info("AkShare data source initialized")
+        except ImportError:
+            logger.warning("AkShare not installed. Run: pip install akshare")
     
-    @retry_on_failure(max_retries=2, delay=1.0)
+    def is_available(self) -> bool:
+        return self._available
+    
+    @retry_with_backoff(max_retries=3, base_delay=2.0)
+    def get_history(self, code: str, days: int) -> pd.DataFrame:
+        """
+        Get historical daily OHLCV data from AkShare.
+        
+        Args:
+            code: Stock code (e.g., "600519")
+            days: Number of trading days to fetch
+            
+        Returns:
+            DataFrame with columns: open, high, low, close, volume, amount
+        """
+        if not self._available:
+            raise RuntimeError("AkShare not available")
+        
+        end_date = datetime.now().strftime("%Y%m%d")
+        # Fetch extra days to account for weekends/holidays
+        start_date = (datetime.now() - timedelta(days=int(days * 1.5))).strftime("%Y%m%d")
+        
+        df = self._ak.stock_zh_a_hist(
+            symbol=code,
+            period="daily",
+            start_date=start_date,
+            end_date=end_date,
+            adjust="qfq"  # Forward adjusted prices
+        )
+        
+        if df is None or df.empty:
+            raise ValueError(f"No data returned for {code}")
+        
+        # Standardize column names (Chinese → English)
+        column_map = {
+            '日期': 'date',
+            '开盘': 'open',
+            '收盘': 'close',
+            '最高': 'high',
+            '最低': 'low',
+            '成交量': 'volume',
+            '成交额': 'amount',
+            '涨跌幅': 'change_pct',
+            '换手率': 'turnover'
+        }
+        df = df.rename(columns=column_map)
+        
+        # Set date as index
+        df['date'] = pd.to_datetime(df['date'])
+        df = df.set_index('date').sort_index()
+        
+        # Ensure numeric types
+        numeric_cols = ['open', 'high', 'low', 'close', 'volume', 'amount']
+        for col in numeric_cols:
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors='coerce')
+        
+        # Data quality checks
+        df = df.dropna(subset=['close', 'volume'])
+        df = df[df['high'] >= df['low']]
+        df = df[df['close'] > 0]
+        df = df[df['volume'] > 0]
+        
+        logger.debug(f"AkShare: Got {len(df)} bars for {code}")
+        return df.tail(days)
+    
+    @retry_with_backoff(max_retries=2, base_delay=1.0)
     def get_realtime(self, code: str) -> Optional[Quote]:
+        """Get real-time quote from AkShare"""
+        if not self._available:
+            return None
+        
         try:
-            import akshare as ak
-            df = ak.stock_zh_a_spot_em()
+            df = self._ak.stock_zh_a_spot_em()
             row = df[df['代码'] == code]
             
             if row.empty:
                 return None
             
             r = row.iloc[0]
+            
             return Quote(
                 code=code,
                 name=str(r.get('名称', '')),
-                price=float(r.get('最新价', 0)),
-                open=float(r.get('今开', 0)),
-                high=float(r.get('最高', 0)),
-                low=float(r.get('最低', 0)),
-                volume=int(r.get('成交量', 0)),
-                amount=float(r.get('成交额', 0)),
-                change_pct=float(r.get('涨跌幅', 0)),
+                price=float(r.get('最新价', 0) or 0),
+                open=float(r.get('今开', 0) or 0),
+                high=float(r.get('最高', 0) or 0),
+                low=float(r.get('最低', 0) or 0),
+                volume=int(r.get('成交量', 0) or 0),
+                amount=float(r.get('成交额', 0) or 0),
+                change_pct=float(r.get('涨跌幅', 0) or 0),
                 timestamp=datetime.now()
             )
         except Exception as e:
-            logger.warning(f"Realtime quote failed for {code}: {e}")
+            logger.warning(f"AkShare realtime failed for {code}: {e}")
             return None
 
 
-class YahooFinanceSource(DataSource):
-    """Yahoo Finance fallback for testing (works globally)"""
+class YahooFinanceDataSource(DataSourceBase):
+    """
+    Yahoo Finance data source.
+    Fallback for when AkShare is unavailable or rate limited.
+    Works globally without geographic restrictions.
+    """
     name = "yahoo"
+    priority = 2
     
-    # Map Chinese codes to Yahoo symbols
-    CHINA_SUFFIX_MAP = {
-        '6': '.SS',  # Shanghai
-        '0': '.SZ',  # Shenzhen
-        '3': '.SZ',  # Shenzhen ChiNext
+    # Map Chinese stock code prefixes to Yahoo Finance suffixes
+    EXCHANGE_SUFFIX = {
+        '6': '.SS',   # Shanghai Stock Exchange
+        '0': '.SZ',   # Shenzhen Stock Exchange
+        '3': '.SZ',   # Shenzhen ChiNext
     }
     
-    def _to_yahoo_symbol(self, code: str) -> str:
-        """Convert Chinese stock code to Yahoo symbol"""
-        code = code.zfill(6)
-        suffix = self.CHINA_SUFFIX_MAP.get(code[0], '.SS')
-        return f"{code}{suffix}"
-    
-    @retry_on_failure(max_retries=3, delay=1.0)
-    def get_history(self, code: str, days: int) -> pd.DataFrame:
+    def __init__(self):
+        self._available = False
+        
         try:
-            import yfinance as yf
+            import yfinance
+            self._yf = yfinance
+            self._available = True
+            logger.info("Yahoo Finance data source initialized")
         except ImportError:
             logger.warning("yfinance not installed. Run: pip install yfinance")
-            return pd.DataFrame()
+    
+    def is_available(self) -> bool:
+        return self._available
+    
+    def _to_yahoo_symbol(self, code: str) -> str:
+        """Convert Chinese stock code to Yahoo Finance symbol"""
+        code = str(code).zfill(6)
+        suffix = self.EXCHANGE_SUFFIX.get(code[0], '.SS')
+        return f"{code}{suffix}"
+    
+    @retry_with_backoff(max_retries=3, base_delay=1.0)
+    def get_history(self, code: str, days: int) -> pd.DataFrame:
+        """Get historical data from Yahoo Finance"""
+        if not self._available:
+            raise RuntimeError("Yahoo Finance not available")
+        
+        symbol = self._to_yahoo_symbol(code)
+        ticker = self._yf.Ticker(symbol)
+        
+        end_date = datetime.now()
+        start_date = end_date - timedelta(days=int(days * 1.5))
+        
+        df = ticker.history(start=start_date, end=end_date, auto_adjust=True)
+        
+        if df.empty:
+            raise ValueError(f"No data from Yahoo for {symbol}")
+        
+        # Standardize column names
+        df = df.rename(columns={
+            'Open': 'open',
+            'High': 'high',
+            'Low': 'low',
+            'Close': 'close',
+            'Volume': 'volume'
+        })
+        
+        df.index.name = 'date'
+        df = df[['open', 'high', 'low', 'close', 'volume']].copy()
+        df['amount'] = df['close'] * df['volume']
+        
+        # Data quality
+        df = df.dropna()
+        df = df[df['close'] > 0]
+        
+        logger.debug(f"Yahoo: Got {len(df)} bars for {code}")
+        return df.tail(days)
+    
+    def get_realtime(self, code: str) -> Optional[Quote]:
+        """Get real-time quote from Yahoo Finance"""
+        if not self._available:
+            return None
         
         try:
             symbol = self._to_yahoo_symbol(code)
-            ticker = yf.Ticker(symbol)
-            
-            end_date = datetime.now()
-            start_date = end_date - timedelta(days=days * 1.5)
-            
-            df = ticker.history(start=start_date, end=end_date)
-            
-            if df.empty:
-                return pd.DataFrame()
-            
-            # Standardize columns
-            df = df.rename(columns={
-                'Open': 'open',
-                'High': 'high',
-                'Low': 'low',
-                'Close': 'close',
-                'Volume': 'volume'
-            })
-            
-            df.index.name = 'date'
-            df = df[['open', 'high', 'low', 'close', 'volume']].copy()
-            df['amount'] = df['close'] * df['volume']
-            
-            return df.tail(days)
-            
-        except Exception as e:
-            logger.error(f"Yahoo fetch failed for {code}: {e}")
-            raise
-    
-    def get_realtime(self, code: str) -> Optional[Quote]:
-        try:
-            import yfinance as yf
-            symbol = self._to_yahoo_symbol(code)
-            ticker = yf.Ticker(symbol)
+            ticker = self._yf.Ticker(symbol)
             info = ticker.info
+            
+            price = info.get('currentPrice') or info.get('regularMarketPrice', 0)
+            
+            if not price or price <= 0:
+                return None
             
             return Quote(
                 code=code,
                 name=info.get('shortName', code),
-                price=float(info.get('currentPrice', info.get('regularMarketPrice', 0))),
-                open=float(info.get('open', 0)),
-                high=float(info.get('dayHigh', 0)),
-                low=float(info.get('dayLow', 0)),
-                volume=int(info.get('volume', 0)),
+                price=float(price),
+                open=float(info.get('open', price) or price),
+                high=float(info.get('dayHigh', price) or price),
+                low=float(info.get('dayLow', price) or price),
+                volume=int(info.get('volume', 0) or 0),
                 amount=0,
-                change_pct=float(info.get('regularMarketChangePercent', 0)),
+                change_pct=float(info.get('regularMarketChangePercent', 0) or 0),
                 timestamp=datetime.now()
             )
         except Exception as e:
@@ -243,197 +339,203 @@ class YahooFinanceSource(DataSource):
             return None
 
 
-class SyntheticDataSource(DataSource):
-    """
-    Generate synthetic data for testing when all sources fail
-    This ensures the system can always run for development/testing
-    """
-    name = "synthetic"
-    
-    # Real stock names for realism
-    STOCK_NAMES = {
-        '600519': '贵州茅台',
-        '601318': '中国平安',
-        '600036': '招商银行',
-        '000858': '五粮液',
-        '002594': 'BYD比亚迪',
-        '300750': '宁德时代',
-    }
-    
-    def get_history(self, code: str, days: int) -> pd.DataFrame:
-        """Generate realistic synthetic stock data"""
-        np.random.seed(int(code) % 10000)  # Reproducible per stock
-        
-        # Generate dates
-        end_date = datetime.now()
-        dates = pd.date_range(end=end_date, periods=days, freq='B')  # Business days
-        
-        # Base price depends on stock code
-        base_price = 50 + (int(code) % 1000) / 10
-        
-        # Generate price series with realistic properties
-        # Using geometric Brownian motion
-        mu = 0.0002  # Daily drift (small positive)
-        sigma = 0.02  # Daily volatility
-        
-        returns = np.random.normal(mu, sigma, days)
-        
-        # Add some regime changes
-        regime_changes = np.random.choice([0, 1], days, p=[0.98, 0.02])
-        returns = returns + regime_changes * np.random.normal(0, 0.03, days)
-        
-        # Generate close prices
-        close = base_price * np.exp(np.cumsum(returns))
-        
-        # Generate OHLC from close
-        daily_range = np.abs(np.random.normal(0, 0.015, days))
-        high = close * (1 + daily_range / 2)
-        low = close * (1 - daily_range / 2)
-        
-        # Open is previous close with gap
-        open_prices = np.roll(close, 1) * (1 + np.random.normal(0, 0.005, days))
-        open_prices[0] = close[0] * 0.99
-        
-        # Volume (higher on big moves)
-        base_volume = 1000000 + (int(code) % 100) * 10000
-        volume_multiplier = 1 + np.abs(returns) * 20
-        volume = (base_volume * volume_multiplier * np.random.uniform(0.5, 1.5, days)).astype(int)
-        
-        df = pd.DataFrame({
-            'open': open_prices,
-            'high': high,
-            'low': low,
-            'close': close,
-            'volume': volume,
-            'amount': close * volume
-        }, index=dates)
-        
-        df.index.name = 'date'
-        
-        logger.info(f"Generated synthetic data for {code}: {len(df)} bars")
-        return df
-    
-    def get_realtime(self, code: str) -> Optional[Quote]:
-        """Generate synthetic real-time quote"""
-        df = self.get_history(code, 5)
-        if df.empty:
-            return None
-        
-        last = df.iloc[-1]
-        prev = df.iloc[-2] if len(df) > 1 else last
-        
-        return Quote(
-            code=code,
-            name=self.STOCK_NAMES.get(code, f'Stock {code}'),
-            price=float(last['close']),
-            open=float(last['open']),
-            high=float(last['high']),
-            low=float(last['low']),
-            volume=int(last['volume']),
-            amount=float(last['amount']),
-            change_pct=float((last['close'] / prev['close'] - 1) * 100),
-            timestamp=datetime.now()
-        )
-
-
 class DataFetcher:
     """
-    Robust data fetcher with multiple sources and fallback
+    Unified data fetcher with intelligent source selection and caching.
     
-    Priority:
-    1. Disk cache (if fresh)
-    2. AkShare (primary for Chinese stocks)
-    3. Yahoo Finance (fallback)
-    4. Synthetic data (last resort for testing)
+    Features:
+    - Automatic fallback between data sources
+    - Multi-level caching (memory + disk)
+    - Rate limiting to prevent API bans
+    - Robust error handling
+    
+    Usage:
+        fetcher = DataFetcher()
+        df = fetcher.get_history("600519", days=500)
+        quote = fetcher.get_realtime("600519")
     """
     
-    def __init__(self, use_synthetic_fallback: bool = True):
+    def __init__(self):
+        # Initialize data sources (ordered by priority)
+        self._sources: List[DataSourceBase] = []
+        
+        # Add AkShare (primary for Chinese stocks)
+        ak_source = AkShareDataSource()
+        if ak_source.is_available():
+            self._sources.append(ak_source)
+        
+        # Add Yahoo Finance (fallback)
+        yf_source = YahooFinanceDataSource()
+        if yf_source.is_available():
+            self._sources.append(yf_source)
+        
+        if not self._sources:
+            logger.error("No data sources available! Install akshare or yfinance.")
+        else:
+            logger.info(f"Data fetcher initialized with {len(self._sources)} sources: "
+                       f"{[s.name for s in self._sources]}")
+        
+        # Memory cache
         self._cache: Dict[str, pd.DataFrame] = {}
         self._cache_time: Dict[str, datetime] = {}
         self._cache_ttl_hours = 4
         
-        # Initialize sources
-        self._sources: List[DataSource] = [
-            AkShareSource(),
-            YahooFinanceSource(),
-        ]
-        
-        if use_synthetic_fallback:
-            self._sources.append(SyntheticDataSource())
-        
-        self._rate_limit = 0.5
-        self._last_request = 0
+        # Rate limiting
+        self._last_request_time = 0.0
+        self._min_request_interval = 0.5  # seconds
     
-    def _wait_rate_limit(self):
-        elapsed = time.time() - self._last_request
-        if elapsed < self._rate_limit:
-            time.sleep(self._rate_limit - elapsed)
-        self._last_request = time.time()
+    def _rate_limit(self):
+        """Enforce rate limiting between requests"""
+        elapsed = time.time() - self._last_request_time
+        if elapsed < self._min_request_interval:
+            time.sleep(self._min_request_interval - elapsed)
+        self._last_request_time = time.time()
     
     def _clean_code(self, code: str) -> str:
-        return str(code).replace('sh', '').replace('sz', '').replace('.', '').strip().zfill(6)
+        """Normalize stock code format"""
+        code = str(code).strip()
+        # Remove exchange prefixes/suffixes
+        for prefix in ['sh', 'sz', 'SH', 'SZ']:
+            code = code.replace(prefix, '')
+        code = code.replace('.', '')
+        return code.zfill(6)
+    
+    def _get_cache_key(self, code: str, days: int) -> str:
+        """Generate unique cache key"""
+        return f"{code}_{days}"
+    
+    def _is_cache_valid(self, cache_key: str) -> bool:
+        """Check if cached data is still valid"""
+        if cache_key not in self._cache_time:
+            return False
+        
+        age = datetime.now() - self._cache_time[cache_key]
+        return age.total_seconds() / 3600 < self._cache_ttl_hours
+    
+    def _save_to_disk_cache(self, code: str, df: pd.DataFrame):
+        """Save data to disk cache"""
+        try:
+            cache_file = CONFIG.DATA_DIR / f"cache_{code}.pkl"
+            cache_data = {
+                'data': df,
+                'timestamp': datetime.now(),
+                'version': '2.0'
+            }
+            with open(cache_file, 'wb') as f:
+                pickle.dump(cache_data, f)
+            logger.debug(f"Saved {code} to disk cache")
+        except Exception as e:
+            logger.warning(f"Failed to save disk cache for {code}: {e}")
+    
+    def _load_from_disk_cache(self, code: str, max_age_hours: float = 24) -> Optional[pd.DataFrame]:
+        """Load data from disk cache if fresh enough"""
+        try:
+            cache_file = CONFIG.DATA_DIR / f"cache_{code}.pkl"
+            
+            if not cache_file.exists():
+                return None
+            
+            with open(cache_file, 'rb') as f:
+                cache_data = pickle.load(f)
+            
+            # Handle old cache format
+            if isinstance(cache_data, pd.DataFrame):
+                return cache_data
+            
+            # Check cache age
+            cache_time = cache_data.get('timestamp', datetime.min)
+            age = (datetime.now() - cache_time).total_seconds() / 3600
+            
+            if age > max_age_hours:
+                logger.debug(f"Disk cache for {code} is stale ({age:.1f}h old)")
+                return None
+            
+            logger.debug(f"Loaded {code} from disk cache ({age:.1f}h old)")
+            return cache_data['data']
+            
+        except Exception as e:
+            logger.warning(f"Failed to load disk cache for {code}: {e}")
+            return None
     
     def get_history(self, 
                     code: str, 
                     days: int = 500,
-                    use_cache: bool = True) -> pd.DataFrame:
+                    use_cache: bool = True,
+                    force_refresh: bool = False) -> pd.DataFrame:
         """
-        Get historical data with fallback sources
+        Get historical OHLCV data for a stock.
+        
+        Args:
+            code: Stock code (e.g., "600519")
+            days: Number of trading days to fetch
+            use_cache: Whether to use cached data
+            force_refresh: Force fetch from source, ignoring cache
+            
+        Returns:
+            DataFrame with columns: open, high, low, close, volume, amount
+            Empty DataFrame if all sources fail
         """
         code = self._clean_code(code)
-        cache_key = f"{code}_{days}"
+        cache_key = self._get_cache_key(code, days)
         
         # Check memory cache
-        if use_cache and cache_key in self._cache:
-            cache_age = (datetime.now() - self._cache_time.get(cache_key, datetime.min))
-            if cache_age.total_seconds() / 3600 < self._cache_ttl_hours:
-                logger.debug(f"Memory cache hit for {code}")
-                return self._cache[cache_key].copy()
+        if use_cache and not force_refresh and self._is_cache_valid(cache_key):
+            logger.debug(f"Memory cache hit for {code}")
+            return self._cache[cache_key].copy()
         
         # Check disk cache
-        disk_df = self._load_disk_cache(code, days)
-        if not disk_df.empty and use_cache:
-            cache_age = self._get_cache_age(code)
-            if cache_age and cache_age.total_seconds() / 3600 < self._cache_ttl_hours:
-                logger.debug(f"Disk cache hit for {code}")
-                self._cache[cache_key] = disk_df
+        if use_cache and not force_refresh:
+            disk_data = self._load_from_disk_cache(code, max_age_hours=self._cache_ttl_hours)
+            if disk_data is not None and len(disk_data) >= min(days, 50):
+                self._cache[cache_key] = disk_data
                 self._cache_time[cache_key] = datetime.now()
-                return disk_df.copy()
+                return disk_data.tail(days).copy()
         
-        # Try each source in order
-        self._wait_rate_limit()
+        # Fetch from sources
+        self._rate_limit()
         
         for source in self._sources:
             try:
-                logger.info(f"Trying {source.name} for {code}...")
+                logger.info(f"Fetching {code} from {source.name}...")
                 df = source.get_history(code, days)
                 
-                if not df.empty and len(df) >= 50:  # Minimum data requirement
-                    logger.info(f"Got {len(df)} bars from {source.name} for {code}")
+                if df is not None and len(df) >= 30:  # Minimum data requirement
+                    logger.info(f"Got {len(df)} bars for {code} from {source.name}")
                     
-                    # Cache the result
+                    # Update caches
                     self._cache[cache_key] = df.copy()
                     self._cache_time[cache_key] = datetime.now()
-                    self._save_disk_cache(code, df)
+                    self._save_to_disk_cache(code, df)
                     
                     return df
+                else:
+                    logger.warning(f"{source.name} returned insufficient data for {code}")
                     
             except Exception as e:
                 logger.warning(f"{source.name} failed for {code}: {e}")
                 continue
         
-        # If all sources failed, return empty or cached data
-        if not disk_df.empty:
-            logger.warning(f"All sources failed for {code}, using stale cache")
-            return disk_df
+        # All sources failed - try stale disk cache as last resort
+        stale_data = self._load_from_disk_cache(code, max_age_hours=168)  # 1 week
+        if stale_data is not None:
+            logger.warning(f"Using stale cache for {code} (all sources failed)")
+            return stale_data.tail(days)
         
         logger.error(f"All data sources failed for {code}")
         return pd.DataFrame()
     
     def get_realtime(self, code: str) -> Optional[Quote]:
-        """Get real-time quote with fallback"""
+        """
+        Get real-time quote for a stock.
+        
+        Args:
+            code: Stock code (e.g., "600519")
+            
+        Returns:
+            Quote object or None if unavailable
+        """
         code = self._clean_code(code)
-        self._wait_rate_limit()
+        self._rate_limit()
         
         for source in self._sources:
             try:
@@ -444,10 +546,12 @@ class DataFetcher:
                 logger.warning(f"{source.name} realtime failed for {code}: {e}")
                 continue
         
-        # Fallback: use last historical close
-        df = self.get_history(code, days=5)
+        # Fallback: use last close from history
+        df = self.get_history(code, days=5, use_cache=True)
         if not df.empty:
             last = df.iloc[-1]
+            prev_close = df.iloc[-2]['close'] if len(df) > 1 else last['close']
+            
             return Quote(
                 code=code,
                 name=f"Stock {code}",
@@ -457,62 +561,69 @@ class DataFetcher:
                 low=float(last['low']),
                 volume=int(last['volume']),
                 amount=float(last.get('amount', 0)),
-                change_pct=0.0,
+                change_pct=float((last['close'] / prev_close - 1) * 100) if prev_close > 0 else 0,
                 timestamp=datetime.now()
             )
         
         return None
     
     def get_stock_name(self, code: str) -> str:
+        """Get stock name by code"""
         quote = self.get_realtime(code)
         return quote.name if quote else code
     
-    def _save_disk_cache(self, code: str, df: pd.DataFrame):
-        try:
-            path = CONFIG.DATA_DIR / f"{code}.pkl"
-            cache_data = {
-                'data': df,
-                'timestamp': datetime.now()
-            }
-            with open(path, 'wb') as f:
-                pickle.dump(cache_data, f)
-        except Exception as e:
-            logger.warning(f"Failed to save cache for {code}: {e}")
-    
-    def _load_disk_cache(self, code: str, days: int) -> pd.DataFrame:
-        try:
-            path = CONFIG.DATA_DIR / f"{code}.pkl"
-            if path.exists():
-                with open(path, 'rb') as f:
-                    cache_data = pickle.load(f)
-                    
-                if isinstance(cache_data, dict):
-                    df = cache_data['data']
-                else:
-                    df = cache_data  # Old format
-                
-                return df.tail(days)
-        except Exception as e:
-            logger.warning(f"Failed to load cache for {code}: {e}")
-        return pd.DataFrame()
-    
-    def _get_cache_age(self, code: str) -> Optional[timedelta]:
-        try:
-            path = CONFIG.DATA_DIR / f"{code}.pkl"
-            if path.exists():
-                with open(path, 'rb') as f:
-                    cache_data = pickle.load(f)
-                if isinstance(cache_data, dict) and 'timestamp' in cache_data:
-                    return datetime.now() - cache_data['timestamp']
-        except:
-            pass
-        return None
-    
-    def get_multiple(self, codes: List[str], days: int = 500) -> Dict[str, pd.DataFrame]:
-        """Get data for multiple stocks"""
+    def get_multiple(self, 
+                     codes: List[str], 
+                     days: int = 500,
+                     progress_callback=None) -> Dict[str, pd.DataFrame]:
+        """
+        Get historical data for multiple stocks.
+        
+        Args:
+            codes: List of stock codes
+            days: Number of days per stock
+            progress_callback: Optional callback(current, total, code)
+            
+        Returns:
+            Dictionary mapping code to DataFrame
+        """
         result = {}
-        for code in codes:
+        total = len(codes)
+        
+        for i, code in enumerate(codes):
+            if progress_callback:
+                progress_callback(i + 1, total, code)
+            
             df = self.get_history(code, days)
             if not df.empty:
                 result[code] = df
+        
+        logger.info(f"Fetched data for {len(result)}/{total} stocks")
         return result
+    
+    def clear_cache(self, code: str = None):
+        """Clear cache (memory and optionally disk)"""
+        if code:
+            code = self._clean_code(code)
+            # Clear memory cache for this code
+            keys_to_remove = [k for k in self._cache if k.startswith(code)]
+            for key in keys_to_remove:
+                del self._cache[key]
+                if key in self._cache_time:
+                    del self._cache_time[key]
+            
+            # Clear disk cache
+            cache_file = CONFIG.DATA_DIR / f"cache_{code}.pkl"
+            if cache_file.exists():
+                cache_file.unlink()
+            
+            logger.info(f"Cleared cache for {code}")
+        else:
+            # Clear all
+            self._cache.clear()
+            self._cache_time.clear()
+            
+            for cache_file in CONFIG.DATA_DIR.glob("cache_*.pkl"):
+                cache_file.unlink()
+            
+            logger.info("Cleared all cache")

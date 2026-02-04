@@ -1,5 +1,11 @@
 """
-Stock Predictor - Generate trading signals and predictions
+Stock Predictor - Generate trading signals using trained models
+
+Uses the same scaler that was fitted during training to ensure
+consistent feature normalization.
+
+Author: AI Trading System
+Version: 2.0
 """
 import numpy as np
 from typing import Dict, List, Tuple, Optional
@@ -13,6 +19,7 @@ import torch
 from config import CONFIG
 from data.fetcher import DataFetcher
 from data.features import FeatureEngine
+from data.processor import DataProcessor
 from models.ensemble import EnsembleModel, EnsemblePrediction
 from utils.logger import log
 
@@ -93,14 +100,17 @@ class Prediction:
 
 class Predictor:
     """
-    Stock Predictor - Generates trading signals and recommendations
+    Stock Predictor - Generates trading signals and recommendations.
     
-    Features:
-    - AI-based price direction prediction
-    - Signal strength calculation
-    - Risk-adjusted position sizing
-    - Price target calculation
-    - Future price visualization
+    IMPORTANT: Uses the saved scaler from training to ensure consistent
+    feature normalization between training and inference.
+    
+    Usage:
+        predictor = Predictor()
+        prediction = predictor.predict("600519")
+        
+        if prediction.signal == Signal.STRONG_BUY:
+            print(f"Buy {prediction.position.shares} shares at {prediction.levels.entry}")
     """
     
     def __init__(self, capital: float = None):
@@ -109,50 +119,73 @@ class Predictor:
         
         self.fetcher = DataFetcher()
         self.feature_engine = FeatureEngine()
+        self.processor = DataProcessor()
         
         self.ensemble: Optional[EnsembleModel] = None
+        self._model_loaded = False
+        
         self._load_model()
     
     def _load_model(self):
-        """Load the trained ensemble model"""
+        """Load trained model and scaler"""
         model_path = CONFIG.MODEL_DIR / "ensemble.pt"
+        scaler_path = CONFIG.MODEL_DIR / "scaler.pkl"
         
+        # Load scaler first (critical for correct predictions)
+        if scaler_path.exists():
+            if self.processor.load_scaler(str(scaler_path)):
+                log.info("Loaded training scaler for inference")
+            else:
+                log.warning("Failed to load scaler - predictions may be inaccurate!")
+        else:
+            log.warning(f"Scaler not found at {scaler_path} - predictions may be inaccurate!")
+        
+        # Load model
         if not model_path.exists():
             log.warning("No trained model found. Train a model first.")
             return
         
         try:
-            # Load to get input size
             state = torch.load(model_path, map_location='cpu')
             input_size = state.get('input_size', len(FeatureEngine.FEATURE_NAMES))
             
             self.ensemble = EnsembleModel(input_size)
             if self.ensemble.load(str(model_path)):
+                self._model_loaded = True
                 log.info("Prediction model loaded successfully")
             else:
                 self.ensemble = None
+                
         except Exception as e:
             log.error(f"Failed to load model: {e}")
             self.ensemble = None
     
+    def is_ready(self) -> bool:
+        """Check if predictor is ready for predictions"""
+        return self._model_loaded and self.ensemble is not None
+    
     def predict(self, stock_code: str) -> Prediction:
         """
-        Generate complete prediction for a stock
+        Generate complete prediction for a stock.
         
         Args:
             stock_code: Stock code (e.g., "600519")
             
         Returns:
-            Prediction object with all analysis
+            Prediction object with signal, levels, and position sizing
+            
+        Raises:
+            RuntimeError: If no model is loaded
+            ValueError: If insufficient data for prediction
         """
-        if self.ensemble is None:
-            raise RuntimeError("No model loaded. Train a model first.")
+        if not self.is_ready():
+            raise RuntimeError("No model loaded. Train a model first with: python main.py --train")
         
         # Get data
-        df = self.fetcher.get_history(stock_code)
+        df = self.fetcher.get_history(stock_code, days=500)
         
         if len(df) < CONFIG.SEQUENCE_LENGTH + 10:
-            raise ValueError(f"Insufficient data for {stock_code}: {len(df)} bars")
+            raise ValueError(f"Insufficient data for {stock_code}: only {len(df)} bars available")
         
         # Get real-time quote
         quote = self.fetcher.get_realtime(stock_code)
@@ -162,15 +195,19 @@ class Predictor:
         # Create features
         df = self.feature_engine.create_features(df)
         
-        # Prepare sequence for prediction
+        # Prepare sequence using the SAME scaler as training
         feature_cols = self.feature_engine.get_feature_columns()
         features = df[feature_cols].values
         
-        # Normalize (use simple standardization for prediction)
-        mean = np.mean(features, axis=0)
-        std = np.std(features, axis=0) + 1e-8
-        features = (features - mean) / std
-        features = np.clip(features, -5, 5)
+        # Transform using loaded scaler
+        if self.processor._fitted:
+            features = self.processor.transform(features)
+        else:
+            # Fallback if no scaler (will give poor results)
+            log.warning("Using fallback normalization - results may be inaccurate")
+            mean = np.mean(features, axis=0)
+            std = np.std(features, axis=0) + 1e-8
+            features = np.clip((features - mean) / std, -5, 5)
         
         # Get last sequence
         X = features[-CONFIG.SEQUENCE_LENGTH:]
@@ -178,18 +215,18 @@ class Predictor:
         # Get ensemble prediction
         ensemble_pred = self.ensemble.predict(X)
         
-        # Extract technical indicators for display
-        rsi = (df['rsi_14'].iloc[-1] + 0.5) * 100 if 'rsi_14' in df.columns else 50
-        macd = df['macd_hist'].iloc[-1] if 'macd_hist' in df.columns else 0
-        ma_ratio = df['ma_ratio_5_20'].iloc[-1] if 'ma_ratio_5_20' in df.columns else 0
+        # Extract indicators for display
+        rsi = self._get_rsi(df)
+        macd_signal = self._get_macd_signal(df)
+        trend = self._get_trend(df)
         
-        # Determine signal
+        # Calculate signal
         signal, strength, reasons = self._calculate_signal(
-            ensemble_pred, rsi, macd, ma_ratio
+            ensemble_pred, rsi, df
         )
         
         # Calculate trading levels
-        atr_pct = df['atr_pct'].iloc[-1] if 'atr_pct' in df.columns else 2.0
+        atr_pct = self._get_atr_pct(df)
         atr = current_price * atr_pct / 100
         levels = self._calculate_levels(current_price, atr, signal)
         
@@ -198,14 +235,14 @@ class Predictor:
             signal, strength, current_price, levels, ensemble_pred.confidence
         )
         
-        # Generate price predictions for chart
+        # Generate warnings
+        warnings = self._generate_warnings(ensemble_pred, rsi)
+        
+        # Price history for chart
         price_history = df['close'].tail(60).tolist()
         predicted_prices = self._generate_price_forecast(
             current_price, ensemble_pred, atr_pct
         )
-        
-        # Generate warnings
-        warnings = self._generate_warnings(ensemble_pred, rsi)
         
         return Prediction(
             stock_code=stock_code,
@@ -223,20 +260,52 @@ class Predictor:
             levels=levels,
             position=position,
             rsi=rsi,
-            macd_signal="bullish" if macd > 0 else "bearish",
-            trend="up" if ma_ratio > 2 else ("down" if ma_ratio < -2 else "sideways"),
+            macd_signal=macd_signal,
+            trend=trend,
             reasons=reasons,
             warnings=warnings,
             price_history=price_history,
             predicted_prices=predicted_prices
         )
     
+    def _get_rsi(self, df) -> float:
+        """Extract RSI from features"""
+        if 'rsi_14' in df.columns:
+            # RSI in features is normalized to [-0.5, 0.5], convert back
+            return (df['rsi_14'].iloc[-1] + 0.5) * 100
+        return 50.0
+    
+    def _get_macd_signal(self, df) -> str:
+        """Extract MACD signal"""
+        if 'macd_hist' in df.columns:
+            macd_hist = df['macd_hist'].iloc[-1]
+            if macd_hist > 0.5:
+                return "bullish"
+            elif macd_hist < -0.5:
+                return "bearish"
+        return "neutral"
+    
+    def _get_trend(self, df) -> str:
+        """Extract trend direction"""
+        if 'ma_ratio_5_20' in df.columns:
+            ratio = df['ma_ratio_5_20'].iloc[-1]
+            if ratio > 2:
+                return "up"
+            elif ratio < -2:
+                return "down"
+        return "sideways"
+    
+    def _get_atr_pct(self, df) -> float:
+        """Get ATR as percentage of price"""
+        if 'atr_pct' in df.columns:
+            return max(df['atr_pct'].iloc[-1], 1.0)  # Minimum 1%
+        return 2.0  # Default
+    
     def _calculate_signal(
         self,
         pred: EnsemblePrediction,
         rsi: float,
-        macd: float,
-        ma_ratio: float
+        df
     ) -> Tuple[Signal, float, List[str]]:
         """Calculate trading signal with scoring system"""
         reasons = []
@@ -280,37 +349,13 @@ class Predictor:
             reasons.append(f"📈 RSI oversold ({rsi:.0f})")
         elif rsi < 40:
             score += 8
-            reasons.append(f"📈 RSI low ({rsi:.0f})")
         elif rsi > 70:
             score -= 15
             reasons.append(f"📉 RSI overbought ({rsi:.0f})")
         elif rsi > 60:
             score -= 8
-            reasons.append(f"📉 RSI high ({rsi:.0f})")
         
-        # MACD (15% weight)
-        if macd > 0.5:
-            score += 12
-            reasons.append("📈 MACD bullish")
-        elif macd < -0.5:
-            score -= 12
-            reasons.append("📉 MACD bearish")
-        
-        # Trend (15% weight)
-        if ma_ratio > 3:
-            score += 12
-            reasons.append(f"📈 Strong uptrend (+{ma_ratio:.1f}%)")
-        elif ma_ratio > 1:
-            score += 6
-            reasons.append(f"📈 Uptrend (+{ma_ratio:.1f}%)")
-        elif ma_ratio < -3:
-            score -= 12
-            reasons.append(f"📉 Strong downtrend ({ma_ratio:.1f}%)")
-        elif ma_ratio < -1:
-            score -= 6
-            reasons.append(f"📉 Downtrend ({ma_ratio:.1f}%)")
-        
-        # Calculate signal strength (0-1)
+        # Calculate strength
         strength = min(abs(score) / 80, 1.0)
         
         # Determine signal
@@ -325,6 +370,12 @@ class Predictor:
         else:
             signal = Signal.HOLD
         
+        # Override if confidence too low
+        if pred.confidence < CONFIG.MIN_CONFIDENCE:
+            if signal in [Signal.BUY, Signal.SELL]:
+                signal = Signal.HOLD
+                strength *= 0.5
+        
         return signal, strength, reasons
     
     def _calculate_levels(
@@ -335,8 +386,6 @@ class Predictor:
     ) -> TradeLevels:
         """Calculate entry, stop loss, and take profit levels"""
         is_buy = signal in [Signal.STRONG_BUY, Signal.BUY]
-        
-        # Tighter stops for strong signals
         multiplier = 2.0 if signal in [Signal.STRONG_BUY, Signal.STRONG_SELL] else 2.5
         
         if is_buy:
@@ -379,22 +428,17 @@ class Predictor:
         if signal == Signal.HOLD or confidence < CONFIG.MIN_CONFIDENCE:
             return PositionSize(0, 0, 0, 0)
         
-        # Risk per share
         risk_per_share = abs(price - levels.stop_loss)
         
         if risk_per_share <= 0:
             return PositionSize(0, 0, 0, 0)
         
-        # Base risk amount (% of capital)
+        # Risk amount adjusted by strength and confidence
         base_risk = self.capital * (CONFIG.RISK_PER_TRADE / 100)
-        
-        # Adjust by signal strength and confidence
         adjusted_risk = base_risk * strength * confidence
         
         # Calculate shares
         shares = int(adjusted_risk / risk_per_share)
-        
-        # Round to lot size
         shares = (shares // CONFIG.LOT_SIZE) * CONFIG.LOT_SIZE
         
         # Apply position limit
@@ -402,8 +446,8 @@ class Predictor:
         max_shares = int(max_position / price / CONFIG.LOT_SIZE) * CONFIG.LOT_SIZE
         shares = min(shares, max_shares)
         
-        # Check if we can afford it
-        available = self.capital * 0.95  # Keep 5% buffer
+        # Affordability check
+        available = self.capital * 0.95
         affordable_shares = int(available / price / CONFIG.LOT_SIZE) * CONFIG.LOT_SIZE
         shares = min(shares, affordable_shares)
         
@@ -431,16 +475,14 @@ class Predictor:
         horizon = CONFIG.PREDICTION_HORIZON
         volatility = atr_pct / 100
         
-        # Expected direction based on probabilities
-        expected_return = (pred.prob_up - pred.prob_down) * 2  # Scale to ~-2% to +2%
+        expected_return = (pred.prob_up - pred.prob_down) * 2
         
+        np.random.seed(42)  # Reproducible
         prices = [current_price]
         
         for i in range(horizon):
-            # Add daily expected return plus some noise
             daily_return = expected_return / horizon
             noise = np.random.normal(0, volatility * 0.3)
-            
             new_price = prices[-1] * (1 + (daily_return + noise) / 100)
             prices.append(round(new_price, 2))
         

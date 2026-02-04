@@ -23,15 +23,23 @@ class RiskManager:
         self.initial_equity = account.equity
         self.daily_start_equity = account.equity
         self.trades_today = 0
+        self._last_date = date.today()
     
     def update(self, account: Account):
-        """Update account state"""
+        """Update account state and check for new day"""
         self.account = account
+        
+        # Auto-reset on new trading day
+        today = date.today()
+        if today != self._last_date:
+            self.new_day()
+            self._last_date = today
     
     def new_day(self):
         """Reset for new trading day"""
         self.daily_start_equity = self.account.equity
         self.trades_today = 0
+        log.info("Risk manager: New trading day reset")
     
     def check_order(self, 
                     code: str, 

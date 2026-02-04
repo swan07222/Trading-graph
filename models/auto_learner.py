@@ -254,13 +254,34 @@ class InternetStockFinder:
             
             stocks = []
             for _, row in df.head(limit).iterrows():
-                code = str(row.get('代码', '')).zfill(6)
-                if len(code) != 6:
+                # FIX: Correct column name - check actual column names
+                code = None
+                for col in ['代码', '股票代码', 'code', 'symbol']:
+                    if col in row:
+                        code = str(row[col]).strip()
+                        break
+                
+                if not code:
                     continue
-                    
+                
+                # Clean and validate code
+                code = code.zfill(6)
+                if not code.isdigit() or len(code) != 6:
+                    continue
+                
+                # Skip invalid codes like 000000
+                if code == '000000':
+                    continue
+                
+                name = ''
+                for col in ['名称', '股票名称', 'name']:
+                    if col in row:
+                        name = str(row[col])
+                        break
+                
                 stocks.append(StockInfo(
                     code=code,
-                    name=row.get('名称', ''),
+                    name=name,
                     source="机构推荐",
                     reason="分析师推荐",
                     score=0.8
@@ -544,6 +565,14 @@ class AutoLearner:
                 self._notify()
                 return
             
+            if len(stocks) < 5:
+                log.warning("Internet search failed, using default stock pool")
+                stocks = [
+                    StockInfo(code=code, name="", source="config", reason="Default pool", score=1.0)
+                    for code in CONFIG.STOCK_POOL
+                ]
+                self.progress.stocks_found = len(stocks)
+
             # =====================================
             # STAGE 3: Prepare training data
             # =====================================
