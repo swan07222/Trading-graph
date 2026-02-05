@@ -1,5 +1,6 @@
+# trading/broker.py
 """
-Unified Broker Interface - Uses canonical types from core.types
+Unified Broker Interface - Production Grade with Full Fill Sync
 
 Supports:
 - Paper Trading (Simulator)
@@ -10,7 +11,7 @@ Supports:
 - 银河证券 (YH)
 """
 from abc import ABC, abstractmethod
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 from typing import Dict, List, Optional, Callable, Tuple
 from pathlib import Path
 import threading
@@ -23,7 +24,9 @@ from core.types import (
     Order, OrderSide, OrderType, OrderStatus,
     Position, Account, Fill
 )
-from utils.logger import log
+from utils.logger import get_logger
+
+log = get_logger(__name__)
 
 
 # ============================================================
@@ -34,6 +37,11 @@ class BrokerInterface(ABC):
     """
     Abstract broker interface - all brokers must implement this.
     Thread-safe design with callbacks for order updates.
+    
+    CRITICAL: For live trading correctness, brokers MUST implement:
+    - get_fills(): Return new fills since last call
+    - get_order_status(): Get current status of an order
+    - sync_order(): Sync single order with broker state
     """
     
     def __init__(self):
@@ -43,6 +51,9 @@ class BrokerInterface(ABC):
             'trade': [],
             'error': [],
         }
+        # Mapping from our order.id to broker's entrust number
+        self._order_id_to_broker_id: Dict[str, str] = {}
+        self._broker_id_to_order_id: Dict[str, str] = {}
     
     @property
     @abstractmethod
@@ -83,12 +94,12 @@ class BrokerInterface(ABC):
     
     @abstractmethod
     def submit_order(self, order: Order) -> Order:
-        """Submit order"""
+        """Submit order - MUST NOT modify order.id, use broker_id instead"""
         pass
     
     @abstractmethod
     def cancel_order(self, order_id: str) -> bool:
-        """Cancel order"""
+        """Cancel order by our order_id"""
         pass
     
     @abstractmethod
@@ -100,6 +111,54 @@ class BrokerInterface(ABC):
     def get_quote(self, symbol: str) -> Optional[float]:
         """Get current price for a stock"""
         pass
+    
+    # ============================================================
+    # CRITICAL: Fill and Status Sync Methods for Live Trading
+    # ============================================================
+    
+    @abstractmethod
+    def get_fills(self, since: datetime = None) -> List[Fill]:
+        """
+        Get fills/trades since last call or since timestamp.
+        Each Fill MUST have:
+        - order_id: Our internal order ID (not broker's)
+        - All fill details (quantity, price, commission, etc.)
+        
+        Implementation should track which fills have been returned
+        to avoid duplicates.
+        """
+        pass
+    
+    @abstractmethod
+    def get_order_status(self, order_id: str) -> Optional[OrderStatus]:
+        """
+        Get current status of an order from broker.
+        Uses our internal order_id, maps to broker_id internally.
+        """
+        pass
+    
+    @abstractmethod
+    def sync_order(self, order: Order) -> Order:
+        """
+        Sync order state with broker.
+        Updates order.status, order.filled_qty, order.avg_price, etc.
+        Returns updated order.
+        """
+        pass
+    
+    def get_broker_id(self, order_id: str) -> Optional[str]:
+        """Get broker's entrust number for our order_id"""
+        return self._order_id_to_broker_id.get(order_id)
+    
+    def get_order_id(self, broker_id: str) -> Optional[str]:
+        """Get our order_id for broker's entrust number"""
+        return self._broker_id_to_order_id.get(broker_id)
+    
+    def register_order_mapping(self, order_id: str, broker_id: str):
+        """Register mapping between our order_id and broker's entrust number"""
+        with self._lock:
+            self._order_id_to_broker_id[order_id] = broker_id
+            self._broker_id_to_order_id[broker_id] = order_id
     
     # === Convenience Methods ===
     
@@ -147,9 +206,7 @@ class BrokerInterface(ABC):
                 callback(*args, **kwargs)
             except Exception as e:
                 log.error(f"Callback error for {event}: {e}")
-    def get_fills(self, since: datetime = None) -> List[Fill]:
-        """Optional: broker fills/trades. Default empty."""
-        return []
+
 
 # ============================================================
 # Simulator Broker
@@ -163,6 +220,7 @@ class SimulatorBroker(BrokerInterface):
     - Realistic slippage and commission
     - T+1 rule enforcement
     - Thread-safe operations
+    - Full fill sync support
     """
     
     def __init__(self, initial_capital: float = None):
@@ -172,7 +230,8 @@ class SimulatorBroker(BrokerInterface):
         self._positions: Dict[str, Position] = {}
         self._orders: Dict[str, Order] = {}
         self._order_history: List[Order] = []
-        self._trades: List[Dict] = []
+        self._fills: List[Fill] = []
+        self._unsent_fills: List[Fill] = []  # Fills not yet returned by get_fills()
         self._connected = False
         
         # T+1 tracking
@@ -181,6 +240,9 @@ class SimulatorBroker(BrokerInterface):
         
         # Data fetcher (lazy init)
         self._fetcher = None
+        
+        # Fill ID counter
+        self._fill_counter = 0
     
     def _get_fetcher(self):
         if self._fetcher is None:
@@ -199,7 +261,7 @@ class SimulatorBroker(BrokerInterface):
     def connect(self, **kwargs) -> bool:
         with self._lock:
             self._connected = True
-            log.info(f"Simulator connected with ¥{self._initial_capital:,.2f}")
+            log.info(f"Simulator connected with {self._initial_capital:,.2f}")
             return True
     
     def disconnect(self):
@@ -250,16 +312,19 @@ class SimulatorBroker(BrokerInterface):
             return pos
     
     def submit_order(self, order: Order) -> Order:
-        """Submit order - DO NOT modify order.id"""
+        """Submit order - preserves order.id, sets broker_id"""
         import random
         
         with self._lock:
             self._check_settlement()
             
-            # FIXED: Set broker_id instead of overwriting order.id
+            # CRITICAL: Do NOT modify order.id - set broker_id instead
             order.broker_id = f"SIM_{datetime.now().strftime('%Y%m%d%H%M%S')}_{uuid.uuid4().hex[:6]}"
             order.created_at = order.created_at or datetime.now()
             order.submitted_at = datetime.now()
+            
+            # Register mapping
+            self.register_order_mapping(order.id, order.broker_id)
             
             # Get current price
             current_price = self.get_quote(order.symbol)
@@ -288,9 +353,9 @@ class SimulatorBroker(BrokerInterface):
                 return order
             
             order.status = OrderStatus.SUBMITTED
-            self._orders[order.id] = order  # Use original order.id
+            self._orders[order.id] = order
             
-            # Execute immediately
+            # Execute immediately (simulator fills instantly)
             self._execute_order(order, exec_price)
             
             self._emit('order_update', order)
@@ -311,7 +376,7 @@ class SimulatorBroker(BrokerInterface):
             total = cost + commission
             
             if total > self._cash:
-                return False, f"Insufficient funds: need ¥{total:,.2f}, have ¥{self._cash:,.2f}"
+                return False, f"Insufficient funds: need {total:,.2f}, have {self._cash:,.2f}"
             
             # Check position limit
             existing_value = 0.0
@@ -401,9 +466,11 @@ class SimulatorBroker(BrokerInterface):
         order.updated_at = datetime.now()
         order.filled_at = datetime.now()
         
-        # Create Fill record
+        # Create Fill record with our order.id (not broker_id)
+        self._fill_counter += 1
         fill = Fill(
-            order_id=order.id,
+            id=f"FILL_SIM_{self._fill_counter:08d}",
+            order_id=order.id,  # CRITICAL: Use our order.id
             symbol=order.symbol,
             side=order.side,
             quantity=fill_qty,
@@ -413,26 +480,48 @@ class SimulatorBroker(BrokerInterface):
             timestamp=datetime.now()
         )
         
-        self._trades.append({
-            'order_id': order.id,
-            'symbol': order.symbol,
-            'name': order.name,
-            'side': order.side.value,
-            'quantity': fill_qty,
-            'price': fill_price,
-            'value': trade_value,
-            'commission': commission,
-            'stamp_tax': stamp_tax,
-            'timestamp': datetime.now()
-        })
+        self._fills.append(fill)
+        self._unsent_fills.append(fill)  # Track for get_fills()
+        
         self._order_history.append(order)
         
         log.info(
             f"[SIM] {order.side.value.upper()} {fill_qty} {order.symbol} "
-            f"@ ¥{fill_price:.2f} (cost: ¥{total_cost:.2f})"
+            f"@ {fill_price:.2f} (cost: {total_cost:.2f})"
         )
         
         self._emit('trade', order, fill)
+    
+    def get_fills(self, since: datetime = None) -> List[Fill]:
+        """Get fills not yet returned"""
+        with self._lock:
+            if since:
+                fills = [f for f in self._fills if f.timestamp and f.timestamp >= since]
+            else:
+                # Return unsent fills
+                fills = list(self._unsent_fills)
+                self._unsent_fills.clear()
+            return fills
+    
+    def get_order_status(self, order_id: str) -> Optional[OrderStatus]:
+        """Get order status"""
+        with self._lock:
+            order = self._orders.get(order_id)
+            return order.status if order else None
+    
+    def sync_order(self, order: Order) -> Order:
+        """Sync order with simulator state"""
+        with self._lock:
+            stored = self._orders.get(order.id)
+            if stored:
+                order.status = stored.status
+                order.filled_qty = stored.filled_qty
+                order.avg_price = stored.avg_price
+                order.filled_price = stored.filled_price
+                order.commission = stored.commission
+                order.filled_at = stored.filled_at
+                order.message = stored.message
+            return order
     
     def cancel_order(self, order_id: str) -> bool:
         with self._lock:
@@ -471,7 +560,20 @@ class SimulatorBroker(BrokerInterface):
     
     def get_trade_history(self) -> List[Dict]:
         with self._lock:
-            return list(self._trades)
+            return [
+                {
+                    'fill_id': f.id,
+                    'order_id': f.order_id,
+                    'symbol': f.symbol,
+                    'side': f.side.value,
+                    'quantity': f.quantity,
+                    'price': f.price,
+                    'commission': f.commission,
+                    'stamp_tax': f.stamp_tax,
+                    'timestamp': f.timestamp
+                }
+                for f in self._fills
+            ]
     
     def reset(self):
         """Reset simulator to initial state"""
@@ -480,9 +582,12 @@ class SimulatorBroker(BrokerInterface):
             self._positions.clear()
             self._orders.clear()
             self._order_history.clear()
-            self._trades.clear()
+            self._fills.clear()
+            self._unsent_fills.clear()
             self._purchase_dates.clear()
             self._last_settlement_date = date.today()
+            self._order_id_to_broker_id.clear()
+            self._broker_id_to_order_id.clear()
             log.info("Simulator reset to initial state")
     
     def reconcile(self) -> Dict:
@@ -496,23 +601,6 @@ class SimulatorBroker(BrokerInterface):
                 'reconciled': True,
                 'timestamp': datetime.now().isoformat()
             }
-    
-    def get_execution_journal(self) -> List[Dict]:
-        """Get execution journal for audit"""
-        with self._lock:
-            return [
-                {
-                    'timestamp': t['timestamp'].isoformat(),
-                    'order_id': t['order_id'],
-                    'symbol': t['symbol'],
-                    'side': t['side'],
-                    'quantity': t['quantity'],
-                    'price': t['price'],
-                    'commission': t['commission'],
-                    'stamp_tax': t.get('stamp_tax', 0)
-                }
-                for t in self._trades
-            ]
 
 
 # ============================================================
@@ -523,10 +611,7 @@ class THSBroker(BrokerInterface):
     """
     TongHuaShun (同花顺) broker integration via easytrader.
     
-    Also works with:
-    - 华泰证券 (Huatai) - 'ht'
-    - 国金证券 (Guojin) - 'gj'
-    - 银河证券 (Yinhe) - 'yh'
+    CRITICAL: Implements full fill sync for live trading correctness.
     """
     
     BROKER_TYPES = {
@@ -542,7 +627,8 @@ class THSBroker(BrokerInterface):
         self._client = None
         self._connected = False
         self._orders: Dict[str, Order] = {}
-        self._order_counter = 0
+        self._seen_fill_ids: set = set()  # Track seen fills to avoid duplicates
+        self._last_fill_check: datetime = None
         
         try:
             import easytrader
@@ -578,6 +664,7 @@ class THSBroker(BrokerInterface):
             balance = self._client.balance
             if balance:
                 self._connected = True
+                self._last_fill_check = datetime.now()
                 log.info(f"Connected to {self.name}")
                 return True
                 
@@ -604,8 +691,6 @@ class THSBroker(BrokerInterface):
         try:
             balance = self._client.balance
             positions = self.get_positions()
-            
-            market_value = sum(p.market_value for p in positions.values())
             
             return Account(
                 broker_name=self.name,
@@ -637,7 +722,6 @@ class THSBroker(BrokerInterface):
                     available_qty=int(p.get('可卖余额', p.get('可用余额', 0))),
                     avg_cost=float(p.get('成本价', p.get('买入成本', 0))),
                     current_price=float(p.get('当前价', p.get('最新价', 0))),
-                    unrealized_pnl=float(p.get('盈亏', p.get('浮动盈亏', 0))),
                 )
             
             return positions
@@ -655,7 +739,7 @@ class THSBroker(BrokerInterface):
             return order
         
         try:
-            # FIXED: Do NOT overwrite order.id
+            # CRITICAL: Preserve order.id, set broker_id
             order.created_at = order.created_at or datetime.now()
             order.submitted_at = datetime.now()
             
@@ -674,8 +758,12 @@ class THSBroker(BrokerInterface):
                 entrust_no = result.get('委托编号') or result.get('entrust_no')
                 if entrust_no:
                     order.status = OrderStatus.SUBMITTED
-                    order.broker_id = str(entrust_no)  # FIXED: use broker_id
+                    order.broker_id = str(entrust_no)
                     order.message = f"Entrust: {order.broker_id}"
+                    
+                    # Register mapping
+                    self.register_order_mapping(order.id, order.broker_id)
+                    
                     log.info(f"Order submitted: {order.id} -> broker {order.broker_id}")
                 else:
                     order.status = OrderStatus.REJECTED
@@ -684,7 +772,7 @@ class THSBroker(BrokerInterface):
                 order.status = OrderStatus.REJECTED
                 order.message = "Unknown response"
             
-            self._orders[order.id] = order  # Use original order.id
+            self._orders[order.id] = order
             self._emit('order_update', order)
             return order
             
@@ -694,19 +782,148 @@ class THSBroker(BrokerInterface):
             order.message = str(e)
             return order
     
+    def get_fills(self, since: datetime = None) -> List[Fill]:
+        """
+        Get fills from broker.
+        CRITICAL: Maps broker entrust numbers back to our order IDs.
+        """
+        if not self.is_connected:
+            return []
+        
+        fills = []
+        
+        try:
+            # Get today's trades from broker
+            trades = self._client.today_trades
+            
+            for trade in trades:
+                # Create unique fill ID
+                fill_id = f"{trade.get('成交编号', '')}"
+                if not fill_id or fill_id in self._seen_fill_ids:
+                    continue
+                
+                self._seen_fill_ids.add(fill_id)
+                
+                # Map broker entrust number to our order ID
+                broker_entrust = str(trade.get('委托编号', ''))
+                our_order_id = self.get_order_id(broker_entrust)
+                
+                if not our_order_id:
+                    log.warning(f"Unknown entrust number: {broker_entrust}")
+                    continue
+                
+                # Parse side
+                trade_side = trade.get('买卖标志', trade.get('操作', ''))
+                if '买' in str(trade_side):
+                    side = OrderSide.BUY
+                else:
+                    side = OrderSide.SELL
+                
+                fill = Fill(
+                    id=fill_id,
+                    order_id=our_order_id,  # Our order ID, not broker's
+                    symbol=str(trade.get('证券代码', '')).zfill(6),
+                    side=side,
+                    quantity=int(trade.get('成交数量', 0)),
+                    price=float(trade.get('成交价格', 0)),
+                    commission=float(trade.get('手续费', 0) or 0),
+                    stamp_tax=float(trade.get('印花税', 0) or 0),
+                    timestamp=datetime.now()
+                )
+                
+                fills.append(fill)
+                log.info(f"Fill received: {fill.id} for order {our_order_id}")
+                
+        except Exception as e:
+            log.error(f"Failed to get fills: {e}")
+        
+        return fills
+    
+    def get_order_status(self, order_id: str) -> Optional[OrderStatus]:
+        """Get order status from broker"""
+        if not self.is_connected:
+            return None
+        
+        broker_id = self.get_broker_id(order_id)
+        if not broker_id:
+            return None
+        
+        try:
+            entrusts = self._client.today_entrusts
+            
+            for entrust in entrusts:
+                if str(entrust.get('委托编号', '')) == broker_id:
+                    status_str = entrust.get('委托状态', entrust.get('状态', ''))
+                    return self._parse_status(status_str)
+            
+            return None
+            
+        except Exception as e:
+            log.error(f"Failed to get order status: {e}")
+            return None
+    
+    def _parse_status(self, status_str: str) -> OrderStatus:
+        """Parse broker status string to OrderStatus"""
+        status_str = str(status_str).lower()
+        
+        if '全部成交' in status_str or '已成' in status_str:
+            return OrderStatus.FILLED
+        elif '部分成交' in status_str:
+            return OrderStatus.PARTIAL
+        elif '已报' in status_str or '已委托' in status_str:
+            return OrderStatus.ACCEPTED
+        elif '已撤' in status_str or '撤单' in status_str:
+            return OrderStatus.CANCELLED
+        elif '废单' in status_str or '拒绝' in status_str:
+            return OrderStatus.REJECTED
+        else:
+            return OrderStatus.SUBMITTED
+    
+    def sync_order(self, order: Order) -> Order:
+        """Sync order state with broker"""
+        if not self.is_connected:
+            return order
+        
+        broker_id = self.get_broker_id(order.id)
+        if not broker_id:
+            return order
+        
+        try:
+            entrusts = self._client.today_entrusts
+            
+            for entrust in entrusts:
+                if str(entrust.get('委托编号', '')) == broker_id:
+                    order.status = self._parse_status(entrust.get('委托状态', ''))
+                    order.filled_qty = int(entrust.get('成交数量', 0) or 0)
+                    
+                    avg_price = entrust.get('成交均价', entrust.get('成交价格', 0))
+                    if avg_price:
+                        order.avg_price = float(avg_price)
+                    
+                    order.updated_at = datetime.now()
+                    break
+            
+        except Exception as e:
+            log.error(f"Failed to sync order: {e}")
+        
+        return order
+    
     def cancel_order(self, order_id: str) -> bool:
         if not self.is_connected:
             return False
         
         order = self._orders.get(order_id)
-        if not order or not order.broker_id:
+        broker_id = self.get_broker_id(order_id)
+        
+        if not broker_id:
             return False
         
         try:
-            self._client.cancel_entrust(order.broker_id)
-            order.status = OrderStatus.CANCELLED
-            order.updated_at = datetime.now()
-            self._emit('order_update', order)
+            self._client.cancel_entrust(broker_id)
+            if order:
+                order.status = OrderStatus.CANCELLED
+                order.updated_at = datetime.now()
+                self._emit('order_update', order)
             return True
         except Exception as e:
             log.error(f"Cancel failed: {e}")
@@ -726,7 +943,7 @@ class ZSZQBroker(BrokerInterface):
     """
     招商证券 (Zhao Shang Zheng Quan) broker integration
     
-    Uses easytrader with 'universal' type or direct API
+    CRITICAL: Implements full fill sync for live trading correctness.
     """
     
     def __init__(self):
@@ -734,7 +951,7 @@ class ZSZQBroker(BrokerInterface):
         self._client = None
         self._connected = False
         self._orders: Dict[str, Order] = {}
-        self._order_counter = 0
+        self._seen_fill_ids: set = set()
         
         try:
             import easytrader
@@ -780,21 +997,6 @@ class ZSZQBroker(BrokerInterface):
                 
         except Exception as e:
             log.error(f"ZSZQ connection failed: {e}")
-            
-            try:
-                self._client = self._easytrader.use('ths')
-                self._client.prepare(
-                    user=kwargs.get('user', ''),
-                    password=kwargs.get('password', '')
-                )
-                self._client.connect(exe_path)
-                
-                if self._client.balance:
-                    self._connected = True
-                    log.info(f"Connected to {self.name} (alternative method)")
-                    return True
-            except Exception as e2:
-                log.error(f"Alternative connection also failed: {e2}")
         
         return False
     
@@ -889,7 +1091,7 @@ class ZSZQBroker(BrokerInterface):
             return order
         
         try:
-            # FIXED: Do NOT overwrite order.id
+            # CRITICAL: Preserve order.id
             order.created_at = order.created_at or datetime.now()
             order.submitted_at = datetime.now()
             
@@ -909,8 +1111,12 @@ class ZSZQBroker(BrokerInterface):
                 
                 if entrust_no:
                     order.status = OrderStatus.SUBMITTED
-                    order.broker_id = str(entrust_no)  # FIXED: use broker_id
+                    order.broker_id = str(entrust_no)
                     order.message = f"Entrust: {entrust_no}"
+                    
+                    # Register mapping
+                    self.register_order_mapping(order.id, order.broker_id)
+                    
                     log.info(f"Order submitted: {order.id} -> broker {order.broker_id}")
                 else:
                     order.status = OrderStatus.REJECTED
@@ -919,7 +1125,7 @@ class ZSZQBroker(BrokerInterface):
                 order.status = OrderStatus.REJECTED
                 order.message = "Unknown response from broker"
             
-            self._orders[order.id] = order  # Use original order.id
+            self._orders[order.id] = order
             self._emit('order_update', order)
             return order
             
@@ -928,20 +1134,141 @@ class ZSZQBroker(BrokerInterface):
             order.status = OrderStatus.REJECTED
             order.message = str(e)
             return order
-
+    
+    def get_fills(self, since: datetime = None) -> List[Fill]:
+        """Get fills from broker"""
+        if not self.is_connected:
+            return []
+        
+        fills = []
+        
+        try:
+            trades = self._client.today_trades
+            
+            for trade in trades:
+                fill_id = f"{trade.get('成交编号', '')}"
+                if not fill_id or fill_id in self._seen_fill_ids:
+                    continue
+                
+                self._seen_fill_ids.add(fill_id)
+                
+                broker_entrust = str(trade.get('委托编号', ''))
+                our_order_id = self.get_order_id(broker_entrust)
+                
+                if not our_order_id:
+                    log.warning(f"Unknown entrust number: {broker_entrust}")
+                    continue
+                
+                trade_side = trade.get('买卖标志', trade.get('操作', ''))
+                if '买' in str(trade_side):
+                    side = OrderSide.BUY
+                else:
+                    side = OrderSide.SELL
+                
+                fill = Fill(
+                    id=fill_id,
+                    order_id=our_order_id,
+                    symbol=str(trade.get('证券代码', '')).zfill(6),
+                    side=side,
+                    quantity=int(trade.get('成交数量', 0)),
+                    price=float(trade.get('成交价格', 0)),
+                    commission=float(trade.get('手续费', 0) or 0),
+                    stamp_tax=float(trade.get('印花税', 0) or 0),
+                    timestamp=datetime.now()
+                )
+                
+                fills.append(fill)
+                
+        except Exception as e:
+            log.error(f"Failed to get fills: {e}")
+        
+        return fills
+    
+    def get_order_status(self, order_id: str) -> Optional[OrderStatus]:
+        """Get order status from broker"""
+        if not self.is_connected:
+            return None
+        
+        broker_id = self.get_broker_id(order_id)
+        if not broker_id:
+            return None
+        
+        try:
+            entrusts = self._client.today_entrusts
+            
+            for entrust in entrusts:
+                if str(entrust.get('委托编号', '')) == broker_id:
+                    status_str = entrust.get('委托状态', entrust.get('状态', ''))
+                    return self._parse_status(status_str)
+            
+            return None
+            
+        except Exception as e:
+            log.error(f"Failed to get order status: {e}")
+            return None
+    
+    def _parse_status(self, status_str: str) -> OrderStatus:
+        """Parse broker status string to OrderStatus"""
+        status_str = str(status_str).lower()
+        
+        if '全部成交' in status_str or '已成' in status_str:
+            return OrderStatus.FILLED
+        elif '部分成交' in status_str:
+            return OrderStatus.PARTIAL
+        elif '已报' in status_str or '已委托' in status_str:
+            return OrderStatus.ACCEPTED
+        elif '已撤' in status_str or '撤单' in status_str:
+            return OrderStatus.CANCELLED
+        elif '废单' in status_str or '拒绝' in status_str:
+            return OrderStatus.REJECTED
+        else:
+            return OrderStatus.SUBMITTED
+    
+    def sync_order(self, order: Order) -> Order:
+        """Sync order state with broker"""
+        if not self.is_connected:
+            return order
+        
+        broker_id = self.get_broker_id(order.id)
+        if not broker_id:
+            return order
+        
+        try:
+            entrusts = self._client.today_entrusts
+            
+            for entrust in entrusts:
+                if str(entrust.get('委托编号', '')) == broker_id:
+                    order.status = self._parse_status(entrust.get('委托状态', ''))
+                    order.filled_qty = int(entrust.get('成交数量', 0) or 0)
+                    
+                    avg_price = entrust.get('成交均价', entrust.get('成交价格', 0))
+                    if avg_price:
+                        order.avg_price = float(avg_price)
+                    
+                    order.updated_at = datetime.now()
+                    break
+            
+        except Exception as e:
+            log.error(f"Failed to sync order: {e}")
+        
+        return order
+    
     def cancel_order(self, order_id: str) -> bool:
         if not self.is_connected:
             return False
         
         order = self._orders.get(order_id)
-        if not order or not order.broker_id:
+        broker_id = self.get_broker_id(order_id)
+        
+        if not broker_id:
             return False
         
         try:
-            self._client.cancel_entrust(order.broker_id)
-            order.status = OrderStatus.CANCELLED
-            order.updated_at = datetime.now()
-            self._emit('order_update', order)
+            self._client.cancel_entrust(broker_id)
+            if order:
+                order.status = OrderStatus.CANCELLED
+                order.updated_at = datetime.now()
+                self._emit('order_update', order)
             log.info(f"Order cancelled: {order_id}")
             return True
         except Exception as e:
