@@ -289,13 +289,18 @@ class Portfolio:
         )
     
     def _calculate_returns(self) -> np.ndarray:
-        """Calculate daily returns from equity history"""
         if len(self.equity_history) < 2:
             return np.array([])
-        
-        equities = [e[1] for e in self.equity_history]
-        returns = np.diff(equities) / np.array(equities[:-1])
-        return returns
+
+        import pandas as pd
+        s = pd.Series(
+            [eq for _, eq in self.equity_history],
+            index=pd.to_datetime([ts for ts, _ in self.equity_history])
+        ).sort_index()
+
+        daily = s.resample("1D").last().dropna()
+        rets = daily.pct_change().dropna().values
+        return rets
     
     def _get_equity_at_date(self, target_date: date) -> float:
         """Get equity value at a specific date"""

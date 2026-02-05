@@ -46,6 +46,7 @@ def main():
     parser.add_argument('--health', action='store_true', help='Show system health')
     parser.add_argument('--epochs', type=int, default=100, help='Training epochs')
     parser.add_argument('--max-stocks', type=int, default=200, help='Max stocks for training')
+    parser.add_argument('--continuous', action='store_true', help='Continuous learning mode')
     parser.add_argument('--cli', action='store_true', help='CLI mode')
     
     args = parser.parse_args()
@@ -85,7 +86,8 @@ def main():
             learner = AutoLearner()
             learner.run(
                 max_stocks=args.max_stocks,
-                epochs=args.epochs,
+                epochs_per_cycle=args.epochs,  # FIXED: correct parameter name
+                continuous=args.continuous,
                 search_all=True
             )
             
@@ -96,7 +98,7 @@ def main():
             print(f"\n{result.stock_code} - {result.stock_name}")
             print(f"Signal: {result.signal.value}")
             print(f"Confidence: {result.confidence:.0%}")
-            print(f"Price: ¥{result.current_price:.2f}")
+            print(f"Price: {result.current_price:.2f}")  # FIXED: removed ¥ for console safety
             
         elif args.backtest:
             from analysis.backtest import Backtester

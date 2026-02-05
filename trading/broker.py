@@ -147,7 +147,9 @@ class BrokerInterface(ABC):
                 callback(*args, **kwargs)
             except Exception as e:
                 log.error(f"Callback error for {event}: {e}")
-
+    def get_fills(self, since: datetime = None) -> List[Fill]:
+        """Optional: broker fills/trades. Default empty."""
+        return []
 
 # ============================================================
 # Simulator Broker
@@ -248,13 +250,16 @@ class SimulatorBroker(BrokerInterface):
             return pos
     
     def submit_order(self, order: Order) -> Order:
+        """Submit order - DO NOT modify order.id"""
         import random
         
         with self._lock:
             self._check_settlement()
             
-            order.id = f"SIM_{datetime.now().strftime('%Y%m%d%H%M%S')}_{uuid.uuid4().hex[:6]}"
-            order.created_at = datetime.now()
+            # FIXED: Set broker_id instead of overwriting order.id
+            order.broker_id = f"SIM_{datetime.now().strftime('%Y%m%d%H%M%S')}_{uuid.uuid4().hex[:6]}"
+            order.created_at = order.created_at or datetime.now()
+            order.submitted_at = datetime.now()
             
             # Get current price
             current_price = self.get_quote(order.symbol)
@@ -268,7 +273,8 @@ class SimulatorBroker(BrokerInterface):
             # Get stock name
             fetcher = self._get_fetcher()
             quote = fetcher.get_realtime(order.symbol)
-            order.name = quote.name if quote else order.symbol
+            if not order.name and quote:
+                order.name = quote.name
             
             # Use limit price if provided, otherwise market price
             exec_price = order.price if order.price > 0 else current_price
@@ -282,7 +288,7 @@ class SimulatorBroker(BrokerInterface):
                 return order
             
             order.status = OrderStatus.SUBMITTED
-            self._orders[order.id] = order
+            self._orders[order.id] = order  # Use original order.id
             
             # Execute immediately
             self._execute_order(order, exec_price)
@@ -649,9 +655,9 @@ class THSBroker(BrokerInterface):
             return order
         
         try:
-            self._order_counter += 1
-            order.id = f"THS_{datetime.now().strftime('%Y%m%d%H%M%S')}_{self._order_counter:04d}"
-            order.created_at = datetime.now()
+            # FIXED: Do NOT overwrite order.id
+            order.created_at = order.created_at or datetime.now()
+            order.submitted_at = datetime.now()
             
             if order.side == OrderSide.BUY:
                 if order.order_type == OrderType.MARKET:
@@ -665,11 +671,12 @@ class THSBroker(BrokerInterface):
                     result = self._client.sell(order.symbol, order.quantity, order.price)
             
             if result and isinstance(result, dict):
-                if '委托编号' in result or 'entrust_no' in result:
+                entrust_no = result.get('委托编号') or result.get('entrust_no')
+                if entrust_no:
                     order.status = OrderStatus.SUBMITTED
-                    order.broker_id = str(result.get('委托编号', result.get('entrust_no', '')))
-                    order.message = f"委托编号: {order.broker_id}"
-                    log.info(f"Order submitted: {order.id}")
+                    order.broker_id = str(entrust_no)  # FIXED: use broker_id
+                    order.message = f"Entrust: {order.broker_id}"
+                    log.info(f"Order submitted: {order.id} -> broker {order.broker_id}")
                 else:
                     order.status = OrderStatus.REJECTED
                     order.message = str(result)
@@ -677,7 +684,7 @@ class THSBroker(BrokerInterface):
                 order.status = OrderStatus.REJECTED
                 order.message = "Unknown response"
             
-            self._orders[order.id] = order
+            self._orders[order.id] = order  # Use original order.id
             self._emit('order_update', order)
             return order
             
@@ -882,9 +889,9 @@ class ZSZQBroker(BrokerInterface):
             return order
         
         try:
-            self._order_counter += 1
-            order.id = f"ZSZQ_{datetime.now().strftime('%Y%m%d%H%M%S')}_{self._order_counter:04d}"
-            order.created_at = datetime.now()
+            # FIXED: Do NOT overwrite order.id
+            order.created_at = order.created_at or datetime.now()
+            order.submitted_at = datetime.now()
             
             if order.side == OrderSide.BUY:
                 if order.order_type == OrderType.MARKET:
@@ -902,9 +909,9 @@ class ZSZQBroker(BrokerInterface):
                 
                 if entrust_no:
                     order.status = OrderStatus.SUBMITTED
-                    order.broker_id = str(entrust_no)
-                    order.message = f"委托编号: {entrust_no}"
-                    log.info(f"Order submitted: {order.id} -> {entrust_no}")
+                    order.broker_id = str(entrust_no)  # FIXED: use broker_id
+                    order.message = f"Entrust: {entrust_no}"
+                    log.info(f"Order submitted: {order.id} -> broker {order.broker_id}")
                 else:
                     order.status = OrderStatus.REJECTED
                     order.message = str(result.get('msg') or result.get('message') or result)
@@ -912,7 +919,7 @@ class ZSZQBroker(BrokerInterface):
                 order.status = OrderStatus.REJECTED
                 order.message = "Unknown response from broker"
             
-            self._orders[order.id] = order
+            self._orders[order.id] = order  # Use original order.id
             self._emit('order_update', order)
             return order
             
@@ -921,7 +928,7 @@ class ZSZQBroker(BrokerInterface):
             order.status = OrderStatus.REJECTED
             order.message = str(e)
             return order
-    
+
     def cancel_order(self, order_id: str) -> bool:
         if not self.is_connected:
             return False

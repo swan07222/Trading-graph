@@ -58,3 +58,28 @@ All sources failed for 601398
 2026-02-04 16:22:47,764 | [31mERROR   [0m | data.fetcher:_fetch_from_sources:464
 All sources failed for 600030
 
+2026-02-05 06:07:51,379 | ERROR | trading:main:115
+Error: invalid syntax (discovery.py, line 94)
+Traceback (most recent call last):
+  File "F:\Trading app\Trading-graph\main.py", line 109, in main
+    from ui.app import run_app
+  File "F:\Trading app\Trading-graph\ui\__init__.py", line 2, in <module>
+    from .app import MainApp, run_app
+  File "F:\Trading app\Trading-graph\ui\app.py", line 23, in <module>
+    from models.predictor import Predictor, Prediction, Signal
+  File "F:\Trading app\Trading-graph\models\__init__.py", line 20, in <module>
+    from .trainer import Trainer
+  File "F:\Trading app\Trading-graph\models\trainer.py", line 18, in <module>
+    from data.fetcher import DataFetcher
+  File "F:\Trading app\Trading-graph\data\__init__.py", line 9, in <module>
+    from .discovery import UniversalStockDiscovery, DiscoveredStock
+  File "F:\Trading app\Trading-graph\data\discovery.py", line 94
+    def discover_all(...):
+                     ^^^
+SyntaxError: invalid syntax
+2026-02-05 06:11:44,976 | ERROR | trading:main:115
+Error: ContinuousLearner.run() got an unexpected keyword argument 'epochs'
+Traceback (most recent call last):
+  File "F:\Trading app\Trading-graph\main.py", line 86, in main
+    learner.run(
+TypeError: ContinuousLearner.run() got an unexpected keyword argument 'epochs'

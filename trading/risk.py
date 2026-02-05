@@ -63,6 +63,7 @@ class RiskManager:
         
         # Trade tracking
         self._trades_today: int = 0
+        self._orders_submitted_today: int = 0
         self._orders_this_minute: List[datetime] = []
         
         # Error tracking
@@ -71,6 +72,9 @@ class RiskManager:
         # Quote timestamps for staleness
         self._quote_timestamps: Dict[str, datetime] = {}
         self._staleness_threshold_seconds: float = 30.0
+        self._equity_by_day: Dict[date, float] = {}
+        self._last_var_day: Optional[date] = None
+        self._last_breach: Dict[str, datetime] = {}
         
         # Subscribe to events
         EVENT_BUS.subscribe(EventType.ORDER_FILLED, self._on_trade)
@@ -111,17 +115,28 @@ class RiskManager:
             
             # Check for new trading day
             today = date.today()
+            self._equity_by_day[today] = account.equity
+
+            # FIXED: Only compute daily return when day changes (for proper VaR)
             if today != self._last_date:
+                prev_day = self._last_date
+                if prev_day in self._equity_by_day:
+                    prev_eq = self._equity_by_day.get(prev_day, old_equity)
+                    new_eq = account.equity
+                    if prev_eq > 0:
+                        r = (new_eq - prev_eq) / prev_eq
+                        self._returns_history.append(r)
+                        if len(self._returns_history) > self._max_history:
+                            self._returns_history.pop(0)
                 self._new_day(old_equity)
                 self._last_date = today
             
-            # Track daily returns for VaR calculation
-            if old_equity > 0:
-                daily_return = (account.equity - old_equity) / old_equity
-                if abs(daily_return) > 0.0001:  # Only track meaningful changes
-                    self._returns_history.append(daily_return)
-                    if len(self._returns_history) > self._max_history:
-                        self._returns_history.pop(0)
+            # REMOVED: The intraday return append that was polluting VaR calculation
+            # if old_equity > 0:
+            #     daily_return = (account.equity - old_equity) / old_equity
+            #     if abs(daily_return) > 0.0001:
+            #         self._returns_history.append(daily_return)
+            #         ...
             
             # Check for risk breaches
             self._check_risk_breaches()
@@ -131,14 +146,15 @@ class RiskManager:
         log.info("Risk manager: New trading day started")
         self._daily_start_equity = last_equity
         self._trades_today = 0
+        self._orders_submitted_today = 0  # FIXED: Reset order count
         self._orders_this_minute.clear()
         self._errors_this_minute.clear()
         
         # Log daily summary
         if self._initial_equity > 0:
             total_return = (last_equity / self._initial_equity - 1) * 100
-            log.info(f"Previous day end equity: ¥{last_equity:,.2f} (Total return: {total_return:+.2f}%)")
-    
+            log.info(f"Previous day end equity: {last_equity:,.2f} (Total return: {total_return:+.2f}%)")
+
     def _on_trade(self, event: Event):
         """Handle trade event"""
         with self._lock:
@@ -188,6 +204,11 @@ class RiskManager:
     
     def _trigger_risk_event(self, risk_type: str, value: float):
         """Trigger risk event and log"""
+        now = datetime.now()
+        last = self._last_breach.get(risk_type)
+        if last and (now - last).total_seconds() < 60:
+            return
+        self._last_breach[risk_type] = now
         EVENT_BUS.publish(RiskEvent(
             type=EventType.RISK_BREACH,
             risk_type=risk_type,
@@ -620,7 +641,7 @@ class RiskManager:
         if equity <= 0:
             return False, "No equity available"
         
-        # Calculate new position value
+        # Calculate existing position value
         existing_value = 0.0
         if symbol in self._account.positions:
             existing_value = self._account.positions[symbol].market_value
@@ -635,14 +656,20 @@ class RiskManager:
                 f"{CONFIG.risk.max_position_pct}%"
             )
         
-        # Top-3 concentration limit (should not exceed 50% combined)
-        position_values = sorted(
-            [p.market_value for p in self._account.positions.values()],
-            reverse=True
-        )
+        # FIXED: Top-3 concentration limit - properly handle existing positions
+        position_values = []
+        for sym, pos in self._account.positions.items():
+            if sym == symbol:
+                # Replace with new total for this symbol
+                position_values.append(total_position)
+            else:
+                position_values.append(pos.market_value)
         
-        # Add new position value and re-sort
-        position_values.append(total_position)
+        # If symbol is new (not in positions), add it
+        if symbol not in self._account.positions:
+            position_values.append(new_value)
+        
+        # Sort descending
         position_values.sort(reverse=True)
         
         # Get top 3
@@ -675,16 +702,17 @@ class RiskManager:
             )
             return False
         
-        # Check per-day limit
-        if self._trades_today >= CONFIG.risk.max_orders_per_day:
+        # FIXED: Check per-day limit using order submissions, not fills
+        if self._orders_submitted_today >= CONFIG.risk.max_orders_per_day:
             log.warning(
-                f"Daily limit: {self._trades_today} orders today "
+                f"Daily limit: {self._orders_submitted_today} orders today "
                 f"(max: {CONFIG.risk.max_orders_per_day})"
             )
             return False
         
         # Record this order attempt
         self._orders_this_minute.append(now)
+        self._orders_submitted_today += 1  # FIXED: Increment order count
         return True
     
     def _check_error_rate(self) -> bool:

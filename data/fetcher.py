@@ -54,25 +54,24 @@ def retry(max_attempts: int = 3, delay: float = 1.0, backoff: float = 2.0):
 
 @dataclass
 class Quote:
-    """Real-time quote data"""
     code: str
-    name: str
-    price: float
-    open: float
-    high: float
-    low: float
-    close: float
-    volume: int
-    amount: float
-    change: float
-    change_pct: float
+    name: str = ""
+    price: float = 0.0
+    open: float = 0.0
+    high: float = 0.0
+    low: float = 0.0
+    close: float = 0.0
+    volume: int = 0
+    amount: float = 0.0
+    change: float = 0.0
+    change_pct: float = 0.0
     bid: float = 0.0
     ask: float = 0.0
     bid_vol: int = 0
     ask_vol: int = 0
     timestamp: datetime = None
     source: str = ""
-    
+
     def __post_init__(self):
         if self.timestamp is None:
             self.timestamp = datetime.now()

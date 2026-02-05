@@ -180,7 +180,9 @@ class ContinuousLearner:
         continuous: bool = False,
         learning_while_trading: bool = False,
         auto_search: bool = True,
-        search_all: bool = True
+        search_all: bool = True,
+        epochs: int = None,          
+        **_unused_kwargs             
     ):
         """Synchronous run for CLI"""
         self.start(

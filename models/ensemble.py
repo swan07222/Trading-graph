@@ -144,7 +144,7 @@ class EnsembleModel:
         val_accuracies = {}
         
         for name, model in self.models.items():
-            if stop_flag and stop_flag():
+            if self._should_stop(stop_flag):
                 log.info("Training stopped by user")
                 break
                 
@@ -168,6 +168,37 @@ class EnsembleModel:
         
         return history
     
+    def _should_stop(self, stop_flag) -> bool:
+        """Check if training should stop - handles various stop flag types"""
+        if stop_flag is None:
+            return False
+        
+        # Case 1: stop_flag is a callable (function that returns bool)
+        if callable(stop_flag):
+            try:
+                result = stop_flag()
+                return bool(result)
+            except TypeError:
+                pass
+        
+        # Case 2: stop_flag has is_cancelled attribute (CancellationToken)
+        is_cancelled = getattr(stop_flag, "is_cancelled", None)
+        if is_cancelled is not None:
+            # Could be a property (returns bool) or method (needs to be called)
+            if callable(is_cancelled):
+                try:
+                    return bool(is_cancelled())
+                except TypeError:
+                    pass
+            else:
+                return bool(is_cancelled)
+        
+        # Case 3: Fallback - try to use it as boolean
+        try:
+            return bool(stop_flag)
+        except Exception:
+            return False
+
     def _train_single_model(
         self,
         model: nn.Module,
@@ -199,7 +230,7 @@ class EnsembleModel:
         best_state = None
         
         for epoch in range(epochs):
-            if stop_flag and stop_flag():
+            if self._should_stop(stop_flag):
                 break
             
             # Training

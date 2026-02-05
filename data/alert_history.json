@@ -1,0 +1,12 @@
+[
+  {
+    "id": "ALERT_ECFAB0385825",
+    "category": "system",
+    "priority": 2,
+    "title": "Trading System Started",
+    "message": "Mode: simulation, Equity: \u00a5100,000.00",
+    "details": {},
+    "created_at": "2026-02-05T06:10:31.203753",
+    "acknowledged": false
+  }
+]

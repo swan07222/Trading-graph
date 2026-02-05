@@ -47,10 +47,6 @@ class CancellationToken:
                 except:
                     pass
     
-    def reset(self):
-        """Reset the token for reuse"""
-        self._cancelled.clear()
-    
     def on_cancel(self, callback: Callable):
         """Register a callback to be called on cancellation"""
         with self._lock:

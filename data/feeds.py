@@ -203,8 +203,11 @@ class PollingFeed(DataFeed):
         result = {}
         
         try:
-            # Single snapshot call
-            df = self._fetcher._sources[0].get_all_stocks()
+            # FIXED: Use public API instead of private internals
+            df = self._fetcher.get_all_stocks()
+            
+            if df is None or df.empty:
+                return result
             
             for symbol in symbols:
                 row = df[df['代码'] == symbol]
@@ -214,7 +217,15 @@ class PollingFeed(DataFeed):
                         code=symbol,
                         name=str(r.get('名称', '')),
                         price=float(r.get('最新价', 0) or 0),
-                        # ... fill other fields
+                        open=float(r.get('今开', 0) or 0),
+                        high=float(r.get('最高', 0) or 0),
+                        low=float(r.get('最低', 0) or 0),
+                        close=float(r.get('昨收', 0) or 0),
+                        volume=int(r.get('成交量', 0) or 0),
+                        amount=float(r.get('成交额', 0) or 0),
+                        change=float(r.get('涨跌额', 0) or 0),
+                        change_pct=float(r.get('涨跌幅', 0) or 0),
+                        source="polling"
                     )
         except Exception as e:
             log.warning(f"Batch quote fetch failed: {e}")
@@ -543,11 +554,19 @@ class BarAggregator:
             
             bar = self._current_bars[symbol]
             
-            # Update bar
+            # FIXED: Get last cumulative volume from bar state
+            last_cum_vol = bar.get('last_cum_vol', 0)
+            
+            # Update bar OHLC
             bar['high'] = max(bar['high'], quote.price)
             bar['low'] = min(bar['low'], quote.price)
             bar['close'] = quote.price
-            bar['volume'] += max(quote.volume - last_cum_vol, 0)
+            
+            # FIXED: Calculate incremental volume (quote.volume is cumulative)
+            current_cum_vol = int(quote.volume) if quote.volume else 0
+            delta_vol = max(current_cum_vol - last_cum_vol, 0)
+            bar['volume'] += delta_vol
+            bar['last_cum_vol'] = current_cum_vol
             
             # Check if bar is complete
             now = datetime.now()
@@ -574,6 +593,7 @@ class BarAggregator:
             'low': quote.price,
             'close': quote.price,
             'volume': 0,
+            'last_cum_vol': int(quote.volume) if quote.volume else 0,  # FIXED: Track cumulative volume
         }
     
     def _emit_bar(self, symbol: str, bar: Dict):

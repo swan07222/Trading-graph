@@ -1,0 +1,77 @@
+2026-02-05 06:06:13,412 | INFO     | trading:main:60 - ============================================================
+2026-02-05 06:06:13,413 | INFO     | trading:main:61 - AI STOCK TRADING SYSTEM - Production Grade
+2026-02-05 06:06:13,413 | INFO     | trading:main:62 - ============================================================
+2026-02-05 06:07:51,091 | INFO     | trading:main:60 - ============================================================
+2026-02-05 06:07:51,092 | INFO     | trading:main:61 - AI STOCK TRADING SYSTEM - Production Grade
+2026-02-05 06:07:51,092 | INFO     | trading:main:62 - ============================================================
+2026-02-05 06:07:51,379 | ERROR    | trading:main:115 - Error: invalid syntax (discovery.py, line 94)
+Traceback (most recent call last):
+  File "F:\Trading app\Trading-graph\main.py", line 109, in main
+    from ui.app import run_app
+  File "F:\Trading app\Trading-graph\ui\__init__.py", line 2, in <module>
+    from .app import MainApp, run_app
+  File "F:\Trading app\Trading-graph\ui\app.py", line 23, in <module>
+    from models.predictor import Predictor, Prediction, Signal
+  File "F:\Trading app\Trading-graph\models\__init__.py", line 20, in <module>
+    from .trainer import Trainer
+  File "F:\Trading app\Trading-graph\models\trainer.py", line 18, in <module>
+    from data.fetcher import DataFetcher
+  File "F:\Trading app\Trading-graph\data\__init__.py", line 9, in <module>
+    from .discovery import UniversalStockDiscovery, DiscoveredStock
+  File "F:\Trading app\Trading-graph\data\discovery.py", line 94
+    def discover_all(...):
+                     ^^^
+SyntaxError: invalid syntax
+2026-02-05 06:10:21,848 | INFO     | trading:main:60 - ============================================================
+2026-02-05 06:10:21,848 | INFO     | trading:main:61 - AI STOCK TRADING SYSTEM - Production Grade
+2026-02-05 06:10:21,849 | INFO     | trading:main:62 - ============================================================
+2026-02-05 06:10:23,806 | INFO     | data.fetcher:__init__:148 - AkShare initialized
+2026-02-05 06:10:23,923 | INFO     | data.fetcher:__init__:272 - Yahoo Finance initialized
+2026-02-05 06:10:23,923 | INFO     | data.fetcher:_init_sources:388 - Data source akshare available
+2026-02-05 06:10:23,923 | INFO     | data.fetcher:_init_sources:388 - Data source yahoo available
+2026-02-05 06:10:23,924 | WARNING  | trading:load_scaler:311 - Scaler not found: F:\Trading app\Trading-graph\models_saved\scaler.pkl
+2026-02-05 06:10:23,924 | WARNING  | trading:_load_model:129 - No scaler found. Predictions may be inaccurate.
+2026-02-05 06:10:23,924 | WARNING  | trading:_load_model:130 - Train a model first with: python main.py --train
+2026-02-05 06:10:23,924 | WARNING  | trading:_load_model:134 - No trained model found. Train a model first.
+2026-02-05 06:10:23,924 | WARNING  | trading:_load_model:135 - Run: python main.py --train
+2026-02-05 06:10:30,199 | INFO     | trading.health:start:616 - Health monitor started
+2026-02-05 06:10:30,199 | INFO     | trading.health:start:616 - Health monitor started
+2026-02-05 06:10:30,199 | INFO     | trading.alerts:start:196 - Alert manager started
+2026-02-05 06:10:30,199 | INFO     | trading.alerts:start:196 - Alert manager started
+2026-02-05 06:10:31,202 | INFO     | data.fetcher:__init__:148 - AkShare initialized
+2026-02-05 06:10:31,202 | INFO     | data.fetcher:__init__:272 - Yahoo Finance initialized
+2026-02-05 06:10:31,202 | INFO     | data.fetcher:_init_sources:388 - Data source akshare available
+2026-02-05 06:10:31,202 | INFO     | data.fetcher:_init_sources:388 - Data source yahoo available
+2026-02-05 06:10:31,202 | WARNING  | trading:load_scaler:311 - Scaler not found: F:\Trading app\Trading-graph\models_saved\scaler.pkl
+2026-02-05 06:10:31,202 | WARNING  | trading:_load_model:129 - No scaler found. Predictions may be inaccurate.
+2026-02-05 06:10:31,203 | WARNING  | trading:_load_model:130 - Train a model first with: python main.py --train
+2026-02-05 06:10:31,203 | WARNING  | trading:_load_model:134 - No trained model found. Train a model first.
+2026-02-05 06:10:31,203 | WARNING  | trading:_load_model:135 - Run: python main.py --train
+2026-02-05 06:10:31,203 | WARNING  | trading.health:_check_status_change:805 - System entering degraded mode
+2026-02-05 06:10:31,203 | WARNING  | trading.health:_check_status_change:805 - System entering degraded mode
+2026-02-05 06:10:31,203 | INFO     | trading:start:115 - Execution engine started (simulation)
+2026-02-05 06:10:39,205 | INFO     | trading:disconnect:208 - Simulator disconnected
+2026-02-05 06:10:41,204 | INFO     | trading.health:stop:623 - Health monitor stopped
+2026-02-05 06:10:41,204 | INFO     | trading.health:stop:623 - Health monitor stopped
+2026-02-05 06:10:41,205 | INFO     | trading.alerts:stop:206 - Alert manager stopped
+2026-02-05 06:10:41,205 | INFO     | trading.alerts:stop:206 - Alert manager stopped
+2026-02-05 06:10:41,206 | INFO     | trading:stop:159 - Execution engine stopped
+2026-02-05 06:11:44,826 | INFO     | trading:main:60 - ============================================================
+2026-02-05 06:11:44,826 | INFO     | trading:main:61 - AI STOCK TRADING SYSTEM - Production Grade
+2026-02-05 06:11:44,826 | INFO     | trading:main:62 - ============================================================
+2026-02-05 06:11:44,976 | ERROR    | trading:main:115 - Error: ContinuousLearner.run() got an unexpected keyword argument 'epochs'
+Traceback (most recent call last):
+  File "F:\Trading app\Trading-graph\main.py", line 86, in main
+    learner.run(
+TypeError: ContinuousLearner.run() got an unexpected keyword argument 'epochs'
+2026-02-05 06:36:55,275 | INFO     | trading:main:61 - ============================================================
+2026-02-05 06:36:55,275 | INFO     | trading:main:62 - AI STOCK TRADING SYSTEM - Production Grade
+2026-02-05 06:36:55,275 | INFO     | trading:main:63 - ============================================================
+2026-02-05 06:36:55,459 | INFO     | trading:_continuous_learning_loop:239 - === Learning Cycle 1 ===
+2026-02-05 06:36:55,459 | INFO     | trading:start:171 - Continuous learning started (mode=full, continuous=False)
+2026-02-05 06:37:48,122 | WARNING  | trading:discover_all:101 - Failed to fetch spot data: HTTPSConnectionPool(host='82.push2.eastmoney.com', port=443): Read timed out. (read timeout=15)
+2026-02-05 06:37:48,122 | INFO     | trading:discover_all:147 - Found 0 from All A-Shares, total: 0
+2026-02-05 06:37:49,123 | INFO     | trading:discover_all:147 - Found 0 from Top Gainers, total: 0
+2026-02-05 06:37:50,124 | INFO     | trading:discover_all:147 - Found 0 from Top Losers, total: 0
+2026-02-05 06:37:51,126 | INFO     | trading:discover_all:147 - Found 0 from High Volume, total: 0
+2026-02-05 06:37:52,126 | INFO     | trading:discover_all:147 - Found 0 from Large Cap, total: 0

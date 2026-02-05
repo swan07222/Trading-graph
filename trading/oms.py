@@ -579,6 +579,10 @@ class OrderManagementSystem:
         cost = order.quantity * order.price
         commission = cost * CONFIG.trading.commission
         total_cost = cost + commission
+
+        order.tags = order.tags or {}
+        order.tags["reserved_cash_remaining"] = float(total_cost)
+        order.tags["reserved_cash_price"] = float(order.price)
         
         if total_cost > self._account.available:
             raise InsufficientFundsError(
@@ -669,10 +673,9 @@ class OrderManagementSystem:
         """Release reserved funds/shares for cancelled/rejected order"""
         if order.side == OrderSide.BUY:
             # Release reserved funds
-            remaining_qty = order.quantity - order.filled_qty
-            cost = remaining_qty * order.price
-            commission = cost * CONFIG.trading.commission
-            self._account.available += cost + commission
+            reserved_rem = float(order.tags.get("reserved_cash_remaining", 0.0))
+            self._account.available += reserved_rem
+            order.tags["reserved_cash_remaining"] = 0.0
         else:
             # Release reserved shares
             position = self._account.positions.get(order.symbol)
@@ -755,6 +758,26 @@ class OrderManagementSystem:
             # Deduct cash
             cost = fill.quantity * fill.price + fill.commission
             self._account.cash -= cost
+            
+            # FIXED: Properly handle reservation release/consumption
+            reserved_rem = float(order.tags.get("reserved_cash_remaining", 0.0))
+            reserved_price = float(order.tags.get("reserved_cash_price", order.price))
+            
+            # What we reserved for this fill (based on limit price + commission estimate)
+            reserved_for_fill = fill.quantity * reserved_price * (1 + CONFIG.trading.commission)
+            
+            # Actual spent (fill.price + commission already in fill.commission)
+            actual_for_fill = fill.quantity * fill.price + fill.commission
+            
+            # Delta can be positive (saved money) or negative (cost more than reserved)
+            delta = reserved_for_fill - actual_for_fill
+            self._account.available += delta
+            
+            # FIXED: Ensure available never exceeds cash or goes negative
+            self._account.available = max(0.0, min(self._account.available, self._account.cash))
+            
+            # Update remaining reservation
+            order.tags["reserved_cash_remaining"] = max(reserved_rem - reserved_for_fill, 0.0)
             self._account.commission_paid += fill.commission
             
             # Update position
