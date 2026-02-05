@@ -99,6 +99,40 @@ class RiskManager:
         with self._lock:
             self._trades_today += 1
     
+    def _get_unified_account_view(self) -> Account:
+        """
+        Get unified account view that includes OMS reservations.
+        This prevents risk checks passing but OMS rejecting.
+        """
+        if self._account is None:
+            return Account()
+        
+        # Start with broker account
+        unified = Account(
+            cash=self._account.cash,
+            available=self._account.available,
+            positions=dict(self._account.positions),
+        )
+        
+        # Subtract pending buy reservations from available
+        try:
+            from trading.oms import get_oms
+            oms = get_oms()
+            
+            active_orders = oms.get_active_orders()
+            for order in active_orders:
+                if order.side == OrderSide.BUY and order.status in [OrderStatus.PENDING, OrderStatus.SUBMITTED, OrderStatus.ACCEPTED]:
+                    reserved = order.tags.get("reserved_cash_remaining", 0.0) if order.tags else 0.0
+                    unified.available -= reserved
+            
+            # Ensure non-negative
+            unified.available = max(0.0, unified.available)
+            
+        except Exception as e:
+            log.debug(f"Could not get OMS reservations: {e}")
+        
+        return unified
+
     def update(self, account: Account):
         """Update with current account state"""
         with self._lock:
@@ -415,6 +449,8 @@ class RiskManager:
         expected_shortfall_pct = np.mean(tail_returns)
         return abs(expected_shortfall_pct * self._account.equity)
     
+
+
     def check_order(
         self,
         symbol: str,
@@ -439,15 +475,16 @@ class RiskManager:
             (allowed, reason_if_rejected)
         """
         with self._lock:
-            # Basic validation
             if self._account is None:
                 return False, "Risk manager not initialized"
             
             if price <= 0:
-                return False, "Invalid price (must be positive)"
+                return False, "Invalid price"
             
             if quantity <= 0:
-                return False, "Invalid quantity (must be positive)"
+                return False, "Invalid quantity"
+
+            account = self._get_unified_account_view()
             
             # ==================== Kill Switch Check ====================
             try:

@@ -469,8 +469,8 @@ class SimulatorBroker(BrokerInterface):
         # Create Fill record with our order.id (not broker_id)
         self._fill_counter += 1
         fill = Fill(
-            id=f"FILL_SIM_{self._fill_counter:08d}",
-            order_id=order.id,  # CRITICAL: Use our order.id
+            id=f"FILL_SIM_{datetime.now().strftime('%Y%m%d%H%M%S')}_{self._fill_counter:06d}",
+            order_id=order.id,  # CRITICAL: Use internal order.id
             symbol=order.symbol,
             side=order.side,
             quantity=fill_qty,

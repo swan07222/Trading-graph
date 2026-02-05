@@ -7,34 +7,18 @@ from datetime import datetime, date
 from enum import Enum
 from typing import Dict, List, Optional, Any
 import uuid
+from core.types import OrderSide, OrderType, OrderStatus, Position, Account, Order, Fill
 
 
 # ============================================================
 # Enums
 # ============================================================
 
-class OrderSide(Enum):
-    BUY = "buy"
-    SELL = "sell"
-
-
 class OrderType(Enum):
     MARKET = "market"
     LIMIT = "limit"
     STOP = "stop"
     STOP_LIMIT = "stop_limit"
-
-
-class OrderStatus(Enum):
-    PENDING = "pending"
-    SUBMITTED = "submitted"
-    ACCEPTED = "accepted"
-    PARTIAL = "partial"
-    FILLED = "filled"
-    CANCELLED = "cancelled"
-    REJECTED = "rejected"
-    EXPIRED = "expired"
-
 
 class PositionSide(Enum):
     LONG = "long"

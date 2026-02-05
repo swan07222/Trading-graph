@@ -151,13 +151,23 @@ class AkShareSource(DataSource):
             log.warning("AkShare not available")
 
     def _get_cached_spot(self) -> pd.DataFrame:
-        """Get cached spot data"""
+        """Get cached spot data with proper TTL"""
         now = time.time()
-        if self._spot_cache is None or \
-           self._spot_cache_time is None or \
-           now - self._spot_cache_time > self._cache_ttl:
-            self._spot_cache = self._ak.stock_zh_a_spot_em()
-            self._spot_cache_time = now
+        # Only refresh if cache is older than TTL
+        if (self._spot_cache is None or 
+            self._spot_cache_time is None or 
+            now - self._spot_cache_time > self._cache_ttl):
+            
+            try:
+                self._spot_cache = self._ak.stock_zh_a_spot_em()
+                self._spot_cache_time = now
+                log.debug(f"Refreshed spot cache: {len(self._spot_cache)} stocks")
+            except Exception as e:
+                log.warning(f"Failed to refresh spot cache: {e}")
+                # Keep old cache if refresh fails
+                if self._spot_cache is None:
+                    self._spot_cache = pd.DataFrame()
+                    
         return self._spot_cache
 
     @retry(max_attempts=3, delay=2.0)

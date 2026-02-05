@@ -425,19 +425,25 @@ class Backtester:
         stock_code: str,
         capital: float
     ):
+        """
+        Simulate trading with proper portfolio accounting.
+        Returns daily portfolio returns (not per-bar).
+        """
         slippage_model = SlippageModel()
         trades = []
-
-        strategy_returns: Dict[datetime, float] = {}
-        benchmark_returns: Dict[datetime, float] = {}
-
-        position = 0
+        
+        # Track portfolio value
+        cash = capital
+        shares = 0
         entry_price = 0.0
-        holding_days = 0
-        entered_today = False  # T+1: cannot sell same/next day depending on your rule
-
+        entry_date = None
+        
+        # Daily returns for this stock's allocation
+        daily_portfolio_values = {}
+        daily_benchmark_values = {}
+        
         horizon = CONFIG.PREDICTION_HORIZON
-        limit = get_price_limit(stock_code) * 100.0  # pct
+        limit = get_price_limit(stock_code) * 100.0
 
         def is_limit_up(prev_close, close):
             return prev_close > 0 and (close / prev_close - 1) * 100 >= (limit - 0.01)
@@ -445,95 +451,115 @@ class Backtester:
         def is_limit_down(prev_close, close):
             return prev_close > 0 and (close / prev_close - 1) * 100 <= (-limit + 0.01)
 
+        # Initialize benchmark
+        benchmark_shares = capital / float(prices[0]) if prices[0] > 0 else 0
+
         for i in range(len(X) - 1):
             pred = model.predict(X[i:i+1])
             current_price = float(prices[i])
             next_price = float(prices[i + 1])
             dt = dates[i]
-
             prev_close = float(prices[i - 1]) if i > 0 else current_price
 
-            # benchmark: daily close-to-close
-            daily_return_pct = (next_price / current_price - 1) * 100.0
-            benchmark_returns[dt] = daily_return_pct
-
-            # default
-            entered_today = False
-
-            # dynamic slippage and costs
+            # Calculate costs
             order_value = capital * 0.1
             vol = float(volumes[i]) if i < len(volumes) else 1e6
             slip = slippage_model.calculate(order_value, vol, current_price)
+            
+            entry_cost_pct = CONFIG.COMMISSION + slip
+            exit_cost_pct = CONFIG.COMMISSION + slip + CONFIG.STAMP_TAX
 
-            entry_cost_pct = (CONFIG.COMMISSION + slip) * 100.0
-            exit_cost_pct = (CONFIG.COMMISSION + slip + CONFIG.STAMP_TAX) * 100.0
+            # Portfolio value at this point
+            portfolio_value = cash + shares * current_price
+            benchmark_value = benchmark_shares * current_price
+            
+            daily_portfolio_values[dt] = portfolio_value
+            daily_benchmark_values[dt] = benchmark_value
 
-            # === Entry decision at close i ===
-            if position == 0:
+            # Entry logic
+            if shares == 0:
                 if pred.predicted_class == 2 and pred.confidence >= CONFIG.MIN_CONFIDENCE:
-                    # A-share: can't buy on limit-up close (practically unfillable)
-                    if is_limit_up(prev_close, current_price):
-                        strategy_returns[dt] = 0.0
-                        continue
-
-                    position = 1
-                    holding_days = 0
-                    entry_price = current_price * (1 + slip)
-                    entered_today = True
-
-                    trades.append(BacktestTrade(
-                        entry_date=dt,
-                        exit_date=None,
-                        stock_code=stock_code,
-                        side="buy",
-                        entry_price=entry_price,
-                        signal_confidence=pred.confidence
-                    ))
-
-                    # If we enter at close i, our PnL for i->i+1 is from entry_price to next_close
-                    strategy_returns[dt] = (next_price / entry_price - 1) * 100.0 - entry_cost_pct
-                else:
-                    strategy_returns[dt] = 0.0
-
-            # === Holding ===
+                    if not is_limit_up(prev_close, current_price):
+                        # Buy
+                        buy_price = current_price * (1 + slip)
+                        cost = capital * 0.95  # Use 95% of remaining capital
+                        shares_to_buy = int(cost / buy_price / 100) * 100
+                        
+                        if shares_to_buy > 0:
+                            actual_cost = shares_to_buy * buy_price * (1 + CONFIG.COMMISSION)
+                            cash -= actual_cost
+                            shares = shares_to_buy
+                            entry_price = buy_price
+                            entry_date = dt
+                            
+                            trades.append(BacktestTrade(
+                                entry_date=dt,
+                                exit_date=None,
+                                stock_code=stock_code,
+                                side="buy",
+                                entry_price=entry_price,
+                                quantity=shares,
+                                signal_confidence=pred.confidence
+                            ))
             else:
-                holding_days += 1
-
-                # T+1 (simplified): do not allow sell on the same day as entry
-                can_sell = (holding_days >= 1)
-
-                # Decide whether to exit at close i (exit affects ONLY costs on day i, exposure ends for i->i+1)
+                # Holding - check exit conditions
+                holding_days = (dt - entry_date).days if entry_date else 0
+                
                 should_exit = False
                 if holding_days >= horizon:
                     should_exit = True
-                elif can_sell and pred.predicted_class == 0 and pred.confidence >= CONFIG.MIN_CONFIDENCE:
+                elif pred.predicted_class == 0 and pred.confidence >= CONFIG.MIN_CONFIDENCE:
                     should_exit = True
 
-                # A-share: can't sell on limit-down close (often unfillable)
-                if should_exit and is_limit_down(prev_close, current_price):
-                    should_exit = False
-
-                if should_exit:
-                    exit_price = current_price * (1 - slip)
-
-                    # finalize trade pnl
-                    gross_pnl_pct = (exit_price / entry_price - 1) * 100.0
-                    net_pnl_pct = gross_pnl_pct - (entry_cost_pct + exit_cost_pct)
-
-                    trades[-1].exit_date = dt
-                    trades[-1].exit_price = exit_price
-                    trades[-1].pnl_pct = net_pnl_pct
-                    trades[-1].holding_days = holding_days
-
-                    # daily return on exit day = cost drag only (we exit at close, so no exposure i->i+1)
-                    strategy_returns[dt] = -exit_cost_pct
-
-                    position = 0
+                if should_exit and not is_limit_down(prev_close, current_price):
+                    # Sell
+                    sell_price = current_price * (1 - slip)
+                    proceeds = shares * sell_price * (1 - CONFIG.COMMISSION - CONFIG.STAMP_TAX)
+                    
+                    # Calculate P&L
+                    gross_pnl = (sell_price - entry_price) * shares
+                    costs = shares * entry_price * CONFIG.COMMISSION + shares * sell_price * (CONFIG.COMMISSION + CONFIG.STAMP_TAX)
+                    net_pnl = gross_pnl - costs
+                    pnl_pct = (sell_price / entry_price - 1) * 100 - (entry_cost_pct + exit_cost_pct) * 100
+                    
+                    cash += proceeds
+                    
+                    if trades:
+                        trades[-1].exit_date = dt
+                        trades[-1].exit_price = sell_price
+                        trades[-1].pnl = net_pnl
+                        trades[-1].pnl_pct = pnl_pct
+                        trades[-1].holding_days = holding_days
+                    
+                    shares = 0
                     entry_price = 0.0
-                    holding_days = 0
+                    entry_date = None
+
+        # Convert to daily returns
+        sorted_dates = sorted(daily_portfolio_values.keys())
+        strategy_returns = {}
+        benchmark_returns = {}
+        
+        for i, dt in enumerate(sorted_dates):
+            if i == 0:
+                strategy_returns[dt] = 0.0
+                benchmark_returns[dt] = 0.0
+            else:
+                prev_dt = sorted_dates[i-1]
+                prev_val = daily_portfolio_values[prev_dt]
+                curr_val = daily_portfolio_values[dt]
+                
+                if prev_val > 0:
+                    strategy_returns[dt] = (curr_val / prev_val - 1) * 100
                 else:
-                    # still holding: i->i+1 close-to-close return
-                    strategy_returns[dt] = daily_return_pct
+                    strategy_returns[dt] = 0.0
+                
+                prev_bench = daily_benchmark_values[prev_dt]
+                curr_bench = daily_benchmark_values[dt]
+                if prev_bench > 0:
+                    benchmark_returns[dt] = (curr_bench / prev_bench - 1) * 100
+                else:
+                    benchmark_returns[dt] = 0.0
 
         return trades, strategy_returns, benchmark_returns
     

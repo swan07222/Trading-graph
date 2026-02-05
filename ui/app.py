@@ -1300,11 +1300,11 @@ class MainApp(QMainWindow):
             else:
                 self.log("Sell order failed", "error")
         
-    def _on_order_filled(self, order):
-        """Handl e order fill"""
+    def _on_order_filled(self, order: Order, fill: Fill):
+        """Handle order fill - now receives both order and fill"""
         self.log(
-            f"✅ Order Filled: {order.side.value.upper()} {order.filled_qty} "
-            f"{order.symbol} @ ¥{order.filled_price:.2f}",  # FIXED: was stock_code
+            f"✅ Order Filled: {order.side.value.upper()} {fill.quantity} "
+            f"{order.symbol} @ ¥{fill.price:.2f}",
             "success"
         )
         self._refresh_portfolio()

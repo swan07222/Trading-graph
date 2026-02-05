@@ -101,6 +101,7 @@ class OrderDatabase:
     
     def _init_db(self):
         with self._transaction() as conn:
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_orders_broker_id ON orders(broker_id)")
             # Orders table
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS orders (
@@ -277,10 +278,11 @@ class OrderDatabase:
         return order
     
     def save_fill(self, fill: Fill):
+        """Save fill with deduplication"""
         with self._transaction() as conn:
             conn.execute("""
-                INSERT INTO fills (id, order_id, symbol, side, quantity, price, 
-                                   commission, stamp_tax, timestamp)
+                INSERT OR IGNORE INTO fills 
+                (id, order_id, symbol, side, quantity, price, commission, stamp_tax, timestamp)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 fill.id, fill.order_id, fill.symbol, fill.side.value,
@@ -631,27 +633,66 @@ class OrderManagementSystem:
         self, 
         order_id: str, 
         new_status: OrderStatus,
-        message: str = ""
+        message: str = "",
+        broker_id: str = None,
+        filled_qty: int = None,
+        avg_price: float = None
     ) -> Optional[Order]:
-        """Update order status with state machine validation"""
+        """
+        Update order status with state machine validation.
+        IDEMPOTENT: same-status updates are allowed (just update metadata).
+        """
         with self._lock:
             order = self._db.load_order(order_id)
             if not order:
+                log.warning(f"Order not found for status update: {order_id}")
                 return None
             
-            # Validate transition
-            OrderStateMachine.validate_transition(order, new_status)
-            
             old_status = order.status
+            
+            # IDEMPOTENT: Allow same-status updates (just update metadata)
+            if new_status == old_status:
+                # Update metadata only
+                if broker_id:
+                    order.broker_id = broker_id
+                if message:
+                    order.message = message
+                if filled_qty is not None:
+                    order.filled_qty = filled_qty
+                if avg_price is not None:
+                    order.avg_price = avg_price
+                order.updated_at = datetime.now()
+                self._db.save_order(order)
+                return order
+            
+            # Validate transition for actual status changes
+            if not OrderStateMachine.can_transition(old_status, new_status):
+                log.warning(
+                    f"Invalid state transition for {order_id}: "
+                    f"{old_status.value} -> {new_status.value}"
+                )
+                # Don't raise - just log and return current state
+                return order
+            
+            # Apply status change
             order.status = new_status
-            order.message = message
+            order.message = message or order.message
             order.updated_at = datetime.now()
+            
+            if broker_id:
+                order.broker_id = broker_id
+            if filled_qty is not None:
+                order.filled_qty = filled_qty
+            if avg_price is not None:
+                order.avg_price = avg_price
             
             if new_status == OrderStatus.CANCELLED:
                 order.cancelled_at = datetime.now()
                 self._release_reserved(order)
             elif new_status == OrderStatus.REJECTED:
                 self._release_reserved(order)
+            elif new_status == OrderStatus.FILLED:
+                order.filled_at = datetime.now()
             
             # Persist
             self._db.save_order(order)
@@ -673,6 +714,16 @@ class OrderManagementSystem:
             
             return order
     
+    def get_order_by_broker_id(self, broker_id: str) -> Optional[Order]:
+        """Get order by broker's entrust number (for fill mapping after restart)"""
+        cursor = self._db._conn.execute(
+            "SELECT * FROM orders WHERE broker_id = ?", (broker_id,)
+        )
+        row = cursor.fetchone()
+        if row:
+            return self._db._row_to_order(row)
+        return None
+
     def _release_reserved(self, order: Order):
         """Release reserved funds/shares for cancelled/rejected order"""
         if order.side == OrderSide.BUY:
@@ -851,9 +902,6 @@ class OrderManagementSystem:
     
     def get_order(self, order_id: str) -> Optional[Order]:
         return self._db.load_order(order_id)
-    
-    def get_active_orders(self) -> List[Order]:
-        return self._db.load_active_orders()
     
     def get_orders(self, symbol: str = None) -> List[Order]:
         if symbol:

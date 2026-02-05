@@ -247,10 +247,18 @@ class Trainer:
         log.info("Evaluating on test set...")
         test_metrics = self._evaluate(X_test, y_test, r_test)
         
+        if len(X_val) > 0:
+            log.info("Calibrating model probabilities...")
+            self.ensemble.calibrate(X_val, y_val)
+
         # Save model
         if save_model:
             self.ensemble.save()
         
+        if len(X_val) > 0:
+            log.info("Calibrating model probabilities...")
+            self.ensemble.calibrate(X_val, y_val)
+
         # Calculate training time
         training_time = (datetime.now() - start_time).total_seconds() / 60
         

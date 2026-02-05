@@ -107,6 +107,44 @@ class EnsembleModel:
         if total > 0:
             self.weights = {k: v / total for k, v in self.weights.items()}
     
+    def calibrate(self, X_val: np.ndarray, y_val: np.ndarray):
+        """
+        Calibrate probabilities using temperature scaling.
+        Should be called after training with validation data.
+        """
+        import torch.nn.functional as F
+        
+        # Get logits from all models
+        X_tensor = torch.FloatTensor(X_val).to(self.device)
+        
+        all_logits = []
+        for name, model in self.models.items():
+            model.eval()
+            with torch.no_grad():
+                logits, _ = model(X_tensor)
+                all_logits.append(logits)
+        
+        # Average logits
+        avg_logits = torch.stack(all_logits).mean(dim=0)
+        
+        # Find optimal temperature
+        y_tensor = torch.LongTensor(y_val).to(self.device)
+        
+        best_temp = 1.0
+        best_nll = float('inf')
+        
+        for temp in [0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 2.5, 3.0]:
+            scaled = avg_logits / temp
+            probs = F.softmax(scaled, dim=-1)
+            nll = F.cross_entropy(scaled, y_tensor).item()
+            
+            if nll < best_nll:
+                best_nll = nll
+                best_temp = temp
+        
+        self.temperature = best_temp
+        log.info(f"Calibration complete: temperature={best_temp:.2f}")
+
     def train(
         self,
         X_train: np.ndarray,
@@ -322,36 +360,45 @@ class EnsembleModel:
         log.info(f"Updated weights: {self.weights}")
     
     def predict(self, X: np.ndarray) -> EnsemblePrediction:
-        """Get ensemble prediction with uncertainty quantification."""
+        """Get ensemble prediction with calibrated probabilities."""
         if X.ndim == 2:
             X = X[np.newaxis, :]
         
         with self._lock:
             X_tensor = torch.FloatTensor(X).to(self.device)
             
+            all_logits = []
             all_probs = {}
             
             for name, model in self.models.items():
                 model.eval()
                 with torch.no_grad():
                     logits, _ = model(X_tensor)
+                    all_logits.append(logits)
                     probs = F.softmax(logits, dim=-1).cpu().numpy()[0]
                     all_probs[name] = probs
             
-            # Weighted average
-            weighted_probs = np.zeros(CONFIG.NUM_CLASSES)
+            # Average logits and apply temperature scaling
+            avg_logits = torch.stack(all_logits).mean(dim=0)
+            temperature = getattr(self, 'temperature', 1.0)
+            scaled_logits = avg_logits / temperature
+            calibrated_probs = F.softmax(scaled_logits, dim=-1).cpu().numpy()[0]
             
+            # Weighted average (for individual model probs, still use weights)
+            weighted_probs = np.zeros(CONFIG.NUM_CLASSES)
             for name, probs in all_probs.items():
                 weight = self.weights.get(name, 1.0 / len(self.models))
                 weighted_probs += probs * weight
-            
             weighted_probs = weighted_probs / (weighted_probs.sum() + 1e-8)
             
-            predicted_class = int(np.argmax(weighted_probs))
-            confidence = float(np.max(weighted_probs))
+            # Use calibrated probabilities for final prediction
+            final_probs = calibrated_probs
+            
+            predicted_class = int(np.argmax(final_probs))
+            confidence = float(np.max(final_probs))
             
             # Entropy
-            entropy = -np.sum(weighted_probs * np.log(weighted_probs + 1e-8))
+            entropy = -np.sum(final_probs * np.log(final_probs + 1e-8))
             max_entropy = np.log(CONFIG.NUM_CLASSES)
             normalized_entropy = entropy / max_entropy
             
@@ -364,7 +411,7 @@ class EnsembleModel:
                 agreement = 0.0
             
             return EnsemblePrediction(
-                probabilities=weighted_probs,
+                probabilities=final_probs,
                 predicted_class=predicted_class,
                 confidence=confidence,
                 entropy=normalized_entropy,

@@ -24,34 +24,31 @@ from trading.kill_switch import get_kill_switch
 from trading.health import get_health_monitor, ComponentType, HealthStatus
 from trading.alerts import get_alert_manager, AlertPriority
 from utils.logger import get_logger
+from utils.metrics import inc_counter, set_gauge, observe
 
 log = get_logger(__name__)
 
 
 class ExecutionEngine:
     """
-    Production execution engine with full broker synchronization.
+    Production execution engine with correct broker synchronization.
     
-    CRITICAL for Live Trading Correctness:
-    - Fill sync loop polls broker.get_fills() and updates OMS
-    - Order status sync loop polls broker order statuses
-    - Proper order ID mapping (OMS ID != broker entrust number)
-    - Reconciliation between OMS and broker state
+    DESIGN PRINCIPLES:
+    1. Fills are ONLY processed from broker.get_fills() - never fabricated
+    2. OMS is the single source of truth for order state
+    3. Broker ID mapping is persisted through OMS for crash recovery
+    4. Status sync captures previous state before mutation
     """
 
     def __init__(self, mode: TradingMode = None):
         self.mode = mode or CONFIG.trading_mode
-
-        # Broker
         self.broker: BrokerInterface = create_broker(self.mode.value)
-
-        # Components
         self.risk_manager: Optional[RiskManager] = None
+        
         self._kill_switch = get_kill_switch()
         self._health_monitor = get_health_monitor()
         self._alert_manager = get_alert_manager()
 
-        # Queue / threads
         self._queue: queue.Queue[Optional[TradeSignal]] = queue.Queue()
         self._running = False
 
@@ -60,80 +57,52 @@ class ExecutionEngine:
         self._status_sync_thread: Optional[threading.Thread] = None
         self._recon_thread: Optional[threading.Thread] = None
 
-        # Track processed fills to avoid duplicates
         self._processed_fill_ids: Set[str] = set()
-
-        # Callbacks
-        self.on_fill: Optional[Callable[[Order], None]] = None
+        
+        self.on_fill: Optional[Callable[[Order, Fill], None]] = None
         self.on_reject: Optional[Callable[[Order, str], None]] = None
 
-        # Register kill switch callback
         self._kill_switch.on_activate(self._on_kill_switch)
 
-    # ---------------------------------------------------------------------
-    # Lifecycle
-    # ---------------------------------------------------------------------
     def start(self) -> bool:
         if self._running:
             return True
 
-        # Connect broker
         if not self.broker.connect():
             log.error("Broker connection failed")
             self._health_monitor.report_component_health(
-                ComponentType.BROKER,
-                HealthStatus.UNHEALTHY,
-                error="Connection failed",
+                ComponentType.BROKER, HealthStatus.UNHEALTHY, error="Connection failed"
             )
             return False
 
-        # Initialize OMS
         from trading.oms import get_oms
         oms = get_oms()
 
-        # Initialize risk manager with broker account
+        # Rebuild broker ID mappings from persisted orders (crash recovery)
+        self._rebuild_broker_mappings(oms)
+
         account = self.broker.get_account()
         self.risk_manager = get_risk_manager()
         self.risk_manager.initialize(account)
 
-        # Start monitors
         self._health_monitor.start()
         self._alert_manager.start()
 
-        # Start all threads
         self._running = True
 
-        self._exec_thread = threading.Thread(
-            target=self._execution_loop, 
-            name="exec_loop", 
-            daemon=True
-        )
+        self._exec_thread = threading.Thread(target=self._execution_loop, name="exec", daemon=True)
         self._exec_thread.start()
 
-        self._fill_sync_thread = threading.Thread(
-            target=self._fill_sync_loop, 
-            name="fill_sync_loop", 
-            daemon=True
-        )
+        self._fill_sync_thread = threading.Thread(target=self._fill_sync_loop, name="fill_sync", daemon=True)
         self._fill_sync_thread.start()
 
-        self._status_sync_thread = threading.Thread(
-            target=self._order_status_sync_loop, 
-            name="status_sync_loop", 
-            daemon=True
-        )
+        self._status_sync_thread = threading.Thread(target=self._status_sync_loop, name="status_sync", daemon=True)
         self._status_sync_thread.start()
 
-        self._recon_thread = threading.Thread(
-            target=self._reconciliation_loop, 
-            name="recon_loop", 
-            daemon=True
-        )
+        self._recon_thread = threading.Thread(target=self._reconciliation_loop, name="recon", daemon=True)
         self._recon_thread.start()
 
-        # Report healthy
         self._health_monitor.report_component_health(ComponentType.BROKER, HealthStatus.HEALTHY)
-
         log.info(f"Execution engine started ({self.mode.value})")
 
         self._alert_manager.system_alert(
@@ -141,8 +110,19 @@ class ExecutionEngine:
             f"Mode: {self.mode.value}, Equity: {account.equity:,.2f}",
             priority=AlertPriority.MEDIUM,
         )
-
         return True
+
+    def _rebuild_broker_mappings(self, oms):
+        """Rebuild broker ID mappings from persisted orders after restart"""
+        try:
+            active_orders = oms.get_active_orders()
+            for order in active_orders:
+                if order.broker_id:
+                    self.broker.register_order_mapping(order.id, order.broker_id)
+                    log.debug(f"Recovered mapping: {order.id} -> {order.broker_id}")
+            log.info(f"Recovered {len(active_orders)} order mappings from DB")
+        except Exception as e:
+            log.warning(f"Failed to rebuild broker mappings: {e}")
 
     def stop(self):
         if not self._running:
@@ -150,92 +130,58 @@ class ExecutionEngine:
 
         self._running = False
 
-        # Wake execution thread
         try:
             self._queue.put_nowait(None)
         except Exception:
             pass
 
-        # Join all threads
-        threads = [
-            self._exec_thread,
-            self._fill_sync_thread,
-            self._status_sync_thread,
-            self._recon_thread
-        ]
-        for t in threads:
+        for t in [self._exec_thread, self._fill_sync_thread, self._status_sync_thread, self._recon_thread]:
             if t and t.is_alive():
                 t.join(timeout=5)
 
-        # Disconnect broker
         try:
             self.broker.disconnect()
         except Exception as e:
             log.warning(f"Broker disconnect error: {e}")
 
-        # Stop components
         try:
             self._health_monitor.stop()
-        except Exception:
-            pass
-
-        try:
             self._alert_manager.stop()
         except Exception:
             pass
 
         log.info("Execution engine stopped")
 
-    # ---------------------------------------------------------------------
-    # Public API
-    # ---------------------------------------------------------------------
     def submit(self, signal: TradeSignal) -> bool:
         """Submit a trading signal for execution"""
         if not self._running:
             log.warning("Execution engine not running")
             return False
 
-        # Kill switch check
         if not self._kill_switch.can_trade:
-            msg = "Trading halted - kill switch/circuit breaker active"
-            log.warning(msg)
-            self._reject_callback(signal, msg)
+            self._reject_signal(signal, "Trading halted - kill switch active")
             return False
 
         if not self.risk_manager:
-            msg = "Risk manager not initialized"
-            self._reject_callback(signal, msg)
+            self._reject_signal(signal, "Risk manager not initialized")
             return False
 
-        # Get price for validation
         price = float(signal.price or 0.0)
         if price <= 0:
             quote_price = self.broker.get_quote(signal.symbol)
-            if quote_price is not None:
-                price = float(quote_price)
-            else:
-                price = 0.0
+            price = float(quote_price) if quote_price else 0.0
 
         if price <= 0:
-            msg = f"Cannot get price for {signal.symbol}"
-            self._reject_callback(signal, msg)
+            self._reject_signal(signal, f"Cannot get price for {signal.symbol}")
             return False
 
-        # Risk check
-        passed, msg = self.risk_manager.check_order(
-            signal.symbol, signal.side, signal.quantity, price
-        )
+        passed, msg = self.risk_manager.check_order(signal.symbol, signal.side, signal.quantity, price)
         if not passed:
             log.warning(f"Risk check failed: {msg}")
-            self._alert_manager.risk_alert(
-                "Order Rejected (Risk)",
-                f"{signal.symbol}: {msg}",
-                {'symbol': signal.symbol, 'reason': msg},
-            )
-            self._reject_callback(signal, msg)
+            self._alert_manager.risk_alert("Order Rejected (Risk)", f"{signal.symbol}: {msg}")
+            self._reject_signal(signal, msg)
             return False
 
-        # Queue for execution
         self._queue.put(signal)
         log.info(f"Signal queued: {signal.side.value} {signal.quantity} {signal.symbol}")
         return True
@@ -244,9 +190,7 @@ class ExecutionEngine:
         """Submit order from AI prediction"""
         from models.predictor import Signal as UiSignal
 
-        if pred.signal == UiSignal.HOLD:
-            return False
-        if pred.position.shares == 0:
+        if pred.signal == UiSignal.HOLD or pred.position.shares == 0:
             return False
 
         side = OrderSide.BUY if pred.signal in (UiSignal.STRONG_BUY, UiSignal.BUY) else OrderSide.SELL
@@ -264,41 +208,30 @@ class ExecutionEngine:
         )
         return self.submit(signal)
 
-    # ---------------------------------------------------------------------
-    # Execution Loop
-    # ---------------------------------------------------------------------
     def _execution_loop(self):
-        """Main execution loop - processes signals from queue"""
+        """Main execution loop"""
         while self._running:
             try:
                 signal = self._queue.get(timeout=0.2)
                 if signal is None:
                     break
-
                 self._execute(signal)
-
             except queue.Empty:
                 pass
             except Exception as e:
                 log.error(f"Execution loop error: {e}")
-                self._alert_manager.system_alert(
-                    "Execution Loop Error",
-                    str(e),
-                    priority=AlertPriority.HIGH,
-                )
+                self._alert_manager.system_alert("Execution Loop Error", str(e), AlertPriority.HIGH)
 
-            # Periodic risk update
             if self.risk_manager and self.broker.is_connected:
-                try:
-                    account = self.broker.get_account()
-                    self.risk_manager.update(account)
-                except Exception:
-                    pass
+                account = self.broker.get_account()
+                set_gauge("account_equity", account.equity)
+                set_gauge("account_cash", account.cash)
+                set_gauge("positions_count", len(account.positions))
 
             time.sleep(0.05)
 
     def _execute(self, signal: TradeSignal):
-        """Execute a single signal"""
+        """Execute a single signal - NEVER fabricate fills"""
         from trading.oms import get_oms
         oms = get_oms()
 
@@ -309,7 +242,6 @@ class ExecutionEngine:
                 log.warning("Trading halted during execution")
                 return
 
-            # Build Order object
             order = Order(
                 symbol=signal.symbol,
                 name=signal.name,
@@ -321,253 +253,192 @@ class ExecutionEngine:
                 signal_id=signal.id,
             )
 
-            # Submit to OMS first (reserves cash/shares)
+            # OMS validates and reserves resources, sets status to SUBMITTED
             order = oms.submit_order(order)
 
             # Submit to broker
             result = self.broker.submit_order(order)
 
-            # Handle broker response
+            inc_counter("orders_submitted_total", labels={"side": order.side.value, "symbol": order.symbol})
+
+            # Persist broker_id and update status through OMS
+            oms.update_order_status(
+                order.id,
+                result.status,
+                message=result.message or "",
+                broker_id=result.broker_id or ""
+            )
+
             if result.status == OrderStatus.REJECTED:
-                # Release OMS reservations
-                oms.update_order_status(order.id, OrderStatus.REJECTED, message=result.message or "Rejected")
-                
                 self._alert_manager.risk_alert(
                     "Order Rejected (Broker)",
-                    f"{order.symbol}: {result.message}",
-                    {'order_id': order.id, 'symbol': order.symbol, 'reason': result.message},
+                    f"{order.symbol}: {result.message}"
                 )
-                
                 if self.on_reject:
                     self.on_reject(order, result.message or "Rejected")
                 return
 
-            if result.status in (OrderStatus.SUBMITTED, OrderStatus.ACCEPTED):
-                # Update OMS status
-                oms.update_order_status(order.id, result.status, message=result.message or "")
-                log.info(f"Order sent to broker: {order.id} -> broker_id={result.broker_id}")
-                return
-
+            # For simulator: immediately pull and process fills
+            # This ensures single fill processing path
             if result.status == OrderStatus.FILLED:
-                # Immediate fill (simulator)
-                fill = Fill(
-                    order_id=order.id,  # Our order ID
-                    symbol=order.symbol,
-                    side=order.side,
-                    quantity=int(result.filled_qty or order.quantity),
-                    price=float(result.filled_price or order.price),
-                    commission=float(result.commission or 0.0),
-                    stamp_tax=0.0,
-                )
-                
-                oms.process_fill(order, fill)
-                
-                log.info(f"Filled: {order.side.value.upper()} {fill.quantity} {order.symbol} @ {fill.price:.2f}")
+                self._process_pending_fills()
 
-                if self.on_fill:
-                    self.on_fill(order)
-
-                self._alert_manager.trading_alert(
-                    "Order Filled",
-                    f"{order.side.value.upper()} {fill.quantity} {order.symbol} @ {fill.price:.2f}",
-                    {'order_id': order.id, 'symbol': order.symbol, 'price': fill.price, 'qty': fill.quantity},
-                )
-                return
-
-            log.warning(f"Unknown broker order status: {result.status}")
+            log.info(f"Order sent: {order.id} -> broker_id={result.broker_id}, status={result.status.value}")
 
         except Exception as e:
             log.error(f"Execution error: {e}")
-            if order is not None:
+            if order:
                 try:
                     oms.update_order_status(order.id, OrderStatus.REJECTED, message=str(e))
                 except Exception:
                     pass
+            self._alert_manager.system_alert("Execution Failed", f"{signal.symbol}: {e}", AlertPriority.HIGH)
 
-            self._alert_manager.system_alert(
-                "Execution Failed",
-                f"{signal.symbol}: {str(e)}",
-                priority=AlertPriority.HIGH,
-            )
-
-    # ---------------------------------------------------------------------
-    # Fill Sync Loop - CRITICAL for Live Trading
-    # ---------------------------------------------------------------------
-    def _fill_sync_loop(self):
-        """
-        Poll broker for fills and update OMS.
-        
-        CRITICAL: This is what makes live trading work correctly.
-        The broker's get_fills() returns Fill objects with our order_id
-        (mapped from broker's entrust number), which we then process
-        through OMS.
-        """
+    def _process_pending_fills(self):
+        """Process any pending fills from broker - single processing path"""
         from trading.oms import get_oms
         oms = get_oms()
 
-        while self._running:
-            try:
-                time.sleep(2.0)  # Poll every 2 seconds
+        try:
+            fills = self.broker.get_fills()
+            for fill in fills:
+                fill_id = fill.id or ""
+                if fill_id and fill_id in self._processed_fill_ids:
+                    continue
+                if fill_id:
+                    self._processed_fill_ids.add(fill_id)
 
-                if not self.broker.is_connected:
+                order = oms.get_order(fill.order_id)
+                if not order:
+                    # Try recovery by broker_id
+                    order = oms.get_order_by_broker_id(fill.order_id)
+                    if order:
+                        fill.order_id = order.id
+
+                if not order:
+                    log.warning(f"Fill for unknown order: {fill.order_id}")
                     continue
 
-                # Get new fills from broker
-                fills = self.broker.get_fills()
+                oms.process_fill(order, fill)
+                log.info(f"Fill processed: {fill.id} for order {order.id}")
 
-                for fill in fills:
-                    # Skip already processed
-                    fill_id = getattr(fill, 'id', '') or ''
-                    if fill_id and fill_id in self._processed_fill_ids:
-                        continue
-                    
-                    if fill_id:
-                        self._processed_fill_ids.add(fill_id)
+                if self.on_fill:
+                    try:
+                        self.on_fill(order, fill)
+                    except Exception as e:
+                        log.warning(f"Fill callback error: {e}")
 
-                    # Get order from OMS
-                    order = oms.get_order(fill.order_id)
-                    if not order:
-                        log.warning(f"Fill for unknown order: {fill.order_id}")
-                        continue
+                inc_counter("fills_processed_total", labels={"side": fill.side.value})
+                observe("fill_latency_seconds", (datetime.now() - fill.timestamp).total_seconds() if fill.timestamp else 0)
 
-                    # Process fill through OMS
-                    oms.process_fill(order, fill)
-                    
-                    log.info(f"Fill synced: {fill.id} for order {fill.order_id}")
+        except Exception as e:
+            log.error(f"Fill processing error: {e}")
 
-                    # Callback
-                    if self.on_fill:
-                        try:
-                            self.on_fill(order)
-                        except Exception as e:
-                            log.warning(f"Fill callback error: {e}")
-
+    def _fill_sync_loop(self):
+        """Poll broker for fills"""
+        while self._running:
+            try:
+                time.sleep(1.0)
+                if not self.broker.is_connected:
+                    continue
+                self._process_pending_fills()
             except Exception as e:
                 log.error(f"Fill sync loop error: {e}")
 
-    # ---------------------------------------------------------------------
-    # Order Status Sync Loop
-    # ---------------------------------------------------------------------
-    def _order_status_sync_loop(self):
-        """
-        Poll broker for order status updates.
-        
-        For orders that haven't been filled yet, check if their
-        status has changed (partial fill, cancelled, etc.)
-        """
+    def _status_sync_loop(self):
+        """Poll broker for order status updates"""
         from trading.oms import get_oms
         oms = get_oms()
 
         while self._running:
             try:
-                time.sleep(5.0)  # Poll every 5 seconds
-
+                time.sleep(3.0)
                 if not self.broker.is_connected:
                     continue
 
-                # Get active orders from OMS
                 active_orders = oms.get_active_orders()
-
                 for order in active_orders:
-                    # Sync with broker
-                    synced = self.broker.sync_order(order)
-                    
-                    if synced.status != order.status:
-                        # Status changed - update OMS
+                    # Capture state BEFORE sync
+                    prev_status = order.status
+                    prev_filled = order.filled_qty
+                    prev_avg = order.avg_price
+
+                    # Sync mutates order in place
+                    self.broker.sync_order(order)
+
+                    # Check for changes
+                    if (order.status != prev_status or 
+                        order.filled_qty != prev_filled or 
+                        order.avg_price != prev_avg):
+                        
                         oms.update_order_status(
-                            order.id, 
-                            synced.status, 
-                            message=synced.message
+                            order.id,
+                            order.status,
+                            message=order.message or "",
+                            filled_qty=order.filled_qty,
+                            avg_price=order.avg_price
                         )
-                        log.info(f"Order status synced: {order.id} -> {synced.status.value}")
+                        log.info(f"Order synced: {order.id} {prev_status.value}->{order.status.value}")
 
             except Exception as e:
-                log.error(f"Order status sync error: {e}")
+                log.error(f"Status sync error: {e}")
 
-    # ---------------------------------------------------------------------
-    # Reconciliation Loop
-    # ---------------------------------------------------------------------
     def _reconciliation_loop(self):
-        """Periodic reconciliation between OMS and broker"""
+        """Periodic reconciliation"""
         from trading.oms import get_oms
         oms = get_oms()
 
         while self._running:
             try:
-                time.sleep(300)  # Every 5 minutes
-
+                time.sleep(300)
                 if not self.broker.is_connected:
                     continue
 
                 broker_account = self.broker.get_account()
                 broker_positions = self.broker.get_positions()
-
                 discrepancies = oms.reconcile(broker_positions, broker_account.cash)
 
-                if (
-                    abs(discrepancies.get('cash_diff', 0.0)) > 1.0
-                    or discrepancies.get('position_diffs')
-                    or discrepancies.get('missing_positions')
-                    or discrepancies.get('extra_positions')
-                ):
+                if (abs(discrepancies.get('cash_diff', 0.0)) > 1.0 or
+                    discrepancies.get('position_diffs') or
+                    discrepancies.get('missing_positions') or
+                    discrepancies.get('extra_positions')):
                     self._alert_manager.risk_alert(
                         "Reconciliation Discrepancy",
                         f"Cash diff: {discrepancies.get('cash_diff', 0):.2f}",
-                        discrepancies,
+                        discrepancies
                     )
-
             except Exception as e:
                 log.error(f"Reconciliation error: {e}")
 
-    # ---------------------------------------------------------------------
-    # Kill Switch Handler
-    # ---------------------------------------------------------------------
     def _on_kill_switch(self, reason: str):
         """Handle kill switch activation"""
         log.critical(f"Kill switch activated: {reason}")
 
-        # Cancel active orders
         try:
             for order in self.broker.get_orders(active_only=True):
                 try:
                     self.broker.cancel_order(order.id)
-                    log.info(f"Cancelled order: {order.id}")
                 except Exception:
                     pass
         except Exception as e:
             log.error(f"Failed to cancel orders: {e}")
 
-        # Drain queue
         try:
             while not self._queue.empty():
                 self._queue.get_nowait()
         except Exception:
             pass
 
-        self._alert_manager.critical_alert(
-            "KILL SWITCH ACTIVATED",
-            f"All trading halted: {reason}",
-            {'reason': reason},
-        )
+        self._alert_manager.critical_alert("KILL SWITCH ACTIVATED", f"All trading halted: {reason}")
 
-    # ---------------------------------------------------------------------
-    # Helpers
-    # ---------------------------------------------------------------------
-    def _reject_callback(self, signal: TradeSignal, reason: str):
-        if not self.on_reject:
-            return
-        try:
-            order = Order(
-                symbol=signal.symbol, 
-                side=signal.side, 
-                quantity=signal.quantity, 
-                price=signal.price
-            )
+    def _reject_signal(self, signal: TradeSignal, reason: str):
+        """Handle signal rejection"""
+        log.warning(f"Signal rejected: {signal.symbol} - {reason}")
+        if self.on_reject:
+            order = Order(symbol=signal.symbol, side=signal.side, quantity=signal.quantity, price=signal.price)
             order.status = OrderStatus.REJECTED
             order.message = reason
             self.on_reject(order, reason)
-        except Exception:
-            pass
 
     def get_account(self) -> Account:
         return self.broker.get_account()
@@ -577,8 +448,3 @@ class ExecutionEngine:
 
     def get_orders(self):
         return self.broker.get_orders()
-
-    def reconcile(self) -> Dict:
-        if hasattr(self.broker, "reconcile"):
-            return self.broker.reconcile()
-        return {}
