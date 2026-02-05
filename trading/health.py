@@ -281,19 +281,27 @@ class HealthMonitor:
         comp.last_check = datetime.now()
     
     def _check_model(self):
-        """Check ML model health"""
+        """Check ML model health - lightweight check"""
         comp = self._components[ComponentType.MODEL]
         
         try:
-            from models.predictor import Predictor
-            predictor = Predictor()
+            # Lightweight check: just verify model file exists
+            from config import CONFIG
+            model_path = CONFIG.MODEL_DIR / "ensemble.pt"
+            scaler_path = CONFIG.MODEL_DIR / "scaler.pkl"
             
-            if predictor.is_ready():
+            if model_path.exists() and scaler_path.exists():
                 comp.status = HealthStatus.HEALTHY
                 comp.last_success = datetime.now()
+                comp.last_error = ""
             else:
                 comp.status = HealthStatus.DEGRADED
-                comp.last_error = "Model not loaded"
+                missing = []
+                if not model_path.exists():
+                    missing.append("model")
+                if not scaler_path.exists():
+                    missing.append("scaler")
+                comp.last_error = f"Missing: {', '.join(missing)}"
                 
         except Exception as e:
             comp.status = HealthStatus.UNHEALTHY

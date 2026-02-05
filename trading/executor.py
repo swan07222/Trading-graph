@@ -308,12 +308,17 @@ class ExecutionEngine:
                 if fill_id:
                     self._processed_fill_ids.add(fill_id)
 
+                # Primary lookup by our order_id
                 order = oms.get_order(fill.order_id)
-                if not order:
-                    # Try recovery by broker_id
-                    order = oms.get_order_by_broker_id(fill.order_id)
-                    if order:
-                        fill.order_id = order.id
+                
+                # FIXED: Only try broker_id lookup if primary fails AND fill has broker-style ID
+                if not order and fill.order_id:
+                    # Check if this looks like a broker ID (not our format)
+                    if not fill.order_id.startswith("ORD_"):
+                        order = oms.get_order_by_broker_id(fill.order_id)
+                        if order:
+                            log.info(f"Recovered order {order.id} from broker_id {fill.order_id}")
+                            fill.order_id = order.id
 
                 if not order:
                     log.warning(f"Fill for unknown order: {fill.order_id}")

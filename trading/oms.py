@@ -45,9 +45,9 @@ class OrderStateMachine:
     
     VALID_TRANSITIONS = {
         OrderStatus.PENDING: [OrderStatus.SUBMITTED, OrderStatus.REJECTED, OrderStatus.CANCELLED],
-        OrderStatus.SUBMITTED: [OrderStatus.ACCEPTED, OrderStatus.REJECTED, OrderStatus.CANCELLED],
+        OrderStatus.SUBMITTED: [OrderStatus.ACCEPTED, OrderStatus.PARTIAL, OrderStatus.FILLED, OrderStatus.REJECTED, OrderStatus.CANCELLED],
         OrderStatus.ACCEPTED: [OrderStatus.PARTIAL, OrderStatus.FILLED, OrderStatus.CANCELLED, OrderStatus.EXPIRED],
-        OrderStatus.PARTIAL: [OrderStatus.FILLED, OrderStatus.CANCELLED],
+        OrderStatus.PARTIAL: [OrderStatus.PARTIAL, OrderStatus.FILLED, OrderStatus.CANCELLED],
         OrderStatus.FILLED: [],  # Terminal
         OrderStatus.CANCELLED: [],  # Terminal
         OrderStatus.REJECTED: [],  # Terminal
@@ -101,8 +101,7 @@ class OrderDatabase:
     
     def _init_db(self):
         with self._transaction() as conn:
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_orders_broker_id ON orders(broker_id)")
-            # Orders table
+            # Orders table FIRST
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS orders (
                     id TEXT PRIMARY KEY,
@@ -148,7 +147,7 @@ class OrderDatabase:
                 )
             """)
             
-            # Positions table (snapshot)
+            # Positions table
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS positions (
                     symbol TEXT PRIMARY KEY,
@@ -183,18 +182,20 @@ class OrderDatabase:
                 )
             """)
             
-            # T+1 tracking
+            # T+1 tracking - FIXED: composite primary key for multiple buys
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS t1_pending (
-                    symbol TEXT PRIMARY KEY,
+                    symbol TEXT,
+                    purchase_date TEXT,
                     quantity INTEGER DEFAULT 0,
-                    purchase_date TEXT
+                    PRIMARY KEY (symbol, purchase_date)
                 )
             """)
             
-            # Indices
+            # Indices AFTER tables exist
             conn.execute("CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_orders_symbol ON orders(symbol)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_orders_broker_id ON orders(broker_id)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_fills_order ON fills(order_id)")
     
     def save_order(self, order: Order):
@@ -397,25 +398,40 @@ class OrderDatabase:
         return account
     
     def save_t1_pending(self, symbol: str, quantity: int, purchase_date: date):
+        """Save T+1 pending - accumulates if same symbol+date"""
         with self._transaction() as conn:
+            # Try to update existing row first
             conn.execute("""
-                INSERT OR REPLACE INTO t1_pending (symbol, quantity, purchase_date)
+                INSERT INTO t1_pending (symbol, purchase_date, quantity)
                 VALUES (?, ?, ?)
-            """, (symbol, quantity, purchase_date.isoformat()))
+                ON CONFLICT(symbol, purchase_date) DO UPDATE SET
+                    quantity = quantity + excluded.quantity
+            """, (symbol, purchase_date.isoformat(), quantity))
     
-    def get_t1_pending(self) -> Dict[str, Tuple[int, date]]:
-        cursor = self._conn.execute("SELECT * FROM t1_pending")
-        result = {}
+    def get_t1_pending(self) -> Dict[str, List[Tuple[int, date]]]:
+        """Get T+1 pending grouped by symbol"""
+        cursor = self._conn.execute("SELECT symbol, purchase_date, quantity FROM t1_pending")
+        result: Dict[str, List[Tuple[int, date]]] = {}
         for row in cursor.fetchall():
-            result[row['symbol']] = (
+            symbol = row['symbol']
+            if symbol not in result:
+                result[symbol] = []
+            result[symbol].append((
                 row['quantity'],
                 date.fromisoformat(row['purchase_date'])
-            )
+            ))
         return result
     
-    def clear_t1_pending(self, symbol: str):
+    def clear_t1_pending(self, symbol: str, purchase_date: date = None):
+        """Clear T+1 pending for symbol (optionally specific date)"""
         with self._transaction() as conn:
-            conn.execute("DELETE FROM t1_pending WHERE symbol = ?", (symbol,))
+            if purchase_date:
+                conn.execute(
+                    "DELETE FROM t1_pending WHERE symbol = ? AND purchase_date = ?",
+                    (symbol, purchase_date.isoformat())
+                )
+            else:
+                conn.execute("DELETE FROM t1_pending WHERE symbol = ?", (symbol,))
     
     def process_t1_settlement(self) -> List[str]:
         """Process T+1 settlement, return list of symbols made available"""
@@ -423,14 +439,15 @@ class OrderDatabase:
         settled = []
         
         with self._transaction() as conn:
+            # Get all pending from before today
             cursor = conn.execute(
-                "SELECT symbol, quantity FROM t1_pending WHERE purchase_date < ?",
+                "SELECT symbol, SUM(quantity) as total_qty FROM t1_pending WHERE purchase_date < ? GROUP BY symbol",
                 (today.isoformat(),)
             )
             
             for row in cursor.fetchall():
                 symbol = row['symbol']
-                quantity = row['quantity']
+                quantity = row['total_qty']
                 
                 # Update available quantity
                 conn.execute("""
@@ -439,13 +456,13 @@ class OrderDatabase:
                     WHERE symbol = ?
                 """, (quantity, symbol))
                 
-                # Remove from pending
-                conn.execute(
-                    "DELETE FROM t1_pending WHERE symbol = ?",
-                    (symbol,)
-                )
-                
                 settled.append(symbol)
+            
+            # Remove all settled entries
+            conn.execute(
+                "DELETE FROM t1_pending WHERE purchase_date < ?",
+                (today.isoformat(),)
+            )
         
         return settled
 
@@ -740,10 +757,9 @@ class OrderManagementSystem:
                 position.frozen_qty -= remaining_qty
     
     def process_fill(self, order: Order, fill: Fill):
-        """Process order fill"""
+        """Process order fill - FIXED: persist order after tag updates"""
         with self._lock:
             # Update order
-            old_status = order.status
             order.filled_qty += fill.quantity
             order.commission += fill.commission
             
@@ -762,14 +778,14 @@ class OrderManagementSystem:
             
             order.updated_at = datetime.now()
             
-            # Persist order
-            self._db.save_order(order)
-            
-            # Persist fill
+            # Persist fill FIRST
             self._db.save_fill(fill)
             
-            # Update account and positions
+            # Update account and positions (this modifies order.tags)
             self._update_account_on_fill(order, fill)
+            
+            # Persist order AFTER tag updates
+            self._db.save_order(order)
             
             # Persist account state
             self._db.save_account_state(self._account)

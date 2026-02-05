@@ -360,7 +360,7 @@ class EnsembleModel:
         log.info(f"Updated weights: {self.weights}")
     
     def predict(self, X: np.ndarray) -> EnsemblePrediction:
-        """Get ensemble prediction with calibrated probabilities."""
+        """Get ensemble prediction with weighted logits and calibrated probabilities."""
         if X.ndim == 2:
             X = X[np.newaxis, :]
         
@@ -374,22 +374,20 @@ class EnsembleModel:
                 model.eval()
                 with torch.no_grad():
                     logits, _ = model(X_tensor)
-                    all_logits.append(logits)
+                    all_logits.append((name, logits))
                     probs = F.softmax(logits, dim=-1).cpu().numpy()[0]
                     all_probs[name] = probs
             
-            # Average logits and apply temperature scaling
-            avg_logits = torch.stack(all_logits).mean(dim=0)
-            temperature = getattr(self, 'temperature', 1.0)
-            scaled_logits = avg_logits / temperature
-            calibrated_probs = F.softmax(scaled_logits, dim=-1).cpu().numpy()[0]
-            
-            # Weighted average (for individual model probs, still use weights)
-            weighted_probs = np.zeros(CONFIG.NUM_CLASSES)
-            for name, probs in all_probs.items():
+            # FIXED: Weighted average of logits (not just mean)
+            weighted_logits = torch.zeros_like(all_logits[0][1])
+            for name, logits in all_logits:
                 weight = self.weights.get(name, 1.0 / len(self.models))
-                weighted_probs += probs * weight
-            weighted_probs = weighted_probs / (weighted_probs.sum() + 1e-8)
+                weighted_logits += logits * weight
+            
+            # Apply temperature scaling
+            temperature = getattr(self, 'temperature', 1.0)
+            scaled_logits = weighted_logits / temperature
+            calibrated_probs = F.softmax(scaled_logits, dim=-1).cpu().numpy()[0]
             
             # Use calibrated probabilities for final prediction
             final_probs = calibrated_probs
@@ -485,7 +483,7 @@ class EnsembleModel:
             return predictions
     
     def save(self, path: str = None):
-        """Save ensemble to file"""
+        """Save ensemble to file including temperature"""
         path = path or str(CONFIG.MODEL_DIR / "ensemble.pt")
         
         with self._lock:
@@ -494,6 +492,7 @@ class EnsembleModel:
                 'model_names': list(self.models.keys()),
                 'models': {name: model.state_dict() for name, model in self.models.items()},
                 'weights': self.weights,
+                'temperature': getattr(self, 'temperature', 1.0),  # ADDED
             }
             
             torch.save(state, path)
@@ -503,7 +502,7 @@ class EnsembleModel:
     # models/ensemble.py - FIXED load() method ending
 
     def load(self, path: str = None) -> bool:
-        """Load ensemble from file"""
+        """Load ensemble from file including temperature"""
         path = path or str(CONFIG.MODEL_DIR / "ensemble.pt")
         
         if not Path(path).exists():
@@ -532,8 +531,11 @@ class EnsembleModel:
                     self.weights[name] = saved_weights.get(name, 1.0)
                 
                 self._normalize_weights()
+                
+                # ADDED: restore temperature
+                self.temperature = state.get('temperature', 1.0)
             
-            log.info(f"Ensemble loaded: {list(self.models.keys())}")
+            log.info(f"Ensemble loaded: {list(self.models.keys())}, temp={self.temperature:.2f}")
             return True
             
         except Exception as e:

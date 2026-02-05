@@ -246,12 +246,13 @@ class Trainer:
         # Evaluate on test set
         log.info("Evaluating on test set...")
         test_metrics = self._evaluate(X_test, y_test, r_test)
-        
+
+        # Calibrate ONCE before saving
         if len(X_val) > 0:
             log.info("Calibrating model probabilities...")
             self.ensemble.calibrate(X_val, y_val)
 
-        # Save model
+        # Save model (now includes calibrated temperature)
         if save_model:
             self.ensemble.save()
         

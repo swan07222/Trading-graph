@@ -16,12 +16,11 @@ import threading
 import numpy as np
 from datetime import datetime, date, timedelta
 from typing import Dict, List, Tuple, Optional
-from dataclasses import dataclass
 
 from config import CONFIG
 from core.types import (
     Account, Position, RiskMetrics, RiskLevel,
-    OrderSide, Order
+    OrderSide, OrderStatus, Order  # ADDED OrderStatus
 )
 from core.events import EVENT_BUS, EventType, Event, RiskEvent
 from utils.logger import get_logger
@@ -107,11 +106,15 @@ class RiskManager:
         if self._account is None:
             return Account()
         
-        # Start with broker account
+        # Start with current account state
         unified = Account(
+            broker_name=self._account.broker_name,
             cash=self._account.cash,
             available=self._account.available,
+            frozen=self._account.frozen,
             positions=dict(self._account.positions),
+            initial_capital=self._account.initial_capital,
+            realized_pnl=self._account.realized_pnl,
         )
         
         # Subtract pending buy reservations from available
@@ -121,8 +124,12 @@ class RiskManager:
             
             active_orders = oms.get_active_orders()
             for order in active_orders:
-                if order.side == OrderSide.BUY and order.status in [OrderStatus.PENDING, OrderStatus.SUBMITTED, OrderStatus.ACCEPTED]:
-                    reserved = order.tags.get("reserved_cash_remaining", 0.0) if order.tags else 0.0
+                if order.side == OrderSide.BUY and order.status in [
+                    OrderStatus.PENDING, OrderStatus.SUBMITTED, OrderStatus.ACCEPTED, OrderStatus.PARTIAL
+                ]:
+                    reserved = 0.0
+                    if order.tags:
+                        reserved = float(order.tags.get("reserved_cash_remaining", 0.0))
                     unified.available -= reserved
             
             # Ensure non-negative
@@ -458,22 +465,7 @@ class RiskManager:
         quantity: int,
         price: float
     ) -> Tuple[bool, str]:
-        """
-        Comprehensive order validation
-        
-        Checks:
-        - Kill switch / circuit breaker
-        - Daily loss limits
-        - Rate limits
-        - Error rate
-        - Quote staleness
-        - Position limits
-        - Concentration limits
-        - Funds availability
-        
-        Returns:
-            (allowed, reason_if_rejected)
-        """
+        """Comprehensive order validation"""
         with self._lock:
             if self._account is None:
                 return False, "Risk manager not initialized"
@@ -484,9 +476,10 @@ class RiskManager:
             if quantity <= 0:
                 return False, "Invalid quantity"
 
+            # GET UNIFIED ACCOUNT VIEW
             account = self._get_unified_account_view()
             
-            # ==================== Kill Switch Check ====================
+            # Kill switch check
             try:
                 from trading.kill_switch import get_kill_switch
                 kill_switch = get_kill_switch()
@@ -497,28 +490,28 @@ class RiskManager:
             except ImportError:
                 pass
             
-            # ==================== Daily Loss Limit Check ====================
+            # Daily loss limit check
             metrics = self.get_metrics()
             
             if not metrics.can_trade:
                 return False, f"Trading disabled - daily loss: {metrics.daily_pnl_pct:.1f}%"
             
-            # ==================== Rate Limit Check ====================
+            # Rate limit check
             if not self._check_rate_limit():
                 return False, "Order rate limit exceeded - please wait"
             
-            # ==================== Error Rate Check ====================
+            # Error rate check
             if not self._check_error_rate():
                 return False, "High error rate detected - trading paused for safety"
             
-            # ==================== Quote Staleness Check ====================
+            # Quote staleness check
             staleness_ok, staleness_msg = self._check_quote_staleness(symbol)
             if not staleness_ok:
                 return False, staleness_msg
             
-            # ==================== Side-Specific Validation ====================
+            # Side-specific validation - PASS UNIFIED ACCOUNT
             if side == OrderSide.BUY:
-                return self._validate_buy_order(symbol, quantity, price, metrics)
+                return self._validate_buy_order(symbol, quantity, price, metrics, account)
             else:
                 return self._validate_sell_order(symbol, quantity)
     
@@ -553,36 +546,38 @@ class RiskManager:
         symbol: str,
         quantity: int,
         price: float,
-        metrics: RiskMetrics
+        metrics: RiskMetrics,
+        account: Account  # ADDED parameter
     ) -> Tuple[bool, str]:
-        """Validate buy order against all limits"""
+        """Validate buy order against all limits using unified account view"""
         
-        # ==================== Lot Size Check ====================
+        # Lot size check
         lot_size = CONFIG.trading.lot_size
         if quantity % lot_size != 0:
             return False, f"Quantity must be multiple of {lot_size}"
         
-        # ==================== Cost Calculation ====================
+        # Cost calculation
         cost = quantity * price
         commission = cost * CONFIG.trading.commission
         total_cost = cost + commission
         
-        # ==================== Funds Check ====================
-        if total_cost > self._account.available:
+        # Funds check - USE UNIFIED ACCOUNT
+        if total_cost > account.available:
             return False, (
                 f"Insufficient funds: need ¥{total_cost:,.2f}, "
-                f"have ¥{self._account.available:,.2f}"
+                f"have ¥{account.available:,.2f}"
             )
         
-        # ==================== Position Size Limit ====================
+        # Position size limit - USE UNIFIED ACCOUNT
         existing_value = 0.0
-        if symbol in self._account.positions:
-            existing_value = self._account.positions[symbol].market_value
+        if symbol in account.positions:
+            existing_value = account.positions[symbol].market_value
         
         new_position_value = existing_value + cost
+        equity = account.equity
         
-        if self._account.equity > 0:
-            position_pct = (new_position_value / self._account.equity) * 100
+        if equity > 0:
+            position_pct = (new_position_value / equity) * 100
             max_pct = CONFIG.risk.max_position_pct
             
             if position_pct > max_pct:
@@ -591,39 +586,37 @@ class RiskManager:
                     f"(max: {max_pct}%)"
                 )
         
-        # ==================== Max Positions Check ====================
-        if symbol not in self._account.positions:
+        # Max positions check
+        if symbol not in account.positions:
             if metrics.position_count >= CONFIG.risk.max_positions:
                 return False, (
                     f"Maximum positions reached: {CONFIG.risk.max_positions}"
                 )
         
-        # ==================== Total Exposure Check ====================
+        # Total exposure check
         max_exposure_pct = CONFIG.risk.max_portfolio_risk_pct
         new_exposure = metrics.gross_exposure + cost
         
-        if self._account.equity > 0:
-            new_exposure_pct = (new_exposure / self._account.equity) * 100
+        if equity > 0:
+            new_exposure_pct = (new_exposure / equity) * 100
             if new_exposure_pct > max_exposure_pct:
                 return False, (
                     f"Would exceed max exposure: {new_exposure_pct:.1f}% "
                     f"(max: {max_exposure_pct}%)"
                 )
         
-        # ==================== Concentration Check ====================
-        conc_ok, conc_msg = self._check_concentration(symbol, cost)
+        # Concentration check - USE UNIFIED ACCOUNT
+        conc_ok, conc_msg = self._check_concentration(symbol, cost, account)
         if not conc_ok:
             return False, conc_msg
         
-        # ==================== VaR Check ====================
-        # If VaR is already high, limit new positions
-        max_var_pct = 5.0  # 5% of equity
-        current_var_pct = (metrics.var_1d_95 / self._account.equity * 100) if self._account.equity > 0 else 0
+        # VaR check
+        max_var_pct = 5.0
+        current_var_pct = (metrics.var_1d_95 / equity * 100) if equity > 0 else 0
         
         if current_var_pct > max_var_pct:
-            # Allow only small positions
             max_add_pct = 2.0
-            max_add_value = self._account.equity * (max_add_pct / 100)
+            max_add_value = equity * (max_add_pct / 100)
             
             if cost > max_add_value:
                 return False, (
@@ -651,19 +644,20 @@ class RiskManager:
         
         return True, "OK"
     
-    def _check_concentration(self, symbol: str, new_value: float) -> Tuple[bool, str]:
+    def _check_concentration(self, symbol: str, new_value: float, account: Account = None) -> Tuple[bool, str]:
         """Check portfolio concentration limits"""
-        if self._account is None:
+        account = account or self._account
+        if account is None:
             return True, "OK"
         
-        equity = self._account.equity
+        equity = account.equity
         if equity <= 0:
             return False, "No equity available"
         
         # Calculate existing position value
         existing_value = 0.0
-        if symbol in self._account.positions:
-            existing_value = self._account.positions[symbol].market_value
+        if symbol in account.positions:
+            existing_value = account.positions[symbol].market_value
         
         total_position = existing_value + new_value
         position_pct = (total_position / equity) * 100
@@ -675,23 +669,18 @@ class RiskManager:
                 f"{CONFIG.risk.max_position_pct}%"
             )
         
-        # FIXED: Top-3 concentration limit - properly handle existing positions
+        # Top-3 concentration limit
         position_values = []
-        for sym, pos in self._account.positions.items():
+        for sym, pos in account.positions.items():
             if sym == symbol:
-                # Replace with new total for this symbol
                 position_values.append(total_position)
             else:
                 position_values.append(pos.market_value)
         
-        # If symbol is new (not in positions), add it
-        if symbol not in self._account.positions:
+        if symbol not in account.positions:
             position_values.append(new_value)
         
-        # Sort descending
         position_values.sort(reverse=True)
-        
-        # Get top 3
         top3_value = sum(position_values[:3])
         top3_pct = (top3_value / equity) * 100
         

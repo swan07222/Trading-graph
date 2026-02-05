@@ -162,7 +162,7 @@ class PollingFeed(DataFeed):
         log.debug(f"Unsubscribed from {symbol}")
     
     def _poll_loop(self):
-        """Main polling loop - fetches only subscribed symbols"""
+        """Main polling loop - fetches all subscribed symbols in one batch"""
         while self._running:
             try:
                 with self._lock:
@@ -172,8 +172,8 @@ class PollingFeed(DataFeed):
                     time.sleep(self._interval)
                     continue
                 
-                # Fetch quotes for subscribed symbols only (not full market)
-                quotes = self._fetch_symbol_quotes(symbols)
+                # Fetch ALL quotes in one API call
+                quotes = self._fetch_batch_quotes(symbols)
                 
                 for symbol, quote in quotes.items():
                     if quote and quote.price > 0:
@@ -197,70 +197,20 @@ class PollingFeed(DataFeed):
             except Exception as e:
                 log.error(f"Polling loop error: {e}")
                 time.sleep(1)
-    
-    def _fetch_symbol_quotes(self, symbols: List[str]) -> Dict[str, Quote]:
-        """Fetch quotes for specific symbols only - much more efficient"""
-        result = {}
-        
-        # Batch into groups of 50 to avoid too many individual calls
-        batch_size = 50
-        
-        for i in range(0, len(symbols), batch_size):
-            batch = symbols[i:i + batch_size]
-            
-            try:
-                # Try AkShare individual stock quotes first
-                import akshare as ak
-                
-                for symbol in batch:
-                    try:
-                        # Use individual stock quote - much faster than full market
-                        df = ak.stock_zh_a_spot_em()
-                        row = df[df['代码'] == symbol]
-                        
-                        if not row.empty:
-                            r = row.iloc[0]
-                            result[symbol] = Quote(
-                                code=symbol,
-                                name=str(r.get('名称', '')),
-                                price=float(r.get('最新价', 0) or 0),
-                                open=float(r.get('今开', 0) or 0),
-                                high=float(r.get('最高', 0) or 0),
-                                low=float(r.get('最低', 0) or 0),
-                                close=float(r.get('昨收', 0) or 0),
-                                volume=int(r.get('成交量', 0) or 0),
-                                amount=float(r.get('成交额', 0) or 0),
-                                change=float(r.get('涨跌额', 0) or 0),
-                                change_pct=float(r.get('涨跌幅', 0) or 0),
-                                timestamp=datetime.now(),
-                                source="polling"
-                            )
-                    except Exception:
-                        pass
-                        
-            except ImportError:
-                # Fallback to fetcher
-                for symbol in batch:
-                    try:
-                        quote = self._fetcher.get_realtime(symbol)
-                        if quote:
-                            result[symbol] = quote
-                    except Exception:
-                        pass
-        
-        return result
 
     def _fetch_batch_quotes(self, symbols: List[str]) -> Dict[str, Quote]:
-        """Fetch quotes for all symbols in one API call"""
+        """Fetch quotes for all symbols in ONE API call"""
         result = {}
         
         try:
-            # FIXED: Use public API instead of private internals
-            df = self._fetcher.get_all_stocks()
+            # Get full market data ONCE
+            import akshare as ak
+            df = ak.stock_zh_a_spot_em()
             
             if df is None or df.empty:
                 return result
             
+            # Filter to only requested symbols
             for symbol in symbols:
                 row = df[df['代码'] == symbol]
                 if not row.empty:
@@ -277,8 +227,19 @@ class PollingFeed(DataFeed):
                         amount=float(r.get('成交额', 0) or 0),
                         change=float(r.get('涨跌额', 0) or 0),
                         change_pct=float(r.get('涨跌幅', 0) or 0),
+                        timestamp=datetime.now(),
                         source="polling"
                     )
+                    
+        except ImportError:
+            # Fallback to fetcher if akshare not available
+            for symbol in symbols:
+                try:
+                    quote = self._fetcher.get_realtime(symbol)
+                    if quote:
+                        result[symbol] = quote
+                except Exception:
+                    pass
         except Exception as e:
             log.warning(f"Batch quote fetch failed: {e}")
         
