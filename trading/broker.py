@@ -298,6 +298,64 @@ class SimulatorBroker(BrokerInterface):
             log.info(f"Simulator connected with ¥{self._initial_capital:,.2f}")
             return True
     
+    def reconcile(self) -> Dict:
+        """
+        Reconcile internal state (for simulator, always matches)
+        Returns discrepancies dict
+        """
+        with self._lock:
+            return {
+                'cash_diff': 0.0,
+                'position_diffs': [],
+                'missing_positions': [],
+                'extra_positions': [],
+                'reconciled': True,
+                'timestamp': datetime.now().isoformat()
+            }
+
+    def get_execution_journal(self) -> List[Dict]:
+        """Get execution journal for replay/audit"""
+        with self._lock:
+            return [
+                {
+                    'timestamp': t['timestamp'].isoformat(),
+                    'order_id': t['order_id'],
+                    'symbol': t['stock_code'],
+                    'side': t['side'],
+                    'quantity': t['quantity'],
+                    'price': t['price'],
+                    'commission': t['commission'],
+                    'stamp_tax': t.get('stamp_tax', 0)
+                }
+                for t in self._trades
+            ]
+
+    def replay_journal(self, journal: List[Dict]) -> bool:
+        """Replay execution journal to recover state"""
+        with self._lock:
+            try:
+                for entry in journal:
+                    # Reconstruct trade
+                    self._trades.append({
+                        'timestamp': datetime.fromisoformat(entry['timestamp']),
+                        'order_id': entry['order_id'],
+                        'stock_code': entry['symbol'],
+                        'stock_name': entry.get('name', ''),
+                        'side': entry['side'],
+                        'quantity': entry['quantity'],
+                        'price': entry['price'],
+                        'value': entry['quantity'] * entry['price'],
+                        'commission': entry['commission'],
+                        'stamp_tax': entry.get('stamp_tax', 0)
+                    })
+                
+                log.info(f"Replayed {len(journal)} journal entries")
+                return True
+                
+            except Exception as e:
+                log.error(f"Journal replay failed: {e}")
+                return False
+
     def disconnect(self):
         with self._lock:
             self._connected = False

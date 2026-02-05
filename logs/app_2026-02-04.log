@@ -572,3 +572,143 @@
 2026-02-04 07:08:10 | INFO     | models.auto_learner:_learning_loop:697 - Test accuracy: 57.30%
 2026-02-04 07:08:10 | INFO     | models.ensemble:save:329 - Ensemble saved to F:\Trading app\Trading-graph\saved_models\ensemble.pt
 2026-02-04 07:08:10 | INFO     | models.auto_learner:_learning_loop:736 - Auto-learning completed in 291.2 minutes!
+2026-02-04 16:18:24,953 | [32mINFO    [0m | trading:main:60 - ============================================================
+2026-02-04 16:18:24,973 | [32mINFO    [0m | trading:main:61 - AI STOCK TRADING SYSTEM - Production Grade
+2026-02-04 16:18:24,974 | [32mINFO    [0m | trading:main:62 - ============================================================
+2026-02-04 16:18:52,407 | [33mWARNING [0m | trading:_get_all_a_shares:235 - Failed to get all A-shares: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-02-04 16:18:52,407 | [32mINFO    [0m | trading:discover_all:154 - Found 0 from All A-Shares, total: 0
+2026-02-04 16:18:52,946 | [32mINFO    [0m | trading:discover_all:154 - Found 300 from CSI 300 Index, total: 300
+2026-02-04 16:18:53,928 | [32mINFO    [0m | trading:discover_all:154 - Found 500 from CSI 500 Index, total: 800
+2026-02-04 16:18:54,998 | [32mINFO    [0m | trading:discover_all:154 - Found 1000 from CSI 1000 Index, total: 1800
+2026-02-04 16:19:02,129 | [32mINFO    [0m | trading:discover_all:154 - Found 0 from Top Gainers, total: 1800
+2026-02-04 16:19:07,800 | [32mINFO    [0m | trading:discover_all:154 - Found 0 from Top Losers, total: 1800
+2026-02-04 16:19:14,015 | [32mINFO    [0m | trading:discover_all:154 - Found 0 from High Volume, total: 1800
+2026-02-04 16:19:20,803 | [32mINFO    [0m | trading:discover_all:154 - Found 0 from Large Cap, total: 1800
+2026-02-04 16:19:27,015 | [32mINFO    [0m | trading:discover_all:154 - Found 0 from Growth Stocks, total: 1800
+2026-02-04 16:19:32,916 | [32mINFO    [0m | trading:discover_all:154 - Found 0 from Value Stocks, total: 1800
+2026-02-04 16:19:32,916 | [32mINFO    [0m | trading:discover_all:177 - Total discovered: 0 stocks
+2026-02-04 16:19:32,917 | [32mINFO    [0m | trading:_run_session:254 - Discovered 0 valid stocks for training
+2026-02-04 16:19:52,610 | [32mINFO    [0m | trading:main:60 - ============================================================
+2026-02-04 16:19:52,611 | [32mINFO    [0m | trading:main:61 - AI STOCK TRADING SYSTEM - Production Grade
+2026-02-04 16:19:52,611 | [32mINFO    [0m | trading:main:62 - ============================================================
+2026-02-04 16:19:59,359 | [33mWARNING [0m | trading:_get_all_a_shares:235 - Failed to get all A-shares: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-02-04 16:19:59,359 | [32mINFO    [0m | trading:discover_all:154 - Found 0 from All A-Shares, total: 0
+2026-02-04 16:19:59,963 | [32mINFO    [0m | trading:discover_all:154 - Found 300 from CSI 300 Index, total: 300
+2026-02-04 16:20:00,925 | [32mINFO    [0m | trading:discover_all:154 - Found 500 from CSI 500 Index, total: 800
+2026-02-04 16:20:02,027 | [32mINFO    [0m | trading:discover_all:154 - Found 1000 from CSI 1000 Index, total: 1800
+2026-02-04 16:20:08,370 | [32mINFO    [0m | trading:discover_all:154 - Found 0 from Top Gainers, total: 1800
+2026-02-04 16:20:14,709 | [32mINFO    [0m | trading:discover_all:154 - Found 0 from Top Losers, total: 1800
+2026-02-04 16:20:21,658 | [32mINFO    [0m | trading:discover_all:154 - Found 0 from High Volume, total: 1800
+2026-02-04 16:20:27,674 | [32mINFO    [0m | trading:discover_all:154 - Found 0 from Large Cap, total: 1800
+2026-02-04 16:20:34,499 | [32mINFO    [0m | trading:discover_all:154 - Found 0 from Growth Stocks, total: 1800
+2026-02-04 16:20:40,226 | [32mINFO    [0m | trading:discover_all:154 - Found 0 from Value Stocks, total: 1800
+2026-02-04 16:20:40,226 | [32mINFO    [0m | trading:discover_all:177 - Total discovered: 0 stocks
+2026-02-04 16:20:40,227 | [32mINFO    [0m | trading:_run_session:254 - Discovered 0 valid stocks for training
+2026-02-04 16:21:12,782 | [32mINFO    [0m | trading:main:60 - ============================================================
+2026-02-04 16:21:12,782 | [32mINFO    [0m | trading:main:61 - AI STOCK TRADING SYSTEM - Production Grade
+2026-02-04 16:21:12,782 | [32mINFO    [0m | trading:main:62 - ============================================================
+2026-02-04 16:21:13,626 | [32mINFO    [0m | data.fetcher:__init__:146 - AkShare initialized
+2026-02-04 16:21:13,741 | [32mINFO    [0m | data.fetcher:__init__:260 - Yahoo Finance initialized
+2026-02-04 16:21:13,741 | [32mINFO    [0m | data.fetcher:_init_sources:376 - Data source akshare available
+2026-02-04 16:21:13,741 | [32mINFO    [0m | data.fetcher:_init_sources:376 - Data source yahoo available
+2026-02-04 16:21:13,741 | [32mINFO    [0m | trading:train:213 - ======================================================================
+2026-02-04 16:21:13,741 | [32mINFO    [0m | trading:train:214 - STARTING TRAINING PIPELINE
+2026-02-04 16:21:13,741 | [32mINFO    [0m | trading:train:215 - ======================================================================
+2026-02-04 16:21:13,741 | [32mINFO    [0m | trading:prepare_data:55 - Preparing data for 20 stocks...
+2026-02-04 16:21:13,742 | [32mINFO    [0m | trading:prepare_data:56 - Temporal split: Train=70%, Val=15%, Test=15%
+2026-02-04 16:21:14,288 | DEBUG    | data.fetcher:_fetch_from_sources:457 - Got 1495 bars from akshare for 600519
+2026-02-04 16:21:14,398 | [32mINFO    [0m | trading:create_features:170 - Created 47 features, 1435 valid samples
+2026-02-04 16:21:14,883 | DEBUG    | data.fetcher:_fetch_from_sources:457 - Got 1495 bars from akshare for 601318
+2026-02-04 16:21:14,989 | [32mINFO    [0m | trading:create_features:170 - Created 47 features, 1435 valid samples
+2026-02-04 16:21:15,470 | DEBUG    | data.fetcher:_fetch_from_sources:457 - Got 1495 bars from akshare for 600036
+2026-02-04 16:21:15,575 | [32mINFO    [0m | trading:create_features:170 - Created 47 features, 1435 valid samples
+2026-02-04 16:21:16,087 | DEBUG    | data.fetcher:_fetch_from_sources:457 - Got 1495 bars from akshare for 000858
+2026-02-04 16:21:16,192 | [32mINFO    [0m | trading:create_features:170 - Created 47 features, 1435 valid samples
+2026-02-04 16:21:16,733 | DEBUG    | data.fetcher:_fetch_from_sources:457 - Got 1484 bars from akshare for 600900
+2026-02-04 16:21:16,844 | [32mINFO    [0m | trading:create_features:170 - Created 47 features, 1424 valid samples
+2026-02-04 16:21:17,338 | DEBUG    | data.fetcher:_fetch_from_sources:457 - Got 1495 bars from akshare for 002594
+2026-02-04 16:21:17,440 | [32mINFO    [0m | trading:create_features:170 - Created 47 features, 1435 valid samples
+2026-02-04 16:21:17,989 | DEBUG    | data.fetcher:_fetch_from_sources:457 - Got 1495 bars from akshare for 300750
+2026-02-04 16:21:18,093 | [32mINFO    [0m | trading:create_features:170 - Created 47 features, 1435 valid samples
+2026-02-04 16:21:18,586 | DEBUG    | data.fetcher:_fetch_from_sources:457 - Got 1495 bars from akshare for 002475
+2026-02-04 16:21:18,691 | [32mINFO    [0m | trading:create_features:170 - Created 47 features, 1435 valid samples
+2026-02-04 16:21:25,830 | [33mWARNING [0m | data.fetcher:_fetch_from_sources:461 - akshare failed for 300059: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-02-04 16:21:38,051 | [33mWARNING [0m | data.fetcher:_fetch_from_sources:461 - yahoo failed for 300059: Too Many Requests. Rate limited. Try after a while.
+2026-02-04 16:21:38,051 | [31mERROR   [0m | data.fetcher:_fetch_from_sources:464 - All sources failed for 300059
+2026-02-04 16:21:38,062 | [33mWARNING [0m | trading:prepare_data:70 - Insufficient data for 300059: 0 bars
+2026-02-04 16:21:38,539 | DEBUG    | data.fetcher:_fetch_from_sources:457 - Got 1495 bars from akshare for 002230
+2026-02-04 16:21:38,646 | [32mINFO    [0m | trading:create_features:170 - Created 47 features, 1435 valid samples
+2026-02-04 16:21:39,148 | DEBUG    | data.fetcher:_fetch_from_sources:457 - Got 1495 bars from akshare for 000333
+2026-02-04 16:21:39,256 | [32mINFO    [0m | trading:create_features:170 - Created 47 features, 1435 valid samples
+2026-02-04 16:21:39,738 | DEBUG    | data.fetcher:_fetch_from_sources:457 - Got 1495 bars from akshare for 000651
+2026-02-04 16:21:40,066 | [32mINFO    [0m | trading:create_features:170 - Created 47 features, 1435 valid samples
+2026-02-04 16:21:40,551 | DEBUG    | data.fetcher:_fetch_from_sources:457 - Got 1495 bars from akshare for 600887
+2026-02-04 16:21:40,677 | [32mINFO    [0m | trading:create_features:170 - Created 47 features, 1435 valid samples
+2026-02-04 16:21:55,929 | [33mWARNING [0m | data.fetcher:_fetch_from_sources:461 - akshare failed for 603288: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-02-04 16:22:04,991 | [33mWARNING [0m | data.fetcher:_record_error:132 - Data source yahoo disabled
+2026-02-04 16:22:04,991 | [33mWARNING [0m | data.fetcher:_fetch_from_sources:461 - yahoo failed for 603288: Too Many Requests. Rate limited. Try after a while.
+2026-02-04 16:22:04,991 | [31mERROR   [0m | data.fetcher:_fetch_from_sources:464 - All sources failed for 603288
+2026-02-04 16:22:04,991 | [33mWARNING [0m | trading:prepare_data:70 - Insufficient data for 603288: 0 bars
+2026-02-04 16:22:12,194 | [33mWARNING [0m | data.fetcher:_fetch_from_sources:461 - akshare failed for 600276: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-02-04 16:22:12,194 | [31mERROR   [0m | data.fetcher:_fetch_from_sources:464 - All sources failed for 600276
+2026-02-04 16:22:12,194 | [33mWARNING [0m | trading:prepare_data:70 - Insufficient data for 600276: 0 bars
+2026-02-04 16:22:19,281 | [33mWARNING [0m | data.fetcher:_fetch_from_sources:461 - akshare failed for 300760: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-02-04 16:22:19,281 | [31mERROR   [0m | data.fetcher:_fetch_from_sources:464 - All sources failed for 300760
+2026-02-04 16:22:19,281 | [33mWARNING [0m | trading:prepare_data:70 - Insufficient data for 300760: 0 bars
+2026-02-04 16:22:26,380 | [33mWARNING [0m | data.fetcher:_fetch_from_sources:461 - akshare failed for 300015: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-02-04 16:22:26,381 | [31mERROR   [0m | data.fetcher:_fetch_from_sources:464 - All sources failed for 300015
+2026-02-04 16:22:26,381 | [33mWARNING [0m | trading:prepare_data:70 - Insufficient data for 300015: 0 bars
+2026-02-04 16:22:33,508 | [33mWARNING [0m | data.fetcher:_fetch_from_sources:461 - akshare failed for 601166: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-02-04 16:22:33,509 | [31mERROR   [0m | data.fetcher:_fetch_from_sources:464 - All sources failed for 601166
+2026-02-04 16:22:33,509 | [33mWARNING [0m | trading:prepare_data:70 - Insufficient data for 601166: 0 bars
+2026-02-04 16:22:40,644 | [33mWARNING [0m | data.fetcher:_fetch_from_sources:461 - akshare failed for 601398: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-02-04 16:22:40,644 | [31mERROR   [0m | data.fetcher:_fetch_from_sources:464 - All sources failed for 601398
+2026-02-04 16:22:40,645 | [33mWARNING [0m | trading:prepare_data:70 - Insufficient data for 601398: 0 bars
+2026-02-04 16:22:47,763 | [33mWARNING [0m | data.fetcher:_fetch_from_sources:461 - akshare failed for 600030: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-02-04 16:22:47,764 | [31mERROR   [0m | data.fetcher:_fetch_from_sources:464 - All sources failed for 600030
+2026-02-04 16:22:47,764 | [33mWARNING [0m | trading:prepare_data:70 - Insufficient data for 600030: 0 bars
+2026-02-04 16:22:47,765 | [32mINFO    [0m | trading:prepare_data:88 - Successfully loaded 12 stocks
+2026-02-04 16:22:47,809 | [32mINFO    [0m | trading:prepare_data:137 - Fitting scaler on training data...
+2026-02-04 16:22:47,857 | [32mINFO    [0m | trading:fit_scaler:99 - Scaler fitted on 11800 samples, 47 features
+2026-02-04 16:22:47,858 | [32mINFO    [0m | trading:prepare_data:140 - Scaler fitted on 11800 training samples
+2026-02-04 16:22:48,023 | [32mINFO    [0m | trading:prepare_data:181 - Data prepared:
+2026-02-04 16:22:48,024 | [32mINFO    [0m | trading:prepare_data:182 -   Train: 11092 samples
+2026-02-04 16:22:48,024 | [32mINFO    [0m | trading:prepare_data:183 -   Val:   1631 samples
+2026-02-04 16:22:48,024 | [32mINFO    [0m | trading:prepare_data:184 -   Test:  1822 samples
+2026-02-04 16:22:48,024 | [32mINFO    [0m | trading:prepare_data:185 -   Input size: 47 features
+2026-02-04 16:22:48,024 | [32mINFO    [0m | trading:prepare_data:189 -   Class distribution: DOWN=3671, NEUTRAL=3764, UP=3657
+2026-02-04 16:22:48,025 | [32mINFO    [0m | trading:save_scaler:304 - Scaler saved to F:\Trading app\Trading-graph\models_saved\scaler.pkl
+2026-02-04 16:22:48,067 | DEBUG    | trading:_init_model:99 - Initialized lstm model
+2026-02-04 16:22:48,107 | DEBUG    | trading:_init_model:99 - Initialized transformer model
+2026-02-04 16:22:48,116 | DEBUG    | trading:_init_model:99 - Initialized gru model
+2026-02-04 16:22:48,126 | DEBUG    | trading:_init_model:99 - Initialized tcn model
+2026-02-04 16:22:48,126 | [32mINFO    [0m | trading:__init__:85 - Ensemble initialized: ['lstm', 'transformer', 'gru', 'tcn'] on cpu
+2026-02-04 16:22:48,126 | [32mINFO    [0m | trading:train:233 - Training ensemble with 4 models...
+2026-02-04 16:22:48,126 | [32mINFO    [0m | trading:train:234 - Epochs: 100, Batch size: 64
+2026-02-04 16:22:48,127 | [32mINFO    [0m | trading:train:151 - Training lstm...
+2026-02-04 16:35:02,530 | [32mINFO    [0m | trading:_train_single_model:268 - lstm Epoch 10: val_acc=40.65%
+2026-02-04 16:47:26,369 | [32mINFO    [0m | trading:_train_single_model:268 - lstm Epoch 20: val_acc=38.69%
+2026-02-04 16:52:17,759 | [32mINFO    [0m | trading:_train_single_model:261 - lstm: Early stopping at epoch 24
+2026-02-04 16:52:17,764 | [32mINFO    [0m | trading:_train_single_model:275 - lstm complete. Best accuracy: 41.51%
+2026-02-04 16:52:17,764 | [32mINFO    [0m | trading:train:151 - Training transformer...
+2026-02-04 17:13:15,494 | [32mINFO    [0m | trading:_train_single_model:268 - transformer Epoch 10: val_acc=37.83%
+2026-02-04 17:28:22,871 | [32mINFO    [0m | trading:_train_single_model:261 - transformer: Early stopping at epoch 17
+2026-02-04 17:28:22,871 | [32mINFO    [0m | trading:_train_single_model:275 - transformer complete. Best accuracy: 40.34%
+2026-02-04 17:28:22,871 | [32mINFO    [0m | trading:train:151 - Training gru...
+2026-02-04 17:37:20,363 | [32mINFO    [0m | trading:_train_single_model:268 - gru Epoch 10: val_acc=37.22%
+2026-02-04 17:44:29,154 | [32mINFO    [0m | trading:_train_single_model:261 - gru: Early stopping at epoch 18
+2026-02-04 17:44:29,154 | [32mINFO    [0m | trading:_train_single_model:275 - gru complete. Best accuracy: 42.00%
+2026-02-04 17:44:29,154 | [32mINFO    [0m | trading:train:151 - Training tcn...
+2026-02-04 17:51:30,732 | [32mINFO    [0m | trading:_train_single_model:268 - tcn Epoch 10: val_acc=32.92%
+2026-02-04 17:58:30,824 | [32mINFO    [0m | trading:_train_single_model:268 - tcn Epoch 20: val_acc=36.79%
+2026-02-04 18:04:48,919 | [32mINFO    [0m | trading:_train_single_model:261 - tcn: Early stopping at epoch 29
+2026-02-04 18:04:48,919 | [32mINFO    [0m | trading:_train_single_model:275 - tcn complete. Best accuracy: 40.71%
+2026-02-04 18:04:48,919 | [32mINFO    [0m | trading:_update_weights:291 - Updated weights: {'lstm': 0.2518248372583779, 'transformer': 0.24602549425793613, 'gru': 0.25430737880167176, 'tcn': 0.24784228968201416}
+2026-02-04 18:04:48,919 | [32mINFO    [0m | trading:train:247 - Evaluating on test set...
+2026-02-04 18:05:26,779 | [32mINFO    [0m | trading:save:362 - Ensemble saved to F:\Trading app\Trading-graph\models_saved\ensemble.pt
+2026-02-04 18:05:26,779 | [32mINFO    [0m | trading:train:276 - ======================================================================
+2026-02-04 18:05:26,779 | [32mINFO    [0m | trading:train:277 - TRAINING COMPLETE
+2026-02-04 18:05:26,779 | [32mINFO    [0m | trading:train:278 -   Best Val Accuracy: 42.00%
+2026-02-04 18:05:26,779 | [32mINFO    [0m | trading:train:279 -   Test Accuracy: 53.13%
+2026-02-04 18:05:26,779 | [32mINFO    [0m | trading:train:280 -   Training Time: 104.2 minutes
+2026-02-04 18:05:26,779 | [32mINFO    [0m | trading:train:281 - ======================================================================

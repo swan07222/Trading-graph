@@ -1,5 +1,6 @@
+# trading/executor.py
 """
-Execution Engine - Handles order execution with unified broker types
+Execution Engine - Production Grade
 """
 import threading
 import queue
@@ -8,100 +9,151 @@ from typing import Dict, List, Optional, Callable
 from dataclasses import dataclass
 
 from config import CONFIG, TradingMode
-from .broker import (
-    BrokerInterface, SimulatorBroker, THSBroker,
-    Order, OrderSide, OrderStatus, create_broker
-)
-from .risk import RiskManager
+from core.types import Order, OrderSide, OrderStatus, TradeSignal, Account
+from .broker import BrokerInterface, SimulatorBroker, THSBroker, create_broker
+from .risk import RiskManager, get_risk_manager
+from .kill_switch import get_kill_switch
+from .health import get_health_monitor, ComponentType, HealthStatus
+from .alerts import get_alert_manager
 from utils.logger import log
-
-
-@dataclass
-class TradeSignal:
-    """Trade signal for execution"""
-    stock_code: str
-    side: OrderSide
-    quantity: int
-    price: Optional[float] = None
-    stop_loss: Optional[float] = None
-    take_profit: Optional[float] = None
 
 
 class ExecutionEngine:
     """
-    Order execution engine with:
-    - Risk checks
-    - Order queue
-    - Async execution
+    Production execution engine with:
+    - Kill switch integration
+    - Health monitoring
+    - Alerting
+    - Reconciliation
     """
     
     def __init__(self, mode: TradingMode = None):
-        self.mode = mode or CONFIG.TRADING_MODE
+        self.mode = mode or CONFIG.trading_mode
         
-        # Create broker using factory
+        # Create broker
         self.broker = create_broker(self.mode.value)
         
+        # Components
         self.risk_manager: Optional[RiskManager] = None
+        self._kill_switch = get_kill_switch()
+        self._health_monitor = get_health_monitor()
+        self._alert_manager = get_alert_manager()
         
         # Order queue
-        self._queue = queue.Queue()
+        self._queue: queue.Queue = queue.Queue()
         self._running = False
         self._thread: Optional[threading.Thread] = None
         
         # Callbacks
         self.on_fill: Optional[Callable[[Order], None]] = None
         self.on_reject: Optional[Callable[[Order, str], None]] = None
+        
+        # Register kill switch callback
+        self._kill_switch.on_activate(self._on_kill_switch)
     
     def start(self) -> bool:
         """Start execution engine"""
+        # Connect broker
         if not self.broker.connect():
             log.error("Broker connection failed")
+            self._health_monitor.report_component_health(
+                ComponentType.BROKER,
+                HealthStatus.UNHEALTHY,
+                error="Connection failed"
+            )
             return False
         
+        # Initialize risk manager
         account = self.broker.get_account()
-        self.risk_manager = RiskManager(account)
+        self.risk_manager = get_risk_manager()
+        self.risk_manager.initialize(account)
         
+        # Start components
+        self._health_monitor.start()
+        self._alert_manager.start()
+        
+        # Start execution loop
         self._running = True
         self._thread = threading.Thread(target=self._run_loop, daemon=True)
         self._thread.start()
         
+        # Report healthy
+        self._health_monitor.report_component_health(
+            ComponentType.BROKER,
+            HealthStatus.HEALTHY
+        )
+        
         log.info(f"Execution engine started ({self.mode.value})")
+        
+        # Send startup alert
+        self._alert_manager.system_alert(
+            "Trading System Started",
+            f"Mode: {self.mode.value}, Capital: ¥{account.equity:,.2f}"
+        )
+        
         return True
     
     def stop(self):
         """Stop execution engine"""
         self._running = False
+        
         if self._thread:
+            self._queue.put(None)  # Sentinel
             self._thread.join(timeout=5)
+        
         self.broker.disconnect()
+        self._health_monitor.stop()
+        self._alert_manager.stop()
+        
         log.info("Execution engine stopped")
     
     def submit(self, signal: TradeSignal) -> bool:
         """Submit trade signal"""
+        # Check kill switch first
+        if not self._kill_switch.can_trade:
+            log.warning("Trading halted - cannot submit order")
+            if self.on_reject:
+                order = Order(symbol=signal.symbol, side=signal.side)
+                order.status = OrderStatus.REJECTED
+                order.message = "Trading halted"
+                self.on_reject(order, "Trading halted")
+            return False
+        
         # Get price for validation
         price = signal.price
         if price is None or price <= 0:
-            price = self.broker.get_quote(signal.stock_code)
+            price = self.broker.get_quote(signal.symbol)
             if price is None or price <= 0:
-                log.error(f"Cannot get price for {signal.stock_code}")
+                log.error(f"Cannot get price for {signal.symbol}")
                 return False
+        
+        # Convert side to string for risk check
+        side_str = signal.side.value if isinstance(signal.side, OrderSide) else signal.side
         
         # Risk check
         passed, msg = self.risk_manager.check_order(
-            signal.stock_code, signal.side, signal.quantity, price
+            signal.symbol, signal.side, signal.quantity, price
         )
         
         if not passed:
             log.warning(f"Risk check failed: {msg}")
+            
+            # Alert on risk rejection
+            self._alert_manager.risk_alert(
+                "Order Rejected",
+                f"{signal.symbol}: {msg}",
+                {'symbol': signal.symbol, 'reason': msg}
+            )
+            
             if self.on_reject:
-                order = Order(stock_code=signal.stock_code, side=signal.side)
+                order = Order(symbol=signal.symbol, side=signal.side)
                 order.status = OrderStatus.REJECTED
                 order.message = msg
                 self.on_reject(order, msg)
             return False
         
         self._queue.put(signal)
-        log.info(f"Signal queued: {signal.side.value} {signal.quantity} {signal.stock_code}")
+        log.info(f"Signal queued: {signal.side.value} {signal.quantity} {signal.symbol}")
         return True
     
     def submit_from_prediction(self, pred) -> bool:
@@ -117,12 +169,15 @@ class ExecutionEngine:
         side = OrderSide.BUY if pred.signal in [Signal.STRONG_BUY, Signal.BUY] else OrderSide.SELL
         
         signal = TradeSignal(
-            stock_code=pred.stock_code,
+            symbol=pred.stock_code,
+            name=pred.stock_name,
             side=side,
             quantity=pred.position.shares,
             price=pred.levels.entry,
             stop_loss=pred.levels.stop_loss,
-            take_profit=pred.levels.target_2
+            take_profit=pred.levels.target_2,
+            confidence=pred.confidence,
+            reasons=pred.reasons
         )
         
         return self.submit(signal)
@@ -132,45 +187,108 @@ class ExecutionEngine:
         while self._running:
             try:
                 signal = self._queue.get(timeout=0.1)
+                
+                if signal is None:  # Sentinel
+                    break
+                
                 self._execute(signal)
+                
             except queue.Empty:
                 pass
+            except Exception as e:
+                log.error(f"Execution loop error: {e}")
+                self._alert_manager.system_alert(
+                    "Execution Error",
+                    str(e),
+                    priority=AlertPriority.HIGH
+                )
             
             # Update risk manager
-            if self.risk_manager:
-                account = self.broker.get_account()
-                self.risk_manager.update(account)
+            if self.risk_manager and self.broker.is_connected:
+                try:
+                    account = self.broker.get_account()
+                    self.risk_manager.update(account)
+                except Exception:
+                    pass
             
             time.sleep(0.1)
     
     def _execute(self, signal: TradeSignal):
         """Execute signal"""
         try:
+            # Final kill switch check
+            if not self._kill_switch.can_trade:
+                log.warning("Trading halted during execution")
+                return
+            
             order = Order(
-                stock_code=signal.stock_code,
+                symbol=signal.symbol,
+                name=signal.name,
                 side=signal.side,
                 quantity=signal.quantity,
-                price=signal.price
+                price=signal.price,
+                stop_loss=signal.stop_loss,
+                take_profit=signal.take_profit,
+                signal_id=signal.id
             )
             
             result = self.broker.submit_order(order)
             
             if result.status == OrderStatus.FILLED:
-                log.info(f"Filled: {result.side.value.upper()} {result.filled_qty} @ ¥{result.filled_price:.2f}")
+                log.info(
+                    f"Filled: {result.side.value.upper()} {result.filled_qty} "
+                    f"@ ¥{result.filled_price:.2f}"
+                )
+                
                 if self.risk_manager:
                     self.risk_manager.record_trade()
+                
                 if self.on_fill:
                     self.on_fill(result)
+                
+                # Alert on fill
+                self._alert_manager.trading_alert(
+                    "Order Filled",
+                    f"{result.side.value.upper()} {result.filled_qty} {result.symbol} @ ¥{result.filled_price:.2f}",
+                    result.to_dict()
+                )
                     
             elif result.status == OrderStatus.REJECTED:
                 log.warning(f"Rejected: {result.message}")
+                
                 if self.on_reject:
                     self.on_reject(result, result.message)
                     
         except Exception as e:
             log.error(f"Execution error: {e}")
+            
+            # Alert on error
+            self._alert_manager.system_alert(
+                "Execution Failed",
+                f"{signal.symbol}: {str(e)}",
+                priority=AlertPriority.HIGH
+            )
     
-    def get_account(self):
+    def _on_kill_switch(self, reason: str):
+        """Handle kill switch activation"""
+        log.critical(f"Kill switch activated: {reason}")
+        
+        # Cancel all pending orders
+        try:
+            for order in self.broker.get_orders(active_only=True):
+                self.broker.cancel_order(order.id)
+                log.info(f"Cancelled order: {order.id}")
+        except Exception as e:
+            log.error(f"Failed to cancel orders: {e}")
+        
+        # Critical alert
+        self._alert_manager.critical_alert(
+            "KILL SWITCH ACTIVATED",
+            f"All trading halted: {reason}",
+            {'reason': reason}
+        )
+    
+    def get_account(self) -> Account:
         return self.broker.get_account()
     
     def get_positions(self):
@@ -178,3 +296,9 @@ class ExecutionEngine:
     
     def get_orders(self):
         return self.broker.get_orders()
+    
+    def reconcile(self) -> Dict:
+        """Reconcile with broker"""
+        if hasattr(self.broker, 'reconcile'):
+            return self.broker.reconcile()
+        return {}

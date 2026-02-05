@@ -122,6 +122,34 @@ class AutoLearner:
         if self._thread:
             self._thread.join(timeout=10)
     
+    def run(
+        self,
+        auto_search: bool = True,
+        max_stocks: int = 500,
+        epochs: int = None,
+        incremental: bool = True,
+        min_market_cap: float = 10,
+        search_all: bool = True
+    ):
+        """
+        Synchronous run method for CLI usage.
+        Wraps start_learning and waits for completion.
+        """
+        self.start_learning(
+            auto_search=auto_search,
+            max_stocks=max_stocks,
+            epochs=epochs,
+            incremental=incremental,
+            min_market_cap=min_market_cap,
+            search_all=search_all
+        )
+        
+        # Wait for completion
+        if self._thread:
+            self._thread.join()
+        
+        return self.progress
+
     def _learning_loop(
         self, 
         auto_search: bool, 

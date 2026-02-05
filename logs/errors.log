@@ -34,3 +34,27 @@
 
 2026-02-04 02:17:20 | ERROR | models.auto_learner:find_top_volume:284 - find_top_volume error: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
 
+2026-02-04 16:21:38,051 | [31mERROR   [0m | data.fetcher:_fetch_from_sources:464
+All sources failed for 300059
+
+2026-02-04 16:22:04,991 | [31mERROR   [0m | data.fetcher:_fetch_from_sources:464
+All sources failed for 603288
+
+2026-02-04 16:22:12,194 | [31mERROR   [0m | data.fetcher:_fetch_from_sources:464
+All sources failed for 600276
+
+2026-02-04 16:22:19,281 | [31mERROR   [0m | data.fetcher:_fetch_from_sources:464
+All sources failed for 300760
+
+2026-02-04 16:22:26,381 | [31mERROR   [0m | data.fetcher:_fetch_from_sources:464
+All sources failed for 300015
+
+2026-02-04 16:22:33,509 | [31mERROR   [0m | data.fetcher:_fetch_from_sources:464
+All sources failed for 601166
+
+2026-02-04 16:22:40,644 | [31mERROR   [0m | data.fetcher:_fetch_from_sources:464
+All sources failed for 601398
+
+2026-02-04 16:22:47,764 | [31mERROR   [0m | data.fetcher:_fetch_from_sources:464
+All sources failed for 600030
+

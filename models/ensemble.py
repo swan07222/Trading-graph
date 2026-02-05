@@ -361,6 +361,8 @@ class EnsembleModel:
         
         log.info(f"Ensemble saved to {path}")
     
+    # models/ensemble.py - FIXED load() method ending
+
     def load(self, path: str = None) -> bool:
         """Load ensemble from file"""
         path = path or str(CONFIG.MODEL_DIR / "ensemble.pt")
