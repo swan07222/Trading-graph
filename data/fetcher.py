@@ -71,10 +71,22 @@ class Quote:
     ask_vol: int = 0
     timestamp: datetime = None
     source: str = ""
+    is_delayed: bool = True  # NEW: flag for delayed/real-time
+    latency_ms: float = 0.0  # NEW: fetch latency
 
     def __post_init__(self):
         if self.timestamp is None:
             self.timestamp = datetime.now()
+    
+    @property
+    def age_seconds(self) -> float:
+        """Age of quote in seconds"""
+        return (datetime.now() - self.timestamp).total_seconds()
+    
+    @property
+    def is_stale(self) -> bool:
+        """Check if quote is stale (> 30 seconds)"""
+        return self.age_seconds > 30
 
 
 @dataclass
@@ -131,6 +143,68 @@ class DataSource:
                 log.warning(f"Data source {self.name} disabled")
 
 
+class SpotCache:
+    """Thread-safe cached spot data with TTL"""
+    
+    def __init__(self, ttl_seconds: float = 10.0):
+        self._cache: Optional[pd.DataFrame] = None
+        self._cache_time: float = 0
+        self._ttl = ttl_seconds
+        self._lock = threading.RLock()
+        self._ak = None
+        
+        try:
+            import akshare as ak
+            self._ak = ak
+        except ImportError:
+            pass
+    
+    def get(self, force_refresh: bool = False) -> Optional[pd.DataFrame]:
+        """Get spot data, refreshing if stale"""
+        with self._lock:
+            now = time.time()
+            
+            if not force_refresh and self._cache is not None:
+                if now - self._cache_time < self._ttl:
+                    return self._cache
+            
+            if self._ak is None:
+                return self._cache
+            
+            try:
+                self._cache = self._ak.stock_zh_a_spot_em()
+                self._cache_time = now
+                log.debug(f"Spot cache refreshed: {len(self._cache)} stocks")
+            except Exception as e:
+                log.warning(f"Spot cache refresh failed: {e}")
+            
+            return self._cache
+    
+    def get_quote(self, symbol: str) -> Optional[Dict]:
+        """Get single stock quote from cache"""
+        df = self.get()
+        if df is None or df.empty:
+            return None
+        
+        row = df[df['代码'] == symbol]
+        if row.empty:
+            return None
+        
+        r = row.iloc[0]
+        return {
+            'code': symbol,
+            'name': str(r.get('名称', '')),
+            'price': float(r.get('最新价', 0) or 0),
+            'open': float(r.get('今开', 0) or 0),
+            'high': float(r.get('最高', 0) or 0),
+            'low': float(r.get('最低', 0) or 0),
+            'close': float(r.get('昨收', 0) or 0),
+            'volume': int(r.get('成交量', 0) or 0),
+            'amount': float(r.get('成交额', 0) or 0),
+            'change': float(r.get('涨跌额', 0) or 0),
+            'change_pct': float(r.get('涨跌幅', 0) or 0),
+        }
+
 class AkShareSource(DataSource):
     """AkShare data source - Primary for A-shares"""
     name = "akshare"
@@ -139,9 +213,8 @@ class AkShareSource(DataSource):
     def __init__(self):
         super().__init__()
         self._ak = None
-        self._spot_cache = None
-        self._spot_cache_time = None
-        self._cache_ttl = 10
+        self._spot_cache = get_spot_cache()  # Use shared cache
+        
         try:
             import akshare as ak
             self._ak = ak
@@ -149,6 +222,35 @@ class AkShareSource(DataSource):
         except ImportError:
             self.status.available = False
             log.warning("AkShare not available")
+
+    def get_realtime(self, code: str) -> Optional[Quote]:
+        if not self._ak or not self.status.available:
+            return None
+        
+        try:
+            data = self._spot_cache.get_quote(code)
+            
+            if data is None or data['price'] <= 0:
+                return None
+            
+            return Quote(
+                code=code,
+                name=data['name'],
+                price=data['price'],
+                open=data['open'],
+                high=data['high'],
+                low=data['low'],
+                close=data['close'],
+                volume=data['volume'],
+                amount=data['amount'],
+                change=data['change'],
+                change_pct=data['change_pct'],
+                source=self.name
+            )
+            
+        except Exception as e:
+            self._record_error(str(e))
+            return None
 
     def _get_cached_spot(self) -> pd.DataFrame:
         """Get cached spot data with proper TTL"""

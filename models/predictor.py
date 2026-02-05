@@ -14,6 +14,7 @@ from datetime import datetime
 from enum import Enum
 from pathlib import Path
 
+import pandas as pd
 import torch
 
 from config import CONFIG
@@ -179,14 +180,10 @@ class Predictor:
             if (now - cached_time).total_seconds() < self._cache_ttl_seconds:
                 df = cached_df
             else:
-                df = self.fetcher.get_history(stock_code, days=500)
-                df = self.feature_engine.create_features(df)
+                df = self._fetch_and_process(stock_code)
                 self._feature_cache[cache_key] = (df, now)
         else:
-            df = self.fetcher.get_history(stock_code, days=500)
-            if len(df) < CONFIG.SEQUENCE_LENGTH + 10:
-                raise ValueError(f"Insufficient data for {stock_code}: {len(df)} bars")
-            df = self.feature_engine.create_features(df)
+            df = self._fetch_and_process(stock_code)
             self._feature_cache[cache_key] = (df, now)
         
         if len(df) < CONFIG.SEQUENCE_LENGTH + 10:
@@ -196,10 +193,18 @@ class Predictor:
             )
         
         # Get real-time quote
-        quote = self.fetcher.get_realtime(stock_code)
-        current_price = quote.price if quote and quote.price > 0 else float(df['close'].iloc[-1])
-        stock_name = quote.name if quote else stock_code
+        last_close = float(df['close'].iloc[-1])
         
+        if use_realtime_price:
+            quote = self.fetcher.get_realtime(stock_code)
+            current_price = quote.price if quote and quote.price > 0 else last_close
+            stock_name = quote.name if quote else stock_code
+        else:
+            # Use last close for consistency with model features
+            current_price = last_close
+            quote = self.fetcher.get_realtime(stock_code)
+            stock_name = quote.name if quote else stock_code
+            
         if len(df) < CONFIG.SEQUENCE_LENGTH:
             raise ValueError(f"Insufficient data after feature creation")
         
@@ -280,6 +285,13 @@ class Predictor:
                 return float(val)
         return default
     
+    def _fetch_and_process(self, stock_code: str) -> pd.DataFrame:
+        """Fetch and process data for a stock"""
+        df = self.fetcher.get_history(stock_code, days=500)
+        if len(df) < CONFIG.SEQUENCE_LENGTH + 10:
+            raise ValueError(f"Insufficient data for {stock_code}: {len(df)} bars")
+        return self.feature_engine.create_features(df)
+
     def _calculate_signal(
         self,
         pred: EnsemblePrediction,

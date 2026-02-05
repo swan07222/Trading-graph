@@ -426,19 +426,19 @@ class Backtester:
         capital: float
     ):
         """
-        Simulate trading with proper portfolio accounting.
-        Returns daily portfolio returns (not per-bar).
+        Simulate trading with NEXT-BAR execution.
+        
+        CRITICAL: Signal at bar i -> execute at bar i+1 open/close
         """
         slippage_model = SlippageModel()
         trades = []
         
-        # Track portfolio value
         cash = capital
         shares = 0
         entry_price = 0.0
         entry_date = None
+        pending_signal = None  # Signal waiting for next bar execution
         
-        # Daily returns for this stock's allocation
         daily_portfolio_values = {}
         daily_benchmark_values = {}
         
@@ -451,38 +451,33 @@ class Backtester:
         def is_limit_down(prev_close, close):
             return prev_close > 0 and (close / prev_close - 1) * 100 <= (-limit + 0.01)
 
-        # Initialize benchmark
         benchmark_shares = capital / float(prices[0]) if prices[0] > 0 else 0
 
         for i in range(len(X) - 1):
-            pred = model.predict(X[i:i+1])
             current_price = float(prices[i])
-            next_price = float(prices[i + 1])
+            next_price = float(prices[i + 1])  # Execution price
             dt = dates[i]
             prev_close = float(prices[i - 1]) if i > 0 else current_price
 
-            # Calculate costs
-            order_value = capital * 0.1
-            vol = float(volumes[i]) if i < len(volumes) else 1e6
-            slip = slippage_model.calculate(order_value, vol, current_price)
-            
-            entry_cost_pct = CONFIG.COMMISSION + slip
-            exit_cost_pct = CONFIG.COMMISSION + slip + CONFIG.STAMP_TAX
-
-            # Portfolio value at this point
+            # Portfolio value at current bar (before any execution)
             portfolio_value = cash + shares * current_price
             benchmark_value = benchmark_shares * current_price
             
             daily_portfolio_values[dt] = portfolio_value
             daily_benchmark_values[dt] = benchmark_value
 
-            # Entry logic
-            if shares == 0:
-                if pred.predicted_class == 2 and pred.confidence >= CONFIG.MIN_CONFIDENCE:
+            # Execute pending signal from PREVIOUS bar
+            if pending_signal is not None:
+                action, signal_conf, signal_dt = pending_signal
+                pending_signal = None
+                
+                if action == 'BUY' and shares == 0:
                     if not is_limit_up(prev_close, current_price):
-                        # Buy
+                        # Execute at current bar's price (which was next bar when signal generated)
+                        vol = float(volumes[i]) if i < len(volumes) else 1e6
+                        slip = slippage_model.calculate(capital * 0.1, vol, current_price)
                         buy_price = current_price * (1 + slip)
-                        cost = capital * 0.95  # Use 95% of remaining capital
+                        cost = capital * 0.95
                         shares_to_buy = int(cost / buy_price / 100) * 100
                         
                         if shares_to_buy > 0:
@@ -493,49 +488,60 @@ class Backtester:
                             entry_date = dt
                             
                             trades.append(BacktestTrade(
-                                entry_date=dt,
+                                entry_date=signal_dt,  # Signal date
                                 exit_date=None,
                                 stock_code=stock_code,
                                 side="buy",
                                 entry_price=entry_price,
                                 quantity=shares,
-                                signal_confidence=pred.confidence
+                                signal_confidence=signal_conf
                             ))
-            else:
-                # Holding - check exit conditions
-                holding_days = (dt - entry_date).days if entry_date else 0
+                            
+                elif action == 'SELL' and shares > 0:
+                    if not is_limit_down(prev_close, current_price):
+                        vol = float(volumes[i]) if i < len(volumes) else 1e6
+                        slip = slippage_model.calculate(shares * current_price, vol, current_price)
+                        sell_price = current_price * (1 - slip)
+                        proceeds = shares * sell_price * (1 - CONFIG.COMMISSION - CONFIG.STAMP_TAX)
+                        
+                        holding_days = (dt - entry_date).days if entry_date else 0
+                        gross_pnl = (sell_price - entry_price) * shares
+                        costs = shares * entry_price * CONFIG.COMMISSION + shares * sell_price * (CONFIG.COMMISSION + CONFIG.STAMP_TAX)
+                        net_pnl = gross_pnl - costs
+                        pnl_pct = (sell_price / entry_price - 1) * 100 - (CONFIG.COMMISSION * 2 + CONFIG.STAMP_TAX) * 100
+                        
+                        cash += proceeds
+                        
+                        if trades:
+                            trades[-1].exit_date = dt
+                            trades[-1].exit_price = sell_price
+                            trades[-1].pnl = net_pnl
+                            trades[-1].pnl_pct = pnl_pct
+                            trades[-1].holding_days = holding_days
+                        
+                        shares = 0
+                        entry_price = 0.0
+                        entry_date = None
+
+            # Generate signal for NEXT bar (if we have prediction data)
+            if i < len(X) - 2:  # Need at least one more bar for execution
+                pred = model.predict(X[i:i+1])
                 
-                should_exit = False
-                if holding_days >= horizon:
-                    should_exit = True
-                elif pred.predicted_class == 0 and pred.confidence >= CONFIG.MIN_CONFIDENCE:
-                    should_exit = True
+                if shares == 0 and pred.predicted_class == 2 and pred.confidence >= CONFIG.MIN_CONFIDENCE:
+                    pending_signal = ('BUY', pred.confidence, dt)
+                elif shares > 0:
+                    holding_days = (dt - entry_date).days if entry_date else 0
+                    should_exit = False
+                    
+                    if holding_days >= horizon:
+                        should_exit = True
+                    elif pred.predicted_class == 0 and pred.confidence >= CONFIG.MIN_CONFIDENCE:
+                        should_exit = True
+                    
+                    if should_exit:
+                        pending_signal = ('SELL', pred.confidence, dt)
 
-                if should_exit and not is_limit_down(prev_close, current_price):
-                    # Sell
-                    sell_price = current_price * (1 - slip)
-                    proceeds = shares * sell_price * (1 - CONFIG.COMMISSION - CONFIG.STAMP_TAX)
-                    
-                    # Calculate P&L
-                    gross_pnl = (sell_price - entry_price) * shares
-                    costs = shares * entry_price * CONFIG.COMMISSION + shares * sell_price * (CONFIG.COMMISSION + CONFIG.STAMP_TAX)
-                    net_pnl = gross_pnl - costs
-                    pnl_pct = (sell_price / entry_price - 1) * 100 - (entry_cost_pct + exit_cost_pct) * 100
-                    
-                    cash += proceeds
-                    
-                    if trades:
-                        trades[-1].exit_date = dt
-                        trades[-1].exit_price = sell_price
-                        trades[-1].pnl = net_pnl
-                        trades[-1].pnl_pct = pnl_pct
-                        trades[-1].holding_days = holding_days
-                    
-                    shares = 0
-                    entry_price = 0.0
-                    entry_date = None
-
-        # Convert to daily returns
+        # Convert to daily returns (rest of method unchanged)
         sorted_dates = sorted(daily_portfolio_values.keys())
         strategy_returns = {}
         benchmark_returns = {}
@@ -562,7 +568,7 @@ class Backtester:
                     benchmark_returns[dt] = 0.0
 
         return trades, strategy_returns, benchmark_returns
-    
+        
     def _calculate_metrics(
         self,
         trades: List[BacktestTrade],

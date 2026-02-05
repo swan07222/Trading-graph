@@ -206,7 +206,9 @@ class AlertManager:
         log.info("Alert manager stopped")
     
     def send(self, alert: Alert):
-        """Queue alert for sending"""
+        """Queue alert for sending - auto-starts if not running"""
+        if not self._running:
+            self.start()
         self._queue.put(alert)
     
     def send_immediate(self, alert: Alert):

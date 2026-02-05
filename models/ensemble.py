@@ -108,34 +108,29 @@ class EnsembleModel:
             self.weights = {k: v / total for k, v in self.weights.items()}
     
     def calibrate(self, X_val: np.ndarray, y_val: np.ndarray):
-        """
-        Calibrate probabilities using temperature scaling.
-        Should be called after training with validation data.
-        """
-        import torch.nn.functional as F
-        
-        # Get logits from all models
+        """Calibrate using WEIGHTED logits (same as inference)"""
         X_tensor = torch.FloatTensor(X_val).to(self.device)
         
-        all_logits = []
+        # Get weighted logits (same as predict)
+        weighted_logits = None
         for name, model in self.models.items():
             model.eval()
             with torch.no_grad():
                 logits, _ = model(X_tensor)
-                all_logits.append(logits)
+                weight = self.weights.get(name, 1.0 / len(self.models))
+                if weighted_logits is None:
+                    weighted_logits = logits * weight
+                else:
+                    weighted_logits += logits * weight
         
-        # Average logits
-        avg_logits = torch.stack(all_logits).mean(dim=0)
-        
-        # Find optimal temperature
         y_tensor = torch.LongTensor(y_val).to(self.device)
         
+        # Find optimal temperature
         best_temp = 1.0
         best_nll = float('inf')
         
         for temp in [0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 2.5, 3.0]:
-            scaled = avg_logits / temp
-            probs = F.softmax(scaled, dim=-1)
+            scaled = weighted_logits / temp
             nll = F.cross_entropy(scaled, y_tensor).item()
             
             if nll < best_nll:
@@ -418,69 +413,61 @@ class EnsembleModel:
             )
     
     def predict_batch(self, X: np.ndarray) -> List[EnsemblePrediction]:
-        """
-        Predict multiple samples efficiently.
-        
-        Uses batched forward passes for all models to avoid
-        per-sample overhead.
-        """
+        """Predict multiple samples - CONSISTENT with predict()"""
         if len(X) == 0:
             return []
         
         with self._lock:
             X_tensor = torch.FloatTensor(X).to(self.device)
             
-            # Get all predictions at once for each model
-            all_model_probs = {}
+            # Collect logits from all models
+            all_logits = {}
+            all_probs = {}
             
             for name, model in self.models.items():
                 model.eval()
                 with torch.no_grad():
                     logits, _ = model(X_tensor)
-                    probs = F.softmax(logits, dim=-1).cpu().numpy()
-                    all_model_probs[name] = probs
+                    all_logits[name] = logits
+                    all_probs[name] = F.softmax(logits, dim=-1).cpu().numpy()
             
-            # Build predictions for each sample
+            # Weighted average of LOGITS (same as predict())
+            weighted_logits = torch.zeros_like(list(all_logits.values())[0])
+            for name, logits in all_logits.items():
+                weight = self.weights.get(name, 1.0 / len(self.models))
+                weighted_logits += logits * weight
+            
+            # Apply temperature scaling
+            temperature = getattr(self, 'temperature', 1.0)
+            scaled_logits = weighted_logits / temperature
+            
+            # Softmax for final probabilities
+            final_probs = F.softmax(scaled_logits, dim=-1).cpu().numpy()
+            
+            # Build predictions
             predictions = []
-            
             for i in range(len(X)):
-                # Get probs for this sample from each model
-                sample_probs = {name: probs[i] for name, probs in all_model_probs.items()}
+                probs = final_probs[i]
+                sample_probs = {name: all_probs[name][i] for name in self.models.keys()}
                 
-                # Weighted average
-                weighted_logits = np.zeros(CONFIG.NUM_CLASSES)
-                for name, probs in sample_probs.items():
-                    # Convert back to logits approximately
-                    logits = np.log(probs + 1e-8)
-                    weight = self.weights.get(name, 1.0 / len(self.models))
-                    weighted_logits += logits * weight
-
-                # Apply temperature scaling
-                temperature = getattr(self, 'temperature', 1.0)
-                scaled_logits = weighted_logits / temperature
-
-                # Softmax
-                exp_logits = np.exp(scaled_logits - np.max(scaled_logits))
-                weighted_probs = exp_logits / (exp_logits.sum() + 1e-8)
-                
-                predicted_class = int(np.argmax(weighted_probs))
-                confidence = float(np.max(weighted_probs))
+                predicted_class = int(np.argmax(probs))
+                confidence = float(np.max(probs))
                 
                 # Entropy
-                entropy = -np.sum(weighted_probs * np.log(weighted_probs + 1e-8))
+                entropy = -np.sum(probs * np.log(probs + 1e-8))
                 max_entropy = np.log(CONFIG.NUM_CLASSES)
                 normalized_entropy = entropy / max_entropy
                 
                 # Agreement
-                model_predictions = [np.argmax(p) for p in sample_probs.values()]
-                if model_predictions:
-                    most_common = max(set(model_predictions), key=model_predictions.count)
-                    agreement = model_predictions.count(most_common) / len(model_predictions)
+                model_preds = [np.argmax(p) for p in sample_probs.values()]
+                if model_preds:
+                    most_common = max(set(model_preds), key=model_preds.count)
+                    agreement = model_preds.count(most_common) / len(model_preds)
                 else:
                     agreement = 0.0
                 
                 predictions.append(EnsemblePrediction(
-                    probabilities=weighted_probs,
+                    probabilities=probs,
                     predicted_class=predicted_class,
                     confidence=confidence,
                     entropy=normalized_entropy,

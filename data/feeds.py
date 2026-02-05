@@ -199,17 +199,42 @@ class PollingFeed(DataFeed):
                 time.sleep(1)
 
     def _fetch_batch_quotes(self, symbols: List[str]) -> Dict[str, Quote]:
-        """Fetch quotes using shared AkShare source cache"""
-        result = {}
+        """Fetch quotes using shared spot cache"""
+        from data.fetcher import get_spot_cache
         
-        try:
-            # Use the fetcher's AkShare source which has internal caching
+        result = {}
+        cache = get_spot_cache()
+        
+        # Single cache refresh for all symbols
+        df = cache.get()
+        
+        if df is None or df.empty:
+            # Fallback to individual fetches
             for symbol in symbols:
                 quote = self._fetcher.get_realtime(symbol)
                 if quote and quote.price > 0:
                     result[symbol] = quote
-        except Exception as e:
-            log.warning(f"Batch quote fetch failed: {e}")
+            return result
+        
+        # Extract from cached data
+        for symbol in symbols:
+            data = cache.get_quote(symbol)
+            if data and data['price'] > 0:
+                quote = Quote(
+                    code=symbol,
+                    name=data['name'],
+                    price=data['price'],
+                    open=data['open'],
+                    high=data['high'],
+                    low=data['low'],
+                    close=data['close'],
+                    volume=data['volume'],
+                    amount=data['amount'],
+                    change=data['change'],
+                    change_pct=data['change_pct'],
+                    source='spot_cache'
+                )
+                result[symbol] = quote
         
         return result
 

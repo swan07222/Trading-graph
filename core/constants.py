@@ -317,9 +317,22 @@ def get_exchange(code: str) -> str:
     return 'UNKNOWN'
 
 
-def get_price_limit(code: str) -> float:
-    """Get price limit for stock"""
+def get_price_limit(code: str, name: str = None) -> float:
+    """
+    Get price limit for stock.
+    
+    Args:
+        code: Stock code
+        name: Stock name (optional, for ST detection)
+    
+    Returns:
+        Price limit as decimal (e.g., 0.10 for 10%)
+    """
     code = str(code).zfill(6)
+    
+    # Check ST first if name provided
+    if name and is_st_stock(name):
+        return PRICE_LIMITS['st']
     
     # STAR Market (科创板)
     if code.startswith('688'):
@@ -330,7 +343,7 @@ def get_price_limit(code: str) -> float:
         return PRICE_LIMITS['chinext']
     
     # BSE (北交所)
-    if code.startswith('83') or code.startswith('43'):
+    if code.startswith(('83', '43', '87')):
         return PRICE_LIMITS['bse']
     
     # Main board

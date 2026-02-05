@@ -269,6 +269,9 @@ class UniversalStockDiscovery:
         except Exception:
             return []
 
+    def _get_top_losers(self) -> List[DiscoveredStock]:
+        return []
+
     def _get_csi1000(self) -> List[DiscoveredStock]:
         if not self._ak:
             return []
@@ -300,26 +303,6 @@ class UniversalStockDiscovery:
                     source="Gainers",
                     change_pct=float(row["涨跌幅"]),
                     score=min(abs(float(row["涨跌幅"])) / 10.0, 0.8),
-                )
-                for _, row in df.iterrows()
-            ]
-        except Exception:
-            return []
-
-    def _get_top_losers(self) -> List[DiscoveredStock]:
-        if not self._ak:
-            return []
-        try:
-            df = self._ak.stock_zh_a_spot_em()
-            df["涨跌幅"] = pd.to_numeric(df["涨跌幅"], errors="coerce")
-            df = df.dropna(subset=["涨跌幅"]).sort_values("涨跌幅", ascending=True).head(100)
-            return [
-                DiscoveredStock(
-                    code=str(row["代码"]),
-                    name=str(row.get("名称", "")),
-                    source="Losers",
-                    change_pct=float(row["涨跌幅"]),
-                    score=min(abs(float(row["涨跌幅"])) / 10.0, 0.7),
                 )
                 for _, row in df.iterrows()
             ]

@@ -301,6 +301,28 @@ class SimulatorBroker(BrokerInterface):
             self._update_prices()
             return dict(self._positions)
     
+    def _check_price_limits(self, symbol: str, price: float, prev_close: float, name: str = None) -> Tuple[bool, str]:
+        """Check if price is within A-share limits"""
+        from core.constants import get_price_limit
+        
+        if prev_close <= 0:
+            return True, "OK"
+        
+        # Get limit percentage with ST detection
+        limit_pct = get_price_limit(symbol, name)
+        
+        # Calculate bounds
+        limit_up = prev_close * (1 + limit_pct)
+        limit_down = prev_close * (1 - limit_pct)
+        
+        if price >= limit_up * 0.999:  # At limit up
+            return False, f"Cannot buy at limit up ({limit_pct*100:.0f}%)"
+        
+        if price <= limit_down * 1.001:  # At limit down
+            return False, f"Cannot sell at limit down ({limit_pct*100:.0f}%)"
+        
+        return True, "OK"
+
     def get_position(self, symbol: str) -> Optional[Position]:
         with self._lock:
             self._check_settlement()
@@ -366,7 +388,9 @@ class SimulatorBroker(BrokerInterface):
         if order.quantity <= 0:
             return False, "Quantity must be positive"
         
-        lot_size = getattr(CONFIG, 'LOT_SIZE', 100)
+        from core.constants import get_lot_size
+        lot_size = get_lot_size(order.symbol)
+
         if order.quantity % lot_size != 0:
             return False, f"Quantity must be multiple of {lot_size}"
         
@@ -405,24 +429,76 @@ class SimulatorBroker(BrokerInterface):
         return True, "OK"
     
     def _execute_order(self, order: Order, market_price: float):
-        """Execute order with realistic simulation"""
+        """Execute order with realistic simulation including limit order behavior"""
         import random
         
-        slippage = CONFIG.SLIPPAGE
+        df = self._get_fetcher().get_history(order.symbol, days=2)
+        prev_close = float(df['close'].iloc[-2]) if len(df) >= 2 else market_price
         
-        if order.side == OrderSide.BUY:
-            fill_price = market_price * (1 + slippage * (0.5 + 0.5 * random.random()))
+        # Check price limits
+        can_trade, reason = self._check_price_limits(order.symbol, market_price, prev_close, order.name)
+        if not can_trade:
+            order.status = OrderStatus.REJECTED
+            order.message = reason
+            self._emit('order_update', order)
+            return
+        
+        # For LIMIT orders, check if order is marketable
+        if order.order_type == OrderType.LIMIT:
+            if order.side == OrderSide.BUY:
+                # Buy limit: only fill if market price <= limit price
+                if market_price > order.price:
+                    # Order accepted but not filled - would need price to come down
+                    order.status = OrderStatus.ACCEPTED
+                    order.message = f"Limit order waiting: market {market_price:.2f} > limit {order.price:.2f}"
+                    self._emit('order_update', order)
+                    # In real sim, you'd queue this and check against future prices
+                    # For now, we'll simulate partial fill with probability
+                    if random.random() < 0.3:  # 30% chance of fill at limit
+                        fill_price = order.price
+                    else:
+                        return  # Order stays open
+                else:
+                    fill_price = min(market_price, order.price)
+            else:  # SELL
+                # Sell limit: only fill if market price >= limit price
+                if market_price < order.price:
+                    order.status = OrderStatus.ACCEPTED
+                    order.message = f"Limit order waiting: market {market_price:.2f} < limit {order.price:.2f}"
+                    self._emit('order_update', order)
+                    if random.random() < 0.3:
+                        fill_price = order.price
+                    else:
+                        return
+                else:
+                    fill_price = max(market_price, order.price)
         else:
-            fill_price = market_price * (1 - slippage * (0.5 + 0.5 * random.random()))
+            # Market order - use market price with slippage
+            fill_price = market_price
+        
+        # Apply slippage
+        slippage = CONFIG.SLIPPAGE
+        if order.side == OrderSide.BUY:
+            fill_price = fill_price * (1 + slippage * (0.5 + 0.5 * random.random()))
+        else:
+            fill_price = fill_price * (1 - slippage * (0.5 + 0.5 * random.random()))
         
         fill_price = round(fill_price, 2)
-        fill_qty = order.quantity
         
+        # Simulate partial fills (10% chance)
+        if random.random() < 0.1 and order.quantity > CONFIG.LOT_SIZE * 2:
+            fill_qty = (order.quantity // 2 // CONFIG.LOT_SIZE) * CONFIG.LOT_SIZE
+            fill_qty = max(fill_qty, CONFIG.LOT_SIZE)
+        else:
+            fill_qty = order.quantity
+        
+        # Calculate costs
         trade_value = fill_qty * fill_price
-        commission = trade_value * CONFIG.COMMISSION
+        commission = max(trade_value * CONFIG.COMMISSION, 5.0)  # Minimum commission
         stamp_tax = trade_value * CONFIG.STAMP_TAX if order.side == OrderSide.SELL else 0
         total_cost = commission + stamp_tax
         
+        # Execute trade
         if order.side == OrderSide.BUY:
             self._cash -= (trade_value + total_cost)
             
@@ -451,26 +527,37 @@ class SimulatorBroker(BrokerInterface):
             realized = gross_pnl - total_cost
             pos.realized_pnl += realized
             pos.quantity -= fill_qty
-            pos.available_qty -= fill_qty
+            pos.available_qty = max(0, pos.available_qty - fill_qty)
             
             if pos.quantity <= 0:
                 del self._positions[order.symbol]
                 if order.symbol in self._purchase_dates:
                     del self._purchase_dates[order.symbol]
         
-        order.status = OrderStatus.FILLED
-        order.filled_qty = fill_qty
-        order.filled_price = fill_price
-        order.avg_price = fill_price
-        order.commission = total_cost
-        order.updated_at = datetime.now()
-        order.filled_at = datetime.now()
+        # Update order
+        order.filled_qty += fill_qty
+        order.commission += total_cost
         
-        # Create Fill record with our order.id (not broker_id)
+        if order.filled_qty >= order.quantity:
+            order.status = OrderStatus.FILLED
+            order.filled_at = datetime.now()
+        else:
+            order.status = OrderStatus.PARTIAL
+        
+        # Calculate average price
+        if order.filled_qty > 0:
+            prev_value = (order.filled_qty - fill_qty) * order.avg_price
+            new_value = fill_qty * fill_price
+            order.avg_price = (prev_value + new_value) / order.filled_qty
+        
+        order.filled_price = fill_price
+        order.updated_at = datetime.now()
+        
+        # Create Fill record
         self._fill_counter += 1
         fill = Fill(
             id=f"FILL_SIM_{datetime.now().strftime('%Y%m%d%H%M%S')}_{self._fill_counter:06d}",
-            order_id=order.id,  # CRITICAL: Use internal order.id
+            order_id=order.id,
             symbol=order.symbol,
             side=order.side,
             quantity=fill_qty,
@@ -481,13 +568,14 @@ class SimulatorBroker(BrokerInterface):
         )
         
         self._fills.append(fill)
-        self._unsent_fills.append(fill)  # Track for get_fills()
+        self._unsent_fills.append(fill)
         
-        self._order_history.append(order)
+        if order.status == OrderStatus.FILLED:
+            self._order_history.append(order)
         
         log.info(
             f"[SIM] {order.side.value.upper()} {fill_qty} {order.symbol} "
-            f"@ {fill_price:.2f} (cost: {total_cost:.2f})"
+            f"@ {fill_price:.2f} (cost: {total_cost:.2f}, status: {order.status.value})"
         )
         
         self._emit('trade', order, fill)

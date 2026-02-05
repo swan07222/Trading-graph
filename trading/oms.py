@@ -437,35 +437,53 @@ class OrderDatabase:
                 conn.execute("DELETE FROM t1_pending WHERE symbol = ?", (symbol,))
     
     def process_t1_settlement(self) -> List[str]:
-        """Process T+1 settlement, return list of symbols made available"""
+        """Process T+1 settlement - only on trading days"""
+        from core.constants import is_trading_day
+        
         today = date.today()
+        
+        # Only process on trading days
+        if not is_trading_day(today):
+            return []
+        
         settled = []
         
         with self._transaction() as conn:
-            # Get all pending from before today
+            # Get all pending where purchase was before today AND
+            # there's been at least one trading day since purchase
             cursor = conn.execute(
-                "SELECT symbol, SUM(quantity) as total_qty FROM t1_pending WHERE purchase_date < ? GROUP BY symbol",
-                (today.isoformat(),)
+                "SELECT symbol, purchase_date, quantity FROM t1_pending"
             )
             
             for row in cursor.fetchall():
                 symbol = row['symbol']
-                quantity = row['total_qty']
+                purchase_date = date.fromisoformat(row['purchase_date'])
+                quantity = row['quantity']
                 
-                # Update available quantity
-                conn.execute("""
-                    UPDATE positions 
-                    SET available_qty = available_qty + ?
-                    WHERE symbol = ?
-                """, (quantity, symbol))
+                # Check if at least one trading day has passed
+                trading_days_passed = 0
+                check_date = purchase_date + timedelta(days=1)
+                while check_date <= today:
+                    if is_trading_day(check_date):
+                        trading_days_passed += 1
+                        break
+                    check_date += timedelta(days=1)
                 
-                settled.append(symbol)
-            
-            # Remove all settled entries
-            conn.execute(
-                "DELETE FROM t1_pending WHERE purchase_date < ?",
-                (today.isoformat(),)
-            )
+                if trading_days_passed >= 1:
+                    # Update available quantity
+                    conn.execute("""
+                        UPDATE positions 
+                        SET available_qty = available_qty + ?
+                        WHERE symbol = ?
+                    """, (quantity, symbol))
+                    
+                    # Remove from pending
+                    conn.execute(
+                        "DELETE FROM t1_pending WHERE symbol = ? AND purchase_date = ?",
+                        (symbol, row['purchase_date'])
+                    )
+                    
+                    settled.append(symbol)
         
         return settled
 
@@ -584,23 +602,51 @@ class OrderManagementSystem:
 
             return order
     
-    def _validate_order(self, order: Order):
-        """Comprehensive order validation"""
+    def _validate_order(self, order: Order, price: float) -> Tuple[bool, str]:
+        """Validate order"""
         if order.quantity <= 0:
-            raise OrderValidationError("Quantity must be positive")
+            return False, "Quantity must be positive"
         
-        if order.quantity % CONFIG.trading.lot_size != 0:
-            raise OrderValidationError(f"Quantity must be multiple of {CONFIG.trading.lot_size}")
+        # FIXED: Use per-symbol lot size
+        from core.constants import get_lot_size
+        lot_size = get_lot_size(order.symbol)
+
+        if order.quantity % lot_size != 0:
+            return False, f"Quantity must be multiple of {lot_size} for {order.symbol}"
         
-        # Price must always be set (use last quote for market orders)
-        if order.price <= 0:
-            raise OrderValidationError("Order price must be positive (set to last quote for market orders)")
-        
-        # Side-specific validation
         if order.side == OrderSide.BUY:
-            self._validate_buy_order(order)
-        else:
-            self._validate_sell_order(order)
+            cost = order.quantity * price
+            commission = cost * CONFIG.COMMISSION
+            total = cost + commission
+            
+            if total > self._cash:
+                return False, f"Insufficient funds: need {total:,.2f}, have {self._cash:,.2f}"
+            
+            # Check position limit
+            existing_value = 0.0
+            existing_pos = self._positions.get(order.symbol)
+            if existing_pos:
+                existing_value = existing_pos.quantity * price
+            
+            new_total_value = existing_value + (order.quantity * price)
+            equity = self._cash + sum(p.market_value for p in self._positions.values())
+            
+            if equity > 0:
+                max_pct = getattr(CONFIG, 'MAX_POSITION_PCT', 15.0)
+                position_pct = new_total_value / equity * 100
+                if position_pct > max_pct:
+                    return False, f"Position too large: {position_pct:.1f}% (max: {max_pct}%)"
+            
+        else:  # SELL
+            pos = self._positions.get(order.symbol)
+            
+            if not pos:
+                return False, f"No position in {order.symbol}"
+            
+            if order.quantity > pos.available_qty:
+                return False, f"Available: {pos.available_qty}, requested: {order.quantity}"
+        
+        return True, "OK"
     
     def _validate_buy_order(self, order: Order):
         """Validate buy order"""
@@ -749,23 +795,56 @@ class OrderManagementSystem:
         return None
 
     def _release_reserved(self, order: Order):
-        """Release reserved funds/shares for cancelled/rejected order"""
+        """Release reserved funds/shares for cancelled/rejected order - WITH SAFETY CLAMPING"""
         if order.side == OrderSide.BUY:
             # Release reserved funds
-            reserved_rem = float(order.tags.get("reserved_cash_remaining", 0.0))
+            if order.tags:
+                reserved_rem = float(order.tags.get("reserved_cash_remaining", 0.0))
+            else:
+                # Fallback: estimate based on unfilled portion
+                unfilled = order.quantity - order.filled_qty
+                reserved_rem = unfilled * order.price * (1 + CONFIG.trading.commission)
+            
             self._account.available += reserved_rem
-            order.tags["reserved_cash_remaining"] = 0.0
-        else:
+            
+            # CRITICAL: Clamp to valid range
+            self._account.available = max(0.0, min(self._account.available, self._account.cash))
+            
+            if order.tags:
+                order.tags["reserved_cash_remaining"] = 0.0
+                
+        else:  # SELL
             # Release reserved shares
             position = self._account.positions.get(order.symbol)
             if position:
                 remaining_qty = order.quantity - order.filled_qty
-                position.available_qty += remaining_qty
-                position.frozen_qty -= remaining_qty
+                
+                # Only release what's actually frozen
+                to_release = min(remaining_qty, position.frozen_qty)
+                position.frozen_qty -= to_release
+                position.available_qty += to_release
+                
+                # CRITICAL: Enforce invariants
+                position.frozen_qty = max(0, position.frozen_qty)
+                position.available_qty = max(0, min(position.available_qty, position.quantity))
+                
+                self._db.save_position(position)
     
     def process_fill(self, order: Order, fill: Fill):
-        """Process order fill - FIXED: persist order after tag updates"""
+        """Process order fill - IDEMPOTENT: skip if fill already exists"""
         with self._lock:
+            # CHECK IF FILL ALREADY PROCESSED (idempotency)
+            existing = self._db._conn.execute(
+                "SELECT 1 FROM fills WHERE id = ?", (fill.id,)
+            ).fetchone()
+            
+            if existing:
+                log.debug(f"Fill {fill.id} already processed, skipping")
+                return
+            
+            # Save fill FIRST (will fail if duplicate due to PRIMARY KEY)
+            self._db.save_fill(fill)
+            
             # Update order
             order.filled_qty += fill.quantity
             order.commission += fill.commission
@@ -785,13 +864,10 @@ class OrderManagementSystem:
             
             order.updated_at = datetime.now()
             
-            # Persist fill FIRST
-            self._db.save_fill(fill)
-            
-            # Update account and positions (this modifies order.tags)
+            # Update account and positions
             self._update_account_on_fill(order, fill)
             
-            # Persist order AFTER tag updates
+            # Persist order AFTER updates
             self._db.save_order(order)
             
             # Persist account state
@@ -837,25 +913,27 @@ class OrderManagementSystem:
             cost = fill.quantity * fill.price + fill.commission
             self._account.cash -= cost
             
-            # FIXED: Properly handle reservation release/consumption
-            reserved_rem = float(order.tags.get("reserved_cash_remaining", 0.0))
-            reserved_price = float(order.tags.get("reserved_cash_price", order.price))
+            # Handle reservation release/consumption
+            reserved_rem = float(order.tags.get("reserved_cash_remaining", 0.0) if order.tags else 0.0)
+            reserved_price = float(order.tags.get("reserved_cash_price", order.price) if order.tags else order.price)
             
-            # What we reserved for this fill (based on limit price + commission estimate)
+            # What we reserved for this fill
             reserved_for_fill = fill.quantity * reserved_price * (1 + CONFIG.trading.commission)
             
-            # Actual spent (fill.price + commission already in fill.commission)
+            # Actual spent
             actual_for_fill = fill.quantity * fill.price + fill.commission
             
-            # Delta can be positive (saved money) or negative (cost more than reserved)
+            # Delta adjustment
             delta = reserved_for_fill - actual_for_fill
             self._account.available += delta
             
-            # FIXED: Ensure available never exceeds cash or goes negative
+            # CRITICAL: Clamp available to valid range
             self._account.available = max(0.0, min(self._account.available, self._account.cash))
             
             # Update remaining reservation
-            order.tags["reserved_cash_remaining"] = max(reserved_rem - reserved_for_fill, 0.0)
+            if order.tags:
+                order.tags["reserved_cash_remaining"] = max(reserved_rem - reserved_for_fill, 0.0)
+            
             self._account.commission_paid += fill.commission
             
             # Update position
@@ -893,27 +971,62 @@ class OrderManagementSystem:
             self._account.available += proceeds
             self._account.commission_paid += fill.commission
             
-            # Update position
-            pos = self._account.positions[symbol]
+            # Update position with LATE-FILL SAFETY
+            pos = self._account.positions.get(symbol)
             
-            # Calculate realized P&L
-            cost_basis = fill.quantity * pos.avg_cost
-            sale_proceeds = fill.quantity * fill.price - fill.commission - fill.stamp_tax
-            realized = sale_proceeds - cost_basis
-            
-            pos.realized_pnl += realized
-            self._account.realized_pnl += realized
-            
-            pos.quantity -= fill.quantity
-            pos.frozen_qty -= fill.quantity
-            pos.last_updated = datetime.now()
-            
-            # Remove position if empty
-            if pos.quantity <= 0:
-                del self._account.positions[symbol]
-                self._db.delete_position(symbol)
+            if pos is None:
+                # Position was already closed - this is a late fill after full sell
+                # Log warning but still process the cash (already added above)
+                log.warning(f"Late fill for closed position {symbol}: {fill.quantity} @ {fill.price}")
+                # Create temporary position for P&L tracking
+                realized_pnl = fill.quantity * fill.price - fill.commission - fill.stamp_tax
+                self._account.realized_pnl += realized_pnl
             else:
-                self._db.save_position(pos)
+                # Calculate realized P&L
+                cost_basis = fill.quantity * pos.avg_cost
+                sale_proceeds = fill.quantity * fill.price - fill.commission - fill.stamp_tax
+                realized = sale_proceeds - cost_basis
+                
+                pos.realized_pnl += realized
+                self._account.realized_pnl += realized
+                
+                # CRITICAL: Late-fill-safe inventory adjustment
+                # If order was cancelled, frozen_qty may have been released back to available_qty
+                # We need to handle both cases safely
+                
+                if pos.frozen_qty >= fill.quantity:
+                    # Normal case: shares are still frozen
+                    pos.frozen_qty -= fill.quantity
+                else:
+                    # Late fill case: some/all shares were released back to available
+                    # First consume whatever is frozen
+                    from_frozen = pos.frozen_qty
+                    pos.frozen_qty = 0
+                    
+                    # Then consume from available
+                    from_available = fill.quantity - from_frozen
+                    if pos.available_qty >= from_available:
+                        pos.available_qty -= from_available
+                    else:
+                        # Edge case: not enough available either (shouldn't happen with proper accounting)
+                        log.error(f"Inventory inconsistency for {symbol}: need {from_available}, have {pos.available_qty} available")
+                        pos.available_qty = 0
+                
+                pos.quantity -= fill.quantity
+                pos.last_updated = datetime.now()
+                
+                # CRITICAL: Enforce invariants
+                pos.quantity = max(0, pos.quantity)
+                pos.available_qty = max(0, min(pos.available_qty, pos.quantity))
+                pos.frozen_qty = max(0, min(pos.frozen_qty, pos.quantity - pos.available_qty))
+                
+                # Remove position if empty
+                if pos.quantity <= 0:
+                    del self._account.positions[symbol]
+                    self._db.delete_position(symbol)
+                    self._db.clear_t1_pending(symbol)
+                else:
+                    self._db.save_position(pos)
         
         # Update peak equity
         if self._account.equity > self._account.peak_equity:

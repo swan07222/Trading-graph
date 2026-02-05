@@ -106,31 +106,60 @@ class RiskManager:
         if self._account is None:
             return Account()
         
-        # Start with current account state
+        # Deep copy positions to avoid mutating originals
+        unified_positions = {}
+        for sym, pos in self._account.positions.items():
+            unified_positions[sym] = Position(
+                symbol=pos.symbol,
+                name=pos.name,
+                quantity=pos.quantity,
+                available_qty=pos.available_qty,
+                frozen_qty=pos.frozen_qty,
+                avg_cost=pos.avg_cost,
+                current_price=pos.current_price,
+                realized_pnl=pos.realized_pnl,
+            )
+        
         unified = Account(
             broker_name=self._account.broker_name,
             cash=self._account.cash,
             available=self._account.available,
             frozen=self._account.frozen,
-            positions=dict(self._account.positions),
+            positions=unified_positions,
             initial_capital=self._account.initial_capital,
             realized_pnl=self._account.realized_pnl,
         )
         
-        # Subtract pending buy reservations from available
         try:
             from trading.oms import get_oms
             oms = get_oms()
             
             active_orders = oms.get_active_orders()
             for order in active_orders:
-                if order.side == OrderSide.BUY and order.status in [
-                    OrderStatus.PENDING, OrderStatus.SUBMITTED, OrderStatus.ACCEPTED, OrderStatus.PARTIAL
+                if order.status not in [
+                    OrderStatus.PENDING, OrderStatus.SUBMITTED, 
+                    OrderStatus.ACCEPTED, OrderStatus.PARTIAL
                 ]:
-                    reserved = 0.0
+                    continue
+                
+                remaining_qty = order.quantity - order.filled_qty
+                if remaining_qty <= 0:
+                    continue
+                
+                if order.side == OrderSide.BUY:
+                    # Subtract reserved cash
                     if order.tags:
                         reserved = float(order.tags.get("reserved_cash_remaining", 0.0))
+                    else:
+                        reserved = remaining_qty * order.price * (1 + CONFIG.trading.commission)
                     unified.available -= reserved
+                    
+                else:  # SELL
+                    # Subtract reserved shares from available
+                    if order.symbol in unified.positions:
+                        pos = unified.positions[order.symbol]
+                        # Reduce available_qty by unfilled sell quantity
+                        pos.available_qty = max(0, pos.available_qty - remaining_qty)
             
             # Ensure non-negative
             unified.available = max(0.0, unified.available)
@@ -154,23 +183,16 @@ class RiskManager:
             if account.equity > self._peak_equity:
                 self._peak_equity = account.equity
             
-            # Check for new trading day
+            # Check for new trading day and record return
             today = date.today()
-            self._equity_by_day[today] = account.equity
-
-            # FIXED: Only compute daily return when day changes (for proper VaR)
             if today != self._last_date:
-                prev_day = self._last_date
-                if prev_day in self._equity_by_day:
-                    prev_eq = self._equity_by_day.get(prev_day, old_equity)
-                    new_eq = account.equity
-                    if prev_eq > 0:
-                        r = (new_eq - prev_eq) / prev_eq
-                        self._returns_history.append(r)
-                        if len(self._returns_history) > self._max_history:
-                            self._returns_history.pop(0)
+                # Record return before resetting
+                self._record_daily_return(old_equity)
                 self._new_day(old_equity)
                 self._last_date = today
+            
+            # Store today's equity for next day's return calculation
+            self._equity_by_day[today] = account.equity
             
             # Check for risk breaches
             self._check_risk_breaches()
@@ -692,6 +714,31 @@ class RiskManager:
         
         return True, "OK"
     
+    def _record_daily_return(self, equity: float):
+        """Record daily return for VaR calculation - called once per day"""
+        today = date.today()
+        
+        # Skip if already recorded today
+        if self._last_var_day == today:
+            return
+        
+        # Get yesterday's equity
+        yesterday = today - timedelta(days=1)
+        prev_equity = self._equity_by_day.get(yesterday)
+        
+        if prev_equity and prev_equity > 0:
+            daily_return = (equity - prev_equity) / prev_equity
+            self._returns_history.append(daily_return)
+            
+            # Keep rolling window
+            if len(self._returns_history) > self._max_history:
+                self._returns_history.pop(0)
+            
+            log.debug(f"VaR: recorded daily return {daily_return:.4f}")
+        
+        self._equity_by_day[today] = equity
+        self._last_var_day = today
+
     def _check_rate_limit(self) -> bool:
         """Check order rate limits"""
         now = datetime.now()

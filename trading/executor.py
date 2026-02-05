@@ -63,6 +63,7 @@ class ExecutionEngine:
         self.on_reject: Optional[Callable[[Order, str], None]] = None
 
         self._kill_switch.on_activate(self._on_kill_switch)
+        self._processed_fill_ids: Set[str] = self._load_processed_fills()
 
     def start(self) -> bool:
         if self._running:
@@ -111,6 +112,17 @@ class ExecutionEngine:
             priority=AlertPriority.MEDIUM,
         )
         return True
+
+    def _load_processed_fills(self) -> Set[str]:
+        """Load already-processed fill IDs from database"""
+        try:
+            from trading.oms import get_oms
+            oms = get_oms()
+            fills = oms.get_fills()  # Gets all fills from DB
+            return {f.id for f in fills if f.id}
+        except Exception as e:
+            log.warning(f"Could not load processed fills: {e}")
+            return set()
 
     def _rebuild_broker_mappings(self, oms):
         """Rebuild broker ID mappings from persisted orders after restart"""
@@ -355,7 +367,7 @@ class ExecutionEngine:
                 log.error(f"Fill sync loop error: {e}")
 
     def _status_sync_loop(self):
-        """Poll broker for order status updates"""
+        """Poll broker for order status updates - STATUS ONLY, not filled_qty"""
         from trading.oms import get_oms
         oms = get_oms()
 
@@ -367,27 +379,23 @@ class ExecutionEngine:
 
                 active_orders = oms.get_active_orders()
                 for order in active_orders:
-                    # Capture state BEFORE sync
-                    prev_status = order.status
-                    prev_filled = order.filled_qty
-                    prev_avg = order.avg_price
-
-                    # Sync mutates order in place
-                    self.broker.sync_order(order)
-
-                    # Check for changes
-                    if (order.status != prev_status or 
-                        order.filled_qty != prev_filled or 
-                        order.avg_price != prev_avg):
-                        
+                    # Get status from broker (don't use filled_qty from broker)
+                    broker_status = self.broker.get_order_status(order.id)
+                    
+                    if broker_status is None:
+                        continue
+                    
+                    # Only update if status actually changed
+                    if broker_status != order.status:
+                        # For terminal states, update status only
+                        # filled_qty comes from fills, not status sync
                         oms.update_order_status(
                             order.id,
-                            order.status,
-                            message=order.message or "",
-                            filled_qty=order.filled_qty,
-                            avg_price=order.avg_price
+                            broker_status,
+                            message=f"Status sync: {broker_status.value}"
+                            # NOTE: Do NOT pass filled_qty or avg_price here
                         )
-                        log.info(f"Order synced: {order.id} {prev_status.value}->{order.status.value}")
+                        log.info(f"Order status synced: {order.id} -> {broker_status.value}")
 
             except Exception as e:
                 log.error(f"Status sync error: {e}")

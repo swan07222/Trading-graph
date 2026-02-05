@@ -26,7 +26,7 @@ from trading.executor import ExecutionEngine
 from .widgets import SignalPanel, PositionTable, LogWidget
 from .charts import StockChart
 from utils.logger import log
-from core.types import Order, OrderSide, OrderStatus, TradeSignal, Account, Position
+from core.types import Order, OrderSide, OrderStatus, TradeSignal, Account, Position, Fill
 from trading.alerts import AlertPriority
 
 class RealTimeMonitor(QThread):
@@ -910,14 +910,23 @@ class MainApp(QMainWindow):
     # ==================== Watchlist ====================
     
     def _update_watchlist(self):
-        """Update watchlist display"""
-        self.watchlist.setRowCount(len(self.watch_list))
+        """Update watchlist - preserve existing prices"""
+        current_count = self.watchlist.rowCount()
+        
+        # Only add/remove rows if list changed
+        if current_count != len(self.watch_list):
+            self.watchlist.setRowCount(len(self.watch_list))
         
         for row, code in enumerate(self.watch_list):
-            self.watchlist.setItem(row, 0, QTableWidgetItem(code))
-            self.watchlist.setItem(row, 1, QTableWidgetItem("--"))
-            self.watchlist.setItem(row, 2, QTableWidgetItem("--"))
-            self.watchlist.setItem(row, 3, QTableWidgetItem("--"))
+            # Only set code if different
+            current_code = self.watchlist.item(row, 0)
+            if current_code is None or current_code.text() != code:
+                self.watchlist.setItem(row, 0, QTableWidgetItem(code))
+            
+            # Initialize other columns ONLY if empty
+            for col in range(1, 4):
+                if self.watchlist.item(row, col) is None:
+                    self.watchlist.setItem(row, col, QTableWidgetItem("--"))
     
     def _on_watchlist_click(self, row, col):
         """Handle watchlist double-click"""

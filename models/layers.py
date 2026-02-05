@@ -150,18 +150,20 @@ class LSTMBlock(nn.Module):
 
 
 class TemporalConvBlock(nn.Module):
-    """Temporal Convolutional Block with dilated causal convolutions"""
+    """Temporal Convolutional Block with STRICTLY CAUSAL dilated convolutions"""
     
     def __init__(self, in_channels: int, out_channels: int, 
                  kernel_size: int = 3, dilation: int = 1, dropout: float = 0.2):
         super().__init__()
         
-        padding = (kernel_size - 1) * dilation // 2
+        # CAUSAL padding: pad only on the left
+        self.padding = (kernel_size - 1) * dilation
         
+        # No padding in conv - we'll pad manually
         self.conv1 = nn.Conv1d(in_channels, out_channels, kernel_size,
-                               padding=padding, dilation=dilation)
+                               padding=0, dilation=dilation)
         self.conv2 = nn.Conv1d(out_channels, out_channels, kernel_size,
-                               padding=padding, dilation=dilation)
+                               padding=0, dilation=dilation)
         
         self.norm1 = nn.BatchNorm1d(out_channels)
         self.norm2 = nn.BatchNorm1d(out_channels)
@@ -172,20 +174,23 @@ class TemporalConvBlock(nn.Module):
         self.residual = nn.Conv1d(in_channels, out_channels, 1) if in_channels != out_channels else nn.Identity()
     
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # x shape: (batch, channels, seq_len)
         residual = self.residual(x)
         
-        out = self.conv1(x)
+        # CAUSAL: Pad only on the left side
+        out = F.pad(x, (self.padding, 0))
+        out = self.conv1(out)
         out = self.norm1(out)
         out = self.activation(out)
         out = self.dropout(out)
         
+        out = F.pad(out, (self.padding, 0))
         out = self.conv2(out)
         out = self.norm2(out)
         out = self.activation(out)
         out = self.dropout(out)
         
         return self.activation(out + residual)
-
 
 class AttentionPooling(nn.Module):
     """Attention-based pooling for sequence aggregation"""
