@@ -15,6 +15,7 @@ from trading.kill_switch import get_kill_switch
 from trading.health import get_health_monitor, ComponentType, HealthStatus
 from trading.alerts import get_alert_manager, AlertPriority
 from utils.logger import log
+from trading.alerts import get_alert_manager, AlertPriority
 
 
 class ExecutionEngine:
@@ -89,9 +90,45 @@ class ExecutionEngine:
             "Trading System Started",
             f"Mode: {self.mode.value}, Capital: ¥{account.equity:,.2f}"
         )
+
+        self._reconciliation_thread = threading.Thread(
+            target=self._reconciliation_loop, daemon=True
+        )
+        self._reconciliation_thread.start()
         
         return True
     
+    def _reconciliation_loop(self):
+        """Periodic reconciliation with broker"""
+        while self._running:
+            try:
+                time.sleep(300)  # Every 5 minutes
+                
+                if not self.broker.is_connected:
+                    continue
+                
+                from trading.oms import get_oms
+                oms = get_oms()
+                
+                broker_account = self.broker.get_account()
+                broker_positions = self.broker.get_positions()
+                
+                discrepancies = oms.reconcile(broker_positions, broker_account.cash)
+                
+                if discrepancies.get('cash_diff', 0) > 1 or \
+                discrepancies.get('position_diffs') or \
+                discrepancies.get('missing_positions') or \
+                discrepancies.get('extra_positions'):
+                    
+                    self._alert_manager.risk_alert(
+                        "Reconciliation Discrepancy",
+                        f"Cash diff: ¥{discrepancies.get('cash_diff', 0):.2f}",
+                        discrepancies
+                    )
+                    
+            except Exception as e:
+                log.error(f"Reconciliation error: {e}")
+
     def stop(self):
         """Stop execution engine"""
         self._running = False
@@ -226,9 +263,25 @@ class ExecutionEngine:
                 signal_id=signal.id
             )
             
+            from trading.oms import get_oms
+            oms = get_oms()
+            order = oms.submit_order(order)
+
             result = self.broker.submit_order(order)
             
             if result.status == OrderStatus.FILLED:
+
+                from core.types import Fill
+                fill = Fill(
+                    order_id=order.id,
+                    symbol=order.symbol,
+                    side=order.side,
+                    quantity=result.filled_qty,
+                    price=result.filled_price,
+                    commission=result.commission
+                )
+                oms.process_fill(order, fill)
+
                 log.info(
                     f"Filled: {result.side.value.upper()} {result.filled_qty} "
                     f"@ ¥{result.filled_price:.2f}"

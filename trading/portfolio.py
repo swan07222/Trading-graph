@@ -10,7 +10,7 @@ from pathlib import Path
 import numpy as np
 
 from config import CONFIG
-from .broker import Position, Account
+from core.types import Position, Account
 from utils.logger import log
 
 
@@ -319,7 +319,7 @@ class Portfolio:
         for code, pos in self.positions.items():
             summary.append({
                 'code': code,
-                'name': pos.stock_name,
+                'name': pos.name,
                 'quantity': pos.quantity,
                 'available': pos.available_qty,
                 'cost': pos.avg_cost,

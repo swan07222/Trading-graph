@@ -60,7 +60,7 @@ class Event:
 @dataclass
 class TickEvent(Event):
     """Market tick event"""
-    type: EventType = field(default=EventType.TICK, init=False)
+    type: EventType = EventType.TICK
     symbol: str = ""
     price: float = 0.0
     volume: int = 0
@@ -71,7 +71,7 @@ class TickEvent(Event):
 @dataclass
 class BarEvent(Event):
     """OHLCV bar event"""
-    type: EventType = field(default=EventType.BAR, init=False)
+    type: EventType = EventType.BAR
     symbol: str = ""
     open: float = 0.0
     high: float = 0.0
@@ -83,7 +83,7 @@ class BarEvent(Event):
 @dataclass
 class OrderEvent(Event):
     """Order lifecycle event"""
-    type: EventType = field(default=EventType.ORDER_SUBMITTED, init=False)
+    type: EventType = EventType.ORDER_SUBMITTED
     order_id: str = ""
     symbol: str = ""
     side: str = ""
@@ -97,7 +97,7 @@ class OrderEvent(Event):
 @dataclass
 class SignalEvent(Event):
     """Trading signal event"""
-    type: EventType = field(default=EventType.SIGNAL_GENERATED, init=False)
+    type: EventType = EventType.SIGNAL_GENERATED
     symbol: str = ""
     signal: str = ""
     strength: float = 0.0
@@ -111,7 +111,7 @@ class SignalEvent(Event):
 @dataclass
 class RiskEvent(Event):
     """Risk management event"""
-    type: EventType = field(default=EventType.RISK_BREACH, init=False)
+    type: EventType = EventType.RISK_BREACH
     risk_type: str = ""
     current_value: float = 0.0
     limit_value: float = 0.0

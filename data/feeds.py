@@ -168,46 +168,59 @@ class PollingFeed(DataFeed):
                 with self._lock:
                     symbols = list(self._symbols)
                 
-                for symbol in symbols:
-                    if not self._running:
-                        break
-                    
-                    try:
-                        quote = self._fetcher.get_realtime(symbol)
-                        
-                        if quote and quote.price > 0:
-                            # Check for changes
-                            last = self._last_quotes.get(symbol)
-                            
-                            if last is None or quote.price != last.price:
-                                self._last_quotes[symbol] = quote
-                                
-                                # Notify callbacks
-                                self._notify(quote)
-                                
-                                # Publish event
-                                EVENT_BUS.publish(TickEvent(
-                                    symbol=symbol,
-                                    price=quote.price,
-                                    volume=quote.volume,
-                                    bid=quote.bid,
-                                    ask=quote.ask,
-                                    source=self.name
-                                ))
-                        
-                        # Rate limiting
-                        time.sleep(0.1)
-                        
-                    except Exception as e:
-                        log.debug(f"Poll error for {symbol}: {e}")
+                if not symbols:
+                    time.sleep(self._interval)
+                    continue
                 
-                # Wait for next cycle
+                # Fetch ALL quotes at once
+                all_quotes = self._fetch_batch_quotes(symbols)
+                
+                for symbol, quote in all_quotes.items():
+                    if quote and quote.price > 0:
+                        last = self._last_quotes.get(symbol)
+                        
+                        if last is None or quote.price != last.price:
+                            self._last_quotes[symbol] = quote
+                            self._notify(quote)
+                            
+                            EVENT_BUS.publish(TickEvent(
+                                symbol=symbol,
+                                price=quote.price,
+                                volume=quote.volume,
+                                bid=quote.bid,
+                                ask=quote.ask,
+                                source=self.name
+                            ))
+                
                 time.sleep(self._interval)
                 
             except Exception as e:
                 log.error(f"Polling loop error: {e}")
                 time.sleep(1)
     
+    def _fetch_batch_quotes(self, symbols: List[str]) -> Dict[str, Quote]:
+        """Fetch quotes for all symbols in one API call"""
+        result = {}
+        
+        try:
+            # Single snapshot call
+            df = self._fetcher._sources[0].get_all_stocks()
+            
+            for symbol in symbols:
+                row = df[df['代码'] == symbol]
+                if not row.empty:
+                    r = row.iloc[0]
+                    result[symbol] = Quote(
+                        code=symbol,
+                        name=str(r.get('名称', '')),
+                        price=float(r.get('最新价', 0) or 0),
+                        # ... fill other fields
+                    )
+        except Exception as e:
+            log.warning(f"Batch quote fetch failed: {e}")
+        
+        return result
+
     def get_quote(self, symbol: str) -> Optional[Quote]:
         """Get last quote for symbol"""
         return self._last_quotes.get(symbol)
@@ -534,7 +547,7 @@ class BarAggregator:
             bar['high'] = max(bar['high'], quote.price)
             bar['low'] = min(bar['low'], quote.price)
             bar['close'] = quote.price
-            bar['volume'] += quote.volume
+            bar['volume'] += max(quote.volume - last_cum_vol, 0)
             
             # Check if bar is complete
             now = datetime.now()

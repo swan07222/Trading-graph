@@ -140,6 +140,9 @@ class AkShareSource(DataSource):
     def __init__(self):
         super().__init__()
         self._ak = None
+        self._spot_cache = None
+        self._spot_cache_time = None
+        self._cache_ttl = 3
         try:
             import akshare as ak
             self._ak = ak
@@ -147,7 +150,17 @@ class AkShareSource(DataSource):
         except ImportError:
             self.status.available = False
             log.warning("AkShare not available")
-    
+
+    def _get_cached_spot(self) -> pd.DataFrame:
+        """Get cached spot data"""
+        now = time.time()
+        if self._spot_cache is None or \
+           self._spot_cache_time is None or \
+           now - self._spot_cache_time > self._cache_ttl:
+            self._spot_cache = self._ak.stock_zh_a_spot_em()
+            self._spot_cache_time = now
+        return self._spot_cache
+
     @retry(max_attempts=3, delay=2.0)
     def get_history(self, code: str, days: int) -> pd.DataFrame:
         if not self._ak or not self.status.available:
@@ -205,7 +218,7 @@ class AkShareSource(DataSource):
             return None
         
         try:
-            df = self._ak.stock_zh_a_spot_em()
+            df = self._get_cached_spot()
             row = df[df['代码'] == code]
             
             if row.empty:

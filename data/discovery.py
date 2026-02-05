@@ -88,29 +88,25 @@ class UniversalStockDiscovery:
                 time.sleep(self._rate_limit - elapsed)
             self._last_request = time.time()
     
-    def discover_all(
-        self,
-        callback: Callable[[str, int], None] = None,
-        max_stocks: int = None,
-        min_market_cap: float = 0,
-        include_st: bool = False
-    ) -> List[DiscoveredStock]:
-        """
-        Discover ALL available stocks from all sources
-        
-        Args:
-            callback: Progress callback (message, count)
-            max_stocks: Maximum stocks to return (None = all)
-            min_market_cap: Minimum market cap in billions
-            include_st: Include ST/*ST stocks
-        
-        Returns:
-            List of discovered stocks, deduplicated and scored
-        """
-        all_stocks: Dict[str, DiscoveredStock] = {}
+    def discover_all(self, callback=None, max_stocks=None, min_market_cap=0, include_st=False):
+    """Discover ALL available stocks from all sources"""
+    all_stocks: Dict[str, DiscoveredStock] = {}
+    
+    # Fetch spot data ONCE
+    spot_df = None
+    if self._ak:
+        try:
+            self._wait()
+            spot_df = self._ak.stock_zh_a_spot_em()
+        except Exception as e:
+            log.warning(f"Failed to fetch spot data: {e}")
         
         sources = [
-            ("All A-Shares", self._get_all_a_shares),
+            ("All A-Shares", lambda: self._from_spot_df(spot_df, 'all')),
+            ("Top Gainers", lambda: self._from_spot_df(spot_df, 'gainers')),
+            ("Top Losers", lambda: self._from_spot_df(spot_df, 'losers')),
+            ("High Volume", lambda: self._from_spot_df(spot_df, 'volume')),
+            ("Large Cap", lambda: self._from_spot_df(spot_df, 'large_cap')),
             ("CSI 300 Index", self._get_csi300),
             ("CSI 500 Index", self._get_csi500),
             ("CSI 1000 Index", self._get_csi1000),
@@ -161,7 +157,7 @@ class UniversalStockDiscovery:
         
         # Filter by market cap
         if min_market_cap > 0:
-            result = [s for s in result if s.market_cap >= min_market_cap * 1e8]
+            result = [s for s in result if s.market_cap >= min_market_cap * 1e9]
         
         # Score by multiple factors
         for stock in result:
@@ -177,6 +173,34 @@ class UniversalStockDiscovery:
         log.info(f"Total discovered: {len(result)} stocks")
         return result
     
+    def _from_spot_df(self, df: pd.DataFrame, filter_type: str) -> List[DiscoveredStock]:
+        """Extract stocks from cached spot dataframe"""
+        if df is None or df.empty:
+            return []
+        
+        if filter_type == 'all':
+            pass  # use all
+        elif filter_type == 'gainers':
+            df = df.sort_values('涨跌幅', ascending=False).head(100)
+        elif filter_type == 'losers':
+            df = df.sort_values('涨跌幅', ascending=True).head(100)
+        elif filter_type == 'volume':
+            df = df.sort_values('成交额', ascending=False).head(100)
+        elif filter_type == 'large_cap':
+            df = df.sort_values('总市值', ascending=False).head(200)
+        
+        return [
+            DiscoveredStock(
+                code=str(row.get('代码', '')),
+                name=str(row.get('名称', '')),
+                source=filter_type,
+                market_cap=float(row.get('总市值', 0) or 0),
+                volume=float(row.get('成交额', 0) or 0),
+                change_pct=float(row.get('涨跌幅', 0) or 0),
+            )
+            for _, row in df.iterrows()
+        ]
+
     def _calculate_score(self, stock: DiscoveredStock) -> float:
         """Calculate comprehensive stock score for training priority"""
         score = 0.5

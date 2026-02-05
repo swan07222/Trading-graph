@@ -59,7 +59,7 @@ class SlippageModel:
 class BacktestResult:
     """Complete backtest results"""
     total_return: float
-    benchmark_return: float
+    benchmark_return: float = 0.0
     excess_return: float
     sharpe_ratio: float
     max_drawdown: float
@@ -381,6 +381,7 @@ class Backtester:
                 returns=returns,
                 dates=fold_df.index[-len(X):],
                 prices=fold_df['close'].values[-len(X):],
+                volumes=fold_df['volume'].values[-len(X):], 
                 stock_code=code,
                 capital=capital / len(all_data)
             )
@@ -419,7 +420,7 @@ class Backtester:
         returns: np.ndarray,
         dates: pd.DatetimeIndex,
         prices: np.ndarray,
-        volumes: np.ndarray,  # ADD THIS PARAMETER
+        volumes: np.ndarray,
         stock_code: str,
         capital: float
     ) -> Tuple[List[BacktestTrade], Dict[datetime, float], Dict[datetime, float]]:
@@ -431,9 +432,12 @@ class Backtester:
         benchmark_returns: Dict[datetime, float] = {}
         
         position = 0
-        entry_price = 0
+        entry_price = 0.0
         entry_date = None
-        entry_confidence = 0
+        entry_confidence = 0.0
+        holding_days = 0
+        
+        horizon = CONFIG.PREDICTION_HORIZON
         
         for i in range(len(X) - 1):
             pred = model.predict(X[i:i+1])
@@ -442,18 +446,83 @@ class Backtester:
             current_date = dates[i]
             current_volume = volumes[i] if i < len(volumes) else 1e6
             
-            # Daily return
+            # Daily return for benchmark
             daily_return_pct = (next_price / current_price - 1) * 100
             benchmark_returns[current_date] = daily_return_pct
             
             # Calculate dynamic slippage
-            order_value = capital * 0.1  # Assume 10% of capital per trade
+            order_value = capital * 0.1
             slippage = slippage_model.calculate(order_value, current_volume, current_price)
             
             # Total costs
             costs_pct = (CONFIG.COMMISSION * 2 + slippage * 2 + CONFIG.STAMP_TAX) * 100
             
-            # ... rest of trading logic with costs_pct
+            # Trading logic
+            if position == 0:
+                # No position - check for entry
+                if pred.predicted_class == 2 and pred.confidence >= CONFIG.MIN_CONFIDENCE:
+                    # Enter long
+                    position = 1
+                    entry_price = current_price * (1 + slippage)  # Buy at worse price
+                    entry_date = current_date
+                    entry_confidence = pred.confidence
+                    holding_days = 0
+                    
+                    trades.append(BacktestTrade(
+                        entry_date=current_date,
+                        exit_date=None,
+                        stock_code=stock_code,
+                        side="buy",
+                        entry_price=entry_price,
+                        signal_confidence=pred.confidence
+                    ))
+                
+                # No position, no signal
+                strategy_returns[current_date] = 0.0
+                
+            else:
+                # In position
+                holding_days += 1
+                
+                # Check exit conditions
+                should_exit = False
+                exit_reason = ""
+                
+                # Exit after horizon days
+                if holding_days >= horizon:
+                    should_exit = True
+                    exit_reason = "horizon"
+                
+                # Exit on sell signal
+                elif pred.predicted_class == 0 and pred.confidence >= CONFIG.MIN_CONFIDENCE:
+                    should_exit = True
+                    exit_reason = "signal"
+                
+                if should_exit:
+                    exit_price = current_price * (1 - slippage)  # Sell at worse price
+                    
+                    # Calculate trade P&L
+                    gross_pnl_pct = (exit_price / entry_price - 1) * 100
+                    net_pnl_pct = gross_pnl_pct - costs_pct
+                    
+                    # Update last trade
+                    if trades:
+                        trades[-1].exit_date = current_date
+                        trades[-1].exit_price = exit_price
+                        trades[-1].pnl_pct = net_pnl_pct
+                        trades[-1].holding_days = holding_days
+                    
+                    strategy_returns[current_date] = net_pnl_pct / holding_days  # Daily-ized
+                    
+                    position = 0
+                    entry_price = 0
+                    entry_date = None
+                    holding_days = 0
+                else:
+                    # Still holding - track daily return
+                    strategy_returns[current_date] = daily_return_pct
+        
+        return trades, strategy_returns, benchmark_returns
 
     
     def _calculate_metrics(

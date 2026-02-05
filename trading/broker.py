@@ -447,8 +447,10 @@ class SimulatorBroker(BrokerInterface):
     
     def _check_settlement(self):
         """Handle T+1 settlement on new trading day"""
+        from core.constants import is_trading_day
+        
         today = date.today()
-        if today != self._last_settlement_date:
+        if today != self._last_settlement_date and is_trading_day(today):
             for symbol, pos in self._positions.items():
                 pos.available_qty = pos.quantity
             self._last_settlement_date = today

@@ -237,7 +237,7 @@ class PositionTable(QTableWidget):
             self.setItem(row, 0, QTableWidgetItem(code))
             
             # Name
-            self.setItem(row, 1, QTableWidgetItem(pos.stock_name))
+            self.setItem(row, 1, QTableWidgetItem(pos.name))
             
             # Shares
             shares_item = QTableWidgetItem(f"{pos.quantity:,}")

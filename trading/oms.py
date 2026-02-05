@@ -558,17 +558,15 @@ class OrderManagementSystem:
     
     def _validate_order(self, order: Order):
         """Comprehensive order validation"""
-        # Basic validation
         if order.quantity <= 0:
             raise OrderValidationError("Quantity must be positive")
         
         if order.quantity % CONFIG.trading.lot_size != 0:
-            raise OrderValidationError(
-                f"Quantity must be multiple of {CONFIG.trading.lot_size}"
-            )
+            raise OrderValidationError(f"Quantity must be multiple of {CONFIG.trading.lot_size}")
         
-        if order.order_type == OrderType.LIMIT and order.price <= 0:
-            raise OrderValidationError("Limit orders require positive price")
+        # Price must always be set (use last quote for market orders)
+        if order.price <= 0:
+            raise OrderValidationError("Order price must be positive (set to last quote for market orders)")
         
         # Side-specific validation
         if order.side == OrderSide.BUY:

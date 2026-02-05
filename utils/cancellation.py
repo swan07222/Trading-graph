@@ -40,7 +40,6 @@ class CancellationToken:
         """Request cancellation"""
         self._cancelled.set()
         
-        # Call registered callbacks
         with self._lock:
             for callback in self._callbacks:
                 try:
@@ -63,15 +62,20 @@ class CancellationToken:
             raise CancelledException("Operation was cancelled")
     
     def wait(self, timeout: float = None) -> bool:
-        """
-        Wait for cancellation.
-        Returns True if cancelled, False if timeout.
-        """
+        """Wait for cancellation."""
         return self._cancelled.wait(timeout)
     
     def __call__(self) -> bool:
         """Allow using token as callable stop_flag"""
         return self.is_cancelled
+
+    def __bool__(self) -> bool:
+        """Allow using token in boolean context"""
+        return self.is_cancelled
+    
+    def reset(self):
+        """Reset the token for reuse"""
+        self._cancelled.clear()
 
 
 class CancelledException(Exception):
