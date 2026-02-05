@@ -1,6 +1,5 @@
 """
 Event System - For decoupled, event-driven architecture
-Score Target: 10/10
 """
 from enum import Enum, auto
 from dataclasses import dataclass, field
@@ -52,48 +51,39 @@ class EventType(Enum):
 @dataclass
 class Event:
     """Base event class"""
-    type: EventType
+    type: EventType = EventType.SYSTEM_START
     timestamp: datetime = field(default_factory=datetime.now)
     source: str = ""
     data: Dict[str, Any] = field(default_factory=dict)
-    
-    def __post_init__(self):
-        if self.timestamp is None:
-            self.timestamp = datetime.now()
 
 
 @dataclass
 class TickEvent(Event):
     """Market tick event"""
+    type: EventType = field(default=EventType.TICK, init=False)
     symbol: str = ""
     price: float = 0.0
     volume: int = 0
     bid: float = 0.0
     ask: float = 0.0
-    
-    def __post_init__(self):
-        self.type = EventType.TICK
-        super().__post_init__()
 
 
 @dataclass
 class BarEvent(Event):
     """OHLCV bar event"""
+    type: EventType = field(default=EventType.BAR, init=False)
     symbol: str = ""
     open: float = 0.0
     high: float = 0.0
     low: float = 0.0
     close: float = 0.0
     volume: int = 0
-    
-    def __post_init__(self):
-        self.type = EventType.BAR
-        super().__post_init__()
 
 
 @dataclass
 class OrderEvent(Event):
     """Order lifecycle event"""
+    type: EventType = field(default=EventType.ORDER_SUBMITTED, init=False)
     order_id: str = ""
     symbol: str = ""
     side: str = ""
@@ -107,23 +97,21 @@ class OrderEvent(Event):
 @dataclass
 class SignalEvent(Event):
     """Trading signal event"""
+    type: EventType = field(default=EventType.SIGNAL_GENERATED, init=False)
     symbol: str = ""
-    signal: str = ""  # BUY, SELL, HOLD
+    signal: str = ""
     strength: float = 0.0
     confidence: float = 0.0
     entry_price: float = 0.0
     stop_loss: float = 0.0
     take_profit: float = 0.0
     reasons: List[str] = field(default_factory=list)
-    
-    def __post_init__(self):
-        self.type = EventType.SIGNAL_GENERATED
-        super().__post_init__()
 
 
 @dataclass
 class RiskEvent(Event):
     """Risk management event"""
+    type: EventType = field(default=EventType.RISK_BREACH, init=False)
     risk_type: str = ""
     current_value: float = 0.0
     limit_value: float = 0.0
@@ -189,7 +177,7 @@ class EventBus:
         if len(self._history) > self._max_history:
             self._history.pop(0)
         
-        if async_:
+        if async_ and self._running:
             self._queue.put(event)
         else:
             self._dispatch(event)
@@ -203,7 +191,6 @@ class EventBus:
             try:
                 handler(event)
             except Exception as e:
-                # Publish error event (sync to avoid recursion)
                 error_event = Event(
                     type=EventType.ERROR,
                     data={'error': str(e), 'original_event': event}
@@ -219,7 +206,7 @@ class EventBus:
             try:
                 handler(event)
             except Exception:
-                pass  # Prevent infinite loop
+                pass
     
     def start(self):
         """Start async event processing"""
@@ -234,7 +221,7 @@ class EventBus:
         """Stop async event processing"""
         self._running = False
         if self._worker_thread:
-            self._queue.put(None)  # Sentinel
+            self._queue.put(None)
             self._worker_thread.join(timeout=5)
     
     def _worker(self):
@@ -242,7 +229,7 @@ class EventBus:
         while self._running:
             try:
                 event = self._queue.get(timeout=0.1)
-                if event is None:  # Sentinel
+                if event is None:
                     break
                 self._dispatch(event)
             except queue.Empty:

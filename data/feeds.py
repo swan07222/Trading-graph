@@ -217,6 +217,196 @@ class PollingFeed(DataFeed):
         with self._lock:
             return self._last_quotes.copy()
 
+class WebSocketFeed(DataFeed):
+    """
+    WebSocket-based real-time data feed
+    
+    Provides:
+    - True real-time quotes
+    - Staleness detection
+    - Automatic reconnection
+    """
+    
+    name = "websocket"
+    
+    def __init__(self):
+        super().__init__()
+        self._ws = None
+        self._reconnect_delay = 1
+        self._max_reconnect_delay = 60
+        self._last_message_time: Dict[str, datetime] = {}
+        self._staleness_threshold = timedelta(seconds=30)
+        self._heartbeat_interval = 10
+        self._symbols: Set[str] = set()
+    
+    def connect(self) -> bool:
+        """Connect to WebSocket feed"""
+        try:
+            import websocket
+            
+            # Try Sina WebSocket
+            ws_url = "wss://push.sina.cn/ws"  # Example URL
+            
+            self._ws = websocket.WebSocketApp(
+                ws_url,
+                on_message=self._on_message,
+                on_error=self._on_error,
+                on_close=self._on_close,
+                on_open=self._on_open
+            )
+            
+            # Run in thread
+            self._running = True
+            self._thread = threading.Thread(target=self._ws.run_forever, daemon=True)
+            self._thread.start()
+            
+            self.status = FeedStatus.CONNECTING
+            return True
+            
+        except ImportError:
+            log.warning("websocket-client not installed, using polling")
+            return False
+        except Exception as e:
+            log.error(f"WebSocket connection failed: {e}")
+            return False
+    
+    def disconnect(self):
+        """Disconnect WebSocket"""
+        self._running = False
+        if self._ws:
+            self._ws.close()
+        self.status = FeedStatus.DISCONNECTED
+    
+    def subscribe(self, symbol: str, data_type: str = 'quote') -> bool:
+        """Subscribe to symbol"""
+        with self._lock:
+            self._symbols.add(symbol)
+            
+            if self._ws and self.status == FeedStatus.CONNECTED:
+                # Send subscription message
+                msg = json.dumps({
+                    "action": "subscribe",
+                    "symbols": [symbol]
+                })
+                self._ws.send(msg)
+            
+            return True
+    
+    def unsubscribe(self, symbol: str):
+        """Unsubscribe from symbol"""
+        with self._lock:
+            self._symbols.discard(symbol)
+            
+            if self._ws and self.status == FeedStatus.CONNECTED:
+                msg = json.dumps({
+                    "action": "unsubscribe",
+                    "symbols": [symbol]
+                })
+                self._ws.send(msg)
+    
+    def _on_open(self, ws):
+        """Handle connection open"""
+        self.status = FeedStatus.CONNECTED
+        self._reconnect_delay = 1
+        log.info("WebSocket connected")
+        
+        # Resubscribe to all symbols
+        with self._lock:
+            for symbol in self._symbols:
+                msg = json.dumps({
+                    "action": "subscribe",
+                    "symbols": [symbol]
+                })
+                ws.send(msg)
+        
+        # Start heartbeat
+        threading.Thread(target=self._heartbeat_loop, daemon=True).start()
+    
+    def _on_message(self, ws, message):
+        """Handle incoming message"""
+        try:
+            data = json.loads(message)
+            
+            symbol = data.get('symbol') or data.get('code')
+            if not symbol:
+                return
+            
+            # Update staleness tracker
+            self._last_message_time[symbol] = datetime.now()
+            
+            # Parse quote
+            quote = Quote(
+                code=symbol,
+                name=data.get('name', ''),
+                price=float(data.get('price') or data.get('current') or 0),
+                open=float(data.get('open', 0)),
+                high=float(data.get('high', 0)),
+                low=float(data.get('low', 0)),
+                close=float(data.get('close') or data.get('preclose', 0)),
+                volume=int(data.get('volume', 0)),
+                amount=float(data.get('amount', 0)),
+                change=float(data.get('change', 0)),
+                change_pct=float(data.get('change_pct') or data.get('pct', 0)),
+                bid=float(data.get('bid1', 0)),
+                ask=float(data.get('ask1', 0)),
+                source='websocket'
+            )
+            
+            if quote.price > 0:
+                self._notify(quote)
+                
+                EVENT_BUS.publish(TickEvent(
+                    symbol=symbol,
+                    price=quote.price,
+                    volume=quote.volume,
+                    bid=quote.bid,
+                    ask=quote.ask,
+                    source=self.name
+                ))
+                
+        except Exception as e:
+            log.debug(f"Message parse error: {e}")
+    
+    def _on_error(self, ws, error):
+        """Handle WebSocket error"""
+        log.error(f"WebSocket error: {error}")
+        self.status = FeedStatus.ERROR
+    
+    def _on_close(self, ws, close_status_code, close_msg):
+        """Handle connection close"""
+        if self._running:
+            self.status = FeedStatus.RECONNECTING
+            log.warning(f"WebSocket closed, reconnecting in {self._reconnect_delay}s...")
+            time.sleep(self._reconnect_delay)
+            
+            # Exponential backoff
+            self._reconnect_delay = min(self._reconnect_delay * 2, self._max_reconnect_delay)
+            
+            self.connect()
+    
+    def _heartbeat_loop(self):
+        """Send periodic heartbeats"""
+        while self._running and self.status == FeedStatus.CONNECTED:
+            try:
+                if self._ws:
+                    self._ws.send('{"action":"heartbeat"}')
+            except Exception:
+                pass
+            time.sleep(self._heartbeat_interval)
+    
+    def is_stale(self, symbol: str) -> bool:
+        """Check if data for symbol is stale"""
+        last_time = self._last_message_time.get(symbol)
+        if not last_time:
+            return True
+        return datetime.now() - last_time > self._staleness_threshold
+    
+    def get_staleness(self, symbol: str) -> float:
+        """Get staleness in seconds"""
+        last_time = self._last_message_time.get(symbol)
+        if not last_time:
+            return float('inf')
+        return (datetime.now() - last_time).total_seconds()
 
 class AggregatedFeed(DataFeed):
     """
@@ -433,8 +623,9 @@ class FeedManager:
     
     def initialize(self):
         """Initialize feeds"""
-        # Create polling feed as default
-        polling = PollingFeed(interval=CONFIG.data.cache_ttl_hours)
+        # FIXED: Use poll_interval_seconds, not cache_ttl_hours
+        interval = getattr(CONFIG.data, 'poll_interval_seconds', 3.0)
+        polling = PollingFeed(interval=interval)
         self._feeds['polling'] = polling
         self._active_feed = polling
         
@@ -444,7 +635,7 @@ class FeedManager:
         # Add bar aggregation
         polling.add_callback(self._bar_aggregator.on_tick)
         
-        log.info("Feed manager initialized")
+        log.info(f"Feed manager initialized (poll interval: {interval}s)")
     
     def subscribe(self, symbol: str) -> bool:
         """Subscribe to symbol"""

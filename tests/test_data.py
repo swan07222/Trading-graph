@@ -33,10 +33,11 @@ class TestDataFetcher:
     
     def test_clean_code(self, fetcher):
         """Test stock code cleaning"""
-        assert fetcher._clean_code("600519") == "600519"
-        assert fetcher._clean_code("sh600519") == "600519"
-        assert fetcher._clean_code("600519.SS") == "600519"
-        assert fetcher._clean_code("519") == "000519"
+        # Use the correct static method name
+        assert DataFetcher.clean_code("600519") == "600519"
+        assert DataFetcher.clean_code("sh600519") == "600519"
+        assert DataFetcher.clean_code("600519.SS") == "600519"
+        assert DataFetcher.clean_code("519") == "000519"
     
     def test_get_history_returns_dataframe(self, fetcher):
         """Test that get_history returns a DataFrame"""
@@ -93,8 +94,17 @@ class TestDataProcessor:
         
         assert 'label' in df.columns
         assert 'future_return' in df.columns
-        assert df['label'].isin([0, 1, 2]).all()
-        assert len(df) < len(sample_df)  # Last PREDICTION_HORIZON rows removed
+        
+        # Labels should be 0, 1, or 2, or NaN (for last HORIZON rows)
+        valid_labels = df['label'].dropna()
+        assert valid_labels.isin([0, 1, 2]).all()
+        
+        # Last PREDICTION_HORIZON rows should have NaN labels
+        assert df['label'].iloc[-CONFIG.PREDICTION_HORIZON:].isna().all()
+        
+        # NOTE: create_labels does NOT drop rows, it sets them to NaN
+        # So len(df) == len(sample_df)
+        assert len(df) == len(sample_df)
     
     def test_scaler_fitting(self, processor):
         """Test scaler fitting"""

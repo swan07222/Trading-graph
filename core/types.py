@@ -1,4 +1,3 @@
-# core/types.py
 """
 Canonical Types - SINGLE SOURCE OF TRUTH for all trading types
 All other modules MUST import from here
@@ -67,7 +66,7 @@ class Order:
     """Canonical Order representation"""
     id: str = ""
     client_id: str = ""
-    broker_id: str = ""  # ID from broker
+    broker_id: str = ""
     
     # Instrument
     symbol: str = ""
@@ -99,7 +98,7 @@ class Order:
     message: str = ""
     strategy: str = ""
     signal_id: str = ""
-    parent_id: str = ""  # For bracket orders
+    parent_id: str = ""
     tags: Dict[str, Any] = field(default_factory=dict)
     
     # Risk
@@ -258,7 +257,7 @@ class Position:
     
     # Quantities
     quantity: int = 0
-    available_qty: int = 0  # T+1 available
+    available_qty: int = 0
     frozen_qty: int = 0
     pending_buy: int = 0
     pending_sell: int = 0
@@ -322,6 +321,7 @@ class Position:
             'name': self.name,
             'quantity': self.quantity,
             'available_qty': self.available_qty,
+            'frozen_qty': self.frozen_qty,
             'avg_cost': self.avg_cost,
             'current_price': self.current_price,
             'market_value': self.market_value,
@@ -343,7 +343,7 @@ class Account:
     
     # Cash
     cash: float = 0.0
-    available: float = 0.0  # Available for trading
+    available: float = 0.0
     frozen: float = 0.0
     
     # Positions
@@ -375,13 +375,13 @@ class Account:
         return sum(p.market_value for p in self.positions.values())
     
     @property
-    def equity(self) -> float:
-        return self.cash + self.positions_value
+    def market_value(self) -> float:
+        """Alias for positions_value"""
+        return self.positions_value
     
     @property
-    def market_value(self) -> float:
-        """Alias for positions_value for compatibility"""
-        return self.positions_value
+    def equity(self) -> float:
+        return self.cash + self.positions_value
     
     @property
     def unrealized_pnl(self) -> float:

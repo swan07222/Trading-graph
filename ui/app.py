@@ -23,11 +23,11 @@ from config import CONFIG, TradingMode
 from models.predictor import Predictor, Prediction, Signal
 from models.trainer import Trainer
 from trading.executor import ExecutionEngine
-from trading.broker import OrderSide
 from .widgets import SignalPanel, PositionTable, LogWidget
 from .charts import StockChart
 from utils.logger import log
-
+from core.types import Order, OrderSide, OrderStatus, TradeSignal
+from trading.alerts import AlertPriority
 
 class RealTimeMonitor(QThread):
     """
@@ -1263,56 +1263,56 @@ class MainApp(QMainWindow):
                 self.log("Buy order failed risk checks", "error")
     
     def _execute_sell(self):
-        """Execute sell order"""
-        if not self.current_prediction or not self.executor:
-            return
-        
-        pred = self.current_prediction
-        positions = self.executor.get_positions()
-        position = positions.get(pred.stock_code)
-        
-        if not position:
-            self.log("No position to sell", "warning")
-            return
-        
-        reply = QMessageBox.question(
-            self, "Confirm Sell Order",
-            f"<b>Sell {pred.stock_code} - {pred.stock_name}</b><br><br>"
-            f"Available: {position.available_qty:,} shares<br>"
-            f"Current Price: ¥{position.current_price:.2f}",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No
+    """Execute sell order"""
+    if not self.current_prediction or not self.executor:
+        return
+    
+    pred = self.current_prediction
+    positions = self.executor.get_positions()
+    position = positions.get(pred.stock_code)
+    
+    if not position:
+        self.log("No position to sell", "warning")
+        return
+    
+    reply = QMessageBox.question(
+        self, "Confirm Sell Order",
+        f"<b>Sell {pred.stock_code} - {pred.stock_name}</b><br><br>"
+        f"Available: {position.available_qty:,} shares<br>"
+        f"Current Price: ¥{position.current_price:.2f}",
+        QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        QMessageBox.StandardButton.No
+    )
+    
+    if reply == QMessageBox.StandardButton.Yes:
+        # FIXED: Use core.types
+        signal = TradeSignal(
+            symbol=pred.stock_code,
+            name=pred.stock_name,
+            side=OrderSide.SELL,
+            quantity=position.available_qty,
+            price=position.current_price
         )
         
-        if reply == QMessageBox.StandardButton.Yes:
-            from trading.executor import TradeSignal
-            
-            signal = TradeSignal(
-                stock_code=pred.stock_code,
-                side=OrderSide.SELL,
-                quantity=position.available_qty,
-                price=position.current_price
-            )
-            
-            success = self.executor.submit(signal)
-            if success:
-                self.log(f"Sell order submitted: {pred.stock_code}", "info")
-            else:
-                self.log("Sell order failed", "error")
+        success = self.executor.submit(signal)
+        if success:
+            self.log(f"Sell order submitted: {pred.stock_code}", "info")
+        else:
+            self.log("Sell order failed", "error")
     
     def _on_order_filled(self, order):
-        """Handle order fill"""
+        """Handl e order fill"""
         self.log(
             f"✅ Order Filled: {order.side.value.upper()} {order.filled_qty} "
-            f"{order.stock_code} @ ¥{order.filled_price:.2f}",
+            f"{order.symbol} @ ¥{order.filled_price:.2f}",  # FIXED: was stock_code
             "success"
         )
         self._refresh_portfolio()
     
     def _on_order_rejected(self, order, reason):
         """Handle order rejection"""
-        self.log(f"❌ Order Rejected: {order.stock_code} - {reason}", "error")
-    
+        self.log(f"❌ Order Rejected: {order.symbol} - {reason}", "error")
+
     def _refresh_portfolio(self):
         """Refresh portfolio display"""
         if not self.executor:

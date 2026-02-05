@@ -508,15 +508,22 @@ class DataFetcher:
             )
         
         return None
-    
+
     def get_multiple_parallel(
         self,
         codes: List[str],
         days: int = 500,
-        callback: Callable[[str, int, int], None] = None
+        callback: Callable[[str, int, int], None] = None,
+        max_workers: int = None
     ) -> Dict[str, pd.DataFrame]:
         """
         Fetch multiple stocks in parallel (MAJOR SPEED IMPROVEMENT)
+        
+        Args:
+            codes: List of stock codes
+            days: Number of days of history
+            callback: Progress callback (code, completed, total)
+            max_workers: Max parallel workers (default from config)
         """
         results = {}
         total = len(codes)
@@ -527,9 +534,9 @@ class DataFetcher:
             df = self.get_history(code, days)
             return code, df
         
-        max_workers = CONFIG.data.parallel_downloads
+        workers = max_workers or CONFIG.data.parallel_downloads
         
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        with ThreadPoolExecutor(max_workers=workers) as executor:
             futures = {executor.submit(fetch_one, c): c for c in codes}
             
             for future in as_completed(futures):
@@ -548,6 +555,19 @@ class DataFetcher:
         
         log.info(f"Parallel fetch: {len(results)}/{total} successful")
         return results
+        
+    def get_all_stocks(self) -> pd.DataFrame:
+        """Get list of all available stocks"""
+        for source in self._sources:
+            if source.name == "akshare" and source.status.available:
+                try:
+                    df = source.get_all_stocks()
+                    if not df.empty:
+                        return df
+                except Exception as e:
+                    log.warning(f"Failed to get stock list: {e}")
+            
+        return pd.DataFrame()
     
     def get_source_status(self) -> List[DataSourceStatus]:
         """Get status of all data sources"""

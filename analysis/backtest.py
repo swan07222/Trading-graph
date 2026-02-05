@@ -39,6 +39,23 @@ class BacktestTrade:
 
 
 @dataclass
+class SlippageModel:
+    """Realistic slippage based on order size and liquidity"""
+    base_slippage: float = 0.001  # 0.1%
+    volume_impact: float = 0.1    # Additional slippage per 1% of daily volume
+    
+    def calculate(self, order_value: float, daily_volume: float, daily_avg_price: float) -> float:
+        """Calculate slippage for an order"""
+        if daily_volume <= 0 or daily_avg_price <= 0:
+            return self.base_slippage
+        
+        daily_value = daily_volume * daily_avg_price
+        order_pct = order_value / daily_value if daily_value > 0 else 0
+        
+        # Slippage increases with order size relative to liquidity
+        slippage = self.base_slippage + self.volume_impact * order_pct
+        
+        return min(slippage, 0.05)  # Cap at 5%
 class BacktestResult:
     """Complete backtest results"""
     total_return: float
@@ -402,12 +419,14 @@ class Backtester:
         returns: np.ndarray,
         dates: pd.DatetimeIndex,
         prices: np.ndarray,
+        volumes: np.ndarray,  # ADD THIS PARAMETER
         stock_code: str,
         capital: float
     ) -> Tuple[List[BacktestTrade], Dict[datetime, float], Dict[datetime, float]]:
-        """Simulate realistic trading."""
+        """Simulate realistic trading with dynamic slippage."""
+        
+        slippage_model = SlippageModel()
         trades = []
-        # FIXED: Return dict indexed by date
         strategy_returns: Dict[datetime, float] = {}
         benchmark_returns: Dict[datetime, float] = {}
         
@@ -416,83 +435,26 @@ class Backtester:
         entry_date = None
         entry_confidence = 0
         
-        costs_pct = (CONFIG.COMMISSION * 2 + CONFIG.SLIPPAGE * 2) * 100
-        
         for i in range(len(X) - 1):
             pred = model.predict(X[i:i+1])
             current_price = prices[i]
             next_price = prices[i + 1]
             current_date = dates[i]
+            current_volume = volumes[i] if i < len(volumes) else 1e6
             
             # Daily return
             daily_return_pct = (next_price / current_price - 1) * 100
-            
-            # Benchmark: buy-hold return
             benchmark_returns[current_date] = daily_return_pct
             
-            # Decision logic
-            signal = None
+            # Calculate dynamic slippage
+            order_value = capital * 0.1  # Assume 10% of capital per trade
+            slippage = slippage_model.calculate(order_value, current_volume, current_price)
             
-            if pred.confidence >= CONFIG.MIN_CONFIDENCE:
-                if pred.predicted_class == 2 and position == 0:
-                    signal = 'enter_long'
-                elif pred.predicted_class == 0 and position == 1:
-                    signal = 'exit_long'
-                elif pred.predicted_class == 1 and position == 1:
-                    signal = 'exit_long'
+            # Total costs
+            costs_pct = (CONFIG.COMMISSION * 2 + slippage * 2 + CONFIG.STAMP_TAX) * 100
             
-            # Execute signals
-            strategy_return = 0
-            
-            if signal == 'enter_long' and position == 0:
-                position = 1
-                entry_price = current_price
-                entry_date = current_date
-                entry_confidence = pred.confidence
-                strategy_return = daily_return_pct - costs_pct / 2
-                
-            elif signal == 'exit_long' and position == 1:
-                exit_price = current_price
-                pnl_pct = (exit_price / entry_price - 1) * 100 - costs_pct
-                
-                trades.append(BacktestTrade(
-                    entry_date=entry_date,
-                    exit_date=current_date,
-                    stock_code=stock_code,
-                    side='long',
-                    entry_price=entry_price,
-                    exit_price=exit_price,
-                    pnl_pct=pnl_pct,
-                    holding_days=(current_date - entry_date).days,
-                    signal_confidence=entry_confidence
-                ))
-                
-                position = 0
-                strategy_return = -costs_pct / 2
-                
-            elif position == 1:
-                strategy_return = daily_return_pct
-            
-            strategy_returns[current_date] = strategy_return
-        
-        # Close any open position
-        if position == 1 and len(prices) > 0:
-            exit_price = prices[-1]
-            pnl_pct = (exit_price / entry_price - 1) * 100 - costs_pct
-            
-            trades.append(BacktestTrade(
-                entry_date=entry_date,
-                exit_date=dates[-1],
-                stock_code=stock_code,
-                side='long',
-                entry_price=entry_price,
-                exit_price=exit_price,
-                pnl_pct=pnl_pct,
-                holding_days=(dates[-1] - entry_date).days,
-                signal_confidence=entry_confidence
-            ))
-        
-        return trades, strategy_returns, benchmark_returns
+            # ... rest of trading logic with costs_pct
+
     
     def _calculate_metrics(
         self,

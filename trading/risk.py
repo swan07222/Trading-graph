@@ -43,6 +43,7 @@ class RiskManager:
         self._initial_equity: float = 0.0
         self._daily_start_equity: float = 0.0
         self._peak_equity: float = 0.0
+        self._max_drawdown_pct: float = 0.0
         self._last_date: date = date.today()
         
         # Returns history for VaR
@@ -55,10 +56,6 @@ class RiskManager:
         
         # Error tracking
         self._errors_this_minute: List[datetime] = []
-        
-        # Subscribe to events
-        EVENT_BUS.subscribe(EventType.ORDER_FILLED, self._on_trade)
-        EVENT_BUS.subscribe(EventType.ERROR, self._on_error)
     
     def initialize(self, account: Account):
         """Initialize with account state"""
@@ -69,6 +66,10 @@ class RiskManager:
             self._peak_equity = account.equity
             log.info(f"Risk manager initialized: equity=¥{account.equity:,.2f}")
     
+    def record_trade(self):
+        """Record a trade - called by execution engine"""
+        self._trades_today += 1
+
     def update(self, account: Account):
         """Update with current account state"""
         with self._lock:
@@ -176,16 +177,15 @@ class RiskManager:
             metrics.positions_value = account.positions_value
             
             # P&L
-            if self._daily_start_equity > 0:
-                metrics.daily_pnl = equity - self._daily_start_equity
-                metrics.daily_pnl_pct = metrics.daily_pnl / self._daily_start_equity * 100
+            if self._peak_equity > 0:
+                metrics.current_drawdown_pct = (self._peak_equity - equity) / self._peak_equity * 100
             
             metrics.total_pnl = equity - self._initial_equity
             
             # Drawdown
-            if self._peak_equity > 0:
-                metrics.current_drawdown_pct = (self._peak_equity - equity) / self._peak_equity * 100
-                metrics.max_drawdown_pct = max(metrics.max_drawdown_pct, metrics.current_drawdown_pct)
+            if metrics.current_drawdown_pct > self._max_drawdown_pct:
+                    self._max_drawdown_pct = metrics.current_drawdown_pct
+                metrics.max_drawdown_pct = self._max_drawdown_pct
             
             # VaR calculation
             metrics.var_1d_95 = self._calculate_var(0.95)
@@ -218,8 +218,9 @@ class RiskManager:
             if metrics.daily_pnl_pct <= -CONFIG.risk.max_daily_loss_pct * 0.8:
                 warnings.append(f"Approaching daily loss limit: {metrics.daily_pnl_pct:.1f}%")
             
-            if metrics.current_drawdown_pct >= CONFIG.risk.max_drawdown_pct * 0.8:
-                warnings.append(f"Approaching max drawdown: {metrics.current_drawdown_pct:.1f}%")
+            if metrics.current_drawdown_pct > self._max_drawdown_pct:
+                self._max_drawdown_pct = metrics.current_drawdown_pct
+                metrics.max_drawdown_pct = self._max_drawdown_pct  # Use tracked value
             
             if metrics.largest_position_pct > CONFIG.risk.max_position_pct * 0.9:
                 warnings.append(f"Large position concentration: {metrics.largest_position_pct:.1f}%")
@@ -372,13 +373,52 @@ class RiskManager:
                 return False, f"High VaR - reduce position to max ¥{max_add:,.0f}"
         
         return True, "OK"
-    
+    def _check_concentration(self, symbol: str, new_value: float) -> Tuple[bool, str]:
+        """Check portfolio concentration limits"""
+        if self._account is None:
+            return True, "OK"
+        
+        equity = self._account.equity
+        if equity <= 0:
+            return False, "No equity"
+        
+        # Sector concentration (if we have sector data)
+        # For now, check individual position concentration
+        
+        existing_value = 0
+        if symbol in self._account.positions:
+            existing_value = self._account.positions[symbol].market_value
+        
+        total_position = existing_value + new_value
+        position_pct = total_position / equity * 100
+        
+        # Individual position limit
+        if position_pct > CONFIG.risk.max_position_pct:
+            return False, f"Position {position_pct:.1f}% exceeds limit {CONFIG.risk.max_position_pct}%"
+        
+        # Top 3 concentration limit (shouldn't exceed 50% combined)
+        position_values = sorted(
+            [p.market_value for p in self._account.positions.values()],
+            reverse=True
+        )
+        
+        # Add new position value to appropriate place
+        position_values.append(total_position)
+        position_values.sort(reverse=True)
+        
+        top3_value = sum(position_values[:3])
+        top3_pct = top3_value / equity * 100
+        
+        if top3_pct > 50:
+            return False, f"Top 3 concentration {top3_pct:.1f}% exceeds 50%"
+        
+        return True, "OK"
     def _validate_sell_order(self, symbol: str, quantity: int) -> Tuple[bool, str]:
         """Validate sell order"""
         if symbol not in self._account.positions:
             return False, f"No position in {symbol}"
         
-        pos = self._account.positions[symbol]
+        pos = self._account.positions[symbol] 
         
         if quantity > pos.available_qty:
             return False, f"Insufficient shares: have {pos.available_qty}, need {quantity}"
@@ -446,11 +486,6 @@ class RiskManager:
         shares = min(shares, max_affordable)
         
         return max(0, shares)
-    
-    def record_trade(self):
-        """Record a trade"""
-        self._trades_today += 1
-
 
 # Global risk manager
 _risk_manager: Optional[RiskManager] = None

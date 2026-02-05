@@ -19,6 +19,7 @@ from PyQt6.QtWidgets import (
 
 from config import CONFIG, TradingMode
 from utils.logger import log
+from utils.cancellation import CancellationToken
 
 
 # ----------------------------
@@ -26,15 +27,16 @@ from utils.logger import log
 # ----------------------------
 
 class TrainWorker(QThread):
-    progress = pyqtSignal(str)                 # text log line
-    epoch = pyqtSignal(str, int, float)        # model_name, epoch, val_acc
-    finished = pyqtSignal(dict)                # results
-    failed = pyqtSignal(str)                   # error message
+    progress = pyqtSignal(str)
+    epoch = pyqtSignal(str, int, float)
+    finished = pyqtSignal(dict)
+    failed = pyqtSignal(str)
 
     def __init__(self, stocks: List[str], epochs: int):
         super().__init__()
         self.stocks = stocks
         self.epochs = epochs
+        self.cancel_token = CancellationToken()  # ADD
 
     def run(self):
         try:
@@ -43,15 +45,27 @@ class TrainWorker(QThread):
             trainer = Trainer()
 
             def cb(model_name: str, epoch_idx: int, val_acc: float):
-                # epoch_idx is 0-based inside ensemble training
+                if self.cancel_token.is_cancelled:  # CHECK
+                    raise Exception("Training cancelled")
                 self.epoch.emit(model_name, epoch_idx + 1, float(val_acc))
 
             self.progress.emit(f"Loading data for {len(self.stocks)} stocks...")
-            results = trainer.train(stock_codes=self.stocks, epochs=self.epochs, callback=cb, save_model=True)
+            results = trainer.train(
+                stock_codes=self.stocks, 
+                epochs=self.epochs, 
+                callback=cb, 
+                stop_flag=self.cancel_token,  # PASS
+                save_model=True
+            )
 
             self.finished.emit(results)
         except Exception as e:
-            self.failed.emit(str(e))
+            if "cancelled" not in str(e).lower():
+                self.failed.emit(str(e))
+    
+    def cancel(self):
+        """Cancel training gracefully"""
+        self.cancel_token.cancel()
 
 
 class BacktestWorker(QThread):
@@ -232,11 +246,10 @@ class TrainingDialog(QDialog):
         self.worker.start()
 
     def stop_training(self):
-        # Safe stop in this simplified version: just terminate the thread (not ideal).
-        # For production: implement cooperative cancellation in Trainer/Ensemble training loops.
-        if self.worker and self.worker.isRunning():
-            self.worker.terminate()
-            self.worker.wait(1000)
+        """Stop training gracefully"""
+        if self.worker:
+            self.worker.cancel()  # Use proper cancellation
+            self.worker.wait(5000)  # Wait up to 5 seconds
         self._set_idle("Stopped by user")
 
     def _on_log(self, msg: str):

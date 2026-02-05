@@ -154,8 +154,13 @@ class OrderDatabase:
                     name TEXT,
                     quantity INTEGER DEFAULT 0,
                     available_qty INTEGER DEFAULT 0,
+                    frozen_qty INTEGER DEFAULT 0,
+                    pending_buy INTEGER DEFAULT 0,
+                    pending_sell INTEGER DEFAULT 0,
                     avg_cost REAL DEFAULT 0,
+                    current_price REAL DEFAULT 0,
                     realized_pnl REAL DEFAULT 0,
+                    commission_paid REAL DEFAULT 0,
                     opened_at TEXT,
                     updated_at TEXT
                 )
@@ -312,12 +317,15 @@ class OrderDatabase:
         with self._transaction() as conn:
             conn.execute("""
                 INSERT OR REPLACE INTO positions 
-                (symbol, name, quantity, available_qty, avg_cost, realized_pnl, 
-                 opened_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                (symbol, name, quantity, available_qty, frozen_qty, 
+                pending_buy, pending_sell, avg_cost, current_price,
+                realized_pnl, commission_paid, opened_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 pos.symbol, pos.name, pos.quantity, pos.available_qty,
-                pos.avg_cost, pos.realized_pnl,
+                pos.frozen_qty, pos.pending_buy, pos.pending_sell,
+                pos.avg_cost, pos.current_price, pos.realized_pnl,
+                pos.commission_paid,
                 pos.opened_at.isoformat() if pos.opened_at else None,
                 datetime.now().isoformat()
             ))
@@ -332,8 +340,13 @@ class OrderDatabase:
             pos.name = row['name'] or ''
             pos.quantity = row['quantity'] or 0
             pos.available_qty = row['available_qty'] or 0
+            pos.frozen_qty = row['frozen_qty'] or 0
+            pos.pending_buy = row['pending_buy'] or 0
+            pos.pending_sell = row['pending_sell'] or 0
             pos.avg_cost = row['avg_cost'] or 0
+            pos.current_price = row['current_price'] or 0
             pos.realized_pnl = row['realized_pnl'] or 0
+            pos.commission_paid = row['commission_paid'] or 0
             if row['opened_at']:
                 pos.opened_at = datetime.fromisoformat(row['opened_at'])
             positions[pos.symbol] = pos

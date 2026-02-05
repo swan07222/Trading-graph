@@ -1,6 +1,5 @@
 """
 Production Logging Configuration
-Score Target: 10/10
 """
 import sys
 from pathlib import Path
@@ -14,21 +13,31 @@ from config.settings import CONFIG
 
 
 class ColoredFormatter(logging.Formatter):
-    """Colored console formatter"""
+    """Colored console formatter - doesn't mutate log record"""
     
     COLORS = {
-        'DEBUG': '\033[36m',     # Cyan
-        'INFO': '\033[32m',      # Green
-        'WARNING': '\033[33m',   # Yellow
-        'ERROR': '\033[31m',     # Red
-        'CRITICAL': '\033[41m',  # Red background
+        'DEBUG': '\033[36m',
+        'INFO': '\033[32m',
+        'WARNING': '\033[33m',
+        'ERROR': '\033[31m',
+        'CRITICAL': '\033[41m',
     }
     RESET = '\033[0m'
     
     def format(self, record):
+        # Don't mutate the original record
         color = self.COLORS.get(record.levelname, '')
-        record.levelname = f"{color}{record.levelname:8}{self.RESET}"
-        return super().format(record)
+        
+        # Save original levelname
+        original_levelname = record.levelname
+        
+        try:
+            # Temporarily modify for colored output
+            record.levelname = f"{color}{record.levelname:8}{self.RESET}"
+            return super().format(record)
+        finally:
+            # Restore original
+            record.levelname = original_levelname
 
 
 def setup_logging(name: str = None) -> logging.Logger:

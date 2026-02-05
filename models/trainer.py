@@ -312,14 +312,20 @@ class Trainer:
             'mean_confidence': np.mean(confidences),
             'trading': trading_metrics
         }
-    
+
     def _simulate_trading(
         self,
         preds: np.ndarray,
         confs: np.ndarray,
-        returns: np.ndarray
+        returns: np.ndarray  # These are HORIZON returns, not daily!
     ) -> Dict:
-        """Simulate trading with CORRECT compounding"""
+        """
+        Simulate trading with CORRECT handling of horizon returns.
+        
+        NOTE: 'returns' are future returns over PREDICTION_HORIZON days,
+        NOT daily returns. We cannot compound them bar-by-bar.
+        Instead, we evaluate per-trade performance.
+        """
         confidence_mask = confs >= CONFIG.MIN_CONFIDENCE
         
         # Position: +1 for UP prediction (long only)
@@ -327,74 +333,85 @@ class Trainer:
         position[preds == 2] = 1  # UP -> Long
         position = position * confidence_mask
         
-        # Daily returns (decimal, not percentage)
-        daily_returns = returns / 100
+        # For horizon-based returns, we evaluate ENTRY performance
+        # Each bar where we enter, we get the horizon return
+        horizon = CONFIG.PREDICTION_HORIZON
+        costs_pct = (CONFIG.COMMISSION * 2 + CONFIG.SLIPPAGE * 2 + CONFIG.STAMP_TAX) * 100
         
-        # Strategy returns with transaction costs
-        costs = CONFIG.COMMISSION * 2 + CONFIG.SLIPPAGE * 2 + CONFIG.STAMP_TAX
+        # Find entry points (transition from 0 to 1)
+        entries = np.diff(position, prepend=0) > 0
+        exits = np.diff(position, prepend=0) < 0
         
-        # Calculate position changes for cost application
-        position_changes = np.abs(np.diff(position, prepend=0))
-        
-        # Net daily returns: position * market_return - costs_on_trade
-        strategy_returns = position * daily_returns - position_changes * costs
-        
-        # CORRECT: Compound returns multiplicatively
-        strategy_equity = np.cumprod(1 + strategy_returns)
-        buyhold_equity = np.cumprod(1 + daily_returns)
-        
-        total_return = (strategy_equity[-1] - 1) * 100 if len(strategy_equity) > 0 else 0
-        buyhold_return = (buyhold_equity[-1] - 1) * 100 if len(buyhold_equity) > 0 else 0
-        
-        # Trade-level statistics (FIXED: compound per-trade)
+        # Trade-level analysis
         trades = []
-        in_trade = False
-        trade_equity = 1.0
+        in_position = False
+        entry_idx = 0
         
         for i in range(len(position)):
-            if position[i] > 0:
-                if not in_trade:
-                    in_trade = True
-                    trade_equity = 1.0
-                trade_equity *= (1 + strategy_returns[i])
-            else:
-                if in_trade:
-                    trades.append(trade_equity - 1)  # Trade return
-                    in_trade = False
-                    trade_equity = 1.0
+            if entries[i] and not in_position:
+                in_position = True
+                entry_idx = i
+            elif (exits[i] or i == len(position) - 1) and in_position:
+                # Calculate trade return
+                # Use the HORIZON return from entry point
+                if entry_idx < len(returns):
+                    trade_return = returns[entry_idx] - costs_pct
+                    trades.append(trade_return)
+                in_position = False
         
-        if in_trade:
-            trades.append(trade_equity - 1)
-        
-        # Statistics
+        # Calculate metrics from trades
         num_trades = len(trades)
+        
         if num_trades > 0:
-            wins = [t for t in trades if t > 0]
-            losses = [t for t in trades if t < 0]
-            win_rate = len(wins) / num_trades
+            trades = np.array(trades)
             
-            gross_profit = sum(wins) if wins else 0
-            gross_loss = abs(sum(losses)) if losses else 1e-8
+            # Convert to decimal for proper calculation
+            trades_decimal = trades / 100
+            
+            # Compound trade returns (non-overlapping)
+            total_return = (np.prod(1 + trades_decimal) - 1) * 100
+            
+            wins = trades[trades > 0]
+            losses = trades[trades < 0]
+            
+            win_rate = len(wins) / num_trades if num_trades > 0 else 0
+            
+            gross_profit = np.sum(wins) if len(wins) > 0 else 0
+            gross_loss = abs(np.sum(losses)) if len(losses) > 0 else 1e-8
             profit_factor = gross_profit / gross_loss
+            
+            # Sharpe on trade returns
+            if len(trades) > 1 and np.std(trades) > 0:
+                # Annualize assuming average holding period
+                avg_holding = horizon  # days
+                trades_per_year = 252 / avg_holding
+                sharpe = np.mean(trades) / np.std(trades) * np.sqrt(trades_per_year)
+            else:
+                sharpe = 0
+            
+            # Max drawdown from cumulative returns
+            cumulative = np.cumsum(trades_decimal)
+            running_max = np.maximum.accumulate(cumulative)
+            drawdown = cumulative - running_max
+            max_drawdown = abs(np.min(drawdown)) if len(drawdown) > 0 else 0
+            
         else:
+            total_return = 0
             win_rate = 0
             profit_factor = 0
-        
-        # Risk metrics
-        if len(strategy_returns) > 1 and np.std(strategy_returns) > 0:
-            sharpe = np.mean(strategy_returns) / np.std(strategy_returns) * np.sqrt(252)
-        else:
             sharpe = 0
+            max_drawdown = 0
         
-        # Max drawdown
-        running_max = np.maximum.accumulate(strategy_equity)
-        drawdown = (strategy_equity - running_max) / (running_max + 1e-8)
-        max_drawdown = abs(np.min(drawdown))
+        # Buy-hold return (compound the horizon returns without overlap)
+        # This is approximate since horizon returns overlap
+        avg_return = np.mean(returns) if len(returns) > 0 else 0
+        num_periods = len(returns) // horizon if horizon > 0 else 1
+        buyhold_return = avg_return * num_periods / 100  # Simplified
         
         return {
             'total_return': total_return,
-            'buyhold_return': buyhold_return,
-            'excess_return': total_return - buyhold_return,
+            'buyhold_return': buyhold_return * 100,
+            'excess_return': total_return - buyhold_return * 100,
             'trades': num_trades,
             'win_rate': win_rate,
             'profit_factor': profit_factor,

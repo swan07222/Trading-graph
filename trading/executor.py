@@ -1,4 +1,3 @@
-# trading/executor.py
 """
 Execution Engine - Production Grade
 """
@@ -10,11 +9,11 @@ from dataclasses import dataclass
 
 from config import CONFIG, TradingMode
 from core.types import Order, OrderSide, OrderStatus, TradeSignal, Account
-from .broker import BrokerInterface, SimulatorBroker, THSBroker, create_broker
-from .risk import RiskManager, get_risk_manager
-from .kill_switch import get_kill_switch
-from .health import get_health_monitor, ComponentType, HealthStatus
-from .alerts import get_alert_manager
+from trading.broker import BrokerInterface, SimulatorBroker, THSBroker, create_broker
+from trading.risk import RiskManager, get_risk_manager
+from trading.kill_switch import get_kill_switch
+from trading.health import get_health_monitor, ComponentType, HealthStatus
+from trading.alerts import get_alert_manager, AlertPriority
 from utils.logger import log
 
 
@@ -98,7 +97,7 @@ class ExecutionEngine:
         self._running = False
         
         if self._thread:
-            self._queue.put(None)  # Sentinel
+            self._queue.put(None)
             self._thread.join(timeout=5)
         
         self.broker.disconnect()
@@ -127,9 +126,6 @@ class ExecutionEngine:
                 log.error(f"Cannot get price for {signal.symbol}")
                 return False
         
-        # Convert side to string for risk check
-        side_str = signal.side.value if isinstance(signal.side, OrderSide) else signal.side
-        
         # Risk check
         passed, msg = self.risk_manager.check_order(
             signal.symbol, signal.side, signal.quantity, price
@@ -138,7 +134,6 @@ class ExecutionEngine:
         if not passed:
             log.warning(f"Risk check failed: {msg}")
             
-            # Alert on risk rejection
             self._alert_manager.risk_alert(
                 "Order Rejected",
                 f"{signal.symbol}: {msg}",
@@ -188,7 +183,7 @@ class ExecutionEngine:
             try:
                 signal = self._queue.get(timeout=0.1)
                 
-                if signal is None:  # Sentinel
+                if signal is None:
                     break
                 
                 self._execute(signal)
@@ -216,7 +211,6 @@ class ExecutionEngine:
     def _execute(self, signal: TradeSignal):
         """Execute signal"""
         try:
-            # Final kill switch check
             if not self._kill_switch.can_trade:
                 log.warning("Trading halted during execution")
                 return
@@ -240,13 +234,9 @@ class ExecutionEngine:
                     f"@ ¥{result.filled_price:.2f}"
                 )
                 
-                if self.risk_manager:
-                    self.risk_manager.record_trade()
-                
                 if self.on_fill:
                     self.on_fill(result)
                 
-                # Alert on fill
                 self._alert_manager.trading_alert(
                     "Order Filled",
                     f"{result.side.value.upper()} {result.filled_qty} {result.symbol} @ ¥{result.filled_price:.2f}",
@@ -262,7 +252,6 @@ class ExecutionEngine:
         except Exception as e:
             log.error(f"Execution error: {e}")
             
-            # Alert on error
             self._alert_manager.system_alert(
                 "Execution Failed",
                 f"{signal.symbol}: {str(e)}",
@@ -273,7 +262,6 @@ class ExecutionEngine:
         """Handle kill switch activation"""
         log.critical(f"Kill switch activated: {reason}")
         
-        # Cancel all pending orders
         try:
             for order in self.broker.get_orders(active_only=True):
                 self.broker.cancel_order(order.id)
@@ -281,7 +269,6 @@ class ExecutionEngine:
         except Exception as e:
             log.error(f"Failed to cancel orders: {e}")
         
-        # Critical alert
         self._alert_manager.critical_alert(
             "KILL SWITCH ACTIVATED",
             f"All trading halted: {reason}",
