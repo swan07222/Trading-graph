@@ -448,12 +448,20 @@ class EnsembleModel:
                 sample_probs = {name: probs[i] for name, probs in all_model_probs.items()}
                 
                 # Weighted average
-                weighted_probs = np.zeros(CONFIG.NUM_CLASSES)
+                weighted_logits = np.zeros(CONFIG.NUM_CLASSES)
                 for name, probs in sample_probs.items():
+                    # Convert back to logits approximately
+                    logits = np.log(probs + 1e-8)
                     weight = self.weights.get(name, 1.0 / len(self.models))
-                    weighted_probs += probs * weight
-                
-                weighted_probs = weighted_probs / (weighted_probs.sum() + 1e-8)
+                    weighted_logits += logits * weight
+
+                # Apply temperature scaling
+                temperature = getattr(self, 'temperature', 1.0)
+                scaled_logits = weighted_logits / temperature
+
+                # Softmax
+                exp_logits = np.exp(scaled_logits - np.max(scaled_logits))
+                weighted_probs = exp_logits / (exp_logits.sum() + 1e-8)
                 
                 predicted_class = int(np.argmax(weighted_probs))
                 confidence = float(np.max(weighted_probs))

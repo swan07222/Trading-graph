@@ -218,7 +218,7 @@ class OrderDatabase:
                 order.filled_at.isoformat() if order.filled_at else None,
                 order.cancelled_at.isoformat() if order.cancelled_at else None,
                 datetime.now().isoformat(),
-                json.dumps(order.tags)
+                json.dumps(order.tags or {})
             ))
     
     def load_order(self, order_id: str) -> Optional[Order]:
@@ -274,7 +274,10 @@ class OrderDatabase:
         if row['cancelled_at']:
             order.cancelled_at = datetime.fromisoformat(row['cancelled_at'])
         if row['tags']:
-            order.tags = json.loads(row['tags'])
+            loaded = json.loads(row['tags'])
+            order.tags = loaded if isinstance(loaded, dict) else {}
+        else:
+            order.tags = {}
         
         return order
     
@@ -577,6 +580,8 @@ class OrderManagementSystem:
             
             log.info(f"Order submitted: {order.id} {order.side.value} {order.quantity} {order.symbol}")
             
+            self._db.save_account_state(self._account)
+
             return order
     
     def _validate_order(self, order: Order):
@@ -726,6 +731,8 @@ class OrderManagementSystem:
             
             # Notify
             self._notify_order_update(order)
+
+            self._db.save_account_state(self._account)
             
             log.info(f"Order {order_id}: {old_status.value} -> {new_status.value}")
             

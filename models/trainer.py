@@ -255,10 +255,6 @@ class Trainer:
         # Save model (now includes calibrated temperature)
         if save_model:
             self.ensemble.save()
-        
-        if len(X_val) > 0:
-            log.info("Calibrating model probabilities...")
-            self.ensemble.calibrate(X_val, y_val)
 
         # Calculate training time
         training_time = (datetime.now() - start_time).total_seconds() / 60

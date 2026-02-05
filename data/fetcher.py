@@ -141,7 +141,7 @@ class AkShareSource(DataSource):
         self._ak = None
         self._spot_cache = None
         self._spot_cache_time = None
-        self._cache_ttl = 3
+        self._cache_ttl = 10
         try:
             import akshare as ak
             self._ak = ak

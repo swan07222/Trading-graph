@@ -180,7 +180,7 @@ class RiskManager:
         log.info("Risk manager: New trading day started")
         self._daily_start_equity = last_equity
         self._trades_today = 0
-        self._orders_submitted_today = 0  # FIXED: Reset order count
+        self._orders_submitted_today = 0  # ADDED: Reset daily order count
         self._orders_this_minute.clear()
         self._errors_this_minute.clear()
         

@@ -224,6 +224,10 @@ class ExecutionEngine:
 
             if self.risk_manager and self.broker.is_connected:
                 account = self.broker.get_account()
+                
+                # CRITICAL: Update risk manager with current account state
+                self.risk_manager.update(account)
+                
                 set_gauge("account_equity", account.equity)
                 set_gauge("account_cash", account.cash)
                 set_gauge("positions_count", len(account.positions))

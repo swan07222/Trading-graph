@@ -199,47 +199,15 @@ class PollingFeed(DataFeed):
                 time.sleep(1)
 
     def _fetch_batch_quotes(self, symbols: List[str]) -> Dict[str, Quote]:
-        """Fetch quotes for all symbols in ONE API call"""
+        """Fetch quotes using shared AkShare source cache"""
         result = {}
         
         try:
-            # Get full market data ONCE
-            import akshare as ak
-            df = ak.stock_zh_a_spot_em()
-            
-            if df is None or df.empty:
-                return result
-            
-            # Filter to only requested symbols
+            # Use the fetcher's AkShare source which has internal caching
             for symbol in symbols:
-                row = df[df['代码'] == symbol]
-                if not row.empty:
-                    r = row.iloc[0]
-                    result[symbol] = Quote(
-                        code=symbol,
-                        name=str(r.get('名称', '')),
-                        price=float(r.get('最新价', 0) or 0),
-                        open=float(r.get('今开', 0) or 0),
-                        high=float(r.get('最高', 0) or 0),
-                        low=float(r.get('最低', 0) or 0),
-                        close=float(r.get('昨收', 0) or 0),
-                        volume=int(r.get('成交量', 0) or 0),
-                        amount=float(r.get('成交额', 0) or 0),
-                        change=float(r.get('涨跌额', 0) or 0),
-                        change_pct=float(r.get('涨跌幅', 0) or 0),
-                        timestamp=datetime.now(),
-                        source="polling"
-                    )
-                    
-        except ImportError:
-            # Fallback to fetcher if akshare not available
-            for symbol in symbols:
-                try:
-                    quote = self._fetcher.get_realtime(symbol)
-                    if quote:
-                        result[symbol] = quote
-                except Exception:
-                    pass
+                quote = self._fetcher.get_realtime(symbol)
+                if quote and quote.price > 0:
+                    result[symbol] = quote
         except Exception as e:
             log.warning(f"Batch quote fetch failed: {e}")
         

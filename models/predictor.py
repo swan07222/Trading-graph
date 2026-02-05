@@ -117,6 +117,10 @@ class Predictor:
         self.ensemble: Optional[EnsembleModel] = None
         self._model_loaded = False
         
+        # ADD: Prediction cache to avoid refetching
+        self._feature_cache: Dict[str, Tuple[pd.DataFrame, datetime]] = {}
+        self._cache_ttl_seconds = 60  # Reuse features for 60 seconds
+        
         self._load_model()
     
     def _load_model(self):
@@ -166,7 +170,24 @@ class Predictor:
             )
         
         # Get historical data
-        df = self.fetcher.get_history(stock_code, days=500)
+        # Check cache first
+        cache_key = stock_code
+        now = datetime.now()
+
+        if cache_key in self._feature_cache:
+            cached_df, cached_time = self._feature_cache[cache_key]
+            if (now - cached_time).total_seconds() < self._cache_ttl_seconds:
+                df = cached_df
+            else:
+                df = self.fetcher.get_history(stock_code, days=500)
+                df = self.feature_engine.create_features(df)
+                self._feature_cache[cache_key] = (df, now)
+        else:
+            df = self.fetcher.get_history(stock_code, days=500)
+            if len(df) < CONFIG.SEQUENCE_LENGTH + 10:
+                raise ValueError(f"Insufficient data for {stock_code}: {len(df)} bars")
+            df = self.feature_engine.create_features(df)
+            self._feature_cache[cache_key] = (df, now)
         
         if len(df) < CONFIG.SEQUENCE_LENGTH + 10:
             raise ValueError(
@@ -178,9 +199,6 @@ class Predictor:
         quote = self.fetcher.get_realtime(stock_code)
         current_price = quote.price if quote and quote.price > 0 else float(df['close'].iloc[-1])
         stock_name = quote.name if quote else stock_code
-        
-        # Create features
-        df = self.feature_engine.create_features(df)
         
         if len(df) < CONFIG.SEQUENCE_LENGTH:
             raise ValueError(f"Insufficient data after feature creation")
