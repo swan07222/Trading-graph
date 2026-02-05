@@ -25,6 +25,7 @@ from datetime import datetime
 from typing import Dict, List, Optional
 from collections import defaultdict
 from core.constants import get_price_limit
+from dataclasses import dataclass, field
 
 
 @dataclass

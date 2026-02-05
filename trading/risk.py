@@ -131,13 +131,6 @@ class RiskManager:
                 self._new_day(old_equity)
                 self._last_date = today
             
-            # REMOVED: The intraday return append that was polluting VaR calculation
-            # if old_equity > 0:
-            #     daily_return = (account.equity - old_equity) / old_equity
-            #     if abs(daily_return) > 0.0001:
-            #         self._returns_history.append(daily_return)
-            #         ...
-            
             # Check for risk breaches
             self._check_risk_breaches()
     
@@ -150,7 +143,6 @@ class RiskManager:
         self._orders_this_minute.clear()
         self._errors_this_minute.clear()
         
-        # Log daily summary
         if self._initial_equity > 0:
             total_return = (last_equity / self._initial_equity - 1) * 100
             log.info(f"Previous day end equity: {last_equity:,.2f} (Total return: {total_return:+.2f}%)")
@@ -498,21 +490,17 @@ class RiskManager:
         last_quote_time = self._quote_timestamps.get(symbol)
         
         if last_quote_time is None:
-            # Try to get from feed manager
+            # Try to get from feed manager using public API
             try:
                 from data.feeds import get_feed_manager
-                feed = get_feed_manager()
-                
-                if hasattr(feed, '_active_feed') and feed._active_feed:
-                    if hasattr(feed._active_feed, '_last_quotes'):
-                        quote = feed._active_feed._last_quotes.get(symbol)
-                        if quote and hasattr(quote, 'timestamp') and quote.timestamp:
-                            last_quote_time = quote.timestamp
+                feed_manager = get_feed_manager()
+                quote = feed_manager.get_quote(symbol)
+                if quote and hasattr(quote, 'timestamp') and quote.timestamp:
+                    last_quote_time = quote.timestamp
             except Exception:
                 pass
         
         if last_quote_time is None:
-            # No quote data - allow but warn
             log.warning(f"No quote timestamp for {symbol} - proceeding with caution")
             return True, "OK"
         
@@ -627,13 +615,7 @@ class RiskManager:
         return True, "OK"
     
     def _check_concentration(self, symbol: str, new_value: float) -> Tuple[bool, str]:
-        """
-        Check portfolio concentration limits
-        
-        Enforces:
-        - Individual position limit
-        - Top-3 positions concentration limit
-        """
+        """Check portfolio concentration limits"""
         if self._account is None:
             return True, "OK"
         
@@ -676,7 +658,7 @@ class RiskManager:
         top3_value = sum(position_values[:3])
         top3_pct = (top3_value / equity) * 100
         
-        top3_limit = 50.0  # 50% max for top 3 positions
+        top3_limit = 50.0
         if top3_pct > top3_limit:
             return False, (
                 f"Top 3 concentration {top3_pct:.1f}% exceeds {top3_limit}%"
@@ -712,7 +694,7 @@ class RiskManager:
         
         # Record this order attempt
         self._orders_this_minute.append(now)
-        self._orders_submitted_today += 1  # FIXED: Increment order count
+        self._orders_submitted_today += 1
         return True
     
     def _check_error_rate(self) -> bool:

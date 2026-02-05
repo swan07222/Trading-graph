@@ -697,11 +697,18 @@ class FeedManager:
             self.subscribe(symbol)
     
     def get_quote(self, symbol: str) -> Optional[Quote]:
-        """Get latest quote"""
+        """Get latest quote for a symbol - PUBLIC API"""
         if isinstance(self._active_feed, PollingFeed):
             return self._active_feed.get_quote(symbol)
         return None
-    
+
+    def get_last_quote_time(self, symbol: str) -> Optional[datetime]:
+        """Get timestamp of last quote for a symbol"""
+        quote = self.get_quote(symbol)
+        if quote and hasattr(quote, 'timestamp'):
+            return quote.timestamp
+        return None
+
     def add_tick_callback(self, callback: Callable):
         """Add tick callback"""
         if self._active_feed:

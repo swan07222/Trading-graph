@@ -373,8 +373,69 @@ class EnsembleModel:
             )
     
     def predict_batch(self, X: np.ndarray) -> List[EnsemblePrediction]:
-        """Predict multiple samples"""
-        return [self.predict(X[i:i+1]) for i in range(len(X))]
+        """
+        Predict multiple samples efficiently.
+        
+        Uses batched forward passes for all models to avoid
+        per-sample overhead.
+        """
+        if len(X) == 0:
+            return []
+        
+        with self._lock:
+            X_tensor = torch.FloatTensor(X).to(self.device)
+            
+            # Get all predictions at once for each model
+            all_model_probs = {}
+            
+            for name, model in self.models.items():
+                model.eval()
+                with torch.no_grad():
+                    logits, _ = model(X_tensor)
+                    probs = F.softmax(logits, dim=-1).cpu().numpy()
+                    all_model_probs[name] = probs
+            
+            # Build predictions for each sample
+            predictions = []
+            
+            for i in range(len(X)):
+                # Get probs for this sample from each model
+                sample_probs = {name: probs[i] for name, probs in all_model_probs.items()}
+                
+                # Weighted average
+                weighted_probs = np.zeros(CONFIG.NUM_CLASSES)
+                for name, probs in sample_probs.items():
+                    weight = self.weights.get(name, 1.0 / len(self.models))
+                    weighted_probs += probs * weight
+                
+                weighted_probs = weighted_probs / (weighted_probs.sum() + 1e-8)
+                
+                predicted_class = int(np.argmax(weighted_probs))
+                confidence = float(np.max(weighted_probs))
+                
+                # Entropy
+                entropy = -np.sum(weighted_probs * np.log(weighted_probs + 1e-8))
+                max_entropy = np.log(CONFIG.NUM_CLASSES)
+                normalized_entropy = entropy / max_entropy
+                
+                # Agreement
+                model_predictions = [np.argmax(p) for p in sample_probs.values()]
+                if model_predictions:
+                    most_common = max(set(model_predictions), key=model_predictions.count)
+                    agreement = model_predictions.count(most_common) / len(model_predictions)
+                else:
+                    agreement = 0.0
+                
+                predictions.append(EnsemblePrediction(
+                    probabilities=weighted_probs,
+                    predicted_class=predicted_class,
+                    confidence=confidence,
+                    entropy=normalized_entropy,
+                    agreement=agreement,
+                    individual_predictions=sample_probs
+                ))
+            
+            return predictions
     
     def save(self, path: str = None):
         """Save ensemble to file"""

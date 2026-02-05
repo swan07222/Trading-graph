@@ -523,6 +523,10 @@ class OrderManagementSystem:
             self._db.save_account_state(self._account)
             log.info("New trading day initialized")
     
+    def get_active_orders(self) -> List[Order]:
+        """Get all active (non-terminal) orders"""
+        return self._db.load_active_orders()
+
     def submit_order(self, order: Order) -> Order:
         """Submit order with full validation"""
         with self._lock:
