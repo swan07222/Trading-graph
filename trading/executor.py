@@ -48,6 +48,7 @@ class ExecutionEngine:
         self._kill_switch = get_kill_switch()
         self._health_monitor = get_health_monitor()
         self._alert_manager = get_alert_manager()
+        self._fills_lock = threading.RLock()
 
         self._queue: queue.Queue[Optional[TradeSignal]] = queue.Queue()
         self._running = False
@@ -232,6 +233,8 @@ class ExecutionEngine:
 
     def _execution_loop(self):
         """Main execution loop"""
+        last_risk_update = 0.0  # ← MOVE THIS TO THE TOP
+        
         while self._running:
             try:
                 signal = self._queue.get(timeout=0.2)
@@ -244,15 +247,18 @@ class ExecutionEngine:
                 log.error(f"Execution loop error: {e}")
                 self._alert_manager.system_alert("Execution Loop Error", str(e), AlertPriority.HIGH)
 
-            if self.risk_manager and self.broker.is_connected:
-                account = self.broker.get_account()
-                
-                # CRITICAL: Update risk manager with current account state
-                self.risk_manager.update(account)
-                
-                set_gauge("account_equity", account.equity)
-                set_gauge("account_cash", account.cash)
-                set_gauge("positions_count", len(account.positions))
+            # Risk update check (moved inside main loop, removed nested while)
+            now = time.time()
+            if self.risk_manager and self.broker.is_connected and (now - last_risk_update) >= 1.0:
+                try:
+                    account = self.broker.get_account()
+                    self.risk_manager.update(account)
+                    set_gauge("account_equity", account.equity)
+                    set_gauge("account_cash", account.cash)
+                    set_gauge("positions_count", len(account.positions))
+                    last_risk_update = now
+                except Exception as e:
+                    log.warning(f"Risk update error: {e}")
 
             time.sleep(0.05)
 
@@ -330,44 +336,45 @@ class ExecutionEngine:
         from trading.oms import get_oms
         oms = get_oms()
 
-        try:
-            fills = self.broker.get_fills()
-            for fill in fills:
-                fill_id = fill.id or ""
-                if fill_id and fill_id in self._processed_fill_ids:
-                    continue
-                if fill_id:
-                    self._processed_fill_ids.add(fill_id)
+        try:  # ← ADD THIS TRY
+            with self._fills_lock:
+                fills = self.broker.get_fills()
+                for fill in fills:
+                    fill_id = fill.id or ""
+                    if fill_id and fill_id in self._processed_fill_ids:
+                        continue
+                    if fill_id:
+                        self._processed_fill_ids.add(fill_id)
 
-                # Primary lookup by our order_id
-                order = oms.get_order(fill.order_id)
-                
-                # FIXED: Only try broker_id lookup if primary fails AND fill has broker-style ID
-                if not order and fill.order_id:
-                    # Check if this looks like a broker ID (not our format)
-                    if not fill.order_id.startswith("ORD_"):
-                        order = oms.get_order_by_broker_id(fill.order_id)
-                        if order:
-                            log.info(f"Recovered order {order.id} from broker_id {fill.order_id}")
-                            fill.order_id = order.id
+                    # Primary lookup by our order_id
+                    order = oms.get_order(fill.order_id)
+                    
+                    # FIXED: Only try broker_id lookup if primary fails AND fill has broker-style ID
+                    if not order and fill.order_id:
+                        # Check if this looks like a broker ID (not our format)
+                        if not fill.order_id.startswith("ORD_"):
+                            order = oms.get_order_by_broker_id(fill.order_id)
+                            if order:
+                                log.info(f"Recovered order {order.id} from broker_id {fill.order_id}")
+                                fill.order_id = order.id
 
-                if not order:
-                    log.warning(f"Fill for unknown order: {fill.order_id}")
-                    continue
+                    if not order:
+                        log.warning(f"Fill for unknown order: {fill.order_id}")
+                        continue
 
-                oms.process_fill(order, fill)
-                log.info(f"Fill processed: {fill.id} for order {order.id}")
+                    oms.process_fill(order, fill)
+                    log.info(f"Fill processed: {fill.id} for order {order.id}")
 
-                if self.on_fill:
-                    try:
-                        self.on_fill(order, fill)
-                    except Exception as e:
-                        log.warning(f"Fill callback error: {e}")
+                    if self.on_fill:
+                        try:
+                            self.on_fill(order, fill)
+                        except Exception as e:
+                            log.warning(f"Fill callback error: {e}")
 
-                inc_counter("fills_processed_total", labels={"side": fill.side.value})
-                observe("fill_latency_seconds", (datetime.now() - fill.timestamp).total_seconds() if fill.timestamp else 0)
+                    inc_counter("fills_processed_total", labels={"side": fill.side.value})
+                    observe("fill_latency_seconds", (datetime.now() - fill.timestamp).total_seconds() if fill.timestamp else 0)
 
-        except Exception as e:
+        except Exception as e:  # ← NOW THIS MATCHES THE TRY
             log.error(f"Fill processing error: {e}")
 
     def _fill_sync_loop(self):

@@ -457,6 +457,8 @@ class Backtester:
 
         benchmark_shares = capital / float(prices[0]) if prices[0] > 0 else 0
 
+        preds = model.predict_batch(X)
+
         for i in range(len(X) - 1):
             current_price = float(prices[i])
             next_price = float(prices[i + 1])  # Execution price

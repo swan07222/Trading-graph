@@ -1206,3 +1206,664 @@ IndentationError: unexpected indent
 2026-02-05 20:09:17,289 | INFO     | trading:create_features:170 - Created 47 features, 440 valid samples
 2026-02-05 20:10:09,543 | WARNING  | trading.data.fetcher:get:194 - Spot cache refresh failed: HTTPSConnectionPool(host='82.push2.eastmoney.com', port=443): Read timed out. (read timeout=15)
 2026-02-05 20:10:14,273 | INFO     | trading:create_features:170 - Created 47 features, 440 valid samples
+2026-02-05 21:11:23,907 | INFO     | trading:main:61 - ============================================================
+2026-02-05 21:11:23,907 | INFO     | trading:main:62 - AI STOCK TRADING SYSTEM - Production Grade
+2026-02-05 21:11:23,907 | INFO     | trading:main:63 - ============================================================
+2026-02-05 21:15:48,849 | INFO     | trading:main:61 - ============================================================
+2026-02-05 21:15:48,850 | INFO     | trading:main:62 - AI STOCK TRADING SYSTEM - Production Grade
+2026-02-05 21:15:48,850 | INFO     | trading:main:63 - ============================================================
+2026-02-05 21:15:49,177 | INFO     | trading.data.fetcher:__init__:256 - AkShare initialized
+2026-02-05 21:15:49,242 | INFO     | trading.data.fetcher:__init__:375 - Yahoo Finance initialized
+2026-02-05 21:15:49,242 | INFO     | trading.data.fetcher:_init_sources:473 - Data source akshare available
+2026-02-05 21:15:49,242 | INFO     | trading.data.fetcher:_init_sources:473 - Data source yahoo available
+2026-02-05 21:15:49,242 | INFO     | trading.data.fetcher:reset_sources:670 - All data sources reset
+2026-02-05 21:15:49,508 | INFO     | trading.data.fetcher:__init__:256 - AkShare initialized
+2026-02-05 21:15:49,508 | INFO     | trading.data.fetcher:__init__:375 - Yahoo Finance initialized
+2026-02-05 21:15:49,508 | INFO     | trading.data.fetcher:_init_sources:473 - Data source akshare available
+2026-02-05 21:15:49,509 | INFO     | trading.data.fetcher:_init_sources:473 - Data source yahoo available
+2026-02-05 21:15:49,509 | INFO     | trading:load_scaler:325 - Scaler loaded from F:\Trading app\Trading-graph\models_saved\scaler.pkl
+2026-02-05 21:15:49,634 | DEBUG    | trading:_init_model:100 - Initialized lstm model
+2026-02-05 21:15:49,656 | DEBUG    | trading:_init_model:100 - Initialized transformer model
+2026-02-05 21:15:49,668 | DEBUG    | trading:_init_model:100 - Initialized gru model
+2026-02-05 21:15:49,679 | DEBUG    | trading:_init_model:100 - Initialized tcn model
+2026-02-05 21:15:49,679 | INFO     | trading:__init__:85 - Ensemble initialized: ['lstm', 'transformer', 'gru', 'tcn'] on cpu
+2026-02-05 21:15:49,735 | DEBUG    | trading:_init_model:100 - Initialized lstm model
+2026-02-05 21:15:49,754 | DEBUG    | trading:_init_model:100 - Initialized transformer model
+2026-02-05 21:15:49,769 | DEBUG    | trading:_init_model:100 - Initialized gru model
+2026-02-05 21:15:49,784 | DEBUG    | trading:_init_model:100 - Initialized tcn model
+2026-02-05 21:15:49,786 | INFO     | trading:load:589 - Ensemble loaded: ['lstm', 'transformer', 'gru', 'tcn'], temp=1.25
+2026-02-05 21:15:49,786 | INFO     | trading:_load_model:153 - Model loaded successfully (4 networks)
+2026-02-05 21:15:54,421 | INFO     | trading.data.fetcher:__init__:256 - AkShare initialized
+2026-02-05 21:15:54,421 | INFO     | trading.data.fetcher:__init__:375 - Yahoo Finance initialized
+2026-02-05 21:15:54,421 | INFO     | trading.data.fetcher:_init_sources:473 - Data source akshare available
+2026-02-05 21:15:54,421 | INFO     | trading.data.fetcher:_init_sources:473 - Data source yahoo available
+2026-02-05 21:15:54,421 | INFO     | trading:load_scaler:325 - Scaler loaded from F:\Trading app\Trading-graph\models_saved\scaler.pkl
+2026-02-05 21:15:54,458 | DEBUG    | trading:_init_model:100 - Initialized lstm model
+2026-02-05 21:15:54,491 | DEBUG    | trading:_init_model:100 - Initialized transformer model
+2026-02-05 21:15:54,491 | DEBUG    | trading:_init_model:100 - Initialized gru model
+2026-02-05 21:15:54,508 | DEBUG    | trading:_init_model:100 - Initialized tcn model
+2026-02-05 21:15:54,508 | INFO     | trading:__init__:85 - Ensemble initialized: ['lstm', 'transformer', 'gru', 'tcn'] on cpu
+2026-02-05 21:15:54,563 | DEBUG    | trading:_init_model:100 - Initialized lstm model
+2026-02-05 21:15:54,583 | DEBUG    | trading:_init_model:100 - Initialized transformer model
+2026-02-05 21:15:54,593 | DEBUG    | trading:_init_model:100 - Initialized gru model
+2026-02-05 21:15:54,602 | DEBUG    | trading:_init_model:100 - Initialized tcn model
+2026-02-05 21:15:54,604 | INFO     | trading:load:589 - Ensemble loaded: ['lstm', 'transformer', 'gru', 'tcn'], temp=1.25
+2026-02-05 21:15:54,604 | INFO     | trading:_load_model:153 - Model loaded successfully (4 networks)
+2026-02-05 21:15:59,445 | INFO     | trading.oms:_recover_or_init:551 - Recovered account state from database
+2026-02-05 21:15:59,445 | INFO     | trading.oms:__init__:544 - OMS initialized: equity=¥100,000.00
+2026-02-05 21:15:59,445 | INFO     | trading.broker:connect:264 - Simulator connected with 100,000.00
+2026-02-05 21:15:59,445 | INFO     | trading.executor:_rebuild_broker_mappings:146 - Recovered 0 order mappings from DB
+2026-02-05 21:15:59,445 | INFO     | trading.risk:initialize:94 - Risk manager initialized: equity=¥100,000.00
+2026-02-05 21:15:59,445 | INFO     | trading.health:start:179 - Health monitor started
+2026-02-05 21:15:59,445 | INFO     | trading.alerts:start:196 - Alert manager started
+2026-02-05 21:16:00,458 | WARNING  | trading.health:_check_status_change:405 - System entering degraded mode
+2026-02-05 21:16:00,458 | INFO     | trading.executor:start:118 - Execution engine started (simulation)
+2026-02-05 21:16:00,458 | WARNING  | trading.alerts:_send_log:281 - 🔔 [SYSTEM] Trading System Started: Mode: simulation, Equity: 100,000.00
+2026-02-05 21:16:10,458 | INFO     | trading.broker:disconnect:270 - Simulator disconnected
+2026-02-05 21:16:10,460 | INFO     | trading.health:stop:186 - Health monitor stopped
+2026-02-05 21:16:10,460 | INFO     | trading.alerts:stop:206 - Alert manager stopped
+2026-02-05 21:16:10,460 | INFO     | trading.executor:stop:176 - Execution engine stopped
+2026-02-05 21:16:42,978 | INFO     | trading:main:61 - ============================================================
+2026-02-05 21:16:42,978 | INFO     | trading:main:62 - AI STOCK TRADING SYSTEM - Production Grade
+2026-02-05 21:16:42,978 | INFO     | trading:main:63 - ============================================================
+2026-02-05 21:16:43,314 | INFO     | trading.data.fetcher:__init__:256 - AkShare initialized
+2026-02-05 21:16:43,361 | INFO     | trading.data.fetcher:__init__:375 - Yahoo Finance initialized
+2026-02-05 21:16:43,361 | INFO     | trading.data.fetcher:_init_sources:473 - Data source akshare available
+2026-02-05 21:16:43,361 | INFO     | trading.data.fetcher:_init_sources:473 - Data source yahoo available
+2026-02-05 21:16:43,361 | INFO     | trading.data.fetcher:reset_sources:670 - All data sources reset
+2026-02-05 21:16:43,361 | INFO     | trading:_load_state:654 - Loaded learner state: 0 sessions
+2026-02-05 21:16:43,361 | INFO     | trading:_continuous_learning_loop:242 - === Learning Cycle 1 ===
+2026-02-05 21:16:43,361 | INFO     | trading:start:174 - Continuous learning started (mode=full, continuous=False)
+2026-02-05 21:16:43,374 | INFO     | trading:__init__:109 - AkShare initialized for stock discovery
+2026-02-05 21:16:49,773 | WARNING  | trading:_safe_fetch:141 - Attempt 1/3 failed for spot data: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-02-05 21:16:56,239 | WARNING  | trading:_safe_fetch:141 - Attempt 2/3 failed for spot data: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-02-05 21:17:04,992 | WARNING  | trading:_safe_fetch:141 - Attempt 3/3 failed for spot data: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-02-05 21:17:04,992 | WARNING  | trading:discover_all:169 - Failed to fetch spot data, trying index constituents...
+2026-02-05 21:17:05,554 | INFO     | trading:discover_all:215 - Found 300 valid from CSI 300 Index, total: 300
+2026-02-05 21:17:07,536 | INFO     | trading:discover_all:215 - Found 500 valid from CSI 500 Index, total: 800
+2026-02-05 21:17:09,740 | INFO     | trading:discover_all:215 - Found 1000 valid from CSI 1000 Index, total: 1800
+2026-02-05 21:17:09,740 | INFO     | trading:discover_all:223 - Before filtering: 1800 stocks
+2026-02-05 21:17:09,740 | INFO     | trading:discover_all:244 - After filtering: 200 stocks
+2026-02-05 21:17:09,740 | INFO     | trading:_discover_all_stocks:413 - Discovered 200 valid stocks
+2026-02-05 21:17:09,740 | INFO     | trading.data.fetcher:__init__:256 - AkShare initialized
+2026-02-05 21:17:09,740 | INFO     | trading.data.fetcher:__init__:375 - Yahoo Finance initialized
+2026-02-05 21:17:09,740 | INFO     | trading.data.fetcher:_init_sources:473 - Data source akshare available
+2026-02-05 21:17:09,740 | INFO     | trading.data.fetcher:_init_sources:473 - Data source yahoo available
+2026-02-05 21:17:09,755 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 000001: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,755 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 000001: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,755 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 000002: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,755 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 000002: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,761 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 000002
+2026-02-05 21:17:09,755 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 000063: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,755 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 000100: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,765 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 000100: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,765 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 000100
+2026-02-05 21:17:09,764 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 000166: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,765 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 000063: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,755 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 000001
+2026-02-05 21:17:09,762 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 000157: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,765 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 000301: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,767 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 000166: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,767 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 000063
+2026-02-05 21:17:09,767 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 000157: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,767 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 000301: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,769 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 000166
+2026-02-05 21:17:09,769 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 000157
+2026-02-05 21:17:09,769 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 000301
+2026-02-05 21:17:09,770 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 000338: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,770 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 000338: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,770 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 000408: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,770 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 000338
+2026-02-05 21:17:09,770 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 000425: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,770 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 000408: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,770 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 000425: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,770 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 000408
+2026-02-05 21:17:09,770 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 000425
+2026-02-05 21:17:09,774 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 000538: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,774 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 000568: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,775 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 000596: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,780 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 000617: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,781 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 000538: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,781 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 000625: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,781 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 000568: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,781 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 000596: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,782 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 000617: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,782 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 000538
+2026-02-05 21:17:09,782 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 000625: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,782 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 000568
+2026-02-05 21:17:09,782 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 000596
+2026-02-05 21:17:09,782 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 000617
+2026-02-05 21:17:09,782 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 000625
+2026-02-05 21:17:09,783 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 000630: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,784 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 000630: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,784 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 000661: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,784 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 000630
+2026-02-05 21:17:09,785 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 000708: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,785 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 000661: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,787 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 000708: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,787 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 000661
+2026-02-05 21:17:09,787 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 000768: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,788 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 000725: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,788 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 000708
+2026-02-05 21:17:09,788 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 000776: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,788 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 000768: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,789 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 000725: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,789 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 000786: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,789 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 000776: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,790 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 000768
+2026-02-05 21:17:09,790 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 000725
+2026-02-05 21:17:09,790 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 000792: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,790 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 000786: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,790 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 000776
+2026-02-05 21:17:09,791 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 000807: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,791 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 000792: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,791 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 000786
+2026-02-05 21:17:09,792 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 000807: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,792 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 000792
+2026-02-05 21:17:09,792 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 000876: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,793 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 000895: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,793 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 000807
+2026-02-05 21:17:09,793 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 000876: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,793 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 000895: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,798 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 000963: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,798 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 000938: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,799 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 000876
+2026-02-05 21:17:09,800 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 000975: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,800 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 000895
+2026-02-05 21:17:09,800 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 000963: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,800 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 000938: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,800 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 000975: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,800 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 000977: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,800 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 000963
+2026-02-05 21:17:09,800 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 000938
+2026-02-05 21:17:09,801 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 000975
+2026-02-05 21:17:09,801 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 000977: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,801 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 000983: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,802 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 000999: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,802 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 000977
+2026-02-05 21:17:09,803 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 000983: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,803 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 001391: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,803 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 000999: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,803 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 000983
+2026-02-05 21:17:09,803 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 001965: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,803 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 001391: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,803 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 000999
+2026-02-05 21:17:09,803 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 001979: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,803 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 001965: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,803 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 001391
+2026-02-05 21:17:09,803 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 002001: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,807 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 001979: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,807 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 002027: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,807 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 001965
+2026-02-05 21:17:09,807 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 002001: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,808 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 001979
+2026-02-05 21:17:09,808 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 002027: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,808 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 002028: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,809 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 002001
+2026-02-05 21:17:09,809 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 002049: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,809 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 002027
+2026-02-05 21:17:09,810 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 002028: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,810 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 002028
+2026-02-05 21:17:09,810 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 002074: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,810 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 002049: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,810 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 002050: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,810 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 002142: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,810 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 002179: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,810 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 002074: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,810 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 002049
+2026-02-05 21:17:09,810 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 002050: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,810 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 002142: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,810 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 002179: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,810 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 002074
+2026-02-05 21:17:09,810 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 002050
+2026-02-05 21:17:09,810 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 002142
+2026-02-05 21:17:09,810 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 002179
+2026-02-05 21:17:09,810 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 002236: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,810 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 002241: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,810 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 002236: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,810 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 002241: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,819 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 002236
+2026-02-05 21:17:09,819 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 002252: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,819 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 002241
+2026-02-05 21:17:09,820 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 002304: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,820 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 002252: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,820 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 002311: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,820 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 002352: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,820 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 002304: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,820 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 002252
+2026-02-05 21:17:09,820 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 002311: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,820 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 002352: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,820 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 002371: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,820 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 002304
+2026-02-05 21:17:09,820 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 002311
+2026-02-05 21:17:09,820 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 002352
+2026-02-05 21:17:09,824 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 002371: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,824 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 002384: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,825 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 002415: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,825 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 002371
+2026-02-05 21:17:09,826 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 002422: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,826 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 002384: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,826 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 002459: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,826 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 002415: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,826 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 002422: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,826 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 002460: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,826 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 002384
+2026-02-05 21:17:09,826 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 002459: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,826 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 002459
+2026-02-05 21:17:09,826 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 002422
+2026-02-05 21:17:09,826 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 002460: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,826 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 002415
+2026-02-05 21:17:09,826 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 002463: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,826 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 002460
+2026-02-05 21:17:09,826 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 002466: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,826 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 002463: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,826 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 002493: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,826 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 002466: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,826 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 002463
+2026-02-05 21:17:09,826 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 002493: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,826 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 002466
+2026-02-05 21:17:09,826 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 002493
+2026-02-05 21:17:09,826 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 002600: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,826 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 002600: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,826 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 002601: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,826 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 002600
+2026-02-05 21:17:09,826 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 002648: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,838 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 002625: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,838 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 002601: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,840 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 002648: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,840 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 002709: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,840 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 002625: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,840 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 002601
+2026-02-05 21:17:09,841 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 002648
+2026-02-05 21:17:09,841 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 002709: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,841 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 002714: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,841 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 002625
+2026-02-05 21:17:09,842 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 002709
+2026-02-05 21:17:09,842 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 002714: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,843 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 002736: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,843 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 002916: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,843 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 002714
+2026-02-05 21:17:09,843 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 002736: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,843 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 002920: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,843 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 002916: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,843 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 002938: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,843 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 002736
+2026-02-05 21:17:09,843 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 002920: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,843 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 003816: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,843 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 002916
+2026-02-05 21:17:09,843 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 002938: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,843 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 002920
+2026-02-05 21:17:09,843 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 003816: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,843 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 300014: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,843 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 002938
+2026-02-05 21:17:09,843 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 003816
+2026-02-05 21:17:09,843 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 300033: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,843 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 300014: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,843 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 300033: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,843 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 300014
+2026-02-05 21:17:09,843 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 300122: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,843 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 300033
+2026-02-05 21:17:09,843 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 300122: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,843 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 300124: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,843 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 300122
+2026-02-05 21:17:09,843 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 300124: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,843 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 300251: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,843 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 300124
+2026-02-05 21:17:09,843 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 300274: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,843 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 300251: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,857 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 300308: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,857 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 300274: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,858 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 300251
+2026-02-05 21:17:09,858 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 300316: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,859 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 300308: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,859 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 300274
+2026-02-05 21:17:09,859 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 300347: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,859 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 300316: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,860 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 300308
+2026-02-05 21:17:09,861 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 300394: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,861 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 300347: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,861 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 300316
+2026-02-05 21:17:09,861 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 300408: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,861 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 300394: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,861 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 300347
+2026-02-05 21:17:09,861 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 300413: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,861 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 300408: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,861 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 300394
+2026-02-05 21:17:09,861 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 300418: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,861 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 300413: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,861 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 300408
+2026-02-05 21:17:09,861 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 300433: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,861 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 300418: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,861 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 300413
+2026-02-05 21:17:09,861 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 300442: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,861 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 300433: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,861 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 300418
+2026-02-05 21:17:09,861 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 300442: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,861 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 300476: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,861 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 300433
+2026-02-05 21:17:09,861 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 300498: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,861 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 300442
+2026-02-05 21:17:09,861 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 300502: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,861 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 300476: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,861 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 300498: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,861 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 300628: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,861 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 300502: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,861 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 300476
+2026-02-05 21:17:09,861 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 300498
+2026-02-05 21:17:09,861 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 300661: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,861 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 300628: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,861 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 300502
+2026-02-05 21:17:09,861 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 300661: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,861 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 300628
+2026-02-05 21:17:09,861 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 300661
+2026-02-05 21:17:09,861 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 300759: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,874 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 300759: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,874 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 300759
+2026-02-05 21:17:09,876 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 300782: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,876 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 300782: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,876 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 300782
+2026-02-05 21:17:09,876 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 300803: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,876 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 300866: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,876 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 300832: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,876 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 300803: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,876 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 300866: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,876 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 300832: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,876 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 300896: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,876 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 300803
+2026-02-05 21:17:09,876 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 300866
+2026-02-05 21:17:09,876 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 300832
+2026-02-05 21:17:09,876 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 300896: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,876 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 300979: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,876 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 300896
+2026-02-05 21:17:09,876 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 300999: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,876 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 300979: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,876 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 301236: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,876 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 301269: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,876 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 300999: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,876 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 300979
+2026-02-05 21:17:09,876 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 301236: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,876 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 301269: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,876 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 302132: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,876 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 300999
+2026-02-05 21:17:09,876 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 301236
+2026-02-05 21:17:09,876 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 301269
+2026-02-05 21:17:09,876 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 600000: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,876 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 302132: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,876 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 600009: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,876 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 600000: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,876 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 302132
+2026-02-05 21:17:09,876 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 600010: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,890 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 600011: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,890 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 600009: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,890 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 600000
+2026-02-05 21:17:09,890 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 600010: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,890 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 600011: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,891 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 600009
+2026-02-05 21:17:09,891 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 600015: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,891 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 600010
+2026-02-05 21:17:09,893 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 600016: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,893 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 600011
+2026-02-05 21:17:09,893 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 600015: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,893 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 600016: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,893 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 600018: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,893 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 600015
+2026-02-05 21:17:09,893 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 600019: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,893 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 600023: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,893 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 600016
+2026-02-05 21:17:09,893 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 600018: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,893 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 600019: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,893 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 600023: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,893 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 600025: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,893 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 600018
+2026-02-05 21:17:09,893 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 600019
+2026-02-05 21:17:09,893 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 600026: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,893 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 600023
+2026-02-05 21:17:09,893 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 600025: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,893 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 600026: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,893 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 600027: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,893 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 600025
+2026-02-05 21:17:09,893 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 600026
+2026-02-05 21:17:09,893 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 600027: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,893 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 600028: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,893 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 600029: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,893 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 600027
+2026-02-05 21:17:09,893 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 600028: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,893 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 600029: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,893 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 600028
+2026-02-05 21:17:09,893 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 600031: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,893 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 600029
+2026-02-05 21:17:09,893 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 600031: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,893 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 600031
+2026-02-05 21:17:09,893 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 600039: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,907 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 600048: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,907 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 600039: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,907 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 600061: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,908 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 600048: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,908 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 600039
+2026-02-05 21:17:09,908 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 600050: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,908 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 600061: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,908 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 600048
+2026-02-05 21:17:09,909 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 600050: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,910 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 600061
+2026-02-05 21:17:09,910 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 600066: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,911 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 600050
+2026-02-05 21:17:09,911 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 600085: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,912 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 600085: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,912 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 600085
+2026-02-05 21:17:09,912 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 600104: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,912 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 600089: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,912 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 600066: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,912 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 600104: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,912 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 600111: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,912 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 600089: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,912 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 600066
+2026-02-05 21:17:09,912 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 600104
+2026-02-05 21:17:09,912 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 600115: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,912 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 600111: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,912 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 600089
+2026-02-05 21:17:09,912 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 600115: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,912 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 600150: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,912 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 600111
+2026-02-05 21:17:09,912 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 600115
+2026-02-05 21:17:09,912 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 600160: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,912 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 600150: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,912 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 600161: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,912 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 600160: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,912 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 600150
+2026-02-05 21:17:09,912 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 600176: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,912 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 600161: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,912 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 600160
+2026-02-05 21:17:09,912 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 600183: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,912 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 600176: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,912 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 600161
+2026-02-05 21:17:09,912 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 600188: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,912 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 600183: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,912 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 600176
+2026-02-05 21:17:09,912 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 600188: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,924 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 600183
+2026-02-05 21:17:09,924 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 600196: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,924 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 600188
+2026-02-05 21:17:09,925 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 600219: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,925 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 600233: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,925 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 600196: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,926 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 600219: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,926 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 600233: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,927 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 600309: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,927 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 600196
+2026-02-05 21:17:09,927 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 600219
+2026-02-05 21:17:09,927 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 600233
+2026-02-05 21:17:09,927 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 600309: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,929 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 600346: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,929 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 600309
+2026-02-05 21:17:09,930 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 600346: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,931 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 600362: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,931 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 600346
+2026-02-05 21:17:09,932 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 600372: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,932 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 600362: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,932 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 600377: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,932 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 600406: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,932 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 600372: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,932 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 600362
+2026-02-05 21:17:09,932 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 600377: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,932 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 600406: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,932 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 600415: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,932 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 600372
+2026-02-05 21:17:09,932 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 600377
+2026-02-05 21:17:09,932 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 600406
+2026-02-05 21:17:09,932 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 600415: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,932 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 600426: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,932 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 600415
+2026-02-05 21:17:09,932 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 600426: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,932 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 600436: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,932 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 600438: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,932 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 600426
+2026-02-05 21:17:09,932 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 600436: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,932 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 600438: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,932 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 600460: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,932 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 600482: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,932 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 600436
+2026-02-05 21:17:09,932 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 600438
+2026-02-05 21:17:09,940 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 600489: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,940 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 600460: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,940 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 600482: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,940 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 600489: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,941 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 600460
+2026-02-05 21:17:09,941 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 600482
+2026-02-05 21:17:09,941 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 600515: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,941 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 600489
+2026-02-05 21:17:09,942 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 600515: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,943 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 600522: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,943 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 600515
+2026-02-05 21:17:09,943 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 600522: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,944 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 600547: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,944 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 600522
+2026-02-05 21:17:09,944 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 600547: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,945 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 600570: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,945 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 600584: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,945 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 600547
+2026-02-05 21:17:09,947 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 600570: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,947 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 600585: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,947 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 600584: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,947 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 600570
+2026-02-05 21:17:09,947 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 600588: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,947 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 600585: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,947 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 600600: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,947 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 600584
+2026-02-05 21:17:09,947 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 600588: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,947 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 600585
+2026-02-05 21:17:09,947 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 600600: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,947 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 600660: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,947 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 600588
+2026-02-05 21:17:09,947 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 600600
+2026-02-05 21:17:09,947 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 600674: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,947 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 600660: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,947 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 600690: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,947 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 600674: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,947 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 600660
+2026-02-05 21:17:09,947 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 600741: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,947 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 600690: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,957 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 600760: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,957 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 600674
+2026-02-05 21:17:09,957 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 600741: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,957 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 600690
+2026-02-05 21:17:09,958 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 600795: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,958 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 600760: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,958 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 600741
+2026-02-05 21:17:09,959 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 600795: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,959 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 600760
+2026-02-05 21:17:09,959 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 600803: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,960 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 600809: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,960 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 600795
+2026-02-05 21:17:09,961 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 600845: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,961 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 600803: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,961 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 600809: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,962 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 600875: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,962 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 600845: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,962 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 600886: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,962 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 600803
+2026-02-05 21:17:09,962 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 600809
+2026-02-05 21:17:09,962 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 600875: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,962 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 600845
+2026-02-05 21:17:09,962 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 600886: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,962 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 600875
+2026-02-05 21:17:09,962 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 600886
+2026-02-05 21:17:09,962 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 600893: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,962 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 600893: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,962 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 600893
+2026-02-05 21:17:09,962 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 600905: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,962 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 600905: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,962 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 600918: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,962 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 600905
+2026-02-05 21:17:09,962 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 600918: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,962 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 600919: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,962 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 600918
+2026-02-05 21:17:09,972 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 600919: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,972 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 600926: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,973 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 600930: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,974 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 600938: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,974 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 600919
+2026-02-05 21:17:09,974 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 600926: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,975 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 600930: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,975 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 600938: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,975 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 600941: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,975 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 600926
+2026-02-05 21:17:09,976 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 600930
+2026-02-05 21:17:09,976 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 600958: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,976 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 600938
+2026-02-05 21:17:09,976 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 600941: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,976 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 600958: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,976 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 600989: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,976 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 600941
+2026-02-05 21:17:09,980 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 600958
+2026-02-05 21:17:09,980 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 600999: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,980 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 600989: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,980 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 601006: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,980 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 600999: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,980 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 601009: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,980 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 600989
+2026-02-05 21:17:09,980 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 601006: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,980 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 600999
+2026-02-05 21:17:09,980 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 601012: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,980 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 601009: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,980 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 601006
+2026-02-05 21:17:09,980 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 601018: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,980 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 601012: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,980 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 601009
+2026-02-05 21:17:09,980 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 601021: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,980 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 601018: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,980 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 601012
+2026-02-05 21:17:09,980 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 601021: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,980 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 601058: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,980 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 601018
+2026-02-05 21:17:09,980 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 601021
+2026-02-05 21:17:09,980 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 601058: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,980 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - akshare failed for 601059: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,980 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 601058
+2026-02-05 21:17:09,980 | WARNING  | trading.data.fetcher:_fetch_from_sources:546 - yahoo failed for 601059: 'DataFetcher' object has no attribute '_rate_lock'
+2026-02-05 21:17:09,980 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 601059
+2026-02-05 21:17:09,988 | INFO     | trading.data.fetcher:get_multiple_parallel:643 - Parallel fetch: 16/200 successful
+2026-02-05 21:17:10,060 | INFO     | trading:create_features:170 - Created 47 features, 1436 valid samples
+2026-02-05 21:17:10,129 | INFO     | trading:create_features:170 - Created 47 features, 1436 valid samples
+2026-02-05 21:17:10,195 | INFO     | trading:create_features:170 - Created 47 features, 1436 valid samples
+2026-02-05 21:17:10,263 | INFO     | trading:create_features:170 - Created 47 features, 1436 valid samples
+2026-02-05 21:17:10,331 | INFO     | trading:create_features:170 - Created 47 features, 1436 valid samples
+2026-02-05 21:17:10,399 | INFO     | trading:create_features:170 - Created 47 features, 1436 valid samples
+2026-02-05 21:17:10,465 | INFO     | trading:create_features:170 - Created 47 features, 1435 valid samples
+2026-02-05 21:17:10,533 | INFO     | trading:create_features:170 - Created 47 features, 1436 valid samples
+2026-02-05 21:17:10,600 | INFO     | trading:create_features:170 - Created 47 features, 1436 valid samples
+2026-02-05 21:17:10,667 | INFO     | trading:create_features:170 - Created 47 features, 1436 valid samples
+2026-02-05 21:17:10,734 | INFO     | trading:create_features:170 - Created 47 features, 1429 valid samples
+2026-02-05 21:17:10,803 | INFO     | trading:create_features:170 - Created 47 features, 1435 valid samples
+2026-02-05 21:17:10,869 | INFO     | trading:create_features:170 - Created 47 features, 1435 valid samples
+2026-02-05 21:17:10,936 | INFO     | trading:create_features:170 - Created 47 features, 1435 valid samples
+2026-02-05 21:17:11,008 | INFO     | trading:create_features:170 - Created 47 features, 1435 valid samples
+2026-02-05 21:17:11,073 | INFO     | trading:create_features:170 - Created 47 features, 1424 valid samples
+2026-02-05 21:17:11,073 | INFO     | trading:_download_all_data:459 - Processed 16 stocks with features
+2026-02-05 21:17:11,157 | INFO     | trading:fit_scaler:99 - Scaler fitted on 15741 samples, 47 features
+2026-02-05 21:17:11,157 | INFO     | trading:_prepare_training_data:512 - Scaler fitted on 15741 samples
+2026-02-05 21:17:11,478 | INFO     | trading:save_scaler:305 - Scaler saved atomically to F:\Trading app\Trading-graph\models_saved\scaler.pkl
+2026-02-05 21:17:11,557 | DEBUG    | trading:_init_model:100 - Initialized lstm model
+2026-02-05 21:17:11,578 | DEBUG    | trading:_init_model:100 - Initialized transformer model
+2026-02-05 21:17:11,593 | DEBUG    | trading:_init_model:100 - Initialized gru model
+2026-02-05 21:17:11,604 | DEBUG    | trading:_init_model:100 - Initialized tcn model
+2026-02-05 21:17:11,604 | INFO     | trading:__init__:85 - Ensemble initialized: ['lstm', 'transformer', 'gru', 'tcn'] on cpu

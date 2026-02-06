@@ -234,8 +234,7 @@ class KillSwitch:
             
             # Set reset time based on type
             if cb_type == CircuitBreakerType.DAILY_LOSS:
-                # Reset at start of next trading day
-                cb.reset_at = None  # Manual reset required
+                cb.reset_at = None  # Manual reset required (sticky)
             elif cb_type == CircuitBreakerType.RAPID_LOSS:
                 cb.reset_at = datetime.now() + timedelta(minutes=30)
             elif cb_type == CircuitBreakerType.ERROR_RATE:

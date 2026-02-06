@@ -314,7 +314,8 @@ class AlertManager:
         try:
             msg = MIMEMultipart()
             msg['Subject'] = f"[{alert.priority.name}] {alert.title}"
-            msg['From'] = f"Trading System <{CONFIG.alerts.smtp_server}>"
+            from_addr = CONFIG.alerts.from_email or CONFIG.alerts.smtp_username or "trading-system@localhost"
+            msg["From"] = f"Trading System <{from_addr}>"
             msg['To'] = ", ".join(CONFIG.alerts.email_recipients)
             
             body = f"""

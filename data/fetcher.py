@@ -158,6 +158,7 @@ class SpotCache:
         self._cache_time: float = 0
         self._ttl = ttl_seconds
         self._lock = threading.RLock()
+        self._rate_lock = threading.Lock()
         self._ak = None
         
         try:
@@ -477,13 +478,13 @@ class DataFetcher:
             log.error("No data sources available!")
     
     def _rate_limit(self, source: str):
-        """Per-source rate limiting"""
-        now = time.time()
-        last = self._request_times.get(source, 0)
-        wait = self._min_interval - (now - last)
-        if wait > 0:
-            time.sleep(wait)
-        self._request_times[source] = time.time()
+        with self._rate_lock:
+            now = time.time()
+            last = self._request_times.get(source, 0)
+            wait = self._min_interval - (now - last)
+            if wait > 0:
+                time.sleep(wait)
+            self._request_times[source] = time.time()
     
     @staticmethod
     def clean_code(code: str) -> str:

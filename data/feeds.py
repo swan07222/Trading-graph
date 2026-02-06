@@ -577,8 +577,12 @@ class BarAggregator:
             
             # FIXED: Calculate incremental volume (quote.volume is cumulative)
             current_cum_vol = int(quote.volume) if quote.volume else 0
-            delta_vol = max(current_cum_vol - last_cum_vol, 0)
-            bar['volume'] += delta_vol
+            if current_cum_vol < last_cum_vol:
+                delta_vol = current_cum_vol  # reset/new session
+            else:
+                delta_vol = current_cum_vol - last_cum_vol
+
+            bar["volume"] += max(delta_vol, 0)
             bar['last_cum_vol'] = current_cum_vol
             
             # Check if bar is complete

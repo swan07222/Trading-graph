@@ -557,19 +557,24 @@ class ContinuousLearner:
         X_test = train_data['X_test']
         y_test = train_data['y_test']
         
-        if X_val is None or len(X_val) == 0:
-            split = int(len(X_train) * 0.85)
-            X_val = X_train[split:]
-            y_val = y_train[split:]
-            X_train = X_train[:split]
-            y_train = y_train[:split]
-            ensemble.calibrate(X_val, y_val)
-        
-        ensemble.save()
-        log.info(f"Training data: {len(X_train)} train, {len(X_val)} val")
-        
         input_size = X_train.shape[2]
         ensemble = EnsembleModel(input_size)
+
+        if mode == self.MODE_INCREMENTAL:
+            if ensemble.load():
+                log.info("Loaded existing model for incremental learning")
+
+        # if no val, split train
+        if X_val is None or len(X_val) == 0:
+            split = int(len(X_train) * 0.85)
+            X_val, y_val = X_train[split:], y_train[split:]
+            X_train, y_train = X_train[:split], y_train[:split]
+
+        ensemble.train(X_train, y_train, X_val, y_val, epochs=epochs, callback=train_callback, stop_flag=self._cancel_token)
+
+        # calibrate AFTER training
+        ensemble.calibrate(X_val, y_val)
+        ensemble.save()
         
         if mode == self.MODE_INCREMENTAL:
             if ensemble.load():

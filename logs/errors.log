@@ -915,3 +915,371 @@ None
 None
 2026-02-05 20:02:20,407 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 000568
 None
+2026-02-05 21:17:09,761 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 000002
+None
+2026-02-05 21:17:09,765 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 000100
+None
+2026-02-05 21:17:09,755 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 000001
+None
+2026-02-05 21:17:09,767 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 000063
+None
+2026-02-05 21:17:09,769 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 000166
+None
+2026-02-05 21:17:09,769 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 000157
+None
+2026-02-05 21:17:09,769 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 000301
+None
+2026-02-05 21:17:09,770 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 000338
+None
+2026-02-05 21:17:09,770 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 000408
+None
+2026-02-05 21:17:09,770 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 000425
+None
+2026-02-05 21:17:09,782 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 000538
+None
+2026-02-05 21:17:09,782 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 000568
+None
+2026-02-05 21:17:09,782 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 000596
+None
+2026-02-05 21:17:09,782 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 000617
+None
+2026-02-05 21:17:09,782 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 000625
+None
+2026-02-05 21:17:09,784 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 000630
+None
+2026-02-05 21:17:09,787 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 000661
+None
+2026-02-05 21:17:09,788 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 000708
+None
+2026-02-05 21:17:09,790 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 000768
+None
+2026-02-05 21:17:09,790 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 000725
+None
+2026-02-05 21:17:09,790 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 000776
+None
+2026-02-05 21:17:09,791 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 000786
+None
+2026-02-05 21:17:09,792 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 000792
+None
+2026-02-05 21:17:09,793 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 000807
+None
+2026-02-05 21:17:09,799 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 000876
+None
+2026-02-05 21:17:09,800 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 000895
+None
+2026-02-05 21:17:09,800 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 000963
+None
+2026-02-05 21:17:09,800 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 000938
+None
+2026-02-05 21:17:09,801 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 000975
+None
+2026-02-05 21:17:09,802 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 000977
+None
+2026-02-05 21:17:09,803 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 000983
+None
+2026-02-05 21:17:09,803 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 000999
+None
+2026-02-05 21:17:09,803 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 001391
+None
+2026-02-05 21:17:09,807 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 001965
+None
+2026-02-05 21:17:09,808 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 001979
+None
+2026-02-05 21:17:09,809 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 002001
+None
+2026-02-05 21:17:09,809 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 002027
+None
+2026-02-05 21:17:09,810 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 002028
+None
+2026-02-05 21:17:09,810 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 002049
+None
+2026-02-05 21:17:09,810 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 002074
+None
+2026-02-05 21:17:09,810 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 002050
+None
+2026-02-05 21:17:09,810 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 002142
+None
+2026-02-05 21:17:09,810 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 002179
+None
+2026-02-05 21:17:09,819 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 002236
+None
+2026-02-05 21:17:09,819 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 002241
+None
+2026-02-05 21:17:09,820 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 002252
+None
+2026-02-05 21:17:09,820 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 002304
+None
+2026-02-05 21:17:09,820 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 002311
+None
+2026-02-05 21:17:09,820 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 002352
+None
+2026-02-05 21:17:09,825 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 002371
+None
+2026-02-05 21:17:09,826 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 002384
+None
+2026-02-05 21:17:09,826 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 002459
+None
+2026-02-05 21:17:09,826 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 002422
+None
+2026-02-05 21:17:09,826 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 002415
+None
+2026-02-05 21:17:09,826 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 002460
+None
+2026-02-05 21:17:09,826 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 002463
+None
+2026-02-05 21:17:09,826 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 002466
+None
+2026-02-05 21:17:09,826 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 002493
+None
+2026-02-05 21:17:09,826 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 002600
+None
+2026-02-05 21:17:09,840 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 002601
+None
+2026-02-05 21:17:09,841 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 002648
+None
+2026-02-05 21:17:09,841 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 002625
+None
+2026-02-05 21:17:09,842 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 002709
+None
+2026-02-05 21:17:09,843 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 002714
+None
+2026-02-05 21:17:09,843 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 002736
+None
+2026-02-05 21:17:09,843 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 002916
+None
+2026-02-05 21:17:09,843 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 002920
+None
+2026-02-05 21:17:09,843 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 002938
+None
+2026-02-05 21:17:09,843 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 003816
+None
+2026-02-05 21:17:09,843 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 300014
+None
+2026-02-05 21:17:09,843 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 300033
+None
+2026-02-05 21:17:09,843 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 300122
+None
+2026-02-05 21:17:09,843 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 300124
+None
+2026-02-05 21:17:09,858 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 300251
+None
+2026-02-05 21:17:09,859 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 300274
+None
+2026-02-05 21:17:09,860 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 300308
+None
+2026-02-05 21:17:09,861 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 300316
+None
+2026-02-05 21:17:09,861 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 300347
+None
+2026-02-05 21:17:09,861 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 300394
+None
+2026-02-05 21:17:09,861 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 300408
+None
+2026-02-05 21:17:09,861 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 300413
+None
+2026-02-05 21:17:09,861 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 300418
+None
+2026-02-05 21:17:09,861 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 300433
+None
+2026-02-05 21:17:09,861 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 300442
+None
+2026-02-05 21:17:09,861 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 300476
+None
+2026-02-05 21:17:09,861 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 300498
+None
+2026-02-05 21:17:09,861 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 300502
+None
+2026-02-05 21:17:09,861 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 300628
+None
+2026-02-05 21:17:09,861 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 300661
+None
+2026-02-05 21:17:09,874 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 300759
+None
+2026-02-05 21:17:09,876 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 300782
+None
+2026-02-05 21:17:09,876 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 300803
+None
+2026-02-05 21:17:09,876 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 300866
+None
+2026-02-05 21:17:09,876 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 300832
+None
+2026-02-05 21:17:09,876 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 300896
+None
+2026-02-05 21:17:09,876 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 300979
+None
+2026-02-05 21:17:09,876 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 300999
+None
+2026-02-05 21:17:09,876 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 301236
+None
+2026-02-05 21:17:09,876 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 301269
+None
+2026-02-05 21:17:09,876 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 302132
+None
+2026-02-05 21:17:09,890 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 600000
+None
+2026-02-05 21:17:09,891 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 600009
+None
+2026-02-05 21:17:09,891 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 600010
+None
+2026-02-05 21:17:09,893 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 600011
+None
+2026-02-05 21:17:09,893 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 600015
+None
+2026-02-05 21:17:09,893 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 600016
+None
+2026-02-05 21:17:09,893 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 600018
+None
+2026-02-05 21:17:09,893 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 600019
+None
+2026-02-05 21:17:09,893 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 600023
+None
+2026-02-05 21:17:09,893 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 600025
+None
+2026-02-05 21:17:09,893 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 600026
+None
+2026-02-05 21:17:09,893 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 600027
+None
+2026-02-05 21:17:09,893 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 600028
+None
+2026-02-05 21:17:09,893 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 600029
+None
+2026-02-05 21:17:09,893 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 600031
+None
+2026-02-05 21:17:09,908 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 600039
+None
+2026-02-05 21:17:09,908 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 600048
+None
+2026-02-05 21:17:09,910 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 600061
+None
+2026-02-05 21:17:09,911 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 600050
+None
+2026-02-05 21:17:09,912 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 600085
+None
+2026-02-05 21:17:09,912 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 600066
+None
+2026-02-05 21:17:09,912 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 600104
+None
+2026-02-05 21:17:09,912 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 600089
+None
+2026-02-05 21:17:09,912 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 600111
+None
+2026-02-05 21:17:09,912 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 600115
+None
+2026-02-05 21:17:09,912 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 600150
+None
+2026-02-05 21:17:09,912 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 600160
+None
+2026-02-05 21:17:09,912 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 600161
+None
+2026-02-05 21:17:09,912 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 600176
+None
+2026-02-05 21:17:09,924 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 600183
+None
+2026-02-05 21:17:09,924 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 600188
+None
+2026-02-05 21:17:09,927 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 600196
+None
+2026-02-05 21:17:09,927 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 600219
+None
+2026-02-05 21:17:09,927 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 600233
+None
+2026-02-05 21:17:09,929 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 600309
+None
+2026-02-05 21:17:09,931 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 600346
+None
+2026-02-05 21:17:09,932 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 600362
+None
+2026-02-05 21:17:09,932 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 600372
+None
+2026-02-05 21:17:09,932 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 600377
+None
+2026-02-05 21:17:09,932 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 600406
+None
+2026-02-05 21:17:09,932 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 600415
+None
+2026-02-05 21:17:09,932 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 600426
+None
+2026-02-05 21:17:09,932 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 600436
+None
+2026-02-05 21:17:09,932 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 600438
+None
+2026-02-05 21:17:09,941 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 600460
+None
+2026-02-05 21:17:09,941 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 600482
+None
+2026-02-05 21:17:09,941 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 600489
+None
+2026-02-05 21:17:09,943 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 600515
+None
+2026-02-05 21:17:09,944 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 600522
+None
+2026-02-05 21:17:09,945 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 600547
+None
+2026-02-05 21:17:09,947 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 600570
+None
+2026-02-05 21:17:09,947 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 600584
+None
+2026-02-05 21:17:09,947 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 600585
+None
+2026-02-05 21:17:09,947 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 600588
+None
+2026-02-05 21:17:09,947 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 600600
+None
+2026-02-05 21:17:09,947 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 600660
+None
+2026-02-05 21:17:09,957 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 600674
+None
+2026-02-05 21:17:09,957 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 600690
+None
+2026-02-05 21:17:09,958 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 600741
+None
+2026-02-05 21:17:09,959 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 600760
+None
+2026-02-05 21:17:09,960 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 600795
+None
+2026-02-05 21:17:09,962 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 600803
+None
+2026-02-05 21:17:09,962 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 600809
+None
+2026-02-05 21:17:09,962 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 600845
+None
+2026-02-05 21:17:09,962 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 600875
+None
+2026-02-05 21:17:09,962 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 600886
+None
+2026-02-05 21:17:09,962 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 600893
+None
+2026-02-05 21:17:09,962 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 600905
+None
+2026-02-05 21:17:09,962 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 600918
+None
+2026-02-05 21:17:09,974 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 600919
+None
+2026-02-05 21:17:09,975 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 600926
+None
+2026-02-05 21:17:09,976 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 600930
+None
+2026-02-05 21:17:09,976 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 600938
+None
+2026-02-05 21:17:09,976 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 600941
+None
+2026-02-05 21:17:09,980 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 600958
+None
+2026-02-05 21:17:09,980 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 600989
+None
+2026-02-05 21:17:09,980 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 600999
+None
+2026-02-05 21:17:09,980 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 601006
+None
+2026-02-05 21:17:09,980 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 601009
+None
+2026-02-05 21:17:09,980 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 601012
+None
+2026-02-05 21:17:09,980 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 601018
+None
+2026-02-05 21:17:09,980 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 601021
+None
+2026-02-05 21:17:09,980 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 601058
+None
+2026-02-05 21:17:09,980 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 601059
+None

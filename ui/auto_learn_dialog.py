@@ -122,10 +122,17 @@ class AutoLearnWorker(QThread):
                 # Prepare training data
                 codes = list(data.keys())
                 
-                metrics = trainer.train(
-                    codes=codes,
-                    epochs=self.config.get('epochs', 50),
-                    progress_callback=train_progress
+                def cb(model_name, epoch_idx, val_acc):
+                    if self.running:
+                        pct = 65 + int(30 * (epoch_idx + 1) / self.config.get("epochs", 50))
+                        self.progress.emit(pct, f"Training {model_name} epoch {epoch_idx+1}")
+                        self.log_message.emit(f"{model_name} epoch {epoch_idx+1} val_acc={val_acc:.2%}", "info")
+
+                results = trainer.train(
+                    stock_codes=codes,
+                    epochs=self.config.get("epochs", 50),
+                    callback=cb,
+                    save_model=True
                 )
                 
                 if metrics:

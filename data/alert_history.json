@@ -8,5 +8,15 @@
     "details": {},
     "created_at": "2026-02-05T06:10:31.203753",
     "acknowledged": false
+  },
+  {
+    "id": "ALERT_EA30E3EAC86D",
+    "category": "system",
+    "priority": 2,
+    "title": "Trading System Started",
+    "message": "Mode: simulation, Equity: 100,000.00",
+    "details": {},
+    "created_at": "2026-02-05T21:16:00.458177",
+    "acknowledged": false
   }
 ]
