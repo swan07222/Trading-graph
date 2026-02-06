@@ -77,15 +77,22 @@ class ExecutionEngine:
             return False
 
         from trading.oms import get_oms
+        from trading.risk import get_risk_manager  # ADDED: Import here
+        
         oms = get_oms()
 
         # Rebuild broker ID mappings from persisted orders (crash recovery)
         self._rebuild_broker_mappings(oms)
 
-        from trading.oms import get_oms
-        account = get_oms().get_account()
-        self.risk_manager.update(account)
+        # FIXED: Initialize risk manager BEFORE using it
+        self.risk_manager = get_risk_manager()
+        
+        # Get account from OMS
+        account = oms.get_account()
+        
+        # Initialize and update risk manager
         self.risk_manager.initialize(account)
+        self.risk_manager.update(account)
 
         self._health_monitor.start()
         self._alert_manager.start()

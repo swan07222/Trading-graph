@@ -1118,3 +1118,91 @@ IndentationError: unexpected indent
 2026-02-05 20:02:21,644 | INFO     | trading:fit_scaler:99 - Scaler fitted on 15741 samples, 47 features
 2026-02-05 20:02:21,645 | INFO     | trading:_prepare_training_data:512 - Scaler fitted on 15741 samples
 2026-02-05 20:02:21,900 | INFO     | trading:save_scaler:305 - Scaler saved atomically to F:\Trading app\Trading-graph\models_saved\scaler.pkl
+2026-02-05 20:06:19,310 | INFO     | trading:main:61 - ============================================================
+2026-02-05 20:06:19,326 | INFO     | trading:main:62 - AI STOCK TRADING SYSTEM - Production Grade
+2026-02-05 20:06:19,326 | INFO     | trading:main:63 - ============================================================
+2026-02-05 20:06:19,629 | INFO     | trading.data.fetcher:__init__:255 - AkShare initialized
+2026-02-05 20:06:19,697 | INFO     | trading.data.fetcher:__init__:374 - Yahoo Finance initialized
+2026-02-05 20:06:19,697 | INFO     | trading.data.fetcher:_init_sources:472 - Data source akshare available
+2026-02-05 20:06:19,698 | INFO     | trading.data.fetcher:_init_sources:472 - Data source yahoo available
+2026-02-05 20:06:19,698 | INFO     | trading.data.fetcher:reset_sources:669 - All data sources reset
+2026-02-05 20:06:20,001 | INFO     | trading.data.fetcher:__init__:255 - AkShare initialized
+2026-02-05 20:06:20,001 | INFO     | trading.data.fetcher:__init__:374 - Yahoo Finance initialized
+2026-02-05 20:06:20,001 | INFO     | trading.data.fetcher:_init_sources:472 - Data source akshare available
+2026-02-05 20:06:20,001 | INFO     | trading.data.fetcher:_init_sources:472 - Data source yahoo available
+2026-02-05 20:06:20,001 | INFO     | trading:load_scaler:325 - Scaler loaded from F:\Trading app\Trading-graph\models_saved\scaler.pkl
+2026-02-05 20:06:20,116 | DEBUG    | trading:_init_model:100 - Initialized lstm model
+2026-02-05 20:06:20,133 | DEBUG    | trading:_init_model:100 - Initialized transformer model
+2026-02-05 20:06:20,143 | DEBUG    | trading:_init_model:100 - Initialized gru model
+2026-02-05 20:06:20,153 | DEBUG    | trading:_init_model:100 - Initialized tcn model
+2026-02-05 20:06:20,153 | INFO     | trading:__init__:85 - Ensemble initialized: ['lstm', 'transformer', 'gru', 'tcn'] on cpu
+2026-02-05 20:06:20,214 | DEBUG    | trading:_init_model:100 - Initialized lstm model
+2026-02-05 20:06:20,233 | DEBUG    | trading:_init_model:100 - Initialized transformer model
+2026-02-05 20:06:20,247 | DEBUG    | trading:_init_model:100 - Initialized gru model
+2026-02-05 20:06:20,258 | DEBUG    | trading:_init_model:100 - Initialized tcn model
+2026-02-05 20:06:20,260 | INFO     | trading:load:589 - Ensemble loaded: ['lstm', 'transformer', 'gru', 'tcn'], temp=1.25
+2026-02-05 20:06:20,261 | INFO     | trading:_load_model:153 - Model loaded successfully (4 networks)
+2026-02-05 20:06:28,131 | INFO     | trading.data.fetcher:__init__:255 - AkShare initialized
+2026-02-05 20:06:28,131 | INFO     | trading.data.fetcher:__init__:374 - Yahoo Finance initialized
+2026-02-05 20:06:28,131 | INFO     | trading.data.fetcher:_init_sources:472 - Data source akshare available
+2026-02-05 20:06:28,131 | INFO     | trading.data.fetcher:_init_sources:472 - Data source yahoo available
+2026-02-05 20:06:28,131 | INFO     | trading:load_scaler:325 - Scaler loaded from F:\Trading app\Trading-graph\models_saved\scaler.pkl
+2026-02-05 20:06:28,178 | DEBUG    | trading:_init_model:100 - Initialized lstm model
+2026-02-05 20:06:28,193 | DEBUG    | trading:_init_model:100 - Initialized transformer model
+2026-02-05 20:06:28,193 | DEBUG    | trading:_init_model:100 - Initialized gru model
+2026-02-05 20:06:28,209 | DEBUG    | trading:_init_model:100 - Initialized tcn model
+2026-02-05 20:06:28,209 | INFO     | trading:__init__:85 - Ensemble initialized: ['lstm', 'transformer', 'gru', 'tcn'] on cpu
+2026-02-05 20:06:28,276 | DEBUG    | trading:_init_model:100 - Initialized lstm model
+2026-02-05 20:06:28,300 | DEBUG    | trading:_init_model:100 - Initialized transformer model
+2026-02-05 20:06:28,313 | DEBUG    | trading:_init_model:100 - Initialized gru model
+2026-02-05 20:06:28,324 | DEBUG    | trading:_init_model:100 - Initialized tcn model
+2026-02-05 20:06:28,326 | INFO     | trading:load:589 - Ensemble loaded: ['lstm', 'transformer', 'gru', 'tcn'], temp=1.25
+2026-02-05 20:06:28,326 | INFO     | trading:_load_model:153 - Model loaded successfully (4 networks)
+2026-02-05 20:06:31,725 | INFO     | trading:__init__:109 - AkShare initialized for stock discovery
+2026-02-05 20:06:42,118 | INFO     | trading.data.fetcher:__init__:255 - AkShare initialized
+2026-02-05 20:06:42,118 | INFO     | trading.data.fetcher:__init__:374 - Yahoo Finance initialized
+2026-02-05 20:06:42,118 | INFO     | trading.data.fetcher:_init_sources:472 - Data source akshare available
+2026-02-05 20:06:42,118 | INFO     | trading.data.fetcher:_init_sources:472 - Data source yahoo available
+2026-02-05 20:06:42,118 | INFO     | trading:load_scaler:325 - Scaler loaded from F:\Trading app\Trading-graph\models_saved\scaler.pkl
+2026-02-05 20:06:42,167 | DEBUG    | trading:_init_model:100 - Initialized lstm model
+2026-02-05 20:06:42,187 | DEBUG    | trading:_init_model:100 - Initialized transformer model
+2026-02-05 20:06:42,197 | DEBUG    | trading:_init_model:100 - Initialized gru model
+2026-02-05 20:06:42,202 | DEBUG    | trading:_init_model:100 - Initialized tcn model
+2026-02-05 20:06:42,202 | INFO     | trading:__init__:85 - Ensemble initialized: ['lstm', 'transformer', 'gru', 'tcn'] on cpu
+2026-02-05 20:06:42,260 | DEBUG    | trading:_init_model:100 - Initialized lstm model
+2026-02-05 20:06:42,278 | DEBUG    | trading:_init_model:100 - Initialized transformer model
+2026-02-05 20:06:42,292 | DEBUG    | trading:_init_model:100 - Initialized gru model
+2026-02-05 20:06:42,302 | DEBUG    | trading:_init_model:100 - Initialized tcn model
+2026-02-05 20:06:42,303 | INFO     | trading:load:589 - Ensemble loaded: ['lstm', 'transformer', 'gru', 'tcn'], temp=1.25
+2026-02-05 20:06:42,304 | INFO     | trading:_load_model:153 - Model loaded successfully (4 networks)
+2026-02-05 20:06:46,894 | INFO     | trading.oms:_recover_or_init:551 - Recovered account state from database
+2026-02-05 20:06:46,894 | INFO     | trading.oms:__init__:544 - OMS initialized: equity=¥100,000.00
+2026-02-05 20:06:46,894 | INFO     | trading.broker:connect:264 - Simulator connected with 100,000.00
+2026-02-05 20:06:46,921 | INFO     | trading.executor:_rebuild_broker_mappings:138 - Recovered 0 order mappings from DB
+2026-02-05 20:09:14,012 | INFO     | trading:main:61 - ============================================================
+2026-02-05 20:09:14,013 | INFO     | trading:main:62 - AI STOCK TRADING SYSTEM - Production Grade
+2026-02-05 20:09:14,013 | INFO     | trading:main:63 - ============================================================
+2026-02-05 20:09:14,333 | INFO     | trading.data.fetcher:__init__:255 - AkShare initialized
+2026-02-05 20:09:14,393 | INFO     | trading.data.fetcher:__init__:374 - Yahoo Finance initialized
+2026-02-05 20:09:14,393 | INFO     | trading.data.fetcher:_init_sources:472 - Data source akshare available
+2026-02-05 20:09:14,393 | INFO     | trading.data.fetcher:_init_sources:472 - Data source yahoo available
+2026-02-05 20:09:14,393 | INFO     | trading.data.fetcher:reset_sources:669 - All data sources reset
+2026-02-05 20:09:14,739 | INFO     | trading.data.fetcher:__init__:255 - AkShare initialized
+2026-02-05 20:09:14,739 | INFO     | trading.data.fetcher:__init__:374 - Yahoo Finance initialized
+2026-02-05 20:09:14,739 | INFO     | trading.data.fetcher:_init_sources:472 - Data source akshare available
+2026-02-05 20:09:14,739 | INFO     | trading.data.fetcher:_init_sources:472 - Data source yahoo available
+2026-02-05 20:09:14,740 | INFO     | trading:load_scaler:325 - Scaler loaded from F:\Trading app\Trading-graph\models_saved\scaler.pkl
+2026-02-05 20:09:14,797 | DEBUG    | trading:_init_model:100 - Initialized lstm model
+2026-02-05 20:09:14,814 | DEBUG    | trading:_init_model:100 - Initialized transformer model
+2026-02-05 20:09:14,823 | DEBUG    | trading:_init_model:100 - Initialized gru model
+2026-02-05 20:09:14,832 | DEBUG    | trading:_init_model:100 - Initialized tcn model
+2026-02-05 20:09:14,832 | INFO     | trading:__init__:85 - Ensemble initialized: ['lstm', 'transformer', 'gru', 'tcn'] on cpu
+2026-02-05 20:09:14,901 | DEBUG    | trading:_init_model:100 - Initialized lstm model
+2026-02-05 20:09:14,917 | DEBUG    | trading:_init_model:100 - Initialized transformer model
+2026-02-05 20:09:14,927 | DEBUG    | trading:_init_model:100 - Initialized gru model
+2026-02-05 20:09:14,936 | DEBUG    | trading:_init_model:100 - Initialized tcn model
+2026-02-05 20:09:14,937 | INFO     | trading:load:589 - Ensemble loaded: ['lstm', 'transformer', 'gru', 'tcn'], temp=1.25
+2026-02-05 20:09:14,937 | INFO     | trading:_load_model:153 - Model loaded successfully (4 networks)
+2026-02-05 20:09:17,289 | INFO     | trading:create_features:170 - Created 47 features, 440 valid samples
+2026-02-05 20:10:09,543 | WARNING  | trading.data.fetcher:get:194 - Spot cache refresh failed: HTTPSConnectionPool(host='82.push2.eastmoney.com', port=443): Read timed out. (read timeout=15)
+2026-02-05 20:10:14,273 | INFO     | trading:create_features:170 - Created 47 features, 440 valid samples
