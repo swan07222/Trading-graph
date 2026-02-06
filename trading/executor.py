@@ -317,7 +317,7 @@ class ExecutionEngine:
 
             # For simulator: immediately pull and process fills
             # This ensures single fill processing path
-            if result.status == OrderStatus.FILLED:
+            if result.status in (OrderStatus.PARTIAL, OrderStatus.FILLED):
                 self._process_pending_fills()
 
             log.info(f"Order sent: {order.id} -> broker_id={result.broker_id}, status={result.status.value}")

@@ -858,7 +858,7 @@ class OrderManagementSystem:
             
             # Update order
             order.filled_qty += fill.quantity
-            order.commission += fill.commission
+            order.commission += (fill.commission + fill.stamp_tax)
             
             # Calculate average price
             if order.filled_qty > 0:

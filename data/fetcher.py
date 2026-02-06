@@ -462,6 +462,7 @@ class DataFetcher:
         self._min_interval = 0.5  # Increased to 500ms between requests
         
         self._init_sources()
+        self._rate_lock = threading.Lock()
     
     def _init_sources(self):
         """Initialize data sources"""

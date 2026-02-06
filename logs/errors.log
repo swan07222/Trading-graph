@@ -1283,3 +1283,106 @@ None
 None
 2026-02-05 21:17:09,980 | ERROR    | trading.data.fetcher:_fetch_from_sources:549 - All sources failed for 601059
 None
+2026-02-05 21:42:54,768 | ERROR    | trading:main:117 - Error: invalid syntax (auto_learn_dialog.py, line 144)
+(<class 'SyntaxError'>, SyntaxError('invalid syntax', ('F:\\Trading app\\Trading-graph\\ui\\auto_learn_dialog.py', 144, 17, '                else:\n', 144, 21)), <traceback object at 0x000001F87FB4B5C0>)
+Traceback (most recent call last):
+  File "F:\Trading app\Trading-graph\main.py", line 111, in main
+    from ui.app import run_app
+  File "F:\Trading app\Trading-graph\ui\__init__.py", line 10, in <module>
+    from .auto_learn_dialog import AutoLearnDialog, show_auto_learn_dialog
+  File "F:\Trading app\Trading-graph\ui\auto_learn_dialog.py", line 144
+    else:
+    ^^^^
+SyntaxError: invalid syntax
+2026-02-05 21:47:03,264 | ERROR    | trading.data.fetcher:_fetch_from_sources:550 - All sources failed for 000100
+None
+2026-02-05 21:47:03,264 | ERROR    | trading.data.fetcher:_fetch_from_sources:550 - All sources failed for 000002
+None
+2026-02-05 21:47:03,279 | ERROR    | trading.data.fetcher:_fetch_from_sources:550 - All sources failed for 000063
+None
+2026-02-05 21:47:03,279 | ERROR    | trading.data.fetcher:_fetch_from_sources:550 - All sources failed for 000157
+None
+2026-02-05 21:47:03,280 | ERROR    | trading.data.fetcher:_fetch_from_sources:550 - All sources failed for 000001
+None
+2026-02-05 21:47:07,041 | ERROR    | trading.data.fetcher:_fetch_from_sources:550 - All sources failed for 000166
+None
+2026-02-05 21:47:07,768 | ERROR    | trading.data.fetcher:_fetch_from_sources:550 - All sources failed for 000338
+None
+2026-02-05 21:47:07,787 | ERROR    | trading.data.fetcher:_fetch_from_sources:550 - All sources failed for 000301
+None
+2026-02-05 21:47:07,793 | ERROR    | trading.data.fetcher:_fetch_from_sources:550 - All sources failed for 000408
+None
+2026-02-05 21:47:09,220 | ERROR    | trading.data.fetcher:_fetch_from_sources:550 - All sources failed for 000538
+None
+2026-02-05 21:47:09,220 | ERROR    | trading.data.fetcher:_fetch_from_sources:550 - All sources failed for 000625
+None
+2026-02-05 21:47:09,220 | ERROR    | trading.data.fetcher:_fetch_from_sources:550 - All sources failed for 000630
+None
+2026-02-05 21:47:09,237 | ERROR    | trading.data.fetcher:_fetch_from_sources:550 - All sources failed for 000425
+None
+2026-02-05 21:47:09,239 | ERROR    | trading.data.fetcher:_fetch_from_sources:550 - All sources failed for 000661
+None
+2026-02-05 21:47:09,242 | ERROR    | trading.data.fetcher:_fetch_from_sources:550 - All sources failed for 000725
+None
+2026-02-05 21:47:09,243 | ERROR    | trading.data.fetcher:_fetch_from_sources:550 - All sources failed for 000708
+None
+2026-02-05 21:47:09,244 | ERROR    | trading.data.fetcher:_fetch_from_sources:550 - All sources failed for 000768
+None
+2026-02-05 21:47:09,245 | ERROR    | trading.data.fetcher:_fetch_from_sources:550 - All sources failed for 000776
+None
+2026-02-05 21:47:09,245 | ERROR    | trading.data.fetcher:_fetch_from_sources:550 - All sources failed for 000786
+None
+2026-02-05 21:47:09,250 | ERROR    | trading.data.fetcher:_fetch_from_sources:550 - All sources failed for 000792
+None
+2026-02-05 21:47:09,252 | ERROR    | trading.data.fetcher:_fetch_from_sources:550 - All sources failed for 000807
+None
+2026-02-05 21:47:09,252 | ERROR    | trading.data.fetcher:_fetch_from_sources:550 - All sources failed for 000876
+None
+2026-02-05 21:47:09,252 | ERROR    | trading.data.fetcher:_fetch_from_sources:550 - All sources failed for 000895
+None
+2026-02-05 21:47:09,252 | ERROR    | trading.data.fetcher:_fetch_from_sources:550 - All sources failed for 000938
+None
+2026-02-05 21:47:09,257 | ERROR    | trading.data.fetcher:_fetch_from_sources:550 - All sources failed for 000963
+None
+2026-02-05 21:47:09,259 | ERROR    | trading.data.fetcher:_fetch_from_sources:550 - All sources failed for 000975
+None
+2026-02-05 21:47:09,260 | ERROR    | trading.data.fetcher:_fetch_from_sources:550 - All sources failed for 000977
+None
+2026-02-05 21:47:09,262 | ERROR    | trading.data.fetcher:_fetch_from_sources:550 - All sources failed for 000983
+None
+2026-02-05 21:47:09,263 | ERROR    | trading.data.fetcher:_fetch_from_sources:550 - All sources failed for 000999
+None
+2026-02-05 21:47:09,264 | ERROR    | trading.data.fetcher:_fetch_from_sources:550 - All sources failed for 001391
+None
+2026-02-05 21:47:09,265 | ERROR    | trading.data.fetcher:_fetch_from_sources:550 - All sources failed for 001965
+None
+2026-02-05 21:47:09,266 | ERROR    | trading.data.fetcher:_fetch_from_sources:550 - All sources failed for 001979
+None
+2026-02-05 21:47:09,267 | ERROR    | trading.data.fetcher:_fetch_from_sources:550 - All sources failed for 002001
+None
+2026-02-05 21:47:09,268 | ERROR    | trading.data.fetcher:_fetch_from_sources:550 - All sources failed for 002027
+None
+2026-02-05 21:47:09,268 | ERROR    | trading.data.fetcher:_fetch_from_sources:550 - All sources failed for 002028
+None
+2026-02-05 21:47:09,271 | ERROR    | trading.data.fetcher:_fetch_from_sources:550 - All sources failed for 002049
+None
+2026-02-05 21:47:09,272 | ERROR    | trading.data.fetcher:_fetch_from_sources:550 - All sources failed for 002050
+None
+2026-02-05 21:47:09,276 | ERROR    | trading.data.fetcher:_fetch_from_sources:550 - All sources failed for 002074
+None
+2026-02-05 21:47:09,276 | ERROR    | trading.data.fetcher:_fetch_from_sources:550 - All sources failed for 002142
+None
+2026-02-05 21:47:09,282 | ERROR    | trading.data.fetcher:_fetch_from_sources:550 - All sources failed for 002179
+None
+2026-02-05 21:47:09,283 | ERROR    | trading.data.fetcher:_fetch_from_sources:550 - All sources failed for 002236
+None
+2026-02-05 21:47:09,284 | ERROR    | trading.data.fetcher:_fetch_from_sources:550 - All sources failed for 002241
+None
+2026-02-05 21:47:09,285 | ERROR    | trading.data.fetcher:_fetch_from_sources:550 - All sources failed for 002252
+None
+2026-02-05 21:47:09,291 | ERROR    | trading.data.fetcher:_fetch_from_sources:550 - All sources failed for 000617
+None
+2026-02-05 21:47:09,939 | ERROR    | trading.data.fetcher:_fetch_from_sources:550 - All sources failed for 000596
+None
+2026-02-05 21:47:09,939 | ERROR    | trading.data.fetcher:_fetch_from_sources:550 - All sources failed for 000568
+None

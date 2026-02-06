@@ -92,7 +92,7 @@ class AutoLearnWorker(QThread):
                 stock_codes,
                 days=500,
                 callback=fetch_callback,
-                max_workers=5  # Reduced to avoid timeouts
+                max_workers=5
             )
             
             results['processed'] = len(data)
@@ -128,18 +128,19 @@ class AutoLearnWorker(QThread):
                         self.progress.emit(pct, f"Training {model_name} epoch {epoch_idx+1}")
                         self.log_message.emit(f"{model_name} epoch {epoch_idx+1} val_acc={val_acc:.2%}", "info")
 
-                results = trainer.train(
+                training_out = trainer.train(
                     stock_codes=codes,
                     epochs=self.config.get("epochs", 50),
                     callback=cb,
                     save_model=True
                 )
+
+                results['samples'] = int(training_out.get('train_samples', 0) + training_out.get('val_samples', 0))
+                results['accuracy'] = float(training_out.get('best_accuracy', 0.0))
                 
-                if metrics:
-                    results['samples'] = metrics.get('total_samples', 0)
-                    results['accuracy'] = metrics.get('accuracy', 0.0)
+                if results['accuracy'] > 0:
                     self.log_message.emit(
-                        f"Training complete! Accuracy: {results['accuracy']:.1%}",
+                        f"Training complete! Best val accuracy: {results['accuracy']:.1%}",
                         "success"
                     )
                 else:

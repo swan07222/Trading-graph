@@ -584,32 +584,32 @@ class MainApp(QMainWindow):
     
     def _setup_statusbar(self):
         """Setup status bar"""
-        self.statusBar = QStatusBar()
-        self.setStatusBar(self.statusBar)
+        self._status_bar = QStatusBar()
+        self.setStatusBar(self._status_bar)
         
         # Progress bar
         self.progress = QProgressBar()
         self.progress.setMaximumWidth(200)
         self.progress.setMaximumHeight(15)
         self.progress.hide()
-        self.statusBar.addPermanentWidget(self.progress)
+        self._status_bar.addWidget(self.progress)
         
         # Status
         self.status_label = QLabel("Ready")
-        self.statusBar.addWidget(self.status_label)
+        self._status_bar.addWidget(self.status_label)
         
         # Market status
         self.market_label = QLabel("")
-        self.statusBar.addPermanentWidget(self.market_label)
+        self._status_bar.addPermanentWidget(self.market_label)
         
         # Monitoring status
         self.monitor_label = QLabel("Monitoring: OFF")
         self.monitor_label.setStyleSheet("color: #888;")
-        self.statusBar.addPermanentWidget(self.monitor_label)
+        self._status_bar.addWidget(self.monitor_label)
         
         # Clock
         self.time_label = QLabel("")
-        self.statusBar.addPermanentWidget(self.time_label)
+        self._status_bar.addWidget(self.time_label)
     
     def _setup_timers(self):
         """Setup update timers"""

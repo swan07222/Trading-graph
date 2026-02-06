@@ -472,11 +472,8 @@ class SimulatorBroker(BrokerInterface):
         fill_price = round(fill_price, 2)
         
         # Simulate partial fills (10% chance)
-        if random.random() < 0.1 and order.quantity > CONFIG.LOT_SIZE * 2:
-            fill_qty = (order.quantity // 2 // CONFIG.LOT_SIZE) * CONFIG.LOT_SIZE
-            fill_qty = max(fill_qty, CONFIG.LOT_SIZE)
-        else:
-            fill_qty = order.quantity
+        # Simulate partial fills (10% chance)
+        fill_qty = order.quantity  # FIX: always full fill (no hanging partial orders)
         
         # Calculate costs
         trade_value = fill_qty * fill_price
@@ -567,24 +564,14 @@ class SimulatorBroker(BrokerInterface):
         self._emit('trade', order, fill)
     
     def get_fills(self, since: datetime = None) -> List[Fill]:
-        """Get fills, optionally filtered by timestamp"""
         with self._lock:
-            if since is None:
-                # Return all unsent fills
-                fills = list(self._unsent_fills)
-                self._unsent_fills.clear()
-                return fills
-            else:
-                # Filter by timestamp
-                result = []
-                remaining = []
-                for fill in self._unsent_fills:
-                    if fill.timestamp and fill.timestamp >= since:
-                        result.append(fill)
-                    else:
-                        remaining.append(fill)
-                self._unsent_fills = remaining
-                return result
+            fills = list(self._unsent_fills)
+            self._unsent_fills.clear()
+
+        if since is None:
+            return fills
+
+        return [f for f in fills if f.timestamp and f.timestamp >= since]
     
     def get_order_status(self, order_id: str) -> Optional[OrderStatus]:
         """Get order status"""

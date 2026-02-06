@@ -23,9 +23,6 @@ from utils.logger import log
 from utils.cancellation import CancellationToken, CancelledException
 from data.fetcher import get_fetcher
 
-fetcher = get_fetcher()
-fetcher.reset_sources()
-
 @dataclass
 class LearningProgress:
     """Track learning progress"""
@@ -547,22 +544,20 @@ class ContinuousLearner:
         }
     
     def _train_model(self, train_data: Dict, epochs: int, mode: str) -> float:
-        """Train or update the model"""
         from models.ensemble import EnsembleModel
-        
+
         X_train = train_data['X_train']
         y_train = train_data['y_train']
         X_val = train_data['X_val']
         y_val = train_data['y_val']
         X_test = train_data['X_test']
         y_test = train_data['y_test']
-        
+
         input_size = X_train.shape[2]
         ensemble = EnsembleModel(input_size)
 
         if mode == self.MODE_INCREMENTAL:
-            if ensemble.load():
-                log.info("Loaded existing model for incremental learning")
+            ensemble.load()
 
         # if no val, split train
         if X_val is None or len(X_val) == 0:
@@ -570,27 +565,16 @@ class ContinuousLearner:
             X_val, y_val = X_train[split:], y_train[split:]
             X_train, y_train = X_train[:split], y_train[:split]
 
-        ensemble.train(X_train, y_train, X_val, y_val, epochs=epochs, callback=train_callback, stop_flag=self._cancel_token)
-
-        # calibrate AFTER training
-        ensemble.calibrate(X_val, y_val)
-        ensemble.save()
-        
-        if mode == self.MODE_INCREMENTAL:
-            if ensemble.load():
-                log.info("Loaded existing model for incremental learning")
-        
         def train_callback(model_name, epoch, val_acc):
             if self._cancel_token.is_cancelled:
                 raise CancelledException()
-            
             self.progress.training_epoch = epoch + 1
-            self.progress.validation_accuracy = val_acc
+            self.progress.validation_accuracy = float(val_acc)
             self._update_progress(
                 message=f"Training {model_name}: Epoch {epoch+1}/{epochs}",
                 progress=50 + (epoch + 1) / epochs * 40
             )
-        
+
         ensemble.train(
             X_train, y_train,
             X_val, y_val,
@@ -598,24 +582,16 @@ class ContinuousLearner:
             callback=train_callback,
             stop_flag=self._cancel_token
         )
-        
-        if X_test is not None and len(X_test) > 0:
-            correct = 0
-            total = min(len(X_test), 1000)
-            
-            for i in range(total):
-                pred = ensemble.predict(X_test[i:i+1])
-                if pred.predicted_class == y_test[i]:
-                    correct += 1
-            
-            test_accuracy = correct / total
-            log.info(f"Test accuracy: {test_accuracy:.2%}")
-        else:
-            test_accuracy = self.progress.validation_accuracy
-        
+
+        ensemble.calibrate(X_val, y_val)
         ensemble.save()
-        
-        return test_accuracy
+
+        if X_test is not None and len(X_test) > 0:
+            preds = ensemble.predict_batch(X_test[:1000])
+            pred_cls = np.array([p.predicted_class for p in preds])
+            return float(np.mean(pred_cls == y_test[:len(pred_cls)]))
+
+        return float(self.progress.validation_accuracy)
     
     def _save_state(self):
         """Save learner state for resume"""
