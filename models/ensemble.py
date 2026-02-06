@@ -13,7 +13,7 @@ from torch.utils.data import DataLoader, TensorDataset
 import threading
 
 from .networks import LSTMModel, TransformerModel, GRUModel, TCNModel, HybridModel
-from config.settings import CONFIG  # FIXED: correct import
+from config.settings import CONFIG
 from utils.logger import get_logger
 
 log = get_logger(__name__)
@@ -69,7 +69,7 @@ class EnsembleModel:
         if self.device == "cuda":
             torch.backends.cudnn.benchmark = True
         self._lock = threading.Lock()
-        self.temperature = 1.0  # Initialize temperature
+        self.temperature = 1.0
         
         model_names = model_names or ['lstm', 'transformer', 'gru', 'tcn']
         
@@ -225,7 +225,7 @@ class EnsembleModel:
         return history
     
     def _should_stop(self, stop_flag: Any) -> bool:
-        """Check if training should stop - handles various stop flag types"""
+        """Check if training should stop"""
         if stop_flag is None:
             return False
         
@@ -261,99 +261,104 @@ class EnsembleModel:
         callback: Callable = None,
         stop_flag: Any = None
     ) -> Tuple[Dict, float]:
-        """Train a single model"""
-        
+        """Train a single model (AMP-enabled on CUDA)."""
+
         optimizer = torch.optim.AdamW(
             model.parameters(),
             lr=CONFIG.model.learning_rate,
             weight_decay=CONFIG.model.weight_decay
         )
-        
+
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
             optimizer, T_max=epochs, eta_min=1e-6
         )
-        
+
         criterion = nn.CrossEntropyLoss(weight=class_weights)
-        
-        history = {'train_loss': [], 'val_loss': [], 'val_acc': []}
-        best_val_acc = 0
+
+        history = {"train_loss": [], "val_loss": [], "val_acc": []}
+        best_val_acc = 0.0
         patience = 0
         best_state = None
-        
-        for epoch in range(epochs):
+
+        use_amp = (self.device == "cuda")
+        scaler = torch.cuda.amp.GradScaler(enabled=use_amp)
+
+        for epoch in range(int(epochs)):
             if self._should_stop(stop_flag):
                 break
-            
-            # Training
+
+            # ---- train ----
             model.train()
             train_losses = []
-            
+
             for batch_X, batch_y in train_loader:
-                batch_X = batch_X.to(self.device)
-                batch_y = batch_y.to(self.device)
-                
-                optimizer.zero_grad()
-                
-                logits, _ = model(batch_X)
-                loss = criterion(logits, batch_y)
-                
-                loss.backward()
-                torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-                optimizer.step()
-                
-                train_losses.append(loss.item())
-            
-            scheduler.step()
-            
-            # Validation
-            model.eval()
-            val_losses = []
-            correct = 0
-            total = 0
-            
-            with torch.no_grad():
-                for batch_X, batch_y in val_loader:
-                    batch_X = batch_X.to(self.device)
-                    batch_y = batch_y.to(self.device)
-                    
+                batch_X = batch_X.to(self.device, non_blocking=True)
+                batch_y = batch_y.to(self.device, non_blocking=True)
+
+                optimizer.zero_grad(set_to_none=True)
+
+                with torch.cuda.amp.autocast(enabled=use_amp):
                     logits, _ = model(batch_X)
                     loss = criterion(logits, batch_y)
-                    val_losses.append(loss.item())
-                    
+
+                scaler.scale(loss).backward()
+                scaler.unscale_(optimizer)
+                torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+                scaler.step(optimizer)
+                scaler.update()
+
+                train_losses.append(float(loss.detach().item()))
+
+            scheduler.step()
+
+            # ---- validate ----
+            model.eval()
+            val_losses = []
+            correct, total = 0, 0
+
+            with torch.inference_mode():
+                for batch_X, batch_y in val_loader:
+                    batch_X = batch_X.to(self.device, non_blocking=True)
+                    batch_y = batch_y.to(self.device, non_blocking=True)
+
+                    with torch.cuda.amp.autocast(enabled=use_amp):
+                        logits, _ = model(batch_X)
+                        loss = criterion(logits, batch_y)
+
+                    val_losses.append(float(loss.item()))
                     preds = torch.argmax(logits, dim=-1)
-                    correct += (preds == batch_y).sum().item()
-                    total += len(batch_y)
-            
-            train_loss = np.mean(train_losses)
-            val_loss = np.mean(val_losses)
-            val_acc = correct / total if total > 0 else 0
-            
-            history['train_loss'].append(train_loss)
-            history['val_loss'].append(val_loss)
-            history['val_acc'].append(val_acc)
-            
-            # Early stopping
+                    correct += int((preds == batch_y).sum().item())
+                    total += int(len(batch_y))
+
+            train_loss = float(np.mean(train_losses)) if train_losses else 0.0
+            val_loss = float(np.mean(val_losses)) if val_losses else 0.0
+            val_acc = float(correct / total) if total > 0 else 0.0
+
+            history["train_loss"].append(train_loss)
+            history["val_loss"].append(val_loss)
+            history["val_acc"].append(val_acc)
+
+            # early stopping
             if val_acc > best_val_acc:
                 best_val_acc = val_acc
                 patience = 0
-                best_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
+                best_state = {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}
             else:
                 patience += 1
-                if patience >= CONFIG.model.early_stop_patience:
+                if patience >= int(CONFIG.model.early_stop_patience):
                     log.info(f"{name}: Early stopping at epoch {epoch+1}")
                     break
-            
+
             if callback:
                 callback(name, epoch, val_acc)
-            
+
             if (epoch + 1) % 10 == 0:
                 log.info(f"{name} Epoch {epoch+1}: val_acc={val_acc:.2%}")
-        
-        # Load best weights
+
         if best_state:
             model.load_state_dict(best_state)
             model.to(self.device)
-        
+
         log.info(f"{name} complete. Best accuracy: {best_val_acc:.2%}")
         return history, best_val_acc
     
@@ -386,6 +391,10 @@ class EnsembleModel:
                 f"Use predict_batch() for multiple samples."
             )
         
+        temp = max(self.temperature, 0.1)  # Prevent division by zero
+        scaled_logits = weighted_logits / temp
+
+
         with self._lock:
             X_tensor = torch.FloatTensor(X).to(self.device)
             
@@ -441,6 +450,9 @@ class EnsembleModel:
             return []
 
         out: List[EnsemblePrediction] = []
+
+        temp = max(self.temperature, 0.1)
+        scaled_logits = weighted_logits / temp
 
         with self._lock:
             n = len(X)
@@ -500,24 +512,33 @@ class EnsembleModel:
         return out
     
     def save(self, path: str = None):
-        """Save ensemble to file atomically."""
+        """Save ensemble to file atomically. Also writes a per-model manifest."""
         from datetime import datetime
         from utils.atomic_io import atomic_torch_save, atomic_write_json
 
-        path = Path(path or (CONFIG.model_dir / "ensemble.pt"))
+        interval = getattr(self, "interval", "1d")
+        horizon = int(getattr(self, "prediction_horizon", CONFIG.model.prediction_horizon))
+
+        if path is None:
+            path = CONFIG.model_dir / f"ensemble_{interval}_{horizon}.pt"
+        path = Path(path)
 
         with self._lock:
             state = {
-                'input_size': self.input_size,
-                'model_names': list(self.models.keys()),
-                'models': {name: model.state_dict() for name, model in self.models.items()},
-                'weights': self.weights,
-                'temperature': self.temperature,
-                'arch': {
-                    'hidden_size': CONFIG.model.hidden_size,
-                    'dropout': CONFIG.model.dropout,
-                    'num_classes': CONFIG.model.num_classes,
-                }
+                "input_size": self.input_size,
+                "model_names": list(self.models.keys()),
+                "models": {name: model.state_dict() for name, model in self.models.items()},
+                "weights": self.weights,
+                "temperature": self.temperature,
+                "meta": {
+                    "interval": str(interval),
+                    "prediction_horizon": int(horizon),
+                },
+                "arch": {
+                    "hidden_size": CONFIG.model.hidden_size,
+                    "dropout": CONFIG.model.dropout,
+                    "num_classes": CONFIG.model.num_classes,
+                },
             }
 
         atomic_torch_save(path, state)
@@ -526,30 +547,40 @@ class EnsembleModel:
             "version": datetime.now().strftime("%Y%m%d_%H%M%S"),
             "saved_at": datetime.now().isoformat(),
             "ensemble_path": path.name,
-            "scaler_path": "scaler.pkl",
+            "scaler_path": f"scaler_{interval}_{horizon}.pkl",
             "input_size": int(self.input_size),
             "num_models": len(self.models),
             "temperature": float(self.temperature),
+            "interval": str(interval),
+            "prediction_horizon": int(horizon),
         }
-        atomic_write_json(path.parent / "model_manifest.json", manifest)
+
+        # Per-model manifest (do NOT overwrite a single global one)
+        manifest_path = path.parent / f"model_manifest_{path.stem}.json"
+        atomic_write_json(manifest_path, manifest)
 
         log.info(f"Ensemble saved atomically to {path}")
 
     def load(self, path: str = None) -> bool:
         """Load ensemble from file."""
-        path = path or str(CONFIG.model_dir / "ensemble.pt")
-        
+        if path is None:
+            # fall back to default daily file if user calls load() directly
+            path = str(CONFIG.model_dir / "ensemble_1d_5.pt")
         if not Path(path).exists():
             log.warning(f"No saved model at {path}")
             return False
-        
+
         try:
             with self._lock:
                 state = torch.load(path, map_location=self.device, weights_only=False)
-                
-                self.input_size = state['input_size']
-                model_names = state.get('model_names', list(state['models'].keys()))
-                
+
+                self.input_size = int(state["input_size"])
+                model_names = state.get("model_names", list(state["models"].keys()))
+
+                meta = state.get("meta", {})
+                self.interval = meta.get("interval", "1d")
+                self.prediction_horizon = int(meta.get("prediction_horizon", CONFIG.model.prediction_horizon))
+
                 arch = state.get("arch", {})
                 saved_hidden = int(arch.get("hidden_size", CONFIG.model.hidden_size))
                 saved_dropout = float(arch.get("dropout", CONFIG.model.dropout))
@@ -557,28 +588,31 @@ class EnsembleModel:
 
                 self.models = {}
                 self.weights = {}
-                
+
                 for name in model_names:
-                    if name in self.MODEL_CLASSES and name in state['models']:
+                    if name in self.MODEL_CLASSES and name in state["models"]:
                         self._init_model(
                             name,
                             hidden_size=saved_hidden,
                             dropout=saved_dropout,
-                            num_classes=saved_classes
+                            num_classes=saved_classes,
                         )
-                        self.models[name].load_state_dict(state['models'][name])
+                        self.models[name].load_state_dict(state["models"][name])
                         self.models[name].eval()
-                
-                saved_weights = state.get('weights', {})
+
+                saved_weights = state.get("weights", {})
                 for name in self.models.keys():
-                    self.weights[name] = saved_weights.get(name, 1.0)
-                
+                    self.weights[name] = float(saved_weights.get(name, 1.0))
+
                 self._normalize_weights()
-                self.temperature = state.get('temperature', 1.0)
-            
-            log.info(f"Ensemble loaded: {list(self.models.keys())}, temp={self.temperature:.2f}")
+                self.temperature = float(state.get("temperature", 1.0))
+
+            log.info(
+                f"Ensemble loaded: {list(self.models.keys())}, "
+                f"interval={getattr(self,'interval','?')}, horizon={getattr(self,'prediction_horizon','?')}"
+            )
             return True
-            
+
         except Exception as e:
             log.error(f"Failed to load ensemble: {e}")
             return False

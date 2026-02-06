@@ -136,3 +136,80 @@
 2026-02-06 04:27:05,526 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized tcn model
 2026-02-06 04:27:05,527 | INFO     | trading.models.ensemble:load:579 - Ensemble loaded: ['lstm', 'transformer', 'gru', 'tcn'], temp=2.00
 2026-02-06 04:27:05,528 | INFO     | trading:_load_model:238 - Model loaded successfully (4 networks)
+2026-02-06 04:55:59,544 | INFO     | trading:main:67 - ============================================================
+2026-02-06 04:55:59,544 | INFO     | trading:main:68 - AI STOCK TRADING SYSTEM - Production Grade
+2026-02-06 04:55:59,544 | INFO     | trading:main:69 - ============================================================
+2026-02-06 04:56:00,486 | INFO     | trading.data.fetcher:__init__:257 - AkShare initialized
+2026-02-06 04:56:00,573 | INFO     | trading.data.fetcher:__init__:437 - Yahoo Finance initialized
+2026-02-06 04:56:00,574 | INFO     | trading.data.fetcher:_init_sources:612 - Data source akshare available
+2026-02-06 04:56:00,574 | INFO     | trading.data.fetcher:_init_sources:612 - Data source yahoo available
+2026-02-06 04:56:00,574 | INFO     | trading:load_scaler:332 - Scaler loaded from F:\Trading app\Trading-graph\models_saved\scaler.pkl
+2026-02-06 04:56:00,626 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized lstm model
+2026-02-06 04:56:00,704 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized transformer model
+2026-02-06 04:56:00,715 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized gru model
+2026-02-06 04:56:00,723 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized tcn model
+2026-02-06 04:56:00,723 | INFO     | trading.models.ensemble:__init__:85 - Ensemble initialized: ['lstm', 'transformer', 'gru', 'tcn'] on cpu
+2026-02-06 04:56:00,780 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized lstm model
+2026-02-06 04:56:00,800 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized transformer model
+2026-02-06 04:56:00,817 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized gru model
+2026-02-06 04:56:00,827 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized tcn model
+2026-02-06 04:56:00,829 | INFO     | trading.models.ensemble:load:579 - Ensemble loaded: ['lstm', 'transformer', 'gru', 'tcn'], temp=2.00
+2026-02-06 04:56:00,829 | INFO     | trading:_load_model:238 - Model loaded successfully (4 networks)
+2026-02-06 05:41:41,978 | INFO     | trading:main:67 - ============================================================
+2026-02-06 05:41:41,979 | INFO     | trading:main:68 - AI STOCK TRADING SYSTEM - Production Grade
+2026-02-06 05:41:41,979 | INFO     | trading:main:69 - ============================================================
+2026-02-06 05:41:42,508 | INFO     | trading.data.fetcher:__init__:257 - AkShare initialized
+2026-02-06 05:41:42,564 | INFO     | trading.data.fetcher:__init__:486 - Yahoo Finance initialized
+2026-02-06 05:41:42,565 | INFO     | trading.data.fetcher:_init_sources:772 - Data source akshare available
+2026-02-06 05:41:42,565 | INFO     | trading.data.fetcher:_init_sources:772 - Data source tencent available
+2026-02-06 05:41:42,565 | INFO     | trading.data.fetcher:_init_sources:772 - Data source yahoo available
+2026-02-06 05:41:42,566 | INFO     | trading:load_scaler:332 - Scaler loaded from F:\Trading app\Trading-graph\models_saved\scaler.pkl
+2026-02-06 05:41:42,622 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized lstm model
+2026-02-06 05:41:42,644 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized transformer model
+2026-02-06 05:41:42,655 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized gru model
+2026-02-06 05:41:42,664 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized tcn model
+2026-02-06 05:41:42,664 | INFO     | trading.models.ensemble:__init__:85 - Ensemble initialized: ['lstm', 'transformer', 'gru', 'tcn'] on cpu
+2026-02-06 05:41:42,773 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized lstm model
+2026-02-06 05:41:42,791 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized transformer model
+2026-02-06 05:41:42,804 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized gru model
+2026-02-06 05:41:42,812 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized tcn model
+2026-02-06 05:41:42,813 | INFO     | trading.models.ensemble:load:584 - Ensemble loaded: ['lstm', 'transformer', 'gru', 'tcn'], temp=2.00
+2026-02-06 05:41:42,814 | INFO     | trading:_load_model:243 - Model loaded successfully (4 networks)
+2026-02-06 05:47:46,565 | INFO     | trading:create_features:170 - Created 47 features, 440 valid samples
+2026-02-06 05:47:48,820 | INFO     | trading:create_features:170 - Created 47 features, 440 valid samples
+2026-02-06 05:48:37,993 | WARNING  | trading.data.fetcher:get:196 - Spot cache refresh failed: HTTPSConnectionPool(host='82.push2.eastmoney.com', port=443): Read timed out. (read timeout=15)
+2026-02-06 05:49:29,341 | WARNING  | trading.data.fetcher:get:196 - Spot cache refresh failed: HTTPSConnectionPool(host='82.push2.eastmoney.com', port=443): Read timed out. (read timeout=15)
+2026-02-06 05:50:21,977 | WARNING  | trading.data.fetcher:get:196 - Spot cache refresh failed: HTTPSConnectionPool(host='82.push2.eastmoney.com', port=443): Read timed out. (read timeout=15)
+2026-02-06 06:02:45,321 | INFO     | trading:create_features:170 - Created 47 features, 440 valid samples
+2026-02-06 06:03:37,153 | WARNING  | trading.data.fetcher:get:196 - Spot cache refresh failed: HTTPSConnectionPool(host='82.push2.eastmoney.com', port=443): Read timed out. (read timeout=15)
+2026-02-06 07:43:32,891 | INFO     | trading:main:67 - ============================================================
+2026-02-06 07:43:32,903 | INFO     | trading:main:68 - AI STOCK TRADING SYSTEM - Production Grade
+2026-02-06 07:43:32,903 | INFO     | trading:main:69 - ============================================================
+2026-02-06 07:43:34,523 | INFO     | trading.data.fetcher:__init__:253 - AkShare initialized
+2026-02-06 07:43:34,721 | INFO     | trading.data.fetcher:__init__:469 - Yahoo Finance initialized
+2026-02-06 07:43:34,721 | INFO     | trading.data.fetcher:_init_sources:758 - Data source akshare available
+2026-02-06 07:43:34,722 | INFO     | trading.data.fetcher:_init_sources:758 - Data source tencent available
+2026-02-06 07:43:34,722 | INFO     | trading.data.fetcher:_init_sources:758 - Data source yahoo available
+2026-02-06 07:43:34,734 | INFO     | trading.data.processor:load_scaler:340 - Scaler loaded from F:\Trading app\Trading-graph\models_saved\scaler.pkl
+2026-02-06 07:43:35,074 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized lstm model
+2026-02-06 07:43:35,101 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized transformer model
+2026-02-06 07:43:35,113 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized gru model
+2026-02-06 07:43:35,122 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized tcn model
+2026-02-06 07:43:35,123 | INFO     | trading.models.ensemble:__init__:85 - Ensemble initialized: ['lstm', 'transformer', 'gru', 'tcn'] on cpu
+2026-02-06 07:43:35,167 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized lstm model
+2026-02-06 07:43:35,186 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized transformer model
+2026-02-06 07:43:35,196 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized gru model
+2026-02-06 07:43:35,207 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized tcn model
+2026-02-06 07:43:35,208 | INFO     | trading.models.ensemble:load:610 - Ensemble loaded: ['lstm', 'transformer', 'gru', 'tcn'], interval=1d, horizon=5
+2026-02-06 07:43:35,209 | INFO     | trading.models.predictor:_load_model:286 - Model loaded successfully (4 networks)
+2026-02-06 07:43:45,681 | INFO     | trading.data.processor:load_scaler:340 - Scaler loaded from F:\Trading app\Trading-graph\models_saved\scaler.pkl
+2026-02-06 07:43:45,723 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized lstm model
+2026-02-06 07:43:45,746 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized transformer model
+2026-02-06 07:43:45,759 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized gru model
+2026-02-06 07:43:45,770 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized tcn model
+2026-02-06 07:43:45,770 | INFO     | trading.models.ensemble:__init__:85 - Ensemble initialized: ['lstm', 'transformer', 'gru', 'tcn'] on cpu
+2026-02-06 07:43:45,822 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized lstm model
+2026-02-06 07:43:45,840 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized transformer model
+2026-02-06 07:43:45,854 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized gru model
+2026-02-06 07:43:45,861 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized tcn model
+2026-02-06 07:43:45,863 | INFO     | trading.models.ensemble:load:610 - Ensemble loaded: ['lstm', 'transformer', 'gru', 'tcn'], interval=1d, horizon=5

@@ -740,6 +740,18 @@ class OrderManagementSystem:
             self._db.save_account_state(self._account)
             log.info("New trading day initialized")
     
+    def _get_order_tag(self, order: Order, key: str, default: float = 0.0) -> float:
+        """Safely get a tag value from order"""
+        if order.tags is None:
+            return default
+        return float(order.tags.get(key, default))
+
+    def _set_order_tag(self, order: Order, key: str, value: float):
+        """Safely set a tag value on order"""
+        if order.tags is None:
+            order.tags = {}
+        order.tags[key] = value
+
     def _enforce_invariants(self):
         """Ensure account invariants are maintained"""
         # Available should never exceed cash

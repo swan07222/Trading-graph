@@ -38,19 +38,22 @@ class RealTimeMonitor(QThread):
     price_updated = pyqtSignal(str, float)  # code, price
     error_occurred = pyqtSignal(str)
     
-    def __init__(self, predictor: Predictor, watch_list: List[str]):
+    def __init__(self, predictor: Predictor, watch_list: List[str], interval: str = "1m", forecast_minutes: int = 30, lookback_bars: int = 1400):
         super().__init__()
         self.predictor = predictor
         self.watch_list = watch_list
         self.running = False
-        self.interval = 30  # seconds
+
+        self.interval = 30  # seconds between scan cycles (not the bar interval)
+        self.data_interval = str(interval).lower()
+        self.forecast_minutes = int(forecast_minutes)
+        self.lookback_bars = int(lookback_bars)
     
     def run(self):
         """
-        Monitoring loop with:
-        - stable interval scheduling
-        - exponential backoff on repeated failures
-        - caps expensive full predictions per cycle
+        Monitoring loop:
+        - uses quick batch for speed
+        - runs full prediction (with future graph) only for strongest signals
         """
         self.running = True
         backoff = 1
@@ -59,21 +62,32 @@ class RealTimeMonitor(QThread):
         while self.running:
             loop_start = time.time()
             try:
-                preds = self.predictor.predict_quick_batch(self.watch_list, use_realtime_price=True)
+                preds = self.predictor.predict_quick_batch(
+                    self.watch_list,
+                    use_realtime_price=True,
+                    interval=self.data_interval,
+                    lookback_bars=self.lookback_bars
+                )
 
                 for p in preds:
                     self.price_updated.emit(p.stock_code, p.current_price)
 
                 strong = [
                     p for p in preds
-                    if p.signal in [Signal.STRONG_BUY, Signal.STRONG_SELL]
+                    if p.signal in [Signal.STRONG_BUY, Signal.STRONG_SELL, Signal.BUY, Signal.SELL]
                     and p.confidence >= CONFIG.MIN_CONFIDENCE
                 ]
                 strong.sort(key=lambda x: x.confidence, reverse=True)
-                strong = strong[:3]  # cap
+                strong = strong[:2]  # cap
 
                 for p in strong:
-                    full = self.predictor.predict(p.stock_code, use_realtime_price=True)
+                    full = self.predictor.predict(
+                        p.stock_code,
+                        use_realtime_price=True,
+                        interval=self.data_interval,
+                        forecast_minutes=self.forecast_minutes,
+                        lookback_bars=self.lookback_bars
+                    )
                     self.signal_detected.emit(full)
 
                 backoff = 1
@@ -289,29 +303,26 @@ class MainApp(QMainWindow):
         layout.addWidget(main_splitter)
     
     def _create_left_panel(self) -> QWidget:
-        """Create left control panel"""
+        """Create left control panel (adds forecast minutes + interval selector)."""
         panel = QWidget()
         panel.setMaximumWidth(350)
         layout = QVBoxLayout(panel)
         layout.setSpacing(10)
-        
+
         # Watchlist
         watchlist_group = QGroupBox("📋 Watchlist")
         watchlist_layout = QVBoxLayout()
-        
+
         self.watchlist = QTableWidget()
         self.watchlist.setColumnCount(4)
         self.watchlist.setHorizontalHeaderLabels(["Code", "Price", "Change", "Signal"])
         self.watchlist.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         self.watchlist.setMaximumHeight(250)
         self.watchlist.cellDoubleClicked.connect(self._on_watchlist_click)
-        
-        # Populate initial watchlist
+
         self._update_watchlist()
-        
         watchlist_layout.addWidget(self.watchlist)
-        
-        # Add/Remove buttons
+
         btn_layout = QHBoxLayout()
         add_btn = QPushButton("+ Add")
         add_btn.clicked.connect(self._add_to_watchlist)
@@ -320,44 +331,59 @@ class MainApp(QMainWindow):
         btn_layout.addWidget(add_btn)
         btn_layout.addWidget(remove_btn)
         watchlist_layout.addLayout(btn_layout)
-        
+
         watchlist_group.setLayout(watchlist_layout)
         layout.addWidget(watchlist_group)
-        
+
         # Trading Settings
         settings_group = QGroupBox("⚙️ Trading Settings")
         settings_layout = QGridLayout()
-        
+
         settings_layout.addWidget(QLabel("Mode:"), 0, 0)
         self.mode_combo = QComboBox()
         self.mode_combo.addItems(["Paper Trading", "Live Trading"])
         settings_layout.addWidget(self.mode_combo, 0, 1)
-        
+
         settings_layout.addWidget(QLabel("Capital:"), 1, 0)
         self.capital_spin = QDoubleSpinBox()
         self.capital_spin.setRange(10000, 100000000)
         self.capital_spin.setValue(CONFIG.CAPITAL)
         self.capital_spin.setPrefix("¥ ")
         settings_layout.addWidget(self.capital_spin, 1, 1)
-        
+
         settings_layout.addWidget(QLabel("Risk/Trade:"), 2, 0)
         self.risk_spin = QDoubleSpinBox()
         self.risk_spin.setRange(0.5, 5.0)
         self.risk_spin.setValue(CONFIG.RISK_PER_TRADE)
         self.risk_spin.setSuffix(" %")
         settings_layout.addWidget(self.risk_spin, 2, 1)
-        
+
+        # NEW: Interval selector (default 1m)
+        settings_layout.addWidget(QLabel("Interval:"), 3, 0)
+        self.interval_combo = QComboBox()
+        self.interval_combo.addItems(["1m", "1d"])
+        self.interval_combo.setCurrentText("1m")
+        settings_layout.addWidget(self.interval_combo, 3, 1)
+
+        # NEW: Forecast minutes (20~30 typical)
+        settings_layout.addWidget(QLabel("Forecast:"), 4, 0)
+        self.forecast_spin = QSpinBox()
+        self.forecast_spin.setRange(5, 60)
+        self.forecast_spin.setValue(30)
+        self.forecast_spin.setSuffix(" min")
+        settings_layout.addWidget(self.forecast_spin, 4, 1)
+
         settings_group.setLayout(settings_layout)
         layout.addWidget(settings_group)
-        
+
         # Connection Status
         connection_group = QGroupBox("🔌 Connection")
         connection_layout = QVBoxLayout()
-        
+
         self.connection_status = QLabel("● Disconnected")
         self.connection_status.setStyleSheet("color: #FF5252; font-weight: bold;")
         connection_layout.addWidget(self.connection_status)
-        
+
         self.connect_btn = QPushButton("Connect to Broker")
         self.connect_btn.clicked.connect(self._toggle_trading)
         self.connect_btn.setStyleSheet("""
@@ -372,49 +398,33 @@ class MainApp(QMainWindow):
             QPushButton:hover { background: #388E3C; }
         """)
         connection_layout.addWidget(self.connect_btn)
-        
+
         connection_group.setLayout(connection_layout)
         layout.addWidget(connection_group)
-        
+
         # AI Model Status
         ai_group = QGroupBox("🧠 AI Model")
         ai_layout = QVBoxLayout()
-        
+
         self.model_status = QLabel("Model: Not Loaded")
         ai_layout.addWidget(self.model_status)
-        
+
         self.train_btn = QPushButton("🎓 Train Model")
         self.train_btn.clicked.connect(self._start_training)
         ai_layout.addWidget(self.train_btn)
-        
+
         self.auto_learn_btn = QPushButton("🤖 Auto Learn")
-        self.auto_learn_btn.setStyleSheet("""
-            QPushButton {
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                    stop:0 #667eea, stop:1 #764ba2);
-                color: white;
-                border: none;
-                padding: 12px;
-                border-radius: 6px;
-                font-weight: bold;
-            }
-            QPushButton:hover {
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                    stop:0 #764ba2, stop:1 #667eea);
-            }
-        """)
         self.auto_learn_btn.clicked.connect(self._show_auto_learn)
         ai_layout.addWidget(self.auto_learn_btn)
-        
+
         self.train_progress = QProgressBar()
         self.train_progress.setVisible(False)
         ai_layout.addWidget(self.train_progress)
-        
+
         ai_group.setLayout(ai_layout)
         layout.addWidget(ai_group)
-        
+
         layout.addStretch()
-        
         return panel
     
     def _create_center_panel(self) -> QWidget:
@@ -843,23 +853,32 @@ class MainApp(QMainWindow):
             self._stop_monitoring()
     
     def _start_monitoring(self):
-        """Start real-time signal monitoring"""
+        """Start real-time signal monitoring (1m interval + user forecast minutes)."""
         if self.predictor is None or self.predictor.ensemble is None:
             self.log("Cannot start monitoring: No model loaded", "error")
             self.monitor_action.setChecked(False)
             return
-        
-        self.monitor = RealTimeMonitor(self.predictor, self.watch_list)
+
+        interval = self.interval_combo.currentText().strip()
+        forecast_min = int(self.forecast_spin.value())
+
+        self.monitor = RealTimeMonitor(
+            self.predictor,
+            self.watch_list,
+            interval=interval,
+            forecast_minutes=forecast_min,
+            lookback_bars=1400 if interval == "1m" else 600
+        )
         self.monitor.signal_detected.connect(self._on_signal_detected)
         self.monitor.price_updated.connect(self._on_price_updated)
         self.monitor.error_occurred.connect(lambda e: self.log(f"Monitor: {e}", "warning"))
         self.monitor.start()
-        
+
         self.monitor_label.setText("📡 Monitoring: ACTIVE")
         self.monitor_label.setStyleSheet("color: #4CAF50; font-weight: bold;")
         self.monitor_action.setText("⏹️ Stop Monitoring")
-        
-        self.log(f"Real-time monitoring started for {len(self.watch_list)} stocks", "success")
+
+        self.log(f"Real-time monitoring started ({interval}, forecast={forecast_min}m) for {len(self.watch_list)} stocks", "success")
     
     def _stop_monitoring(self):
         """Stop real-time monitoring"""
@@ -916,11 +935,44 @@ class MainApp(QMainWindow):
         QApplication.alert(self)
     
     def _on_price_updated(self, code: str, price: float):
-        """Update price in watchlist"""
+        """
+        Update watchlist price + update chart's REAL line live.
+        Forecast line stays stable (good for comparing real vs predicted divergence).
+        """
         for row in range(self.watchlist.rowCount()):
-            if self.watchlist.item(row, 0).text() == code:
+            item = self.watchlist.item(row, 0)
+            if item and item.text() == code:
                 self.watchlist.setItem(row, 1, QTableWidgetItem(f"¥{price:.2f}"))
                 break
+
+        try:
+            current_code = self.stock_input.text().strip()
+            if not current_code or current_code != code:
+                return
+            if not self.current_prediction:
+                return
+
+            series = getattr(self, "_live_price_series", {})
+            if code not in series:
+                base = list(self.current_prediction.price_history or [])
+                series[code] = base[-120:] if base else []
+            series[code].append(float(price))
+            series[code] = series[code][-180:]
+            setattr(self, "_live_price_series", series)
+
+            levels = {
+                "stop_loss": self.current_prediction.levels.stop_loss,
+                "target_1": self.current_prediction.levels.target_1,
+                "target_2": self.current_prediction.levels.target_2,
+                "target_3": self.current_prediction.levels.target_3,
+            }
+            self.chart.update_data(
+                series[code],
+                self.current_prediction.predicted_prices,
+                levels
+            )
+        except Exception as e:
+            log.warning(f"Chart live update failed: {e}")
     
     def _quick_trade(self, pred: Prediction):
         """Quick trade from signal"""
@@ -974,29 +1026,38 @@ class MainApp(QMainWindow):
     # ==================== Analysis ====================
     
     def _analyze_stock(self):
-        """Analyze stock"""
+        """Analyze stock (uses 1m + forecast minutes option)."""
         code = self.stock_input.text().strip()
         if not code:
             self.log("Please enter a stock code", "warning")
             return
-        
+
         if self.predictor is None or self.predictor.ensemble is None:
             self.log("No model loaded. Please train a model first.", "error")
             return
-        
+
+        interval = self.interval_combo.currentText().strip()
+        forecast_min = int(self.forecast_spin.value())
+
         self.analyze_action.setEnabled(False)
         self.signal_panel.reset()
         self.status_label.setText(f"Analyzing {code}...")
         self.progress.setRange(0, 0)
         self.progress.show()
-        
+
         def analyze():
-            return self.predictor.predict(code)
-        
+            return self.predictor.predict(
+                code,
+                use_realtime_price=True,
+                interval=interval,
+                forecast_minutes=forecast_min,
+                lookback_bars=1400 if interval == "1m" else 600
+            )
+
         worker = WorkerThread(analyze)
         worker.finished.connect(self._on_analysis_done)
         worker.error.connect(self._on_analysis_error)
-        self.workers['analyze'] = worker
+        self.workers["analyze"] = worker
         worker.start()
     
     def _on_analysis_done(self, pred: Prediction):

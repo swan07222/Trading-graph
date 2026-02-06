@@ -199,11 +199,11 @@ class Backtester:
                 trades, returns_dict, benchmark_dict, accuracy = result
                 all_trades.extend(trades)
                 
-                for dt, ret_list in returns_dict.items():
-                    daily_returns_by_date[dt].extend(ret_list)
+                for dt, ret in returns_dict.items():
+                    daily_returns_by_date[dt].append(float(ret))
 
-                for dt, ret_list in benchmark_dict.items():
-                    benchmark_returns_by_date[dt].extend(ret_list)
+                for dt, ret in benchmark_dict.items():
+                    benchmark_returns_by_date[dt].append(float(ret))
                 
                 fold_accuracies.append(accuracy)
                 
@@ -307,99 +307,115 @@ class Backtester:
         test_end: pd.Timestamp,
         capital: float
     ) -> Optional[Tuple]:
-        """Run single fold of walk-forward backtest"""
-        
+        """Run single fold of walk-forward backtest (portfolio-weighted, aligned)."""
+
         processor = DataProcessor()
         feature_cols = self.feature_engine.get_feature_columns()
-        
-        # Collect training features for scaler
+
+        # --------- Fit scaler on training data only ----------
         train_features_list = []
-        
         for code, df in all_data.items():
             mask = (df.index >= train_start) & (df.index < train_end)
-            fold_df = df[mask]
-            
+            fold_df = df.loc[mask]
             if len(fold_df) >= CONFIG.model.sequence_length:
                 train_features_list.append(fold_df[feature_cols].values)
-        
+
         if not train_features_list:
             log.warning("No training data for this fold")
             return None
-        
-        # Fit scaler on training data
-        combined_train = np.concatenate(train_features_list)
+
+        combined_train = np.concatenate(train_features_list, axis=0)
         processor.fit_scaler(combined_train)
-        
-        # Prepare training sequences
-        X_train, y_train = [], []
-        
+
+        # --------- Build training sequences ----------
+        X_train_list, y_train_list = [], []
         for code, df in all_data.items():
             mask = (df.index >= train_start) & (df.index < train_end)
             fold_raw = df.loc[mask].copy()
             fold_df = processor.create_labels(fold_raw)
-            
+
             if len(fold_df) >= CONFIG.model.sequence_length + 10:
                 X, y, _ = processor.prepare_sequences(fold_df, feature_cols, fit_scaler=False)
                 if len(X) > 0:
-                    X_train.append(X)
-                    y_train.append(y)
-        
-        if not X_train:
-            log.warning("No training sequences")
+                    X_train_list.append(X)
+                    y_train_list.append(y)
+
+        if not X_train_list:
+            log.warning("No training sequences for this fold")
             return None
-        
-        X_train = np.concatenate(X_train)
-        y_train = np.concatenate(y_train)
-        
-        # Train model
-        input_size = X_train.shape[2]
-        model = EnsembleModel(input_size, model_names=['lstm', 'gru', 'tcn'])
-        
+
+        X_train = np.concatenate(X_train_list, axis=0)
+        y_train = np.concatenate(y_train_list, axis=0)
+
+        # --------- Train model ----------
+        input_size = int(X_train.shape[2])
+        model = EnsembleModel(input_size, model_names=["lstm", "gru", "tcn"])
+
         split = int(len(X_train) * 0.85)
         model.train(
             X_train[:split], y_train[:split],
             X_train[split:], y_train[split:],
             epochs=30
         )
-        
-        # Test
-        trades = []
-        returns_by_date = defaultdict(list)
-        benchmark_by_date = defaultdict(list)
-        predictions = []
-        actuals = []
-        
+
+        # --------- Test / simulate per stock ----------
+        trades: List[BacktestTrade] = []
+        predictions, actuals = [], []
+
+        # Collect per-stock daily *values* then sum into a portfolio
+        portfolio_values_by_date: Dict[pd.Timestamp, float] = defaultdict(float)
+        benchmark_values_by_date: Dict[pd.Timestamp, float] = defaultdict(float)
+
+        # Only allocate capital across stocks that actually have test sequences
+        valid_test_codes = []
+        prepared = {}
+
         for code, df in all_data.items():
             mask = (df.index >= test_start) & (df.index < test_end)
             fold_raw = df.loc[mask].copy()
             fold_df = processor.create_labels(fold_raw)
-            
+
             if len(fold_df) < CONFIG.model.sequence_length + 5:
                 continue
-            
+
             X, y, returns, idx = processor.prepare_sequences(
                 fold_df, feature_cols, fit_scaler=False, return_index=True
             )
             if len(X) == 0:
                 continue
 
-            # FIXED: Safe index alignment
             common_idx = fold_df.index.intersection(idx)
             if len(common_idx) == 0:
                 continue
-            aligned = fold_df.loc[common_idx]
-            
-            # Re-filter X, y, returns to match common_idx
+
             idx_mask = idx.isin(common_idx)
             X = X[idx_mask]
             y = y[idx_mask]
             returns = returns[idx_mask]
             idx = idx[idx_mask]
 
-            if len(X) == 0:
+            aligned = fold_df.loc[common_idx]
+
+            if len(X) == 0 or aligned.empty:
                 continue
 
-            code_trades, code_returns, code_benchmark = self._simulate_trading(
+            valid_test_codes.append(code)
+            prepared[code] = (X, y, returns, idx, aligned)
+
+        if not valid_test_codes:
+            log.warning("No valid test stocks for this fold")
+            return None
+
+        cap_slice = float(capital) / float(len(valid_test_codes))
+
+        for code in valid_test_codes:
+            X, y, returns, idx, aligned = prepared[code]
+
+            preds = model.predict_batch(X)
+            predictions.extend([p.predicted_class for p in preds])
+            actuals.extend(y.tolist())
+
+            code_trades, code_vals, code_bench_vals = self._simulate_trading(
                 model=model,
                 X=X,
                 y=y,
@@ -409,28 +425,42 @@ class Backtester:
                 close_prices=aligned["close"].values,
                 volumes=aligned["volume"].values,
                 stock_code=code,
-                capital=capital / len(all_data)
+                capital=cap_slice,
+                preds=preds,  # avoid double inference
             )
-            
-            trades.extend(code_trades)
-            
-            for dt, ret in code_returns.items():
-                returns_by_date[dt].append(ret)
 
-            for dt, ret in code_benchmark.items():
-                benchmark_by_date[dt].append(ret)
-            
-            preds = model.predict_batch(X)
-            predictions.extend([p.predicted_class for p in preds])
-            actuals.extend(y.tolist())
-        
-        if actuals:
-            accuracy = np.mean(np.array(predictions) == np.array(actuals))
-            log.info(f"  Fold accuracy: {accuracy:.2%}")
-        else:
-            accuracy = 0
-        
-        return trades, returns_by_date, benchmark_by_date, accuracy
+            trades.extend(code_trades)
+
+            for dt, v in code_vals.items():
+                portfolio_values_by_date[dt] += float(v)
+            for dt, v in code_bench_vals.items():
+                benchmark_values_by_date[dt] += float(v)
+
+        # --------- Fold accuracy ----------
+        accuracy = float(np.mean(np.array(predictions) == np.array(actuals))) if actuals else 0.0
+        log.info(f"  Fold accuracy: {accuracy:.2%}")
+
+        # --------- Convert summed values -> daily returns (%) ----------
+        sorted_dates = sorted(portfolio_values_by_date.keys())
+        returns_by_date: Dict[pd.Timestamp, float] = {}
+        bench_by_date: Dict[pd.Timestamp, float] = {}
+
+        for i, dt in enumerate(sorted_dates):
+            if i == 0:
+                returns_by_date[dt] = 0.0
+                bench_by_date[dt] = 0.0
+                continue
+
+            prev_dt = sorted_dates[i - 1]
+            pv0 = float(portfolio_values_by_date.get(prev_dt, 0.0))
+            pv1 = float(portfolio_values_by_date.get(dt, 0.0))
+            bv0 = float(benchmark_values_by_date.get(prev_dt, 0.0))
+            bv1 = float(benchmark_values_by_date.get(dt, 0.0))
+
+            returns_by_date[dt] = ((pv1 / pv0) - 1.0) * 100.0 if pv0 > 0 else 0.0
+            bench_by_date[dt] = ((bv1 / bv0) - 1.0) * 100.0 if bv0 > 0 else 0.0
+
+        return trades, returns_by_date, bench_by_date, accuracy
     
     def _simulate_trading(
         self,
@@ -443,10 +473,15 @@ class Backtester:
         close_prices: np.ndarray,
         volumes: np.ndarray,
         stock_code: str,
-        capital: float
+        capital: float,
+        preds: Optional[List] = None,
     ) -> Tuple[List[BacktestTrade], Dict, Dict]:
         """
         NEXT-BAR execution without lookahead + realistic CN costs.
+        Returns:
+        - trades
+        - daily_portfolio_values[date] = value
+        - daily_benchmark_values[date] = value
         """
         slippage_model = SlippageModel()
         lot = int(get_lot_size(stock_code))
@@ -465,7 +500,6 @@ class Backtester:
         horizon = int(CONFIG.model.prediction_horizon)
         limit_pct = float(get_price_limit(stock_code))
 
-        # Costs
         commission_rate = float(CONFIG.trading.commission)
         stamp_tax_rate = float(CONFIG.trading.stamp_tax)
         commission_min = 5.0
@@ -488,11 +522,12 @@ class Backtester:
                 return False
             return px <= prev_close * (1.0 - limit_pct + 1e-4)
 
-        # FIXED: Benchmark buys at first OPEN, not close
+        # Benchmark: buy at first OPEN
         first_open = float(open_prices[0]) if len(open_prices) > 0 else 0.0
         benchmark_shares = (capital / first_open) if first_open > 0 else 0.0
 
-        preds = model.predict_batch(X)
+        if preds is None:
+            preds = model.predict_batch(X)
 
         n = min(len(dates), len(open_prices), len(close_prices), len(volumes), len(preds))
         if n == 0:
@@ -503,8 +538,7 @@ class Backtester:
             open_t = float(open_prices[t])
             close_t = float(close_prices[t])
             prev_close = float(close_prices[t - 1]) if t > 0 else close_t
-            
-            # Handle NaN/invalid prices
+
             if np.isnan(open_t) or np.isnan(close_t) or open_t <= 0 or close_t <= 0:
                 continue
 
@@ -543,9 +577,9 @@ class Backtester:
                                 ))
 
                 elif action == "SELL" and shares > 0:
-                    # T+1 check
+                    # T+1: cannot sell same execution day
                     if entry_exec_i is not None and t == entry_exec_i:
-                        pass  # Can't sell same day
+                        pass
                     else:
                         if not is_limit_down(prev_close, open_t):
                             notional = shares * open_t
@@ -584,10 +618,8 @@ class Backtester:
                             entry_exec_i = None
 
             # 2) Mark-to-market at CLOSE
-            portfolio_value = cash + shares * close_t
-            benchmark_value = benchmark_shares * close_t
-            daily_portfolio_values[dt] = float(portfolio_value)
-            daily_benchmark_values[dt] = float(benchmark_value)
+            daily_portfolio_values[dt] = float(cash + shares * close_t)
+            daily_benchmark_values[dt] = float(benchmark_shares * close_t)
 
             # 3) Signal at CLOSE for next OPEN
             if t < n - 1:
@@ -596,15 +628,17 @@ class Backtester:
                     pending_signal = ("BUY", float(pred.confidence), dt)
                 elif shares > 0:
                     holding_bars = (t - entry_exec_i) if entry_exec_i is not None else 0
-                    should_exit = (holding_bars >= horizon) or (pred.predicted_class == 0 and pred.confidence >= CONFIG.model.min_confidence)
+                    should_exit = (
+                        holding_bars >= horizon or
+                        (pred.predicted_class == 0 and pred.confidence >= CONFIG.model.min_confidence)
+                    )
                     if should_exit:
                         pending_signal = ("SELL", float(pred.confidence), dt)
 
-        # Force close at last bar if still holding
+        # Force close at last close if holding
         if shares > 0 and trades:
             dt = dates[n - 1]
             close_t = float(close_prices[n - 1])
-
             if not np.isnan(close_t) and close_t > 0:
                 proceeds = shares * close_t
                 fee = commission(proceeds) + transfer_fee(proceeds)
@@ -631,27 +665,9 @@ class Backtester:
                 trades[-1].pnl_pct = float(pnl_pct)
                 trades[-1].holding_days = int(holding_bars)
 
-        # Daily returns (%)
-        sorted_dates = sorted(daily_portfolio_values.keys())
-        strategy_returns: Dict[pd.Timestamp, float] = {}
-        benchmark_returns: Dict[pd.Timestamp, float] = {}
+                daily_portfolio_values[dt] = float(cash)
 
-        for i, dt in enumerate(sorted_dates):
-            if i == 0:
-                strategy_returns[dt] = 0.0
-                benchmark_returns[dt] = 0.0
-                continue
-
-            prev_dt = sorted_dates[i - 1]
-            prev_val = daily_portfolio_values[prev_dt]
-            curr_val = daily_portfolio_values[dt]
-            prev_b = daily_benchmark_values[prev_dt]
-            curr_b = daily_benchmark_values[dt]
-
-            strategy_returns[dt] = ((curr_val / prev_val) - 1.0) * 100.0 if prev_val > 0 else 0.0
-            benchmark_returns[dt] = ((curr_b / prev_b) - 1.0) * 100.0 if prev_b > 0 else 0.0
-
-        return trades, strategy_returns, benchmark_returns
+        return trades, daily_portfolio_values, daily_benchmark_values
         
     def _calculate_metrics(
         self,

@@ -19,7 +19,7 @@ import uuid
 import time
 import json
 
-from config import CONFIG
+from config.settings import CONFIG
 from core.types import (
     Order, OrderSide, OrderType, OrderStatus,
     Position, Account, Fill
@@ -231,7 +231,7 @@ class SimulatorBroker(BrokerInterface):
         self._orders: Dict[str, Order] = {}
         self._order_history: List[Order] = []
         self._fills: List[Fill] = []
-        self._unsent_fills: List[Fill] = []  # Fills not yet returned by get_fills()
+        self._unsent_fills: List[Fill] = []
         self._connected = False
         
         # T+1 tracking
@@ -301,6 +301,46 @@ class SimulatorBroker(BrokerInterface):
             self._update_prices()
             return dict(self._positions)
     
+    def _schedule_execution(self, order_id: str):
+        """Execute order asynchronously using ONE worker thread per order."""
+        import random
+        import threading
+
+        def worker():
+            while True:
+                time.sleep(random.uniform(0.05, 0.30))
+
+                with self._lock:
+                    order = self._orders.get(order_id)
+                    if not order or not order.is_active:
+                        return
+
+                market_price = self.get_quote(order.symbol)
+                if market_price is None or market_price <= 0:
+                    with self._lock:
+                        order = self._orders.get(order_id)
+                        if order and order.is_active:
+                            order.status = OrderStatus.REJECTED
+                            order.message = "No market quote during async execution"
+                            self._emit("order_update", order)
+                    return
+
+                with self._lock:
+                    order = self._orders.get(order_id)
+                    if not order or not order.is_active:
+                        return
+
+                    self._execute_order(order, market_price=float(market_price))
+
+                    if order.status in (OrderStatus.FILLED, OrderStatus.CANCELLED, OrderStatus.REJECTED, OrderStatus.EXPIRED):
+                        return
+
+                    if order.status == OrderStatus.PARTIAL:
+                        time.sleep(random.uniform(0.4, 1.2))
+                        continue
+
+        threading.Thread(target=worker, daemon=True, name=f"sim_exec_{order_id}").start()
+
     def _check_price_limits(self, symbol: str, side: OrderSide, price: float, prev_close: float, name: str = None) -> Tuple[bool, str]:
         from core.constants import get_price_limit
         if prev_close <= 0:
@@ -352,7 +392,6 @@ class SimulatorBroker(BrokerInterface):
             if not order.name and quote:
                 order.name = quote.name
 
-            # Validate using a conservative reference price
             ref_price = order.price if (order.order_type == OrderType.LIMIT and order.price > 0) else current_price
 
             ok, reason = self._validate_order(order, ref_price)
@@ -365,14 +404,16 @@ class SimulatorBroker(BrokerInterface):
             order.status = OrderStatus.SUBMITTED
             self._orders[order.id] = order
 
-            # Execute using REAL market price for marketability checks
-            self._execute_order(order, market_price=current_price)
+            order.status = OrderStatus.ACCEPTED
+            self._orders[order.id] = order
+
+            self._schedule_execution(order_id=order.id)
 
             self._emit('order_update', order)
             return order
     
     def _validate_order(self, order: Order, price: float) -> Tuple[bool, str]:
-        """Validate order (cash/shares/lot size) using a reference price."""
+        """Validate order using a reference price."""
         if order.quantity <= 0:
             return False, "Quantity must be positive"
 
@@ -391,7 +432,6 @@ class SimulatorBroker(BrokerInterface):
             if total > self._cash:
                 return False, f"Insufficient funds: need {total:,.2f}, have {self._cash:,.2f}"
 
-            # Position concentration check (keep yours)
             existing_value = 0.0
             existing_pos = self._positions.get(order.symbol)
             if existing_pos:
@@ -415,13 +455,12 @@ class SimulatorBroker(BrokerInterface):
         return True, "OK"
     
     def _execute_order(self, order: Order, market_price: float):
-        """Execute order with realistic simulation including marketable limit checks."""
+        """Execute order with realistic simulation."""
         import random
 
         df = self._get_fetcher().get_history(order.symbol, days=2)
         prev_close = float(df['close'].iloc[-2]) if len(df) >= 2 else float(market_price)
 
-        # Price limits check based on market price (not order price)
         can_trade, reason = self._check_price_limits(order.symbol, order.side, float(market_price), prev_close, order.name)
         if not can_trade:
             order.status = OrderStatus.REJECTED
@@ -429,7 +468,6 @@ class SimulatorBroker(BrokerInterface):
             self._emit('order_update', order)
             return
 
-        # Limit order marketability check
         if order.order_type == OrderType.LIMIT:
             if order.price <= 0:
                 order.status = OrderStatus.REJECTED
@@ -453,7 +491,6 @@ class SimulatorBroker(BrokerInterface):
         else:
             fill_price = float(market_price)
 
-        # Slippage
         slippage = float(CONFIG.SLIPPAGE)
         if order.side == OrderSide.BUY:
             fill_price *= (1 + slippage * (0.5 + 0.5 * random.random()))
@@ -461,7 +498,19 @@ class SimulatorBroker(BrokerInterface):
             fill_price *= (1 - slippage * (0.5 + 0.5 * random.random()))
         fill_price = round(fill_price, 2)
 
-        fill_qty = int(order.quantity)
+        remaining = int(order.quantity - order.filled_qty)
+        if remaining <= 0:
+            return
+
+        fill_qty = remaining
+
+        from core.constants import get_lot_size
+        lot = int(get_lot_size(order.symbol))
+
+        if remaining >= 2 * lot:
+            if random.random() < 0.25:
+                half = max(lot, (remaining // 2 // lot) * lot)
+                fill_qty = min(half, remaining)
 
         trade_value = fill_qty * fill_price
         commission = max(trade_value * CONFIG.COMMISSION, 5.0)
@@ -481,7 +530,7 @@ class SimulatorBroker(BrokerInterface):
                     symbol=order.symbol,
                     name=order.name,
                     quantity=fill_qty,
-                    available_qty=0,  # T+1
+                    available_qty=0,
                     avg_cost=fill_price,
                     current_price=fill_price
                 )
@@ -504,7 +553,7 @@ class SimulatorBroker(BrokerInterface):
 
         order.filled_qty += fill_qty
         order.commission += total_cost
-        order.status = OrderStatus.FILLED
+        order.status = OrderStatus.FILLED if order.filled_qty >= order.quantity else OrderStatus.PARTIAL
         order.filled_at = datetime.now()
 
         prev_value = (order.filled_qty - fill_qty) * order.avg_price
@@ -672,7 +721,7 @@ class THSBroker(BrokerInterface):
         self._orders: Dict[str, Order] = {}
         self._seen_fill_ids: set = set()
         self._last_fill_check: datetime = None
-        self._fetcher = None  # ADDED: lazy init fetcher
+        self._fetcher = None
         
         try:
             import easytrader
@@ -783,7 +832,6 @@ class THSBroker(BrokerInterface):
             return order
         
         try:
-            # CRITICAL: Preserve order.id, set broker_id
             order.created_at = order.created_at or datetime.now()
             order.submitted_at = datetime.now()
             
@@ -805,7 +853,6 @@ class THSBroker(BrokerInterface):
                     order.broker_id = str(entrust_no)
                     order.message = f"Entrust: {order.broker_id}"
                     
-                    # Register mapping
                     self.register_order_mapping(order.id, order.broker_id)
                     
                     log.info(f"Order submitted: {order.id} -> broker {order.broker_id}")
@@ -827,28 +874,22 @@ class THSBroker(BrokerInterface):
             return order
     
     def get_fills(self, since: datetime = None) -> List[Fill]:
-        """
-        Get fills from broker.
-        CRITICAL: Maps broker entrust numbers back to our order IDs.
-        """
+        """Get fills from broker."""
         if not self.is_connected:
             return []
         
         fills = []
         
         try:
-            # Get today's trades from broker
             trades = self._client.today_trades
             
             for trade in trades:
-                # Create unique fill ID
                 fill_id = f"{trade.get('成交编号', '')}"
                 if not fill_id or fill_id in self._seen_fill_ids:
                     continue
                 
                 self._seen_fill_ids.add(fill_id)
                 
-                # Map broker entrust number to our order ID
                 broker_entrust = str(trade.get('委托编号', ''))
                 our_order_id = self.get_order_id(broker_entrust)
                 
@@ -856,14 +897,12 @@ class THSBroker(BrokerInterface):
                     log.warning(f"Unknown entrust number: {broker_entrust}")
                     continue
                 
-                # Parse side
                 trade_side = trade.get('买卖标志', trade.get('操作', ''))
                 if '买' in str(trade_side):
                     side = OrderSide.BUY
                 else:
                     side = OrderSide.SELL
                 
-                # Parse timestamp - FIXED: moved outside Fill constructor
                 ts = trade.get("成交时间") or trade.get("time") or None
                 fill_time = datetime.now()
                 if ts:
@@ -987,6 +1026,7 @@ class THSBroker(BrokerInterface):
         if active_only:
             return [o for o in self._orders.values() if o.is_active]
         return list(self._orders.values())
+    
     def _get_fetcher(self):
         """Get shared fetcher instance"""
         if self._fetcher is None:
@@ -1002,8 +1042,6 @@ class THSBroker(BrokerInterface):
 class ZSZQBroker(BrokerInterface):
     """
     招商证券 (Zhao Shang Zheng Quan) broker integration
-    
-    CRITICAL: Implements full fill sync for live trading correctness.
     """
     
     def __init__(self):
@@ -1152,7 +1190,6 @@ class ZSZQBroker(BrokerInterface):
             return order
         
         try:
-            # CRITICAL: Preserve order.id
             order.created_at = order.created_at or datetime.now()
             order.submitted_at = datetime.now()
             
@@ -1175,7 +1212,6 @@ class ZSZQBroker(BrokerInterface):
                     order.broker_id = str(entrust_no)
                     order.message = f"Entrust: {entrust_no}"
                     
-                    # Register mapping
                     self.register_order_mapping(order.id, order.broker_id)
                     
                     log.info(f"Order submitted: {order.id} -> broker {order.broker_id}")
@@ -1226,7 +1262,6 @@ class ZSZQBroker(BrokerInterface):
                 else:
                     side = OrderSide.SELL
                 
-                # Parse timestamp - FIXED
                 ts = trade.get("成交时间") or trade.get("time") or None
                 fill_time = datetime.now()
                 if ts:
@@ -1371,7 +1406,7 @@ def create_broker(mode: str = None, **kwargs) -> BrokerInterface:
         mode: 'simulation', 'paper', 'live', 'ths', 'ht', 'gj', 'yh', 'zszq'
         **kwargs: Additional arguments for broker
     """
-    from config import TradingMode
+    from config.settings import TradingMode
     
     if mode is None:
         mode = CONFIG.trading_mode.value if hasattr(CONFIG.trading_mode, 'value') else str(CONFIG.trading_mode)

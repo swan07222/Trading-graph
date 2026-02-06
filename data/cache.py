@@ -323,14 +323,24 @@ class TieredCache:
         max_age_hours: float = None,
         persist: bool = True
     ) -> T:
-        """Get from cache or compute and store"""
-        value = self.get(key, max_age_hours)
-        if value is not None:
-            return value
+        """Get from cache or compute and store - thread-safe"""
+        with self._lock:
+            value = self.get(key, max_age_hours)
+            if value is not None:
+                return value
+            
+            # Compute outside lock to avoid blocking
         
         value = compute_fn()
-        if value is not None:
-            self.set(key, value, persist)
+        
+        with self._lock:
+            # Double-check another thread didn't populate it
+            existing = self.get(key, max_age_hours)
+            if existing is not None:
+                return existing
+            
+            if value is not None:
+                self.set(key, value, persist)
         
         return value
 

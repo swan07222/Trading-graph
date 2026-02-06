@@ -4,6 +4,7 @@ Pytest configuration and shared fixtures
 """
 import pytest
 import sys
+import os
 from pathlib import Path
 
 # Ensure project root is in path
@@ -32,3 +33,18 @@ def temp_model_dir(tmp_path):
     CONFIG._model_dir_override = tmp_path
     yield tmp_path
     CONFIG._model_dir_override = None
+
+@pytest.fixture(autouse=True, scope="session")
+def force_offline_for_tests():
+    """
+    Make pytest deterministic and fast:
+    - Avoid network calls (AkShare/Yahoo)
+    - Allow tests to run even without data sources
+    """
+    old = os.environ.get("TRADING_OFFLINE")
+    os.environ["TRADING_OFFLINE"] = "1"
+    yield
+    if old is None:
+        os.environ.pop("TRADING_OFFLINE", None)
+    else:
+        os.environ["TRADING_OFFLINE"] = old

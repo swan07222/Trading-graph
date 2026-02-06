@@ -455,6 +455,10 @@ class Config:
         
         self._load_from_env()
     
+    def set_model_dir(self, path: str):
+        """Override model directory path"""
+        self._model_dir_override = str(path) if path else None
+
     def _load_from_env(self):
         """Load from environment variables"""
         env_mappings = {

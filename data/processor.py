@@ -1,3 +1,4 @@
+# data/processor.py
 """
 Data Processor - Prepare data for training WITHOUT data leakage
 
@@ -15,8 +16,10 @@ import pickle
 from pathlib import Path
 import threading
 
-from config import CONFIG
-from utils.logger import log
+from config.settings import CONFIG
+from utils.logger import get_logger
+
+log = get_logger(__name__)
 
 
 class DataProcessor:
@@ -174,7 +177,7 @@ class DataProcessor:
                 X.append(seq)
                 y.append(int(labels[i]))
                 r.append(float(returns[i]) if not np.isnan(returns[i]) else 0.0)
-                idx.append(df.index[i])  # ✅ aligned end-of-sequence timestamp
+                idx.append(df.index[i])  # aligned end-of-sequence timestamp
 
         if not X:
             empty = (np.array([]), np.array([]), np.array([]))
@@ -247,58 +250,55 @@ class DataProcessor:
     ) -> Dict[str, Tuple[np.ndarray, np.ndarray, np.ndarray]]:
         """
         Split a single stock's data temporally with proper embargo.
-        
-        CRITICAL: Labels are created WITHIN each split to prevent leakage.
+
+        FIX:
+        - clamp split boundaries so we never slice negative ranges
+        - keep leakage rules intact
         """
         n = len(df)
         horizon = CONFIG.PREDICTION_HORIZON
         embargo = CONFIG.EMBARGO_BARS
-        
-        # Calculate split points
-        train_end = int(n * CONFIG.TRAIN_RATIO)
-        val_end = int(n * (CONFIG.TRAIN_RATIO + CONFIG.VAL_RATIO))
-        
-        # Split raw data BEFORE labeling
-        # Subtract horizon+embargo from boundaries to ensure no leakage
-        train_df = df.iloc[:train_end - horizon - embargo].copy()
-        val_df = df.iloc[train_end:val_end - horizon - embargo].copy()
-        test_df = df.iloc[val_end:].copy()
-        
-        # Create labels within each split
+
+        train_end_raw = int(n * CONFIG.TRAIN_RATIO)
+        val_end_raw = int(n * (CONFIG.TRAIN_RATIO + CONFIG.VAL_RATIO))
+
+        cut_train = max(0, train_end_raw - horizon - embargo)
+        cut_val = max(cut_train, val_end_raw - horizon - embargo)
+
+        train_df = df.iloc[:cut_train].copy()
+        val_df = df.iloc[train_end_raw:cut_val].copy()
+        test_df = df.iloc[val_end_raw:].copy()
+
         train_df = self.create_labels(train_df)
         val_df = self.create_labels(val_df)
         test_df = self.create_labels(test_df)
-        
-        log.debug(f"Split sizes: train={len(train_df)}, val={len(val_df)}, test={len(test_df)}")
-        
-        # Fit scaler on training data only
+
         if fit_scaler_on_train and len(train_df) >= CONFIG.SEQUENCE_LENGTH:
             train_features = train_df[feature_cols].values
-            valid_mask = ~train_df['label'].isna()
-            if valid_mask.sum() > 10:
+            valid_mask = ~train_df["label"].isna()
+            if int(valid_mask.sum()) > 10:
                 self.fit_scaler(train_features[valid_mask])
-        
+
         results = {}
-        for name, split_df in [('train', train_df), ('val', val_df), ('test', test_df)]:
+        for name, split_df in [("train", train_df), ("val", val_df), ("test", test_df)]:
             if len(split_df) >= CONFIG.SEQUENCE_LENGTH + 5:
                 X, y, r = self.prepare_sequences(split_df, feature_cols, fit_scaler=False)
                 results[name] = (X, y, r)
-                log.debug(f"  {name}: {len(X)} sequences")
             else:
                 results[name] = (np.array([]), np.array([]), np.array([]))
-                log.debug(f"  {name}: insufficient data")
-        
+
         return results
     
     def save_scaler(self, path: str = None):
+        """Save scaler atomically"""
         if not self._fitted:
             log.warning("Scaler not fitted, nothing to save")
             return
 
         from pathlib import Path
-        from utils.atomic_io import atomic_pickle_dump
-
-        path = Path(path or (CONFIG.MODEL_DIR / "scaler.pkl"))
+        
+        path = Path(path) if path else (CONFIG.MODEL_DIR / "scaler.pkl")
+        path.parent.mkdir(parents=True, exist_ok=True)
 
         with self._lock:
             data = {
@@ -308,8 +308,16 @@ class DataProcessor:
                 'fitted': True
             }
 
-        atomic_pickle_dump(path, data)
-        log.info(f"Scaler saved atomically to {path}")
+        try:
+            from utils.atomic_io import atomic_pickle_dump
+            atomic_pickle_dump(path, data)
+        except ImportError:
+            # Fallback to regular pickle
+            import pickle
+            with open(path, 'wb') as f:
+                pickle.dump(data, f, protocol=pickle.HIGHEST_PROTOCOL)
+        
+        log.info(f"Scaler saved to {path}")
     
     def load_scaler(self, path: str = None) -> bool:
         """Load saved scaler for inference"""

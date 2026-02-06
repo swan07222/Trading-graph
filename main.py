@@ -71,6 +71,9 @@ def main():
     from core.events import EVENT_BUS
     EVENT_BUS.start()
 
+    from utils.metrics import start_process_metrics
+    start_process_metrics()
+
     from trading.kill_switch import get_kill_switch
     _ = get_kill_switch()
 

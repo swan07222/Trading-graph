@@ -2,13 +2,6 @@
 """
 Kill Switch and Circuit Breaker System
 Score Target: 10/10
-
-Features:
-- Emergency trading halt
-- Automatic circuit breakers
-- Manual override
-- Persistent state
-- Audit logging
 """
 import threading
 from datetime import datetime, timedelta
@@ -18,7 +11,7 @@ from enum import Enum
 from pathlib import Path
 import json
 
-from config import CONFIG
+from config.settings import CONFIG
 from core.types import SystemStatus, RiskLevel
 from core.events import EVENT_BUS, EventType, Event
 from utils.logger import get_logger
@@ -50,12 +43,6 @@ class CircuitBreakerState:
 class KillSwitch:
     """
     Emergency kill switch for trading
-    
-    Features:
-    - Immediate trading halt
-    - Circuit breakers with auto-reset
-    - Persistent state (survives restart)
-    - Audit logging
     """
     
     STATE_FILE = "kill_switch_state.json"
@@ -64,24 +51,19 @@ class KillSwitch:
         self._lock = threading.RLock()
         self._audit = get_audit_log()
         
-        # State
         self._active = False
         self._activated_at: Optional[datetime] = None
         self._activated_by: str = ""
         self._reason: str = ""
         
-        # Circuit breakers
         self._circuit_breakers: dict[CircuitBreakerType, CircuitBreakerState] = {}
         self._init_circuit_breakers()
         
-        # Callbacks
         self._on_activate: List[Callable] = []
         self._on_deactivate: List[Callable] = []
         
-        # Load persisted state
         self._load_state()
         
-        # Subscribe to risk events
         EVENT_BUS.subscribe(EventType.RISK_BREACH, self._on_risk_event)
     
     def _init_circuit_breakers(self):
@@ -97,11 +79,11 @@ class KillSwitch:
             ),
             CircuitBreakerType.RAPID_LOSS: CircuitBreakerState(
                 type=CircuitBreakerType.RAPID_LOSS,
-                threshold=2.0  # 2% in 5 minutes
+                threshold=2.0
             ),
             CircuitBreakerType.ERROR_RATE: CircuitBreakerState(
                 type=CircuitBreakerType.ERROR_RATE,
-                threshold=5  # 5 errors in 1 minute
+                threshold=5
             ),
         }
     
@@ -116,7 +98,6 @@ class KillSwitch:
         if self._active:
             return False
         
-        # Check circuit breakers
         for cb in self._circuit_breakers.values():
             if cb.triggered and not self._is_cb_expired(cb):
                 return False
@@ -140,10 +121,8 @@ class KillSwitch:
             self._activated_by = activated_by
             self._reason = reason
             
-            # Persist
             self._save_state()
             
-            # Audit
             self._audit.log_risk_event('kill_switch_activated', {
                 'reason': reason,
                 'activated_by': activated_by,
@@ -152,14 +131,12 @@ class KillSwitch:
             
             log.critical(f"🛑 KILL SWITCH ACTIVATED: {reason}")
             
-            # Notify
             for callback in self._on_activate:
                 try:
                     callback(reason)
                 except Exception as e:
                     log.error(f"Kill switch callback error: {e}")
             
-            # Publish event
             EVENT_BUS.publish(Event(
                 type=EventType.CIRCUIT_BREAKER,
                 data={
@@ -176,7 +153,6 @@ class KillSwitch:
             if not self._active:
                 return False
             
-            # For live trading, require override code
             if CONFIG.trading_mode.value == 'live':
                 if not override_code or override_code != self._get_override_code():
                     log.warning("Kill switch deactivation requires valid override code")
@@ -184,10 +160,8 @@ class KillSwitch:
             
             self._active = False
             
-            # Persist
             self._save_state()
             
-            # Audit
             self._audit.log_risk_event('kill_switch_deactivated', {
                 'deactivated_by': deactivated_by,
                 'was_active_for': (datetime.now() - self._activated_at).total_seconds()
@@ -196,7 +170,6 @@ class KillSwitch:
             
             log.info(f"✅ Kill switch deactivated by {deactivated_by}")
             
-            # Notify
             for callback in self._on_deactivate:
                 try:
                     callback()
@@ -206,8 +179,7 @@ class KillSwitch:
             return True
     
     def _get_override_code(self) -> str:
-        """Generate override code (in production, use proper 2FA)"""
-        # Simple implementation - in production use TOTP or similar
+        """Generate override code"""
         import hashlib
         today = datetime.now().strftime("%Y-%m-%d")
         return hashlib.sha256(f"OVERRIDE_{today}".encode()).hexdigest()[:8].upper()
@@ -225,16 +197,15 @@ class KillSwitch:
                 return
             
             if cb.triggered:
-                return  # Already triggered
+                return
             
             cb.triggered = True
             cb.triggered_at = datetime.now()
             cb.trigger_value = current_value
             cb.message = message
             
-            # Set reset time based on type
             if cb_type == CircuitBreakerType.DAILY_LOSS:
-                cb.reset_at = None  # Manual reset required (sticky)
+                cb.reset_at = None
             elif cb_type == CircuitBreakerType.RAPID_LOSS:
                 cb.reset_at = datetime.now() + timedelta(minutes=30)
             elif cb_type == CircuitBreakerType.ERROR_RATE:
@@ -244,10 +215,8 @@ class KillSwitch:
                     minutes=CONFIG.risk.circuit_breaker_duration_minutes
                 )
             
-            # Persist
             self._save_state()
             
-            # Audit
             self._audit.log_risk_event('circuit_breaker_triggered', {
                 'type': cb_type.value,
                 'value': current_value,
@@ -258,7 +227,6 @@ class KillSwitch:
             
             log.warning(f"⚡ Circuit breaker triggered: {cb_type.value} - {message}")
             
-            # If critical, activate kill switch
             if cb_type in [CircuitBreakerType.DRAWDOWN]:
                 self.activate(f"Circuit breaker: {cb_type.value}", "circuit_breaker")
     
@@ -370,7 +338,6 @@ class KillSwitch:
             self._activated_by = state.get('activated_by', '')
             self._reason = state.get('reason', '')
             
-            # Load circuit breaker states
             for cb_type_str, cb_state in state.get('circuit_breakers', {}).items():
                 try:
                     cb_type = CircuitBreakerType(cb_type_str)

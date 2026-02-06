@@ -81,9 +81,9 @@ class DataSourceStatus:
     last_error: str = None
     success_count: int = 0
     error_count: int = 0
-    consecutive_errors: int = 0  # Track consecutive errors
+    consecutive_errors: int = 0
     avg_latency_ms: float = 0.0
-    disabled_until: datetime = None  # Temporary disable
+    disabled_until: datetime = None
 
 
 class DataSource:
@@ -106,12 +106,10 @@ class DataSource:
             if not self.status.available:
                 return False
             
-            # Check if temporarily disabled
             if self.status.disabled_until:
                 if datetime.now() < self.status.disabled_until:
                     return False
                 else:
-                    # Re-enable after cooldown
                     self.status.disabled_until = None
                     self.status.consecutive_errors = 0
                     log.info(f"Data source {self.name} re-enabled after cooldown")
@@ -128,7 +126,7 @@ class DataSource:
         with self._lock:
             self.status.last_success = datetime.now()
             self.status.success_count += 1
-            self.status.consecutive_errors = 0  # Reset on success
+            self.status.consecutive_errors = 0
             self.status.available = True
             self.status.disabled_until = None
             
@@ -144,9 +142,7 @@ class DataSource:
             self.status.error_count += 1
             self.status.consecutive_errors += 1
             
-            # Temporary disable after 10 consecutive errors (not 5)
             if self.status.consecutive_errors >= 10:
-                # Disable for 60 seconds, not permanently
                 self.status.disabled_until = datetime.now() + timedelta(seconds=60)
                 log.warning(f"Data source {self.name} temporarily disabled for 60s")
 
@@ -183,7 +179,7 @@ class SpotCache:
             try:
                 import socket
                 old_timeout = socket.getdefaulttimeout()
-                socket.setdefaulttimeout(60)  # 60 second timeout
+                socket.setdefaulttimeout(60)
                 
                 try:
                     self._cache = self._ak.stock_zh_a_spot_em()
@@ -273,7 +269,7 @@ class AkShareSource(DataSource):
         try:
             import socket
             old_timeout = socket.getdefaulttimeout()
-            socket.setdefaulttimeout(60)  # 60 second timeout
+            socket.setdefaulttimeout(60)
             
             try:
                 end_date = datetime.now().strftime("%Y%m%d")
@@ -292,7 +288,6 @@ class AkShareSource(DataSource):
             if df is None or df.empty:
                 raise DataFetchError(f"No data for {code}")
             
-            # Standardize columns
             column_map = {
                 '日期': 'date', '开盘': 'open', '收盘': 'close',
                 '最高': 'high', '最低': 'low', '成交量': 'volume',
@@ -350,25 +345,61 @@ class AkShareSource(DataSource):
             return None
     
     def get_history_instrument(self, inst: dict, days: int, interval: str = "1d") -> pd.DataFrame:
-        """
-        Instrument-aware history for CN equities with interval support.
-        Supported: 1d, 1wk, 1mo (best effort).
-        """
+        """Instrument-aware history for CN equities with interval support."""
         if not self._ak or not self.is_available():
             return pd.DataFrame()
 
         if inst.get("market") != "CN" or inst.get("asset") != "EQUITY":
             return pd.DataFrame()
 
-        period_map = {"1d": "daily", "1wk": "weekly", "1mo": "monthly"}
-        period = period_map.get(interval, "daily")
-
         start = time.time()
         try:
             import socket
             old_timeout = socket.getdefaulttimeout()
             socket.setdefaulttimeout(60)
+
             try:
+                min_map = {"1m": "1", "5m": "5", "15m": "15", "30m": "30", "60m": "60"}
+                if interval in min_map:
+                    df = self._ak.stock_zh_a_hist_min_em(
+                        symbol=str(inst["symbol"]).zfill(6),
+                        period=min_map[interval],
+                        adjust="qfq",
+                    )
+
+                    if df is None or df.empty:
+                        return pd.DataFrame()
+
+                    col_map_candidates = [
+                        {"时间": "date", "开盘": "open", "收盘": "close", "最高": "high", "最低": "low", "成交量": "volume", "成交额": "amount"},
+                        {"日期": "date", "开盘": "open", "收盘": "close", "最高": "high", "最低": "low", "成交量": "volume", "成交额": "amount"},
+                    ]
+                    for cmap in col_map_candidates:
+                        if set(cmap.keys()).issubset(set(df.columns)):
+                            df = df.rename(columns=cmap)
+                            break
+
+                    if "date" not in df.columns:
+                        df = df.rename(columns={df.columns[0]: "date"})
+
+                    df["date"] = pd.to_datetime(df["date"], errors="coerce")
+                    df = df.dropna(subset=["date"]).set_index("date").sort_index()
+
+                    for c in ["open", "high", "low", "close", "volume", "amount"]:
+                        if c in df.columns:
+                            df[c] = pd.to_numeric(df[c], errors="coerce")
+
+                    df = df.dropna(subset=["close"])
+                    if "volume" in df.columns:
+                        df = df[df["volume"].fillna(0) >= 0]
+
+                    latency = (time.time() - start) * 1000
+                    self._record_success(latency)
+                    return df.tail(max(50, int(days)))
+
+                period_map = {"1d": "daily", "1wk": "weekly", "1mo": "monthly"}
+                period = period_map.get(interval, "daily")
+
                 end_date = datetime.now().strftime("%Y%m%d")
                 start_date = (datetime.now() - timedelta(days=int(days * 2.2))).strftime("%Y%m%d")
 
@@ -379,6 +410,7 @@ class AkShareSource(DataSource):
                     end_date=end_date,
                     adjust="qfq"
                 )
+
             finally:
                 socket.setdefaulttimeout(old_timeout)
 
@@ -386,21 +418,21 @@ class AkShareSource(DataSource):
                 return pd.DataFrame()
 
             column_map = {
-                '日期': 'date', '开盘': 'open', '收盘': 'close',
-                '最高': 'high', '最低': 'low', '成交量': 'volume',
-                '成交额': 'amount', '涨跌幅': 'change_pct', '换手率': 'turnover'
+                "日期": "date", "开盘": "open", "收盘": "close",
+                "最高": "high", "最低": "low", "成交量": "volume",
+                "成交额": "amount", "涨跌幅": "change_pct", "换手率": "turnover"
             }
             df = df.rename(columns=column_map)
-            df['date'] = pd.to_datetime(df['date'])
-            df = df.set_index('date').sort_index()
+            df["date"] = pd.to_datetime(df["date"])
+            df = df.set_index("date").sort_index()
 
-            for col in ['open', 'high', 'low', 'close', 'volume', 'amount']:
+            for col in ["open", "high", "low", "close", "volume", "amount"]:
                 if col in df.columns:
-                    df[col] = pd.to_numeric(df[col], errors='coerce')
+                    df[col] = pd.to_numeric(df[col], errors="coerce")
 
-            df = df.dropna(subset=['close', 'volume'])
-            df = df[df['volume'] > 0]
-            df = df[df['high'] >= df['low']]
+            df = df.dropna(subset=["close", "volume"])
+            df = df[df["volume"] > 0]
+            df = df[df["high"] >= df["low"]]
 
             latency = (time.time() - start) * 1000
             self._record_success(latency)
@@ -483,10 +515,7 @@ class YahooSource(DataSource):
             raise
     
     def get_history_instrument(self, inst: dict, days: int, interval: str = "1d") -> pd.DataFrame:
-        """
-        Instrument-aware yfinance history with interval support.
-        Works best for US/HK, also supports CN via yahoo suffix.
-        """
+        """Instrument-aware yfinance history with interval support."""
         if not self._yf or not self.is_available():
             return pd.DataFrame()
 
@@ -556,10 +585,128 @@ class YahooSource(DataSource):
             return None
 
 
+class TencentQuoteSource(DataSource):
+    """Free realtime quotes via Tencent batch endpoint."""
+    name = "tencent"
+    priority = 1
+
+    def get_realtime_batch(self, codes: List[str]) -> Dict[str, Quote]:
+        if not self.is_available():
+            return {}
+
+        from core.constants import get_exchange
+
+        vendor_symbols = []
+        vendor_to_code = {}
+
+        for c in codes:
+            code6 = str(c).zfill(6)
+            ex = get_exchange(code6)
+            if ex == "SSE":
+                sym = f"sh{code6}"
+            elif ex == "SZSE":
+                sym = f"sz{code6}"
+            elif ex == "BSE":
+                sym = f"bj{code6}"
+            else:
+                continue
+            vendor_symbols.append(sym)
+            vendor_to_code[sym] = code6
+
+        if not vendor_symbols:
+            return {}
+
+        CHUNK = 120
+        out: Dict[str, Quote] = {}
+        start_all = time.time()
+
+        try:
+            for i in range(0, len(vendor_symbols), CHUNK):
+                chunk = vendor_symbols[i:i + CHUNK]
+                url = "https://qt.gtimg.cn/q=" + ",".join(chunk)
+
+                resp = self._session.get(url, timeout=5)
+                text = resp.text
+
+                for line in text.splitlines():
+                    if "~" not in line or "=" not in line:
+                        continue
+                    try:
+                        left, right = line.split("=", 1)
+                        vendor_sym = left.strip().replace("v_", "")
+                        payload = right.strip().strip('";')
+                        parts = payload.split("~")
+                        if len(parts) < 10:
+                            continue
+
+                        code6 = vendor_to_code.get(vendor_sym)
+                        if not code6:
+                            continue
+
+                        name = parts[1]
+                        price = float(parts[3] or 0)
+                        prev_close = float(parts[4] or 0)
+                        open_px = float(parts[5] or 0)
+                        volume = int(float(parts[6] or 0))
+
+                        if price <= 0:
+                            continue
+
+                        chg = price - prev_close
+                        chg_pct = (chg / prev_close * 100) if prev_close > 0 else 0.0
+
+                        out[code6] = Quote(
+                            code=code6,
+                            name=name,
+                            price=price,
+                            open=open_px,
+                            high=price,
+                            low=price,
+                            close=prev_close,
+                            volume=volume,
+                            amount=0.0,
+                            change=chg,
+                            change_pct=chg_pct,
+                            source=self.name,
+                            is_delayed=False,
+                            latency_ms=0.0,
+                        )
+                    except Exception:
+                        continue
+
+            latency = (time.time() - start_all) * 1000
+            self._record_success(latency)
+            for q in out.values():
+                q.latency_ms = float(latency)
+
+            return out
+
+        except Exception as e:
+            self._record_error(str(e))
+            return {}
+
+    def get_realtime(self, code: str) -> Optional[Quote]:
+        res = self.get_realtime_batch([code])
+        return res.get(str(code).zfill(6))
+
+    def get_history(self, code: str, days: int) -> pd.DataFrame:
+        """
+        TencentQuoteSource is realtime-only. Return empty DF for history.
+        This prevents warning spam and wasted retries in history fetch loops.
+        """
+        import pandas as pd
+        return pd.DataFrame()
+
+    def get_history_instrument(self, inst: dict, days: int, interval: str = "1d") -> pd.DataFrame:
+        """
+        Realtime-only source: no history.
+        """
+        import pandas as pd
+        return pd.DataFrame()
+
+
 class DataFetcher:
-    """
-    High-performance data fetcher with multi-source support
-    """
+    """High-performance data fetcher with multi-source support"""
     
     def __init__(self):
         self._sources: List[DataSource] = []
@@ -567,16 +714,16 @@ class DataFetcher:
         self._db = get_database()
         self._rate_limiter = threading.Semaphore(CONFIG.data.parallel_downloads)
         self._request_times: Dict[str, float] = {}
-        self._min_interval = 0.5  # Increased to 500ms between requests
+        self._min_interval = 0.5
         
         self._init_sources()
         self._rate_lock = threading.Lock()
     
     def _init_sources(self):
-        """Initialize data sources (always include local DB source)."""
+        """Initialize data sources."""
         self._sources = []
 
-        # Always-available local DB source to satisfy tests and offline usage
+        # Local DB source
         try:
             class LocalDatabaseSource(DataSource):
                 name = "localdb"
@@ -605,14 +752,12 @@ class DataFetcher:
         except Exception:
             pass
 
-        # External sources
-        for source in [AkShareSource(), YahooSource()]:
+        for source in [AkShareSource(), TencentQuoteSource(), YahooSource()]:
             if source.status.available:
                 self._sources.append(source)
                 log.info(f"Data source {source.name} available")
 
         self._sources.sort(key=lambda x: x.priority)
-
         if not self._sources:
             log.error("No data sources available!")
     
@@ -625,28 +770,68 @@ class DataFetcher:
                 time.sleep(wait)
             self._request_times[source] = time.time()
 
-    def get_history_instrument(self, inst: dict, days: int, interval: str = "1d") -> pd.DataFrame:
-        """Local DB source supports CN EQUITY daily bars from MarketDatabase."""
-        if inst.get("market") != "CN" or inst.get("asset") != "EQUITY" or interval != "1d":
-            return pd.DataFrame()
-        try:
-            from data.database import get_database
-            db = get_database()
-            df = db.get_bars(inst["symbol"], limit=days)
-            return df.tail(days) if df is not None else pd.DataFrame()
-        except Exception:
-            return pd.DataFrame()
+    def get_realtime_batch(self, codes: List[str]) -> Dict[str, Quote]:
+        """Efficient CN realtime quotes for many symbols."""
+        cleaned = [self.clean_code(c) for c in codes]
+        cleaned = [c for c in cleaned if c]
+        if not cleaned:
+            return {}
 
-    def get_history(self, code: str, days: int) -> pd.DataFrame:
-        """Legacy interface for Local DB source."""
-        inst = {"market": "CN", "asset": "EQUITY", "symbol": str(code).zfill(6)}
-        return self.get_history_instrument(inst, days=days, interval="1d")
+        offline = str(os.environ.get("TRADING_OFFLINE", "0")).lower() in ("1", "true", "yes")
+        if offline:
+            return {}
+
+        for source in self._sources:
+            if not source.is_available():
+                continue
+            fn = getattr(source, "get_realtime_batch", None)
+            if callable(fn):
+                try:
+                    self._rate_limit(f"{source.name}_rt_batch")
+                    out = fn(cleaned)
+                    if isinstance(out, dict) and out:
+                        return out
+                except Exception:
+                    continue
+
+        try:
+            cache = get_spot_cache()
+            df = cache.get()
+            if df is not None and not df.empty:
+                out = {}
+                for c in cleaned:
+                    q = cache.get_quote(c)
+                    if q and q.get("price", 0) > 0:
+                        out[c] = Quote(
+                            code=c,
+                            name=q.get("name", ""),
+                            price=float(q["price"]),
+                            open=float(q.get("open", 0) or 0),
+                            high=float(q.get("high", 0) or 0),
+                            low=float(q.get("low", 0) or 0),
+                            close=float(q.get("close", 0) or 0),
+                            volume=int(q.get("volume", 0) or 0),
+                            amount=float(q.get("amount", 0) or 0),
+                            change=float(q.get("change", 0) or 0),
+                            change_pct=float(q.get("change_pct", 0) or 0),
+                            source="spot_cache",
+                            is_delayed=False,
+                            latency_ms=0.0,
+                        )
+                if out:
+                    return out
+        except Exception:
+            pass
+
+        out: Dict[str, Quote] = {}
+        for c in cleaned:
+            q = self.get_realtime(c)
+            if q and q.price > 0:
+                out[c] = q
+        return out
 
     def _fetch_from_sources_instrument(self, inst: dict, days: int, interval: str = "1d") -> pd.DataFrame:
-        """
-        Fetch using any source that supports get_history_instrument(inst,...).
-        Falls back to legacy get_history(code,days) for CN equity sources.
-        """
+        """Fetch using any source that supports get_history_instrument."""
         with self._rate_limiter:
             for source in self._sources:
                 if not source.is_available():
@@ -654,12 +839,10 @@ class DataFetcher:
                 try:
                     self._rate_limit(source.name)
 
-                    # New-style instrument-aware sources
                     fn = getattr(source, "get_history_instrument", None)
                     if callable(fn):
                         df = fn(inst, days=days, interval=interval)
                     else:
-                        # Legacy fallback (CN equity only)
                         if inst["market"] == "CN" and inst["asset"] == "EQUITY":
                             df = source.get_history(inst["symbol"], days)
                         else:
@@ -686,21 +869,18 @@ class DataFetcher:
 
         s = s.replace(" ", "").replace("-", "").replace("_", "")
 
-        # strip known prefixes (only at start)
         prefixes = ("sh.", "sz.", "bj.", "SH.", "SZ.", "BJ.", "sh", "sz", "bj", "SH", "SZ", "BJ")
         for p in prefixes:
             if s.startswith(p):
                 s = s[len(p):]
                 break
 
-        # strip known suffixes (only at end)
         suffixes = (".SS", ".SZ", ".BJ", ".ss", ".sz", ".bj")
         for suf in suffixes:
             if s.endswith(suf):
                 s = s[:-len(suf)]
                 break
 
-        # keep digits only
         digits = "".join(ch for ch in s if ch.isdigit())
         return digits.zfill(6) if digits else ""
     
@@ -708,16 +888,20 @@ class DataFetcher:
         self,
         code: str,
         days: int = 500,
+        bars: int = None,
         use_cache: bool = True,
         update_db: bool = True,
         instrument: dict = None,
         interval: str = "1d",
+        max_age_hours: float = None,
     ) -> pd.DataFrame:
         """
         Multi-asset/multi-market history fetch.
 
-        - If instrument is None, it will parse from code (CN equity default).
-        - Supports offline mode: set env TRADING_OFFLINE=1 to disable network.
+        FIX:
+        - Add `bars` for intraday intervals like 1m/5m. For interval != 1d, `bars`
+        is the correct unit (not "days").
+        - Use shorter cache TTL for intraday to prevent stale charts.
         """
         from core.instruments import parse_instrument, instrument_key
 
@@ -725,34 +909,51 @@ class DataFetcher:
         key = instrument_key(inst)
         offline = str(os.environ.get("TRADING_OFFLINE", "0")).lower() in ("1", "true", "yes")
 
-        cache_key = f"history:{key}:{interval}:{days}"
+        count = int(bars if bars is not None else days)
+        count = max(1, count)
 
-        # Cache
+        # Cache TTL: intraday should be short
+        if max_age_hours is not None:
+            ttl = float(max_age_hours)
+        else:
+            if str(interval).lower() == "1d":
+                ttl = float(CONFIG.data.cache_ttl_hours)
+            else:
+                ttl = min(float(CONFIG.data.cache_ttl_hours), 1.0 / 60.0)  # ~1 minute
+
+        cache_key = f"history:{key}:{interval}:{count}"
+
         if use_cache:
-            cached_df = self._cache.get(cache_key, CONFIG.data.cache_ttl_hours)
-            if cached_df is not None and len(cached_df) >= min(days, 100):
-                return cached_df.tail(days)
+            cached_df = self._cache.get(cache_key, ttl)
+            if cached_df is not None and isinstance(cached_df, pd.DataFrame) and len(cached_df) >= min(count, 100):
+                return cached_df.tail(count)
 
-        # Local DB only works for CN equities in your current schema (daily_bars uses code)
-        if inst["market"] == "CN" and inst["asset"] == "EQUITY":
+        # Only daily CN equities are stored in local DB
+        if (str(interval).lower() == "1d" and inst["market"] == "CN" and inst["asset"] == "EQUITY"):
             db_df = self._db.get_bars(inst["symbol"])
-            if not db_df.empty and len(db_df) >= days:
-                self._cache.set(cache_key, db_df.tail(days))
-                return db_df.tail(days)
+            if not db_df.empty and len(db_df) >= count:
+                out = db_df.tail(count)
+                self._cache.set(cache_key, out)
+                return out
 
         if offline:
-            # Offline: never hit network sources
             return pd.DataFrame()
 
-        # Fetch from sources (supports instrument-aware sources)
-        df = self._fetch_from_sources_instrument(inst, days=days, interval=interval)
+        df = self._fetch_from_sources_instrument(inst, days=count, interval=interval)
+        if df is None or df.empty:
+            return pd.DataFrame()
 
-        if df is not None and not df.empty:
-            self._cache.set(cache_key, df)
-            if update_db and inst["market"] == "CN" and inst["asset"] == "EQUITY":
-                self._db.upsert_bars(inst["symbol"], df)
+        out = df.tail(count)
+        self._cache.set(cache_key, out)
 
-        return df if df is not None else pd.DataFrame()
+        # update_db only for 1d CN
+        if update_db and str(interval).lower() == "1d" and inst["market"] == "CN" and inst["asset"] == "EQUITY":
+            try:
+                self._db.upsert_bars(inst["symbol"], out)
+            except Exception:
+                pass
+
+        return out
     
     def _fetch_from_sources(self, code: str, days: int) -> pd.DataFrame:
         """Fetch from online sources with fallback"""
@@ -777,60 +978,47 @@ class DataFetcher:
         return pd.DataFrame()
     
     def get_realtime(self, code: str, instrument: dict = None) -> Optional[Quote]:
-        """
-        Multi-asset realtime quote.
-        Offline mode returns last close if available (CN only).
-        """
+        """Best-effort realtime quote."""
         from core.instruments import parse_instrument
-
         inst = instrument or parse_instrument(code)
+
         offline = str(os.environ.get("TRADING_OFFLINE", "0")).lower() in ("1", "true", "yes")
+        if offline:
+            return None
 
-        if not offline:
-            with self._rate_limiter:
-                for source in self._sources:
-                    if not source.is_available():
-                        continue
-                    try:
-                        self._rate_limit(f"{source.name}_rt")
+        candidates: List[Quote] = []
 
-                        fn = getattr(source, "get_realtime_instrument", None)
-                        if callable(fn):
-                            q = fn(inst)
+        with self._rate_limiter:
+            for source in self._sources:
+                if not source.is_available():
+                    continue
+                try:
+                    self._rate_limit(f"{source.name}_rt")
+                    fn = getattr(source, "get_realtime_instrument", None)
+                    if callable(fn):
+                        q = fn(inst)
+                    else:
+                        if inst["market"] == "CN" and inst["asset"] == "EQUITY":
+                            q = source.get_realtime(inst["symbol"])
                         else:
-                            if inst["market"] == "CN" and inst["asset"] == "EQUITY":
-                                q = source.get_realtime(inst["symbol"])
-                            else:
-                                q = None
+                            q = None
 
-                        if q and q.price > 0:
-                            return q
-                    except Exception:
-                        continue
+                    if q and q.price and q.price > 0:
+                        candidates.append(q)
+                except Exception:
+                    continue
 
-        # Offline fallback: last historical close (CN equity only)
-        if inst["market"] == "CN" and inst["asset"] == "EQUITY":
-            df = self.get_history(inst["symbol"], days=5, use_cache=True, update_db=False, instrument=inst)
-            if not df.empty:
-                last = df.iloc[-1]
-                prev = df.iloc[-2] if len(df) > 1 else last
-                change = float(last["close"] - prev["close"])
-                change_pct = (change / float(prev["close"]) * 100) if float(prev["close"]) > 0 else 0.0
-                return Quote(
-                    code=inst["symbol"],
-                    name=f"Stock {inst['symbol']}",
-                    price=float(last["close"]),
-                    open=float(last["open"]),
-                    high=float(last["high"]),
-                    low=float(last["low"]),
-                    close=float(prev["close"]),
-                    volume=int(last["volume"]),
-                    amount=float(last.get("amount", 0)),
-                    change=change,
-                    change_pct=change_pct,
-                    source="offline_cache",
-                )
-        return None
+        if not candidates:
+            return None
+
+        prices = np.array([c.price for c in candidates], dtype=float)
+        med = float(np.median(prices))
+
+        good = [c for c in candidates if abs(c.price - med) / max(med, 1e-8) < 0.01]
+        pool = good if good else candidates
+
+        pool.sort(key=lambda q: (q.is_delayed, q.latency_ms))
+        return pool[0]
 
     def get_multiple_parallel(
         self,
@@ -839,13 +1027,12 @@ class DataFetcher:
         callback: Callable[[str, int, int], None] = None,
         max_workers: int = None
     ) -> Dict[str, pd.DataFrame]:
-        """Fetch multiple stocks in parallel with better error handling"""
+        """Fetch multiple stocks in parallel"""
         results = {}
         total = len(codes)
         completed = 0
         lock = threading.Lock()
         
-        # Reset source status before bulk fetch
         for source in self._sources:
             source.status.consecutive_errors = 0
             source.status.disabled_until = None
@@ -858,8 +1045,7 @@ class DataFetcher:
                 log.debug(f"Failed to fetch {code}: {e}")
                 return code, pd.DataFrame()
         
-        # Use fewer workers to avoid overwhelming the API
-        workers = min(max_workers or 5, 5)  # Max 5 workers
+        workers = min(max_workers or 5, 5)
         
         with ThreadPoolExecutor(max_workers=workers) as executor:
             futures = {executor.submit(fetch_one, c): c for c in codes}
@@ -867,7 +1053,7 @@ class DataFetcher:
             for future in as_completed(futures):
                 code = futures[future]
                 try:
-                    code, df = future.result(timeout=120)  # 2 minute timeout
+                    code, df = future.result(timeout=120)
                     if not df.empty and len(df) >= CONFIG.data.min_history_days:
                         results[code] = df
                 except Exception as e:
@@ -899,7 +1085,7 @@ class DataFetcher:
         return [s.status for s in self._sources]
     
     def reset_sources(self):
-        """Reset all source error counts - call before bulk operations"""
+        """Reset all source error counts"""
         for source in self._sources:
             with source._lock:
                 source.status.consecutive_errors = 0

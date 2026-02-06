@@ -1,11 +1,6 @@
+# models/predictor.py
 """
 Stock Predictor - Generate Trading Signals
-
-FIXED Issues:
-- Uses saved scaler from training (no normalization mismatch)
-- Uses correct method name (prepare_inference_sequence)
-- Proper error handling
-- Consistent with training pipeline
 """
 import numpy as np
 from typing import Dict, List, Tuple, Optional
@@ -18,12 +13,14 @@ import pandas as pd
 import torch
 import threading
 
-from config import CONFIG
+from config.settings import CONFIG
 from data.fetcher import DataFetcher
 from data.features import FeatureEngine
 from data.processor import DataProcessor
 from models.ensemble import EnsembleModel, EnsemblePrediction
-from utils.logger import log
+from utils.logger import get_logger
+
+log = get_logger(__name__)
 
 
 class Signal(Enum):
@@ -67,18 +64,17 @@ class QuickPrediction:
     prob_neutral: float
     prob_down: float
     confidence: float
-    signal: Signal  # reuse your Signal enum
+    signal: Signal
+
 
 @dataclass
 class Prediction:
     """Complete prediction result"""
-    # Stock info
     stock_code: str
     stock_name: str
     current_price: float
     timestamp: datetime
     
-    # AI predictions
     prob_up: float
     prob_neutral: float
     prob_down: float
@@ -86,37 +82,25 @@ class Prediction:
     confidence: float
     model_agreement: float
     
-    # Signal
     signal: Signal
     signal_strength: float
     
-    # Trading levels
     levels: TradeLevels
-    
-    # Position sizing
     position: PositionSize
     
-    # Technical indicators
     rsi: float = 50.0
     macd_signal: str = "neutral"
     trend: str = "sideways"
     
-    # Analysis
     reasons: List[str] = field(default_factory=list)
     warnings: List[str] = field(default_factory=list)
     
-    # Chart data
     price_history: List[float] = field(default_factory=list)
     predicted_prices: List[float] = field(default_factory=list)
 
 
 class Predictor:
-    """
-    Stock Predictor - Generate trading signals and recommendations
-    
-    IMPORTANT: Uses the same scaler that was fitted during training
-    to ensure consistent normalization.
-    """
+    """Stock Predictor - Generate trading signals and recommendations"""
     
     def __init__(self, capital: float = None):
         self.capital = capital or CONFIG.CAPITAL
@@ -130,74 +114,83 @@ class Predictor:
         self.ensemble: Optional[EnsembleModel] = None
         self._model_loaded = False
         
-        # ADD: Prediction cache to avoid refetching
         self._feature_cache: Dict[str, Tuple[pd.DataFrame, datetime]] = {}
-        self._cache_ttl_seconds = 60  # Reuse features for 60 seconds
+        self._cache_ttl_seconds = 60
         
         self._manifest_path = CONFIG.MODEL_DIR / "model_manifest.json"
         self._manifest_mtime = None
 
         self._load_model()
     
-    def predict_quick_batch(self, codes: List[str], use_realtime_price: bool = True) -> List["QuickPrediction"]:
-        """
-        Fast batch prediction used by UI real-time monitor.
-        Uses cached feature frames and ensemble.predict_batch() for speed.
-        """
-        self._maybe_reload_model()
+    def predict_quick_batch(
+        self,
+        codes: List[str],
+        use_realtime_price: bool = True,
+        interval: str = "1m",
+        lookback_bars: int = 900
+    ) -> List[QuickPrediction]:
+        """Fast batch prediction for UI. Supports 1m mode."""
+        interval = str(interval).lower()
+
+        # For quick signals we assume horizon is your UI-selected horizon,
+        # but the model loaded here is only used for probabilities anyway.
+        # We'll load the "closest default" (30) so the UI behaves predictably.
+        horizon = 30 if interval != "1d" else int(CONFIG.PREDICTION_HORIZON)
+        self._ensure_model(interval=interval, horizon=horizon)
+
         if not self.is_ready():
             raise RuntimeError("Model not loaded")
 
         feature_cols = self.feature_engine.get_feature_columns()
+        now = datetime.now()
+
+        price_map = {}
+        if use_realtime_price:
+            try:
+                quotes = self.fetcher.get_realtime_batch(codes)
+                price_map = {k: float(v.price) for k, v in quotes.items() if v and v.price > 0}
+            except Exception:
+                price_map = {}
 
         seqs: List[np.ndarray] = []
         metas: List[Tuple[str, float, pd.DataFrame]] = []
-        now = datetime.now()
 
         for code in codes:
             code = DataFetcher.clean_code(code)
             if not code:
                 continue
 
-            # Cache features for TTL seconds
             with self._lock:
                 cached = self._feature_cache.get(code)
                 if cached and (now - cached[1]).total_seconds() < self._cache_ttl_seconds:
                     df = cached[0]
                 else:
-                    df = self._fetch_and_process(code)
+                    df = self._fetch_and_process(code, interval=interval, lookback_bars=lookback_bars)
                     self._feature_cache[code] = (df, now)
 
             if len(df) < CONFIG.SEQUENCE_LENGTH + 5:
                 continue
 
             last_close = float(df["close"].iloc[-1])
-            price = last_close
-            if use_realtime_price:
-                try:
-                    quote = self.fetcher.get_realtime(code)
-                    if quote and getattr(quote, "price", 0) and quote.price > 0:
-                        price = float(quote.price)
-                except Exception:
-                    price = last_close
+            price = float(price_map.get(code, last_close))
 
-            X = self.processor.prepare_inference_sequence(df, feature_cols)  # (1, seq, feat)
-            seqs.append(X[0])  # (seq, feat)
+            X = self.processor.prepare_inference_sequence(df, feature_cols)
+            seqs.append(X[0])
             metas.append((code, price, df))
 
         if not seqs:
             return []
 
-        X_batch = np.stack(seqs, axis=0)  # (B, seq, feat)
+        X_batch = np.stack(seqs, axis=0)
         preds = self.ensemble.predict_batch(X_batch)
 
         out: List[QuickPrediction] = []
         for (code, price, df), ep in zip(metas, preds):
-            rsi = self._get_indicator(df, "rsi_14", default=50.0)
-            macd = self._get_indicator(df, "macd_hist", default=0.0)
-            ma_ratio = self._get_indicator(df, "ma_ratio_5_20", default=0.0)
-
-            sig, _strength, _reasons = self._calculate_signal(ep, rsi, macd, ma_ratio)
+            sig = Signal.HOLD
+            if ep.predicted_class == 2 and ep.confidence >= CONFIG.MIN_CONFIDENCE:
+                sig = Signal.BUY
+            elif ep.predicted_class == 0 and ep.confidence >= CONFIG.MIN_CONFIDENCE:
+                sig = Signal.SELL
 
             out.append(QuickPrediction(
                 stock_code=code,
@@ -211,17 +204,72 @@ class Predictor:
 
         return out
 
+    def _ensure_model(self, interval: str, horizon: int):
+        """
+        Ensure the correct model/scaler (interval + horizon) is loaded.
+        For 1m forecasting 30 minutes, horizon=30 bars.
+
+        If not found, fall back to existing "ensemble.pt"/"scaler.pkl" behavior.
+        """
+        interval = str(interval).lower()
+        horizon = int(horizon)
+
+        key = f"{interval}_{horizon}"
+        loaded_key = getattr(self, "_loaded_model_key", None)
+        if loaded_key == key and self.is_ready():
+            return
+
+        # Preferred per-model files:
+        model_path = CONFIG.MODEL_DIR / f"ensemble_{interval}_{horizon}.pt"
+        scaler_path = CONFIG.MODEL_DIR / f"scaler_{interval}_{horizon}.pkl"
+
+        # Fallback legacy files:
+        if not model_path.exists():
+            model_path = CONFIG.MODEL_DIR / "ensemble.pt"
+        if not scaler_path.exists():
+            scaler_path = CONFIG.MODEL_DIR / "scaler.pkl"
+
+        # Load scaler (best effort)
+        try:
+            self.processor.load_scaler(str(scaler_path))
+        except Exception:
+            pass
+
+        # Load ensemble
+        if not model_path.exists():
+            self.ensemble = None
+            self._model_loaded = False
+            self._loaded_model_key = None
+            return
+
+        try:
+            state = torch.load(model_path, map_location="cpu", weights_only=False)
+            input_size = int(state.get("input_size", len(FeatureEngine.FEATURE_NAMES)))
+
+            self.ensemble = EnsembleModel(input_size)
+            ok = self.ensemble.load(str(model_path))
+            self._model_loaded = bool(ok)
+
+            # store metadata for forecasting scaling
+            meta = state.get("meta", {})
+            self._trained_interval = str(meta.get("interval", interval))
+            self._trained_horizon = int(meta.get("prediction_horizon", horizon))
+
+            self._loaded_model_key = key if ok else None
+        except Exception:
+            self.ensemble = None
+            self._model_loaded = False
+            self._loaded_model_key = None
+
     def _load_model(self):
         """Load the trained ensemble model and scaler"""
         model_path = CONFIG.MODEL_DIR / "ensemble.pt"
         scaler_path = CONFIG.MODEL_DIR / "scaler.pkl"
         
-        # Load scaler first (required for proper normalization)
         if not self.processor.load_scaler(str(scaler_path)):
             log.warning("No scaler found. Predictions may be inaccurate.")
             log.warning("Train a model first with: python main.py --train")
         
-        # Load model
         if not model_path.exists():
             log.warning("No trained model found. Train a model first.")
             log.warning("Run: python main.py --train")
@@ -248,95 +296,82 @@ class Predictor:
         """Check if predictor is ready"""
         return self._model_loaded and self.ensemble is not None
     
-    def predict(self, stock_code: str, use_realtime_price: bool = False) -> Prediction:
+    def predict(
+        self,
+        stock_code: str,
+        use_realtime_price: bool = False,
+        interval: str = "1m",
+        forecast_minutes: int = 30,
+        lookback_bars: int = 1200
+    ) -> Prediction:
         """
-        Generate complete prediction for a stock
+        Generate complete prediction for a stock.
+
+        FIX:
+        - interval="1m"
+        - forecast_minutes controls future graph length (20~30)
         """
-        self._maybe_reload_model()
+        interval = str(interval).lower()
+        forecast_minutes = int(forecast_minutes)
+
+        horizon_steps = forecast_minutes if interval != "1d" else int(CONFIG.PREDICTION_HORIZON)
+        self._ensure_model(interval=interval, horizon=horizon_steps)
+
         if not self.is_ready():
-            raise RuntimeError(
-                "Model not loaded. Train a model first with: python main.py --train"
-            )
-        
+            raise RuntimeError("Model not loaded. Train a model first.")
+
         stock_code = DataFetcher.clean_code(stock_code)
-        # Get historical data
-        # Check cache first
-        cache_key = stock_code
         now = datetime.now()
-        
+
         with self._lock:
-            if cache_key in self._feature_cache:
-                cached_df, cached_time = self._feature_cache[cache_key]
-                if (now - cached_time).total_seconds() < self._cache_ttl_seconds:
-                    df = cached_df
-                else:
-                    df = self._fetch_and_process(stock_code)
-                    self._feature_cache[cache_key] = (df, now)
+            cached = self._feature_cache.get(stock_code)
+            if cached and (now - cached[1]).total_seconds() < self._cache_ttl_seconds:
+                df = cached[0]
             else:
-                df = self._fetch_and_process(stock_code)
-                self._feature_cache[cache_key] = (df, now)
-        
+                df = self._fetch_and_process(stock_code, interval=interval, lookback_bars=lookback_bars)
+                self._feature_cache[stock_code] = (df, now)
+
         if len(df) < CONFIG.SEQUENCE_LENGTH + 10:
-            raise ValueError(
-                f"Insufficient data for {stock_code}: {len(df)} bars "
-                f"(need at least {CONFIG.SEQUENCE_LENGTH + 10})"
-            )
-        
-        # Get real-time quote
-        last_close = float(df['close'].iloc[-1])
+            raise ValueError(f"Insufficient data for {stock_code}: {len(df)} bars")
+
+        last_close = float(df["close"].iloc[-1])
         quote = self.fetcher.get_realtime(stock_code)
         stock_name = quote.name if quote else stock_code
 
-        if use_realtime_price and quote and quote.price > 0:
-            current_price = float(quote.price)
-        else:
-            current_price = last_close
-            
-        if len(df) < CONFIG.SEQUENCE_LENGTH:
-            raise ValueError(f"Insufficient data after feature creation")
-        
-        # Prepare sequence using the SAME scaler as training
+        current_price = float(quote.price) if (use_realtime_price and quote and quote.price > 0) else last_close
+
         feature_cols = self.feature_engine.get_feature_columns()
-        
-        try:
-            # FIXED: Use correct method name
-            X = self.processor.prepare_inference_sequence(df, feature_cols)
-        except Exception as e:
-            log.error(f"Failed to prepare sequence: {e}")
-            raise
-        
-        # Get ensemble prediction
+        X = self.processor.prepare_inference_sequence(df, feature_cols)
+
         ensemble_pred = self.ensemble.predict(X)
-        
-        # Extract technical indicators from features
-        rsi = self._get_indicator(df, 'rsi_14', default=50)
-        macd = self._get_indicator(df, 'macd_hist', default=0)
-        ma_ratio = self._get_indicator(df, 'ma_ratio_5_20', default=0)
-        atr_pct = self._get_indicator(df, 'atr_pct', default=2.0)
-        
-        # Calculate signal
-        signal, strength, reasons = self._calculate_signal(
-            ensemble_pred, rsi, macd, ma_ratio
-        )
-        
-        # Calculate trading levels
-        atr = current_price * atr_pct / 100
+
+        rsi = self._get_indicator(df, "rsi_14", default=50)
+        macd = self._get_indicator(df, "macd_hist", default=0)
+        ma_ratio = self._get_indicator(df, "ma_ratio_5_20", default=0)
+        atr_pct = self._get_indicator(df, "atr_pct", default=2.0)
+
+        signal, strength, reasons = self._calculate_signal(ensemble_pred, rsi, macd, ma_ratio)
+
+        atr = current_price * atr_pct / 100.0
         levels = self._calculate_levels(current_price, atr, signal)
-        
-        # Calculate position size
-        position = self._calculate_position(
-            signal, strength, current_price, levels, ensemble_pred.confidence
-        )
-        
-        # Generate warnings
+
+        position = self._calculate_position(signal, strength, current_price, levels, ensemble_pred.confidence)
+
         warnings = self._generate_warnings(ensemble_pred, rsi)
-        
-        # Price history and predictions for chart
-        price_history = df['close'].tail(60).tolist()
+
+        # show recent history: for 1m show 120 points; for 1d show 60
+        hist_len = 120 if interval != "1d" else 60
+        price_history = df["close"].tail(hist_len).tolist()
+
+        model_horizon = int(getattr(self, "_trained_horizon", horizon_steps))
         predicted_prices = self._generate_price_forecast(
-            current_price, ensemble_pred, atr_pct
+            current_price=current_price,
+            pred=ensemble_pred,
+            atr_pct=atr_pct,
+            horizon_steps=horizon_steps,
+            model_horizon=model_horizon
         )
-        
+
         return Prediction(
             stock_code=stock_code,
             stock_name=stock_name,
@@ -374,10 +409,7 @@ class Predictor:
             pass
 
     def _get_indicator(self, df: pd.DataFrame, col: str, default: float) -> float:
-        """
-        Safely get an indicator from df.
-        Handles common normalization ranges without assuming a single scheme.
-        """
+        """Safely get an indicator from df, handling normalization."""
         try:
             if col not in df.columns or len(df) == 0:
                 return float(default)
@@ -388,29 +420,44 @@ class Predictor:
 
             v = float(v)
 
-            # RSI: try to detect normalization
-            if col.lower() in ("rsi", "rsi_14", "rsi14"):
-                # raw RSI is typically [0,100]
-                if 0.0 <= v <= 100.0:
-                    return v
-                # common normalized RSI variants
-                if 0.0 <= v <= 1.0:
-                    return v * 100.0
-                if -0.5 <= v <= 0.5:
+            # RSI: features.py normalizes as: rsi / 100 - 0.5, giving range [-0.5, 0.5]
+            # We need to convert back to [0, 100] for signal calculations
+            if col.lower() in ("rsi", "rsi_14", "rsi_7"):
+                # Check if value is in normalized range [-0.6, 0.6]
+                if -0.6 <= v <= 0.6:
+                    # Reverse normalization: (v + 0.5) * 100
                     return (v + 0.5) * 100.0
-                if -1.0 <= v <= 1.0:
-                    return (v + 1.0) * 50.0  # map [-1,1] -> [0,100]
+                # Already in 0-100 range (shouldn't happen with current features.py)
+                elif 0.0 <= v <= 100.0:
+                    return v
+                # Fallback
                 return float(default)
 
             return v
         except Exception:
             return float(default)
     
-    def _fetch_and_process(self, stock_code: str) -> pd.DataFrame:
-        """Fetch and process data for a stock"""
-        df = self.fetcher.get_history(stock_code, days=500)
-        if len(df) < CONFIG.SEQUENCE_LENGTH + 10:
-            raise ValueError(f"Insufficient data for {stock_code}: {len(df)} bars")
+    def _fetch_and_process(self, stock_code: str, interval: str = "1d", lookback_bars: int = None) -> pd.DataFrame:
+        """
+        Fetch and process data for a stock.
+
+        FIX:
+        - supports 1m interval using bars
+        """
+        interval = str(interval).lower()
+
+        if interval == "1d":
+            df = self.fetcher.get_history(stock_code, days=500, interval="1d")
+        else:
+            lb = int(lookback_bars or max(800, CONFIG.SEQUENCE_LENGTH + 300))
+            df = self.fetcher.get_history(stock_code, bars=lb, days=lb, interval=interval, use_cache=True)
+
+        if df is None or df.empty:
+            raise ValueError(f"No data for {stock_code} ({interval})")
+
+        if len(df) < CONFIG.SEQUENCE_LENGTH + 20:
+            raise ValueError(f"Insufficient data for {stock_code} ({interval}): {len(df)} bars")
+
         return self.feature_engine.create_features(df)
 
     def _calculate_signal(
@@ -596,23 +643,50 @@ class Predictor:
         self,
         current_price: float,
         pred: EnsemblePrediction,
-        atr_pct: float
+        atr_pct: float,
+        horizon_steps: int,
+        model_horizon: int
     ) -> List[float]:
-        """Generate price forecast for visualization"""
-        horizon = CONFIG.PREDICTION_HORIZON
-        volatility = atr_pct / 100
-        
-        expected_return = (pred.prob_up - pred.prob_down) * 2
-        
-        prices = [current_price]
-        
-        for i in range(horizon):
-            daily_return = expected_return / horizon
-            noise = np.random.normal(0, volatility * 0.3)
-            new_price = prices[-1] * (1 + (daily_return + noise) / 100)
-            prices.append(round(new_price, 2))
-        
-        return prices
+        """
+        Deterministic future price path for charting.
+
+        - horizon_steps: how many minutes to draw into the future (20~30)
+        - model_horizon: the horizon the model was trained on (bars)
+
+        If you forecast 30 but model was trained for 20, we scale drift approximately.
+        """
+        horizon_steps = int(horizon_steps)
+        if horizon_steps <= 0:
+            return [round(float(current_price), 2)]
+
+        px0 = float(current_price)
+        if px0 <= 0:
+            return [0.0]
+
+        up_thr = float(CONFIG.UP_THRESHOLD)
+        dn_thr = float(CONFIG.DOWN_THRESHOLD)
+
+        # Expected TOTAL return (%) over model horizon
+        exp_total_model = (pred.prob_up * up_thr) + (pred.prob_down * dn_thr)
+
+        # Confidence shrinkage
+        exp_total_model *= float(0.35 + 0.65 * pred.confidence)
+
+        # Scale drift from model horizon to requested horizon
+        mh = max(1, int(model_horizon))
+        exp_total = exp_total_model * (float(horizon_steps) / float(mh))
+
+        # Small deterministic curvature based on ATR%
+        vol = max(0.0001, float(atr_pct) / 100.0)
+
+        prices = [px0]
+        for step in range(1, horizon_steps + 1):
+            step_ret = exp_total / horizon_steps  # % per step
+            curve = (vol * 0.10) * (step / horizon_steps) * (1 if exp_total >= 0 else -1)
+            px1 = prices[-1] * (1.0 + (step_ret / 100.0) + curve)
+            prices.append(px1)
+
+        return [round(float(p), 2) for p in prices]
     
     def _generate_warnings(
         self,

@@ -213,125 +213,222 @@ class Trainer:
         callback: Callable = None,
         stop_flag: Callable = None,
         save_model: bool = True,
-        incremental: bool = False, 
+        incremental: bool = False,
+        interval: str = "1m",
+        prediction_horizon: int = 30,
+        lookback_bars: int = 2400,
     ) -> Dict:
-        """Train the ensemble model"""
-        epochs = epochs or CONFIG.EPOCHS
-        batch_size = batch_size or CONFIG.BATCH_SIZE
-        
+        """
+        Train the ensemble model.
+
+        FIX:
+        - supports intraday intervals (1m)
+        - supports custom horizon in bars (e.g. 20~30 minutes => 20~30 bars)
+        - saves model + scaler per interval/horizon so you can switch forecast time
+        """
+        epochs = int(epochs or CONFIG.EPOCHS)
+        batch_size = int(batch_size or CONFIG.BATCH_SIZE)
+
         log.info("=" * 70)
         log.info("STARTING TRAINING PIPELINE")
+        log.info(f"interval={interval}, horizon={prediction_horizon} bars, lookback_bars={lookback_bars}")
         log.info("=" * 70)
-        
+
         start_time = datetime.now()
-        
-        # Prepare data
-        (X_train, y_train, r_train,
-         X_val, y_val, r_val,
-         X_test, y_test, r_test) = self.prepare_data(stock_codes)
-        
-        if len(X_train) == 0:
-            raise ValueError("No training data available")
-        
-        # Initialize ensemble
-        self.ensemble = EnsembleModel(
-            input_size=self.input_size,
-            model_names=model_names
-        )
-        
+
+        # --- Prepare data (inline changes: use interval/bars + horizon) ---
+        stocks = stock_codes or CONFIG.STOCK_POOL
+        feature_cols = self.feature_engine.get_feature_columns()
+
+        stock_data: Dict[str, Dict] = {}
+        for code in stocks:
+            try:
+                df = self.fetcher.get_history(code, interval=interval, bars=lookback_bars, days=lookback_bars, use_cache=True)
+                if df is None or df.empty:
+                    continue
+                df = self.feature_engine.create_features(df)
+                if len(df) < CONFIG.SEQUENCE_LENGTH + 80:
+                    continue
+                stock_data[code] = {"df": df}
+            except Exception as e:
+                log.warning(f"Error processing {code}: {e}")
+
+        if not stock_data:
+            raise ValueError("No valid stock data available for training")
+
+        all_train_features = []
+        split_data = {}
+
+        horizon = int(prediction_horizon)
+        embargo = max(int(CONFIG.EMBARGO_BARS), horizon)  # must be >= horizon for leakage safety
+
+        for code, data in stock_data.items():
+            df = data["df"]
+            n = len(df)
+
+            train_end = int(n * CONFIG.TRAIN_RATIO) - horizon - embargo
+            val_end = int(n * (CONFIG.TRAIN_RATIO + CONFIG.VAL_RATIO)) - horizon - embargo
+
+            if train_end < CONFIG.SEQUENCE_LENGTH + 50:
+                continue
+
+            train_df = df.iloc[:train_end].copy()
+            val_df = df.iloc[int(n * CONFIG.TRAIN_RATIO):val_end].copy()
+            test_df = df.iloc[int(n * (CONFIG.TRAIN_RATIO + CONFIG.VAL_RATIO)) :].copy()
+
+            train_df = self.processor.create_labels(train_df, horizon=horizon)
+            val_df = self.processor.create_labels(val_df, horizon=horizon)
+            test_df = self.processor.create_labels(test_df, horizon=horizon)
+
+            split_data[code] = {"train": train_df, "val": val_df, "test": test_df}
+
+            train_features = train_df[feature_cols].values
+            valid_mask = ~train_df["label"].isna()
+            if int(valid_mask.sum()) > 0:
+                all_train_features.append(train_features[valid_mask])
+
+        if not all_train_features:
+            raise ValueError("No valid training data after split")
+
+        combined_train_features = np.concatenate(all_train_features, axis=0)
+        self.processor.fit_scaler(combined_train_features)
+
+        all_train = {"X": [], "y": []}
+        all_val = {"X": [], "y": []}
+        all_test = {"X": [], "y": []}
+
+        for code, splits in split_data.items():
+            for split_df, storage in [(splits["train"], all_train), (splits["val"], all_val), (splits["test"], all_test)]:
+                if len(split_df) >= CONFIG.SEQUENCE_LENGTH + 5:
+                    X, y, _ = self.processor.prepare_sequences(split_df, feature_cols, fit_scaler=False)
+                    if len(X) > 0:
+                        storage["X"].append(X)
+                        storage["y"].append(y)
+
+        if not all_train["X"]:
+            raise ValueError("No training sequences available")
+
+        X_train = np.concatenate(all_train["X"])
+        y_train = np.concatenate(all_train["y"])
+        X_val = np.concatenate(all_val["X"]) if all_val["X"] else None
+        y_val = np.concatenate(all_val["y"]) if all_val["y"] else None
+        X_test = np.concatenate(all_test["X"]) if all_test["X"] else None
+        y_test = np.concatenate(all_test["y"]) if all_test["y"] else None
+
+        self.input_size = int(X_train.shape[2])
+
+        # --- Save scaler per interval/horizon ---
+        scaler_path = CONFIG.MODEL_DIR / f"scaler_{interval}_{horizon}.pkl"
+        self.processor.save_scaler(str(scaler_path))
+
+        # --- Train ensemble ---
+        self.ensemble = EnsembleModel(input_size=self.input_size, model_names=model_names)
+        # Attach metadata used by save()
+        self.ensemble.interval = str(interval)
+        self.ensemble.prediction_horizon = int(horizon)
+
         if incremental:
-            self.ensemble.load()
-        
-        log.info(f"Training ensemble with {len(self.ensemble.models)} models...")
-        log.info(f"Epochs: {epochs}, Batch size: {batch_size}")
-        
-        # Train
-        self.history = self.ensemble.train(
+            # load the same interval/horizon model if exists
+            self.ensemble.load(str(CONFIG.model_dir / f"ensemble_{interval}_{horizon}.pt"))
+
+        if X_val is None or len(X_val) == 0:
+            split = int(len(X_train) * 0.85)
+            X_val, y_val = X_train[split:], y_train[split:]
+            X_train, y_train = X_train[:split], y_train[:split]
+
+        history = self.ensemble.train(
             X_train, y_train,
             X_val, y_val,
             epochs=epochs,
             batch_size=batch_size,
             callback=callback,
-            stop_flag=stop_flag
+            stop_flag=stop_flag,
         )
-        
-        # Evaluate on test set
-        log.info("Evaluating on test set...")
-        test_metrics = self._evaluate(X_test, y_test, r_test)
 
-        # Calibrate ONCE before saving
-        if len(X_val) > 0:
-            log.info("Calibrating model probabilities...")
-            self.ensemble.calibrate(X_val, y_val)
+        self.ensemble.calibrate(X_val, y_val)
 
-        # Save model (now includes calibrated temperature)
         if save_model:
-            self.ensemble.save()
+            self.ensemble.save(str(CONFIG.model_dir / f"ensemble_{interval}_{horizon}.pt"))
 
-        # Calculate training time
-        training_time = (datetime.now() - start_time).total_seconds() / 60
-        
-        # Compile results
-        best_accuracy = 0
-        for h in self.history.values():
-            if h.get('val_acc'):
-                best_accuracy = max(best_accuracy, max(h['val_acc']))
-        
-        results = {
-            'history': self.history,
-            'best_accuracy': best_accuracy,
-            'test_metrics': test_metrics,
-            'input_size': self.input_size,
-            'num_models': len(self.ensemble.models),
-            'training_time_minutes': training_time,
-            'epochs': epochs,
-            'train_samples': len(X_train),
-            'val_samples': len(X_val),
-            'test_samples': len(X_test)
+        # Quick test accuracy
+        test_acc = 0.0
+        if X_test is not None and len(X_test) > 0:
+            preds = self.ensemble.predict_batch(X_test[:2000])
+            pred_cls = np.array([p.predicted_class for p in preds])
+            test_acc = float(np.mean(pred_cls == y_test[:len(pred_cls)]))
+
+        training_time = (datetime.now() - start_time).total_seconds() / 60.0
+        best_accuracy = 0.0
+        for h in history.values():
+            if h.get("val_acc"):
+                best_accuracy = max(best_accuracy, max(h["val_acc"]))
+
+        return {
+            "history": history,
+            "best_accuracy": float(best_accuracy),
+            "test_metrics": {"accuracy": test_acc},
+            "input_size": int(self.input_size),
+            "num_models": len(self.ensemble.models) if self.ensemble else 0,
+            "training_time_minutes": float(training_time),
+            "epochs": int(epochs),
+            "train_samples": int(len(X_train)),
+            "val_samples": int(len(X_val)),
+            "test_samples": int(len(X_test)) if X_test is not None else 0,
+            "interval": str(interval),
+            "prediction_horizon": int(horizon),
+            "model_path": f"ensemble_{interval}_{horizon}.pt",
+            "scaler_path": f"scaler_{interval}_{horizon}.pkl",
         }
-        
-        log.info("=" * 70)
-        log.info(f"TRAINING COMPLETE")
-        log.info(f"  Best Val Accuracy: {best_accuracy:.2%}")
-        log.info(f"  Test Accuracy: {test_metrics.get('accuracy', 0):.2%}")
-        log.info(f"  Training Time: {training_time:.1f} minutes")
-        log.info("=" * 70)
-        
-        return results
     
     def _evaluate(self, X: np.ndarray, y: np.ndarray, r: np.ndarray) -> Dict:
         """Evaluate model on test data"""
-        if len(X) == 0:
-            return {'accuracy': 0, 'trading': {}}
+        if len(X) == 0 or len(y) == 0:
+            return {
+                'accuracy': 0, 
+                'trading': {},
+                'confusion_matrix': [],
+                'up_precision': 0,
+                'up_recall': 0,
+                'up_f1': 0,
+            }
         
         predictions = self.ensemble.predict_batch(X)
-        
         pred_classes = np.array([p.predicted_class for p in predictions])
 
-        cm = confusion_matrix(y, pred_classes, labels=[0,1,2])
+        # Ensure we have predictions
+        if len(pred_classes) == 0:
+            return {
+                'accuracy': 0, 
+                'trading': {},
+                'confusion_matrix': [],
+                'up_precision': 0,
+                'up_recall': 0,
+                'up_f1': 0,
+            }
+
+        cm = confusion_matrix(y, pred_classes, labels=[0, 1, 2])
         pr, rc, f1, _ = precision_recall_fscore_support(
             y, pred_classes, labels=[2], average=None, zero_division=0
         )
 
         metrics_extra = {
             "confusion_matrix": cm.tolist(),
-            "up_precision": float(pr[0]),
-            "up_recall": float(rc[0]),
-            "up_f1": float(f1[0]),
+            "up_precision": float(pr[0]) if len(pr) > 0 else 0.0,
+            "up_recall": float(rc[0]) if len(rc) > 0 else 0.0,
+            "up_f1": float(f1[0]) if len(f1) > 0 else 0.0,
         }
 
         confidences = np.array([p.confidence for p in predictions])
-        
-        accuracy = np.mean(pred_classes == y)
+        accuracy = float(np.mean(pred_classes == y))
         
         # Per-class accuracy
         class_acc = {}
         for c in range(CONFIG.NUM_CLASSES):
             mask = y == c
             if mask.sum() > 0:
-                class_acc[c] = np.mean(pred_classes[mask] == c)
+                class_acc[c] = float(np.mean(pred_classes[mask] == c))
             else:
-                class_acc[c] = 0
+                class_acc[c] = 0.0
         
         # Trading simulation
         trading_metrics = self._simulate_trading(pred_classes, confidences, r)
@@ -339,7 +436,7 @@ class Trainer:
         return {
             'accuracy': accuracy,
             'class_accuracy': class_acc,
-            'mean_confidence': np.mean(confidences),
+            'mean_confidence': float(np.mean(confidences)) if len(confidences) > 0 else 0.0,
             'trading': trading_metrics,
             **metrics_extra
         }

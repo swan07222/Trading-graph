@@ -1,3 +1,4 @@
+# data/database.py
 """
 Local Database for Market Data Storage
 Score Target: 10/10
@@ -153,34 +154,44 @@ class MarketDatabase:
                   datetime.now().isoformat()))
     
     def upsert_bars(self, code: str, df: pd.DataFrame):
-        """Insert or update daily bars"""
-        if df.empty:
+        """Insert or update daily bars (fast executemany)."""
+        if df is None or df.empty:
             return
-        
+
+        work = df.copy()
+        if not isinstance(work.index, pd.DatetimeIndex):
+            work.index = pd.to_datetime(work.index)
+
+        work = work.sort_index()
+        code = str(code).zfill(6)
+
+        rows = []
+        for idx, row in work.iterrows():
+            rows.append((
+                code,
+                idx.strftime("%Y-%m-%d"),
+                float(row.get("open", 0) or 0),
+                float(row.get("high", 0) or 0),
+                float(row.get("low", 0) or 0),
+                float(row.get("close", 0) or 0),
+                int(row.get("volume", 0) or 0),
+                float(row.get("amount", 0) or 0),
+                float(row.get("turnover", 0) or 0),
+            ))
+
         with self._transaction() as conn:
-            for idx, row in df.iterrows():
-                date_str = idx.strftime("%Y-%m-%d") if isinstance(idx, datetime) else str(idx)
-                conn.execute("""
-                    INSERT INTO daily_bars (code, date, open, high, low, close, volume, amount, turnover)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    ON CONFLICT(code, date) DO UPDATE SET
-                        open = excluded.open,
-                        high = excluded.high,
-                        low = excluded.low,
-                        close = excluded.close,
-                        volume = excluded.volume,
-                        amount = excluded.amount,
-                        turnover = excluded.turnover
-                """, (
-                    code, date_str,
-                    float(row.get('open', 0)),
-                    float(row.get('high', 0)),
-                    float(row.get('low', 0)),
-                    float(row.get('close', 0)),
-                    int(row.get('volume', 0)),
-                    float(row.get('amount', 0)),
-                    float(row.get('turnover', 0) if 'turnover' in row else 0)
-                ))
+            conn.executemany("""
+                INSERT INTO daily_bars (code, date, open, high, low, close, volume, amount, turnover)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(code, date) DO UPDATE SET
+                    open = excluded.open,
+                    high = excluded.high,
+                    low = excluded.low,
+                    close = excluded.close,
+                    volume = excluded.volume,
+                    amount = excluded.amount,
+                    turnover = excluded.turnover
+            """, rows)
     
     def get_bars(
         self,
@@ -189,44 +200,20 @@ class MarketDatabase:
         end_date: date = None,
         limit: int = None
     ) -> pd.DataFrame:
-        """Get daily bars for a stock (correct limit semantics)."""
-        where = ["code = ?"]
-        params: List = [code]
-
-        if start_date:
-            where.append("date >= ?")
-            params.append(start_date.isoformat())
-        if end_date:
-            where.append("date <= ?")
-            params.append(end_date.isoformat())
-
-        where_sql = " AND ".join(where)
-
-        if limit:
-            query = f"""
-            SELECT * FROM (
-                SELECT * FROM daily_bars
-                WHERE {where_sql}
-                ORDER BY date DESC
-                LIMIT ?
-            ) sub
-            ORDER BY date ASC
-            """
-            params.append(int(limit))
-        else:
-            query = f"""
-            SELECT * FROM daily_bars
-            WHERE {where_sql}
-            ORDER BY date ASC
-            """
-
+        """Get daily bars for a stock"""
+        # ... existing query code ...
+        
         df = pd.read_sql_query(query, self._conn, params=params)
         if df.empty:
-            return df
+            return pd.DataFrame()
 
         df["date"] = pd.to_datetime(df["date"])
         df = df.set_index("date").sort_index()
-        df = df.drop(columns=["code"], errors="ignore")
+        
+        # Safely drop code column if present
+        if "code" in df.columns:
+            df = df.drop(columns=["code"])
+        
         return df
     
     def get_last_date(self, code: str) -> Optional[date]:

@@ -17,10 +17,10 @@ import numpy as np
 from datetime import datetime, date, timedelta
 from typing import Dict, List, Tuple, Optional
 
-from config import CONFIG
+from config.settings import CONFIG
 from core.types import (
     Account, Position, RiskMetrics, RiskLevel,
-    OrderSide, OrderStatus, Order  # ADDED OrderStatus
+    OrderSide, OrderStatus, Order
 )
 from core.events import EVENT_BUS, EventType, Event, RiskEvent
 from utils.logger import get_logger
@@ -438,45 +438,45 @@ class RiskManager:
             return metrics
     
     def _calculate_var(self, confidence: float) -> float:
-        """
-        Calculate Value at Risk using historical simulation
+        """Calculate Value at Risk using historical simulation"""
+        if self._account is None:
+            return 0.0
         
-        Args:
-            confidence: Confidence level (e.g., 0.95 for 95%)
-            
-        Returns:
-            VaR in currency units
-        """
-        if len(self._returns_history) < 20 or self._account is None:
+        equity = self._account.equity
+        if equity <= 0:
+            return 0.0
+        
+        if len(self._returns_history) < 20:
             # Fallback: assume 2% daily VaR
-            return self._account.equity * 0.02 if self._account else 0
+            return equity * 0.02
         
         returns = np.array(self._returns_history)
         var_percentile = np.percentile(returns, (1 - confidence) * 100)
         
-        return abs(var_percentile * self._account.equity)
+        return abs(var_percentile * equity)
     
     def _calculate_expected_shortfall(self, confidence: float) -> float:
-        """
-        Calculate Expected Shortfall (Conditional VaR)
+        """Calculate Expected Shortfall (Conditional VaR)"""
+        if self._account is None:
+            return 0.0
         
-        This is the expected loss given that loss exceeds VaR.
-        """
-        if len(self._returns_history) < 20 or self._account is None:
-            # Fallback: assume 3% expected shortfall
-            return self._account.equity * 0.03 if self._account else 0
+        equity = self._account.equity
+        if equity <= 0:
+            return 0.0
+        
+        if len(self._returns_history) < 20:
+            return equity * 0.03
         
         returns = np.array(self._returns_history)
         var_percentile = np.percentile(returns, (1 - confidence) * 100)
         
-        # Get returns in the tail
         tail_returns = returns[returns <= var_percentile]
         
         if len(tail_returns) == 0:
-            return abs(var_percentile * self._account.equity)
+            return abs(var_percentile * equity)
         
         expected_shortfall_pct = np.mean(tail_returns)
-        return abs(expected_shortfall_pct * self._account.equity)
+        return abs(expected_shortfall_pct * equity)
     
 
 
@@ -538,29 +538,23 @@ class RiskManager:
                 return self._validate_sell_order(symbol, quantity, account)  # FIXED: pass account
     
     def _check_quote_staleness(self, symbol: str) -> Tuple[bool, str]:
-        """Check if quote for symbol is fresh enough"""
         last_quote_time = self._quote_timestamps.get(symbol)
-        
+
         if last_quote_time is None:
-            # Try to get from feed manager using public API
             try:
                 from data.feeds import get_feed_manager
-                feed_manager = get_feed_manager()
-                quote = feed_manager.get_quote(symbol)
-                if quote and hasattr(quote, 'timestamp') and quote.timestamp:
-                    last_quote_time = quote.timestamp
+                q = get_feed_manager().get_quote(symbol)
+                if q and getattr(q, "timestamp", None):
+                    last_quote_time = q.timestamp
             except Exception:
                 pass
-        
+
         if last_quote_time is None:
-            log.warning(f"No quote timestamp for {symbol} - proceeding with caution")
-            return True, "OK"
-        
-        age_seconds = (datetime.now() - last_quote_time).total_seconds()
-        
-        if age_seconds > self._staleness_threshold_seconds:
-            return False, f"Quote stale ({age_seconds:.0f}s old) - refresh data before trading"
-        
+            return False, "No quote timestamp available (cannot verify freshness)"
+
+        age = (datetime.now() - last_quote_time).total_seconds()
+        if age > float(self._staleness_threshold_seconds):
+            return False, f"Quote stale: {age:.0f}s (limit {self._staleness_threshold_seconds:.0f}s)"
         return True, "OK"
     
     def _validate_buy_order(

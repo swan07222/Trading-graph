@@ -164,74 +164,96 @@ class PollingFeed(DataFeed):
         log.debug(f"Unsubscribed from {symbol}")
     
     def _poll_loop(self):
-        """Main polling loop"""
+        """Main polling loop (seconds-level updates)."""
         while self._running:
             try:
                 with self._lock:
                     symbols = list(self._symbols)
-                
+
                 if not symbols:
                     time.sleep(self._interval)
                     continue
-                
+
                 quotes = self._fetch_batch_quotes(symbols)
-                
+
+                now_ts = datetime.now()
                 for symbol, quote in quotes.items():
                     if quote and quote.price > 0:
+                        # ensure timestamp exists and is recent
+                        if getattr(quote, "timestamp", None) is None:
+                            quote.timestamp = now_ts
+
                         self._last_quotes[symbol] = quote
                         self._notify(quote)
 
                         EVENT_BUS.publish(TickEvent(
                             symbol=symbol,
-                            price=quote.price,
-                            volume=quote.volume,
-                            bid=quote.bid,
-                            ask=quote.ask,
+                            price=float(quote.price),
+                            volume=int(quote.volume or 0),
+                            bid=float(getattr(quote, "bid", 0.0) or 0.0),
+                            ask=float(getattr(quote, "ask", 0.0) or 0.0),
                             source=self.name
                         ))
-                
+
                 time.sleep(self._interval)
-                
+
             except Exception as e:
                 log.error(f"Polling loop error: {e}")
                 time.sleep(1)
 
     def _fetch_batch_quotes(self, symbols: List[str]) -> Dict[str, 'Quote']:
-        """Fetch quotes using shared spot cache"""
-        from data.fetcher import get_spot_cache, Quote
-        
+        """
+        Fast batch quotes:
+        1) DataFetcher.get_realtime_batch (Tencent)
+        2) spot cache
+        3) per-symbol fallback
+        """
         result = {}
-        cache = get_spot_cache()
-        
-        df = cache.get()
-        
-        if df is None or df.empty:
-            fetcher = self._get_fetcher()
-            for symbol in symbols:
-                quote = fetcher.get_realtime(symbol)
-                if quote and quote.price > 0:
-                    result[symbol] = quote
-            return result
-        
+        fetcher = self._get_fetcher()
+
+        # 1) Batch
+        try:
+            batch = fetcher.get_realtime_batch(symbols)
+            if batch:
+                return batch
+        except Exception:
+            pass
+
+        # 2) Spot cache
+        try:
+            from data.fetcher import get_spot_cache, Quote
+            cache = get_spot_cache()
+            df = cache.get()
+            if df is not None and not df.empty:
+                for symbol in symbols:
+                    data = cache.get_quote(symbol)
+                    if data and data.get("price", 0) > 0:
+                        result[symbol] = Quote(
+                            code=symbol,
+                            name=data.get("name", ""),
+                            price=float(data["price"]),
+                            open=float(data.get("open", 0) or 0),
+                            high=float(data.get("high", 0) or 0),
+                            low=float(data.get("low", 0) or 0),
+                            close=float(data.get("close", 0) or 0),
+                            volume=int(data.get("volume", 0) or 0),
+                            amount=float(data.get("amount", 0) or 0),
+                            change=float(data.get("change", 0) or 0),
+                            change_pct=float(data.get("change_pct", 0) or 0),
+                            source="spot_cache",
+                            is_delayed=False,
+                        )
+                if result:
+                    return result
+        except Exception:
+            pass
+
+        # 3) Per-symbol
         for symbol in symbols:
-            data = cache.get_quote(symbol)
-            if data and data['price'] > 0:
-                quote = Quote(
-                    code=symbol,
-                    name=data['name'],
-                    price=data['price'],
-                    open=data['open'],
-                    high=data['high'],
-                    low=data['low'],
-                    close=data['close'],
-                    volume=data['volume'],
-                    amount=data['amount'],
-                    change=data['change'],
-                    change_pct=data['change_pct'],
-                    source='spot_cache'
-                )
-                result[symbol] = quote
-        
+            q = fetcher.get_realtime(symbol)
+            if q and q.price > 0:
+                result[symbol] = q
+
         return result
 
     def get_quote(self, symbol: str) -> Optional['Quote']:
@@ -522,65 +544,70 @@ class BarAggregator:
         self._callbacks.append(callback)
     
     def on_tick(self, quote):
-        """Process tick into bar"""
         symbol = quote.code
-        
+        ts = getattr(quote, "timestamp", None) or datetime.now()
+        px = float(getattr(quote, "price", 0) or 0)
+        if px <= 0:
+            return
+
         with self._lock:
             if symbol not in self._current_bars:
                 self._current_bars[symbol] = self._new_bar(quote)
-            
-            bar = self._current_bars[symbol]
-            
-            last_cum_vol = bar.get('last_cum_vol', 0)
-            
-            bar['high'] = max(bar['high'], quote.price)
-            bar['low'] = min(bar['low'], quote.price)
-            bar['close'] = quote.price
-            
-            # Handle volume (could be None, NaN, or cumulative)
-            current_cum_vol = 0
-            if quote.volume is not None:
-                try:
-                    current_cum_vol = int(quote.volume)
-                except (ValueError, TypeError):
-                    current_cum_vol = 0
-            
-            if current_cum_vol < last_cum_vol:
-                delta_vol = current_cum_vol  # reset/new session
-            else:
-                delta_vol = current_cum_vol - last_cum_vol
 
-            bar["volume"] += max(delta_vol, 0)
-            bar['last_cum_vol'] = current_cum_vol
+            bar = self._current_bars[symbol]
+
+            # Day/session cut
+            if bar.get("session_date") and bar["session_date"] != ts.date():
+                self._emit_bar(symbol, bar)
+                self._current_bars[symbol] = self._new_bar(quote)
+                bar = self._current_bars[symbol]
+
+            # OHLC
+            bar["high"] = max(float(bar["high"]), px)
+            bar["low"] = min(float(bar["low"]), px)
+            bar["close"] = px
+
+            # volume delta from cumulative - with safety checks
+            last_cum = int(bar.get("last_cum_vol", 0) or 0)
+            cur_cum = 0
             
-            now = datetime.now()
-            bar_end = bar['timestamp'] + timedelta(seconds=self._interval)
-            
-            if now >= bar_end:
+            vol = getattr(quote, 'volume', None)
+            if vol is not None:
+                try:
+                    cur_cum = int(vol)
+                except (ValueError, TypeError):
+                    cur_cum = 0
+
+            delta = cur_cum if cur_cum < last_cum else (cur_cum - last_cum)
+            bar["volume"] += max(int(delta), 0)
+            bar["last_cum_vol"] = cur_cum
+
+            # Bar end boundary
+            if ts >= bar["timestamp"] + timedelta(seconds=self._interval):
                 self._emit_bar(symbol, bar)
                 self._current_bars[symbol] = self._new_bar(quote)
     
     def _new_bar(self, quote) -> Dict:
-        """Create new bar"""
-        now = datetime.now()
-        seconds = (now.minute * 60 + now.second) % self._interval
-        bar_start = now - timedelta(seconds=seconds, microseconds=now.microsecond)
-        
+        ts = getattr(quote, "timestamp", None) or datetime.now()
+        seconds = (ts.minute * 60 + ts.second) % self._interval
+        bar_start = ts - timedelta(seconds=seconds, microseconds=ts.microsecond)
+
         initial_vol = 0
         if quote.volume is not None:
             try:
                 initial_vol = int(quote.volume)
             except (ValueError, TypeError):
                 initial_vol = 0
-        
+
         return {
-            'timestamp': bar_start,
-            'open': quote.price,
-            'high': quote.price,
-            'low': quote.price,
-            'close': quote.price,
-            'volume': 0,
-            'last_cum_vol': initial_vol,
+            "timestamp": bar_start,
+            "open": float(quote.price),
+            "high": float(quote.price),
+            "low": float(quote.price),
+            "close": float(quote.price),
+            "volume": 0,
+            "last_cum_vol": initial_vol,
+            "session_date": bar_start.date(),
         }
     
     def _emit_bar(self, symbol: str, bar: Dict):
@@ -628,16 +655,20 @@ class FeedManager:
         self._lock = threading.RLock()
     
     def initialize(self):
-        """Initialize feeds"""
-        interval = CONFIG.data.poll_interval_seconds
+        """Initialize feeds (seconds polling + 1m/5m bar aggregation)."""
+        interval = float(CONFIG.data.poll_interval_seconds)  # set to 1.0 for seconds updates
         polling = PollingFeed(interval=interval)
-        self._feeds['polling'] = polling
+        self._feeds["polling"] = polling
         self._active_feed = polling
-        
+
+        # Choose bar interval: 60 for 1m, 300 for 5m
+        bar_seconds = 60  # change to 300 for 5m
+        self._bar_aggregator = BarAggregator(interval_seconds=bar_seconds)
+
         polling.connect()
         polling.add_callback(self._bar_aggregator.on_tick)
-        
-        log.info(f"Feed manager initialized (poll interval: {interval}s)")
+
+        log.info(f"Feed manager initialized (poll={interval}s, bar={bar_seconds}s)")
     
     def subscribe(self, symbol: str) -> bool:
         """Subscribe to symbol"""

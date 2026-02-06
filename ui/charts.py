@@ -35,68 +35,43 @@ class StockChart(pg.PlotWidget):
         # Legend
         self.addLegend(offset=(10, 10))
     
-    def update_data(self,
-                    prices: List[float],
-                    predictions: List[float] = None,
-                    levels: Dict[str, float] = None):
-        """Update chart with new data"""
+    def update_data(self, prices: List[float], predictions: List[float] = None, levels: Dict[str, float] = None):
+        """Update chart with actual + forecast overlay (forecast anchored to last actual)."""
         self.clear()
         self.level_lines = []
-        
+
         if not prices:
             return
-        
-        x = np.arange(len(prices))
-        
-        # Main price line
-        self.price_line = self.plot(
-            x, prices,
-            pen=pg.mkPen('#00E5FF', width=2),
-            name='Price'
-        )
-        
-        # Moving averages
+
+        x = np.arange(len(prices), dtype=float)
+
+        self.plot(x, prices, pen=pg.mkPen("#00E5FF", width=2), name="Actual")
+
         if len(prices) >= 20:
-            ma5 = np.convolve(prices, np.ones(5)/5, mode='valid')
-            ma20 = np.convolve(prices, np.ones(20)/20, mode='valid')
-            
-            self.plot(
-                np.arange(4, len(prices)), ma5,
-                pen=pg.mkPen('#FF9800', width=1),
-                name='MA5'
-            )
-            
-            self.plot(
-                np.arange(19, len(prices)), ma20,
-                pen=pg.mkPen('#9C27B0', width=1),
-                name='MA20'
-            )
-        
-        # Predictions
+            ma5 = np.convolve(prices, np.ones(5)/5, mode="valid")
+            ma20 = np.convolve(prices, np.ones(20)/20, mode="valid")
+
+            self.plot(np.arange(4, len(prices)), ma5, pen=pg.mkPen("#FF9800", width=1), name="MA5")
+            self.plot(np.arange(19, len(prices)), ma20, pen=pg.mkPen("#9C27B0", width=1), name="MA20")
+
+        # predictions include current point at index 0
         if predictions and len(predictions) > 1:
-            pred_x = np.arange(len(prices) - 1, len(prices) + len(predictions) - 1)
-            self.prediction_line = self.plot(
-                pred_x, predictions,
-                pen=pg.mkPen('#4CAF50', width=2, style=Qt.PenStyle.DashLine),
-                name='Prediction'
-            )
-        
-        # Trading levels
+            pred_x = np.arange(len(prices) - 1, len(prices) - 1 + len(predictions), dtype=float)
+            self.plot(pred_x, predictions, pen=pg.mkPen("#4CAF50", width=2, style=Qt.PenStyle.DashLine), name="Forecast")
+
         if levels:
-            if 'stop_loss' in levels:
-                line = self.addLine(
-                    y=levels['stop_loss'],
-                    pen=pg.mkPen('#FF5252', width=1, style=Qt.PenStyle.DashLine)
-                )
-                self.level_lines.append(line)
-            
-            for key in ['target_1', 'target_2', 'target_3']:
-                if key in levels:
-                    line = self.addLine(
-                        y=levels[key],
-                        pen=pg.mkPen('#4CAF50', width=1, style=Qt.PenStyle.DashLine)
-                    )
-                    self.level_lines.append(line)
+            if levels.get("stop_loss"):
+                self.level_lines.append(self.addLine(
+                    y=float(levels["stop_loss"]),
+                    pen=pg.mkPen("#FF5252", width=1, style=Qt.PenStyle.DashLine)
+                ))
+
+            for key in ("target_1", "target_2", "target_3"):
+                if levels.get(key):
+                    self.level_lines.append(self.addLine(
+                        y=float(levels[key]),
+                        pen=pg.mkPen("#4CAF50", width=1, style=Qt.PenStyle.DashLine)
+                    ))
     
     def clear_chart(self):
         """Clear all chart data"""

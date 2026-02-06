@@ -1,3 +1,4 @@
+# data/features.py
 """
 Feature Engineering - Technical indicators WITHOUT look-ahead bias
 
@@ -8,8 +9,10 @@ import numpy as np
 from typing import List
 import ta
 
-from config import CONFIG
-from utils.logger import log
+from config.settings import CONFIG
+from utils.logger import get_logger
+
+log = get_logger(__name__)
 
 
 class FeatureEngine:

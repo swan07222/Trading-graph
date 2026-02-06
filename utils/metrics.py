@@ -119,3 +119,34 @@ def set_gauge(name: str, value: float, labels: Dict = None):
 
 def observe(name: str, value: float, labels: Dict = None):
     _metrics.observe_histogram(name, value, labels)
+
+_process_metrics_started = False
+
+def start_process_metrics(interval_seconds: float = 5.0):
+    """Background gauges: cpu/mem/threads. Safe to call multiple times."""
+    global _process_metrics_started
+    if _process_metrics_started:
+        return
+    _process_metrics_started = True
+
+    try:
+        import psutil
+        import os
+    except Exception:
+        return
+
+    proc = psutil.Process(os.getpid())
+
+    def loop():
+        while True:
+            try:
+                set_gauge("process_cpu_percent", float(proc.cpu_percent(interval=None)))
+                mem = proc.memory_info()
+                set_gauge("process_memory_rss_bytes", float(mem.rss))
+                set_gauge("process_threads", float(proc.num_threads()))
+            except Exception:
+                pass
+            time.sleep(float(interval_seconds))
+
+    t = threading.Thread(target=loop, daemon=True, name="process_metrics")
+    t.start()
