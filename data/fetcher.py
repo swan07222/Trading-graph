@@ -121,7 +121,7 @@ class DataSource:
         raise NotImplementedError
     
     def get_realtime(self, code: str) -> Optional[Quote]:
-        raise NotImplementedError
+        return None
     
     def _record_success(self, latency_ms: float = 0):
         with self._lock:

@@ -538,7 +538,7 @@ class EnsembleModel:
             "num_models": len(self.models),
             "temperature": float(state["temperature"]),
         }
-        atomic_write_json(CONFIG.MODEL_DIR / "model_manifest.json", manifest)
+        atomic_write_json(path.parent / "model_manifest.json", manifest)
 
         log.info(f"Ensemble saved atomically to {path}")
 

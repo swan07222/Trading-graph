@@ -653,6 +653,12 @@ class OrderManagementSystem:
         commission = cost * CONFIG.trading.commission
         total_cost = cost + commission
 
+        slip = float(getattr(CONFIG.trading, "slippage", 0.0))
+        est_price = order.price * (1 + slip)
+        est_value = order.quantity * est_price
+        est_commission = max(est_value * CONFIG.trading.commission, 5.0)
+        total_cost = est_value + est_commission
+
         order.tags = order.tags or {}
         order.tags["reserved_cash_remaining"] = float(total_cost)
         order.tags["reserved_cash_price"] = float(order.price)
@@ -913,7 +919,12 @@ class OrderManagementSystem:
         """Update account and positions after fill"""
         symbol = order.symbol
         
-        if order.side == OrderSide.BUY:
+        if order.status == OrderStatus.FILLED and order.side == OrderSide.BUY and order.tags:
+            leftover = float(order.tags.get("reserved_cash_remaining", 0.0))
+            if leftover > 0:
+                self._account.available += leftover
+                order.tags["reserved_cash_remaining"] = 0.0
+                self._account.available = max(0.0, min(self._account.available, self._account.cash))
             # Deduct cash
             cost = fill.quantity * fill.price + fill.commission
             self._account.cash -= cost

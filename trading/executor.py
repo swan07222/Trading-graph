@@ -82,8 +82,9 @@ class ExecutionEngine:
         # Rebuild broker ID mappings from persisted orders (crash recovery)
         self._rebuild_broker_mappings(oms)
 
-        account = self.broker.get_account()
-        self.risk_manager = get_risk_manager()
+        from trading.oms import get_oms
+        account = get_oms().get_account()
+        self.risk_manager.update(account)
         self.risk_manager.initialize(account)
 
         self._health_monitor.start()

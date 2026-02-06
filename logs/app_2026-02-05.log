@@ -752,3 +752,369 @@ IndentationError: unexpected indent
 2026-02-05 19:39:27,594 | INFO     | trading:start:171 - Continuous learning started (mode=full, continuous=False)
 2026-02-05 19:39:27,776 | INFO     | trading:__init__:109 - AkShare initialized for stock discovery
 2026-02-05 19:40:19,342 | WARNING  | trading:_safe_fetch:141 - Attempt 1/3 failed for spot data: HTTPSConnectionPool(host='82.push2.eastmoney.com', port=443): Read timed out. (read timeout=15)
+2026-02-05 19:41:50,215 | INFO     | trading:main:61 - ============================================================
+2026-02-05 19:41:50,216 | INFO     | trading:main:62 - AI STOCK TRADING SYSTEM - Production Grade
+2026-02-05 19:41:50,216 | INFO     | trading:main:63 - ============================================================
+2026-02-05 19:41:50,516 | INFO     | trading.data.fetcher:__init__:255 - AkShare initialized
+2026-02-05 19:41:50,572 | INFO     | trading.data.fetcher:__init__:374 - Yahoo Finance initialized
+2026-02-05 19:41:50,572 | INFO     | trading.data.fetcher:_init_sources:472 - Data source akshare available
+2026-02-05 19:41:50,572 | INFO     | trading.data.fetcher:_init_sources:472 - Data source yahoo available
+2026-02-05 19:41:50,572 | INFO     | trading.data.fetcher:reset_sources:669 - All data sources reset
+2026-02-05 19:41:50,573 | INFO     | trading:_load_state:649 - Loaded learner state: 0 sessions
+2026-02-05 19:41:50,574 | INFO     | trading:_continuous_learning_loop:242 - === Learning Cycle 1 ===
+2026-02-05 19:41:50,574 | INFO     | trading:start:174 - Continuous learning started (mode=full, continuous=False)
+2026-02-05 19:41:50,574 | INFO     | trading:__init__:109 - AkShare initialized for stock discovery
+2026-02-05 19:42:42,373 | WARNING  | trading:_safe_fetch:141 - Attempt 1/3 failed for spot data: HTTPSConnectionPool(host='82.push2.eastmoney.com', port=443): Read timed out. (read timeout=15)
+2026-02-05 19:43:35,734 | WARNING  | trading:_safe_fetch:141 - Attempt 2/3 failed for spot data: HTTPSConnectionPool(host='82.push2.eastmoney.com', port=443): Read timed out. (read timeout=15)
+2026-02-05 19:44:28,626 | WARNING  | trading:_safe_fetch:141 - Attempt 3/3 failed for spot data: HTTPSConnectionPool(host='82.push2.eastmoney.com', port=443): Read timed out. (read timeout=15)
+2026-02-05 19:44:28,626 | WARNING  | trading:discover_all:169 - Failed to fetch spot data, trying index constituents...
+2026-02-05 19:46:39,127 | WARNING  | trading:_get_csi300:351 - Failed to get CSI300: ('Connection aborted.', ConnectionResetError(10054, 'An existing connection was forcibly closed by the remote host', None, 10054, None))
+2026-02-05 19:46:39,127 | INFO     | trading:discover_all:215 - Found 0 valid from CSI 300 Index, total: 0
+2026-02-05 19:48:50,197 | WARNING  | trading:_get_csi500:363 - Failed to get CSI500: ('Connection aborted.', ConnectionResetError(10054, 'An existing connection was forcibly closed by the remote host', None, 10054, None))
+2026-02-05 19:48:50,197 | INFO     | trading:discover_all:215 - Found 0 valid from CSI 500 Index, total: 0
+2026-02-05 19:49:02,264 | WARNING  | trading:_get_csi1000:375 - Failed to get CSI1000: ('Connection aborted.', ConnectionAbortedError(10053, 'An established connection was aborted by the software in your host machine', None, 10053, None))
+2026-02-05 19:49:02,264 | INFO     | trading:discover_all:215 - Found 0 valid from CSI 1000 Index, total: 0
+2026-02-05 19:49:02,264 | INFO     | trading:discover_all:223 - Before filtering: 0 stocks
+2026-02-05 19:49:02,264 | INFO     | trading:discover_all:244 - After filtering: 0 stocks
+2026-02-05 19:49:02,264 | WARNING  | trading:discover_all:248 - No stocks after filtering, using fallback
+2026-02-05 19:49:02,264 | INFO     | trading:_get_fallback_stocks:280 - Using 40 fallback stocks
+2026-02-05 19:49:02,264 | INFO     | trading:_discover_all_stocks:413 - Discovered 40 valid stocks
+2026-02-05 19:49:02,264 | INFO     | trading.data.fetcher:__init__:255 - AkShare initialized
+2026-02-05 19:49:02,264 | INFO     | trading.data.fetcher:__init__:374 - Yahoo Finance initialized
+2026-02-05 19:49:02,264 | INFO     | trading.data.fetcher:_init_sources:472 - Data source akshare available
+2026-02-05 19:49:02,264 | INFO     | trading.data.fetcher:_init_sources:472 - Data source yahoo available
+2026-02-05 19:49:03,922 | WARNING  | trading.data.fetcher:_fetch_from_sources:545 - akshare failed for 600028: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-02-05 19:49:03,960 | WARNING  | trading.data.fetcher:_fetch_from_sources:545 - akshare failed for 601857: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-02-05 19:49:03,962 | WARNING  | trading.data.fetcher:_fetch_from_sources:545 - akshare failed for 601012: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-02-05 19:49:03,970 | WARNING  | trading.data.fetcher:_fetch_from_sources:545 - akshare failed for 600309: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-02-05 19:49:03,970 | WARNING  | trading.data.fetcher:_fetch_from_sources:545 - akshare failed for 601088: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-02-05 19:49:07,211 | WARNING  | trading.data.fetcher:_fetch_from_sources:545 - yahoo failed for 601857: Too Many Requests. Rate limited. Try after a while.
+2026-02-05 19:49:07,212 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 601857
+2026-02-05 19:49:07,216 | WARNING  | trading.data.fetcher:_fetch_from_sources:545 - yahoo failed for 601088: Too Many Requests. Rate limited. Try after a while.
+2026-02-05 19:49:07,217 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 601088
+2026-02-05 19:49:07,225 | WARNING  | trading.data.fetcher:_fetch_from_sources:545 - yahoo failed for 600309: Too Many Requests. Rate limited. Try after a while.
+2026-02-05 19:49:07,226 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 600309
+2026-02-05 19:49:07,229 | WARNING  | trading.data.fetcher:_fetch_from_sources:545 - yahoo failed for 600028: Too Many Requests. Rate limited. Try after a while.
+2026-02-05 19:49:07,230 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 600028
+2026-02-05 19:49:07,242 | WARNING  | trading.data.fetcher:_fetch_from_sources:545 - yahoo failed for 601012: Too Many Requests. Rate limited. Try after a while.
+2026-02-05 19:49:07,243 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 601012
+2026-02-05 19:49:07,640 | WARNING  | trading.data.fetcher:_fetch_from_sources:545 - akshare failed for 000568: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-02-05 19:49:08,266 | WARNING  | trading.data.fetcher:_fetch_from_sources:545 - akshare failed for 601328: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-02-05 19:49:08,277 | WARNING  | trading.data.fetcher:_fetch_from_sources:545 - akshare failed for 600000: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-02-05 19:49:08,290 | WARNING  | trading.data.fetcher:_fetch_from_sources:545 - akshare failed for 002714: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-02-05 19:49:08,314 | WARNING  | trading.data.fetcher:_record_error:150 - Data source akshare temporarily disabled for 60s
+2026-02-05 19:49:08,314 | WARNING  | trading.data.fetcher:_fetch_from_sources:545 - akshare failed for 000002: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-02-05 19:49:09,271 | WARNING  | trading.data.fetcher:_fetch_from_sources:545 - yahoo failed for 000568: Too Many Requests. Rate limited. Try after a while.
+2026-02-05 19:49:09,271 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 000568
+2026-02-05 19:49:09,921 | WARNING  | trading.data.fetcher:_fetch_from_sources:545 - yahoo failed for 600690: Too Many Requests. Rate limited. Try after a while.
+2026-02-05 19:49:09,921 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 600690
+2026-02-05 19:49:09,937 | WARNING  | trading.data.fetcher:_fetch_from_sources:545 - yahoo failed for 600000: Too Many Requests. Rate limited. Try after a while.
+2026-02-05 19:49:09,944 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 600000
+2026-02-05 19:49:09,937 | WARNING  | trading.data.fetcher:_record_error:150 - Data source yahoo temporarily disabled for 60s
+2026-02-05 19:49:09,945 | WARNING  | trading.data.fetcher:_fetch_from_sources:545 - yahoo failed for 601328: Too Many Requests. Rate limited. Try after a while.
+2026-02-05 19:49:09,937 | WARNING  | trading.data.fetcher:_fetch_from_sources:545 - yahoo failed for 002714: Too Many Requests. Rate limited. Try after a while.
+2026-02-05 19:49:09,945 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 601899
+2026-02-05 19:49:09,945 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 601328
+2026-02-05 19:49:09,945 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 002714
+2026-02-05 19:49:09,947 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 600585
+2026-02-05 19:49:09,947 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 002352
+2026-02-05 19:49:09,948 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 300124
+2026-02-05 19:49:09,949 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 002415
+2026-02-05 19:49:09,949 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 600031
+2026-02-05 19:49:09,952 | WARNING  | trading.data.fetcher:_record_error:150 - Data source yahoo temporarily disabled for 60s
+2026-02-05 19:49:09,953 | WARNING  | trading.data.fetcher:_fetch_from_sources:545 - yahoo failed for 000002: Too Many Requests. Rate limited. Try after a while.
+2026-02-05 19:49:09,953 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 000001
+2026-02-05 19:49:09,953 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 002304
+2026-02-05 19:49:09,953 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 000002
+2026-02-05 19:49:10,884 | WARNING  | trading.data.fetcher:_record_error:150 - Data source yahoo temporarily disabled for 60s
+2026-02-05 19:49:10,884 | WARNING  | trading.data.fetcher:_fetch_from_sources:545 - yahoo failed for 000725: Too Many Requests. Rate limited. Try after a while.
+2026-02-05 19:49:10,884 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 000725
+2026-02-05 19:49:10,900 | INFO     | trading.data.fetcher:get_multiple_parallel:642 - Parallel fetch: 20/40 successful
+2026-02-05 19:49:10,976 | INFO     | trading:create_features:170 - Created 47 features, 1435 valid samples
+2026-02-05 19:49:11,043 | INFO     | trading:create_features:170 - Created 47 features, 1435 valid samples
+2026-02-05 19:49:11,111 | INFO     | trading:create_features:170 - Created 47 features, 1435 valid samples
+2026-02-05 19:49:11,176 | INFO     | trading:create_features:170 - Created 47 features, 1436 valid samples
+2026-02-05 19:49:11,247 | INFO     | trading:create_features:170 - Created 47 features, 1424 valid samples
+2026-02-05 19:49:11,310 | INFO     | trading:create_features:170 - Created 47 features, 1436 valid samples
+2026-02-05 19:49:11,377 | INFO     | trading:create_features:170 - Created 47 features, 1436 valid samples
+2026-02-05 19:49:11,443 | INFO     | trading:create_features:170 - Created 47 features, 1436 valid samples
+2026-02-05 19:49:11,510 | INFO     | trading:create_features:170 - Created 47 features, 1436 valid samples
+2026-02-05 19:49:11,576 | INFO     | trading:create_features:170 - Created 47 features, 1436 valid samples
+2026-02-05 19:49:11,644 | INFO     | trading:create_features:170 - Created 47 features, 1435 valid samples
+2026-02-05 19:49:11,710 | INFO     | trading:create_features:170 - Created 47 features, 1435 valid samples
+2026-02-05 19:49:11,794 | INFO     | trading:create_features:170 - Created 47 features, 1435 valid samples
+2026-02-05 19:49:11,859 | INFO     | trading:create_features:170 - Created 47 features, 1436 valid samples
+2026-02-05 19:49:11,929 | INFO     | trading:create_features:170 - Created 47 features, 1435 valid samples
+2026-02-05 19:49:11,995 | INFO     | trading:create_features:170 - Created 47 features, 1435 valid samples
+2026-02-05 19:49:12,062 | INFO     | trading:create_features:170 - Created 47 features, 1435 valid samples
+2026-02-05 19:49:12,128 | INFO     | trading:create_features:170 - Created 47 features, 1429 valid samples
+2026-02-05 19:49:12,195 | INFO     | trading:create_features:170 - Created 47 features, 1436 valid samples
+2026-02-05 19:49:12,260 | INFO     | trading:create_features:170 - Created 47 features, 1436 valid samples
+2026-02-05 19:49:12,260 | INFO     | trading:_download_all_data:459 - Processed 20 stocks with features
+2026-02-05 19:49:12,358 | INFO     | trading:fit_scaler:99 - Scaler fitted on 19677 samples, 47 features
+2026-02-05 19:49:12,359 | INFO     | trading:_prepare_training_data:512 - Scaler fitted on 19677 samples
+2026-02-05 19:49:12,647 | INFO     | trading:save_scaler:305 - Scaler saved atomically to F:\Trading app\Trading-graph\models_saved\scaler.pkl
+2026-02-05 19:49:21,882 | INFO     | trading:main:61 - ============================================================
+2026-02-05 19:49:21,882 | INFO     | trading:main:62 - AI STOCK TRADING SYSTEM - Production Grade
+2026-02-05 19:49:21,882 | INFO     | trading:main:63 - ============================================================
+2026-02-05 19:58:55,167 | INFO     | trading:main:61 - ============================================================
+2026-02-05 19:58:55,167 | INFO     | trading:main:62 - AI STOCK TRADING SYSTEM - Production Grade
+2026-02-05 19:58:55,168 | INFO     | trading:main:63 - ============================================================
+2026-02-05 20:01:41,303 | INFO     | trading:main:61 - ============================================================
+2026-02-05 20:01:41,303 | INFO     | trading:main:62 - AI STOCK TRADING SYSTEM - Production Grade
+2026-02-05 20:01:41,303 | INFO     | trading:main:63 - ============================================================
+2026-02-05 20:01:41,672 | INFO     | trading.data.fetcher:__init__:255 - AkShare initialized
+2026-02-05 20:01:41,734 | INFO     | trading.data.fetcher:__init__:374 - Yahoo Finance initialized
+2026-02-05 20:01:41,734 | INFO     | trading.data.fetcher:_init_sources:472 - Data source akshare available
+2026-02-05 20:01:41,734 | INFO     | trading.data.fetcher:_init_sources:472 - Data source yahoo available
+2026-02-05 20:01:41,734 | INFO     | trading.data.fetcher:reset_sources:669 - All data sources reset
+2026-02-05 20:01:41,736 | INFO     | trading:_load_state:649 - Loaded learner state: 0 sessions
+2026-02-05 20:01:41,736 | INFO     | trading:_continuous_learning_loop:242 - === Learning Cycle 1 ===
+2026-02-05 20:01:41,736 | INFO     | trading:start:174 - Continuous learning started (mode=full, continuous=False)
+2026-02-05 20:01:41,736 | INFO     | trading:__init__:109 - AkShare initialized for stock discovery
+2026-02-05 20:01:52,627 | WARNING  | trading:_safe_fetch:141 - Attempt 1/3 failed for spot data: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-02-05 20:02:00,250 | WARNING  | trading:_safe_fetch:141 - Attempt 2/3 failed for spot data: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-02-05 20:02:08,580 | WARNING  | trading:_safe_fetch:141 - Attempt 3/3 failed for spot data: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-02-05 20:02:08,581 | WARNING  | trading:discover_all:169 - Failed to fetch spot data, trying index constituents...
+2026-02-05 20:02:09,144 | INFO     | trading:discover_all:215 - Found 300 valid from CSI 300 Index, total: 300
+2026-02-05 20:02:11,119 | INFO     | trading:discover_all:215 - Found 500 valid from CSI 500 Index, total: 800
+2026-02-05 20:02:13,263 | INFO     | trading:discover_all:215 - Found 1000 valid from CSI 1000 Index, total: 1800
+2026-02-05 20:02:13,263 | INFO     | trading:discover_all:223 - Before filtering: 1800 stocks
+2026-02-05 20:02:13,263 | INFO     | trading:discover_all:244 - After filtering: 200 stocks
+2026-02-05 20:02:13,263 | INFO     | trading:_discover_all_stocks:413 - Discovered 200 valid stocks
+2026-02-05 20:02:13,263 | INFO     | trading.data.fetcher:__init__:255 - AkShare initialized
+2026-02-05 20:02:13,263 | INFO     | trading.data.fetcher:__init__:374 - Yahoo Finance initialized
+2026-02-05 20:02:13,263 | INFO     | trading.data.fetcher:_init_sources:472 - Data source akshare available
+2026-02-05 20:02:13,263 | INFO     | trading.data.fetcher:_init_sources:472 - Data source yahoo available
+2026-02-05 20:02:13,723 | WARNING  | trading.data.fetcher:_fetch_from_sources:545 - akshare failed for 000002: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-02-05 20:02:14,309 | WARNING  | trading.data.fetcher:_fetch_from_sources:545 - akshare failed for 000001: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-02-05 20:02:14,324 | WARNING  | trading.data.fetcher:_fetch_from_sources:545 - akshare failed for 000100: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-02-05 20:02:14,329 | WARNING  | trading.data.fetcher:_fetch_from_sources:545 - akshare failed for 000063: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-02-05 20:02:14,335 | WARNING  | trading.data.fetcher:_fetch_from_sources:545 - akshare failed for 000157: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-02-05 20:02:16,908 | WARNING  | trading.data.fetcher:_fetch_from_sources:545 - yahoo failed for 000100: Too Many Requests. Rate limited. Try after a while.
+2026-02-05 20:02:16,908 | WARNING  | trading.data.fetcher:_fetch_from_sources:545 - yahoo failed for 000002: Too Many Requests. Rate limited. Try after a while.
+2026-02-05 20:02:16,908 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 000100
+2026-02-05 20:02:16,908 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 000002
+2026-02-05 20:02:16,923 | WARNING  | trading.data.fetcher:_fetch_from_sources:545 - yahoo failed for 000157: Too Many Requests. Rate limited. Try after a while.
+2026-02-05 20:02:16,923 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 000157
+2026-02-05 20:02:16,925 | WARNING  | trading.data.fetcher:_fetch_from_sources:545 - yahoo failed for 000001: Too Many Requests. Rate limited. Try after a while.
+2026-02-05 20:02:16,925 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 000001
+2026-02-05 20:02:16,943 | WARNING  | trading.data.fetcher:_fetch_from_sources:545 - yahoo failed for 000063: Too Many Requests. Rate limited. Try after a while.
+2026-02-05 20:02:16,943 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 000063
+2026-02-05 20:02:17,327 | WARNING  | trading.data.fetcher:_fetch_from_sources:545 - akshare failed for 000166: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-02-05 20:02:17,926 | WARNING  | trading.data.fetcher:_fetch_from_sources:545 - akshare failed for 000425: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-02-05 20:02:18,014 | WARNING  | trading.data.fetcher:_fetch_from_sources:545 - akshare failed for 000408: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-02-05 20:02:18,014 | WARNING  | trading.data.fetcher:_fetch_from_sources:545 - akshare failed for 000301: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-02-05 20:02:18,015 | WARNING  | trading.data.fetcher:_record_error:150 - Data source akshare temporarily disabled for 60s
+2026-02-05 20:02:18,015 | WARNING  | trading.data.fetcher:_fetch_from_sources:545 - akshare failed for 000338: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-02-05 20:02:19,059 | WARNING  | trading.data.fetcher:_fetch_from_sources:545 - yahoo failed for 000166: Too Many Requests. Rate limited. Try after a while.
+2026-02-05 20:02:19,059 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 000166
+2026-02-05 20:02:19,726 | WARNING  | trading.data.fetcher:_fetch_from_sources:545 - yahoo failed for 000425: Too Many Requests. Rate limited. Try after a while.
+2026-02-05 20:02:19,726 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 000425
+2026-02-05 20:02:19,746 | WARNING  | trading.data.fetcher:_fetch_from_sources:545 - yahoo failed for 000301: Too Many Requests. Rate limited. Try after a while.
+2026-02-05 20:02:19,746 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 000301
+2026-02-05 20:02:19,765 | WARNING  | trading.data.fetcher:_fetch_from_sources:545 - yahoo failed for 000408: Too Many Requests. Rate limited. Try after a while.
+2026-02-05 20:02:19,765 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 000408
+2026-02-05 20:02:19,765 | WARNING  | trading.data.fetcher:_record_error:150 - Data source yahoo temporarily disabled for 60s
+2026-02-05 20:02:19,766 | WARNING  | trading.data.fetcher:_fetch_from_sources:545 - yahoo failed for 000338: Too Many Requests. Rate limited. Try after a while.
+2026-02-05 20:02:19,766 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 000617
+2026-02-05 20:02:19,766 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 000338
+2026-02-05 20:02:19,766 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 000625
+2026-02-05 20:02:19,766 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 000630
+2026-02-05 20:02:19,766 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 000661
+2026-02-05 20:02:19,766 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 000708
+2026-02-05 20:02:19,766 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 000725
+2026-02-05 20:02:19,766 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 000768
+2026-02-05 20:02:19,773 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 000776
+2026-02-05 20:02:19,777 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 000786
+2026-02-05 20:02:19,778 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 000792
+2026-02-05 20:02:19,779 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 000807
+2026-02-05 20:02:19,783 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 000876
+2026-02-05 20:02:19,783 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 000895
+2026-02-05 20:02:19,784 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 000938
+2026-02-05 20:02:19,784 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 000963
+2026-02-05 20:02:19,784 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 000975
+2026-02-05 20:02:19,787 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 000977
+2026-02-05 20:02:19,788 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 000983
+2026-02-05 20:02:19,788 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 000999
+2026-02-05 20:02:19,789 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 001391
+2026-02-05 20:02:19,789 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 001965
+2026-02-05 20:02:19,789 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 001979
+2026-02-05 20:02:19,791 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 002001
+2026-02-05 20:02:19,792 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 002027
+2026-02-05 20:02:19,793 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 002028
+2026-02-05 20:02:19,793 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 002049
+2026-02-05 20:02:19,794 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 002050
+2026-02-05 20:02:19,795 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 002074
+2026-02-05 20:02:19,795 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 002142
+2026-02-05 20:02:19,797 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 002179
+2026-02-05 20:02:19,799 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 002236
+2026-02-05 20:02:19,800 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 002241
+2026-02-05 20:02:19,800 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 002252
+2026-02-05 20:02:19,800 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 002304
+2026-02-05 20:02:19,801 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 002311
+2026-02-05 20:02:19,802 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 002352
+2026-02-05 20:02:19,802 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 002371
+2026-02-05 20:02:19,803 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 002384
+2026-02-05 20:02:19,804 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 002415
+2026-02-05 20:02:19,805 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 002422
+2026-02-05 20:02:19,805 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 002459
+2026-02-05 20:02:19,805 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 002460
+2026-02-05 20:02:19,805 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 002463
+2026-02-05 20:02:19,808 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 002466
+2026-02-05 20:02:19,810 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 002493
+2026-02-05 20:02:19,812 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 002600
+2026-02-05 20:02:19,812 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 002601
+2026-02-05 20:02:19,812 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 002625
+2026-02-05 20:02:19,812 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 002648
+2026-02-05 20:02:19,812 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 002709
+2026-02-05 20:02:19,812 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 002714
+2026-02-05 20:02:19,818 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 002736
+2026-02-05 20:02:19,818 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 002916
+2026-02-05 20:02:19,819 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 002920
+2026-02-05 20:02:19,820 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 002938
+2026-02-05 20:02:19,820 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 003816
+2026-02-05 20:02:19,821 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 300014
+2026-02-05 20:02:19,822 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 300033
+2026-02-05 20:02:19,825 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 300122
+2026-02-05 20:02:19,825 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 300124
+2026-02-05 20:02:19,826 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 300251
+2026-02-05 20:02:19,827 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 300274
+2026-02-05 20:02:19,828 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 300308
+2026-02-05 20:02:19,829 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 300316
+2026-02-05 20:02:19,831 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 300347
+2026-02-05 20:02:19,831 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 300394
+2026-02-05 20:02:19,832 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 300408
+2026-02-05 20:02:19,833 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 300413
+2026-02-05 20:02:19,833 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 300418
+2026-02-05 20:02:19,833 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 300433
+2026-02-05 20:02:19,833 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 300442
+2026-02-05 20:02:19,833 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 300476
+2026-02-05 20:02:19,833 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 300498
+2026-02-05 20:02:19,833 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 300502
+2026-02-05 20:02:19,833 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 300628
+2026-02-05 20:02:19,833 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 300661
+2026-02-05 20:02:19,839 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 300759
+2026-02-05 20:02:19,841 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 300782
+2026-02-05 20:02:19,842 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 300803
+2026-02-05 20:02:19,843 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 300832
+2026-02-05 20:02:19,843 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 300866
+2026-02-05 20:02:19,846 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 300896
+2026-02-05 20:02:19,847 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 300979
+2026-02-05 20:02:19,847 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 300999
+2026-02-05 20:02:19,848 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 301236
+2026-02-05 20:02:19,849 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 301269
+2026-02-05 20:02:19,849 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 302132
+2026-02-05 20:02:19,849 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 600000
+2026-02-05 20:02:19,849 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 600009
+2026-02-05 20:02:19,849 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 600010
+2026-02-05 20:02:19,849 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 600011
+2026-02-05 20:02:19,849 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 600015
+2026-02-05 20:02:19,849 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 600016
+2026-02-05 20:02:19,849 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 600018
+2026-02-05 20:02:19,849 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 600019
+2026-02-05 20:02:19,856 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 600023
+2026-02-05 20:02:19,857 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 600025
+2026-02-05 20:02:19,857 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 600026
+2026-02-05 20:02:19,858 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 600027
+2026-02-05 20:02:19,859 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 600028
+2026-02-05 20:02:19,860 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 600029
+2026-02-05 20:02:19,860 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 600031
+2026-02-05 20:02:19,860 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 600039
+2026-02-05 20:02:19,860 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 600048
+2026-02-05 20:02:19,860 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 600050
+2026-02-05 20:02:19,860 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 600061
+2026-02-05 20:02:19,867 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 600066
+2026-02-05 20:02:19,867 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 600085
+2026-02-05 20:02:19,868 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 600089
+2026-02-05 20:02:19,869 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 600104
+2026-02-05 20:02:19,869 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 600111
+2026-02-05 20:02:19,870 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 600115
+2026-02-05 20:02:19,871 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 600150
+2026-02-05 20:02:19,871 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 600160
+2026-02-05 20:02:19,872 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 600161
+2026-02-05 20:02:19,872 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 600176
+2026-02-05 20:02:19,873 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 600183
+2026-02-05 20:02:19,874 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 600188
+2026-02-05 20:02:19,874 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 600196
+2026-02-05 20:02:19,875 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 600219
+2026-02-05 20:02:19,876 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 600233
+2026-02-05 20:02:19,877 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 600309
+2026-02-05 20:02:19,877 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 600346
+2026-02-05 20:02:19,877 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 600362
+2026-02-05 20:02:19,877 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 600372
+2026-02-05 20:02:19,877 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 600377
+2026-02-05 20:02:19,877 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 600406
+2026-02-05 20:02:19,883 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 600415
+2026-02-05 20:02:19,883 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 600426
+2026-02-05 20:02:19,884 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 600436
+2026-02-05 20:02:19,885 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 600438
+2026-02-05 20:02:19,885 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 600460
+2026-02-05 20:02:19,886 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 600482
+2026-02-05 20:02:19,887 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 600489
+2026-02-05 20:02:19,887 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 600515
+2026-02-05 20:02:19,890 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 600522
+2026-02-05 20:02:19,890 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 600547
+2026-02-05 20:02:19,891 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 600570
+2026-02-05 20:02:19,891 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 600584
+2026-02-05 20:02:19,892 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 600585
+2026-02-05 20:02:19,893 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 600588
+2026-02-05 20:02:19,893 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 600600
+2026-02-05 20:02:19,893 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 600660
+2026-02-05 20:02:19,895 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 600674
+2026-02-05 20:02:19,896 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 600690
+2026-02-05 20:02:19,897 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 600741
+2026-02-05 20:02:19,898 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 600760
+2026-02-05 20:02:19,898 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 600795
+2026-02-05 20:02:19,898 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 600803
+2026-02-05 20:02:19,900 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 600809
+2026-02-05 20:02:19,901 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 600845
+2026-02-05 20:02:19,901 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 600875
+2026-02-05 20:02:19,902 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 600886
+2026-02-05 20:02:19,903 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 600893
+2026-02-05 20:02:19,903 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 600905
+2026-02-05 20:02:19,903 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 600918
+2026-02-05 20:02:19,903 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 600919
+2026-02-05 20:02:19,903 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 600926
+2026-02-05 20:02:19,903 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 600930
+2026-02-05 20:02:19,909 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 600938
+2026-02-05 20:02:19,910 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 600941
+2026-02-05 20:02:19,910 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 600958
+2026-02-05 20:02:19,913 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 600989
+2026-02-05 20:02:19,914 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 600999
+2026-02-05 20:02:19,915 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 601006
+2026-02-05 20:02:19,915 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 601009
+2026-02-05 20:02:19,915 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 601012
+2026-02-05 20:02:19,917 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 601018
+2026-02-05 20:02:19,917 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 601021
+2026-02-05 20:02:19,918 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 601058
+2026-02-05 20:02:19,919 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 601059
+2026-02-05 20:02:20,227 | WARNING  | trading.data.fetcher:_fetch_from_sources:545 - yahoo failed for 000596: Yahoo Finance not available
+2026-02-05 20:02:20,227 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 000596
+2026-02-05 20:02:20,407 | WARNING  | trading.data.fetcher:_record_error:150 - Data source yahoo temporarily disabled for 60s
+2026-02-05 20:02:20,407 | WARNING  | trading.data.fetcher:_fetch_from_sources:545 - yahoo failed for 000538: Too Many Requests. Rate limited. Try after a while.
+2026-02-05 20:02:20,407 | WARNING  | trading.data.fetcher:_record_error:150 - Data source yahoo temporarily disabled for 60s
+2026-02-05 20:02:20,407 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 000538
+2026-02-05 20:02:20,407 | WARNING  | trading.data.fetcher:_fetch_from_sources:545 - yahoo failed for 000568: Too Many Requests. Rate limited. Try after a while.
+2026-02-05 20:02:20,407 | ERROR    | trading.data.fetcher:_fetch_from_sources:548 - All sources failed for 000568
+2026-02-05 20:02:20,407 | INFO     | trading.data.fetcher:get_multiple_parallel:642 - Parallel fetch: 16/200 successful
+2026-02-05 20:02:20,480 | INFO     | trading:create_features:170 - Created 47 features, 1436 valid samples
+2026-02-05 20:02:20,550 | INFO     | trading:create_features:170 - Created 47 features, 1436 valid samples
+2026-02-05 20:02:20,649 | INFO     | trading:create_features:170 - Created 47 features, 1436 valid samples
+2026-02-05 20:02:20,725 | INFO     | trading:create_features:170 - Created 47 features, 1436 valid samples
+2026-02-05 20:02:20,792 | INFO     | trading:create_features:170 - Created 47 features, 1436 valid samples
+2026-02-05 20:02:20,865 | INFO     | trading:create_features:170 - Created 47 features, 1436 valid samples
+2026-02-05 20:02:20,926 | INFO     | trading:create_features:170 - Created 47 features, 1435 valid samples
+2026-02-05 20:02:20,993 | INFO     | trading:create_features:170 - Created 47 features, 1436 valid samples
+2026-02-05 20:02:21,077 | INFO     | trading:create_features:170 - Created 47 features, 1436 valid samples
+2026-02-05 20:02:21,147 | INFO     | trading:create_features:170 - Created 47 features, 1436 valid samples
+2026-02-05 20:02:21,210 | INFO     | trading:create_features:170 - Created 47 features, 1429 valid samples
+2026-02-05 20:02:21,292 | INFO     | trading:create_features:170 - Created 47 features, 1435 valid samples
+2026-02-05 20:02:21,359 | INFO     | trading:create_features:170 - Created 47 features, 1435 valid samples
+2026-02-05 20:02:21,431 | INFO     | trading:create_features:170 - Created 47 features, 1435 valid samples
+2026-02-05 20:02:21,499 | INFO     | trading:create_features:170 - Created 47 features, 1435 valid samples
+2026-02-05 20:02:21,566 | INFO     | trading:create_features:170 - Created 47 features, 1424 valid samples
+2026-02-05 20:02:21,566 | INFO     | trading:_download_all_data:459 - Processed 16 stocks with features
+2026-02-05 20:02:21,644 | INFO     | trading:fit_scaler:99 - Scaler fitted on 15741 samples, 47 features
+2026-02-05 20:02:21,645 | INFO     | trading:_prepare_training_data:512 - Scaler fitted on 15741 samples
+2026-02-05 20:02:21,900 | INFO     | trading:save_scaler:305 - Scaler saved atomically to F:\Trading app\Trading-graph\models_saved\scaler.pkl

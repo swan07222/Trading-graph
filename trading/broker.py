@@ -246,8 +246,8 @@ class SimulatorBroker(BrokerInterface):
     
     def _get_fetcher(self):
         if self._fetcher is None:
-            from data.fetcher import DataFetcher
-            self._fetcher = DataFetcher()
+            from data.fetcher import get_fetcher
+            self._fetcher = get_fetcher()
         return self._fetcher
     
     @property
@@ -301,26 +301,20 @@ class SimulatorBroker(BrokerInterface):
             self._update_prices()
             return dict(self._positions)
     
-    def _check_price_limits(self, symbol: str, price: float, prev_close: float, name: str = None) -> Tuple[bool, str]:
-        """Check if price is within A-share limits"""
+    def _check_price_limits(self, symbol: str, side: OrderSide, price: float, prev_close: float, name: str = None) -> Tuple[bool, str]:
         from core.constants import get_price_limit
-        
         if prev_close <= 0:
             return True, "OK"
-        
-        # Get limit percentage with ST detection
+
         limit_pct = get_price_limit(symbol, name)
-        
-        # Calculate bounds
         limit_up = prev_close * (1 + limit_pct)
         limit_down = prev_close * (1 - limit_pct)
-        
-        if price >= limit_up * 0.999:  # At limit up
+
+        if side == OrderSide.BUY and price >= limit_up * 0.999:
             return False, f"Cannot buy at limit up ({limit_pct*100:.0f}%)"
-        
-        if price <= limit_down * 1.001:  # At limit down
+        if side == OrderSide.SELL and price <= limit_down * 1.001:
             return False, f"Cannot sell at limit down ({limit_pct*100:.0f}%)"
-        
+
         return True, "OK"
 
     def get_position(self, symbol: str) -> Optional[Position]:
@@ -395,6 +389,14 @@ class SimulatorBroker(BrokerInterface):
             return False, f"Quantity must be multiple of {lot_size}"
         
         if order.side == OrderSide.BUY:
+            est_price = price * (1 + CONFIG.SLIPPAGE)   # conservative
+            est_value = order.quantity * est_price
+            est_commission = max(est_value * CONFIG.COMMISSION, 5.0)
+            est_total = est_value + est_commission
+
+            if est_total > self._cash:
+                return False, f"Insufficient funds: need {est_total:,.2f}, have {self._cash:,.2f}"
+
             cost = order.quantity * price
             commission = cost * CONFIG.COMMISSION
             total = cost + commission
@@ -436,7 +438,7 @@ class SimulatorBroker(BrokerInterface):
         prev_close = float(df['close'].iloc[-2]) if len(df) >= 2 else market_price
         
         # Check price limits
-        can_trade, reason = self._check_price_limits(order.symbol, market_price, prev_close, order.name)
+        can_trade, reason = self._check_price_limits(order.symbol, order.side, market_price, prev_close, order.name)
         if not can_trade:
             order.status = OrderStatus.REJECTED
             order.message = reason
@@ -445,30 +447,19 @@ class SimulatorBroker(BrokerInterface):
         
         # For LIMIT orders, check if order is marketable
         if order.order_type == OrderType.LIMIT:
-            if order.side == OrderSide.BUY:
-                # Buy limit: only fill if market price <= limit price
-                if market_price > order.price:
-                    # Order accepted but not filled - would need price to come down
-                    order.status = OrderStatus.REJECTED
-                    order.message = f"Limit order not marketable in simulator: market {market_price:.2f} > limit {order.price:.2f}"
-                    self._emit('order_update', order)
-                    return
-                else:
-                    fill_price = min(market_price, order.price)
-            else:  # SELL
-                # Sell limit: only fill if market price >= limit price
-                if market_price < order.price:
-                    order.status = OrderStatus.ACCEPTED
-                    order.message = f"Limit order waiting: market {market_price:.2f} < limit {order.price:.2f}"
-                    self._emit('order_update', order)
-                    if random.random() < 0.3:
-                        fill_price = order.price
-                    else:
-                        return
-                else:
-                    fill_price = max(market_price, order.price)
+            if order.side == OrderSide.BUY and market_price > order.price:
+                order.status = OrderStatus.REJECTED
+                order.message = f"Limit BUY not marketable: market {market_price:.2f} > limit {order.price:.2f}"
+                self._emit('order_update', order)
+                return
+            if order.side == OrderSide.SELL and market_price < order.price:
+                order.status = OrderStatus.REJECTED
+                order.message = f"Limit SELL not marketable: market {market_price:.2f} < limit {order.price:.2f}"
+                self._emit('order_update', order)
+                return
+
+            fill_price = order.price
         else:
-            # Market order - use market price with slippage
             fill_price = market_price
         
         # Apply slippage
@@ -787,7 +778,7 @@ class THSBroker(BrokerInterface):
             
             return Account(
                 broker_name=self.name,
-                cash=float(balance.get('资金余额', balance.get('总资产', 0))),
+                cash=float(balance.get('资金余额', 0) or 0),
                 available=float(balance.get('可用金额', 0)),
                 frozen=float(balance.get('冻结金额', 0)),
                 positions=positions,

@@ -9,17 +9,19 @@ Features:
 - Session management
 - Access control
 """
+from __future__ import annotations  # MUST BE FIRST IMPORT
+
 import os
 import json
 import hashlib
 import secrets
 import threading
+import gzip
 from pathlib import Path
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 from typing import Dict, List, Optional, Any
 from dataclasses import dataclass
 from contextlib import contextmanager
-import gzip
 
 from config.settings import CONFIG
 from utils.logger import get_logger
@@ -195,7 +197,6 @@ class AuditLog:
     
     def _get_file(self):
         """Get current log file"""
-        from datetime import date
         today = date.today()
         
         if self._current_date != today:
@@ -337,8 +338,6 @@ class AuditLog:
         results = []
         
         # Determine files to search
-        from datetime import date, timedelta
-        
         start = start_date.date() if start_date else date.today() - timedelta(days=30)
         end = end_date.date() if end_date else date.today()
         

@@ -405,7 +405,8 @@ class Backtester:
             for dt, ret in code_benchmark.items():
                 benchmark_by_date[dt].append(ret)
             
-            predictions.extend([model.predict(X[i:i+1]).predicted_class for i in range(len(X))])
+            preds = model.predict_batch(X)
+            predictions.extend([p.predicted_class for p in preds])
             actuals.extend(y.tolist())
         
         if actuals:
@@ -528,7 +529,7 @@ class Backtester:
 
             # Generate signal for NEXT bar (if we have prediction data)
             if i < len(X) - 2:  # Need at least one more bar for execution
-                pred = model.predict(X[i:i+1])
+                pred = preds[i]
                 
                 if shares == 0 and pred.predicted_class == 2 and pred.confidence >= CONFIG.MIN_CONFIDENCE:
                     pending_signal = ('BUY', pred.confidence, dt)
