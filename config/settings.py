@@ -154,6 +154,7 @@ class AlertConfig:
     smtp_username: str = ""
     smtp_password_key: str = "smtp_password"
 
+
 class Config:
     """
     Production-grade configuration manager with backward compatibility
@@ -185,7 +186,6 @@ class Config:
         self.risk = RiskConfig()
         self.security = SecurityConfig()
         self.alerts = AlertConfig()
-        self.min_stocks_for_training: int = 5
         
         # Main settings
         self.capital: float = 100000.0
@@ -196,6 +196,7 @@ class Config:
         
         # Paths
         self._base_dir = Path(__file__).parent.parent
+        self._model_dir_override: Optional[str] = None
         
         # Stock pool
         self.stock_pool: List[str] = [
@@ -205,7 +206,7 @@ class Config:
             "300760", "300015", "601166", "601398", "600030",
         ]
         
-        # Minimum stocks for training
+        # Training settings
         self.min_stocks_for_training: int = 5
         self.auto_learn_epochs: int = 50
         
@@ -214,7 +215,6 @@ class Config:
         self._validate()
     
     # ==================== BACKWARD COMPATIBILITY ALIASES ====================
-    # These properties maintain compatibility with old CONFIG.UPPERCASE style
     
     @property
     def CAPITAL(self) -> float:
@@ -379,11 +379,6 @@ class Config:
     def RISK_PER_TRADE(self, value: float):
         self.risk.risk_per_trade_pct = value
     
-    # Training config aliases
-    @property
-    def MIN_STOCKS_FOR_TRAINING(self) -> int:
-        return self.min_stocks_for_training
-    
     @property
     def AUTO_LEARN_EPOCHS(self) -> int:
         return self.auto_learn_epochs
@@ -399,7 +394,7 @@ class Config:
     
     @property
     def DATA_DIR(self) -> Path:
-        path = self._base_dir / "data"
+        path = self._base_dir / "data_storage"
         path.mkdir(parents=True, exist_ok=True)
         return path
     
@@ -409,8 +404,10 @@ class Config:
     
     @property
     def MODEL_DIR(self) -> Path:
-        override = getattr(self, "_model_dir_override", None)
-        path = Path(override) if override else (self._base_dir / "models_saved")
+        if self._model_dir_override:
+            path = Path(self._model_dir_override)
+        else:
+            path = self._base_dir / "models_saved"
         path.mkdir(parents=True, exist_ok=True)
         return path
     
@@ -448,22 +445,22 @@ class Config:
     def audit_dir(self) -> Path:
         return self.AUDIT_DIR
     
+    def set_model_dir(self, path: str):
+        """Override model directory path"""
+        self._model_dir_override = str(path) if path else None
+    
     def _load(self):
         """Load configuration from file and environment"""
         if self._config_file.exists():
             try:
-                with open(self._config_file, 'r') as f:
+                with open(self._config_file, 'r', encoding='utf-8') as f:
                     data = json.load(f)
                 self._apply_dict(data)
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"Warning: Failed to load config file: {e}")
         
         self._load_from_env()
     
-    def set_model_dir(self, path: str):
-        """Override model directory path"""
-        self._model_dir_override = str(path) if path else None
-
     def _load_from_env(self):
         """Load from environment variables"""
         env_mappings = {
@@ -489,9 +486,10 @@ class Config:
             if hasattr(self, key):
                 current = getattr(self, key)
                 if hasattr(current, '__dataclass_fields__'):
-                    for k, v in value.items():
-                        if hasattr(current, k):
-                            setattr(current, k, v)
+                    if isinstance(value, dict):
+                        for k, v in value.items():
+                            if hasattr(current, k):
+                                setattr(current, k, v)
                 else:
                     setattr(self, key, value)
     
@@ -505,13 +503,23 @@ class Config:
     
     def _validate(self):
         """Validate configuration"""
-        assert self.capital > 0, "Capital must be positive"
-        assert 0 < self.model.train_ratio < 1, "Invalid train ratio"
-        assert self.model.embargo_bars >= self.model.prediction_horizon, \
-            "Embargo must be >= prediction horizon"
-        assert abs(self.model.train_ratio + self.model.val_ratio + 
-                   self.model.test_ratio - 1.0) < 0.001, \
-            "Split ratios must sum to 1.0"
+        errors = []
+        
+        if self.capital <= 0:
+            errors.append("Capital must be positive")
+        
+        if not (0 < self.model.train_ratio < 1):
+            errors.append("Invalid train ratio")
+        
+        if self.model.embargo_bars < self.model.prediction_horizon:
+            errors.append("Embargo must be >= prediction horizon")
+        
+        ratio_sum = self.model.train_ratio + self.model.val_ratio + self.model.test_ratio
+        if abs(ratio_sum - 1.0) >= 0.001:
+            errors.append(f"Split ratios must sum to 1.0, got {ratio_sum}")
+        
+        if errors:
+            raise ValueError(f"Configuration errors: {'; '.join(errors)}")
     
     def save(self):
         """Save current configuration to file"""
@@ -523,8 +531,11 @@ class Config:
             'broker_path': self.broker_path,
         }
         
-        with open(self._config_file, 'w') as f:
-            json.dump(data, f, indent=2)
+        try:
+            with open(self._config_file, 'w', encoding='utf-8') as f:
+                json.dump(data, f, indent=2)
+        except Exception as e:
+            print(f"Warning: Failed to save config: {e}")
     
     def is_market_open(self) -> bool:
         """Check if market is currently open"""
@@ -539,6 +550,15 @@ class Config:
         afternoon = t.market_open_pm <= current_time <= t.market_close_pm
         
         return morning or afternoon
+    
+    def get_min_data_required(self) -> int:
+        """Get minimum data points required for training"""
+        return (
+            self.model.sequence_length + 
+            self.model.prediction_horizon + 
+            self.model.embargo_bars + 
+            50  # Buffer
+        )
 
 
 # Global config instance

@@ -918,3 +918,23 @@ Fold 18/58:
 2026-02-06 09:59:48,457 | INFO     | trading.models.ensemble:_train_single_model:381 - gru complete. Best accuracy: 57.58%
 2026-02-06 09:59:48,458 | INFO     | trading.models.ensemble:train:218 - Training tcn...
 2026-02-06 09:59:53,869 | INFO     | trading:main:121 - Interrupted by user
+2026-02-06 10:04:59,763 | INFO     | trading:main:67 - ============================================================
+2026-02-06 10:04:59,764 | INFO     | trading:main:68 - AI STOCK TRADING SYSTEM - Production Grade
+2026-02-06 10:04:59,764 | INFO     | trading:main:69 - ============================================================
+2026-02-06 10:05:01,686 | INFO     | trading.data.fetcher:__init__:264 - AkShare initialized
+2026-02-06 10:05:01,870 | INFO     | trading.data.fetcher:__init__:480 - Yahoo Finance initialized
+2026-02-06 10:05:01,871 | INFO     | trading.data.fetcher:_init_sources:777 - Data source akshare available
+2026-02-06 10:05:01,871 | INFO     | trading.data.fetcher:_init_sources:777 - Data source tencent available
+2026-02-06 10:05:01,871 | INFO     | trading.data.fetcher:_init_sources:777 - Data source yahoo available
+2026-02-06 10:05:01,871 | INFO     | trading.data.processor:load_scaler:412 - Scaler loaded from F:\Trading app\Trading-graph\models_saved\scaler.pkl
+2026-02-06 10:05:02,200 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized lstm model
+2026-02-06 10:05:02,238 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized transformer model
+2026-02-06 10:05:02,254 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized gru model
+2026-02-06 10:05:02,266 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized tcn model
+2026-02-06 10:05:02,266 | INFO     | trading.models.ensemble:__init__:85 - Ensemble initialized: ['lstm', 'transformer', 'gru', 'tcn'] on cpu
+2026-02-06 10:05:02,319 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized lstm model
+2026-02-06 10:05:02,339 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized transformer model
+2026-02-06 10:05:02,352 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized gru model
+2026-02-06 10:05:02,366 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized tcn model
+2026-02-06 10:05:02,368 | INFO     | trading.models.ensemble:load:627 - Ensemble loaded: ['lstm', 'transformer', 'gru', 'tcn'], interval=1d, horizon=5
+2026-02-06 10:05:02,369 | INFO     | trading.models.predictor:_load_model:314 - Model loaded successfully (4 networks)

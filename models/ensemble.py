@@ -11,8 +11,8 @@ from pathlib import Path
 from dataclasses import dataclass
 from torch.utils.data import DataLoader, TensorDataset
 import threading
+import os
 
-from .networks import LSTMModel, TransformerModel, GRUModel, TCNModel, HybridModel
 from config.settings import CONFIG
 from utils.logger import get_logger
 
@@ -51,13 +51,7 @@ class EnsembleModel:
     Ensemble of multiple neural networks with weighted voting.
     """
     
-    MODEL_CLASSES = {
-        'lstm': LSTMModel,
-        'transformer': TransformerModel,
-        'gru': GRUModel,
-        'tcn': TCNModel,
-        'hybrid': HybridModel,
-    }
+    MODEL_CLASSES = {}  # Will be populated on first use
     
     def __init__(
         self, 
@@ -71,6 +65,9 @@ class EnsembleModel:
         self._lock = threading.Lock()
         self.temperature = 1.0
         
+        # Lazy import to avoid circular imports
+        self._init_model_classes()
+        
         model_names = model_names or ['lstm', 'transformer', 'gru', 'tcn']
         
         self.models: Dict[str, nn.Module] = {}
@@ -83,6 +80,18 @@ class EnsembleModel:
         self._normalize_weights()
         
         log.info(f"Ensemble initialized: {list(self.models.keys())} on {self.device}")
+    
+    def _init_model_classes(self):
+        """Initialize model classes lazily"""
+        if not self.MODEL_CLASSES:
+            from .networks import LSTMModel, TransformerModel, GRUModel, TCNModel, HybridModel
+            self.MODEL_CLASSES.update({
+                'lstm': LSTMModel,
+                'transformer': TransformerModel,
+                'gru': GRUModel,
+                'tcn': TCNModel,
+                'hybrid': HybridModel,
+            })
     
     def _init_model(
         self, 
@@ -170,16 +179,13 @@ class EnsembleModel:
         callback: Callable = None,
         stop_flag: Any = None
     ) -> Dict:
-        """Train all models in the ensemble (faster loaders + stable defaults)."""
-        import os
-
+        """Train all models in the ensemble."""
         epochs = epochs or CONFIG.model.epochs
         batch_size = batch_size or CONFIG.model.batch_size
 
         train_dataset = TensorDataset(torch.FloatTensor(X_train), torch.LongTensor(y_train))
         val_dataset = TensorDataset(torch.FloatTensor(X_val), torch.LongTensor(y_val))
 
-        # ---- speed knobs ----
         pin = (self.device == "cuda")
         cpu_cnt = os.cpu_count() or 0
         num_workers = 0 if cpu_cnt <= 2 else min(4, cpu_cnt - 1)
@@ -191,7 +197,7 @@ class EnsembleModel:
             shuffle=True,
             num_workers=num_workers,
             pin_memory=pin,
-            persistent_workers=persistent,
+            persistent_workers=persistent if num_workers > 0 else False,
         )
         val_loader = DataLoader(
             val_dataset,
@@ -199,7 +205,7 @@ class EnsembleModel:
             shuffle=False,
             num_workers=num_workers,
             pin_memory=pin,
-            persistent_workers=persistent,
+            persistent_workers=persistent if num_workers > 0 else False,
         )
 
         class_counts = np.bincount(y_train, minlength=CONFIG.model.num_classes)
@@ -295,7 +301,7 @@ class EnsembleModel:
         best_state = None
 
         use_amp = (self.device == "cuda")
-        scaler = torch.amp.GradScaler("cuda", enabled=use_amp)
+        scaler = torch.amp.GradScaler("cuda", enabled=use_amp) if use_amp else None
 
         for epoch in range(int(epochs)):
             if self._should_stop(stop_flag):
@@ -310,7 +316,7 @@ class EnsembleModel:
 
                 optimizer.zero_grad(set_to_none=True)
 
-                if use_amp:
+                if use_amp and scaler:
                     with torch.amp.autocast("cuda", enabled=True):
                         logits, _ = model(batch_X)
                         loss = criterion(logits, batch_y)
@@ -529,7 +535,7 @@ class EnsembleModel:
         return out
     
     def save(self, path: str = None):
-        """Save ensemble to file atomically. Also writes a per-model manifest."""
+        """Save ensemble to file atomically."""
         from datetime import datetime
         from utils.atomic_io import atomic_torch_save, atomic_write_json
 
@@ -572,17 +578,16 @@ class EnsembleModel:
             "prediction_horizon": int(horizon),
         }
 
-        # Per-model manifest (do NOT overwrite a single global one)
         manifest_path = path.parent / f"model_manifest_{path.stem}.json"
         atomic_write_json(manifest_path, manifest)
 
-        log.info(f"Ensemble saved atomically to {path}")
+        log.info(f"Ensemble saved to {path}")
 
     def load(self, path: str = None) -> bool:
         """Load ensemble from file."""
         if path is None:
-            # fall back to default daily file if user calls load() directly
             path = str(CONFIG.model_dir / "ensemble_1d_5.pt")
+        
         if not Path(path).exists():
             log.warning(f"No saved model at {path}")
             return False
@@ -602,6 +607,9 @@ class EnsembleModel:
                 saved_hidden = int(arch.get("hidden_size", CONFIG.model.hidden_size))
                 saved_dropout = float(arch.get("dropout", CONFIG.model.dropout))
                 saved_classes = int(arch.get("num_classes", CONFIG.model.num_classes))
+
+                # Ensure model classes are initialized
+                self._init_model_classes()
 
                 self.models = {}
                 self.weights = {}
@@ -626,7 +634,7 @@ class EnsembleModel:
 
             log.info(
                 f"Ensemble loaded: {list(self.models.keys())}, "
-                f"interval={getattr(self,'interval','?')}, horizon={getattr(self,'prediction_horizon','?')}"
+                f"interval={getattr(self, 'interval', '?')}, horizon={getattr(self, 'prediction_horizon', '?')}"
             )
             return True
 

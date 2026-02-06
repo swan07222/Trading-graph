@@ -853,7 +853,7 @@ class MainApp(QMainWindow):
             self._stop_monitoring()
     
     def _start_monitoring(self):
-        """Start real-time signal monitoring (1m interval + user forecast minutes)."""
+        """Start real-time monitoring + ensure feed subscriptions for dealing bars (1m)."""
         if self.predictor is None or self.predictor.ensemble is None:
             self.log("Cannot start monitoring: No model loaded", "error")
             self.monitor_action.setChecked(False)
@@ -861,6 +861,14 @@ class MainApp(QMainWindow):
 
         interval = self.interval_combo.currentText().strip()
         forecast_min = int(self.forecast_spin.value())
+
+        # Ensure feed subscribes so BarAggregator records 1m dealing bars into local DB
+        try:
+            from data.feeds import get_feed_manager
+            fm = get_feed_manager()
+            fm.subscribe_many(self.watch_list)
+        except Exception as e:
+            self.log(f"Feed subscription warning: {e}", "warning")
 
         self.monitor = RealTimeMonitor(
             self.predictor,
@@ -874,11 +882,11 @@ class MainApp(QMainWindow):
         self.monitor.error_occurred.connect(lambda e: self.log(f"Monitor: {e}", "warning"))
         self.monitor.start()
 
-        self.monitor_label.setText("📡 Monitoring: ACTIVE")
+        self.monitor_label.setText("Monitoring: ACTIVE")
         self.monitor_label.setStyleSheet("color: #4CAF50; font-weight: bold;")
-        self.monitor_action.setText("⏹️ Stop Monitoring")
+        self.monitor_action.setText("Stop Monitoring")
 
-        self.log(f"Real-time monitoring started ({interval}, forecast={forecast_min}m) for {len(self.watch_list)} stocks", "success")
+        self.log(f"Monitoring started ({interval}, forecast={forecast_min}m) for {len(self.watch_list)} stocks", "success")
     
     def _stop_monitoring(self):
         """Stop real-time monitoring"""
@@ -936,43 +944,86 @@ class MainApp(QMainWindow):
     
     def _on_price_updated(self, code: str, price: float):
         """
-        Update watchlist price + update chart's REAL line live.
-        Forecast line stays stable (good for comparing real vs predicted divergence).
+        Real-time chart update:
+        - update watchlist price
+        - if this code is currently selected, refresh BOTH actual series and AI forecast curve
+        with a throttle to avoid heavy CPU.
         """
+        # Update watchlist price cell
         for row in range(self.watchlist.rowCount()):
             item = self.watchlist.item(row, 0)
             if item and item.text() == code:
                 self.watchlist.setItem(row, 1, QTableWidgetItem(f"¥{price:.2f}"))
                 break
 
+        # Only update chart for the currently selected stock
         try:
             current_code = self.stock_input.text().strip()
             if not current_code or current_code != code:
                 return
-            if not self.current_prediction:
+            if not self.predictor:
                 return
+        except Exception:
+            return
 
-            series = getattr(self, "_live_price_series", {})
-            if code not in series:
-                base = list(self.current_prediction.price_history or [])
-                series[code] = base[-120:] if base else []
-            series[code].append(float(price))
-            series[code] = series[code][-180:]
-            setattr(self, "_live_price_series", series)
+        # Throttle forecast refresh (e.g., once every 2 seconds)
+        now = time.time()
+        last = float(getattr(self, "_last_forecast_refresh_ts", 0.0))
+        if (now - last) < 2.0:
+            # still update actual series quickly without refreshing forecast
+            try:
+                if self.current_prediction and self.current_prediction.price_history:
+                    series = getattr(self, "_live_price_series", {})
+                    base = series.get(code) or list(self.current_prediction.price_history)
+                    base = base[-180:]
+                    base.append(float(price))
+                    base = base[-180:]
+                    series[code] = base
+                    setattr(self, "_live_price_series", series)
 
-            levels = {
-                "stop_loss": self.current_prediction.levels.stop_loss,
-                "target_1": self.current_prediction.levels.target_1,
-                "target_2": self.current_prediction.levels.target_2,
-                "target_3": self.current_prediction.levels.target_3,
-            }
-            self.chart.update_data(
-                series[code],
-                self.current_prediction.predicted_prices,
-                levels
+                    levels = {
+                        "stop_loss": self.current_prediction.levels.stop_loss,
+                        "target_1": self.current_prediction.levels.target_1,
+                        "target_2": self.current_prediction.levels.target_2,
+                        "target_3": self.current_prediction.levels.target_3,
+                    }
+                    self.chart.update_data(series[code], self.current_prediction.predicted_prices, levels)
+            except Exception:
+                pass
+            return
+
+        setattr(self, "_last_forecast_refresh_ts", now)
+
+        # Refresh BOTH actual history and forecast curve using Predictor (fast path uses intraday DB)
+        try:
+            interval = self.interval_combo.currentText().strip()
+            forecast_min = int(self.forecast_spin.value())
+
+            actual_prices, predicted_prices = self.predictor.get_realtime_forecast_curve(
+                stock_code=code,
+                interval=interval,
+                horizon_steps=forecast_min if interval != "1d" else int(CONFIG.PREDICTION_HORIZON),
+                lookback_bars=1400 if interval == "1m" else 600,
+                use_realtime_price=True,
             )
+
+            # Update chart using current levels if available
+            levels = None
+            if self.current_prediction and self.current_prediction.stock_code == code:
+                levels = {
+                    "stop_loss": self.current_prediction.levels.stop_loss,
+                    "target_1": self.current_prediction.levels.target_1,
+                    "target_2": self.current_prediction.levels.target_2,
+                    "target_3": self.current_prediction.levels.target_3,
+                }
+
+            self.chart.update_data(actual_prices, predicted_prices, levels)
+
+            # Keep state
+            if self.current_prediction and self.current_prediction.stock_code == code:
+                self.current_prediction.predicted_prices = predicted_prices
         except Exception as e:
-            log.warning(f"Chart live update failed: {e}")
+            log.warning(f"Realtime forecast refresh failed: {e}")
     
     def _quick_trade(self, pred: Prediction):
         """Quick trade from signal"""

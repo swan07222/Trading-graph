@@ -12,6 +12,7 @@ from pathlib import Path
 import pandas as pd
 import torch
 import threading
+import time
 
 from config.settings import CONFIG
 from data.fetcher import DataFetcher
@@ -119,6 +120,16 @@ class Predictor:
         
         self._manifest_path = CONFIG.MODEL_DIR / "model_manifest.json"
         self._manifest_mtime = None
+        
+        # Forecaster
+        self._forecaster = None
+        self._forecaster_device = self.device
+        self._last_inference_X: Optional[np.ndarray] = None
+        
+        # Model metadata
+        self._trained_interval = "1d"
+        self._trained_horizon = CONFIG.PREDICTION_HORIZON
+        self._loaded_model_key: Optional[str] = None
 
         self._load_model()
     
@@ -129,13 +140,10 @@ class Predictor:
         interval: str = "1m",
         lookback_bars: int = 900
     ) -> List[QuickPrediction]:
-        """Fast batch prediction for UI. Supports 1m mode."""
+        """Fast batch prediction for UI."""
         interval = str(interval).lower()
-
-        # For quick signals we assume horizon is your UI-selected horizon,
-        # but the model loaded here is only used for probabilities anyway.
-        # We'll load the "closest default" (30) so the UI behaves predictably.
         horizon = 30 if interval != "1d" else int(CONFIG.PREDICTION_HORIZON)
+        
         self._ensure_model(interval=interval, horizon=horizon)
 
         if not self.is_ready():
@@ -165,8 +173,12 @@ class Predictor:
                 if cached and (now - cached[1]).total_seconds() < self._cache_ttl_seconds:
                     df = cached[0]
                 else:
-                    df = self._fetch_and_process(code, interval=interval, lookback_bars=lookback_bars)
-                    self._feature_cache[code] = (df, now)
+                    try:
+                        df = self._fetch_and_process(code, interval=interval, lookback_bars=lookback_bars)
+                        self._feature_cache[code] = (df, now)
+                    except Exception as e:
+                        log.warning(f"Failed to fetch {code}: {e}")
+                        continue
 
             if len(df) < CONFIG.SEQUENCE_LENGTH + 5:
                 continue
@@ -174,9 +186,13 @@ class Predictor:
             last_close = float(df["close"].iloc[-1])
             price = float(price_map.get(code, last_close))
 
-            X = self.processor.prepare_inference_sequence(df, feature_cols)
-            seqs.append(X[0])
-            metas.append((code, price, df))
+            try:
+                X = self.processor.prepare_inference_sequence(df, feature_cols)
+                seqs.append(X[0])
+                metas.append((code, price, df))
+            except Exception as e:
+                log.warning(f"Failed to prepare sequence for {code}: {e}")
+                continue
 
         if not seqs:
             return []
@@ -204,14 +220,75 @@ class Predictor:
 
         return out
 
-    def _ensure_model(self, interval: str, horizon: int):
+    def get_realtime_forecast_curve(
+        self,
+        stock_code: str,
+        interval: str = "1m",
+        horizon_steps: int = 30,
+        lookback_bars: int = 1400,
+        use_realtime_price: bool = True,
+    ) -> Tuple[List[float], List[float]]:
         """
-        Ensure the correct classifier ensemble + forecaster are loaded (interval + horizon).
-        Forecaster produces the future curve using AI model outputs, not heuristics.
+        Real-time AI graph: fetch latest intraday bars and produce forecast curve.
         """
-        import torch
-        from models.networks import TCNModel
+        interval = str(interval).lower()
+        horizon_steps = int(horizon_steps)
+        stock_code = DataFetcher.clean_code(stock_code)
 
+        self._ensure_model(interval=interval, horizon=horizon_steps)
+        if not self.is_ready():
+            raise RuntimeError("Model not loaded")
+
+        feature_cols = self.feature_engine.get_feature_columns()
+
+        df = self.fetcher.get_history(
+            stock_code,
+            interval=interval,
+            bars=int(lookback_bars),
+            days=int(lookback_bars),
+            use_cache=True,
+            update_db=True,
+        )
+        if df is None or df.empty:
+            raise ValueError(f"No data for {stock_code} ({interval})")
+
+        df = self.feature_engine.create_features(df)
+        if len(df) < CONFIG.SEQUENCE_LENGTH + 20:
+            raise ValueError(f"Insufficient data for forecast: {stock_code} ({interval}) len={len(df)}")
+
+        last_close = float(df["close"].iloc[-1])
+        current_price = last_close
+        if use_realtime_price:
+            try:
+                q = self.fetcher.get_realtime(stock_code)
+                if q and q.price and float(q.price) > 0:
+                    current_price = float(q.price)
+            except Exception:
+                pass
+
+        X = self.processor.prepare_inference_sequence(df, feature_cols)
+        self._last_inference_X = X
+
+        atr_pct = float(df["atr_pct"].iloc[-1]) if "atr_pct" in df.columns else 2.0
+
+        model_horizon = int(getattr(self, "_trained_horizon", horizon_steps))
+        predicted_prices = self._generate_price_forecast(
+            current_price=current_price,
+            pred=self.ensemble.predict(X),
+            atr_pct=atr_pct,
+            horizon_steps=horizon_steps,
+            model_horizon=model_horizon,
+        )
+
+        hist_len = 180 if interval != "1d" else 60
+        actual_prices = df["close"].tail(hist_len).tolist()
+        if actual_prices:
+            actual_prices[-1] = float(current_price)
+
+        return actual_prices, predicted_prices
+
+    def _ensure_model(self, interval: str, horizon: int):
+        """Ensure the correct classifier ensemble + forecaster are loaded."""
         interval = str(interval).lower()
         horizon = int(horizon)
 
@@ -220,7 +297,6 @@ class Predictor:
         if loaded_key == key and self.is_ready():
             return
 
-        # Paths
         model_path = CONFIG.MODEL_DIR / f"ensemble_{interval}_{horizon}.pt"
         scaler_path = CONFIG.MODEL_DIR / f"scaler_{interval}_{horizon}.pkl"
         forecast_path = CONFIG.MODEL_DIR / f"forecast_{interval}_{horizon}.pt"
@@ -234,8 +310,8 @@ class Predictor:
         # Load scaler
         try:
             self.processor.load_scaler(str(scaler_path))
-        except Exception:
-            pass
+        except Exception as e:
+            log.warning(f"Failed to load scaler: {e}")
 
         # Load classifier ensemble
         if not model_path.exists():
@@ -243,6 +319,7 @@ class Predictor:
             self._model_loaded = False
             self._loaded_model_key = None
             self._forecaster = None
+            log.warning(f"Model not found: {model_path}")
             return
 
         try:
@@ -257,17 +334,21 @@ class Predictor:
             self._trained_interval = str(meta.get("interval", interval))
             self._trained_horizon = int(meta.get("prediction_horizon", horizon))
             self._loaded_model_key = key if ok else None
-        except Exception:
+            
+        except Exception as e:
+            log.error(f"Failed to load model: {e}")
             self.ensemble = None
             self._model_loaded = False
             self._loaded_model_key = None
             self._forecaster = None
             return
 
-        # Load forecaster (best-effort)
+        # Load forecaster (optional)
         self._forecaster = None
         try:
             if forecast_path.exists():
+                from models.networks import TCNModel
+                
                 fstate = torch.load(forecast_path, map_location="cpu", weights_only=False)
                 finput = int(fstate.get("input_size", input_size))
                 fh = int(fstate.get("horizon", horizon))
@@ -279,14 +360,16 @@ class Predictor:
                 fore = TCNModel(
                     input_size=finput,
                     hidden_size=hidden,
-                    num_classes=fh,   # horizon outputs
+                    num_classes=fh,
                     dropout=drop
                 ).to(device)
                 fore.load_state_dict(fstate["state_dict"])
                 fore.eval()
                 self._forecaster = fore
                 self._forecaster_device = device
-        except Exception:
+                log.info(f"Forecaster loaded: {forecast_path}")
+        except Exception as e:
+            log.warning(f"Failed to load forecaster: {e}")
             self._forecaster = None
 
     def _load_model(self):
@@ -304,7 +387,7 @@ class Predictor:
             return
         
         try:
-            state = torch.load(model_path, map_location='cpu')
+            state = torch.load(model_path, map_location='cpu', weights_only=False)
             input_size = state.get('input_size', len(FeatureEngine.FEATURE_NAMES))
             
             self.ensemble = EnsembleModel(input_size)
@@ -332,13 +415,7 @@ class Predictor:
         forecast_minutes: int = 30,
         lookback_bars: int = 1200
     ) -> Prediction:
-        """
-        Generate complete prediction for a stock.
-
-        FIX:
-        - interval="1m"
-        - forecast_minutes controls future graph length (20~30)
-        """
+        """Generate complete prediction for a stock."""
         interval = str(interval).lower()
         forecast_minutes = int(forecast_minutes)
 
@@ -370,7 +447,6 @@ class Predictor:
 
         feature_cols = self.feature_engine.get_feature_columns()
         X = self.processor.prepare_inference_sequence(df, feature_cols)
-
         self._last_inference_X = X
 
         ensemble_pred = self.ensemble.predict(X)
@@ -389,7 +465,6 @@ class Predictor:
 
         warnings = self._generate_warnings(ensemble_pred, rsi)
 
-        # show recent history: for 1m show 120 points; for 1d show 60
         hist_len = 120 if interval != "1d" else 60
         price_history = df["close"].tail(hist_len).tolist()
 
@@ -413,7 +488,7 @@ class Predictor:
             predicted_class=ensemble_pred.predicted_class,
             confidence=ensemble_pred.confidence,
             model_agreement=ensemble_pred.agreement,
-            signal=signal,
+                        signal=signal,
             signal_strength=strength,
             levels=levels,
             position=position,
@@ -426,18 +501,6 @@ class Predictor:
             predicted_prices=predicted_prices
         )
     
-    def _maybe_reload_model(self):
-        try:
-            if self._manifest_path.exists():
-                mtime = self._manifest_path.stat().st_mtime
-                if self._manifest_mtime is None:
-                    self._manifest_mtime = mtime
-                elif mtime != self._manifest_mtime:
-                    self._manifest_mtime = mtime
-                    self._load_model()
-        except Exception:
-            pass
-
     def _get_indicator(self, df: pd.DataFrame, col: str, default: float) -> float:
         """Safely get an indicator from df, handling normalization."""
         try:
@@ -451,16 +514,12 @@ class Predictor:
             v = float(v)
 
             # RSI: features.py normalizes as: rsi / 100 - 0.5, giving range [-0.5, 0.5]
-            # We need to convert back to [0, 100] for signal calculations
+            # Convert back to [0, 100] for signal calculations
             if col.lower() in ("rsi", "rsi_14", "rsi_7"):
-                # Check if value is in normalized range [-0.6, 0.6]
                 if -0.6 <= v <= 0.6:
-                    # Reverse normalization: (v + 0.5) * 100
                     return (v + 0.5) * 100.0
-                # Already in 0-100 range (shouldn't happen with current features.py)
                 elif 0.0 <= v <= 100.0:
                     return v
-                # Fallback
                 return float(default)
 
             return v
@@ -468,12 +527,7 @@ class Predictor:
             return float(default)
     
     def _fetch_and_process(self, stock_code: str, interval: str = "1d", lookback_bars: int = None) -> pd.DataFrame:
-        """
-        Fetch and process data for a stock.
-
-        FIX:
-        - supports 1m interval using bars
-        """
+        """Fetch and process data for a stock."""
         interval = str(interval).lower()
 
         if interval == "1d":
@@ -556,12 +610,12 @@ class Predictor:
         # Trend (15% weight)
         if ma_ratio > 3:
             score += 12
-            reasons.append(f"📈 Strong uptrend")
+            reasons.append("📈 Strong uptrend")
         elif ma_ratio > 1:
             score += 6
         elif ma_ratio < -3:
             score -= 12
-            reasons.append(f"📉 Strong downtrend")
+            reasons.append("📉 Strong downtrend")
         elif ma_ratio < -1:
             score -= 6
         
@@ -637,20 +691,16 @@ class Predictor:
         if risk_per_share <= 0:
             return PositionSize(0, 0, 0, 0)
         
-        # Base risk amount
         base_risk = self.capital * (CONFIG.RISK_PER_TRADE / 100)
         adjusted_risk = base_risk * strength * confidence
         
-        # Calculate shares
         shares = int(adjusted_risk / risk_per_share)
         shares = (shares // CONFIG.LOT_SIZE) * CONFIG.LOT_SIZE
         
-        # Apply position limit
         max_position = self.capital * (CONFIG.MAX_POSITION_PCT / 100)
         max_shares = int(max_position / price / CONFIG.LOT_SIZE) * CONFIG.LOT_SIZE
         shares = min(shares, max_shares)
         
-        # Check affordability
         available = self.capital * 0.95
         affordable = int(available / price / CONFIG.LOT_SIZE) * CONFIG.LOT_SIZE
         shares = min(shares, affordable)
@@ -678,15 +728,9 @@ class Predictor:
         model_horizon: int
     ) -> List[float]:
         """
-        FULL AI forecast curve:
-        - If forecast_{interval}_{horizon}.pt exists, use it to predict horizon-step returns.
-        - Otherwise fall back to previous heuristic behavior.
-
-        Forecaster outputs Y[k-1] = % return from now to t+k (vector).
+        Generate price forecast curve using AI forecaster if available,
+        otherwise use heuristic approach.
         """
-        import torch
-        import numpy as np
-
         horizon_steps = int(horizon_steps)
         if horizon_steps <= 0:
             return [round(float(current_price), 2)]
@@ -695,23 +739,21 @@ class Predictor:
         if px0 <= 0:
             return [0.0]
 
-        # ---- Use AI forecaster if available ----
+        # Use AI forecaster if available
         fore = getattr(self, "_forecaster", None)
-        if fore is not None and hasattr(self, "_last_inference_X"):
+        if fore is not None and self._last_inference_X is not None:
             try:
-                X = getattr(self, "_last_inference_X")  # (1, seq, feat), already scaled
+                X = self._last_inference_X
                 device = getattr(self, "_forecaster_device", "cpu")
                 xb = torch.FloatTensor(X).to(device)
 
                 with torch.inference_mode():
-                    out, _ = fore(xb)  # (1, H)
+                    out, _ = fore(xb)
                     rets = out.detach().cpu().numpy()[0].astype(float)
 
-                # If UI asks more steps than trained horizon, truncate; if fewer, slice
                 rets = rets[:horizon_steps]
 
-                # Safety clamp: avoid insane jumps (use ATR as scale)
-                # atr_pct is percent; allow roughly +/- 3*ATR per step cumulative
+                # Safety clamp
                 cap = max(1.0, float(atr_pct) * 3.0)
                 rets = np.clip(rets, -cap, cap)
 
@@ -720,10 +762,10 @@ class Predictor:
                     prices.append(px0 * (1.0 + rets[k] / 100.0))
 
                 return [round(float(p), 2) for p in prices]
-            except Exception:
-                pass
+            except Exception as e:
+                log.debug(f"Forecaster inference failed: {e}")
 
-        # ---- Fallback heuristic (your old behavior) ----
+        # Fallback heuristic
         up_thr = float(CONFIG.UP_THRESHOLD)
         dn_thr = float(CONFIG.DOWN_THRESHOLD)
 
@@ -776,7 +818,6 @@ class Predictor:
             except Exception as e:
                 log.warning(f"Failed to predict {code}: {e}")
         
-        # Sort by signal strength
         predictions.sort(key=lambda p: (
             p.signal in [Signal.STRONG_BUY, Signal.STRONG_SELL],
             p.signal_strength,
@@ -805,3 +846,8 @@ class Predictor:
             filtered = predictions
         
         return filtered[:n]
+    
+    def clear_cache(self):
+        """Clear feature cache"""
+        with self._lock:
+            self._feature_cache.clear()

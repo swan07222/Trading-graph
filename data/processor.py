@@ -7,10 +7,11 @@ CRITICAL FIXES:
 - Proper embargo gap between splits  
 - Labels truncated at split boundaries
 - Consistent sequence construction
+- Added validation for minimum data requirements
 """
 import numpy as np
 import pandas as pd
-from typing import Tuple, List, Optional, Dict
+from typing import Tuple, List, Optional, Dict, Union
 from sklearn.preprocessing import RobustScaler
 import pickle
 from pathlib import Path
@@ -60,17 +61,17 @@ class DataProcessor:
         
         df = df.copy()
         
-        # Future return over horizon
+        if 'close' not in df.columns:
+            raise ValueError("DataFrame must have 'close' column")
+        
         future_price = df['close'].shift(-horizon)
         future_return = (future_price / df['close'] - 1) * 100
         
-        # Create labels
         df['label'] = 1  # Default: NEUTRAL
         df.loc[future_return >= up_thresh, 'label'] = 2  # UP
         df.loc[future_return <= down_thresh, 'label'] = 0  # DOWN
         df['future_return'] = future_return
         
-        # Mark last horizon rows as invalid (no future data)
         df.iloc[-horizon:, df.columns.get_loc('label')] = np.nan
         df.iloc[-horizon:, df.columns.get_loc('future_return')] = np.nan
         
@@ -85,8 +86,7 @@ class DataProcessor:
             if features.ndim != 2:
                 raise ValueError(f"Features must be 2D, got shape {features.shape}")
             
-            # Remove any NaN rows before fitting
-            valid_mask = ~np.isnan(features).any(axis=1)
+            valid_mask = ~(np.isnan(features).any(axis=1) | np.isinf(features).any(axis=1))
             clean_features = features[valid_mask]
             
             if len(clean_features) < 10:
@@ -124,14 +124,12 @@ class DataProcessor:
             else:
                 features_2d = features
             
-            # Handle NaN values
-            nan_mask = np.isnan(features_2d)
-            features_2d = np.nan_to_num(features_2d, nan=0.0)
+            nan_mask = np.isnan(features_2d) | np.isinf(features_2d)
+            features_2d = np.nan_to_num(features_2d, nan=0.0, posinf=0.0, neginf=0.0)
             
             transformed = self.scaler.transform(features_2d)
             transformed = np.clip(transformed, -5, 5)
             
-            # Restore NaN positions
             transformed[nan_mask] = 0.0
             
             if len(original_shape) == 3:
@@ -145,7 +143,11 @@ class DataProcessor:
         feature_cols: List[str],
         fit_scaler: bool = False,
         return_index: bool = False
-    ):
+    ) -> Union[Tuple[np.ndarray, np.ndarray, np.ndarray], 
+               Tuple[np.ndarray, np.ndarray, np.ndarray, pd.DatetimeIndex]]:
+        """
+        Prepare sequences for training/validation.
+        """
         seq_len = CONFIG.SEQUENCE_LENGTH
 
         missing_cols = set(feature_cols) - set(df.columns)
@@ -161,7 +163,8 @@ class DataProcessor:
 
         if fit_scaler:
             valid_mask = ~np.isnan(labels)
-            self.fit_scaler(features[valid_mask])
+            if valid_mask.sum() > 10:
+                self.fit_scaler(features[valid_mask])
 
         if self._fitted:
             features = self.transform(features)
@@ -177,7 +180,7 @@ class DataProcessor:
                 X.append(seq)
                 y.append(int(labels[i]))
                 r.append(float(returns[i]) if not np.isnan(returns[i]) else 0.0)
-                idx.append(df.index[i])  # aligned end-of-sequence timestamp
+                idx.append(df.index[i])
 
         if not X:
             empty = (np.array([]), np.array([]), np.array([]))
@@ -201,7 +204,6 @@ class DataProcessor:
     ) -> np.ndarray:
         """
         Prepare a single sequence for inference using the last SEQUENCE_LENGTH rows.
-        Robust to NaN/Inf and missing columns.
         """
         seq_len = CONFIG.SEQUENCE_LENGTH
 
@@ -215,7 +217,6 @@ class DataProcessor:
         df_seq = df.tail(seq_len).copy()
         features = df_seq[feature_cols].values.astype(np.float32)
 
-        # Replace inf/nan safely (keep stable behavior)
         features = np.nan_to_num(features, nan=0.0, posinf=0.0, neginf=0.0)
 
         if self._fitted:
@@ -226,7 +227,6 @@ class DataProcessor:
 
         return features[np.newaxis, :, :]
     
-    # Alias for backward compatibility
     def prepare_single_sequence(self, df: pd.DataFrame, feature_cols: List[str]) -> np.ndarray:
         """Alias for prepare_inference_sequence"""
         return self.prepare_inference_sequence(df, feature_cols)
@@ -237,9 +237,7 @@ class DataProcessor:
         feature_cols: List[str],
         fit_scaler_on_train: bool = True
     ) -> Dict[str, Tuple[np.ndarray, np.ndarray, np.ndarray]]:
-        """
-        Alias for split_temporal_single_stock for backward compatibility
-        """
+        """Alias for split_temporal_single_stock"""
         return self.split_temporal_single_stock(df, feature_cols, fit_scaler_on_train)
     
     def split_temporal_single_stock(
@@ -250,20 +248,26 @@ class DataProcessor:
     ) -> Dict[str, Tuple[np.ndarray, np.ndarray, np.ndarray]]:
         """
         Split a single stock's data temporally with proper embargo.
-
-        FIX:
-        - clamp split boundaries so we never slice negative ranges
-        - keep leakage rules intact
         """
         n = len(df)
         horizon = CONFIG.PREDICTION_HORIZON
         embargo = CONFIG.EMBARGO_BARS
+        seq_len = CONFIG.SEQUENCE_LENGTH
+        
+        min_required = seq_len + horizon + embargo + 50
+        if n < min_required:
+            log.warning(f"Insufficient data for splitting: {n} rows, need {min_required}")
+            return {
+                'train': (np.array([]), np.array([]), np.array([])),
+                'val': (np.array([]), np.array([]), np.array([])),
+                'test': (np.array([]), np.array([]), np.array([])),
+            }
 
         train_end_raw = int(n * CONFIG.TRAIN_RATIO)
         val_end_raw = int(n * (CONFIG.TRAIN_RATIO + CONFIG.VAL_RATIO))
 
-        cut_train = max(0, train_end_raw - horizon - embargo)
-        cut_val = max(cut_train, val_end_raw - horizon - embargo)
+        cut_train = max(seq_len, train_end_raw - horizon - embargo)
+        cut_val = max(cut_train + seq_len, val_end_raw - horizon - embargo)
 
         train_df = df.iloc[:cut_train].copy()
         val_df = df.iloc[train_end_raw:cut_val].copy()
@@ -273,7 +277,7 @@ class DataProcessor:
         val_df = self.create_labels(val_df)
         test_df = self.create_labels(test_df)
 
-        if fit_scaler_on_train and len(train_df) >= CONFIG.SEQUENCE_LENGTH:
+        if fit_scaler_on_train and len(train_df) >= seq_len:
             train_features = train_df[feature_cols].values
             valid_mask = ~train_df["label"].isna()
             if int(valid_mask.sum()) > 10:
@@ -281,43 +285,15 @@ class DataProcessor:
 
         results = {}
         for name, split_df in [("train", train_df), ("val", val_df), ("test", test_df)]:
-            if len(split_df) >= CONFIG.SEQUENCE_LENGTH + 5:
+            if len(split_df) >= seq_len + 5:
                 X, y, r = self.prepare_sequences(split_df, feature_cols, fit_scaler=False)
                 results[name] = (X, y, r)
+                log.debug(f"Split '{name}': {len(X)} samples")
             else:
                 results[name] = (np.array([]), np.array([]), np.array([]))
+                log.debug(f"Split '{name}': 0 samples (insufficient data)")
 
         return results
-    
-    def save_scaler(self, path: str = None):
-        """Save scaler atomically"""
-        if not self._fitted:
-            log.warning("Scaler not fitted, nothing to save")
-            return
-
-        from pathlib import Path
-        
-        path = Path(path) if path else (CONFIG.MODEL_DIR / "scaler.pkl")
-        path.parent.mkdir(parents=True, exist_ok=True)
-
-        with self._lock:
-            data = {
-                'scaler': self.scaler,
-                'n_features': self._n_features,
-                'fit_samples': self._fit_samples,
-                'fitted': True
-            }
-
-        try:
-            from utils.atomic_io import atomic_pickle_dump
-            atomic_pickle_dump(path, data)
-        except ImportError:
-            # Fallback to regular pickle
-            import pickle
-            with open(path, 'wb') as f:
-                pickle.dump(data, f, protocol=pickle.HIGHEST_PROTOCOL)
-        
-        log.info(f"Scaler saved to {path}")
     
     def prepare_forecast_sequences(
         self,
@@ -326,12 +302,10 @@ class DataProcessor:
         horizon: int,
         fit_scaler: bool = False,
         return_index: bool = False
-    ):
+    ) -> Union[Tuple[np.ndarray, np.ndarray], 
+               Tuple[np.ndarray, np.ndarray, pd.DatetimeIndex]]:
         """
-        Multi-step forecasting dataset:
-        - X: (samples, seq_len, n_features)
-        - Y: (samples, horizon) where Y[k-1] = % return from close[t] to close[t+k]
-        Strictly uses future close only for labels (allowed).
+        Multi-step forecasting dataset.
         """
         seq_len = int(CONFIG.SEQUENCE_LENGTH)
         horizon = int(horizon)
@@ -347,7 +321,9 @@ class DataProcessor:
         close = pd.to_numeric(df["close"], errors="coerce").values.astype(np.float32)
 
         if fit_scaler:
-            self.fit_scaler(features[~np.isnan(features).any(axis=1)])
+            valid_mask = ~np.isnan(features).any(axis=1)
+            if valid_mask.sum() > 10:
+                self.fit_scaler(features[valid_mask])
 
         if self._fitted:
             features = self.transform(features)
@@ -356,7 +332,6 @@ class DataProcessor:
 
         n = len(df)
         for i in range(seq_len - 1, n):
-            # need future closes up to i+horizon
             if i + horizon >= n:
                 break
 
@@ -372,8 +347,7 @@ class DataProcessor:
             if np.isnan(fut).any():
                 continue
 
-            # vector of horizon returns relative to current close
-            y = (fut / c0 - 1.0) * 100.0  # shape (horizon,)
+            y = (fut / c0 - 1.0) * 100.0
 
             X.append(seq)
             Y.append(y.astype(np.float32))
@@ -390,6 +364,32 @@ class DataProcessor:
         if return_index:
             return X, Y, pd.DatetimeIndex(idx)
         return X, Y
+
+    def save_scaler(self, path: str = None):
+        """Save scaler atomically"""
+        if not self._fitted:
+            log.warning("Scaler not fitted, nothing to save")
+            return
+
+        path = Path(path) if path else (CONFIG.MODEL_DIR / "scaler.pkl")
+        path.parent.mkdir(parents=True, exist_ok=True)
+
+        with self._lock:
+            data = {
+                'scaler': self.scaler,
+                'n_features': self._n_features,
+                'fit_samples': self._fit_samples,
+                'fitted': True
+            }
+
+        try:
+            from utils.atomic_io import atomic_pickle_dump
+            atomic_pickle_dump(path, data)
+        except ImportError:
+            with open(path, 'wb') as f:
+                pickle.dump(data, f, protocol=pickle.HIGHEST_PROTOCOL)
+        
+        log.info(f"Scaler saved to {path}")
 
     def load_scaler(self, path: str = None) -> bool:
         """Load saved scaler for inference"""
@@ -409,7 +409,7 @@ class DataProcessor:
                 self._fit_samples = data.get('fit_samples', 0)
                 self._fitted = data.get('fitted', True)
             
-            log.info(f"Scaler loaded from {path}")
+            log.info(f"Scaler loaded from {path} ({self._n_features} features)")
             return True
             
         except Exception as e:
@@ -420,7 +420,10 @@ class DataProcessor:
         """Get class distribution for logging"""
         if len(y) == 0:
             return {'DOWN': 0, 'NEUTRAL': 0, 'UP': 0, 'total': 0}
-        counts = np.bincount(y.astype(int), minlength=CONFIG.NUM_CLASSES)
+        
+        y_int = y.astype(int)
+        counts = np.bincount(y_int, minlength=CONFIG.NUM_CLASSES)
+        
         return {
             'DOWN': int(counts[0]),
             'NEUTRAL': int(counts[1]),
