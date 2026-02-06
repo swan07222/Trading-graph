@@ -404,7 +404,8 @@ class Config:
     
     @property
     def MODEL_DIR(self) -> Path:
-        path = self._base_dir / "models_saved"
+        override = getattr(self, "_model_dir_override", None)
+        path = Path(override) if override else (self._base_dir / "models_saved")
         path.mkdir(parents=True, exist_ok=True)
         return path
     

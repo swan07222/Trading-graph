@@ -171,17 +171,18 @@ class EventBus:
                 self._subscribers[event_type].remove(handler)
     
     def publish(self, event: Event, async_: bool = True):
-        """Publish event"""
-        # Record in history
-        self._history.append(event)
-        if len(self._history) > self._max_history:
-            self._history.pop(0)
-        
+        """Publish event (thread-safe history)."""
+        # Record in history safely
+        with self._lock:
+            self._history.append(event)
+            if len(self._history) > self._max_history:
+                self._history.pop(0)
+
         if async_ and self._running:
             self._queue.put(event)
         else:
             self._dispatch(event)
-    
+            
     def _dispatch(self, event: Event):
         """Dispatch event to subscribers"""
         with self._lock:

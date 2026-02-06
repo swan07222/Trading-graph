@@ -1,13 +1,6 @@
+# data/feeds.py
 """
 Real-Time Data Feeds
-Score Target: 10/10
-
-Features:
-- WebSocket streaming (when available)
-- Polling fallback
-- Multi-source aggregation
-- Automatic reconnection
-- Data normalization
 """
 import threading
 import time
@@ -19,10 +12,9 @@ from abc import ABC, abstractmethod
 from enum import Enum
 import json
 
-from config import CONFIG
+from config.settings import CONFIG  # FIXED
 from core.events import EVENT_BUS, EventType, TickEvent, BarEvent
 from core.exceptions import DataSourceUnavailableError
-from data.fetcher import get_fetcher, Quote
 from utils.logger import get_logger
 
 log = get_logger(__name__)
@@ -45,6 +37,12 @@ class Subscription:
     interval: int = 0  # For bars, in seconds
     callback: Optional[Callable] = None
     created_at: datetime = field(default_factory=datetime.now)
+
+
+# Import Quote here to avoid circular import at module level
+def _get_quote_class():
+    from data.fetcher import Quote
+    return Quote
 
 
 class DataFeed(ABC):
@@ -107,9 +105,6 @@ class DataFeed(ABC):
 class PollingFeed(DataFeed):
     """
     Polling-based data feed
-    
-    Uses periodic API calls to fetch quotes.
-    Fallback when WebSocket not available.
     """
     
     name = "polling"
@@ -119,7 +114,7 @@ class PollingFeed(DataFeed):
         self._interval = interval
         self._fetcher = None  # Lazy init
         self._symbols: Set[str] = set()
-        self._last_quotes: Dict[str, Quote] = {}
+        self._last_quotes: Dict[str, 'Quote'] = {}
     
     def connect(self) -> bool:
         """Start polling"""
@@ -169,7 +164,7 @@ class PollingFeed(DataFeed):
         log.debug(f"Unsubscribed from {symbol}")
     
     def _poll_loop(self):
-        """Main polling loop - fetches all subscribed symbols in one batch"""
+        """Main polling loop"""
         while self._running:
             try:
                 with self._lock:
@@ -179,13 +174,10 @@ class PollingFeed(DataFeed):
                     time.sleep(self._interval)
                     continue
                 
-                # Fetch ALL quotes in one API call
                 quotes = self._fetch_batch_quotes(symbols)
                 
                 for symbol, quote in quotes.items():
                     if quote and quote.price > 0:
-                        last = self._last_quotes.get(symbol)
-                        
                         self._last_quotes[symbol] = quote
                         self._notify(quote)
 
@@ -204,18 +196,16 @@ class PollingFeed(DataFeed):
                 log.error(f"Polling loop error: {e}")
                 time.sleep(1)
 
-    def _fetch_batch_quotes(self, symbols: List[str]) -> Dict[str, Quote]:
+    def _fetch_batch_quotes(self, symbols: List[str]) -> Dict[str, 'Quote']:
         """Fetch quotes using shared spot cache"""
-        from data.fetcher import get_spot_cache
+        from data.fetcher import get_spot_cache, Quote
         
         result = {}
         cache = get_spot_cache()
         
-        # Single cache refresh for all symbols
         df = cache.get()
         
         if df is None or df.empty:
-            # Fallback to individual fetches
             fetcher = self._get_fetcher()
             for symbol in symbols:
                 quote = fetcher.get_realtime(symbol)
@@ -223,7 +213,6 @@ class PollingFeed(DataFeed):
                     result[symbol] = quote
             return result
         
-        # Extract from cached data
         for symbol in symbols:
             data = cache.get_quote(symbol)
             if data and data['price'] > 0:
@@ -245,24 +234,18 @@ class PollingFeed(DataFeed):
         
         return result
 
-    def get_quote(self, symbol: str) -> Optional[Quote]:
+    def get_quote(self, symbol: str) -> Optional['Quote']:
         """Get last quote for symbol"""
         return self._last_quotes.get(symbol)
     
-    def get_all_quotes(self) -> Dict[str, Quote]:
+    def get_all_quotes(self) -> Dict[str, 'Quote']:
         """Get all last quotes"""
         with self._lock:
             return self._last_quotes.copy()
 
+
 class WebSocketFeed(DataFeed):
-    """
-    WebSocket-based real-time data feed
-    
-    Provides:
-    - True real-time quotes
-    - Staleness detection
-    - Automatic reconnection
-    """
+    """WebSocket-based real-time data feed"""
     
     name = "websocket"
     
@@ -281,8 +264,7 @@ class WebSocketFeed(DataFeed):
         try:
             import websocket
             
-            # Try Sina WebSocket
-            ws_url = "wss://push.sina.cn/ws"  # Example URL
+            ws_url = "wss://push.sina.cn/ws"
             
             self._ws = websocket.WebSocketApp(
                 ws_url,
@@ -292,7 +274,6 @@ class WebSocketFeed(DataFeed):
                 on_open=self._on_open
             )
             
-            # Run in thread
             self._running = True
             self._thread = threading.Thread(target=self._ws.run_forever, daemon=True)
             self._thread.start()
@@ -320,7 +301,6 @@ class WebSocketFeed(DataFeed):
             self._symbols.add(symbol)
             
             if self._ws and self.status == FeedStatus.CONNECTED:
-                # Send subscription message
                 msg = json.dumps({
                     "action": "subscribe",
                     "symbols": [symbol]
@@ -347,7 +327,6 @@ class WebSocketFeed(DataFeed):
         self._reconnect_delay = 1
         log.info("WebSocket connected")
         
-        # Resubscribe to all symbols
         with self._lock:
             for symbol in self._symbols:
                 msg = json.dumps({
@@ -356,11 +335,12 @@ class WebSocketFeed(DataFeed):
                 })
                 ws.send(msg)
         
-        # Start heartbeat
         threading.Thread(target=self._heartbeat_loop, daemon=True).start()
     
     def _on_message(self, ws, message):
         """Handle incoming message"""
+        from data.fetcher import Quote
+        
         try:
             data = json.loads(message)
             
@@ -368,10 +348,8 @@ class WebSocketFeed(DataFeed):
             if not symbol:
                 return
             
-            # Update staleness tracker
             self._last_message_time[symbol] = datetime.now()
             
-            # Parse quote
             quote = Quote(
                 code=symbol,
                 name=data.get('name', ''),
@@ -416,7 +394,6 @@ class WebSocketFeed(DataFeed):
             log.warning(f"WebSocket closed, reconnecting in {self._reconnect_delay}s...")
             time.sleep(self._reconnect_delay)
             
-            # Exponential backoff
             self._reconnect_delay = min(self._reconnect_delay * 2, self._max_reconnect_delay)
             
             self.connect()
@@ -445,15 +422,9 @@ class WebSocketFeed(DataFeed):
             return float('inf')
         return (datetime.now() - last_time).total_seconds()
 
+
 class AggregatedFeed(DataFeed):
-    """
-    Aggregated data feed combining multiple sources
-    
-    Features:
-    - Automatic source selection
-    - Failover between sources
-    - Data quality scoring
-    """
+    """Aggregated data feed combining multiple sources"""
     
     name = "aggregated"
     
@@ -469,7 +440,6 @@ class AggregatedFeed(DataFeed):
         if primary:
             self._primary_feed = feed
         
-        # Forward callbacks
         feed.add_callback(self._on_feed_data)
     
     def connect(self) -> bool:
@@ -535,16 +505,11 @@ class AggregatedFeed(DataFeed):
     
     def _on_feed_data(self, data):
         """Handle data from any feed"""
-        # Forward to our callbacks
         self._notify(data)
 
 
 class BarAggregator:
-    """
-    Aggregates ticks into bars
-    
-    Creates OHLCV bars from tick data.
-    """
+    """Aggregates ticks into bars"""
     
     def __init__(self, interval_seconds: int = 60):
         self._interval = interval_seconds
@@ -556,27 +521,30 @@ class BarAggregator:
         """Add bar callback"""
         self._callbacks.append(callback)
     
-    def on_tick(self, quote: Quote):
+    def on_tick(self, quote):
         """Process tick into bar"""
         symbol = quote.code
         
         with self._lock:
-            # Get or create current bar
             if symbol not in self._current_bars:
                 self._current_bars[symbol] = self._new_bar(quote)
             
             bar = self._current_bars[symbol]
             
-            # FIXED: Get last cumulative volume from bar state
             last_cum_vol = bar.get('last_cum_vol', 0)
             
-            # Update bar OHLC
             bar['high'] = max(bar['high'], quote.price)
             bar['low'] = min(bar['low'], quote.price)
             bar['close'] = quote.price
             
-            # FIXED: Calculate incremental volume (quote.volume is cumulative)
-            current_cum_vol = int(quote.volume) if quote.volume else 0
+            # Handle volume (could be None, NaN, or cumulative)
+            current_cum_vol = 0
+            if quote.volume is not None:
+                try:
+                    current_cum_vol = int(quote.volume)
+                except (ValueError, TypeError):
+                    current_cum_vol = 0
+            
             if current_cum_vol < last_cum_vol:
                 delta_vol = current_cum_vol  # reset/new session
             else:
@@ -585,23 +553,25 @@ class BarAggregator:
             bar["volume"] += max(delta_vol, 0)
             bar['last_cum_vol'] = current_cum_vol
             
-            # Check if bar is complete
             now = datetime.now()
             bar_end = bar['timestamp'] + timedelta(seconds=self._interval)
             
             if now >= bar_end:
-                # Emit bar
                 self._emit_bar(symbol, bar)
-                
-                # Start new bar
                 self._current_bars[symbol] = self._new_bar(quote)
     
-    def _new_bar(self, quote: Quote) -> Dict:
+    def _new_bar(self, quote) -> Dict:
         """Create new bar"""
         now = datetime.now()
-        # Align to interval
         seconds = (now.minute * 60 + now.second) % self._interval
         bar_start = now - timedelta(seconds=seconds, microseconds=now.microsecond)
+        
+        initial_vol = 0
+        if quote.volume is not None:
+            try:
+                initial_vol = int(quote.volume)
+            except (ValueError, TypeError):
+                initial_vol = 0
         
         return {
             'timestamp': bar_start,
@@ -610,12 +580,11 @@ class BarAggregator:
             'low': quote.price,
             'close': quote.price,
             'volume': 0,
-            'last_cum_vol': int(quote.volume) if quote.volume else 0,  # FIXED: Track cumulative volume
+            'last_cum_vol': initial_vol,
         }
     
     def _emit_bar(self, symbol: str, bar: Dict):
         """Emit completed bar"""
-        # Publish event
         EVENT_BUS.publish(BarEvent(
             symbol=symbol,
             open=bar['open'],
@@ -626,7 +595,6 @@ class BarAggregator:
             timestamp=bar['timestamp']
         ))
         
-        # Notify callbacks
         for callback in self._callbacks:
             try:
                 callback(symbol, bar)
@@ -634,20 +602,8 @@ class BarAggregator:
                 log.warning(f"Bar callback error: {e}")
 
 
-# =============================================================================
-# FEED MANAGER
-# =============================================================================
-
 class FeedManager:
-    """
-    Central manager for all data feeds
-    
-    Features:
-    - Single point of access
-    - Automatic feed selection
-    - Subscription management
-    - Health monitoring
-    """
+    """Central manager for all data feeds"""
     
     _instance = None
     _lock = threading.Lock()
@@ -673,16 +629,12 @@ class FeedManager:
     
     def initialize(self):
         """Initialize feeds"""
-        # FIXED: Use poll_interval_seconds, not cache_ttl_hours
-        interval = getattr(CONFIG.data, 'poll_interval_seconds', 3.0)
+        interval = CONFIG.data.poll_interval_seconds
         polling = PollingFeed(interval=interval)
         self._feeds['polling'] = polling
         self._active_feed = polling
         
-        # Connect
         polling.connect()
-        
-        # Add bar aggregation
         polling.add_callback(self._bar_aggregator.on_tick)
         
         log.info(f"Feed manager initialized (poll interval: {interval}s)")
@@ -713,8 +665,8 @@ class FeedManager:
         for symbol in symbols:
             self.subscribe(symbol)
     
-    def get_quote(self, symbol: str) -> Optional[Quote]:
-        """Get latest quote for a symbol - PUBLIC API"""
+    def get_quote(self, symbol: str) -> Optional['Quote']:
+        """Get latest quote for a symbol"""
         if isinstance(self._active_feed, PollingFeed):
             return self._active_feed.get_quote(symbol)
         return None
@@ -746,7 +698,6 @@ class FeedManager:
         log.info("Feed manager shutdown")
 
 
-# Global instance
 _feed_manager: Optional[FeedManager] = None
 
 

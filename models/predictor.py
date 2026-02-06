@@ -60,6 +60,16 @@ class PositionSize:
 
 
 @dataclass
+class QuickPrediction:
+    stock_code: str
+    current_price: float
+    prob_up: float
+    prob_neutral: float
+    prob_down: float
+    confidence: float
+    signal: Signal  # reuse your Signal enum
+
+@dataclass
 class Prediction:
     """Complete prediction result"""
     # Stock info
@@ -124,8 +134,83 @@ class Predictor:
         self._feature_cache: Dict[str, Tuple[pd.DataFrame, datetime]] = {}
         self._cache_ttl_seconds = 60  # Reuse features for 60 seconds
         
+        self._manifest_path = CONFIG.MODEL_DIR / "model_manifest.json"
+        self._manifest_mtime = None
+
         self._load_model()
     
+    def predict_quick_batch(self, codes: List[str], use_realtime_price: bool = True) -> List["QuickPrediction"]:
+        """
+        Fast batch prediction used by UI real-time monitor.
+        Uses cached feature frames and ensemble.predict_batch() for speed.
+        """
+        self._maybe_reload_model()
+        if not self.is_ready():
+            raise RuntimeError("Model not loaded")
+
+        feature_cols = self.feature_engine.get_feature_columns()
+
+        seqs: List[np.ndarray] = []
+        metas: List[Tuple[str, float, pd.DataFrame]] = []
+        now = datetime.now()
+
+        for code in codes:
+            code = DataFetcher.clean_code(code)
+            if not code:
+                continue
+
+            # Cache features for TTL seconds
+            with self._lock:
+                cached = self._feature_cache.get(code)
+                if cached and (now - cached[1]).total_seconds() < self._cache_ttl_seconds:
+                    df = cached[0]
+                else:
+                    df = self._fetch_and_process(code)
+                    self._feature_cache[code] = (df, now)
+
+            if len(df) < CONFIG.SEQUENCE_LENGTH + 5:
+                continue
+
+            last_close = float(df["close"].iloc[-1])
+            price = last_close
+            if use_realtime_price:
+                try:
+                    quote = self.fetcher.get_realtime(code)
+                    if quote and getattr(quote, "price", 0) and quote.price > 0:
+                        price = float(quote.price)
+                except Exception:
+                    price = last_close
+
+            X = self.processor.prepare_inference_sequence(df, feature_cols)  # (1, seq, feat)
+            seqs.append(X[0])  # (seq, feat)
+            metas.append((code, price, df))
+
+        if not seqs:
+            return []
+
+        X_batch = np.stack(seqs, axis=0)  # (B, seq, feat)
+        preds = self.ensemble.predict_batch(X_batch)
+
+        out: List[QuickPrediction] = []
+        for (code, price, df), ep in zip(metas, preds):
+            rsi = self._get_indicator(df, "rsi_14", default=50.0)
+            macd = self._get_indicator(df, "macd_hist", default=0.0)
+            ma_ratio = self._get_indicator(df, "ma_ratio_5_20", default=0.0)
+
+            sig, _strength, _reasons = self._calculate_signal(ep, rsi, macd, ma_ratio)
+
+            out.append(QuickPrediction(
+                stock_code=code,
+                current_price=price,
+                prob_up=ep.prob_up,
+                prob_neutral=ep.prob_neutral,
+                prob_down=ep.prob_down,
+                confidence=ep.confidence,
+                signal=sig,
+            ))
+
+        return out
+
     def _load_model(self):
         """Load the trained ensemble model and scaler"""
         model_path = CONFIG.MODEL_DIR / "ensemble.pt"
@@ -167,6 +252,7 @@ class Predictor:
         """
         Generate complete prediction for a stock
         """
+        self._maybe_reload_model()
         if not self.is_ready():
             raise RuntimeError(
                 "Model not loaded. Train a model first with: python main.py --train"
@@ -275,16 +361,50 @@ class Predictor:
             predicted_prices=predicted_prices
         )
     
-    def _get_indicator(self, df, col: str, default: float) -> float:
-        """Safely get indicator value"""
-        if col in df.columns:
-            val = df[col].iloc[-1]
-            if not np.isnan(val):
-                # Convert normalized values back
-                if col == 'rsi_14':
-                    return (val + 0.5) * 100  # Was normalized to [-0.5, 0.5]
-                return float(val)
-        return default
+    def _maybe_reload_model(self):
+        try:
+            if self._manifest_path.exists():
+                mtime = self._manifest_path.stat().st_mtime
+                if self._manifest_mtime is None:
+                    self._manifest_mtime = mtime
+                elif mtime != self._manifest_mtime:
+                    self._manifest_mtime = mtime
+                    self._load_model()
+        except Exception:
+            pass
+
+    def _get_indicator(self, df: pd.DataFrame, col: str, default: float) -> float:
+        """
+        Safely get an indicator from df.
+        Handles common normalization ranges without assuming a single scheme.
+        """
+        try:
+            if col not in df.columns or len(df) == 0:
+                return float(default)
+
+            v = df[col].iloc[-1]
+            if v is None or (isinstance(v, float) and np.isnan(v)):
+                return float(default)
+
+            v = float(v)
+
+            # RSI: try to detect normalization
+            if col.lower() in ("rsi", "rsi_14", "rsi14"):
+                # raw RSI is typically [0,100]
+                if 0.0 <= v <= 100.0:
+                    return v
+                # common normalized RSI variants
+                if 0.0 <= v <= 1.0:
+                    return v * 100.0
+                if -0.5 <= v <= 0.5:
+                    return (v + 0.5) * 100.0
+                if -1.0 <= v <= 1.0:
+                    return (v + 1.0) * 50.0  # map [-1,1] -> [0,100]
+                return float(default)
+
+            return v
+        except Exception:
+            return float(default)
     
     def _fetch_and_process(self, stock_code: str) -> pd.DataFrame:
         """Fetch and process data for a stock"""

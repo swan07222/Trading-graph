@@ -1,12 +1,14 @@
+# analysis/backtest.py
 """
-Walk-Forward Backtesting System v3.0
+Walk-Forward Backtesting System v3.1
 
-FIXED Issues:
-- Proper time-aligned returns across stocks (by DATE)
-- Correct benchmark calculation (buy-hold compounded)
-- Trade counting by entries, not bars
-- Realistic A-share rules
+FIXES:
+- Correct config import
+- Proper index alignment
+- Import cleanup
+- Better error handling
 """
+import os
 import numpy as np
 import pandas as pd
 from typing import Dict, List, Tuple, Optional
@@ -14,18 +16,15 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from collections import defaultdict
 
-from config import CONFIG
+from config.settings import CONFIG  # FIXED: correct import
 from data.fetcher import DataFetcher
 from data.features import FeatureEngine
 from data.processor import DataProcessor
 from models.ensemble import EnsembleModel
-from utils.logger import log
-from dataclasses import dataclass, field
-from datetime import datetime
-from typing import Dict, List, Optional
-from collections import defaultdict
-from core.constants import get_price_limit
-from dataclasses import dataclass, field
+from utils.logger import get_logger
+from core.constants import get_price_limit, get_lot_size, get_exchange  # FIXED: top-level import
+
+log = get_logger(__name__)
 
 
 @dataclass
@@ -52,16 +51,19 @@ class SlippageModel:
     
     def calculate(self, order_value: float, daily_volume: float, daily_avg_price: float) -> float:
         """Calculate slippage for an order"""
-        if daily_volume <= 0 or daily_avg_price <= 0:
+        if daily_volume <= 0 or daily_avg_price <= 0 or np.isnan(daily_volume) or np.isnan(daily_avg_price):
             return self.base_slippage
         
         daily_value = daily_volume * daily_avg_price
-        order_pct = order_value / daily_value if daily_value > 0 else 0
-        
-        # Slippage increases with order size relative to liquidity
+        if daily_value <= 0:
+            return self.base_slippage
+            
+        order_pct = order_value / daily_value
         slippage = self.base_slippage + self.volume_impact * order_pct
         
         return min(slippage, 0.05)  # Cap at 5%
+
+
 @dataclass
 class BacktestResult:
     """Complete backtest results"""
@@ -147,8 +149,8 @@ class Backtester:
         initial_capital: float = None
     ) -> BacktestResult:
         """Run walk-forward backtest."""
-        stocks = stock_codes or CONFIG.STOCK_POOL[:5]
-        capital = initial_capital or CONFIG.CAPITAL
+        stocks = stock_codes or CONFIG.stock_pool[:5]
+        capital = initial_capital or CONFIG.capital
         
         log.info(f"Starting walk-forward backtest:")
         log.info(f"  Stocks: {len(stocks)}")
@@ -177,7 +179,6 @@ class Backtester:
         
         # Run backtest
         all_trades = []
-        # FIXED: Store returns by date for proper alignment
         daily_returns_by_date: Dict[datetime, List[float]] = defaultdict(list)
         benchmark_returns_by_date: Dict[datetime, List[float]] = defaultdict(list)
         fold_accuracies = []
@@ -198,7 +199,6 @@ class Backtester:
                 trades, returns_dict, benchmark_dict, accuracy = result
                 all_trades.extend(trades)
                 
-                # FIXED: Aggregate returns by date
                 for dt, ret_list in returns_dict.items():
                     daily_returns_by_date[dt].extend(ret_list)
 
@@ -219,12 +219,11 @@ class Backtester:
                 })
         
         if not daily_returns_by_date:
-            raise ValueError("No predictions generated during backtest")
+            raise ValueError("No predictions generated during backtest. Check model and data.")
         
-        # FIXED: Calculate properly time-aligned returns
+        # Calculate properly time-aligned returns
         sorted_dates = sorted(daily_returns_by_date.keys())
         
-        # Average returns across stocks for each date
         daily_returns = np.array([
             np.mean(daily_returns_by_date[dt]) for dt in sorted_dates
         ])
@@ -254,13 +253,17 @@ class Backtester:
             try:
                 df = self.fetcher.get_history(code, days=2000)
                 
+                if df is None or df.empty:
+                    log.warning(f"No data for {code}")
+                    continue
+                
                 if len(df) < min_days:
                     log.warning(f"Insufficient data for {code}: {len(df)} days")
                     continue
                 
                 df = self.feature_engine.create_features(df)
                 
-                if len(df) >= CONFIG.SEQUENCE_LENGTH + 50:
+                if len(df) >= CONFIG.model.sequence_length + 50:
                     all_data[code] = df
                     log.info(f"  {code}: {len(df)} samples")
                     
@@ -278,7 +281,7 @@ class Backtester:
     ) -> List[Tuple]:
         """Generate walk-forward folds with proper separation"""
         folds = []
-        embargo_days = CONFIG.EMBARGO_BARS
+        embargo_days = CONFIG.model.embargo_bars
         
         train_start = min_date
         
@@ -316,7 +319,7 @@ class Backtester:
             mask = (df.index >= train_start) & (df.index < train_end)
             fold_df = df[mask]
             
-            if len(fold_df) >= CONFIG.SEQUENCE_LENGTH:
+            if len(fold_df) >= CONFIG.model.sequence_length:
                 train_features_list.append(fold_df[feature_cols].values)
         
         if not train_features_list:
@@ -331,12 +334,11 @@ class Backtester:
         X_train, y_train = [], []
         
         for code, df in all_data.items():
-
             mask = (df.index >= train_start) & (df.index < train_end)
             fold_raw = df.loc[mask].copy()
             fold_df = processor.create_labels(fold_raw)
             
-            if len(fold_df) >= CONFIG.SEQUENCE_LENGTH + 10:
+            if len(fold_df) >= CONFIG.model.sequence_length + 10:
                 X, y, _ = processor.prepare_sequences(fold_df, feature_cols, fit_scaler=False)
                 if len(X) > 0:
                     X_train.append(X)
@@ -362,7 +364,6 @@ class Backtester:
         
         # Test
         trades = []
-        # FIXED: Returns indexed by date
         returns_by_date = defaultdict(list)
         benchmark_by_date = defaultdict(list)
         predictions = []
@@ -371,9 +372,9 @@ class Backtester:
         for code, df in all_data.items():
             mask = (df.index >= test_start) & (df.index < test_end)
             fold_raw = df.loc[mask].copy()
-            fold_df = processor.create_labels(fold_raw)  
+            fold_df = processor.create_labels(fold_raw)
             
-            if len(fold_df) < CONFIG.SEQUENCE_LENGTH + 5:
+            if len(fold_df) < CONFIG.model.sequence_length + 5:
                 continue
             
             X, y, returns, idx = processor.prepare_sequences(
@@ -382,15 +383,30 @@ class Backtester:
             if len(X) == 0:
                 continue
 
-            aligned = fold_df.loc[idx]
+            # FIXED: Safe index alignment
+            common_idx = fold_df.index.intersection(idx)
+            if len(common_idx) == 0:
+                continue
+            aligned = fold_df.loc[common_idx]
             
+            # Re-filter X, y, returns to match common_idx
+            idx_mask = idx.isin(common_idx)
+            X = X[idx_mask]
+            y = y[idx_mask]
+            returns = returns[idx_mask]
+            idx = idx[idx_mask]
+
+            if len(X) == 0:
+                continue
+
             code_trades, code_returns, code_benchmark = self._simulate_trading(
                 model=model,
                 X=X,
                 y=y,
                 returns=returns,
                 dates=idx,
-                prices=aligned["close"].values,
+                open_prices=aligned["open"].values,
+                close_prices=aligned["close"].values,
                 volumes=aligned["volume"].values,
                 stock_code=code,
                 capital=capital / len(all_data)
@@ -398,7 +414,6 @@ class Backtester:
             
             trades.extend(code_trades)
             
-            # FIXED: Store by date
             for dt, ret in code_returns.items():
                 returns_by_date[dt].append(ret)
 
@@ -424,154 +439,217 @@ class Backtester:
         y: np.ndarray,
         returns: np.ndarray,
         dates: pd.DatetimeIndex,
-        prices: np.ndarray,
+        open_prices: np.ndarray,
+        close_prices: np.ndarray,
         volumes: np.ndarray,
         stock_code: str,
         capital: float
-    ):
+    ) -> Tuple[List[BacktestTrade], Dict, Dict]:
         """
-        Simulate trading with NEXT-BAR execution.
-        
-        CRITICAL: Signal at bar i -> execute at bar i+1 open/close
+        NEXT-BAR execution without lookahead + realistic CN costs.
         """
         slippage_model = SlippageModel()
-        trades = []
-        
-        cash = capital
+        lot = int(get_lot_size(stock_code))
+
+        trades: List[BacktestTrade] = []
+
+        cash = float(capital)
         shares = 0
         entry_price = 0.0
-        entry_date = None
-        pending_signal = None  # Signal waiting for next bar execution
-        
-        daily_portfolio_values = {}
-        daily_benchmark_values = {}
-        
-        horizon = CONFIG.PREDICTION_HORIZON
-        limit = get_price_limit(stock_code) * 100.0
+        entry_exec_i: Optional[int] = None
+        pending_signal: Optional[Tuple[str, float, pd.Timestamp]] = None
 
-        def is_limit_up(prev_close, close):
-            return prev_close > 0 and (close / prev_close - 1) * 100 >= (limit - 0.01)
+        daily_portfolio_values: Dict[pd.Timestamp, float] = {}
+        daily_benchmark_values: Dict[pd.Timestamp, float] = {}
 
-        def is_limit_down(prev_close, close):
-            return prev_close > 0 and (close / prev_close - 1) * 100 <= (-limit + 0.01)
+        horizon = int(CONFIG.model.prediction_horizon)
+        limit_pct = float(get_price_limit(stock_code))
 
-        benchmark_shares = capital / float(prices[0]) if prices[0] > 0 else 0
+        # Costs
+        commission_rate = float(CONFIG.trading.commission)
+        stamp_tax_rate = float(CONFIG.trading.stamp_tax)
+        commission_min = 5.0
+        is_sse = (get_exchange(str(stock_code).zfill(6)) == "SSE")
+        transfer_fee_rate = 0.00002 if is_sse else 0.0
+
+        def commission(notional: float) -> float:
+            return max(commission_min, notional * commission_rate) if notional > 0 else 0.0
+
+        def transfer_fee(notional: float) -> float:
+            return notional * transfer_fee_rate if notional > 0 else 0.0
+
+        def is_limit_up(prev_close: float, px: float) -> bool:
+            if prev_close <= 0:
+                return False
+            return px >= prev_close * (1.0 + limit_pct - 1e-4)
+
+        def is_limit_down(prev_close: float, px: float) -> bool:
+            if prev_close <= 0:
+                return False
+            return px <= prev_close * (1.0 - limit_pct + 1e-4)
+
+        # FIXED: Benchmark buys at first OPEN, not close
+        first_open = float(open_prices[0]) if len(open_prices) > 0 else 0.0
+        benchmark_shares = (capital / first_open) if first_open > 0 else 0.0
 
         preds = model.predict_batch(X)
 
-        for i in range(len(X) - 1):
-            current_price = float(prices[i])
-            next_price = float(prices[i + 1])  # Execution price
-            dt = dates[i]
-            prev_close = float(prices[i - 1]) if i > 0 else current_price
+        n = min(len(dates), len(open_prices), len(close_prices), len(volumes), len(preds))
+        if n == 0:
+            return [], {}, {}
 
-            # Portfolio value at current bar (before any execution)
-            portfolio_value = cash + shares * current_price
-            benchmark_value = benchmark_shares * current_price
+        for t in range(n):
+            dt = dates[t]
+            open_t = float(open_prices[t])
+            close_t = float(close_prices[t])
+            prev_close = float(close_prices[t - 1]) if t > 0 else close_t
             
-            daily_portfolio_values[dt] = portfolio_value
-            daily_benchmark_values[dt] = benchmark_value
+            # Handle NaN/invalid prices
+            if np.isnan(open_t) or np.isnan(close_t) or open_t <= 0 or close_t <= 0:
+                continue
 
-            # Execute pending signal from PREVIOUS bar
+            # 1) Execute pending at OPEN
             if pending_signal is not None:
                 action, signal_conf, signal_dt = pending_signal
                 pending_signal = None
-                
-                if action == 'BUY' and shares == 0:
-                    if not is_limit_up(prev_close, current_price):
-                        # Execute at current bar's price (which was next bar when signal generated)
-                        vol = float(volumes[i]) if i < len(volumes) else 1e6
-                        slip = slippage_model.calculate(capital * 0.1, vol, current_price)
-                        buy_price = current_price * (1 + slip)
-                        cost = capital * 0.95
-                        shares_to_buy = int(cost / buy_price / 100) * 100
-                        
-                        if shares_to_buy > 0:
-                            actual_cost = shares_to_buy * buy_price * (1 + CONFIG.COMMISSION)
-                            cash -= actual_cost
-                            shares = shares_to_buy
-                            entry_price = buy_price
-                            entry_date = dt
-                            
-                            trades.append(BacktestTrade(
-                                entry_date=signal_dt,  # Signal date
-                                exit_date=None,
-                                stock_code=stock_code,
-                                side="buy",
-                                entry_price=entry_price,
-                                quantity=shares,
-                                signal_confidence=signal_conf
-                            ))
-                            
-                elif action == 'SELL' and shares > 0:
-                    if not is_limit_down(prev_close, current_price):
-                        vol = float(volumes[i]) if i < len(volumes) else 1e6
-                        slip = slippage_model.calculate(shares * current_price, vol, current_price)
-                        sell_price = current_price * (1 - slip)
-                        proceeds = shares * sell_price * (1 - CONFIG.COMMISSION - CONFIG.STAMP_TAX)
-                        
-                        holding_days = (dt - entry_date).days if entry_date else 0
-                        gross_pnl = (sell_price - entry_price) * shares
-                        costs = shares * entry_price * CONFIG.COMMISSION + shares * sell_price * (CONFIG.COMMISSION + CONFIG.STAMP_TAX)
-                        net_pnl = gross_pnl - costs
-                        pnl_pct = (sell_price / entry_price - 1) * 100 - (CONFIG.COMMISSION * 2 + CONFIG.STAMP_TAX) * 100
-                        
-                        cash += proceeds
-                        
-                        if trades:
-                            trades[-1].exit_date = dt
-                            trades[-1].exit_price = sell_price
-                            trades[-1].pnl = net_pnl
-                            trades[-1].pnl_pct = pnl_pct
-                            trades[-1].holding_days = holding_days
-                        
-                        shares = 0
-                        entry_price = 0.0
-                        entry_date = None
 
-            # Generate signal for NEXT bar (if we have prediction data)
-            if i < len(X) - 2:  # Need at least one more bar for execution
-                pred = preds[i]
-                
-                if shares == 0 and pred.predicted_class == 2 and pred.confidence >= CONFIG.MIN_CONFIDENCE:
-                    pending_signal = ('BUY', pred.confidence, dt)
+                if action == "BUY" and shares == 0:
+                    if not is_limit_up(prev_close, open_t):
+                        invest = cash * 0.95
+                        vol = float(volumes[t]) if not np.isnan(volumes[t]) and volumes[t] > 0 else 1e6
+                        slip = slippage_model.calculate(invest, vol, open_t)
+                        buy_px = open_t * (1.0 + slip)
+
+                        qty = int(invest / buy_px / lot) * lot
+                        if qty > 0:
+                            notional = qty * buy_px
+                            fee = commission(notional) + transfer_fee(notional)
+                            total = notional + fee
+
+                            if total <= cash:
+                                cash -= total
+                                shares = qty
+                                entry_price = buy_px
+                                entry_exec_i = t
+
+                                trades.append(BacktestTrade(
+                                    entry_date=signal_dt,
+                                    exit_date=None,
+                                    stock_code=stock_code,
+                                    side="buy",
+                                    entry_price=entry_price,
+                                    quantity=shares,
+                                    signal_confidence=float(signal_conf)
+                                ))
+
+                elif action == "SELL" and shares > 0:
+                    # T+1 check
+                    if entry_exec_i is not None and t == entry_exec_i:
+                        pass  # Can't sell same day
+                    else:
+                        if not is_limit_down(prev_close, open_t):
+                            notional = shares * open_t
+                            vol = float(volumes[t]) if not np.isnan(volumes[t]) and volumes[t] > 0 else 1e6
+                            slip = slippage_model.calculate(notional, vol, open_t)
+                            sell_px = open_t * (1.0 - slip)
+
+                            proceeds = shares * sell_px
+                            fee = commission(proceeds) + transfer_fee(proceeds)
+                            tax = proceeds * stamp_tax_rate
+                            net = proceeds - fee - tax
+                            cash += net
+
+                            if trades:
+                                holding_bars = (t - entry_exec_i) if entry_exec_i is not None else 0
+                                gross_pnl = (sell_px - entry_price) * shares
+
+                                buy_notional = entry_price * shares
+                                sell_notional = sell_px * shares
+                                costs = (
+                                    commission(buy_notional) + transfer_fee(buy_notional) +
+                                    commission(sell_notional) + transfer_fee(sell_notional) +
+                                    sell_notional * stamp_tax_rate
+                                )
+                                net_pnl = gross_pnl - costs
+                                pnl_pct = (sell_px / entry_price - 1.0) * 100.0 - (costs / max(1e-8, buy_notional)) * 100.0
+
+                                trades[-1].exit_date = dt
+                                trades[-1].exit_price = sell_px
+                                trades[-1].pnl = float(net_pnl)
+                                trades[-1].pnl_pct = float(pnl_pct)
+                                trades[-1].holding_days = int(holding_bars)
+
+                            shares = 0
+                            entry_price = 0.0
+                            entry_exec_i = None
+
+            # 2) Mark-to-market at CLOSE
+            portfolio_value = cash + shares * close_t
+            benchmark_value = benchmark_shares * close_t
+            daily_portfolio_values[dt] = float(portfolio_value)
+            daily_benchmark_values[dt] = float(benchmark_value)
+
+            # 3) Signal at CLOSE for next OPEN
+            if t < n - 1:
+                pred = preds[t]
+                if shares == 0 and pred.predicted_class == 2 and pred.confidence >= CONFIG.model.min_confidence:
+                    pending_signal = ("BUY", float(pred.confidence), dt)
                 elif shares > 0:
-                    holding_days = (dt - entry_date).days if entry_date else 0
-                    should_exit = False
-                    
-                    if holding_days >= horizon:
-                        should_exit = True
-                    elif pred.predicted_class == 0 and pred.confidence >= CONFIG.MIN_CONFIDENCE:
-                        should_exit = True
-                    
+                    holding_bars = (t - entry_exec_i) if entry_exec_i is not None else 0
+                    should_exit = (holding_bars >= horizon) or (pred.predicted_class == 0 and pred.confidence >= CONFIG.model.min_confidence)
                     if should_exit:
-                        pending_signal = ('SELL', pred.confidence, dt)
+                        pending_signal = ("SELL", float(pred.confidence), dt)
 
-        # Convert to daily returns (rest of method unchanged)
+        # Force close at last bar if still holding
+        if shares > 0 and trades:
+            dt = dates[n - 1]
+            close_t = float(close_prices[n - 1])
+
+            if not np.isnan(close_t) and close_t > 0:
+                proceeds = shares * close_t
+                fee = commission(proceeds) + transfer_fee(proceeds)
+                tax = proceeds * stamp_tax_rate
+                net = proceeds - fee - tax
+                cash += net
+
+                holding_bars = ((n - 1) - entry_exec_i) if entry_exec_i is not None else 0
+                gross_pnl = (close_t - entry_price) * shares
+
+                buy_notional = entry_price * shares
+                sell_notional = close_t * shares
+                costs = (
+                    commission(buy_notional) + transfer_fee(buy_notional) +
+                    commission(sell_notional) + transfer_fee(sell_notional) +
+                    sell_notional * stamp_tax_rate
+                )
+                net_pnl = gross_pnl - costs
+                pnl_pct = (close_t / entry_price - 1.0) * 100.0 - (costs / max(1e-8, buy_notional)) * 100.0
+
+                trades[-1].exit_date = dt
+                trades[-1].exit_price = close_t
+                trades[-1].pnl = float(net_pnl)
+                trades[-1].pnl_pct = float(pnl_pct)
+                trades[-1].holding_days = int(holding_bars)
+
+        # Daily returns (%)
         sorted_dates = sorted(daily_portfolio_values.keys())
-        strategy_returns = {}
-        benchmark_returns = {}
-        
+        strategy_returns: Dict[pd.Timestamp, float] = {}
+        benchmark_returns: Dict[pd.Timestamp, float] = {}
+
         for i, dt in enumerate(sorted_dates):
             if i == 0:
                 strategy_returns[dt] = 0.0
                 benchmark_returns[dt] = 0.0
-            else:
-                prev_dt = sorted_dates[i-1]
-                prev_val = daily_portfolio_values[prev_dt]
-                curr_val = daily_portfolio_values[dt]
-                
-                if prev_val > 0:
-                    strategy_returns[dt] = (curr_val / prev_val - 1) * 100
-                else:
-                    strategy_returns[dt] = 0.0
-                
-                prev_bench = daily_benchmark_values[prev_dt]
-                curr_bench = daily_benchmark_values[dt]
-                if prev_bench > 0:
-                    benchmark_returns[dt] = (curr_bench / prev_bench - 1) * 100
-                else:
-                    benchmark_returns[dt] = 0.0
+                continue
+
+            prev_dt = sorted_dates[i - 1]
+            prev_val = daily_portfolio_values[prev_dt]
+            curr_val = daily_portfolio_values[dt]
+            prev_b = daily_benchmark_values[prev_dt]
+            curr_b = daily_benchmark_values[dt]
+
+            strategy_returns[dt] = ((curr_val / prev_val) - 1.0) * 100.0 if prev_val > 0 else 0.0
+            benchmark_returns[dt] = ((curr_b / prev_b) - 1.0) * 100.0 if prev_b > 0 else 0.0
 
         return trades, strategy_returns, benchmark_returns
         
@@ -596,7 +674,7 @@ class Backtester:
         
         total_return = (equity[-1] / capital - 1) * 100 if len(equity) > 0 else 0
         
-        # FIXED: Proper benchmark calculation (compounded)
+        # Benchmark calculation (compounded)
         benchmark_equity = [capital]
         for ret in benchmark_daily:
             benchmark_equity.append(benchmark_equity[-1] * (1 + ret / 100))
@@ -620,8 +698,11 @@ class Backtester:
         # Volatility
         volatility = np.std(daily_returns) * np.sqrt(252) if len(daily_returns) > 0 else 0
         
-        # Calmar ratio
-        calmar = total_return / max_dd_pct if max_dd_pct > 0 else 0
+        # Calmar ratio (capped)
+        if max_dd_pct > 0.01:  # Minimum 0.01% to avoid huge ratios
+            calmar = total_return / max_dd_pct
+        else:
+            calmar = 0
         
         # Trade statistics
         total_trades = len(trades)

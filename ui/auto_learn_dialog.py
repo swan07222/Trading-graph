@@ -11,6 +11,7 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
 from datetime import datetime
 from typing import Optional, Dict, Any
+from utils.cancellation import CancellationToken
 
 
 class AutoLearnWorker(QThread):
@@ -24,6 +25,7 @@ class AutoLearnWorker(QThread):
         super().__init__()
         self.config = config
         self.running = True
+        self.token = CancellationToken()
     
     def run(self):
         try:
@@ -132,7 +134,9 @@ class AutoLearnWorker(QThread):
                     stock_codes=codes,
                     epochs=self.config.get("epochs", 50),
                     callback=cb,
-                    save_model=True
+                    stop_flag=self.token,  
+                    save_model=True,
+                    incremental=bool(self.config.get("incremental", False)),
                 )
 
                 results['samples'] = int(training_out.get('train_samples', 0) + training_out.get('val_samples', 0))
@@ -157,6 +161,7 @@ class AutoLearnWorker(QThread):
     
     def stop(self):
         self.running = False
+        self.token.cancel()
 
 
 class AutoLearnDialog(QDialog):

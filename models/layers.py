@@ -1,10 +1,10 @@
+# models/layers.py
 """
-Custom Neural Network Layers - Built from scratch
+Custom Neural Network Layers
 """
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import numpy as np
 import math
 from typing import Optional, Tuple
 
@@ -156,10 +156,8 @@ class TemporalConvBlock(nn.Module):
                  kernel_size: int = 3, dilation: int = 1, dropout: float = 0.2):
         super().__init__()
         
-        # CAUSAL padding: pad only on the left
         self.padding = (kernel_size - 1) * dilation
         
-        # No padding in conv - we'll pad manually
         self.conv1 = nn.Conv1d(in_channels, out_channels, kernel_size,
                                padding=0, dilation=dilation)
         self.conv2 = nn.Conv1d(out_channels, out_channels, kernel_size,
@@ -174,10 +172,8 @@ class TemporalConvBlock(nn.Module):
         self.residual = nn.Conv1d(in_channels, out_channels, 1) if in_channels != out_channels else nn.Identity()
     
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # x shape: (batch, channels, seq_len)
         residual = self.residual(x)
         
-        # CAUSAL: Pad only on the left side
         out = F.pad(x, (self.padding, 0))
         out = self.conv1(out)
         out = self.norm1(out)
@@ -191,6 +187,7 @@ class TemporalConvBlock(nn.Module):
         out = self.dropout(out)
         
         return self.activation(out + residual)
+
 
 class AttentionPooling(nn.Module):
     """Attention-based pooling for sequence aggregation"""

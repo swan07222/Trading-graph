@@ -57,7 +57,7 @@ class SafeStreamHandler(logging.StreamHandler):
                 stream.write(msg + self.terminator)
             except UnicodeEncodeError:
                 # Fallback: encode with replacement
-                safe_msg = msg.encode('utf-8', errors='replace').decode('ascii', errors='replace')
+                safe_msg = msg.encode("utf-8", errors="replace").decode("utf-8", errors="replace")
                 stream.write(safe_msg + self.terminator)
             self.flush()
         except Exception:

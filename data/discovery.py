@@ -1,7 +1,6 @@
 # data/discovery.py
 """
 Universal Stock Discovery System
-Searches ALL available sources for stocks to train on
 """
 from __future__ import annotations
 
@@ -13,8 +12,10 @@ from dataclasses import dataclass, field
 
 import pandas as pd
 
-from config import CONFIG
-from utils.logger import log
+from config.settings import CONFIG  # FIXED
+from utils.logger import get_logger
+
+log = get_logger(__name__)
 
 
 @dataclass
@@ -40,7 +41,6 @@ class DiscoveredStock:
         
         code = str(code).strip()
         
-        # Remove common prefixes/suffixes
         for prefix in ["sh", "sz", "SH", "SZ", "bj", "BJ", "sh.", "sz.", "SH.", "SZ."]:
             if code.startswith(prefix):
                 code = code[len(prefix):]
@@ -49,10 +49,7 @@ class DiscoveredStock:
             if code.endswith(suffix):
                 code = code[:-len(suffix)]
         
-        # Remove any remaining dots, dashes, spaces
         code = code.replace(".", "").replace("-", "").replace(" ", "")
-        
-        # Extract only digits
         digits = ''.join(c for c in code if c.isdigit())
         
         if digits:
@@ -61,23 +58,10 @@ class DiscoveredStock:
 
     def is_valid(self) -> bool:
         """Check if stock code is valid"""
-        if not self.code:
+        if not self.code or len(self.code) != 6 or not self.code.isdigit():
             return False
         
-        if len(self.code) != 6:
-            return False
-        
-        if not self.code.isdigit():
-            return False
-        
-        valid_prefixes = [
-            "60",  # Shanghai main board
-            "00",  # Shenzhen main board  
-            "30",  # ChiNext
-            "68",  # STAR Market
-            "83", "43", "87",  # Beijing
-        ]
-        
+        valid_prefixes = ["60", "00", "30", "68", "83", "43", "87"]
         return any(self.code.startswith(p) for p in valid_prefixes)
 
     @property
@@ -92,9 +76,7 @@ class DiscoveredStock:
 
 
 class UniversalStockDiscovery:
-    """
-    Discovers stocks from multiple sources.
-    """
+    """Discovers stocks from multiple sources."""
 
     def __init__(self):
         self._ak = None
@@ -149,7 +131,6 @@ class UniversalStockDiscovery:
         """Discover ALL available stocks from all sources"""
         all_stocks: Dict[str, DiscoveredStock] = {}
         
-        # If AkShare not available, return default stock pool
         if not self._ak:
             log.warning("AkShare not available, using fallback stocks")
             return self._get_fallback_stocks(max_stocks)
@@ -157,7 +138,6 @@ class UniversalStockDiscovery:
         if callback:
             callback("Fetching market data (this may take a moment)...", 0)
         
-        # Try spot data first
         spot_df = self._safe_fetch(
             lambda: self._ak.stock_zh_a_spot_em(),
             "spot data"
@@ -217,33 +197,25 @@ class UniversalStockDiscovery:
             except Exception as e:
                 log.warning(f"Failed to search {source_name}: {e}")
 
-        # Convert to list
         result = list(all_stocks.values())
         
         log.info(f"Before filtering: {len(result)} stocks")
 
-        # Filter by market cap ONLY if we have market cap data
         if min_market_cap > 0:
-            # Only filter stocks that have market cap data
             filtered = [s for s in result if s.market_cap <= 0 or s.market_cap >= min_market_cap * 1e9]
             if len(filtered) > 0:
                 result = filtered
-            # If all would be filtered, keep original
 
-        # Calculate scores
         for stock in result:
             stock.score = self._calculate_score(stock)
 
-        # Sort by score
         result.sort(key=lambda x: x.score, reverse=True)
 
-        # Apply max_stocks limit
         if max_stocks and max_stocks > 0:
             result = result[:max_stocks]
 
         log.info(f"After filtering: {len(result)} stocks")
 
-        # If still no stocks, use fallback
         if not result:
             log.warning("No stocks after filtering, using fallback")
             return self._get_fallback_stocks(max_stocks)
@@ -380,14 +352,12 @@ class UniversalStockDiscovery:
         if df is None or df.empty:
             return []
         
-        # Find code column
         code_col = None
         for col in ["成分券代码", "证券代码", "代码", "stock_code", "code", "symbol"]:
             if col in df.columns:
                 code_col = col
                 break
         
-        # Find name column
         name_col = None
         for col in ["成分券名称", "证券简称", "名称", "stock_name", "name"]:
             if col in df.columns:
@@ -395,7 +365,6 @@ class UniversalStockDiscovery:
                 break
         
         if code_col is None:
-            # Try first column as code
             code_col = df.columns[0]
             log.debug(f"Using first column '{code_col}' as code for {source}")
         
@@ -415,132 +384,3 @@ class UniversalStockDiscovery:
                 stocks.append(stock)
         
         return stocks
-
-    def _get_top_gainers(self) -> List[DiscoveredStock]:
-        if not self._ak:
-            return []
-        try:
-            self._wait()
-            df = self._ak.stock_zh_a_spot_em()
-            df["涨跌幅"] = pd.to_numeric(df["涨跌幅"], errors="coerce")
-            df = df.dropna(subset=["涨跌幅"]).sort_values("涨跌幅", ascending=False).head(100)
-            return [
-                DiscoveredStock(
-                    code=str(row["代码"]),
-                    name=str(row.get("名称", "")),
-                    source="Gainers",
-                    change_pct=float(row["涨跌幅"]),
-                    score=0.7,
-                )
-                for _, row in df.iterrows()
-            ]
-        except Exception:
-            return []
-
-    def _get_top_losers(self) -> List[DiscoveredStock]:
-        if not self._ak:
-            return []
-        try:
-            self._wait()
-            df = self._ak.stock_zh_a_spot_em()
-            df["涨跌幅"] = pd.to_numeric(df["涨跌幅"], errors="coerce")
-            df = df.dropna(subset=["涨跌幅"]).sort_values("涨跌幅", ascending=True).head(100)
-            return [
-                DiscoveredStock(
-                    code=str(row["代码"]),
-                    name=str(row.get("名称", "")),
-                    source="Losers",
-                    change_pct=float(row["涨跌幅"]),
-                    score=0.7,
-                )
-                for _, row in df.iterrows()
-            ]
-        except Exception:
-            return []
-
-    def _get_high_volume(self) -> List[DiscoveredStock]:
-        if not self._ak:
-            return []
-        try:
-            self._wait()
-            df = self._ak.stock_zh_a_spot_em()
-            df["成交额"] = pd.to_numeric(df["成交额"], errors="coerce")
-            df = df.dropna(subset=["成交额"]).sort_values("成交额", ascending=False).head(100)
-            return [
-                DiscoveredStock(
-                    code=str(row["代码"]),
-                    name=str(row.get("名称", "")),
-                    source="HighVolume",
-                    volume=float(row["成交额"]),
-                    score=0.7,
-                )
-                for _, row in df.iterrows()
-            ]
-        except Exception:
-            return []
-
-    def _get_large_cap(self) -> List[DiscoveredStock]:
-        if not self._ak:
-            return []
-        try:
-            self._wait()
-            df = self._ak.stock_zh_a_spot_em()
-            df["总市值"] = pd.to_numeric(df["总市值"], errors="coerce")
-            df = df.dropna(subset=["总市值"]).sort_values("总市值", ascending=False).head(200)
-            return [
-                DiscoveredStock(
-                    code=str(row["代码"]),
-                    name=str(row.get("名称", "")),
-                    source="LargeCap",
-                    market_cap=float(row["总市值"]),
-                    score=0.75,
-                )
-                for _, row in df.iterrows()
-            ]
-        except Exception:
-            return []
-
-    def _get_growth_stocks(self) -> List[DiscoveredStock]:
-        if not self._ak:
-            return []
-        try:
-            self._wait()
-            df = self._ak.stock_zh_a_spot_em()
-            if "60日涨跌幅" not in df.columns:
-                return []
-            df["60日涨跌幅"] = pd.to_numeric(df["60日涨跌幅"], errors="coerce")
-            df = df.dropna(subset=["60日涨跌幅"]).sort_values("60日涨跌幅", ascending=False).head(100)
-            return [
-                DiscoveredStock(
-                    code=str(row["代码"]),
-                    name=str(row.get("名称", "")),
-                    source="Growth",
-                    score=0.65,
-                )
-                for _, row in df.iterrows()
-            ]
-        except Exception:
-            return []
-
-    def _get_value_stocks(self) -> List[DiscoveredStock]:
-        if not self._ak:
-            return []
-        try:
-            self._wait()
-            df = self._ak.stock_zh_a_spot_em()
-            col = "市盈率-动态" if "市盈率-动态" in df.columns else "市盈率"
-            if col not in df.columns:
-                return []
-            df["市盈率"] = pd.to_numeric(df[col], errors="coerce")
-            df = df[(df["市盈率"] > 0) & (df["市盈率"] < 20)].sort_values("市盈率").head(100)
-            return [
-                DiscoveredStock(
-                    code=str(row["代码"]),
-                    name=str(row.get("名称", "")),
-                    source="Value",
-                    score=0.6,
-                )
-                for _, row in df.iterrows()
-            ]
-        except Exception:
-            return []

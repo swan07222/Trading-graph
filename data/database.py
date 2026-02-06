@@ -183,38 +183,50 @@ class MarketDatabase:
                 ))
     
     def get_bars(
-        self, 
-        code: str, 
+        self,
+        code: str,
         start_date: date = None,
         end_date: date = None,
         limit: int = None
     ) -> pd.DataFrame:
-        """Get daily bars for a stock"""
-        query = "SELECT * FROM daily_bars WHERE code = ?"
-        params = [code]
-        
+        """Get daily bars for a stock (correct limit semantics)."""
+        where = ["code = ?"]
+        params: List = [code]
+
         if start_date:
-            query += " AND date >= ?"
+            where.append("date >= ?")
             params.append(start_date.isoformat())
-        
         if end_date:
-            query += " AND date <= ?"
+            where.append("date <= ?")
             params.append(end_date.isoformat())
-        
-        query += " ORDER BY date"
-        
+
+        where_sql = " AND ".join(where)
+
         if limit:
-            query += f" DESC LIMIT {limit}"
-        
+            query = f"""
+            SELECT * FROM (
+                SELECT * FROM daily_bars
+                WHERE {where_sql}
+                ORDER BY date DESC
+                LIMIT ?
+            ) sub
+            ORDER BY date ASC
+            """
+            params.append(int(limit))
+        else:
+            query = f"""
+            SELECT * FROM daily_bars
+            WHERE {where_sql}
+            ORDER BY date ASC
+            """
+
         df = pd.read_sql_query(query, self._conn, params=params)
-        
         if df.empty:
             return df
-        
-        df['date'] = pd.to_datetime(df['date'])
-        df = df.set_index('date').sort_index()
-        df = df.drop(columns=['code'], errors='ignore')
-        
+
+        df["date"] = pd.to_datetime(df["date"])
+        df = df.set_index("date").sort_index()
+        df = df.drop(columns=["code"], errors="ignore")
         return df
     
     def get_last_date(self, code: str) -> Optional[date]:

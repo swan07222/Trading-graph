@@ -1,9 +1,6 @@
+# models/auto_learner.py
 """
 Continuous Auto-Learning System
-- Searches ALL available stocks from internet
-- Trains continuously in background
-- Updates model while trading
-- Self-improving predictions
 """
 import os
 import json
@@ -18,10 +15,13 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import numpy as np
 import pandas as pd
 
-from config import CONFIG
-from utils.logger import log
+from config.settings import CONFIG  # FIXED
+from utils.logger import get_logger
 from utils.cancellation import CancellationToken, CancelledException
 from data.fetcher import get_fetcher
+
+log = get_logger(__name__)
+
 
 @dataclass
 class LearningProgress:
@@ -74,12 +74,7 @@ class LearningProgress:
 
 class ContinuousLearner:
     """
-    Continuous learning system that:
-    1. Discovers ALL stocks from multiple sources
-    2. Downloads and processes data in parallel
-    3. Trains model continuously
-    4. Can run alongside live trading
-    5. Auto-improves based on prediction accuracy
+    Continuous learning system
     """
     
     MODE_FULL = "full"
@@ -99,8 +94,8 @@ class ContinuousLearner:
         self._processed_stocks: Set[str] = set()
         self._failed_stocks: Set[str] = set()
         
-        self.history_path = CONFIG.DATA_DIR / "continuous_learning_history.json"
-        self.state_path = CONFIG.DATA_DIR / "learner_state.json"
+        self.history_path = CONFIG.data_dir / "continuous_learning_history.json"
+        self.state_path = CONFIG.data_dir / "learner_state.json"
         self._load_state()
     
     def add_callback(self, callback: Callable[[LearningProgress], None]):
@@ -318,7 +313,7 @@ class ContinuousLearner:
             
             data = self._download_all_data(stocks)
             
-            min_stocks = getattr(CONFIG, 'MIN_STOCKS_FOR_TRAINING', 5)
+            min_stocks = CONFIG.min_stocks_for_training
             if len(data) < min_stocks:
                 self._update_progress(
                     stage="error", 
@@ -434,11 +429,11 @@ class ContinuousLearner:
             codes,
             days=1500,
             callback=download_callback,
-            max_workers=getattr(CONFIG.data, 'parallel_downloads', 10)
+            max_workers=CONFIG.data.parallel_downloads
         )
         
         valid_data = {}
-        seq_len = getattr(CONFIG, 'SEQUENCE_LENGTH', 60)
+        seq_len = CONFIG.model.sequence_length
         
         for code, df in raw_data.items():
             if self._cancel_token.is_cancelled:
@@ -465,11 +460,11 @@ class ContinuousLearner:
         processor = DataProcessor()
         feature_cols = feature_engine.get_feature_columns()
         
-        horizon = getattr(CONFIG, 'PREDICTION_HORIZON', 5)
-        embargo = getattr(CONFIG, 'EMBARGO_BARS', 10)
-        train_ratio = getattr(CONFIG, 'TRAIN_RATIO', 0.7)
-        val_ratio = getattr(CONFIG, 'VAL_RATIO', 0.15)
-        seq_len = getattr(CONFIG, 'SEQUENCE_LENGTH', 60)
+        horizon = CONFIG.model.prediction_horizon
+        embargo = CONFIG.model.embargo_bars
+        train_ratio = CONFIG.model.train_ratio
+        val_ratio = CONFIG.model.val_ratio
+        seq_len = CONFIG.model.sequence_length
         
         all_train_features = []
         split_data = {}
@@ -559,7 +554,6 @@ class ContinuousLearner:
         if mode == self.MODE_INCREMENTAL:
             ensemble.load()
 
-        # if no val, split train
         if X_val is None or len(X_val) == 0:
             split = int(len(X_train) * 0.85)
             X_val, y_val = X_train[split:], y_train[split:]

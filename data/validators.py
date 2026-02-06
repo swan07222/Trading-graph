@@ -51,45 +51,66 @@ class StockCodeValidator:
     @classmethod
     def validate(cls, code: str, market: str = 'a_share') -> ValidationResult:
         """
-        Validate stock code
-        
-        Args:
-            code: Stock code
-            market: Market type ('a_share', 'hk', 'us')
-        
-        Returns:
-            ValidationResult
+        Validate stock code.
+
+        CN (a_share):
+        - Accepts SSE/SZSE/BSE via get_exchange()
+
+        HK:
+        - 5 digits
+
+        US:
+        - allow BRK.B / BF.B style tickers
         """
         errors = []
         warnings = []
-        
+
         if not code:
             errors.append("Stock code is required")
             return ValidationResult(False, errors, warnings)
-        
-        # Clean code
-        code = str(code).strip().upper()
-        
-        # Remove exchange prefix
-        for prefix in ['SH', 'SZ', 'BJ', '.SS', '.SZ']:
-            code = code.replace(prefix, '')
-        
-        # Validate pattern
-        pattern = cls.PATTERNS.get(market, cls.PATTERNS['a_share'])
-        
-        if not re.match(pattern, code):
-            errors.append(f"Invalid stock code format: {code}")
-            return ValidationResult(False, errors, warnings)
-        
-        # Validate exchange
-        if market == 'a_share':
-            code = code.zfill(6)
-            exchange = get_exchange(code)
-            
-            if exchange == 'UNKNOWN':
-                warnings.append(f"Unknown exchange for code: {code}")
-        
-        return ValidationResult(True, errors, warnings, code)
+
+        raw = str(code).strip()
+        code_u = raw.strip().upper()
+
+        # Strip common prefixes/suffixes (CN)
+        for prefix in ['SH', 'SZ', 'BJ', 'SH.', 'SZ.', 'BJ.', 'sh', 'sz', 'bj']:
+            if code_u.startswith(prefix.upper()):
+                code_u = code_u[len(prefix):]
+                break
+        for suffix in ['.SS', '.SZ', '.BJ', '.ss', '.sz', '.bj']:
+            if code_u.endswith(suffix.upper()):
+                code_u = code_u[:-len(suffix)]
+                break
+
+        if market == "a_share":
+            digits = "".join(ch for ch in code_u if ch.isdigit())
+            if not digits:
+                errors.append(f"Invalid stock code format: {raw}")
+                return ValidationResult(False, errors, warnings)
+
+            code6 = digits.zfill(6)
+            exchange = get_exchange(code6)
+            if exchange == "UNKNOWN":
+                errors.append(f"Unknown/invalid A-share code: {code6}")
+                return ValidationResult(False, errors, warnings)
+
+            return ValidationResult(True, errors, warnings, code6)
+
+        if market == "hk":
+            if not re.fullmatch(r"^\d{5}$", code_u):
+                errors.append(f"Invalid HK stock code format: {raw}")
+                return ValidationResult(False, errors, warnings)
+            return ValidationResult(True, errors, warnings, code_u)
+
+        if market == "us":
+            # allow BRK.B etc.
+            if not re.fullmatch(r"^[A-Z0-9]{1,6}(\.[A-Z])?$", code_u):
+                errors.append(f"Invalid US ticker format: {raw}")
+                return ValidationResult(False, errors, warnings)
+            return ValidationResult(True, errors, warnings, code_u)
+
+        errors.append(f"Unknown market: {market}")
+        return ValidationResult(False, errors, warnings)
     
     @classmethod
     def validate_many(cls, codes: List[str], market: str = 'a_share') -> ValidationResult:

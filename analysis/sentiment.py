@@ -1,3 +1,4 @@
+# analysis/sentiment.py
 """
 Sentiment Analysis - News and Social Media Analysis
 """
@@ -13,8 +14,10 @@ import pickle
 import requests
 from bs4 import BeautifulSoup
 
-from config import CONFIG
-from utils.logger import log
+from config.settings import CONFIG  # FIXED
+from utils.logger import get_logger
+
+log = get_logger(__name__)
 
 
 @dataclass
@@ -86,11 +89,52 @@ class KeywordSentimentAnalyzer:
 class SentimentAnalyzer:
     """Ensemble sentiment analyzer"""
     
-    def __init__(self, use_bert: bool = False):
+    def __init__(self, use_bert: bool = False, hf_model: str = "IDEA-CCNL/Erlangshen-Roberta-110M-Sentiment"):
         self.keyword_analyzer = KeywordSentimentAnalyzer()
+        self._use_bert = bool(use_bert)
+        self._hf = None
+        self._hf_model = hf_model
+
+        if self._use_bert:
+            try:
+                from transformers import pipeline
+                self._hf = pipeline("sentiment-analysis", model=hf_model)
+            except Exception as e:
+                log.warning(f"Failed to load HuggingFace model: {e}")
+                self._hf = None
+                self._use_bert = False
     
     def analyze(self, text: str) -> SentimentResult:
-        return self.keyword_analyzer.analyze(text)
+        """Blend keyword + optional HF transformer sentiment"""
+        kw = self.keyword_analyzer.analyze(text)
+        if not self._use_bert or self._hf is None or not text:
+            return kw
+
+        try:
+            out = self._hf(text[:512])[0]
+            label = str(out.get("label", "")).lower()
+            score = float(out.get("score", 0.5))
+
+            if "neg" in label:
+                hf_score = -score
+            elif "pos" in label:
+                hf_score = +score
+            else:
+                hf_score = 0.0
+
+            blended = 0.55 * kw.score + 0.45 * hf_score
+            confidence = min(1.0, 0.6 * kw.confidence + 0.4 * score)
+
+            if blended > 0.2:
+                lbl = "positive"
+            elif blended < -0.2:
+                lbl = "negative"
+            else:
+                lbl = "neutral"
+
+            return SentimentResult(blended, confidence, lbl, "keyword+hf")
+        except Exception:
+            return kw
     
     def analyze_batch(self, texts: List[str]) -> List[SentimentResult]:
         return [self.analyze(text) for text in texts]
@@ -107,7 +151,7 @@ class NewsScraper:
         
         self.analyzer = SentimentAnalyzer()
         
-        self._cache_dir = CONFIG.DATA_DIR / "news_cache"
+        self._cache_dir = CONFIG.data_dir / "news_cache"  # FIXED: lowercase
         self._cache_dir.mkdir(exist_ok=True)
         self._seen_hashes = set()
         
@@ -183,10 +227,31 @@ class NewsScraper:
         return items
     
     def scrape_all(self) -> List[NewsItem]:
-        """Scrape from all sources"""
-        items = []
+        """Scrape from all sources with short TTL disk cache."""
+        cache_path = self._cache_dir / "scrape_all.pkl"
+        ttl_seconds = 180  # 3 minutes
+
+        try:
+            if cache_path.exists():
+                mtime = cache_path.stat().st_mtime
+                if (time.time() - mtime) < ttl_seconds:
+                    with open(cache_path, "rb") as f:
+                        items = pickle.load(f)
+                    if isinstance(items, list):
+                        return items
+        except Exception:
+            pass
+
+        items: List[NewsItem] = []
         items.extend(self.scrape_sina())
         items.sort(key=lambda x: x.timestamp, reverse=True)
+
+        try:
+            with open(cache_path, "wb") as f:
+                pickle.dump(items, f, protocol=pickle.HIGHEST_PROTOCOL)
+        except Exception:
+            pass
+
         return items
     
     def get_stock_sentiment(self, stock_code: str) -> Tuple[float, float]:

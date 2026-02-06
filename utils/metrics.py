@@ -54,9 +54,13 @@ class MetricsRegistry:
                 self._histograms[key] = self._histograms[key][-1000:]
     
     def _make_key(self, name: str, labels: Dict = None) -> str:
+        """
+        Prometheus label format:
+        metric_name{label="value",...}
+        """
         if not labels:
             return name
-        label_str = ",".join(f"{k}={v}" for k, v in sorted(labels.items()))
+        label_str = ",".join(f'{k}="{v}"' for k, v in sorted(labels.items()))
         return f"{name}{{{label_str}}}"
     
     def get_all(self) -> Dict:
@@ -70,14 +74,32 @@ class MetricsRegistry:
             }
     
     def to_prometheus(self) -> str:
-        """Export in Prometheus format"""
+        """Export counters, gauges, histogram count/sum in Prometheus format."""
         lines = []
         with self._lock:
-            for name, value in self._counters.items():
-                lines.append(f"{name} {value}")
-            for name, value in self._gauges.items():
-                lines.append(f"{name} {value}")
-        return "\n".join(lines)
+            for key, value in self._counters.items():
+                lines.append(f"{key} {float(value)}")
+
+            for key, value in self._gauges.items():
+                lines.append(f"{key} {float(value)}")
+
+            # Histograms: export _count and _sum
+            for key, obs in self._histograms.items():
+                count = len(obs)
+                s = float(sum(obs)) if obs else 0.0
+
+                # Turn "metric{..}" into "metric_count{..}" etc.
+                if "{" in key:
+                    base = key[:key.index("{")]
+                    labels = key[key.index("{"):]
+                else:
+                    base = key
+                    labels = ""
+
+                lines.append(f"{base}_count{labels} {float(count)}")
+                lines.append(f"{base}_sum{labels} {float(s)}")
+
+        return "\n".join(lines) + ("\n" if lines else "")
 
 
 # Global registry

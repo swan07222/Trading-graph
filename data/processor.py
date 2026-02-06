@@ -197,23 +197,30 @@ class DataProcessor:
         feature_cols: List[str]
     ) -> np.ndarray:
         """
-        Prepare a single sequence for inference.
-        Uses the last SEQUENCE_LENGTH rows.
+        Prepare a single sequence for inference using the last SEQUENCE_LENGTH rows.
+        Robust to NaN/Inf and missing columns.
         """
         seq_len = CONFIG.SEQUENCE_LENGTH
-        
+
+        missing_cols = set(feature_cols) - set(df.columns)
+        if missing_cols:
+            raise ValueError(f"Missing feature columns for inference: {missing_cols}")
+
         if len(df) < seq_len:
             raise ValueError(f"Need at least {seq_len} rows, got {len(df)}")
-        
-        df_seq = df.tail(seq_len)
+
+        df_seq = df.tail(seq_len).copy()
         features = df_seq[feature_cols].values.astype(np.float32)
-        
+
+        # Replace inf/nan safely (keep stable behavior)
+        features = np.nan_to_num(features, nan=0.0, posinf=0.0, neginf=0.0)
+
         if self._fitted:
             features = self.transform(features)
         else:
-            log.warning("Scaler not fitted - using raw features")
-            features = np.clip(features, -5, 5)
-        
+            log.warning("Scaler not fitted - using raw features (clipped)")
+            features = np.clip(features, -5, 5).astype(np.float32)
+
         return features[np.newaxis, :, :]
     
     # Alias for backward compatibility

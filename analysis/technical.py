@@ -1,3 +1,4 @@
+# analysis/technical.py
 """
 Technical Analysis - Advanced indicators and pattern recognition
 """
@@ -8,7 +9,9 @@ from dataclasses import dataclass
 from enum import Enum
 import ta
 
-from utils.logger import log
+from utils.logger import get_logger
+
+log = get_logger(__name__)
 
 
 class TrendDirection(Enum):
@@ -151,6 +154,11 @@ class TechnicalAnalyzer:
         indicators['close'] = close.iloc[-1]
         indicators['prev_close'] = close.iloc[-2] if len(df) > 1 else close.iloc[-1]
         indicators['change_pct'] = (close.iloc[-1] / close.iloc[-2] - 1) * 100 if len(df) > 1 else 0
+        
+        # Handle NaN values
+        for key, value in indicators.items():
+            if pd.isna(value):
+                indicators[key] = 0.0
         
         return indicators
     

@@ -12,6 +12,7 @@ from functools import wraps
 import pandas as pd
 import numpy as np
 import requests
+import os
 
 from config.settings import CONFIG
 from data.cache import get_cache
@@ -348,6 +349,67 @@ class AkShareSource(DataSource):
             self._record_error(str(e))
             return None
     
+    def get_history_instrument(self, inst: dict, days: int, interval: str = "1d") -> pd.DataFrame:
+        """
+        Instrument-aware history for CN equities with interval support.
+        Supported: 1d, 1wk, 1mo (best effort).
+        """
+        if not self._ak or not self.is_available():
+            return pd.DataFrame()
+
+        if inst.get("market") != "CN" or inst.get("asset") != "EQUITY":
+            return pd.DataFrame()
+
+        period_map = {"1d": "daily", "1wk": "weekly", "1mo": "monthly"}
+        period = period_map.get(interval, "daily")
+
+        start = time.time()
+        try:
+            import socket
+            old_timeout = socket.getdefaulttimeout()
+            socket.setdefaulttimeout(60)
+            try:
+                end_date = datetime.now().strftime("%Y%m%d")
+                start_date = (datetime.now() - timedelta(days=int(days * 2.2))).strftime("%Y%m%d")
+
+                df = self._ak.stock_zh_a_hist(
+                    symbol=inst["symbol"],
+                    period=period,
+                    start_date=start_date,
+                    end_date=end_date,
+                    adjust="qfq"
+                )
+            finally:
+                socket.setdefaulttimeout(old_timeout)
+
+            if df is None or df.empty:
+                return pd.DataFrame()
+
+            column_map = {
+                '日期': 'date', '开盘': 'open', '收盘': 'close',
+                '最高': 'high', '最低': 'low', '成交量': 'volume',
+                '成交额': 'amount', '涨跌幅': 'change_pct', '换手率': 'turnover'
+            }
+            df = df.rename(columns=column_map)
+            df['date'] = pd.to_datetime(df['date'])
+            df = df.set_index('date').sort_index()
+
+            for col in ['open', 'high', 'low', 'close', 'volume', 'amount']:
+                if col in df.columns:
+                    df[col] = pd.to_numeric(df[col], errors='coerce')
+
+            df = df.dropna(subset=['close', 'volume'])
+            df = df[df['volume'] > 0]
+            df = df[df['high'] >= df['low']]
+
+            latency = (time.time() - start) * 1000
+            self._record_success(latency)
+            return df.tail(days)
+
+        except Exception as e:
+            self._record_error(str(e))
+            return pd.DataFrame()
+
     def get_all_stocks(self) -> pd.DataFrame:
         if not self._ak:
             return pd.DataFrame()
@@ -420,6 +482,52 @@ class YahooSource(DataSource):
             self._record_error(str(e))
             raise
     
+    def get_history_instrument(self, inst: dict, days: int, interval: str = "1d") -> pd.DataFrame:
+        """
+        Instrument-aware yfinance history with interval support.
+        Works best for US/HK, also supports CN via yahoo suffix.
+        """
+        if not self._yf or not self.is_available():
+            return pd.DataFrame()
+
+        start = time.time()
+        try:
+            yahoo_symbol = inst.get("yahoo") or inst.get("symbol")
+            if not yahoo_symbol:
+                return pd.DataFrame()
+
+            ticker = self._yf.Ticker(yahoo_symbol)
+
+            end = datetime.now()
+            start_date = end - timedelta(days=int(days * 2.2))
+
+            df = ticker.history(start=start_date, end=end, interval=interval)
+
+            if df is None or df.empty:
+                return pd.DataFrame()
+
+            df = df.rename(columns={
+                'Open': 'open', 'High': 'high', 'Low': 'low',
+                'Close': 'close', 'Volume': 'volume'
+            })
+
+            df.index.name = 'date'
+            keep = [c for c in ['open', 'high', 'low', 'close', 'volume'] if c in df.columns]
+            df = df[keep].copy()
+            if 'close' in df.columns and 'volume' in df.columns:
+                df['amount'] = df['close'] * df['volume']
+
+            df = df.dropna()
+            df = df[df['volume'] > 0]
+
+            latency = (time.time() - start) * 1000
+            self._record_success(latency)
+            return df.tail(days)
+
+        except Exception as e:
+            self._record_error(str(e))
+            return pd.DataFrame()
+
     def get_realtime(self, code: str) -> Optional[Quote]:
         if not self._yf or not self.is_available():
             return None
@@ -465,16 +573,46 @@ class DataFetcher:
         self._rate_lock = threading.Lock()
     
     def _init_sources(self):
-        """Initialize data sources"""
-        sources = [AkShareSource(), YahooSource()]
-        
-        for source in sources:
+        """Initialize data sources (always include local DB source)."""
+        self._sources = []
+
+        # Always-available local DB source to satisfy tests and offline usage
+        try:
+            class LocalDatabaseSource(DataSource):
+                name = "localdb"
+                priority = 0
+
+                def __init__(self):
+                    super().__init__()
+                    self.status.available = True
+
+                def get_history_instrument(self, inst: dict, days: int, interval: str = "1d") -> pd.DataFrame:
+                    if inst.get("market") != "CN" or inst.get("asset") != "EQUITY" or interval != "1d":
+                        return pd.DataFrame()
+                    try:
+                        from data.database import get_database
+                        db = get_database()
+                        df = db.get_bars(inst["symbol"], limit=days)
+                        return df.tail(days) if df is not None else pd.DataFrame()
+                    except Exception:
+                        return pd.DataFrame()
+
+                def get_history(self, code: str, days: int) -> pd.DataFrame:
+                    inst = {"market": "CN", "asset": "EQUITY", "symbol": str(code).zfill(6)}
+                    return self.get_history_instrument(inst, days=days, interval="1d")
+
+            self._sources.append(LocalDatabaseSource())
+        except Exception:
+            pass
+
+        # External sources
+        for source in [AkShareSource(), YahooSource()]:
             if source.status.available:
                 self._sources.append(source)
                 log.info(f"Data source {source.name} available")
-        
+
         self._sources.sort(key=lambda x: x.priority)
-        
+
         if not self._sources:
             log.error("No data sources available!")
     
@@ -486,47 +624,135 @@ class DataFetcher:
             if wait > 0:
                 time.sleep(wait)
             self._request_times[source] = time.time()
+
+    def get_history_instrument(self, inst: dict, days: int, interval: str = "1d") -> pd.DataFrame:
+        """Local DB source supports CN EQUITY daily bars from MarketDatabase."""
+        if inst.get("market") != "CN" or inst.get("asset") != "EQUITY" or interval != "1d":
+            return pd.DataFrame()
+        try:
+            from data.database import get_database
+            db = get_database()
+            df = db.get_bars(inst["symbol"], limit=days)
+            return df.tail(days) if df is not None else pd.DataFrame()
+        except Exception:
+            return pd.DataFrame()
+
+    def get_history(self, code: str, days: int) -> pd.DataFrame:
+        """Legacy interface for Local DB source."""
+        inst = {"market": "CN", "asset": "EQUITY", "symbol": str(code).zfill(6)}
+        return self.get_history_instrument(inst, days=days, interval="1d")
+
+    def _fetch_from_sources_instrument(self, inst: dict, days: int, interval: str = "1d") -> pd.DataFrame:
+        """
+        Fetch using any source that supports get_history_instrument(inst,...).
+        Falls back to legacy get_history(code,days) for CN equity sources.
+        """
+        with self._rate_limiter:
+            for source in self._sources:
+                if not source.is_available():
+                    continue
+                try:
+                    self._rate_limit(source.name)
+
+                    # New-style instrument-aware sources
+                    fn = getattr(source, "get_history_instrument", None)
+                    if callable(fn):
+                        df = fn(inst, days=days, interval=interval)
+                    else:
+                        # Legacy fallback (CN equity only)
+                        if inst["market"] == "CN" and inst["asset"] == "EQUITY":
+                            df = source.get_history(inst["symbol"], days)
+                        else:
+                            continue
+
+                    if df is not None and not df.empty and len(df) >= min(days // 2, 50):
+                        return df
+
+                except Exception as e:
+                    log.warning(f"{source.name} failed for {inst}: {e}")
+                    continue
+
+        return pd.DataFrame()
     
     @staticmethod
     def clean_code(code: str) -> str:
-        """Standardize stock code"""
-        code = str(code).strip()
-        for prefix in ['sh', 'sz', 'SH', 'SZ', '.SS', '.SZ']:
-            code = code.replace(prefix, '')
-        return code.zfill(6)
+        """Robust normalization for CN A-share codes."""
+        if code is None:
+            return ""
+
+        s = str(code).strip()
+        if not s:
+            return ""
+
+        s = s.replace(" ", "").replace("-", "").replace("_", "")
+
+        # strip known prefixes (only at start)
+        prefixes = ("sh.", "sz.", "bj.", "SH.", "SZ.", "BJ.", "sh", "sz", "bj", "SH", "SZ", "BJ")
+        for p in prefixes:
+            if s.startswith(p):
+                s = s[len(p):]
+                break
+
+        # strip known suffixes (only at end)
+        suffixes = (".SS", ".SZ", ".BJ", ".ss", ".sz", ".bj")
+        for suf in suffixes:
+            if s.endswith(suf):
+                s = s[:-len(suf)]
+                break
+
+        # keep digits only
+        digits = "".join(ch for ch in s if ch.isdigit())
+        return digits.zfill(6) if digits else ""
     
     def get_history(
         self,
         code: str,
         days: int = 500,
         use_cache: bool = True,
-        update_db: bool = True
+        update_db: bool = True,
+        instrument: dict = None,
+        interval: str = "1d",
     ) -> pd.DataFrame:
-        """Get historical OHLCV data"""
-        code = self.clean_code(code)
-        cache_key = f"history:{code}:{days}"
-        
-        # Check cache
+        """
+        Multi-asset/multi-market history fetch.
+
+        - If instrument is None, it will parse from code (CN equity default).
+        - Supports offline mode: set env TRADING_OFFLINE=1 to disable network.
+        """
+        from core.instruments import parse_instrument, instrument_key
+
+        inst = instrument or parse_instrument(code)
+        key = instrument_key(inst)
+        offline = str(os.environ.get("TRADING_OFFLINE", "0")).lower() in ("1", "true", "yes")
+
+        cache_key = f"history:{key}:{interval}:{days}"
+
+        # Cache
         if use_cache:
             cached_df = self._cache.get(cache_key, CONFIG.data.cache_ttl_hours)
             if cached_df is not None and len(cached_df) >= min(days, 100):
                 return cached_df.tail(days)
-        
-        # Check database
-        db_df = self._db.get_bars(code)
-        if not db_df.empty and len(db_df) >= days:
-            self._cache.set(cache_key, db_df.tail(days))
-            return db_df.tail(days)
-        
-        # Fetch from sources
-        df = self._fetch_from_sources(code, days)
-        
-        if not df.empty:
+
+        # Local DB only works for CN equities in your current schema (daily_bars uses code)
+        if inst["market"] == "CN" and inst["asset"] == "EQUITY":
+            db_df = self._db.get_bars(inst["symbol"])
+            if not db_df.empty and len(db_df) >= days:
+                self._cache.set(cache_key, db_df.tail(days))
+                return db_df.tail(days)
+
+        if offline:
+            # Offline: never hit network sources
+            return pd.DataFrame()
+
+        # Fetch from sources (supports instrument-aware sources)
+        df = self._fetch_from_sources_instrument(inst, days=days, interval=interval)
+
+        if df is not None and not df.empty:
             self._cache.set(cache_key, df)
-            if update_db:
-                self._db.upsert_bars(code, df)
-        
-        return df
+            if update_db and inst["market"] == "CN" and inst["asset"] == "EQUITY":
+                self._db.upsert_bars(inst["symbol"], df)
+
+        return df if df is not None else pd.DataFrame()
     
     def _fetch_from_sources(self, code: str, days: int) -> pd.DataFrame:
         """Fetch from online sources with fallback"""
@@ -550,49 +776,60 @@ class DataFetcher:
         log.error(f"All sources failed for {code}")
         return pd.DataFrame()
     
-    def get_realtime(self, code: str) -> Optional[Quote]:
-        """Get real-time quote"""
-        code = self.clean_code(code)
-        
-        with self._rate_limiter:
-            for source in self._sources:
-                if not source.is_available():
-                    continue
-                
-                try:
-                    self._rate_limit(f"{source.name}_rt")
-                    quote = source.get_realtime(code)
-                    
-                    if quote and quote.price > 0:
-                        return quote
-                        
-                except Exception as e:
-                    log.debug(f"{source.name} realtime failed: {e}")
-                    continue
-        
-        # Fallback: use last historical close
-        df = self.get_history(code, days=5)
-        if not df.empty:
-            last = df.iloc[-1]
-            prev = df.iloc[-2] if len(df) > 1 else last
-            change = last['close'] - prev['close']
-            change_pct = (change / prev['close'] * 100) if prev['close'] > 0 else 0
-            
-            return Quote(
-                code=code,
-                name=f"Stock {code}",
-                price=float(last['close']),
-                open=float(last['open']),
-                high=float(last['high']),
-                low=float(last['low']),
-                close=float(prev['close']),
-                volume=int(last['volume']),
-                amount=float(last.get('amount', 0)),
-                change=change,
-                change_pct=change_pct,
-                source="cache"
-            )
-        
+    def get_realtime(self, code: str, instrument: dict = None) -> Optional[Quote]:
+        """
+        Multi-asset realtime quote.
+        Offline mode returns last close if available (CN only).
+        """
+        from core.instruments import parse_instrument
+
+        inst = instrument or parse_instrument(code)
+        offline = str(os.environ.get("TRADING_OFFLINE", "0")).lower() in ("1", "true", "yes")
+
+        if not offline:
+            with self._rate_limiter:
+                for source in self._sources:
+                    if not source.is_available():
+                        continue
+                    try:
+                        self._rate_limit(f"{source.name}_rt")
+
+                        fn = getattr(source, "get_realtime_instrument", None)
+                        if callable(fn):
+                            q = fn(inst)
+                        else:
+                            if inst["market"] == "CN" and inst["asset"] == "EQUITY":
+                                q = source.get_realtime(inst["symbol"])
+                            else:
+                                q = None
+
+                        if q and q.price > 0:
+                            return q
+                    except Exception:
+                        continue
+
+        # Offline fallback: last historical close (CN equity only)
+        if inst["market"] == "CN" and inst["asset"] == "EQUITY":
+            df = self.get_history(inst["symbol"], days=5, use_cache=True, update_db=False, instrument=inst)
+            if not df.empty:
+                last = df.iloc[-1]
+                prev = df.iloc[-2] if len(df) > 1 else last
+                change = float(last["close"] - prev["close"])
+                change_pct = (change / float(prev["close"]) * 100) if float(prev["close"]) > 0 else 0.0
+                return Quote(
+                    code=inst["symbol"],
+                    name=f"Stock {inst['symbol']}",
+                    price=float(last["close"]),
+                    open=float(last["open"]),
+                    high=float(last["high"]),
+                    low=float(last["low"]),
+                    close=float(prev["close"]),
+                    volume=int(last["volume"]),
+                    amount=float(last.get("amount", 0)),
+                    change=change,
+                    change_pct=change_pct,
+                    source="offline_cache",
+                )
         return None
 
     def get_multiple_parallel(

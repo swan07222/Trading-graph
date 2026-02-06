@@ -46,30 +46,50 @@ class RealTimeMonitor(QThread):
         self.interval = 30  # seconds
     
     def run(self):
-        """Main monitoring loop"""
+        """
+        Monitoring loop with:
+        - stable interval scheduling
+        - exponential backoff on repeated failures
+        - caps expensive full predictions per cycle
+        """
         self.running = True
-        
+        backoff = 1
+        max_backoff = 60
+
         while self.running:
-            for code in self.watch_list:
-                if not self.running:
-                    break
-                
-                try:
-                    pred = self.predictor.predict(code)
-                    self.price_updated.emit(code, pred.current_price)
-                    
-                    # Emit signal if strong enough
-                    if pred.signal in [Signal.STRONG_BUY, Signal.STRONG_SELL]:
-                        if pred.confidence >= CONFIG.MIN_CONFIDENCE:
-                            self.signal_detected.emit(pred)
-                    
-                except Exception as e:
-                    self.error_occurred.emit(f"{code}: {str(e)}")
-                
-                time.sleep(2)  # Rate limit
-            
-            # Wait before next cycle
-            for _ in range(self.interval):
+            loop_start = time.time()
+            try:
+                preds = self.predictor.predict_quick_batch(self.watch_list, use_realtime_price=True)
+
+                for p in preds:
+                    self.price_updated.emit(p.stock_code, p.current_price)
+
+                strong = [
+                    p for p in preds
+                    if p.signal in [Signal.STRONG_BUY, Signal.STRONG_SELL]
+                    and p.confidence >= CONFIG.MIN_CONFIDENCE
+                ]
+                strong.sort(key=lambda x: x.confidence, reverse=True)
+                strong = strong[:3]  # cap
+
+                for p in strong:
+                    full = self.predictor.predict(p.stock_code, use_realtime_price=True)
+                    self.signal_detected.emit(full)
+
+                backoff = 1
+
+            except Exception as e:
+                self.error_occurred.emit(str(e))
+                sleep_s = min(max_backoff, backoff)
+                backoff = min(max_backoff, backoff * 2)
+                for _ in range(sleep_s):
+                    if not self.running:
+                        break
+                    time.sleep(1)
+
+            elapsed = time.time() - loop_start
+            remaining = max(0.0, self.interval - elapsed)
+            for _ in range(int(remaining)):
                 if not self.running:
                     break
                 time.sleep(1)

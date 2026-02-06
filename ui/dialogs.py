@@ -41,27 +41,34 @@ class TrainWorker(QThread):
     def run(self):
         try:
             from models.trainer import Trainer
+            from utils.cancellation import CancelledException
 
             trainer = Trainer()
 
             def cb(model_name: str, epoch_idx: int, val_acc: float):
-                if self.cancel_token.is_cancelled:  # CHECK
-                    raise Exception("Training cancelled")
+                # cooperative cancellation
+                self.cancel_token.raise_if_cancelled()
                 self.epoch.emit(model_name, epoch_idx + 1, float(val_acc))
 
             self.progress.emit(f"Loading data for {len(self.stocks)} stocks...")
+
             results = trainer.train(
-                stock_codes=self.stocks, 
-                epochs=self.epochs, 
-                callback=cb, 
-                stop_flag=self.cancel_token,  # PASS
+                stock_codes=self.stocks,
+                epochs=self.epochs,
+                callback=cb,
+                stop_flag=self.cancel_token,
                 save_model=True
             )
 
+            # normal completion
             self.finished.emit(results)
+
+        except CancelledException:
+            # clean cancellation path (UI can treat as stopped)
+            self.finished.emit({"cancelled": True})
+
         except Exception as e:
-            if "cancelled" not in str(e).lower():
-                self.failed.emit(str(e))
+            self.failed.emit(str(e))
     
     def cancel(self):
         """Cancel training gracefully"""

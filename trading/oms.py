@@ -11,6 +11,16 @@ Features:
 - Position management with T+1
 - Audit trail
 - Reconciliation support
+
+Fixes applied:
+- Config import path
+- Fill deduplication using composite key
+- T+1 uses fill timestamp date
+- Partial fill release calculation
+- Transaction wrapping for atomicity
+- Thread-local connection cleanup
+- Consistent available/cash invariant
+- Price update persistence
 """
 import sqlite3
 import threading
@@ -21,7 +31,7 @@ from pathlib import Path
 from contextlib import contextmanager
 import uuid
 
-from config import CONFIG
+from config.settings import CONFIG  # Fixed import
 from core.types import (
     Order, OrderSide, OrderType, OrderStatus,
     Fill, Position, Account
@@ -74,7 +84,9 @@ class OrderDatabase:
     
     def __init__(self, db_path: Path = None):
         self._db_path = db_path or CONFIG.data_dir / "orders.db"
+        self._db_path.parent.mkdir(parents=True, exist_ok=True)
         self._local = threading.local()
+        self._init_lock = threading.Lock()
         self._init_db()
     
     @property
@@ -91,117 +103,143 @@ class OrderDatabase:
             self._local.conn.execute("PRAGMA foreign_keys=ON")
         return self._local.conn
     
+    def close_connection(self):
+        """Close thread-local connection"""
+        if hasattr(self._local, 'conn') and self._local.conn:
+            try:
+                self._local.conn.close()
+            except Exception:
+                pass
+            self._local.conn = None
+    
     @contextmanager
-    def _transaction(self):
+    def transaction(self):
+        """Context manager for atomic transactions"""
+        conn = self._conn
         try:
-            yield self._conn
-            self._conn.commit()
+            yield conn
+            conn.commit()
         except Exception:
-            self._conn.rollback()
+            conn.rollback()
             raise
     
-    def _init_db(self):
-        with self._transaction() as conn:
-            # Orders table FIRST
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS orders (
-                    id TEXT PRIMARY KEY,
-                    broker_id TEXT,
-                    symbol TEXT NOT NULL,
-                    name TEXT,
-                    side TEXT NOT NULL,
-                    order_type TEXT NOT NULL,
-                    quantity INTEGER NOT NULL,
-                    price REAL,
-                    stop_price REAL,
-                    status TEXT NOT NULL,
-                    filled_qty INTEGER DEFAULT 0,
-                    avg_price REAL DEFAULT 0,
-                    commission REAL DEFAULT 0,
-                    message TEXT,
-                    strategy TEXT,
-                    signal_id TEXT,
-                    stop_loss REAL,
-                    take_profit REAL,
-                    created_at TEXT,
-                    submitted_at TEXT,
-                    filled_at TEXT,
-                    cancelled_at TEXT,
-                    updated_at TEXT,
-                    tags TEXT
-                )
-            """)
-            
-            # Fills table
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS fills (
-                    id TEXT PRIMARY KEY,
-                    order_id TEXT NOT NULL,
-                    symbol TEXT NOT NULL,
-                    side TEXT NOT NULL,
-                    quantity INTEGER NOT NULL,
-                    price REAL NOT NULL,
-                    commission REAL DEFAULT 0,
-                    stamp_tax REAL DEFAULT 0,
-                    timestamp TEXT,
-                    FOREIGN KEY (order_id) REFERENCES orders(id)
-                )
-            """)
-            
-            # Positions table
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS positions (
-                    symbol TEXT PRIMARY KEY,
-                    name TEXT,
-                    quantity INTEGER DEFAULT 0,
-                    available_qty INTEGER DEFAULT 0,
-                    frozen_qty INTEGER DEFAULT 0,
-                    pending_buy INTEGER DEFAULT 0,
-                    pending_sell INTEGER DEFAULT 0,
-                    avg_cost REAL DEFAULT 0,
-                    current_price REAL DEFAULT 0,
-                    realized_pnl REAL DEFAULT 0,
-                    commission_paid REAL DEFAULT 0,
-                    opened_at TEXT,
-                    updated_at TEXT
-                )
-            """)
-            
-            # Account state table
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS account_state (
-                    id INTEGER PRIMARY KEY CHECK (id = 1),
-                    cash REAL DEFAULT 0,
-                    available REAL DEFAULT 0,
-                    initial_capital REAL DEFAULT 0,
-                    realized_pnl REAL DEFAULT 0,
-                    commission_paid REAL DEFAULT 0,
-                    peak_equity REAL DEFAULT 0,
-                    daily_start_equity REAL DEFAULT 0,
-                    daily_start_date TEXT,
-                    updated_at TEXT
-                )
-            """)
-            
-            # T+1 tracking - FIXED: composite primary key for multiple buys
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS t1_pending (
-                    symbol TEXT,
-                    purchase_date TEXT,
-                    quantity INTEGER DEFAULT 0,
-                    PRIMARY KEY (symbol, purchase_date)
-                )
-            """)
-            
-            # Indices AFTER tables exist
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status)")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_orders_symbol ON orders(symbol)")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_orders_broker_id ON orders(broker_id)")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_fills_order ON fills(order_id)")
+    # Alias for internal use
+    _transaction = transaction
     
-    def save_order(self, order: Order):
-        with self._transaction() as conn:
-            conn.execute("""
+    def _init_db(self):
+        with self._init_lock:
+            with self.transaction() as conn:
+                # Orders table
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS orders (
+                        id TEXT PRIMARY KEY,
+                        broker_id TEXT,
+                        symbol TEXT NOT NULL,
+                        name TEXT,
+                        side TEXT NOT NULL,
+                        order_type TEXT NOT NULL,
+                        quantity INTEGER NOT NULL,
+                        price REAL,
+                        stop_price REAL,
+                        status TEXT NOT NULL,
+                        filled_qty INTEGER DEFAULT 0,
+                        avg_price REAL DEFAULT 0,
+                        commission REAL DEFAULT 0,
+                        message TEXT,
+                        strategy TEXT,
+                        signal_id TEXT,
+                        stop_loss REAL,
+                        take_profit REAL,
+                        created_at TEXT,
+                        submitted_at TEXT,
+                        filled_at TEXT,
+                        cancelled_at TEXT,
+                        updated_at TEXT,
+                        tags TEXT
+                    )
+                """)
+                
+                # Fills table with composite unique constraint for deduplication
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS fills (
+                        id TEXT PRIMARY KEY,
+                        order_id TEXT NOT NULL,
+                        broker_fill_id TEXT,
+                        symbol TEXT NOT NULL,
+                        side TEXT NOT NULL,
+                        quantity INTEGER NOT NULL,
+                        price REAL NOT NULL,
+                        commission REAL DEFAULT 0,
+                        stamp_tax REAL DEFAULT 0,
+                        timestamp TEXT,
+                        FOREIGN KEY (order_id) REFERENCES orders(id)
+                    )
+                """)
+                
+                # Unique constraint for deduplication (order_id + qty + price + timestamp)
+                conn.execute("""
+                    CREATE UNIQUE INDEX IF NOT EXISTS idx_fills_dedup 
+                    ON fills(order_id, quantity, price, timestamp)
+                """)
+                
+                # Positions table
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS positions (
+                        symbol TEXT PRIMARY KEY,
+                        name TEXT,
+                        quantity INTEGER DEFAULT 0,
+                        available_qty INTEGER DEFAULT 0,
+                        frozen_qty INTEGER DEFAULT 0,
+                        pending_buy INTEGER DEFAULT 0,
+                        pending_sell INTEGER DEFAULT 0,
+                        avg_cost REAL DEFAULT 0,
+                        current_price REAL DEFAULT 0,
+                        realized_pnl REAL DEFAULT 0,
+                        commission_paid REAL DEFAULT 0,
+                        opened_at TEXT,
+                        updated_at TEXT
+                    )
+                """)
+                
+                # Account state table
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS account_state (
+                        id INTEGER PRIMARY KEY CHECK (id = 1),
+                        cash REAL DEFAULT 0,
+                        available REAL DEFAULT 0,
+                        initial_capital REAL DEFAULT 0,
+                        realized_pnl REAL DEFAULT 0,
+                        commission_paid REAL DEFAULT 0,
+                        peak_equity REAL DEFAULT 0,
+                        daily_start_equity REAL DEFAULT 0,
+                        daily_start_date TEXT,
+                        updated_at TEXT
+                    )
+                """)
+                
+                # T+1 tracking with composite primary key
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS t1_pending (
+                        symbol TEXT,
+                        purchase_date TEXT,
+                        quantity INTEGER DEFAULT 0,
+                        PRIMARY KEY (symbol, purchase_date)
+                    )
+                """)
+                
+                # Indices
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status)")
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_orders_symbol ON orders(symbol)")
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_orders_broker_id ON orders(broker_id)")
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_fills_order ON fills(order_id)")
+    
+    def save_order(self, order: Order, conn: sqlite3.Connection = None):
+        """Save order - can use existing connection for transaction"""
+        target_conn = conn or self._conn
+        should_commit = conn is None
+        
+        try:
+            target_conn.execute("""
                 INSERT INTO orders (
                     id, broker_id, symbol, name, side, order_type, quantity, price,
                     stop_price, status, filled_qty, avg_price, commission, message,
@@ -246,10 +284,27 @@ class OrderDatabase:
                 datetime.now().isoformat(),
                 json.dumps(order.tags or {})
             ))
+            
+            if should_commit:
+                target_conn.commit()
+        except Exception:
+            if should_commit:
+                target_conn.rollback()
+            raise
     
     def load_order(self, order_id: str) -> Optional[Order]:
         cursor = self._conn.execute(
             "SELECT * FROM orders WHERE id = ?", (order_id,)
+        )
+        row = cursor.fetchone()
+        if not row:
+            return None
+        return self._row_to_order(row)
+    
+    def load_order_by_broker_id(self, broker_id: str) -> Optional[Order]:
+        """Load order by broker's entrust number"""
+        cursor = self._conn.execute(
+            "SELECT * FROM orders WHERE broker_id = ?", (broker_id,)
         )
         row = cursor.fetchone()
         if not row:
@@ -307,26 +362,64 @@ class OrderDatabase:
         
         return order
     
-    def save_fill(self, fill: Fill):
-        """Save fill with deduplication"""
-        with self._transaction() as conn:
-            conn.execute("""
-                INSERT OR IGNORE INTO fills 
-                (id, order_id, symbol, side, quantity, price, commission, stamp_tax, timestamp)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    def save_fill(self, fill: Fill, conn: sqlite3.Connection = None) -> bool:
+        """
+        Save fill with deduplication.
+        Returns True if new fill, False if duplicate.
+        Uses composite key (order_id, quantity, price, timestamp) for deduplication.
+        """
+        target_conn = conn or self._conn
+        should_commit = conn is None
+        
+        timestamp_str = fill.timestamp.isoformat() if fill.timestamp else None
+        
+        try:
+            target_conn.execute("""
+                INSERT INTO fills 
+                (id, order_id, broker_fill_id, symbol, side, quantity, price, 
+                 commission, stamp_tax, timestamp)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
-                fill.id, fill.order_id, fill.symbol, fill.side.value,
+                fill.id, fill.order_id, getattr(fill, 'broker_fill_id', None),
+                fill.symbol, fill.side.value,
                 fill.quantity, fill.price, fill.commission, fill.stamp_tax,
-                fill.timestamp.isoformat() if fill.timestamp else None
+                timestamp_str
             ))
+            
+            if should_commit:
+                target_conn.commit()
+            return True
+            
+        except sqlite3.IntegrityError:
+            # Duplicate fill (unique constraint violation)
+            if should_commit:
+                target_conn.rollback()
+            return False
+        except Exception:
+            if should_commit:
+                target_conn.rollback()
+            raise
+    
+    def fill_exists(self, order_id: str, quantity: int, price: float, 
+                    timestamp: datetime) -> bool:
+        """Check if fill already exists"""
+        timestamp_str = timestamp.isoformat() if timestamp else None
+        cursor = self._conn.execute("""
+            SELECT 1 FROM fills 
+            WHERE order_id = ? AND quantity = ? AND price = ? AND timestamp = ?
+        """, (order_id, quantity, price, timestamp_str))
+        return cursor.fetchone() is not None
     
     def load_fills(self, order_id: str = None) -> List[Fill]:
         if order_id:
             cursor = self._conn.execute(
-                "SELECT * FROM fills WHERE order_id = ?", (order_id,)
+                "SELECT * FROM fills WHERE order_id = ? ORDER BY timestamp",
+                (order_id,)
             )
         else:
-            cursor = self._conn.execute("SELECT * FROM fills ORDER BY timestamp DESC")
+            cursor = self._conn.execute(
+                "SELECT * FROM fills ORDER BY timestamp DESC"
+            )
         
         fills = []
         for row in cursor.fetchall():
@@ -345,9 +438,13 @@ class OrderDatabase:
         
         return fills
     
-    def save_position(self, pos: Position):
-        with self._transaction() as conn:
-            conn.execute("""
+    def save_position(self, pos: Position, conn: sqlite3.Connection = None):
+        """Save position - can use existing connection"""
+        target_conn = conn or self._conn
+        should_commit = conn is None
+        
+        try:
+            target_conn.execute("""
                 INSERT OR REPLACE INTO positions 
                 (symbol, name, quantity, available_qty, frozen_qty, 
                 pending_buy, pending_sell, avg_cost, current_price,
@@ -361,6 +458,13 @@ class OrderDatabase:
                 pos.opened_at.isoformat() if pos.opened_at else None,
                 datetime.now().isoformat()
             ))
+            
+            if should_commit:
+                target_conn.commit()
+        except Exception:
+            if should_commit:
+                target_conn.rollback()
+            raise
     
     def load_positions(self) -> Dict[str, Position]:
         cursor = self._conn.execute("SELECT * FROM positions WHERE quantity > 0")
@@ -385,13 +489,27 @@ class OrderDatabase:
         
         return positions
     
-    def delete_position(self, symbol: str):
-        with self._transaction() as conn:
-            conn.execute("DELETE FROM positions WHERE symbol = ?", (symbol,))
+    def delete_position(self, symbol: str, conn: sqlite3.Connection = None):
+        """Delete position - can use existing connection"""
+        target_conn = conn or self._conn
+        should_commit = conn is None
+        
+        try:
+            target_conn.execute("DELETE FROM positions WHERE symbol = ?", (symbol,))
+            if should_commit:
+                target_conn.commit()
+        except Exception:
+            if should_commit:
+                target_conn.rollback()
+            raise
     
-    def save_account_state(self, account: Account):
-        with self._transaction() as conn:
-            conn.execute("""
+    def save_account_state(self, account: Account, conn: sqlite3.Connection = None):
+        """Save account state - can use existing connection"""
+        target_conn = conn or self._conn
+        should_commit = conn is None
+        
+        try:
+            target_conn.execute("""
                 INSERT OR REPLACE INTO account_state 
                 (id, cash, available, initial_capital, realized_pnl, commission_paid,
                  peak_equity, daily_start_equity, daily_start_date, updated_at)
@@ -403,6 +521,13 @@ class OrderDatabase:
                 account.daily_start_date.isoformat() if account.daily_start_date else None,
                 datetime.now().isoformat()
             ))
+            
+            if should_commit:
+                target_conn.commit()
+        except Exception:
+            if should_commit:
+                target_conn.rollback()
+            raise
     
     def load_account_state(self) -> Optional[Account]:
         cursor = self._conn.execute("SELECT * FROM account_state WHERE id = 1")
@@ -426,20 +551,32 @@ class OrderDatabase:
         
         return account
     
-    def save_t1_pending(self, symbol: str, quantity: int, purchase_date: date):
+    def save_t1_pending(self, symbol: str, quantity: int, purchase_date: date,
+                        conn: sqlite3.Connection = None):
         """Save T+1 pending - accumulates if same symbol+date"""
-        with self._transaction() as conn:
-            # Try to update existing row first
-            conn.execute("""
+        target_conn = conn or self._conn
+        should_commit = conn is None
+        
+        try:
+            target_conn.execute("""
                 INSERT INTO t1_pending (symbol, purchase_date, quantity)
                 VALUES (?, ?, ?)
                 ON CONFLICT(symbol, purchase_date) DO UPDATE SET
                     quantity = quantity + excluded.quantity
             """, (symbol, purchase_date.isoformat(), quantity))
+            
+            if should_commit:
+                target_conn.commit()
+        except Exception:
+            if should_commit:
+                target_conn.rollback()
+            raise
     
     def get_t1_pending(self) -> Dict[str, List[Tuple[int, date]]]:
         """Get T+1 pending grouped by symbol"""
-        cursor = self._conn.execute("SELECT symbol, purchase_date, quantity FROM t1_pending")
+        cursor = self._conn.execute(
+            "SELECT symbol, purchase_date, quantity FROM t1_pending"
+        )
         result: Dict[str, List[Tuple[int, date]]] = {}
         for row in cursor.fetchall():
             symbol = row['symbol']
@@ -451,16 +588,29 @@ class OrderDatabase:
             ))
         return result
     
-    def clear_t1_pending(self, symbol: str, purchase_date: date = None):
+    def clear_t1_pending(self, symbol: str, purchase_date: date = None,
+                         conn: sqlite3.Connection = None):
         """Clear T+1 pending for symbol (optionally specific date)"""
-        with self._transaction() as conn:
+        target_conn = conn or self._conn
+        should_commit = conn is None
+        
+        try:
             if purchase_date:
-                conn.execute(
+                target_conn.execute(
                     "DELETE FROM t1_pending WHERE symbol = ? AND purchase_date = ?",
                     (symbol, purchase_date.isoformat())
                 )
             else:
-                conn.execute("DELETE FROM t1_pending WHERE symbol = ?", (symbol,))
+                target_conn.execute(
+                    "DELETE FROM t1_pending WHERE symbol = ?", (symbol,)
+                )
+            
+            if should_commit:
+                target_conn.commit()
+        except Exception:
+            if should_commit:
+                target_conn.rollback()
+            raise
     
     def process_t1_settlement(self) -> List[str]:
         """Process T+1 settlement - only on trading days"""
@@ -474,9 +624,7 @@ class OrderDatabase:
         
         settled = []
         
-        with self._transaction() as conn:
-            # Get all pending where purchase was before today AND
-            # there's been at least one trading day since purchase
+        with self.transaction() as conn:
             cursor = conn.execute(
                 "SELECT symbol, purchase_date, quantity FROM t1_pending"
             )
@@ -519,11 +667,12 @@ class OrderManagementSystem:
     Production Order Management System
     
     Features:
-    - SQLite persistence
+    - SQLite persistence with atomic transactions
     - Crash recovery
     - Order state machine
     - T+1 settlement
     - Reconciliation
+    - Idempotent fill processing
     """
     
     def __init__(self, initial_capital: float = None):
@@ -549,10 +698,12 @@ class OrderManagementSystem:
         
         if account:
             log.info("Recovered account state from database")
+            # Ensure invariant
+            account.available = max(0.0, min(account.available, account.cash))
             return account
         
         # New account
-        capital = initial_capital or CONFIG.capital
+        capital = initial_capital or getattr(CONFIG, 'capital', 100000.0)
         account = Account(
             cash=capital,
             available=capital,
@@ -589,50 +740,61 @@ class OrderManagementSystem:
             self._db.save_account_state(self._account)
             log.info("New trading day initialized")
     
+    def _enforce_invariants(self):
+        """Ensure account invariants are maintained"""
+        # Available should never exceed cash
+        self._account.available = max(0.0, min(self._account.available, self._account.cash))
+        # Cash should never be negative
+        self._account.cash = max(0.0, self._account.cash)
+    
     def get_active_orders(self) -> List[Order]:
         """Get all active (non-terminal) orders"""
         return self._db.load_active_orders()
-
+    
     def submit_order(self, order: Order) -> Order:
         """Submit order with full validation + reservation (cash/shares)."""
         with self._lock:
             self._check_new_day()
-
-            # --- Basic sanity ---
+            
+            # Basic sanity checks
             if order.quantity <= 0:
                 raise OrderValidationError("Quantity must be positive")
-
+            
             if order.price is None or float(order.price) <= 0:
-                # OMS must reserve cash/shares using a price. Require ExecutionEngine to provide it.
-                raise OrderValidationError("Order price must be provided (>0) for OMS reservation")
-
+                raise OrderValidationError(
+                    "Order price must be provided (>0) for OMS reservation"
+                )
+            
             # Per-symbol lot size (STAR can be 200)
             from core.constants import get_lot_size
             lot = get_lot_size(order.symbol)
             if order.quantity % lot != 0:
-                raise OrderValidationError(f"Quantity must be multiple of {lot} for {order.symbol}")
-
-            # --- Reserve resources ---
+                raise OrderValidationError(
+                    f"Quantity must be multiple of {lot} for {order.symbol}"
+                )
+            
+            # Reserve resources
             if order.side == OrderSide.BUY:
-                self._validate_buy_order(order)      # reserves cash, sets tags
+                self._validate_buy_order(order)
             else:
-                self._validate_sell_order(order)     # freezes shares in position
-
-            # --- Update status ---
+                self._validate_sell_order(order)
+            
+            # Update status
             order.status = OrderStatus.SUBMITTED
             order.submitted_at = datetime.now()
             order.updated_at = datetime.now()
-
-            # Persist
-            self._db.save_order(order)
-            self._db.save_account_state(self._account)
-
-            # If sell reservation changed position, persist it
-            if order.side == OrderSide.SELL:
-                pos = self._account.positions.get(order.symbol)
-                if pos:
-                    self._db.save_position(pos)
-
+            
+            # Persist atomically
+            with self._db.transaction() as conn:
+                self._db.save_order(order, conn)
+                self._db.save_account_state(self._account, conn)
+                
+                # If sell reservation changed position, persist it
+                if order.side == OrderSide.SELL:
+                    pos = self._account.positions.get(order.symbol)
+                    if pos:
+                        self._db.save_position(pos, conn)
+            
             # Audit + callbacks
             self._audit.log_order(
                 order_id=order.id,
@@ -643,51 +805,68 @@ class OrderManagementSystem:
                 status=order.status.value
             )
             self._notify_order_update(order)
-
-            log.info(f"Order submitted: {order.id} {order.side.value} {order.quantity} {order.symbol}")
+            
+            log.info(
+                f"Order submitted: {order.id} {order.side.value} "
+                f"{order.quantity} {order.symbol} @ ¥{order.price:.2f}"
+            )
             return order
     
     def _validate_buy_order(self, order: Order):
-        """Validate buy order"""
-        cost = order.quantity * order.price
-        commission = cost * CONFIG.trading.commission
-        total_cost = cost + commission
-
-        slip = float(getattr(CONFIG.trading, "slippage", 0.0))
-        est_price = order.price * (1 + slip)
-        est_value = order.quantity * est_price
-        est_commission = max(est_value * CONFIG.trading.commission, 5.0)
-        total_cost = est_value + est_commission
-
-        order.tags = order.tags or {}
-        order.tags["reserved_cash_remaining"] = float(total_cost)
-        order.tags["reserved_cash_price"] = float(order.price)
+        """Validate buy order and reserve cash (available only)."""
+        if order.price <= 0:
+            raise OrderValidationError("BUY reservation requires price > 0")
         
-        if total_cost > self._account.available:
+        # Get trading config with safe defaults
+        trading_config = getattr(CONFIG, 'trading', None)
+        risk_config = getattr(CONFIG, 'risk', None)
+        
+        slip = float(getattr(trading_config, 'slippage', 0.002) if trading_config else 0.002)
+        comm_rate = float(getattr(trading_config, 'commission', 0.0003) if trading_config else 0.0003)
+        comm_min = 5.0
+        
+        # Conservative reservation (covers slippage + min commission)
+        est_price = float(order.price) * (1.0 + slip)
+        est_value = float(order.quantity) * est_price
+        est_commission = max(est_value * comm_rate, comm_min)
+        reserved_total = est_value + est_commission
+        
+        # Store reservation details
+        order.tags = order.tags or {}
+        order.tags["reserved_price"] = float(order.price)
+        order.tags["reserved_slip"] = slip
+        order.tags["reserved_commission_rate"] = comm_rate
+        order.tags["reserved_commission_min"] = comm_min
+        order.tags["reserved_cash_total"] = float(reserved_total)
+        order.tags["reserved_cash_remaining"] = float(reserved_total)
+        
+        if reserved_total > self._account.available:
             raise InsufficientFundsError(
-                f"Insufficient funds: need ¥{total_cost:,.2f}, "
+                f"Insufficient funds: need ¥{reserved_total:,.2f}, "
                 f"have ¥{self._account.available:,.2f}"
             )
         
-        # Check position limit
-        existing_value = 0
+        # Position limit check
+        max_position_pct = float(getattr(risk_config, 'max_position_pct', 20.0) if risk_config else 20.0)
+        
+        existing_value = 0.0
         if order.symbol in self._account.positions:
             existing_value = self._account.positions[order.symbol].market_value
         
-        new_position_value = existing_value + cost
-        
+        new_position_value = existing_value + (order.quantity * order.price)
         if self._account.equity > 0:
             position_pct = new_position_value / self._account.equity * 100
-            if position_pct > CONFIG.risk.max_position_pct:
+            if position_pct > max_position_pct:
                 raise OrderValidationError(
-                    f"Position too large: {position_pct:.1f}% (max {CONFIG.risk.max_position_pct}%)"
+                    f"Position too large: {position_pct:.1f}% (max {max_position_pct}%)"
                 )
         
-        # Reserve funds
-        self._account.available -= total_cost
+        # Reserve available cash
+        self._account.available -= reserved_total
+        self._enforce_invariants()
     
     def _validate_sell_order(self, order: Order):
-        """Validate sell order"""
+        """Validate sell order and freeze shares."""
         position = self._account.positions.get(order.symbol)
         
         if not position:
@@ -695,16 +874,17 @@ class OrderManagementSystem:
         
         if order.quantity > position.available_qty:
             raise InsufficientPositionError(
-                f"Insufficient shares: have {position.available_qty}, need {order.quantity}"
+                f"Insufficient shares: have {position.available_qty}, "
+                f"need {order.quantity}"
             )
         
-        # Reserve shares
+        # Reserve shares (freeze them)
         position.available_qty -= order.quantity
         position.frozen_qty += order.quantity
     
     def update_order_status(
-        self, 
-        order_id: str, 
+        self,
+        order_id: str,
         new_status: OrderStatus,
         message: str = "",
         broker_id: str = None,
@@ -733,12 +913,9 @@ class OrderManagementSystem:
                     order.filled_qty = filled_qty
                 if avg_price is not None:
                     order.avg_price = avg_price
-
+                
                 order.updated_at = datetime.now()
                 self._db.save_order(order)
-                self._db.save_account_state(self._account)
-
-                # IMPORTANT: notify even if status unchanged (broker_id/message updates)
                 self._notify_order_update(order)
                 return order
             
@@ -748,7 +925,6 @@ class OrderManagementSystem:
                     f"Invalid state transition for {order_id}: "
                     f"{old_status.value} -> {new_status.value}"
                 )
-                # Don't raise - just log and return current state
                 return order
             
             # Apply status change
@@ -763,6 +939,7 @@ class OrderManagementSystem:
             if avg_price is not None:
                 order.avg_price = avg_price
             
+            # Handle terminal states
             if new_status == OrderStatus.CANCELLED:
                 order.cancelled_at = datetime.now()
                 self._release_reserved(order)
@@ -773,8 +950,18 @@ class OrderManagementSystem:
             elif new_status == OrderStatus.EXPIRED:
                 self._release_reserved(order)
             
-            # Persist
-            self._db.save_order(order)
+            # Persist atomically
+            with self._db.transaction() as conn:
+                self._db.save_order(order, conn)
+                self._db.save_account_state(self._account, conn)
+                
+                # If sell order released frozen, update position
+                if order.side == OrderSide.SELL and new_status in [
+                    OrderStatus.CANCELLED, OrderStatus.REJECTED, OrderStatus.EXPIRED
+                ]:
+                    pos = self._account.positions.get(order.symbol)
+                    if pos:
+                        self._db.save_position(pos, conn)
             
             # Audit
             self._audit.log_order(
@@ -786,105 +973,138 @@ class OrderManagementSystem:
                 status=new_status.value
             )
             
-            # Notify
             self._notify_order_update(order)
-
-            self._db.save_account_state(self._account)
             
             log.info(f"Order {order_id}: {old_status.value} -> {new_status.value}")
             
             return order
     
     def get_order_by_broker_id(self, broker_id: str) -> Optional[Order]:
-        """Get order by broker's entrust number (for fill mapping after restart)"""
-        cursor = self._db._conn.execute(
-            "SELECT * FROM orders WHERE broker_id = ?", (broker_id,)
-        )
-        row = cursor.fetchone()
-        if row:
-            return self._db._row_to_order(row)
-        return None
-
+        """Get order by broker's entrust number"""
+        return self._db.load_order_by_broker_id(broker_id)
+    
     def _release_reserved(self, order: Order):
-        """Release reserved funds/shares for cancelled/rejected order - WITH SAFETY CLAMPING"""
+        """Release reserved funds/shares for cancelled/rejected/expired orders."""
         if order.side == OrderSide.BUY:
-            # Release reserved funds
-            if order.tags:
-                reserved_rem = float(order.tags.get("reserved_cash_remaining", 0.0))
-            else:
-                # Fallback: estimate based on unfilled portion
-                unfilled = order.quantity - order.filled_qty
-                reserved_rem = unfilled * order.price * (1 + CONFIG.trading.commission)
+            tags = order.tags or {}
+            reserved_rem = float(tags.get("reserved_cash_remaining", 0.0))
             
-            self._account.available += reserved_rem
+            # Fallback for partial fills or older orders
+            if reserved_rem <= 0.0:
+                reserved_total = float(tags.get("reserved_cash_total", 0.0))
+                if reserved_total > 0:
+                    # Calculate what was actually used
+                    actual_used = (order.filled_qty * order.avg_price) + order.commission
+                    reserved_rem = max(0.0, reserved_total - actual_used)
             
-            # CRITICAL: Clamp to valid range
-            self._account.available = max(0.0, min(self._account.available, self._account.cash))
+            if reserved_rem > 0:
+                self._account.available += reserved_rem
+                self._enforce_invariants()
             
-            if order.tags:
-                order.tags["reserved_cash_remaining"] = 0.0
-                
+            # Clear remaining reservation
+            tags["reserved_cash_remaining"] = 0.0
+            order.tags = tags
+        
         else:  # SELL
-            # Release reserved shares
             position = self._account.positions.get(order.symbol)
             if position:
-                remaining_qty = order.quantity - order.filled_qty
-                
-                # Only release what's actually frozen
+                # Release unfilled frozen shares
+                remaining_qty = max(0, order.quantity - order.filled_qty)
                 to_release = min(remaining_qty, position.frozen_qty)
-                position.frozen_qty -= to_release
-                position.available_qty += to_release
-                
-                # CRITICAL: Enforce invariants
-                position.frozen_qty = max(0, position.frozen_qty)
-                position.available_qty = max(0, min(position.available_qty, position.quantity))
-                
-                self._db.save_position(position)
+                position.frozen_qty = max(0, position.frozen_qty - to_release)
+                position.available_qty = min(
+                    position.available_qty + to_release,
+                    position.quantity
+                )
     
     def process_fill(self, order: Order, fill: Fill):
-        """Process order fill - IDEMPOTENT: skip if fill already exists"""
+        """
+        Process order fill - IDEMPOTENT: skip if fill already exists.
+        Uses atomic transaction for consistency.
+        """
         with self._lock:
-            # CHECK IF FILL ALREADY PROCESSED (idempotency)
-            existing = self._db._conn.execute(
-                "SELECT 1 FROM fills WHERE id = ?", (fill.id,)
-            ).fetchone()
-            
-            if existing:
-                log.debug(f"Fill {fill.id} already processed, skipping")
+            # Check for duplicate fill using composite key
+            if self._db.fill_exists(
+                fill.order_id, fill.quantity, fill.price, fill.timestamp
+            ):
+                log.debug(f"Fill already processed: {fill.order_id} "
+                         f"{fill.quantity}@{fill.price}, skipping")
                 return
             
-            # Save fill FIRST (will fail if duplicate due to PRIMARY KEY)
-            self._db.save_fill(fill)
+            # Determine fill date for T+1 (use fill timestamp, not today)
+            fill_date = fill.timestamp.date() if fill.timestamp else date.today()
             
-            # Update order
-            order.filled_qty += fill.quantity
-            order.commission += (fill.commission + fill.stamp_tax)
+            # Begin atomic transaction
+            with self._db.transaction() as conn:
+                # Save fill (will fail silently if duplicate due to unique constraint)
+                if not self._db.save_fill(fill, conn):
+                    log.debug(f"Fill duplicate detected during save: {fill.id}")
+                    return
+                
+                # Update order quantities/commission
+                order.filled_qty += int(fill.quantity)
+                order.commission += float(fill.commission + fill.stamp_tax)
+                
+                # Calculate running average price
+                if order.filled_qty > 0:
+                    prev_filled = order.filled_qty - fill.quantity
+                    if prev_filled > 0:
+                        prev_value = prev_filled * order.avg_price
+                        new_value = fill.quantity * fill.price
+                        order.avg_price = (prev_value + new_value) / order.filled_qty
+                    else:
+                        order.avg_price = fill.price
+                
+                # Decrement reserved cash on BUY fills
+                if fill.side == OrderSide.BUY:
+                    tags = order.tags or {}
+                    reserved_rem = float(tags.get("reserved_cash_remaining", 0.0))
+                    
+                    actual_cost = (
+                        float(fill.quantity) * float(fill.price) +
+                        float(fill.commission) + float(fill.stamp_tax)
+                    )
+                    
+                    if actual_cost <= reserved_rem:
+                        tags["reserved_cash_remaining"] = reserved_rem - actual_cost
+                    else:
+                        # Reservation overrun
+                        over = actual_cost - reserved_rem
+                        tags["reserved_cash_remaining"] = 0.0
+                        self._account.available = max(0.0, self._account.available - over)
+                        tags["reserved_cash_overrun"] = float(
+                            tags.get("reserved_cash_overrun", 0.0)
+                        ) + over
+                    
+                    order.tags = tags
+                
+                # Update order status
+                if order.filled_qty >= order.quantity:
+                    order.status = OrderStatus.FILLED
+                    order.filled_at = datetime.now()
+                else:
+                    order.status = OrderStatus.PARTIAL
+                
+                order.updated_at = datetime.now()
+                
+                # Update account/positions
+                self._update_account_on_fill(order, fill, fill_date, conn)
+                
+                # If order is terminal FILLED, release any leftover reservation
+                if order.status == OrderStatus.FILLED and order.side == OrderSide.BUY:
+                    tags = order.tags or {}
+                    left = float(tags.get("reserved_cash_remaining", 0.0))
+                    if left > 0:
+                        self._account.available += left
+                        self._enforce_invariants()
+                        tags["reserved_cash_remaining"] = 0.0
+                        order.tags = tags
+                
+                # Persist all changes in transaction
+                self._db.save_order(order, conn)
+                self._db.save_account_state(self._account, conn)
             
-            # Calculate average price
-            if order.filled_qty > 0:
-                prev_value = (order.filled_qty - fill.quantity) * order.avg_price
-                new_value = fill.quantity * fill.price
-                order.avg_price = (prev_value + new_value) / order.filled_qty
-            
-            # Update status
-            if order.filled_qty >= order.quantity:
-                order.status = OrderStatus.FILLED
-                order.filled_at = datetime.now()
-            else:
-                order.status = OrderStatus.PARTIAL
-            
-            order.updated_at = datetime.now()
-            
-            # Update account and positions
-            self._update_account_on_fill(order, fill)
-            
-            # Persist order AFTER updates
-            self._db.save_order(order)
-            
-            # Persist account state
-            self._db.save_account_state(self._account)
-            
-            # Audit
+            # Audit (outside transaction)
             self._audit.log_trade(
                 order_id=order.id,
                 code=order.symbol,
@@ -894,11 +1114,10 @@ class OrderManagementSystem:
                 commission=fill.commission
             )
             
-            # Notify
+            # Notify + event
             self._notify_order_update(order)
             self._notify_fill(fill)
             
-            # Publish event
             EVENT_BUS.publish(OrderEvent(
                 type=EventType.ORDER_FILLED,
                 order_id=order.id,
@@ -915,56 +1134,179 @@ class OrderManagementSystem:
                 f"@ ¥{fill.price:.2f} (commission: ¥{fill.commission:.2f})"
             )
     
-    def _update_account_on_fill(self, order: Order, fill: Fill):
+    def _update_account_on_fill(self, order: Order, fill: Fill, 
+                                 fill_date: date, conn: sqlite3.Connection):
         """Update account and positions after fill"""
         if fill.side == OrderSide.BUY:
-            self._apply_buy_fill(order, fill)
+            self._apply_buy_fill(order, fill, fill_date, conn)
         else:
-            self._apply_sell_fill(order, fill)
-
+            self._apply_sell_fill(order, fill, conn)
+        
         # Update peak equity
         if self._account.equity > self._account.peak_equity:
             self._account.peak_equity = self._account.equity
     
+    def _apply_buy_fill(self, order: Order, fill: Fill, 
+                        fill_date: date, conn: sqlite3.Connection):
+        """Apply a BUY fill to account + positions."""
+        qty = int(fill.quantity)
+        px = float(fill.price)
+        fees = float(fill.commission + fill.stamp_tax)
+        trade_value = qty * px
+        total_cost = trade_value + fees
+        
+        # Cash decreases on fill
+        self._account.cash -= total_cost
+        self._account.cash = max(0.0, self._account.cash)
+        self._account.commission_paid += fees
+        
+        # Get or create position
+        pos = self._account.positions.get(order.symbol)
+        if pos is None:
+            pos = Position(
+                symbol=order.symbol,
+                name=order.name or "",
+                quantity=0,
+                available_qty=0,
+                frozen_qty=0,
+                avg_cost=0.0,
+                current_price=px,
+                realized_pnl=0.0,
+                commission_paid=0.0,
+                opened_at=datetime.now(),
+            )
+            self._account.positions[order.symbol] = pos
+        
+        # Update average cost
+        old_qty = int(pos.quantity)
+        new_qty = old_qty + qty
+        if new_qty > 0:
+            pos.avg_cost = (pos.avg_cost * old_qty + px * qty) / new_qty
+        pos.quantity = new_qty
+        pos.current_price = px
+        pos.commission_paid += fees
+        pos.last_updated = datetime.now()
+        
+        # T+1: shares available next trading day (use fill date)
+        self._db.save_t1_pending(order.symbol, qty, fill_date, conn)
+        
+        # Persist position
+        self._db.save_position(pos, conn)
+        
+        # Enforce invariants
+        self._enforce_invariants()
+    
+    def _apply_sell_fill(self, order: Order, fill: Fill, 
+                         conn: sqlite3.Connection):
+        """Apply a SELL fill to account + positions."""
+        qty = int(fill.quantity)
+        px = float(fill.price)
+        fees = float(fill.commission + fill.stamp_tax)
+        trade_value = qty * px
+        proceeds = trade_value - fees
+        
+        pos = self._account.positions.get(order.symbol)
+        if pos is None:
+            log.warning(f"SELL fill for missing position: {order.symbol}")
+            self._account.cash += max(0.0, proceeds)
+            self._account.commission_paid += fees
+            self._enforce_invariants()
+            return
+        
+        # Cash increases on fill
+        self._account.cash += proceeds
+        self._account.cash = max(0.0, self._account.cash)
+        self._account.commission_paid += fees
+        
+        # Position qty decreases; frozen decreases
+        pos.frozen_qty = max(0, int(pos.frozen_qty) - qty)
+        pos.quantity = max(0, int(pos.quantity) - qty)
+        pos.current_price = px
+        pos.commission_paid += fees
+        
+        # Realized PnL on sold shares
+        gross = (px - float(pos.avg_cost)) * qty
+        realized = gross - fees
+        pos.realized_pnl += realized
+        self._account.realized_pnl += realized
+        
+        pos.last_updated = datetime.now()
+        
+        if pos.quantity <= 0:
+            # Remove position entirely
+            self._account.positions.pop(order.symbol, None)
+            self._db.delete_position(order.symbol, conn)
+            self._db.clear_t1_pending(order.symbol, conn=conn)
+        else:
+            self._db.save_position(pos, conn)
+        
+        # Enforce invariants
+        self._enforce_invariants()
+    
     def cancel_order(self, order_id: str) -> bool:
+        """Cancel an order"""
         updated = self.update_order_status(order_id, OrderStatus.CANCELLED)
         return bool(updated and updated.status == OrderStatus.CANCELLED)
     
     def get_order(self, order_id: str) -> Optional[Order]:
+        """Get order by ID"""
         return self._db.load_order(order_id)
     
     def get_orders(self, symbol: str = None) -> List[Order]:
+        """Get orders, optionally filtered by symbol"""
         if symbol:
             return self._db.load_orders_by_symbol(symbol)
         return self._db.load_active_orders()
     
     def get_fills(self, order_id: str = None) -> List[Fill]:
+        """Get fills, optionally filtered by order"""
         return self._db.load_fills(order_id)
     
     def get_position(self, symbol: str) -> Optional[Position]:
+        """Get position for symbol"""
         return self._account.positions.get(symbol)
     
     def get_positions(self) -> Dict[str, Position]:
+        """Get all positions"""
         return self._account.positions.copy()
     
     def get_account(self) -> Account:
+        """Get account state"""
         return self._account
     
     def update_prices(self, prices: Dict[str, float]):
-        """Update position prices"""
+        """Update position prices and persist"""
         with self._lock:
+            updated = False
             for symbol, price in prices.items():
                 if symbol in self._account.positions:
                     self._account.positions[symbol].update_price(price)
-            self._account.last_updated = datetime.now()
+                    updated = True
+            
+            if updated:
+                self._account.last_updated = datetime.now()
+                
+                # Update peak equity
+                if self._account.equity > self._account.peak_equity:
+                    self._account.peak_equity = self._account.equity
+                
+                # Persist
+                with self._db.transaction() as conn:
+                    for symbol, pos in self._account.positions.items():
+                        if symbol in prices:
+                            self._db.save_position(pos, conn)
+                    self._db.save_account_state(self._account, conn)
     
     def on_order_update(self, callback: Callable):
+        """Register order update callback"""
         self._on_order_update.append(callback)
     
     def on_fill(self, callback: Callable):
+        """Register fill callback"""
         self._on_fill.append(callback)
     
     def _notify_order_update(self, order: Order):
+        """Notify order update callbacks"""
         for callback in self._on_order_update:
             try:
                 callback(order)
@@ -972,72 +1314,135 @@ class OrderManagementSystem:
                 log.warning(f"Order callback error: {e}")
     
     def _notify_fill(self, fill: Fill):
+        """Notify fill callbacks"""
         for callback in self._on_fill:
             try:
                 callback(fill)
             except Exception as e:
                 log.warning(f"Fill callback error: {e}")
     
-    def reconcile(self, broker_positions: Dict[str, Position], broker_cash: float) -> Dict:
+    def reconcile(
+        self,
+        broker_positions: Dict[str, Position],
+        broker_cash: float
+    ) -> Dict:
         """
-        Reconcile OMS state with broker
-        Returns discrepancies
+        Reconcile OMS state with broker.
+        Returns discrepancies.
         """
-        discrepancies = {
-            'cash_diff': broker_cash - self._account.cash,
-            'position_diffs': [],
-            'missing_positions': [],
-            'extra_positions': []
-        }
-        
-        our_symbols = set(self._account.positions.keys())
-        broker_symbols = set(broker_positions.keys())
-        
-        # Missing in our records
-        for symbol in broker_symbols - our_symbols:
-            discrepancies['missing_positions'].append({
-                'symbol': symbol,
-                'broker_qty': broker_positions[symbol].quantity
-            })
-        
-        # Extra in our records
-        for symbol in our_symbols - broker_symbols:
-            discrepancies['extra_positions'].append({
-                'symbol': symbol,
-                'our_qty': self._account.positions[symbol].quantity
-            })
-        
-        # Quantity differences
-        for symbol in our_symbols & broker_symbols:
-            our_qty = self._account.positions[symbol].quantity
-            broker_qty = broker_positions[symbol].quantity
+        with self._lock:
+            discrepancies = {
+                'cash_diff': broker_cash - self._account.cash,
+                'position_diffs': [],
+                'missing_positions': [],
+                'extra_positions': []
+            }
             
-            if our_qty != broker_qty:
-                discrepancies['position_diffs'].append({
+            our_symbols = set(self._account.positions.keys())
+            broker_symbols = set(broker_positions.keys())
+            
+            # Missing in our records
+            for symbol in broker_symbols - our_symbols:
+                discrepancies['missing_positions'].append({
                     'symbol': symbol,
-                    'our_qty': our_qty,
-                    'broker_qty': broker_qty,
-                    'diff': broker_qty - our_qty
+                    'broker_qty': broker_positions[symbol].quantity
                 })
-        
-        if any([
-            abs(discrepancies['cash_diff']) > 1,
-            discrepancies['position_diffs'],
-            discrepancies['missing_positions'],
-            discrepancies['extra_positions']
-        ]):
-            log.warning(f"Reconciliation discrepancies: {discrepancies}")
-            self._audit.log_risk_event('reconciliation', discrepancies)
-        
-        return discrepancies
+            
+            # Extra in our records
+            for symbol in our_symbols - broker_symbols:
+                discrepancies['extra_positions'].append({
+                    'symbol': symbol,
+                    'our_qty': self._account.positions[symbol].quantity
+                })
+            
+            # Quantity differences
+            for symbol in our_symbols & broker_symbols:
+                our_qty = self._account.positions[symbol].quantity
+                broker_qty = broker_positions[symbol].quantity
+                
+                if our_qty != broker_qty:
+                    discrepancies['position_diffs'].append({
+                        'symbol': symbol,
+                        'our_qty': our_qty,
+                        'broker_qty': broker_qty,
+                        'diff': broker_qty - our_qty
+                    })
+            
+            has_discrepancy = any([
+                abs(discrepancies['cash_diff']) > 1,
+                discrepancies['position_diffs'],
+                discrepancies['missing_positions'],
+                discrepancies['extra_positions']
+            ])
+            
+            if has_discrepancy:
+                log.warning(f"Reconciliation discrepancies: {discrepancies}")
+                self._audit.log_risk_event('reconciliation', discrepancies)
+            
+            return discrepancies
+    
+    def force_sync_from_broker(
+        self,
+        broker_positions: Dict[str, Position],
+        broker_cash: float,
+        broker_available: float = None
+    ):
+        """
+        Force sync OMS state from broker (use after reconciliation shows issues).
+        WARNING: This overwrites OMS state.
+        """
+        with self._lock:
+            log.warning("Force syncing OMS state from broker")
+            
+            self._account.cash = broker_cash
+            self._account.available = broker_available if broker_available is not None else broker_cash
+            self._account.positions = broker_positions.copy()
+            
+            self._enforce_invariants()
+            
+            # Persist
+            with self._db.transaction() as conn:
+                # Clear and recreate positions
+                conn.execute("DELETE FROM positions")
+                for pos in self._account.positions.values():
+                    self._db.save_position(pos, conn)
+                self._db.save_account_state(self._account, conn)
+            
+            self._audit.log_risk_event('force_sync', {
+                'cash': broker_cash,
+                'positions': len(broker_positions)
+            })
+            
+            log.info(f"Synced from broker: cash=¥{broker_cash:,.2f}, "
+                    f"positions={len(broker_positions)}")
+    
+    def close(self):
+        """Cleanup resources"""
+        try:
+            self._db.close_connection()
+        except Exception as e:
+            log.warning(f"Error closing OMS: {e}")
 
 
 # Global OMS instance
 _oms: Optional[OrderManagementSystem] = None
+_oms_lock = threading.Lock()
 
 
-def get_oms() -> OrderManagementSystem:
+def get_oms(initial_capital: float = None) -> OrderManagementSystem:
+    """Get or create global OMS instance"""
     global _oms
     if _oms is None:
-        _oms = OrderManagementSystem()
+        with _oms_lock:
+            if _oms is None:
+                _oms = OrderManagementSystem(initial_capital)
     return _oms
+
+
+def reset_oms():
+    """Reset global OMS instance (for testing)"""
+    global _oms
+    with _oms_lock:
+        if _oms is not None:
+            _oms.close()
+            _oms = None

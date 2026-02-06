@@ -1,0 +1,138 @@
+2026-02-06 01:10:35,735 | INFO     | trading:main:61 - ============================================================
+2026-02-06 01:10:35,735 | INFO     | trading:main:62 - AI STOCK TRADING SYSTEM - Production Grade
+2026-02-06 01:10:35,735 | INFO     | trading:main:63 - ============================================================
+2026-02-06 01:10:36,843 | INFO     | trading.data.fetcher:__init__:256 - AkShare initialized
+2026-02-06 01:10:36,990 | INFO     | trading.data.fetcher:__init__:375 - Yahoo Finance initialized
+2026-02-06 01:10:36,990 | INFO     | trading.data.fetcher:_init_sources:474 - Data source akshare available
+2026-02-06 01:10:36,990 | INFO     | trading.data.fetcher:_init_sources:474 - Data source yahoo available
+2026-02-06 01:10:36,992 | INFO     | trading:load_scaler:325 - Scaler loaded from F:\Trading app\Trading-graph\models_saved\scaler.pkl
+2026-02-06 01:10:37,049 | DEBUG    | trading:_init_model:102 - Initialized lstm model
+2026-02-06 01:10:37,073 | DEBUG    | trading:_init_model:102 - Initialized transformer model
+2026-02-06 01:10:37,086 | DEBUG    | trading:_init_model:102 - Initialized gru model
+2026-02-06 01:10:37,098 | DEBUG    | trading:_init_model:102 - Initialized tcn model
+2026-02-06 01:10:37,098 | INFO     | trading:__init__:87 - Ensemble initialized: ['lstm', 'transformer', 'gru', 'tcn'] on cpu
+2026-02-06 01:10:37,170 | DEBUG    | trading:_init_model:102 - Initialized lstm model
+2026-02-06 01:10:37,189 | DEBUG    | trading:_init_model:102 - Initialized transformer model
+2026-02-06 01:10:37,203 | DEBUG    | trading:_init_model:102 - Initialized gru model
+2026-02-06 01:10:37,214 | DEBUG    | trading:_init_model:102 - Initialized tcn model
+2026-02-06 01:10:37,216 | INFO     | trading:load:589 - Ensemble loaded: ['lstm', 'transformer', 'gru', 'tcn'], temp=2.00
+2026-02-06 01:10:37,217 | INFO     | trading:_load_model:229 - Model loaded successfully (4 networks)
+2026-02-06 01:10:42,370 | INFO     | trading.data.fetcher:__init__:256 - AkShare initialized
+2026-02-06 01:10:42,370 | INFO     | trading.data.fetcher:__init__:375 - Yahoo Finance initialized
+2026-02-06 01:10:42,370 | INFO     | trading.data.fetcher:_init_sources:474 - Data source akshare available
+2026-02-06 01:10:42,370 | INFO     | trading.data.fetcher:_init_sources:474 - Data source yahoo available
+2026-02-06 01:10:42,370 | INFO     | trading:load_scaler:325 - Scaler loaded from F:\Trading app\Trading-graph\models_saved\scaler.pkl
+2026-02-06 01:10:42,415 | DEBUG    | trading:_init_model:102 - Initialized lstm model
+2026-02-06 01:10:42,429 | DEBUG    | trading:_init_model:102 - Initialized transformer model
+2026-02-06 01:10:42,437 | DEBUG    | trading:_init_model:102 - Initialized gru model
+2026-02-06 01:10:42,448 | DEBUG    | trading:_init_model:102 - Initialized tcn model
+2026-02-06 01:10:42,448 | INFO     | trading:__init__:87 - Ensemble initialized: ['lstm', 'transformer', 'gru', 'tcn'] on cpu
+2026-02-06 01:10:42,521 | DEBUG    | trading:_init_model:102 - Initialized lstm model
+2026-02-06 01:10:42,541 | DEBUG    | trading:_init_model:102 - Initialized transformer model
+2026-02-06 01:10:42,552 | DEBUG    | trading:_init_model:102 - Initialized gru model
+2026-02-06 01:10:42,561 | DEBUG    | trading:_init_model:102 - Initialized tcn model
+2026-02-06 01:10:42,562 | INFO     | trading:load:589 - Ensemble loaded: ['lstm', 'transformer', 'gru', 'tcn'], temp=2.00
+2026-02-06 01:10:42,563 | INFO     | trading:_load_model:229 - Model loaded successfully (4 networks)
+2026-02-06 01:10:47,252 | INFO     | trading:create_features:170 - Created 47 features, 440 valid samples
+2026-02-06 01:54:36,636 | INFO     | trading:main:61 - ============================================================
+2026-02-06 01:54:36,636 | INFO     | trading:main:62 - AI STOCK TRADING SYSTEM - Production Grade
+2026-02-06 01:54:36,636 | INFO     | trading:main:63 - ============================================================
+2026-02-06 01:54:37,234 | INFO     | trading.data.fetcher:__init__:256 - AkShare initialized
+2026-02-06 01:54:37,347 | INFO     | trading.data.fetcher:__init__:375 - Yahoo Finance initialized
+2026-02-06 01:54:37,347 | INFO     | trading.data.fetcher:_init_sources:474 - Data source akshare available
+2026-02-06 01:54:37,347 | INFO     | trading.data.fetcher:_init_sources:474 - Data source yahoo available
+2026-02-06 01:54:37,348 | INFO     | trading:load_scaler:325 - Scaler loaded from F:\Trading app\Trading-graph\models_saved\scaler.pkl
+2026-02-06 01:54:37,413 | DEBUG    | trading:_init_model:102 - Initialized lstm model
+2026-02-06 01:54:37,444 | DEBUG    | trading:_init_model:102 - Initialized transformer model
+2026-02-06 01:54:37,458 | DEBUG    | trading:_init_model:102 - Initialized gru model
+2026-02-06 01:54:37,467 | DEBUG    | trading:_init_model:102 - Initialized tcn model
+2026-02-06 01:54:37,467 | INFO     | trading:__init__:87 - Ensemble initialized: ['lstm', 'transformer', 'gru', 'tcn'] on cpu
+2026-02-06 01:54:37,537 | DEBUG    | trading:_init_model:102 - Initialized lstm model
+2026-02-06 01:54:37,558 | DEBUG    | trading:_init_model:102 - Initialized transformer model
+2026-02-06 01:54:37,569 | DEBUG    | trading:_init_model:102 - Initialized gru model
+2026-02-06 01:54:37,578 | DEBUG    | trading:_init_model:102 - Initialized tcn model
+2026-02-06 01:54:37,580 | INFO     | trading:load:581 - Ensemble loaded: ['lstm', 'transformer', 'gru', 'tcn'], temp=2.00
+2026-02-06 01:54:37,580 | INFO     | trading:_load_model:229 - Model loaded successfully (4 networks)
+2026-02-06 02:36:46,120 | INFO     | trading:main:67 - ============================================================
+2026-02-06 02:36:46,136 | INFO     | trading:main:68 - AI STOCK TRADING SYSTEM - Production Grade
+2026-02-06 02:36:46,136 | INFO     | trading:main:69 - ============================================================
+2026-02-06 02:36:48,426 | INFO     | trading.data.fetcher:__init__:256 - AkShare initialized
+2026-02-06 02:36:48,600 | INFO     | trading.data.fetcher:__init__:436 - Yahoo Finance initialized
+2026-02-06 02:36:48,601 | INFO     | trading.data.fetcher:_init_sources:611 - Data source akshare available
+2026-02-06 02:36:48,601 | INFO     | trading.data.fetcher:_init_sources:611 - Data source yahoo available
+2026-02-06 02:36:48,612 | INFO     | trading:load_scaler:325 - Scaler loaded from F:\Trading app\Trading-graph\models_saved\scaler.pkl
+2026-02-06 02:36:48,986 | DEBUG    | trading:_init_model:102 - Initialized lstm model
+2026-02-06 02:36:49,037 | DEBUG    | trading:_init_model:102 - Initialized transformer model
+2026-02-06 02:36:49,051 | DEBUG    | trading:_init_model:102 - Initialized gru model
+2026-02-06 02:36:49,072 | DEBUG    | trading:_init_model:102 - Initialized tcn model
+2026-02-06 02:36:49,073 | INFO     | trading:__init__:87 - Ensemble initialized: ['lstm', 'transformer', 'gru', 'tcn'] on cpu
+2026-02-06 02:36:49,154 | DEBUG    | trading:_init_model:102 - Initialized lstm model
+2026-02-06 02:36:49,192 | DEBUG    | trading:_init_model:102 - Initialized transformer model
+2026-02-06 02:36:49,211 | DEBUG    | trading:_init_model:102 - Initialized gru model
+2026-02-06 02:36:49,219 | DEBUG    | trading:_init_model:102 - Initialized tcn model
+2026-02-06 02:36:49,221 | INFO     | trading:load:581 - Ensemble loaded: ['lstm', 'transformer', 'gru', 'tcn'], temp=2.00
+2026-02-06 02:36:49,222 | INFO     | trading:_load_model:233 - Model loaded successfully (4 networks)
+2026-02-06 02:44:37,836 | INFO     | trading:main:67 - ============================================================
+2026-02-06 02:44:37,836 | INFO     | trading:main:68 - AI STOCK TRADING SYSTEM - Production Grade
+2026-02-06 02:44:37,836 | INFO     | trading:main:69 - ============================================================
+2026-02-06 02:44:38,270 | INFO     | trading:_load_state:630 - Loaded learner state: 0 sessions
+2026-02-06 02:44:38,270 | INFO     | trading:_continuous_learning_loop:239 - === Learning Cycle 1 ===
+2026-02-06 02:44:38,270 | INFO     | trading:start:171 - Continuous learning started (mode=full, continuous=False)
+2026-02-06 02:44:38,595 | INFO     | trading:__init__:109 - AkShare initialized for stock discovery
+2026-02-06 03:19:31,568 | INFO     | trading:main:67 - ============================================================
+2026-02-06 03:19:31,568 | INFO     | trading:main:68 - AI STOCK TRADING SYSTEM - Production Grade
+2026-02-06 03:19:31,568 | INFO     | trading:main:69 - ============================================================
+2026-02-06 03:19:33,011 | INFO     | trading.data.fetcher:__init__:256 - AkShare initialized
+2026-02-06 03:19:33,174 | INFO     | trading.data.fetcher:__init__:436 - Yahoo Finance initialized
+2026-02-06 03:19:33,174 | INFO     | trading.data.fetcher:_init_sources:611 - Data source akshare available
+2026-02-06 03:19:33,175 | INFO     | trading.data.fetcher:_init_sources:611 - Data source yahoo available
+2026-02-06 03:19:33,175 | INFO     | trading:load_scaler:332 - Scaler loaded from F:\Trading app\Trading-graph\models_saved\scaler.pkl
+2026-02-06 03:19:33,542 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized lstm model
+2026-02-06 03:19:33,589 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized transformer model
+2026-02-06 03:19:33,602 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized gru model
+2026-02-06 03:19:33,620 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized tcn model
+2026-02-06 03:19:33,621 | INFO     | trading.models.ensemble:__init__:85 - Ensemble initialized: ['lstm', 'transformer', 'gru', 'tcn'] on cpu
+2026-02-06 03:19:33,680 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized lstm model
+2026-02-06 03:19:33,701 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized transformer model
+2026-02-06 03:19:33,722 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized gru model
+2026-02-06 03:19:33,734 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized tcn model
+2026-02-06 03:19:33,737 | INFO     | trading.models.ensemble:load:579 - Ensemble loaded: ['lstm', 'transformer', 'gru', 'tcn'], temp=2.00
+2026-02-06 03:19:33,738 | INFO     | trading:_load_model:239 - Model loaded successfully (4 networks)
+2026-02-06 03:54:26,356 | INFO     | trading:main:67 - ============================================================
+2026-02-06 03:54:26,357 | INFO     | trading:main:68 - AI STOCK TRADING SYSTEM - Production Grade
+2026-02-06 03:54:26,357 | INFO     | trading:main:69 - ============================================================
+2026-02-06 03:54:27,410 | INFO     | trading.data.fetcher:__init__:256 - AkShare initialized
+2026-02-06 03:54:27,532 | INFO     | trading.data.fetcher:__init__:436 - Yahoo Finance initialized
+2026-02-06 03:54:27,532 | INFO     | trading.data.fetcher:_init_sources:611 - Data source akshare available
+2026-02-06 03:54:27,532 | INFO     | trading.data.fetcher:_init_sources:611 - Data source yahoo available
+2026-02-06 03:54:27,532 | INFO     | trading:load_scaler:332 - Scaler loaded from F:\Trading app\Trading-graph\models_saved\scaler.pkl
+2026-02-06 03:54:27,592 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized lstm model
+2026-02-06 03:54:27,617 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized transformer model
+2026-02-06 03:54:27,630 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized gru model
+2026-02-06 03:54:27,642 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized tcn model
+2026-02-06 03:54:27,642 | INFO     | trading.models.ensemble:__init__:85 - Ensemble initialized: ['lstm', 'transformer', 'gru', 'tcn'] on cpu
+2026-02-06 03:54:27,699 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized lstm model
+2026-02-06 03:54:27,719 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized transformer model
+2026-02-06 03:54:27,729 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized gru model
+2026-02-06 03:54:27,739 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized tcn model
+2026-02-06 03:54:27,740 | INFO     | trading.models.ensemble:load:579 - Ensemble loaded: ['lstm', 'transformer', 'gru', 'tcn'], temp=2.00
+2026-02-06 03:54:27,741 | INFO     | trading:_load_model:239 - Model loaded successfully (4 networks)
+2026-02-06 04:27:04,224 | INFO     | trading:main:67 - ============================================================
+2026-02-06 04:27:04,224 | INFO     | trading:main:68 - AI STOCK TRADING SYSTEM - Production Grade
+2026-02-06 04:27:04,224 | INFO     | trading:main:69 - ============================================================
+2026-02-06 04:27:05,216 | INFO     | trading.data.fetcher:__init__:257 - AkShare initialized
+2026-02-06 04:27:05,268 | INFO     | trading.data.fetcher:__init__:437 - Yahoo Finance initialized
+2026-02-06 04:27:05,268 | INFO     | trading.data.fetcher:_init_sources:612 - Data source akshare available
+2026-02-06 04:27:05,268 | INFO     | trading.data.fetcher:_init_sources:612 - Data source yahoo available
+2026-02-06 04:27:05,269 | INFO     | trading:load_scaler:332 - Scaler loaded from F:\Trading app\Trading-graph\models_saved\scaler.pkl
+2026-02-06 04:27:05,325 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized lstm model
+2026-02-06 04:27:05,348 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized transformer model
+2026-02-06 04:27:05,360 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized gru model
+2026-02-06 04:27:05,369 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized tcn model
+2026-02-06 04:27:05,369 | INFO     | trading.models.ensemble:__init__:85 - Ensemble initialized: ['lstm', 'transformer', 'gru', 'tcn'] on cpu
+2026-02-06 04:27:05,487 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized lstm model
+2026-02-06 04:27:05,507 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized transformer model
+2026-02-06 04:27:05,518 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized gru model
+2026-02-06 04:27:05,526 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized tcn model
+2026-02-06 04:27:05,527 | INFO     | trading.models.ensemble:load:579 - Ensemble loaded: ['lstm', 'transformer', 'gru', 'tcn'], temp=2.00
+2026-02-06 04:27:05,528 | INFO     | trading:_load_model:238 - Model loaded successfully (4 networks)

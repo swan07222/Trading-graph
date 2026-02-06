@@ -9,6 +9,7 @@ FIXED Issues:
 """
 import numpy as np
 import torch
+import random
 from typing import Dict, List, Optional, Callable, Tuple
 from pathlib import Path
 from datetime import datetime
@@ -20,7 +21,14 @@ from data.processor import DataProcessor
 from data.features import FeatureEngine
 from models.ensemble import EnsembleModel
 from utils.logger import log
+from sklearn.metrics import precision_recall_fscore_support, confusion_matrix
 
+seed = 42
+random.seed(seed)
+np.random.seed(seed)
+torch.manual_seed(seed)
+if torch.cuda.is_available():
+    torch.cuda.manual_seed_all(seed)
 
 class Trainer:
     """
@@ -204,7 +212,8 @@ class Trainer:
         model_names: List[str] = None,
         callback: Callable = None,
         stop_flag: Callable = None,
-        save_model: bool = True
+        save_model: bool = True,
+        incremental: bool = False, 
     ) -> Dict:
         """Train the ensemble model"""
         epochs = epochs or CONFIG.EPOCHS
@@ -229,6 +238,9 @@ class Trainer:
             input_size=self.input_size,
             model_names=model_names
         )
+        
+        if incremental:
+            self.ensemble.load()
         
         log.info(f"Training ensemble with {len(self.ensemble.models)} models...")
         log.info(f"Epochs: {epochs}, Batch size: {batch_size}")
@@ -295,6 +307,19 @@ class Trainer:
         predictions = self.ensemble.predict_batch(X)
         
         pred_classes = np.array([p.predicted_class for p in predictions])
+
+        cm = confusion_matrix(y, pred_classes, labels=[0,1,2])
+        pr, rc, f1, _ = precision_recall_fscore_support(
+            y, pred_classes, labels=[2], average=None, zero_division=0
+        )
+
+        metrics_extra = {
+            "confusion_matrix": cm.tolist(),
+            "up_precision": float(pr[0]),
+            "up_recall": float(rc[0]),
+            "up_f1": float(f1[0]),
+        }
+
         confidences = np.array([p.confidence for p in predictions])
         
         accuracy = np.mean(pred_classes == y)
@@ -315,7 +340,8 @@ class Trainer:
             'accuracy': accuracy,
             'class_accuracy': class_acc,
             'mean_confidence': np.mean(confidences),
-            'trading': trading_metrics
+            'trading': trading_metrics,
+            **metrics_extra
         }
 
     def _simulate_trading(
