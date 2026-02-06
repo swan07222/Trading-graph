@@ -137,33 +137,58 @@ class ContinuousLearner:
         self,
         mode: str = MODE_FULL,
         max_stocks: int = None,
-        epochs_per_cycle: int = 50,
+        epochs_per_cycle: int = 10,
         min_market_cap: float = 10,
         include_all_markets: bool = True,
         continuous: bool = True,
-        learning_while_trading: bool = False
+        learning_while_trading: bool = True,
+        interval: str = "1m",
+        prediction_horizon: int = 30,
+        lookback_bars: int = 3000,
+        cycle_interval_seconds: int = 900,  # 15 minutes
+        incremental: bool = True,
     ):
-        """Start continuous learning"""
+        """
+        Continuous auto-learning:
+        - Discover liquid stocks
+        - Prefetch intraday (dealing) bars into DB
+        - Train incrementally (few epochs) repeatedly until stopped
+        """
         if self._thread and self._thread.is_alive():
             if self.progress.is_paused:
                 self.resume()
                 return
             log.warning("Learning already in progress")
             return
-        
+
         self._cancel_token = CancellationToken()
         self.progress.reset()
         self.progress.is_running = True
-        
+
         self._thread = threading.Thread(
             target=self._continuous_learning_loop,
-            args=(mode, max_stocks, epochs_per_cycle, min_market_cap, 
-                  include_all_markets, continuous, learning_while_trading),
+            args=(
+                mode,
+                max_stocks,
+                epochs_per_cycle,
+                min_market_cap,
+                include_all_markets,
+                continuous,
+                learning_while_trading,
+                str(interval).lower(),
+                int(prediction_horizon),
+                int(lookback_bars),
+                int(cycle_interval_seconds),
+                bool(incremental),
+            ),
             daemon=True
         )
         self._thread.start()
-        
-        log.info(f"Continuous learning started (mode={mode}, continuous={continuous})")
+
+        log.info(
+            f"Continuous learning started: interval={interval}, horizon={prediction_horizon}, "
+            f"lookback={lookback_bars}, cycle={cycle_interval_seconds}s, incremental={incremental}"
+        )
     
     def run(
         self,
@@ -223,43 +248,63 @@ class ContinuousLearner:
         min_market_cap: float,
         include_all_markets: bool,
         continuous: bool,
-        learning_while_trading: bool
+        learning_while_trading: bool,
+        interval: str,
+        prediction_horizon: int,
+        lookback_bars: int,
+        cycle_interval_seconds: int,
+        incremental: bool,
     ):
-        """Main continuous learning loop"""
+        """Main continuous learning loop: discover -> prefetch intraday -> train -> repeat until stop."""
         cycle = 0
-        
+
         try:
             while not self._cancel_token.is_cancelled:
                 cycle += 1
-                log.info(f"=== Learning Cycle {cycle} ===")
-                
+                self._update_progress(
+                    stage="cycle_start",
+                    message=f"=== Learning Cycle {cycle} (intraday dealing: {interval}) ===",
+                    progress=0.0
+                )
+
                 while self.progress.is_paused and not self._cancel_token.is_cancelled:
                     time.sleep(1)
-                
+
                 if self._cancel_token.is_cancelled:
                     break
-                
-                success = self._run_learning_cycle(
+
+                ok = self._run_learning_cycle(
                     mode=mode,
-                    max_stocks=max_stocks,
-                    epochs=epochs_per_cycle,
+                    max_stocks=max_stocks or 200,
+                    epochs=max(1, int(epochs_per_cycle)),
                     min_market_cap=min_market_cap,
-                    include_all_markets=include_all_markets
+                    include_all_markets=include_all_markets,
+                    interval=interval,
+                    prediction_horizon=int(prediction_horizon),
+                    lookback_bars=int(lookback_bars),
+                    incremental=bool(incremental),
                 )
-                
-                if success:
+
+                if ok:
                     self.progress.total_training_sessions += 1
                     self._save_state()
-                
+
                 if not continuous:
                     break
-                
-                wait_time = 300 if not learning_while_trading else 3600
-                for _ in range(wait_time):
+
+                # Wait between cycles, but remain cancellable
+                wait_s = int(cycle_interval_seconds)
+                self._update_progress(
+                    stage="waiting",
+                    message=f"Waiting {wait_s}s until next cycle... (press Stop to cancel)",
+                    progress=100.0
+                )
+
+                for _ in range(wait_s):
                     if self._cancel_token.is_cancelled:
                         break
                     time.sleep(1)
-                
+
         except CancelledException:
             log.info("Learning cancelled")
         except Exception as e:
@@ -278,94 +323,137 @@ class ContinuousLearner:
         max_stocks: int,
         epochs: int,
         min_market_cap: float,
-        include_all_markets: bool
+        include_all_markets: bool,
+        interval: str,
+        prediction_horizon: int,
+        lookback_bars: int,
+        incremental: bool,
     ) -> bool:
-        """Run a single learning cycle"""
+        """One continuous cycle: discover -> prefetch intraday -> train."""
         start_time = datetime.now()
-        
+
         try:
-            # Stage 1: Discover ALL Stocks
+            # 1) Discover liquid stocks continuously
             self._update_progress(
                 stage="discovering",
-                message="Searching all available stocks...",
-                progress=0
+                message="Discovering liquid stocks (high dealing activity)...",
+                progress=5.0
             )
-            
-            stocks = self._discover_all_stocks(
-                max_stocks=max_stocks,
-                min_market_cap=min_market_cap,
-                include_all_markets=include_all_markets
-            )
-            
-            if not stocks:
-                self._update_progress(stage="error", message="No stocks found")
+
+            from data.discovery import UniversalStockDiscovery
+            discovery = UniversalStockDiscovery()
+
+            def cb(msg, count):
+                if self._cancel_token.is_cancelled:
+                    raise CancelledException()
+                self._update_progress(message=msg, stocks_found=count)
+
+            stocks = discovery.discover_all(
+                callback=cb,
+                max_stocks=int(max_stocks),
+                min_market_cap=float(min_market_cap),
+                include_st=False,
+            ) or []
+
+            codes = [s.code for s in stocks if getattr(s, "code", "")] or CONFIG.stock_pool[: int(max_stocks)]
+            codes = [str(c).zfill(6) for c in codes]
+            self.progress.stocks_found = len(codes)
+            self.progress.stocks_total = len(codes)
+
+            if not codes:
+                self._update_progress(stage="error", message="No stocks discovered")
                 return False
-            
-            self.progress.stocks_found = len(stocks)
-            self.progress.stocks_total = len(stocks)
-            
-            # Stage 2: Download Data
+
+            # 2) Prefetch intraday dealing bars into DB
             self._update_progress(
                 stage="downloading",
-                message=f"Downloading data for {len(stocks)} stocks...",
-                progress=10
+                message=f"Prefetching dealing data: {interval} bars for {len(codes)} stocks...",
+                progress=20.0
             )
-            
-            data = self._download_all_data(stocks)
-            
-            min_stocks = CONFIG.min_stocks_for_training
-            if len(data) < min_stocks:
+
+            from data.fetcher import get_fetcher
+            fetcher = get_fetcher()
+
+            ok_cnt = 0
+            for i, code in enumerate(codes, start=1):
+                if self._cancel_token.is_cancelled:
+                    raise CancelledException()
+
+                try:
+                    df = fetcher.get_history(
+                        code,
+                        interval=interval,
+                        bars=int(lookback_bars),
+                        days=int(lookback_bars),
+                        use_cache=True,
+                        update_db=True,
+                    )
+                    if df is not None and not df.empty:
+                        ok_cnt += 1
+                except Exception:
+                    pass
+
+                self.progress.stocks_processed = i
+                pct = 20.0 + 35.0 * (i / max(1, len(codes)))
                 self._update_progress(
-                    stage="error", 
-                    message=f"Insufficient data: only {len(data)} stocks"
+                    message=f"Prefetched {interval} {i}/{len(codes)}: {code}",
+                    progress=pct
                 )
+
+            if ok_cnt < max(5, int(0.1 * len(codes))):
+                self._update_progress(stage="error", message=f"Too few intraday histories fetched: {ok_cnt}")
                 return False
-            
-            # Stage 3: Prepare Training Data
-            self._update_progress(
-                stage="preparing",
-                message="Processing features and labels...",
-                progress=40
-            )
-            
-            train_data = self._prepare_training_data(data)
-            
-            if train_data is None:
-                return False
-            
-            # Stage 4: Train Model
+
+            # 3) Train (incremental) on dealing bars
             self._update_progress(
                 stage="training",
-                message="Training AI models...",
-                progress=50,
-                training_total_epochs=epochs
+                message=f"Training incrementally (epochs={epochs}) on intraday dealing features...",
+                progress=60.0,
+                training_total_epochs=int(epochs),
             )
-            
-            accuracy = self._train_model(train_data, epochs, mode)
-            
-            # Stage 5: Evaluate and Save
-            self._update_progress(
-                stage="evaluating",
-                message="Evaluating model performance...",
-                progress=95
+
+            from models.trainer import Trainer
+            trainer = Trainer()
+
+            def train_cb(model_name, epoch_idx, val_acc):
+                if self._cancel_token.is_cancelled:
+                    raise CancelledException()
+                self.progress.training_epoch = int(epoch_idx) + 1
+                self.progress.validation_accuracy = float(val_acc)
+                self._update_progress(
+                    message=f"Training {model_name}: epoch {epoch_idx+1}/{epochs}",
+                    progress=60.0 + 35.0 * ((epoch_idx + 1) / max(1, epochs))
+                )
+
+            out = trainer.train(
+                stock_codes=codes,
+                epochs=int(epochs),
+                callback=train_cb,
+                stop_flag=self._cancel_token,
+                save_model=True,
+                incremental=bool(incremental),
+                interval=str(interval).lower(),
+                prediction_horizon=int(prediction_horizon),
+                lookback_bars=int(lookback_bars),
             )
-            
-            if accuracy > self.progress.best_accuracy_ever:
-                self.progress.best_accuracy_ever = accuracy
-            
-            duration = (datetime.now() - start_time).total_seconds() / 3600
-            self.progress.total_training_hours += duration
-            self.progress.total_stocks_learned += len(data)
-            
+
+            acc = float(out.get("best_accuracy", 0.0))
+            self.progress.training_accuracy = acc
             self._update_progress(
                 stage="complete",
-                message=f"Cycle complete! Accuracy: {accuracy:.1%}",
-                progress=100,
-                training_accuracy=accuracy
+                message=f"Cycle complete. best_val_acc={acc:.1%}, prefetched={ok_cnt}/{len(codes)}",
+                progress=100.0
             )
-            
+
+            # Update stats
+            duration_h = (datetime.now() - start_time).total_seconds() / 3600.0
+            self.progress.total_training_hours += duration_h
+            self.progress.total_stocks_learned += len(codes)
+            if acc > self.progress.best_accuracy_ever:
+                self.progress.best_accuracy_ever = acc
+
             return True
-            
+
         except CancelledException:
             raise
         except Exception as e:

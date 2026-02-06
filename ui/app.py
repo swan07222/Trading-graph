@@ -25,7 +25,7 @@ from models.trainer import Trainer
 from trading.executor import ExecutionEngine
 from .widgets import SignalPanel, PositionTable, LogWidget
 from .charts import StockChart
-from utils.logger import log
+from utils.logger import get_logger
 from core.types import Order, OrderSide, OrderStatus, TradeSignal, Account, Position, Fill
 from trading.alerts import AlertPriority
 

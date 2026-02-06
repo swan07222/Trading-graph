@@ -412,3 +412,509 @@ Fold 1/58:
 2026-02-06 08:49:44,283 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized tcn model
 2026-02-06 08:49:44,284 | INFO     | trading.models.ensemble:load:627 - Ensemble loaded: ['lstm', 'transformer', 'gru', 'tcn'], interval=1d, horizon=5
 2026-02-06 08:49:44,285 | INFO     | trading.models.predictor:_load_model:286 - Model loaded successfully (4 networks)
+2026-02-06 08:49:59,937 | INFO     | trading:main:67 - ============================================================
+2026-02-06 08:49:59,937 | INFO     | trading:main:68 - AI STOCK TRADING SYSTEM - Production Grade
+2026-02-06 08:49:59,937 | INFO     | trading:main:69 - ============================================================
+2026-02-06 08:50:00,285 | INFO     | trading.data.fetcher:__init__:264 - AkShare initialized
+2026-02-06 08:50:00,348 | INFO     | trading.data.fetcher:__init__:480 - Yahoo Finance initialized
+2026-02-06 08:50:00,348 | INFO     | trading.data.fetcher:_init_sources:777 - Data source akshare available
+2026-02-06 08:50:00,349 | INFO     | trading.data.fetcher:_init_sources:777 - Data source tencent available
+2026-02-06 08:50:00,349 | INFO     | trading.data.fetcher:_init_sources:777 - Data source yahoo available
+2026-02-06 08:50:00,349 | INFO     | trading.analysis.backtest:run:155 - Starting walk-forward backtest:
+2026-02-06 08:50:00,349 | INFO     | trading.analysis.backtest:run:156 -   Stocks: 5
+2026-02-06 08:50:00,349 | INFO     | trading.analysis.backtest:run:157 -   Train: 12 months, Test: 1 months
+2026-02-06 08:50:00,349 | INFO     | trading.analysis.backtest:run:158 -   Capital: ¥100,000.00
+2026-02-06 08:50:00,431 | INFO     | trading.data.features:create_features:173 - Created 47 features, 1435 valid samples
+2026-02-06 08:50:00,432 | INFO     | trading.analysis.backtest:_collect_data:268 -   600519: 1435 samples
+2026-02-06 08:50:00,507 | INFO     | trading.data.features:create_features:173 - Created 47 features, 1435 valid samples
+2026-02-06 08:50:00,508 | INFO     | trading.analysis.backtest:_collect_data:268 -   601318: 1435 samples
+2026-02-06 08:50:00,580 | INFO     | trading.data.features:create_features:173 - Created 47 features, 1435 valid samples
+2026-02-06 08:50:00,580 | INFO     | trading.analysis.backtest:_collect_data:268 -   600036: 1435 samples
+2026-02-06 08:50:00,655 | INFO     | trading.data.features:create_features:173 - Created 47 features, 1436 valid samples
+2026-02-06 08:50:00,655 | INFO     | trading.analysis.backtest:_collect_data:268 -   000858: 1436 samples
+2026-02-06 08:50:00,730 | INFO     | trading.data.features:create_features:173 - Created 47 features, 1424 valid samples
+2026-02-06 08:50:00,730 | INFO     | trading.analysis.backtest:_collect_data:268 -   600900: 1424 samples
+2026-02-06 08:50:00,731 | INFO     | trading.analysis.backtest:run:170 -   Date range: 2020-03-11 to 2026-02-05
+2026-02-06 08:50:00,734 | INFO     | trading.analysis.backtest:run:178 -   Folds: 58
+2026-02-06 08:50:00,734 | INFO     | trading.analysis.backtest:run:190 - 
+Fold 1/58:
+2026-02-06 08:50:00,734 | INFO     | trading.analysis.backtest:run:191 -   Train: 2020-03-11 to 2021-03-11
+2026-02-06 08:50:00,734 | INFO     | trading.analysis.backtest:run:192 -   Test:  2021-03-21 to 2021-04-21
+2026-02-06 08:50:00,741 | INFO     | trading.data.processor:fit_scaler:102 - Scaler fitted on 1215 samples, 47 features
+2026-02-06 08:50:00,786 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized lstm model
+2026-02-06 08:50:00,796 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized gru model
+2026-02-06 08:50:00,804 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized tcn model
+2026-02-06 08:50:00,804 | INFO     | trading.models.ensemble:__init__:85 - Ensemble initialized: ['lstm', 'gru', 'tcn'] on cpu
+2026-02-06 08:50:00,805 | INFO     | trading.models.ensemble:train:218 - Training lstm...
+2026-02-06 08:52:06,496 | INFO     | trading.models.ensemble:_train_single_model:371 - lstm: Early stopping at epoch 16
+2026-02-06 08:52:06,513 | INFO     | trading.models.ensemble:_train_single_model:381 - lstm complete. Best accuracy: 56.30%
+2026-02-06 08:52:06,513 | INFO     | trading.models.ensemble:train:218 - Training gru...
+2026-02-06 08:53:17,182 | INFO     | trading.models.ensemble:_train_single_model:371 - gru: Early stopping at epoch 19
+2026-02-06 08:53:17,182 | INFO     | trading.models.ensemble:_train_single_model:381 - gru complete. Best accuracy: 45.19%
+2026-02-06 08:53:17,182 | INFO     | trading.models.ensemble:train:218 - Training tcn...
+2026-02-06 08:54:08,316 | INFO     | trading.models.ensemble:_train_single_model:371 - tcn: Early stopping at epoch 16
+2026-02-06 08:54:08,332 | INFO     | trading.models.ensemble:_train_single_model:381 - tcn complete. Best accuracy: 56.30%
+2026-02-06 08:54:08,332 | INFO     | trading.models.ensemble:_update_weights:397 - Updated weights: {'lstm': 0.35704882541239213, 'gru': 0.2859023491752157, 'tcn': 0.35704882541239213}
+2026-02-06 08:54:08,825 | INFO     | trading.models.ensemble:calibrate:160 - Calibration complete: temperature=0.75
+2026-02-06 08:54:10,063 | WARNING  | trading.analysis.backtest:_run_fold:405 - No valid test stocks for this fold
+2026-02-06 08:54:10,063 | INFO     | trading.analysis.backtest:run:190 - 
+Fold 2/58:
+2026-02-06 08:54:10,063 | INFO     | trading.analysis.backtest:run:191 -   Train: 2020-04-11 to 2021-04-11
+2026-02-06 08:54:10,063 | INFO     | trading.analysis.backtest:run:192 -   Test:  2021-04-21 to 2021-05-21
+2026-02-06 08:54:10,081 | INFO     | trading.data.processor:fit_scaler:102 - Scaler fitted on 1210 samples, 47 features
+2026-02-06 08:54:10,119 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized lstm model
+2026-02-06 08:54:10,122 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized gru model
+2026-02-06 08:54:10,133 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized tcn model
+2026-02-06 08:54:10,133 | INFO     | trading.models.ensemble:__init__:85 - Ensemble initialized: ['lstm', 'gru', 'tcn'] on cpu
+2026-02-06 08:54:10,133 | INFO     | trading.models.ensemble:train:218 - Training lstm...
+2026-02-06 08:55:48,442 | INFO     | trading.models.ensemble:_train_single_model:371 - lstm: Early stopping at epoch 20
+2026-02-06 08:55:48,442 | INFO     | trading.models.ensemble:_train_single_model:381 - lstm complete. Best accuracy: 52.99%
+2026-02-06 08:55:48,442 | INFO     | trading.models.ensemble:train:218 - Training gru...
+2026-02-06 08:56:48,483 | INFO     | trading.models.ensemble:_train_single_model:371 - gru: Early stopping at epoch 17
+2026-02-06 08:56:48,483 | INFO     | trading.models.ensemble:_train_single_model:381 - gru complete. Best accuracy: 50.75%
+2026-02-06 08:56:48,483 | INFO     | trading.models.ensemble:train:218 - Training tcn...
+2026-02-06 08:57:48,038 | INFO     | trading.models.ensemble:_train_single_model:371 - tcn: Early stopping at epoch 20
+2026-02-06 08:57:48,053 | INFO     | trading.models.ensemble:_train_single_model:381 - tcn complete. Best accuracy: 57.46%
+2026-02-06 08:57:48,053 | INFO     | trading.models.ensemble:_update_weights:397 - Updated weights: {'lstm': 0.32788003266598914, 'gru': 0.3135226693577466, 'tcn': 0.3585972979762643}
+2026-02-06 08:57:48,527 | INFO     | trading.models.ensemble:calibrate:160 - Calibration complete: temperature=1.50
+2026-02-06 08:57:49,746 | WARNING  | trading.analysis.backtest:_run_fold:405 - No valid test stocks for this fold
+2026-02-06 08:57:49,746 | INFO     | trading.analysis.backtest:run:190 - 
+Fold 3/58:
+2026-02-06 08:57:49,746 | INFO     | trading.analysis.backtest:run:191 -   Train: 2020-05-11 to 2021-05-11
+2026-02-06 08:57:49,746 | INFO     | trading.analysis.backtest:run:192 -   Test:  2021-05-21 to 2021-06-21
+2026-02-06 08:57:49,762 | INFO     | trading.data.processor:fit_scaler:102 - Scaler fitted on 1215 samples, 47 features
+2026-02-06 08:57:49,800 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized lstm model
+2026-02-06 08:57:49,800 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized gru model
+2026-02-06 08:57:49,813 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized tcn model
+2026-02-06 08:57:49,813 | INFO     | trading.models.ensemble:__init__:85 - Ensemble initialized: ['lstm', 'gru', 'tcn'] on cpu
+2026-02-06 08:57:49,813 | INFO     | trading.models.ensemble:train:218 - Training lstm...
+2026-02-06 08:59:24,798 | INFO     | trading.models.ensemble:_train_single_model:371 - lstm: Early stopping at epoch 18
+2026-02-06 08:59:24,813 | INFO     | trading.models.ensemble:_train_single_model:381 - lstm complete. Best accuracy: 61.48%
+2026-02-06 08:59:24,814 | INFO     | trading.models.ensemble:train:218 - Training gru...
+2026-02-06 09:00:40,025 | INFO     | trading.models.ensemble:_train_single_model:371 - gru: Early stopping at epoch 18
+2026-02-06 09:00:40,025 | INFO     | trading.models.ensemble:_train_single_model:381 - gru complete. Best accuracy: 60.00%
+2026-02-06 09:00:40,025 | INFO     | trading.models.ensemble:train:218 - Training tcn...
+2026-02-06 09:01:40,817 | INFO     | trading.models.ensemble:_train_single_model:371 - tcn: Early stopping at epoch 17
+2026-02-06 09:01:40,820 | INFO     | trading.models.ensemble:_train_single_model:381 - tcn complete. Best accuracy: 53.33%
+2026-02-06 09:01:40,822 | INFO     | trading.models.ensemble:_update_weights:397 - Updated weights: {'lstm': 0.35455615727651624, 'gru': 0.3442048989119074, 'tcn': 0.30123894381157623}
+2026-02-06 09:01:41,372 | INFO     | trading.models.ensemble:calibrate:160 - Calibration complete: temperature=1.00
+2026-02-06 09:01:42,808 | WARNING  | trading.analysis.backtest:_run_fold:405 - No valid test stocks for this fold
+2026-02-06 09:01:42,812 | INFO     | trading.analysis.backtest:run:190 - 
+Fold 4/58:
+2026-02-06 09:01:42,813 | INFO     | trading.analysis.backtest:run:191 -   Train: 2020-06-11 to 2021-06-11
+2026-02-06 09:01:42,813 | INFO     | trading.analysis.backtest:run:192 -   Test:  2021-06-21 to 2021-07-21
+2026-02-06 09:01:42,818 | INFO     | trading.data.processor:fit_scaler:102 - Scaler fitted on 1215 samples, 47 features
+2026-02-06 09:01:42,857 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized lstm model
+2026-02-06 09:01:42,867 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized gru model
+2026-02-06 09:01:42,873 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized tcn model
+2026-02-06 09:01:42,873 | INFO     | trading.models.ensemble:__init__:85 - Ensemble initialized: ['lstm', 'gru', 'tcn'] on cpu
+2026-02-06 09:01:42,874 | INFO     | trading.models.ensemble:train:218 - Training lstm...
+2026-02-06 09:03:13,165 | INFO     | trading.models.ensemble:_train_single_model:371 - lstm: Early stopping at epoch 16
+2026-02-06 09:03:13,165 | INFO     | trading.models.ensemble:_train_single_model:381 - lstm complete. Best accuracy: 63.70%
+2026-02-06 09:03:13,165 | INFO     | trading.models.ensemble:train:218 - Training gru...
+2026-02-06 09:04:19,525 | INFO     | trading.models.ensemble:_train_single_model:371 - gru: Early stopping at epoch 16
+2026-02-06 09:04:19,527 | INFO     | trading.models.ensemble:_train_single_model:381 - gru complete. Best accuracy: 62.22%
+2026-02-06 09:04:19,530 | INFO     | trading.models.ensemble:train:218 - Training tcn...
+2026-02-06 09:05:14,356 | INFO     | trading:main:67 - ============================================================
+2026-02-06 09:05:14,357 | INFO     | trading:main:68 - AI STOCK TRADING SYSTEM - Production Grade
+2026-02-06 09:05:14,357 | INFO     | trading:main:69 - ============================================================
+2026-02-06 09:05:15,095 | INFO     | trading.data.fetcher:__init__:264 - AkShare initialized
+2026-02-06 09:05:15,190 | INFO     | trading.data.fetcher:__init__:480 - Yahoo Finance initialized
+2026-02-06 09:05:15,190 | INFO     | trading.data.fetcher:_init_sources:777 - Data source akshare available
+2026-02-06 09:05:15,191 | INFO     | trading.data.fetcher:_init_sources:777 - Data source tencent available
+2026-02-06 09:05:15,191 | INFO     | trading.data.fetcher:_init_sources:777 - Data source yahoo available
+2026-02-06 09:05:15,192 | INFO     | trading.data.processor:load_scaler:340 - Scaler loaded from F:\Trading app\Trading-graph\models_saved\scaler.pkl
+2026-02-06 09:05:15,275 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized lstm model
+2026-02-06 09:05:15,390 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized transformer model
+2026-02-06 09:05:15,405 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized gru model
+2026-02-06 09:05:15,421 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized tcn model
+2026-02-06 09:05:15,421 | INFO     | trading.models.ensemble:__init__:85 - Ensemble initialized: ['lstm', 'transformer', 'gru', 'tcn'] on cpu
+2026-02-06 09:05:15,517 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized lstm model
+2026-02-06 09:05:15,546 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized transformer model
+2026-02-06 09:05:15,569 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized gru model
+2026-02-06 09:05:15,601 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized tcn model
+2026-02-06 09:05:15,604 | INFO     | trading.models.ensemble:load:627 - Ensemble loaded: ['lstm', 'transformer', 'gru', 'tcn'], interval=1d, horizon=5
+2026-02-06 09:05:15,605 | INFO     | trading.models.predictor:_load_model:286 - Model loaded successfully (4 networks)
+2026-02-06 09:05:28,571 | INFO     | trading.models.ensemble:_train_single_model:371 - tcn: Early stopping at epoch 21
+2026-02-06 09:05:28,575 | INFO     | trading.models.ensemble:_train_single_model:381 - tcn complete. Best accuracy: 45.93%
+2026-02-06 09:05:28,576 | INFO     | trading.models.ensemble:_update_weights:397 - Updated weights: {'lstm': 0.37430906734018476, 'gru': 0.3633811232480102, 'tcn': 0.2623098094118051}
+2026-02-06 09:05:29,049 | INFO     | trading.models.ensemble:calibrate:160 - Calibration complete: temperature=0.75
+2026-02-06 09:05:30,243 | WARNING  | trading.analysis.backtest:_run_fold:405 - No valid test stocks for this fold
+2026-02-06 09:05:30,251 | INFO     | trading.analysis.backtest:run:190 - 
+Fold 5/58:
+2026-02-06 09:05:30,252 | INFO     | trading.analysis.backtest:run:191 -   Train: 2020-07-11 to 2021-07-11
+2026-02-06 09:05:30,252 | INFO     | trading.analysis.backtest:run:192 -   Test:  2021-07-21 to 2021-08-21
+2026-02-06 09:05:30,258 | INFO     | trading.data.processor:fit_scaler:102 - Scaler fitted on 1215 samples, 47 features
+2026-02-06 09:05:30,291 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized lstm model
+2026-02-06 09:05:30,298 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized gru model
+2026-02-06 09:05:30,305 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized tcn model
+2026-02-06 09:05:30,305 | INFO     | trading.models.ensemble:__init__:85 - Ensemble initialized: ['lstm', 'gru', 'tcn'] on cpu
+2026-02-06 09:05:30,305 | INFO     | trading.models.ensemble:train:218 - Training lstm...
+2026-02-06 09:05:40,461 | INFO     | trading.data.discovery:__init__:91 - AkShare initialized for stock discovery
+2026-02-06 09:05:46,609 | WARNING  | trading.data.discovery:_safe_fetch:123 - Attempt 1/3 failed for spot data: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-02-06 09:05:53,508 | WARNING  | trading.data.discovery:_safe_fetch:123 - Attempt 2/3 failed for spot data: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-02-06 09:06:02,309 | WARNING  | trading.data.discovery:_safe_fetch:123 - Attempt 3/3 failed for spot data: ('Connection aborted.', ConnectionResetError(10054, 'An existing connection was forcibly closed by the remote host', None, 10054, None))
+2026-02-06 09:06:02,309 | WARNING  | trading.data.discovery:discover_all:149 - Failed to fetch spot data, trying index constituents...
+2026-02-06 09:06:04,059 | INFO     | trading.data.discovery:discover_all:195 - Found 300 valid from CSI 300 Index, total: 300
+2026-02-06 09:06:04,964 | INFO     | trading.data.discovery:discover_all:195 - Found 500 valid from CSI 500 Index, total: 800
+2026-02-06 09:06:15,259 | INFO     | trading.data.discovery:discover_all:195 - Found 1000 valid from CSI 1000 Index, total: 1800
+2026-02-06 09:06:15,259 | INFO     | trading.data.discovery:discover_all:202 - Before filtering: 1800 stocks
+2026-02-06 09:06:15,261 | INFO     | trading.data.discovery:discover_all:217 - After filtering: 50 stocks
+2026-02-06 09:06:15,262 | INFO     | trading.data.fetcher:__init__:264 - AkShare initialized
+2026-02-06 09:06:15,266 | INFO     | trading.data.fetcher:__init__:480 - Yahoo Finance initialized
+2026-02-06 09:06:15,267 | INFO     | trading.data.fetcher:_init_sources:777 - Data source akshare available
+2026-02-06 09:06:15,267 | INFO     | trading.data.fetcher:_init_sources:777 - Data source tencent available
+2026-02-06 09:06:15,267 | INFO     | trading.data.fetcher:_init_sources:777 - Data source yahoo available
+2026-02-06 09:06:31,924 | WARNING  | trading.data.fetcher:_record_error:147 - Data source akshare temporarily disabled for 60s
+2026-02-06 09:06:34,560 | WARNING  | trading.data.fetcher:_record_error:147 - Data source yahoo temporarily disabled for 60s
+2026-02-06 09:06:38,464 | WARNING  | trading.data.fetcher:_record_error:147 - Data source yahoo temporarily disabled for 60s
+2026-02-06 09:06:39,156 | WARNING  | trading.data.fetcher:_record_error:147 - Data source yahoo temporarily disabled for 60s
+2026-02-06 09:06:39,162 | WARNING  | trading.data.fetcher:_record_error:147 - Data source yahoo temporarily disabled for 60s
+2026-02-06 09:06:46,982 | INFO     | trading.data.fetcher:get_multiple_parallel:1214 - Parallel fetch: 15/50 successful
+2026-02-06 09:06:46,983 | INFO     | trading.data.fetcher:__init__:264 - AkShare initialized
+2026-02-06 09:06:46,986 | INFO     | trading.data.fetcher:__init__:480 - Yahoo Finance initialized
+2026-02-06 09:06:46,986 | INFO     | trading.data.fetcher:_init_sources:777 - Data source akshare available
+2026-02-06 09:06:46,987 | INFO     | trading.data.fetcher:_init_sources:777 - Data source tencent available
+2026-02-06 09:06:46,987 | INFO     | trading.data.fetcher:_init_sources:777 - Data source yahoo available
+2026-02-06 09:06:46,987 | INFO     | trading:train:232 - ======================================================================
+2026-02-06 09:06:46,987 | INFO     | trading:train:233 - STARTING TRAINING PIPELINE
+2026-02-06 09:06:46,987 | INFO     | trading:train:234 - interval=1m, horizon=30 bars, lookback_bars=2400
+2026-02-06 09:06:46,988 | INFO     | trading:train:235 - ======================================================================
+2026-02-06 09:06:47,721 | INFO     | trading.data.features:create_features:173 - Created 47 features, 241 valid samples
+2026-02-06 09:06:48,597 | INFO     | trading.data.features:create_features:173 - Created 47 features, 241 valid samples
+2026-02-06 09:06:49,268 | INFO     | trading.data.features:create_features:173 - Created 47 features, 241 valid samples
+2026-02-06 09:06:49,946 | INFO     | trading.data.features:create_features:173 - Created 47 features, 241 valid samples
+2026-02-06 09:06:50,626 | INFO     | trading.data.features:create_features:173 - Created 47 features, 241 valid samples
+2026-02-06 09:06:51,314 | INFO     | trading.data.features:create_features:173 - Created 47 features, 241 valid samples
+2026-02-06 09:06:51,973 | INFO     | trading.data.features:create_features:173 - Created 47 features, 241 valid samples
+2026-02-06 09:06:52,667 | INFO     | trading.data.features:create_features:173 - Created 47 features, 241 valid samples
+2026-02-06 09:06:53,442 | INFO     | trading.data.features:create_features:173 - Created 47 features, 241 valid samples
+2026-02-06 09:07:01,157 | INFO     | trading.models.ensemble:_train_single_model:371 - lstm: Early stopping at epoch 17
+2026-02-06 09:07:01,160 | INFO     | trading.models.ensemble:_train_single_model:381 - lstm complete. Best accuracy: 60.74%
+2026-02-06 09:07:01,161 | INFO     | trading.models.ensemble:train:218 - Training gru...
+2026-02-06 09:07:26,321 | INFO     | trading.data.fetcher:__init__:264 - AkShare initialized
+2026-02-06 09:07:26,322 | INFO     | trading.data.fetcher:__init__:480 - Yahoo Finance initialized
+2026-02-06 09:07:26,322 | INFO     | trading.data.fetcher:_init_sources:777 - Data source akshare available
+2026-02-06 09:07:26,322 | INFO     | trading.data.fetcher:_init_sources:777 - Data source tencent available
+2026-02-06 09:07:26,322 | INFO     | trading.data.fetcher:_init_sources:777 - Data source yahoo available
+2026-02-06 09:07:26,323 | INFO     | trading.data.processor:load_scaler:340 - Scaler loaded from F:\Trading app\Trading-graph\models_saved\scaler.pkl
+2026-02-06 09:07:26,427 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized lstm model
+2026-02-06 09:07:26,451 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized transformer model
+2026-02-06 09:07:26,465 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized gru model
+2026-02-06 09:07:26,475 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized tcn model
+2026-02-06 09:07:26,475 | INFO     | trading.models.ensemble:__init__:85 - Ensemble initialized: ['lstm', 'transformer', 'gru', 'tcn'] on cpu
+2026-02-06 09:07:26,564 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized lstm model
+2026-02-06 09:07:26,588 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized transformer model
+2026-02-06 09:07:26,603 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized gru model
+2026-02-06 09:07:26,620 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized tcn model
+2026-02-06 09:07:26,623 | INFO     | trading.models.ensemble:load:627 - Ensemble loaded: ['lstm', 'transformer', 'gru', 'tcn'], interval=1d, horizon=5
+2026-02-06 09:07:26,624 | INFO     | trading.models.predictor:_load_model:286 - Model loaded successfully (4 networks)
+2026-02-06 09:08:02,650 | INFO     | trading.models.ensemble:_train_single_model:371 - gru: Early stopping at epoch 16
+2026-02-06 09:08:02,653 | INFO     | trading.models.ensemble:_train_single_model:381 - gru complete. Best accuracy: 63.70%
+2026-02-06 09:08:02,653 | INFO     | trading.models.ensemble:train:218 - Training tcn...
+2026-02-06 09:08:56,581 | INFO     | trading.models.ensemble:_train_single_model:371 - tcn: Early stopping at epoch 16
+2026-02-06 09:08:56,583 | INFO     | trading.models.ensemble:_train_single_model:381 - tcn complete. Best accuracy: 63.70%
+2026-02-06 09:08:56,584 | INFO     | trading.models.ensemble:_update_weights:397 - Updated weights: {'lstm': 0.3202971758817827, 'gru': 0.3398514120591087, 'tcn': 0.3398514120591087}
+2026-02-06 09:08:57,080 | INFO     | trading.models.ensemble:calibrate:160 - Calibration complete: temperature=0.50
+2026-02-06 09:08:58,285 | WARNING  | trading.analysis.backtest:_run_fold:405 - No valid test stocks for this fold
+2026-02-06 09:08:58,292 | INFO     | trading.analysis.backtest:run:190 - 
+Fold 6/58:
+2026-02-06 09:08:58,292 | INFO     | trading.analysis.backtest:run:191 -   Train: 2020-08-11 to 2021-08-11
+2026-02-06 09:08:58,292 | INFO     | trading.analysis.backtest:run:192 -   Test:  2021-08-21 to 2021-09-21
+2026-02-06 09:08:58,299 | INFO     | trading.data.processor:fit_scaler:102 - Scaler fitted on 1220 samples, 47 features
+2026-02-06 09:08:58,334 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized lstm model
+2026-02-06 09:08:58,426 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized gru model
+2026-02-06 09:08:58,429 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized tcn model
+2026-02-06 09:08:58,429 | INFO     | trading.models.ensemble:__init__:85 - Ensemble initialized: ['lstm', 'gru', 'tcn'] on cpu
+2026-02-06 09:08:58,429 | INFO     | trading.models.ensemble:train:218 - Training lstm...
+2026-02-06 09:10:27,652 | INFO     | trading.models.ensemble:_train_single_model:371 - lstm: Early stopping at epoch 16
+2026-02-06 09:10:27,656 | INFO     | trading.models.ensemble:_train_single_model:381 - lstm complete. Best accuracy: 60.74%
+2026-02-06 09:10:27,658 | INFO     | trading.models.ensemble:train:218 - Training gru...
+2026-02-06 09:11:11,268 | INFO     | trading:main:67 - ============================================================
+2026-02-06 09:11:11,268 | INFO     | trading:main:68 - AI STOCK TRADING SYSTEM - Production Grade
+2026-02-06 09:11:11,268 | INFO     | trading:main:69 - ============================================================
+2026-02-06 09:11:11,800 | INFO     | trading.data.fetcher:__init__:264 - AkShare initialized
+2026-02-06 09:11:11,893 | INFO     | trading.data.fetcher:__init__:480 - Yahoo Finance initialized
+2026-02-06 09:11:11,893 | INFO     | trading.data.fetcher:_init_sources:777 - Data source akshare available
+2026-02-06 09:11:11,894 | INFO     | trading.data.fetcher:_init_sources:777 - Data source tencent available
+2026-02-06 09:11:11,894 | INFO     | trading.data.fetcher:_init_sources:777 - Data source yahoo available
+2026-02-06 09:11:11,894 | INFO     | trading.analysis.backtest:run:155 - Starting walk-forward backtest:
+2026-02-06 09:11:11,894 | INFO     | trading.analysis.backtest:run:156 -   Stocks: 5
+2026-02-06 09:11:11,894 | INFO     | trading.analysis.backtest:run:157 -   Train: 12 months, Test: 1 months
+2026-02-06 09:11:11,894 | INFO     | trading.analysis.backtest:run:158 -   Capital: ¥100,000.00
+2026-02-06 09:11:11,996 | INFO     | trading.data.features:create_features:173 - Created 47 features, 1435 valid samples
+2026-02-06 09:11:11,997 | INFO     | trading.analysis.backtest:_collect_data:268 -   600519: 1435 samples
+2026-02-06 09:11:12,112 | INFO     | trading.data.features:create_features:173 - Created 47 features, 1435 valid samples
+2026-02-06 09:11:12,112 | INFO     | trading.analysis.backtest:_collect_data:268 -   601318: 1435 samples
+2026-02-06 09:11:12,245 | INFO     | trading.data.features:create_features:173 - Created 47 features, 1435 valid samples
+2026-02-06 09:11:12,246 | INFO     | trading.analysis.backtest:_collect_data:268 -   600036: 1435 samples
+2026-02-06 09:11:12,354 | INFO     | trading.data.features:create_features:173 - Created 47 features, 1436 valid samples
+2026-02-06 09:11:12,354 | INFO     | trading.analysis.backtest:_collect_data:268 -   000858: 1436 samples
+2026-02-06 09:11:12,478 | INFO     | trading.data.features:create_features:173 - Created 47 features, 1424 valid samples
+2026-02-06 09:11:12,478 | INFO     | trading.analysis.backtest:_collect_data:268 -   600900: 1424 samples
+2026-02-06 09:11:12,478 | INFO     | trading.analysis.backtest:run:170 -   Date range: 2020-03-11 to 2026-02-05
+2026-02-06 09:11:12,478 | INFO     | trading.analysis.backtest:run:178 -   Folds: 58
+2026-02-06 09:11:12,478 | INFO     | trading.analysis.backtest:run:190 - 
+Fold 1/58:
+2026-02-06 09:11:12,478 | INFO     | trading.analysis.backtest:run:191 -   Train: 2020-03-11 to 2021-03-11
+2026-02-06 09:11:12,478 | INFO     | trading.analysis.backtest:run:192 -   Test:  2021-03-21 to 2021-04-21
+2026-02-06 09:11:12,500 | INFO     | trading.data.processor:fit_scaler:102 - Scaler fitted on 1215 samples, 47 features
+2026-02-06 09:11:12,575 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized lstm model
+2026-02-06 09:11:12,593 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized gru model
+2026-02-06 09:11:12,595 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized tcn model
+2026-02-06 09:11:12,595 | INFO     | trading.models.ensemble:__init__:85 - Ensemble initialized: ['lstm', 'gru', 'tcn'] on cpu
+2026-02-06 09:11:12,595 | INFO     | trading.models.ensemble:train:218 - Training lstm...
+2026-02-06 09:11:17,538 | INFO     | trading:main:121 - Interrupted by user
+2026-02-06 09:11:50,281 | INFO     | trading.models.ensemble:_train_single_model:371 - gru: Early stopping at epoch 19
+2026-02-06 09:11:50,283 | INFO     | trading.models.ensemble:_train_single_model:381 - gru complete. Best accuracy: 50.37%
+2026-02-06 09:11:50,284 | INFO     | trading.models.ensemble:train:218 - Training tcn...
+2026-02-06 09:12:45,513 | INFO     | trading.models.ensemble:_train_single_model:371 - tcn: Early stopping at epoch 16
+2026-02-06 09:12:45,513 | INFO     | trading.models.ensemble:_train_single_model:381 - tcn complete. Best accuracy: 60.74%
+2026-02-06 09:12:45,513 | INFO     | trading.models.ensemble:_update_weights:397 - Updated weights: {'lstm': 0.3555317286441301, 'gru': 0.2889365427117399, 'tcn': 0.3555317286441301}
+2026-02-06 09:12:46,157 | INFO     | trading.models.ensemble:calibrate:160 - Calibration complete: temperature=0.50
+2026-02-06 09:12:47,705 | WARNING  | trading.analysis.backtest:_run_fold:405 - No valid test stocks for this fold
+2026-02-06 09:12:47,714 | INFO     | trading.analysis.backtest:run:190 - 
+Fold 7/58:
+2026-02-06 09:12:47,715 | INFO     | trading.analysis.backtest:run:191 -   Train: 2020-09-11 to 2021-09-11
+2026-02-06 09:12:47,715 | INFO     | trading.analysis.backtest:run:192 -   Test:  2021-09-21 to 2021-10-21
+2026-02-06 09:12:47,724 | INFO     | trading.data.processor:fit_scaler:102 - Scaler fitted on 1220 samples, 47 features
+2026-02-06 09:12:47,769 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized lstm model
+2026-02-06 09:12:47,771 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized gru model
+2026-02-06 09:12:47,787 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized tcn model
+2026-02-06 09:12:47,787 | INFO     | trading.models.ensemble:__init__:85 - Ensemble initialized: ['lstm', 'gru', 'tcn'] on cpu
+2026-02-06 09:12:47,788 | INFO     | trading.models.ensemble:train:218 - Training lstm...
+2026-02-06 09:14:19,033 | INFO     | trading.models.ensemble:_train_single_model:371 - lstm: Early stopping at epoch 16
+2026-02-06 09:14:19,037 | INFO     | trading.models.ensemble:_train_single_model:381 - lstm complete. Best accuracy: 57.04%
+2026-02-06 09:14:19,038 | INFO     | trading.models.ensemble:train:218 - Training gru...
+2026-02-06 09:15:24,546 | INFO     | trading.models.ensemble:_train_single_model:371 - gru: Early stopping at epoch 16
+2026-02-06 09:15:24,546 | INFO     | trading.models.ensemble:_train_single_model:381 - gru complete. Best accuracy: 57.04%
+2026-02-06 09:15:24,561 | INFO     | trading.models.ensemble:train:218 - Training tcn...
+2026-02-06 09:16:18,622 | INFO     | trading.models.ensemble:_train_single_model:371 - tcn: Early stopping at epoch 17
+2026-02-06 09:16:18,622 | INFO     | trading.models.ensemble:_train_single_model:381 - tcn complete. Best accuracy: 57.04%
+2026-02-06 09:16:18,638 | INFO     | trading.models.ensemble:_update_weights:397 - Updated weights: {'lstm': 0.33333333333333337, 'gru': 0.33333333333333337, 'tcn': 0.33333333333333337}
+2026-02-06 09:16:19,124 | INFO     | trading.models.ensemble:calibrate:160 - Calibration complete: temperature=1.00
+2026-02-06 09:16:20,312 | WARNING  | trading.analysis.backtest:_run_fold:405 - No valid test stocks for this fold
+2026-02-06 09:16:20,312 | INFO     | trading.analysis.backtest:run:190 - 
+Fold 8/58:
+2026-02-06 09:16:20,312 | INFO     | trading.analysis.backtest:run:191 -   Train: 2020-10-11 to 2021-10-11
+2026-02-06 09:16:20,312 | INFO     | trading.analysis.backtest:run:192 -   Test:  2021-10-21 to 2021-11-21
+2026-02-06 09:16:20,325 | INFO     | trading.data.processor:fit_scaler:102 - Scaler fitted on 1210 samples, 47 features
+2026-02-06 09:16:20,353 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized lstm model
+2026-02-06 09:16:20,364 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized gru model
+2026-02-06 09:16:20,364 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized tcn model
+2026-02-06 09:16:20,364 | INFO     | trading.models.ensemble:__init__:85 - Ensemble initialized: ['lstm', 'gru', 'tcn'] on cpu
+2026-02-06 09:16:20,364 | INFO     | trading.models.ensemble:train:218 - Training lstm...
+2026-02-06 09:17:45,182 | INFO     | trading.models.ensemble:_train_single_model:371 - lstm: Early stopping at epoch 16
+2026-02-06 09:17:45,186 | INFO     | trading.models.ensemble:_train_single_model:381 - lstm complete. Best accuracy: 54.48%
+2026-02-06 09:17:45,187 | INFO     | trading.models.ensemble:train:218 - Training gru...
+2026-02-06 09:19:00,662 | INFO     | trading.models.ensemble:_train_single_model:371 - gru: Early stopping at epoch 19
+2026-02-06 09:19:00,662 | INFO     | trading.models.ensemble:_train_single_model:381 - gru complete. Best accuracy: 49.25%
+2026-02-06 09:19:00,662 | INFO     | trading.models.ensemble:train:218 - Training tcn...
+2026-02-06 09:19:51,996 | INFO     | trading.models.ensemble:_train_single_model:371 - tcn: Early stopping at epoch 16
+2026-02-06 09:19:51,996 | INFO     | trading.models.ensemble:_train_single_model:381 - tcn complete. Best accuracy: 55.97%
+2026-02-06 09:19:51,996 | INFO     | trading.models.ensemble:_update_weights:397 - Updated weights: {'lstm': 0.34116934374572677, 'gru': 0.30732362679668207, 'tcn': 0.3515070294575911}
+2026-02-06 09:19:52,552 | INFO     | trading.models.ensemble:calibrate:160 - Calibration complete: temperature=0.75
+2026-02-06 09:19:53,901 | WARNING  | trading.analysis.backtest:_run_fold:405 - No valid test stocks for this fold
+2026-02-06 09:19:53,903 | INFO     | trading.analysis.backtest:run:190 - 
+Fold 9/58:
+2026-02-06 09:19:53,903 | INFO     | trading.analysis.backtest:run:191 -   Train: 2020-11-11 to 2021-11-11
+2026-02-06 09:19:53,903 | INFO     | trading.analysis.backtest:run:192 -   Test:  2021-11-21 to 2021-12-21
+2026-02-06 09:19:53,916 | INFO     | trading.data.processor:fit_scaler:102 - Scaler fitted on 1215 samples, 47 features
+2026-02-06 09:19:53,956 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized lstm model
+2026-02-06 09:19:53,965 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized gru model
+2026-02-06 09:19:53,968 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized tcn model
+2026-02-06 09:19:53,968 | INFO     | trading.models.ensemble:__init__:85 - Ensemble initialized: ['lstm', 'gru', 'tcn'] on cpu
+2026-02-06 09:19:53,968 | INFO     | trading.models.ensemble:train:218 - Training lstm...
+2026-02-06 09:21:31,788 | INFO     | trading.models.ensemble:_train_single_model:371 - lstm: Early stopping at epoch 18
+2026-02-06 09:21:31,792 | INFO     | trading.models.ensemble:_train_single_model:381 - lstm complete. Best accuracy: 56.30%
+2026-02-06 09:21:31,792 | INFO     | trading.models.ensemble:train:218 - Training gru...
+2026-02-06 09:22:37,369 | INFO     | trading.models.ensemble:_train_single_model:371 - gru: Early stopping at epoch 18
+2026-02-06 09:22:37,371 | INFO     | trading.models.ensemble:_train_single_model:381 - gru complete. Best accuracy: 60.00%
+2026-02-06 09:22:37,373 | INFO     | trading.models.ensemble:train:218 - Training tcn...
+2026-02-06 09:23:41,276 | INFO     | trading.models.ensemble:_train_single_model:371 - tcn: Early stopping at epoch 21
+2026-02-06 09:23:41,278 | INFO     | trading.models.ensemble:_train_single_model:381 - tcn complete. Best accuracy: 56.30%
+2026-02-06 09:23:41,279 | INFO     | trading.models.ensemble:_update_weights:397 - Updated weights: {'lstm': 0.32500385588695346, 'gru': 0.34999228822609296, 'tcn': 0.32500385588695346}
+2026-02-06 09:23:41,782 | INFO     | trading.models.ensemble:calibrate:160 - Calibration complete: temperature=1.00
+2026-02-06 09:23:42,984 | WARNING  | trading.analysis.backtest:_run_fold:405 - No valid test stocks for this fold
+2026-02-06 09:23:42,991 | INFO     | trading.analysis.backtest:run:190 - 
+Fold 10/58:
+2026-02-06 09:23:42,991 | INFO     | trading.analysis.backtest:run:191 -   Train: 2020-12-11 to 2021-12-11
+2026-02-06 09:23:42,992 | INFO     | trading.analysis.backtest:run:192 -   Test:  2021-12-21 to 2022-01-21
+2026-02-06 09:23:42,999 | INFO     | trading.data.processor:fit_scaler:102 - Scaler fitted on 1205 samples, 47 features
+2026-02-06 09:23:43,035 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized lstm model
+2026-02-06 09:23:43,042 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized gru model
+2026-02-06 09:23:43,050 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized tcn model
+2026-02-06 09:23:43,050 | INFO     | trading.models.ensemble:__init__:85 - Ensemble initialized: ['lstm', 'gru', 'tcn'] on cpu
+2026-02-06 09:23:43,051 | INFO     | trading.models.ensemble:train:218 - Training lstm...
+2026-02-06 09:25:06,063 | INFO     | trading.models.ensemble:_train_single_model:371 - lstm: Early stopping at epoch 16
+2026-02-06 09:25:06,067 | INFO     | trading.models.ensemble:_train_single_model:381 - lstm complete. Best accuracy: 56.39%
+2026-02-06 09:25:06,068 | INFO     | trading.models.ensemble:train:218 - Training gru...
+2026-02-06 09:26:06,842 | INFO     | trading.models.ensemble:_train_single_model:371 - gru: Early stopping at epoch 17
+2026-02-06 09:26:06,844 | INFO     | trading.models.ensemble:_train_single_model:381 - gru complete. Best accuracy: 60.15%
+2026-02-06 09:26:06,844 | INFO     | trading.models.ensemble:train:218 - Training tcn...
+2026-02-06 09:27:27,651 | INFO     | trading.models.ensemble:_train_single_model:371 - tcn: Early stopping at epoch 27
+2026-02-06 09:27:27,654 | INFO     | trading.models.ensemble:_train_single_model:381 - tcn complete. Best accuracy: 57.89%
+2026-02-06 09:27:27,657 | INFO     | trading.models.ensemble:_update_weights:397 - Updated weights: {'lstm': 0.32168627488430945, 'gru': 0.34680572017365335, 'tcn': 0.33150800494203725}
+2026-02-06 09:27:28,152 | INFO     | trading.models.ensemble:calibrate:160 - Calibration complete: temperature=1.00
+2026-02-06 09:27:29,339 | WARNING  | trading.analysis.backtest:_run_fold:405 - No valid test stocks for this fold
+2026-02-06 09:27:29,346 | INFO     | trading.analysis.backtest:run:190 - 
+Fold 11/58:
+2026-02-06 09:27:29,347 | INFO     | trading.analysis.backtest:run:191 -   Train: 2021-01-11 to 2022-01-11
+2026-02-06 09:27:29,347 | INFO     | trading.analysis.backtest:run:192 -   Test:  2022-01-21 to 2022-02-21
+2026-02-06 09:27:29,353 | INFO     | trading.data.processor:fit_scaler:102 - Scaler fitted on 1205 samples, 47 features
+2026-02-06 09:27:29,388 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized lstm model
+2026-02-06 09:27:29,396 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized gru model
+2026-02-06 09:27:29,404 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized tcn model
+2026-02-06 09:27:29,404 | INFO     | trading.models.ensemble:__init__:85 - Ensemble initialized: ['lstm', 'gru', 'tcn'] on cpu
+2026-02-06 09:27:29,404 | INFO     | trading.models.ensemble:train:218 - Training lstm...
+2026-02-06 09:29:31,656 | INFO     | trading.models.ensemble:_train_single_model:371 - lstm: Early stopping at epoch 24
+2026-02-06 09:29:31,660 | INFO     | trading.models.ensemble:_train_single_model:381 - lstm complete. Best accuracy: 54.14%
+2026-02-06 09:29:31,661 | INFO     | trading.models.ensemble:train:218 - Training gru...
+2026-02-06 09:31:13,508 | INFO     | trading.models.ensemble:_train_single_model:371 - gru: Early stopping at epoch 28
+2026-02-06 09:31:13,509 | INFO     | trading.models.ensemble:_train_single_model:381 - gru complete. Best accuracy: 57.14%
+2026-02-06 09:31:13,510 | INFO     | trading.models.ensemble:train:218 - Training tcn...
+2026-02-06 09:32:01,054 | INFO     | trading.models.ensemble:_train_single_model:371 - tcn: Early stopping at epoch 16
+2026-02-06 09:32:01,058 | INFO     | trading.models.ensemble:_train_single_model:381 - tcn complete. Best accuracy: 53.38%
+2026-02-06 09:32:01,058 | INFO     | trading.models.ensemble:_update_weights:397 - Updated weights: {'lstm': 0.3281840017200063, 'gru': 0.34853017362978783, 'tcn': 0.3232858246502058}
+2026-02-06 09:32:01,537 | INFO     | trading.models.ensemble:calibrate:160 - Calibration complete: temperature=3.00
+2026-02-06 09:32:02,706 | WARNING  | trading.analysis.backtest:_run_fold:405 - No valid test stocks for this fold
+2026-02-06 09:32:02,712 | INFO     | trading.analysis.backtest:run:190 - 
+Fold 12/58:
+2026-02-06 09:32:02,712 | INFO     | trading.analysis.backtest:run:191 -   Train: 2021-02-11 to 2022-02-11
+2026-02-06 09:32:02,713 | INFO     | trading.analysis.backtest:run:192 -   Test:  2022-02-21 to 2022-03-21
+2026-02-06 09:32:02,719 | INFO     | trading.data.processor:fit_scaler:102 - Scaler fitted on 1180 samples, 47 features
+2026-02-06 09:32:02,754 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized lstm model
+2026-02-06 09:32:02,763 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized gru model
+2026-02-06 09:32:02,769 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized tcn model
+2026-02-06 09:32:02,769 | INFO     | trading.models.ensemble:__init__:85 - Ensemble initialized: ['lstm', 'gru', 'tcn'] on cpu
+2026-02-06 09:32:02,770 | INFO     | trading.models.ensemble:train:218 - Training lstm...
+2026-02-06 09:34:05,645 | INFO     | trading.models.ensemble:_train_single_model:371 - lstm: Early stopping at epoch 25
+2026-02-06 09:34:05,647 | INFO     | trading.models.ensemble:_train_single_model:381 - lstm complete. Best accuracy: 58.14%
+2026-02-06 09:34:05,648 | INFO     | trading.models.ensemble:train:218 - Training gru...
+2026-02-06 09:35:50,585 | INFO     | trading.models.ensemble:_train_single_model:381 - gru complete. Best accuracy: 56.59%
+2026-02-06 09:35:50,586 | INFO     | trading.models.ensemble:train:218 - Training tcn...
+2026-02-06 09:36:34,792 | INFO     | trading.models.ensemble:_train_single_model:371 - tcn: Early stopping at epoch 16
+2026-02-06 09:36:34,794 | INFO     | trading.models.ensemble:_train_single_model:381 - tcn complete. Best accuracy: 51.16%
+2026-02-06 09:36:34,795 | INFO     | trading.models.ensemble:_update_weights:397 - Updated weights: {'lstm': 0.3522080773303763, 'gru': 0.34145448066765366, 'tcn': 0.30633744200197005}
+2026-02-06 09:36:35,263 | INFO     | trading.models.ensemble:calibrate:160 - Calibration complete: temperature=0.75
+2026-02-06 09:36:36,428 | WARNING  | trading.analysis.backtest:_run_fold:405 - No valid test stocks for this fold
+2026-02-06 09:36:36,436 | INFO     | trading.analysis.backtest:run:190 - 
+Fold 13/58:
+2026-02-06 09:36:36,436 | INFO     | trading.analysis.backtest:run:191 -   Train: 2021-03-11 to 2022-03-11
+2026-02-06 09:36:36,436 | INFO     | trading.analysis.backtest:run:192 -   Test:  2022-03-21 to 2022-04-21
+2026-02-06 09:36:36,442 | INFO     | trading.data.processor:fit_scaler:102 - Scaler fitted on 1205 samples, 47 features
+2026-02-06 09:36:36,479 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized lstm model
+2026-02-06 09:36:36,486 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized gru model
+2026-02-06 09:36:36,493 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized tcn model
+2026-02-06 09:36:36,493 | INFO     | trading.models.ensemble:__init__:85 - Ensemble initialized: ['lstm', 'gru', 'tcn'] on cpu
+2026-02-06 09:36:36,493 | INFO     | trading.models.ensemble:train:218 - Training lstm...
+2026-02-06 09:38:02,428 | INFO     | trading.models.ensemble:_train_single_model:371 - lstm: Early stopping at epoch 17
+2026-02-06 09:38:02,431 | INFO     | trading.models.ensemble:_train_single_model:381 - lstm complete. Best accuracy: 50.38%
+2026-02-06 09:38:02,432 | INFO     | trading.models.ensemble:train:218 - Training gru...
+2026-02-06 09:38:59,531 | INFO     | trading.models.ensemble:_train_single_model:371 - gru: Early stopping at epoch 16
+2026-02-06 09:38:59,533 | INFO     | trading.models.ensemble:_train_single_model:381 - gru complete. Best accuracy: 51.13%
+2026-02-06 09:38:59,535 | INFO     | trading.models.ensemble:train:218 - Training tcn...
+2026-02-06 09:40:28,593 | INFO     | trading.models.ensemble:_train_single_model:381 - tcn complete. Best accuracy: 50.38%
+2026-02-06 09:40:28,594 | INFO     | trading.models.ensemble:_update_weights:397 - Updated weights: {'lstm': 0.33165832310053883, 'gru': 0.3366833537989224, 'tcn': 0.33165832310053883}
+2026-02-06 09:40:29,054 | INFO     | trading.models.ensemble:calibrate:160 - Calibration complete: temperature=2.00
+2026-02-06 09:40:30,232 | WARNING  | trading.analysis.backtest:_run_fold:405 - No valid test stocks for this fold
+2026-02-06 09:40:30,241 | INFO     | trading.analysis.backtest:run:190 - 
+Fold 14/58:
+2026-02-06 09:40:30,241 | INFO     | trading.analysis.backtest:run:191 -   Train: 2021-04-11 to 2022-04-11
+2026-02-06 09:40:30,241 | INFO     | trading.analysis.backtest:run:192 -   Test:  2022-04-21 to 2022-05-21
+2026-02-06 09:40:30,248 | INFO     | trading.data.processor:fit_scaler:102 - Scaler fitted on 1195 samples, 47 features
+2026-02-06 09:40:30,286 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized lstm model
+2026-02-06 09:40:30,294 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized gru model
+2026-02-06 09:40:30,301 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized tcn model
+2026-02-06 09:40:30,301 | INFO     | trading.models.ensemble:__init__:85 - Ensemble initialized: ['lstm', 'gru', 'tcn'] on cpu
+2026-02-06 09:40:30,301 | INFO     | trading.models.ensemble:train:218 - Training lstm...
+2026-02-06 09:41:51,620 | INFO     | trading.models.ensemble:_train_single_model:371 - lstm: Early stopping at epoch 16
+2026-02-06 09:41:51,624 | INFO     | trading.models.ensemble:_train_single_model:381 - lstm complete. Best accuracy: 50.00%
+2026-02-06 09:41:51,625 | INFO     | trading.models.ensemble:train:218 - Training gru...
+2026-02-06 09:42:52,088 | INFO     | trading.models.ensemble:_train_single_model:371 - gru: Early stopping at epoch 17
+2026-02-06 09:42:52,090 | INFO     | trading.models.ensemble:_train_single_model:381 - gru complete. Best accuracy: 47.73%
+2026-02-06 09:42:52,090 | INFO     | trading.models.ensemble:train:218 - Training tcn...
+2026-02-06 09:44:06,549 | INFO     | trading.models.ensemble:_train_single_model:371 - tcn: Early stopping at epoch 25
+2026-02-06 09:44:06,553 | INFO     | trading.models.ensemble:_train_single_model:381 - tcn complete. Best accuracy: 50.00%
+2026-02-06 09:44:06,554 | INFO     | trading.models.ensemble:_update_weights:397 - Updated weights: {'lstm': 0.3383450082873575, 'gru': 0.32330998342528516, 'tcn': 0.3383450082873575}
+2026-02-06 09:44:07,020 | INFO     | trading.models.ensemble:calibrate:160 - Calibration complete: temperature=1.25
+2026-02-06 09:44:08,221 | WARNING  | trading.analysis.backtest:_run_fold:405 - No valid test stocks for this fold
+2026-02-06 09:44:08,228 | INFO     | trading.analysis.backtest:run:190 - 
+Fold 15/58:
+2026-02-06 09:44:08,229 | INFO     | trading.analysis.backtest:run:191 -   Train: 2021-05-11 to 2022-05-11
+2026-02-06 09:44:08,229 | INFO     | trading.analysis.backtest:run:192 -   Test:  2022-05-21 to 2022-06-21
+2026-02-06 09:44:08,235 | INFO     | trading.data.processor:fit_scaler:102 - Scaler fitted on 1200 samples, 47 features
+2026-02-06 09:44:08,270 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized lstm model
+2026-02-06 09:44:08,277 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized gru model
+2026-02-06 09:44:08,284 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized tcn model
+2026-02-06 09:44:08,284 | INFO     | trading.models.ensemble:__init__:85 - Ensemble initialized: ['lstm', 'gru', 'tcn'] on cpu
+2026-02-06 09:44:08,285 | INFO     | trading.models.ensemble:train:218 - Training lstm...
+2026-02-06 09:45:48,405 | INFO     | trading.models.ensemble:_train_single_model:371 - lstm: Early stopping at epoch 20
+2026-02-06 09:45:48,408 | INFO     | trading.models.ensemble:_train_single_model:381 - lstm complete. Best accuracy: 53.79%
+2026-02-06 09:45:48,411 | INFO     | trading.models.ensemble:train:218 - Training gru...
+2026-02-06 09:46:58,513 | INFO     | trading.models.ensemble:_train_single_model:371 - gru: Early stopping at epoch 20
+2026-02-06 09:46:58,516 | INFO     | trading.models.ensemble:_train_single_model:381 - gru complete. Best accuracy: 53.03%
+2026-02-06 09:46:58,518 | INFO     | trading.models.ensemble:train:218 - Training tcn...
+2026-02-06 09:48:06,082 | INFO     | trading.models.ensemble:_train_single_model:371 - tcn: Early stopping at epoch 23
+2026-02-06 09:48:06,085 | INFO     | trading.models.ensemble:_train_single_model:381 - tcn complete. Best accuracy: 42.42%
+2026-02-06 09:48:06,087 | INFO     | trading.models.ensemble:_update_weights:397 - Updated weights: {'lstm': 0.35949676991073, 'gru': 0.3540909060858998, 'tcn': 0.28641232400337}
+2026-02-06 09:48:06,548 | INFO     | trading.models.ensemble:calibrate:160 - Calibration complete: temperature=1.00
+2026-02-06 09:48:07,746 | WARNING  | trading.analysis.backtest:_run_fold:405 - No valid test stocks for this fold
+2026-02-06 09:48:07,753 | INFO     | trading.analysis.backtest:run:190 - 
+Fold 16/58:
+2026-02-06 09:48:07,754 | INFO     | trading.analysis.backtest:run:191 -   Train: 2021-06-11 to 2022-06-11
+2026-02-06 09:48:07,754 | INFO     | trading.analysis.backtest:run:192 -   Test:  2022-06-21 to 2022-07-21
+2026-02-06 09:48:07,760 | INFO     | trading.data.processor:fit_scaler:102 - Scaler fitted on 1195 samples, 47 features
+2026-02-06 09:48:07,807 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized lstm model
+2026-02-06 09:48:07,820 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized gru model
+2026-02-06 09:48:07,829 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized tcn model
+2026-02-06 09:48:07,829 | INFO     | trading.models.ensemble:__init__:85 - Ensemble initialized: ['lstm', 'gru', 'tcn'] on cpu
+2026-02-06 09:48:07,830 | INFO     | trading.models.ensemble:train:218 - Training lstm...
+2026-02-06 09:49:32,105 | INFO     | trading.models.ensemble:_train_single_model:371 - lstm: Early stopping at epoch 17
+2026-02-06 09:49:32,109 | INFO     | trading.models.ensemble:_train_single_model:381 - lstm complete. Best accuracy: 57.58%
+2026-02-06 09:49:32,110 | INFO     | trading.models.ensemble:train:218 - Training gru...
+2026-02-06 09:51:06,416 | INFO     | trading.models.ensemble:_train_single_model:371 - gru: Early stopping at epoch 26
+2026-02-06 09:51:06,418 | INFO     | trading.models.ensemble:_train_single_model:381 - gru complete. Best accuracy: 49.24%
+2026-02-06 09:51:06,419 | INFO     | trading.models.ensemble:train:218 - Training tcn...
+2026-02-06 09:52:02,312 | INFO     | trading.models.ensemble:_train_single_model:371 - tcn: Early stopping at epoch 17
+2026-02-06 09:52:02,316 | INFO     | trading.models.ensemble:_train_single_model:381 - tcn complete. Best accuracy: 53.03%
+2026-02-06 09:52:02,316 | INFO     | trading.models.ensemble:_update_weights:397 - Updated weights: {'lstm': 0.36237366388480874, 'gru': 0.30674268406014454, 'tcn': 0.33088365205504666}
+2026-02-06 09:52:02,873 | INFO     | trading.models.ensemble:calibrate:160 - Calibration complete: temperature=0.50
+2026-02-06 09:52:04,382 | WARNING  | trading.analysis.backtest:_run_fold:405 - No valid test stocks for this fold
+2026-02-06 09:52:04,385 | INFO     | trading.analysis.backtest:run:190 - 
+Fold 17/58:
+2026-02-06 09:52:04,385 | INFO     | trading.analysis.backtest:run:191 -   Train: 2021-07-11 to 2022-07-11
+2026-02-06 09:52:04,386 | INFO     | trading.analysis.backtest:run:192 -   Test:  2022-07-21 to 2022-08-21
+2026-02-06 09:52:04,391 | INFO     | trading.data.processor:fit_scaler:102 - Scaler fitted on 1195 samples, 47 features
+2026-02-06 09:52:04,430 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized lstm model
+2026-02-06 09:52:04,438 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized gru model
+2026-02-06 09:52:04,445 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized tcn model
+2026-02-06 09:52:04,445 | INFO     | trading.models.ensemble:__init__:85 - Ensemble initialized: ['lstm', 'gru', 'tcn'] on cpu
+2026-02-06 09:52:04,445 | INFO     | trading.models.ensemble:train:218 - Training lstm...
+2026-02-06 09:53:30,552 | INFO     | trading.models.ensemble:_train_single_model:371 - lstm: Early stopping at epoch 16
+2026-02-06 09:53:30,556 | INFO     | trading.models.ensemble:_train_single_model:381 - lstm complete. Best accuracy: 57.58%
+2026-02-06 09:53:30,557 | INFO     | trading.models.ensemble:train:218 - Training gru...
+2026-02-06 09:55:41,680 | INFO     | trading.models.ensemble:_train_single_model:381 - gru complete. Best accuracy: 61.36%
+2026-02-06 09:55:41,682 | INFO     | trading.models.ensemble:train:218 - Training tcn...
+2026-02-06 09:56:42,156 | INFO     | trading.models.ensemble:_train_single_model:371 - tcn: Early stopping at epoch 17
+2026-02-06 09:56:42,158 | INFO     | trading.models.ensemble:_train_single_model:381 - tcn complete. Best accuracy: 50.76%
+2026-02-06 09:56:42,159 | INFO     | trading.models.ensemble:_update_weights:397 - Updated weights: {'lstm': 0.3388421921903966, 'gru': 0.3655094248321601, 'tcn': 0.29564838297744334}
+2026-02-06 09:56:42,656 | INFO     | trading.models.ensemble:calibrate:160 - Calibration complete: temperature=1.50
+2026-02-06 09:56:44,037 | WARNING  | trading.analysis.backtest:_run_fold:405 - No valid test stocks for this fold
+2026-02-06 09:56:44,042 | INFO     | trading.analysis.backtest:run:190 - 
+Fold 18/58:
+2026-02-06 09:56:44,043 | INFO     | trading.analysis.backtest:run:191 -   Train: 2021-08-11 to 2022-08-11
+2026-02-06 09:56:44,043 | INFO     | trading.analysis.backtest:run:192 -   Test:  2022-08-21 to 2022-09-21
+2026-02-06 09:56:44,050 | INFO     | trading.data.processor:fit_scaler:102 - Scaler fitted on 1200 samples, 47 features
+2026-02-06 09:56:44,093 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized lstm model
+2026-02-06 09:56:44,101 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized gru model
+2026-02-06 09:56:44,108 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized tcn model
+2026-02-06 09:56:44,109 | INFO     | trading.models.ensemble:__init__:85 - Ensemble initialized: ['lstm', 'gru', 'tcn'] on cpu
+2026-02-06 09:56:44,109 | INFO     | trading.models.ensemble:train:218 - Training lstm...
+2026-02-06 09:58:34,629 | INFO     | trading.models.ensemble:_train_single_model:371 - lstm: Early stopping at epoch 19
+2026-02-06 09:58:34,633 | INFO     | trading.models.ensemble:_train_single_model:381 - lstm complete. Best accuracy: 57.58%
+2026-02-06 09:58:34,633 | INFO     | trading.models.ensemble:train:218 - Training gru...
+2026-02-06 09:59:48,454 | INFO     | trading.models.ensemble:_train_single_model:371 - gru: Early stopping at epoch 17
+2026-02-06 09:59:48,457 | INFO     | trading.models.ensemble:_train_single_model:381 - gru complete. Best accuracy: 57.58%
+2026-02-06 09:59:48,458 | INFO     | trading.models.ensemble:train:218 - Training tcn...
+2026-02-06 09:59:53,869 | INFO     | trading:main:121 - Interrupted by user

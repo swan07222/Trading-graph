@@ -319,6 +319,78 @@ class DataProcessor:
         
         log.info(f"Scaler saved to {path}")
     
+    def prepare_forecast_sequences(
+        self,
+        df: pd.DataFrame,
+        feature_cols: List[str],
+        horizon: int,
+        fit_scaler: bool = False,
+        return_index: bool = False
+    ):
+        """
+        Multi-step forecasting dataset:
+        - X: (samples, seq_len, n_features)
+        - Y: (samples, horizon) where Y[k-1] = % return from close[t] to close[t+k]
+        Strictly uses future close only for labels (allowed).
+        """
+        seq_len = int(CONFIG.SEQUENCE_LENGTH)
+        horizon = int(horizon)
+
+        missing_cols = set(feature_cols) - set(df.columns)
+        if missing_cols:
+            raise ValueError(f"Missing feature columns: {missing_cols}")
+
+        if "close" not in df.columns:
+            raise ValueError("DataFrame must have 'close' column for forecasting labels")
+
+        features = df[feature_cols].values.astype(np.float32)
+        close = pd.to_numeric(df["close"], errors="coerce").values.astype(np.float32)
+
+        if fit_scaler:
+            self.fit_scaler(features[~np.isnan(features).any(axis=1)])
+
+        if self._fitted:
+            features = self.transform(features)
+
+        X, Y, idx = [], [], []
+
+        n = len(df)
+        for i in range(seq_len - 1, n):
+            # need future closes up to i+horizon
+            if i + horizon >= n:
+                break
+
+            seq = features[i - seq_len + 1: i + 1]
+            if len(seq) != seq_len or np.isnan(seq).any():
+                continue
+
+            c0 = float(close[i])
+            if not np.isfinite(c0) or c0 <= 0:
+                continue
+
+            fut = close[i + 1: i + horizon + 1]
+            if np.isnan(fut).any():
+                continue
+
+            # vector of horizon returns relative to current close
+            y = (fut / c0 - 1.0) * 100.0  # shape (horizon,)
+
+            X.append(seq)
+            Y.append(y.astype(np.float32))
+            idx.append(df.index[i])
+
+        if not X:
+            if return_index:
+                return np.array([]), np.array([]), pd.DatetimeIndex([])
+            return np.array([]), np.array([])
+
+        X = np.array(X, dtype=np.float32)
+        Y = np.array(Y, dtype=np.float32)
+
+        if return_index:
+            return X, Y, pd.DatetimeIndex(idx)
+        return X, Y
+
     def load_scaler(self, path: str = None) -> bool:
         """Load saved scaler for inference"""
         path = path or str(CONFIG.MODEL_DIR / "scaler.pkl")

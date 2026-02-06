@@ -185,6 +185,7 @@ class Config:
         self.risk = RiskConfig()
         self.security = SecurityConfig()
         self.alerts = AlertConfig()
+        self.min_stocks_for_training: int = 5
         
         # Main settings
         self.capital: float = 100000.0
@@ -223,6 +224,10 @@ class Config:
     def CAPITAL(self, value: float):
         self.capital = value
     
+    @property
+    def MIN_STOCKS_FOR_TRAINING(self) -> int:
+        return self.min_stocks_for_training
+
     @property
     def STOCK_POOL(self) -> List[str]:
         return self.stock_pool

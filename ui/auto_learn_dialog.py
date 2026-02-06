@@ -28,131 +28,75 @@ class AutoLearnWorker(QThread):
         self.token = CancellationToken()
     
     def run(self):
+        """
+        Continuous mode:
+        - starts ContinuousLearner in continuous loop
+        - streams progress into UI
+        - stops only when user presses Stop
+        """
         try:
-            from data.discovery import UniversalStockDiscovery
-            from data.fetcher import get_fetcher
-            from models.trainer import Trainer
-            
-            results = {
-                'discovered': 0,
-                'processed': 0,
-                'samples': 0,
-                'accuracy': 0.0
-            }
-            
-            # Step 1: Discover stocks
-            if self.config.get('discover_new', True):
-                self.progress.emit(5, "Discovering stocks from internet...")
-                self.log_message.emit("Starting stock discovery...", "info")
-                
-                discovery = UniversalStockDiscovery()
-                
-                def discovery_callback(msg, count):
-                    if self.running:
-                        self.log_message.emit(msg, "info")
-                
-                stocks = discovery.discover_all(
-                    callback=discovery_callback,
-                    max_stocks=self.config.get('max_stocks', 50),
-                    include_st=False
-                )
-                
-                results['discovered'] = len(stocks)
-                self.log_message.emit(f"Discovered {len(stocks)} stocks", "success")
-                
-                if not stocks:
-                    self.log_message.emit("No stocks discovered. Using default stock pool.", "warning")
-                    from config import CONFIG
-                    stock_codes = CONFIG.STOCK_POOL[:self.config.get('max_stocks', 50)]
-                else:
-                    stock_codes = [s.code for s in stocks]
-            else:
-                from config import CONFIG
-                stock_codes = CONFIG.STOCK_POOL[:self.config.get('max_stocks', 50)]
-                results['discovered'] = len(stock_codes)
-            
-            if not self.running:
-                return
-            
-            # Step 2: Fetch data
-            self.progress.emit(20, "Fetching historical data...")
-            self.log_message.emit(f"Fetching data for {len(stock_codes)} stocks...", "info")
-            
-            fetcher = get_fetcher()
-            
-            completed = 0
-            total = len(stock_codes)
-            
-            def fetch_callback(code, done, total_count):
-                nonlocal completed
-                completed = done
-                if self.running:
-                    pct = 20 + int(40 * done / total_count)
-                    self.progress.emit(pct, f"Fetching {code} ({done}/{total_count})")
-            
-            data = fetcher.get_multiple_parallel(
-                stock_codes,
-                days=500,
-                callback=fetch_callback,
-                max_workers=5
+            from models.auto_learner import AutoLearner  # alias of ContinuousLearner
+
+            learner = AutoLearner()
+
+            # map UI config -> learner params
+            max_stocks = int(self.config.get("max_stocks", 50))
+            epochs = int(self.config.get("epochs", 10))
+            incremental = bool(self.config.get("incremental", True))
+
+            # continuous dealing-learning parameters (tune as needed)
+            interval = "1m"
+            horizon = 30
+            lookback_bars = 3000
+            cycle_interval_seconds = 900  # 15 minutes
+
+            results = {"discovered": 0, "processed": 0, "samples": 0, "accuracy": 0.0}
+
+            def on_progress(p):
+                # p is LearningProgress
+                if not self.running:
+                    return
+                # progress bar expects 0..100
+                percent = int(max(0, min(100, p.progress)))
+                self.progress.emit(percent, p.message or p.stage)
+                self.log_message.emit(f"{p.stage}: {p.message}", "info")
+
+                results["discovered"] = int(getattr(p, "stocks_found", 0) or 0)
+                results["processed"] = int(getattr(p, "stocks_processed", 0) or 0)
+                results["accuracy"] = float(getattr(p, "validation_accuracy", 0.0) or 0.0)
+
+            learner.add_callback(on_progress)
+
+            # Start continuous learner
+            learner.start(
+                mode="full",
+                max_stocks=max_stocks,
+                epochs_per_cycle=epochs,
+                min_market_cap=10,
+                include_all_markets=True,
+                continuous=True,
+                learning_while_trading=True,
+                interval=interval,
+                prediction_horizon=horizon,
+                lookback_bars=lookback_bars,
+                cycle_interval_seconds=cycle_interval_seconds,
+                incremental=incremental,
             )
-            
-            results['processed'] = len(data)
-            self.log_message.emit(f"Fetched data for {len(data)} stocks", "success")
-            
-            if not self.running:
-                return
-            
-            # Step 3: Train model (if mode includes training)
-            mode = self.config.get('mode', 'full')
-            
-            if mode in ['full', 'training'] and len(data) >= 10:
-                self.progress.emit(65, "Training AI model...")
-                self.log_message.emit("Starting model training...", "info")
-                
-                trainer = Trainer()
-                
-                def train_progress(epoch, total_epochs, loss, val_loss):
-                    if self.running:
-                        pct = 65 + int(30 * epoch / total_epochs)
-                        self.progress.emit(pct, f"Training epoch {epoch}/{total_epochs}")
-                        self.log_message.emit(
-                            f"Epoch {epoch}: loss={loss:.4f}, val_loss={val_loss:.4f}",
-                            "info"
-                        )
-                
-                # Prepare training data
-                codes = list(data.keys())
-                
-                def cb(model_name, epoch_idx, val_acc):
-                    if self.running:
-                        pct = 65 + int(30 * (epoch_idx + 1) / self.config.get("epochs", 50))
-                        self.progress.emit(pct, f"Training {model_name} epoch {epoch_idx+1}")
-                        self.log_message.emit(f"{model_name} epoch {epoch_idx+1} val_acc={val_acc:.2%}", "info")
 
-                training_out = trainer.train(
-                    stock_codes=codes,
-                    epochs=self.config.get("epochs", 50),
-                    callback=cb,
-                    stop_flag=self.token,  
-                    save_model=True,
-                    incremental=bool(self.config.get("incremental", False)),
-                )
+            # Keep this QThread alive until stop() called
+            while self.running and not self.token.is_cancelled:
+                self.token.raise_if_cancelled()
+                # sleep lightly to keep UI responsive
+                self.msleep(200)
 
-                results['samples'] = int(training_out.get('train_samples', 0) + training_out.get('val_samples', 0))
-                results['accuracy'] = float(training_out.get('best_accuracy', 0.0))
-                
-                if results['accuracy'] > 0:
-                    self.log_message.emit(
-                        f"Training complete! Best val accuracy: {results['accuracy']:.1%}",
-                        "success"
-                    )
-                else:
-                    self.log_message.emit("Training completed with warnings", "warning")
-            
-            self.progress.emit(100, "Complete!")
+            # Stop learner when UI requests stop
+            try:
+                learner.stop()
+            except Exception:
+                pass
+
             self.finished.emit(results)
-            
+
         except Exception as e:
             import traceback
             error_msg = f"{str(e)}\n{traceback.format_exc()}"

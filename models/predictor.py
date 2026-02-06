@@ -206,11 +206,12 @@ class Predictor:
 
     def _ensure_model(self, interval: str, horizon: int):
         """
-        Ensure the correct model/scaler (interval + horizon) is loaded.
-        For 1m forecasting 30 minutes, horizon=30 bars.
-
-        If not found, fall back to existing "ensemble.pt"/"scaler.pkl" behavior.
+        Ensure the correct classifier ensemble + forecaster are loaded (interval + horizon).
+        Forecaster produces the future curve using AI model outputs, not heuristics.
         """
+        import torch
+        from models.networks import TCNModel
+
         interval = str(interval).lower()
         horizon = int(horizon)
 
@@ -219,27 +220,29 @@ class Predictor:
         if loaded_key == key and self.is_ready():
             return
 
-        # Preferred per-model files:
+        # Paths
         model_path = CONFIG.MODEL_DIR / f"ensemble_{interval}_{horizon}.pt"
         scaler_path = CONFIG.MODEL_DIR / f"scaler_{interval}_{horizon}.pkl"
+        forecast_path = CONFIG.MODEL_DIR / f"forecast_{interval}_{horizon}.pt"
 
-        # Fallback legacy files:
+        # Legacy fallbacks
         if not model_path.exists():
             model_path = CONFIG.MODEL_DIR / "ensemble.pt"
         if not scaler_path.exists():
             scaler_path = CONFIG.MODEL_DIR / "scaler.pkl"
 
-        # Load scaler (best effort)
+        # Load scaler
         try:
             self.processor.load_scaler(str(scaler_path))
         except Exception:
             pass
 
-        # Load ensemble
+        # Load classifier ensemble
         if not model_path.exists():
             self.ensemble = None
             self._model_loaded = False
             self._loaded_model_key = None
+            self._forecaster = None
             return
 
         try:
@@ -250,16 +253,41 @@ class Predictor:
             ok = self.ensemble.load(str(model_path))
             self._model_loaded = bool(ok)
 
-            # store metadata for forecasting scaling
             meta = state.get("meta", {})
             self._trained_interval = str(meta.get("interval", interval))
             self._trained_horizon = int(meta.get("prediction_horizon", horizon))
-
             self._loaded_model_key = key if ok else None
         except Exception:
             self.ensemble = None
             self._model_loaded = False
             self._loaded_model_key = None
+            self._forecaster = None
+            return
+
+        # Load forecaster (best-effort)
+        self._forecaster = None
+        try:
+            if forecast_path.exists():
+                fstate = torch.load(forecast_path, map_location="cpu", weights_only=False)
+                finput = int(fstate.get("input_size", input_size))
+                fh = int(fstate.get("horizon", horizon))
+                arch = fstate.get("arch", {})
+                hidden = int(arch.get("hidden_size", CONFIG.model.hidden_size))
+                drop = float(arch.get("dropout", CONFIG.model.dropout))
+
+                device = "cuda" if torch.cuda.is_available() else "cpu"
+                fore = TCNModel(
+                    input_size=finput,
+                    hidden_size=hidden,
+                    num_classes=fh,   # horizon outputs
+                    dropout=drop
+                ).to(device)
+                fore.load_state_dict(fstate["state_dict"])
+                fore.eval()
+                self._forecaster = fore
+                self._forecaster_device = device
+        except Exception:
+            self._forecaster = None
 
     def _load_model(self):
         """Load the trained ensemble model and scaler"""
@@ -342,6 +370,8 @@ class Predictor:
 
         feature_cols = self.feature_engine.get_feature_columns()
         X = self.processor.prepare_inference_sequence(df, feature_cols)
+
+        self._last_inference_X = X
 
         ensemble_pred = self.ensemble.predict(X)
 
@@ -648,13 +678,15 @@ class Predictor:
         model_horizon: int
     ) -> List[float]:
         """
-        Deterministic future price path for charting.
+        FULL AI forecast curve:
+        - If forecast_{interval}_{horizon}.pt exists, use it to predict horizon-step returns.
+        - Otherwise fall back to previous heuristic behavior.
 
-        - horizon_steps: how many minutes to draw into the future (20~30)
-        - model_horizon: the horizon the model was trained on (bars)
-
-        If you forecast 30 but model was trained for 20, we scale drift approximately.
+        Forecaster outputs Y[k-1] = % return from now to t+k (vector).
         """
+        import torch
+        import numpy as np
+
         horizon_steps = int(horizon_steps)
         if horizon_steps <= 0:
             return [round(float(current_price), 2)]
@@ -663,25 +695,49 @@ class Predictor:
         if px0 <= 0:
             return [0.0]
 
+        # ---- Use AI forecaster if available ----
+        fore = getattr(self, "_forecaster", None)
+        if fore is not None and hasattr(self, "_last_inference_X"):
+            try:
+                X = getattr(self, "_last_inference_X")  # (1, seq, feat), already scaled
+                device = getattr(self, "_forecaster_device", "cpu")
+                xb = torch.FloatTensor(X).to(device)
+
+                with torch.inference_mode():
+                    out, _ = fore(xb)  # (1, H)
+                    rets = out.detach().cpu().numpy()[0].astype(float)
+
+                # If UI asks more steps than trained horizon, truncate; if fewer, slice
+                rets = rets[:horizon_steps]
+
+                # Safety clamp: avoid insane jumps (use ATR as scale)
+                # atr_pct is percent; allow roughly +/- 3*ATR per step cumulative
+                cap = max(1.0, float(atr_pct) * 3.0)
+                rets = np.clip(rets, -cap, cap)
+
+                prices = [px0]
+                for k in range(len(rets)):
+                    prices.append(px0 * (1.0 + rets[k] / 100.0))
+
+                return [round(float(p), 2) for p in prices]
+            except Exception:
+                pass
+
+        # ---- Fallback heuristic (your old behavior) ----
         up_thr = float(CONFIG.UP_THRESHOLD)
         dn_thr = float(CONFIG.DOWN_THRESHOLD)
 
-        # Expected TOTAL return (%) over model horizon
         exp_total_model = (pred.prob_up * up_thr) + (pred.prob_down * dn_thr)
-
-        # Confidence shrinkage
         exp_total_model *= float(0.35 + 0.65 * pred.confidence)
 
-        # Scale drift from model horizon to requested horizon
         mh = max(1, int(model_horizon))
         exp_total = exp_total_model * (float(horizon_steps) / float(mh))
 
-        # Small deterministic curvature based on ATR%
         vol = max(0.0001, float(atr_pct) / 100.0)
 
         prices = [px0]
         for step in range(1, horizon_steps + 1):
-            step_ret = exp_total / horizon_steps  # % per step
+            step_ret = exp_total / horizon_steps
             curve = (vol * 0.10) * (step / horizon_steps) * (1 if exp_total >= 0 else -1)
             px1 = prices[-1] * (1.0 + (step_ret / 100.0) + curve)
             prices.append(px1)

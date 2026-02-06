@@ -18,7 +18,7 @@ from PyQt6.QtWidgets import (
 )
 
 from config import CONFIG, TradingMode
-from utils.logger import log
+from utils.logger import get_logger
 from utils.cancellation import CancellationToken
 
 

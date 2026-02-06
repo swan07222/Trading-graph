@@ -20,7 +20,7 @@ from data.fetcher import DataFetcher
 from data.processor import DataProcessor
 from data.features import FeatureEngine
 from models.ensemble import EnsembleModel
-from utils.logger import log
+from utils.logger import get_logger
 from sklearn.metrics import precision_recall_fscore_support, confusion_matrix
 
 seed = 42
@@ -219,24 +219,28 @@ class Trainer:
         lookback_bars: int = 2400,
     ) -> Dict:
         """
-        Train the ensemble model.
+        Train:
+        1) Classification ensemble for signals
+        2) Multi-step forecaster (AI-generated future price curve)
 
-        FIX:
-        - supports intraday intervals (1m)
-        - supports custom horizon in bars (e.g. 20~30 minutes => 20~30 bars)
-        - saves model + scaler per interval/horizon so you can switch forecast time
+        Forecaster predicts horizon-step return vector, saved as forecast_{interval}_{horizon}.pt
         """
+        import torch
+        import torch.nn as nn
+        from torch.utils.data import DataLoader, TensorDataset
+        from models.networks import TCNModel
+
         epochs = int(epochs or CONFIG.EPOCHS)
         batch_size = int(batch_size or CONFIG.BATCH_SIZE)
+        interval = str(interval).lower()
+        horizon = int(prediction_horizon)
 
         log.info("=" * 70)
-        log.info("STARTING TRAINING PIPELINE")
-        log.info(f"interval={interval}, horizon={prediction_horizon} bars, lookback_bars={lookback_bars}")
+        log.info("STARTING TRAINING PIPELINE (Classifier + Forecaster)")
+        log.info(f"interval={interval}, horizon={horizon} bars, lookback_bars={lookback_bars}")
         log.info("=" * 70)
 
-        start_time = datetime.now()
-
-        # --- Prepare data (inline changes: use interval/bars + horizon) ---
+        # --- Prepare data for classifier (your existing logic) ---
         stocks = stock_codes or CONFIG.STOCK_POOL
         feature_cols = self.feature_engine.get_feature_columns()
 
@@ -259,8 +263,7 @@ class Trainer:
         all_train_features = []
         split_data = {}
 
-        horizon = int(prediction_horizon)
-        embargo = max(int(CONFIG.EMBARGO_BARS), horizon)  # must be >= horizon for leakage safety
+        embargo = max(int(CONFIG.EMBARGO_BARS), horizon)
 
         for code, data in stock_data.items():
             df = data["df"]
@@ -274,7 +277,7 @@ class Trainer:
 
             train_df = df.iloc[:train_end].copy()
             val_df = df.iloc[int(n * CONFIG.TRAIN_RATIO):val_end].copy()
-            test_df = df.iloc[int(n * (CONFIG.TRAIN_RATIO + CONFIG.VAL_RATIO)) :].copy()
+            test_df = df.iloc[int(n * (CONFIG.TRAIN_RATIO + CONFIG.VAL_RATIO)):].copy()
 
             train_df = self.processor.create_labels(train_df, horizon=horizon)
             val_df = self.processor.create_labels(val_df, horizon=horizon)
@@ -293,6 +296,7 @@ class Trainer:
         combined_train_features = np.concatenate(all_train_features, axis=0)
         self.processor.fit_scaler(combined_train_features)
 
+        # sequences for classifier
         all_train = {"X": [], "y": []}
         all_val = {"X": [], "y": []}
         all_test = {"X": [], "y": []}
@@ -317,18 +321,16 @@ class Trainer:
 
         self.input_size = int(X_train.shape[2])
 
-        # --- Save scaler per interval/horizon ---
+        # save scaler per interval/horizon
         scaler_path = CONFIG.MODEL_DIR / f"scaler_{interval}_{horizon}.pkl"
         self.processor.save_scaler(str(scaler_path))
 
-        # --- Train ensemble ---
+        # --- Train classifier ensemble ---
         self.ensemble = EnsembleModel(input_size=self.input_size, model_names=model_names)
-        # Attach metadata used by save()
         self.ensemble.interval = str(interval)
         self.ensemble.prediction_horizon = int(horizon)
 
         if incremental:
-            # load the same interval/horizon model if exists
             self.ensemble.load(str(CONFIG.model_dir / f"ensemble_{interval}_{horizon}.pt"))
 
         if X_val is None or len(X_val) == 0:
@@ -344,20 +346,140 @@ class Trainer:
             callback=callback,
             stop_flag=stop_flag,
         )
-
         self.ensemble.calibrate(X_val, y_val)
 
         if save_model:
             self.ensemble.save(str(CONFIG.model_dir / f"ensemble_{interval}_{horizon}.pt"))
 
-        # Quick test accuracy
+        # --- Train forecaster (multi-step AI curve) ---
+        # Build forecast dataset from same split_data, using the fitted scaler
+        Xf_train_list, Yf_train_list = [], []
+        Xf_val_list, Yf_val_list = [], []
+
+        for code, splits in split_data.items():
+            tr = splits["train"]
+            va = splits["val"]
+
+            if len(tr) >= CONFIG.SEQUENCE_LENGTH + horizon + 5:
+                Xf, Yf = self.processor.prepare_forecast_sequences(tr, feature_cols, horizon=horizon, fit_scaler=False)
+                if len(Xf) > 0:
+                    Xf_train_list.append(Xf)
+                    Yf_train_list.append(Yf)
+
+            if len(va) >= CONFIG.SEQUENCE_LENGTH + horizon + 5:
+                Xf, Yf = self.processor.prepare_forecast_sequences(va, feature_cols, horizon=horizon, fit_scaler=False)
+                if len(Xf) > 0:
+                    Xf_val_list.append(Xf)
+                    Yf_val_list.append(Yf)
+
+        if Xf_train_list and Xf_val_list:
+            Xf_train = np.concatenate(Xf_train_list, axis=0)
+            Yf_train = np.concatenate(Yf_train_list, axis=0)
+            Xf_val = np.concatenate(Xf_val_list, axis=0)
+            Yf_val = np.concatenate(Yf_val_list, axis=0)
+
+            device = "cuda" if torch.cuda.is_available() else "cpu"
+            forecaster = TCNModel(
+                input_size=self.input_size,
+                hidden_size=CONFIG.model.hidden_size,
+                num_classes=horizon,          # <-- multi-step output vector length
+                dropout=CONFIG.model.dropout
+            ).to(device)
+
+            opt = torch.optim.AdamW(forecaster.parameters(), lr=CONFIG.model.learning_rate, weight_decay=CONFIG.model.weight_decay)
+            loss_fn = nn.MSELoss()
+
+            train_loader = DataLoader(
+                TensorDataset(torch.FloatTensor(Xf_train), torch.FloatTensor(Yf_train)),
+                batch_size=min(512, batch_size),
+                shuffle=True
+            )
+            val_loader = DataLoader(
+                TensorDataset(torch.FloatTensor(Xf_val), torch.FloatTensor(Yf_val)),
+                batch_size=1024,
+                shuffle=False
+            )
+
+            best_val = float("inf")
+            best_state = None
+            patience = 0
+            max_patience = 10
+            fore_epochs = max(10, min(30, epochs // 2))
+
+            log.info(f"Training forecaster (TCN regression): samples={len(Xf_train)}, horizon={horizon}, epochs={fore_epochs}")
+
+            for ep in range(fore_epochs):
+                if stop_flag is not None:
+                    # supports CancellationToken
+                    try:
+                        if bool(stop_flag):
+                            break
+                    except Exception:
+                        pass
+
+                forecaster.train()
+                losses = []
+                for xb, yb in train_loader:
+                    xb = xb.to(device)
+                    yb = yb.to(device)
+                    opt.zero_grad(set_to_none=True)
+                    pred, _ = forecaster(xb)   # pred shape (B, horizon)
+                    loss = loss_fn(pred, yb)
+                    loss.backward()
+                    torch.nn.utils.clip_grad_norm_(forecaster.parameters(), 1.0)
+                    opt.step()
+                    losses.append(float(loss.detach().item()))
+
+                forecaster.eval()
+                vlosses = []
+                with torch.inference_mode():
+                    for xb, yb in val_loader:
+                        xb = xb.to(device)
+                        yb = yb.to(device)
+                        pred, _ = forecaster(xb)
+                        vlosses.append(float(loss_fn(pred, yb).item()))
+                v = float(np.mean(vlosses)) if vlosses else float("inf")
+
+                log.info(f"Forecaster epoch {ep+1}/{fore_epochs}: train_mse={np.mean(losses):.6f} val_mse={v:.6f}")
+
+                if v < best_val:
+                    best_val = v
+                    best_state = {k: t.detach().cpu().clone() for k, t in forecaster.state_dict().items()}
+                    patience = 0
+                else:
+                    patience += 1
+                    if patience >= max_patience:
+                        log.info("Forecaster early stopping")
+                        break
+
+            if best_state:
+                forecaster.load_state_dict(best_state)
+
+            # Save forecaster
+            forecast_path = CONFIG.model_dir / f"forecast_{interval}_{horizon}.pt"
+            payload = {
+                "input_size": int(self.input_size),
+                "interval": str(interval),
+                "horizon": int(horizon),
+                "arch": {
+                    "hidden_size": int(CONFIG.model.hidden_size),
+                    "dropout": float(CONFIG.model.dropout),
+                },
+                "state_dict": forecaster.state_dict(),
+            }
+            from utils.atomic_io import atomic_torch_save
+            atomic_torch_save(forecast_path, payload)
+            log.info(f"Forecaster saved: {forecast_path}")
+        else:
+            log.warning("Forecaster training skipped: insufficient forecast train/val samples")
+
+        # Quick classifier test accuracy
         test_acc = 0.0
         if X_test is not None and len(X_test) > 0:
             preds = self.ensemble.predict_batch(X_test[:2000])
             pred_cls = np.array([p.predicted_class for p in preds])
             test_acc = float(np.mean(pred_cls == y_test[:len(pred_cls)]))
 
-        training_time = (datetime.now() - start_time).total_seconds() / 60.0
         best_accuracy = 0.0
         for h in history.values():
             if h.get("val_acc"):
@@ -369,7 +491,6 @@ class Trainer:
             "test_metrics": {"accuracy": test_acc},
             "input_size": int(self.input_size),
             "num_models": len(self.ensemble.models) if self.ensemble else 0,
-            "training_time_minutes": float(training_time),
             "epochs": int(epochs),
             "train_samples": int(len(X_train)),
             "val_samples": int(len(X_val)),
@@ -378,6 +499,7 @@ class Trainer:
             "prediction_horizon": int(horizon),
             "model_path": f"ensemble_{interval}_{horizon}.pt",
             "scaler_path": f"scaler_{interval}_{horizon}.pkl",
+            "forecast_path": f"forecast_{interval}_{horizon}.pt",
         }
     
     def _evaluate(self, X: np.ndarray, y: np.ndarray, r: np.ndarray) -> Dict:
