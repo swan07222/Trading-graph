@@ -199,10 +199,11 @@ class Backtester:
                 all_trades.extend(trades)
                 
                 # FIXED: Aggregate returns by date
-                for dt, ret in returns_dict.items():
-                    daily_returns_by_date[dt].append(ret)
-                for dt, ret in benchmark_dict.items():
-                    benchmark_returns_by_date[dt].append(ret)
+                for dt, ret_list in returns_dict.items():
+                    daily_returns_by_date[dt].extend(ret_list)
+
+                for dt, ret_list in benchmark_dict.items():
+                    benchmark_returns_by_date[dt].extend(ret_list)
                 
                 fold_accuracies.append(accuracy)
                 
@@ -330,10 +331,10 @@ class Backtester:
         X_train, y_train = [], []
         
         for code, df in all_data.items():
-            df_labeled = processor.create_labels(df.copy())
-            
-            mask = (df_labeled.index >= train_start) & (df_labeled.index < train_end)
-            fold_df = df_labeled[mask]
+
+            mask = (df.index >= train_start) & (df.index < train_end)
+            fold_raw = df.loc[mask].copy()
+            fold_df = processor.create_labels(fold_raw)
             
             if len(fold_df) >= CONFIG.SEQUENCE_LENGTH + 10:
                 X, y, _ = processor.prepare_sequences(fold_df, feature_cols, fit_scaler=False)
@@ -368,27 +369,29 @@ class Backtester:
         actuals = []
         
         for code, df in all_data.items():
-            df_labeled = processor.create_labels(df.copy())
-            
-            mask = (df_labeled.index >= test_start) & (df_labeled.index < test_end)
-            fold_df = df_labeled[mask]
+            mask = (df.index >= test_start) & (df.index < test_end)
+            fold_raw = df.loc[mask].copy()
+            fold_df = processor.create_labels(fold_raw)  
             
             if len(fold_df) < CONFIG.SEQUENCE_LENGTH + 5:
                 continue
             
-            X, y, returns = processor.prepare_sequences(fold_df, feature_cols, fit_scaler=False)
-            
+            X, y, returns, idx = processor.prepare_sequences(
+                fold_df, feature_cols, fit_scaler=False, return_index=True
+            )
             if len(X) == 0:
                 continue
+
+            aligned = fold_df.loc[idx]
             
             code_trades, code_returns, code_benchmark = self._simulate_trading(
                 model=model,
                 X=X,
                 y=y,
                 returns=returns,
-                dates=fold_df.index[-len(X):],
-                prices=fold_df['close'].values[-len(X):],
-                volumes=fold_df['volume'].values[-len(X):], 
+                dates=idx,
+                prices=aligned["close"].values,
+                volumes=aligned["volume"].values,
                 stock_code=code,
                 capital=capital / len(all_data)
             )

@@ -88,6 +88,7 @@ class OrderDatabase:
             self._local.conn.row_factory = sqlite3.Row
             self._local.conn.execute("PRAGMA journal_mode=WAL")
             self._local.conn.execute("PRAGMA synchronous=NORMAL")
+            self._local.conn.execute("PRAGMA foreign_keys=ON")
         return self._local.conn
     
     @contextmanager
@@ -201,12 +202,37 @@ class OrderDatabase:
     def save_order(self, order: Order):
         with self._transaction() as conn:
             conn.execute("""
-                INSERT OR REPLACE INTO orders 
-                (id, broker_id, symbol, name, side, order_type, quantity, price, 
-                 stop_price, status, filled_qty, avg_price, commission, message,
-                 strategy, signal_id, stop_loss, take_profit, created_at, submitted_at,
-                 filled_at, cancelled_at, updated_at, tags)
+                INSERT INTO orders (
+                    id, broker_id, symbol, name, side, order_type, quantity, price,
+                    stop_price, status, filled_qty, avg_price, commission, message,
+                    strategy, signal_id, stop_loss, take_profit,
+                    created_at, submitted_at, filled_at, cancelled_at, updated_at, tags
+                )
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    broker_id=excluded.broker_id,
+                    symbol=excluded.symbol,
+                    name=excluded.name,
+                    side=excluded.side,
+                    order_type=excluded.order_type,
+                    quantity=excluded.quantity,
+                    price=excluded.price,
+                    stop_price=excluded.stop_price,
+                    status=excluded.status,
+                    filled_qty=excluded.filled_qty,
+                    avg_price=excluded.avg_price,
+                    commission=excluded.commission,
+                    message=excluded.message,
+                    strategy=excluded.strategy,
+                    signal_id=excluded.signal_id,
+                    stop_loss=excluded.stop_loss,
+                    take_profit=excluded.take_profit,
+                    created_at=excluded.created_at,
+                    submitted_at=excluded.submitted_at,
+                    filled_at=excluded.filled_at,
+                    cancelled_at=excluded.cancelled_at,
+                    updated_at=excluded.updated_at,
+                    tags=excluded.tags
             """, (
                 order.id, order.broker_id, order.symbol, order.name,
                 order.side.value, order.order_type.value, order.quantity, order.price,
@@ -568,22 +594,46 @@ class OrderManagementSystem:
         return self._db.load_active_orders()
 
     def submit_order(self, order: Order) -> Order:
-        """Submit order with full validation"""
+        """Submit order with full validation + reservation (cash/shares)."""
         with self._lock:
             self._check_new_day()
-            
-            # Validate
-            self._validate_order(order)
-            
-            # Update status
+
+            # --- Basic sanity ---
+            if order.quantity <= 0:
+                raise OrderValidationError("Quantity must be positive")
+
+            if order.price is None or float(order.price) <= 0:
+                # OMS must reserve cash/shares using a price. Require ExecutionEngine to provide it.
+                raise OrderValidationError("Order price must be provided (>0) for OMS reservation")
+
+            # Per-symbol lot size (STAR can be 200)
+            from core.constants import get_lot_size
+            lot = get_lot_size(order.symbol)
+            if order.quantity % lot != 0:
+                raise OrderValidationError(f"Quantity must be multiple of {lot} for {order.symbol}")
+
+            # --- Reserve resources ---
+            if order.side == OrderSide.BUY:
+                self._validate_buy_order(order)      # reserves cash, sets tags
+            else:
+                self._validate_sell_order(order)     # freezes shares in position
+
+            # --- Update status ---
             order.status = OrderStatus.SUBMITTED
             order.submitted_at = datetime.now()
             order.updated_at = datetime.now()
-            
+
             # Persist
             self._db.save_order(order)
-            
-            # Audit
+            self._db.save_account_state(self._account)
+
+            # If sell reservation changed position, persist it
+            if order.side == OrderSide.SELL:
+                pos = self._account.positions.get(order.symbol)
+                if pos:
+                    self._db.save_position(pos)
+
+            # Audit + callbacks
             self._audit.log_order(
                 order_id=order.id,
                 code=order.symbol,
@@ -592,61 +642,10 @@ class OrderManagementSystem:
                 price=order.price,
                 status=order.status.value
             )
-            
-            # Notify
             self._notify_order_update(order)
-            
+
             log.info(f"Order submitted: {order.id} {order.side.value} {order.quantity} {order.symbol}")
-            
-            self._db.save_account_state(self._account)
-
             return order
-    
-    def _validate_order(self, order: Order, price: float) -> Tuple[bool, str]:
-        """Validate order"""
-        if order.quantity <= 0:
-            return False, "Quantity must be positive"
-        
-        # FIXED: Use per-symbol lot size
-        from core.constants import get_lot_size
-        lot_size = get_lot_size(order.symbol)
-
-        if order.quantity % lot_size != 0:
-            return False, f"Quantity must be multiple of {lot_size} for {order.symbol}"
-        
-        if order.side == OrderSide.BUY:
-            cost = order.quantity * price
-            commission = cost * CONFIG.COMMISSION
-            total = cost + commission
-            
-            if total > self._cash:
-                return False, f"Insufficient funds: need {total:,.2f}, have {self._cash:,.2f}"
-            
-            # Check position limit
-            existing_value = 0.0
-            existing_pos = self._positions.get(order.symbol)
-            if existing_pos:
-                existing_value = existing_pos.quantity * price
-            
-            new_total_value = existing_value + (order.quantity * price)
-            equity = self._cash + sum(p.market_value for p in self._positions.values())
-            
-            if equity > 0:
-                max_pct = getattr(CONFIG, 'MAX_POSITION_PCT', 15.0)
-                position_pct = new_total_value / equity * 100
-                if position_pct > max_pct:
-                    return False, f"Position too large: {position_pct:.1f}% (max: {max_pct}%)"
-            
-        else:  # SELL
-            pos = self._positions.get(order.symbol)
-            
-            if not pos:
-                return False, f"No position in {order.symbol}"
-            
-            if order.quantity > pos.available_qty:
-                return False, f"Available: {pos.available_qty}, requested: {order.quantity}"
-        
-        return True, "OK"
     
     def _validate_buy_order(self, order: Order):
         """Validate buy order"""
@@ -720,7 +719,6 @@ class OrderManagementSystem:
             
             # IDEMPOTENT: Allow same-status updates (just update metadata)
             if new_status == old_status:
-                # Update metadata only
                 if broker_id:
                     order.broker_id = broker_id
                 if message:
@@ -729,8 +727,13 @@ class OrderManagementSystem:
                     order.filled_qty = filled_qty
                 if avg_price is not None:
                     order.avg_price = avg_price
+
                 order.updated_at = datetime.now()
                 self._db.save_order(order)
+                self._db.save_account_state(self._account)
+
+                # IMPORTANT: notify even if status unchanged (broker_id/message updates)
+                self._notify_order_update(order)
                 return order
             
             # Validate transition for actual status changes
@@ -761,6 +764,8 @@ class OrderManagementSystem:
                 self._release_reserved(order)
             elif new_status == OrderStatus.FILLED:
                 order.filled_at = datetime.now()
+            elif new_status == OrderStatus.EXPIRED:
+                self._release_reserved(order)
             
             # Persist
             self._db.save_order(order)
@@ -1033,8 +1038,8 @@ class OrderManagementSystem:
             self._account.peak_equity = self._account.equity
     
     def cancel_order(self, order_id: str) -> bool:
-        """Cancel an order"""
-        return self.update_order_status(order_id, OrderStatus.CANCELLED) is not None
+        updated = self.update_order_status(order_id, OrderStatus.CANCELLED)
+        return bool(updated and updated.status == OrderStatus.CANCELLED)
     
     def get_order(self, order_id: str) -> Optional[Order]:
         return self._db.load_order(order_id)

@@ -21,7 +21,10 @@ import pandas as pd
 from config import CONFIG
 from utils.logger import log
 from utils.cancellation import CancellationToken, CancelledException
+from data.fetcher import get_fetcher
 
+fetcher = get_fetcher()
+fetcher.reset_sources()
 
 @dataclass
 class LearningProgress:
@@ -560,7 +563,9 @@ class ContinuousLearner:
             y_val = y_train[split:]
             X_train = X_train[:split]
             y_train = y_train[:split]
+            ensemble.calibrate(X_val, y_val)
         
+        ensemble.save()
         log.info(f"Training data: {len(X_train)} train, {len(X_val)} val")
         
         input_size = X_train.shape[2]

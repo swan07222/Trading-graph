@@ -16,6 +16,7 @@ from pathlib import Path
 
 import pandas as pd
 import torch
+import threading
 
 from config import CONFIG
 from data.fetcher import DataFetcher
@@ -114,6 +115,7 @@ class Predictor:
         self.fetcher = DataFetcher()
         self.feature_engine = FeatureEngine()
         self.processor = DataProcessor()
+        self._lock = threading.RLock()
         
         self.ensemble: Optional[EnsembleModel] = None
         self._model_loaded = False
@@ -161,7 +163,7 @@ class Predictor:
         """Check if predictor is ready"""
         return self._model_loaded and self.ensemble is not None
     
-    def predict(self, stock_code: str) -> Prediction:
+    def predict(self, stock_code: str, use_realtime_price: bool = False) -> Prediction:
         """
         Generate complete prediction for a stock
         """
@@ -170,21 +172,23 @@ class Predictor:
                 "Model not loaded. Train a model first with: python main.py --train"
             )
         
+        stock_code = DataFetcher.clean_code(stock_code)
         # Get historical data
         # Check cache first
         cache_key = stock_code
         now = datetime.now()
-
-        if cache_key in self._feature_cache:
-            cached_df, cached_time = self._feature_cache[cache_key]
-            if (now - cached_time).total_seconds() < self._cache_ttl_seconds:
-                df = cached_df
+        
+        with self._lock:
+            if cache_key in self._feature_cache:
+                cached_df, cached_time = self._feature_cache[cache_key]
+                if (now - cached_time).total_seconds() < self._cache_ttl_seconds:
+                    df = cached_df
+                else:
+                    df = self._fetch_and_process(stock_code)
+                    self._feature_cache[cache_key] = (df, now)
             else:
                 df = self._fetch_and_process(stock_code)
                 self._feature_cache[cache_key] = (df, now)
-        else:
-            df = self._fetch_and_process(stock_code)
-            self._feature_cache[cache_key] = (df, now)
         
         if len(df) < CONFIG.SEQUENCE_LENGTH + 10:
             raise ValueError(
@@ -194,16 +198,13 @@ class Predictor:
         
         # Get real-time quote
         last_close = float(df['close'].iloc[-1])
-        
-        if use_realtime_price:
-            quote = self.fetcher.get_realtime(stock_code)
-            current_price = quote.price if quote and quote.price > 0 else last_close
-            stock_name = quote.name if quote else stock_code
+        quote = self.fetcher.get_realtime(stock_code)
+        stock_name = quote.name if quote else stock_code
+
+        if use_realtime_price and quote and quote.price > 0:
+            current_price = float(quote.price)
         else:
-            # Use last close for consistency with model features
             current_price = last_close
-            quote = self.fetcher.get_realtime(stock_code)
-            stock_name = quote.name if quote else stock_code
             
         if len(df) < CONFIG.SEQUENCE_LENGTH:
             raise ValueError(f"Insufficient data after feature creation")
@@ -219,7 +220,7 @@ class Predictor:
             raise
         
         # Get ensemble prediction
-        ensemble_pred = self.ensemble.predict(X[0])
+        ensemble_pred = self.ensemble.predict(X)
         
         # Extract technical indicators from features
         rsi = self._get_indicator(df, 'rsi_14', default=50)

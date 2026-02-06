@@ -449,15 +449,10 @@ class SimulatorBroker(BrokerInterface):
                 # Buy limit: only fill if market price <= limit price
                 if market_price > order.price:
                     # Order accepted but not filled - would need price to come down
-                    order.status = OrderStatus.ACCEPTED
-                    order.message = f"Limit order waiting: market {market_price:.2f} > limit {order.price:.2f}"
+                    order.status = OrderStatus.REJECTED
+                    order.message = f"Limit order not marketable in simulator: market {market_price:.2f} > limit {order.price:.2f}"
                     self._emit('order_update', order)
-                    # In real sim, you'd queue this and check against future prices
-                    # For now, we'll simulate partial fill with probability
-                    if random.random() < 0.3:  # 30% chance of fill at limit
-                        fill_price = order.price
-                    else:
-                        return  # Order stays open
+                    return
                 else:
                     fill_price = min(market_price, order.price)
             else:  # SELL
@@ -581,15 +576,24 @@ class SimulatorBroker(BrokerInterface):
         self._emit('trade', order, fill)
     
     def get_fills(self, since: datetime = None) -> List[Fill]:
-        """Get fills not yet returned"""
+        """Get fills, optionally filtered by timestamp"""
         with self._lock:
-            if since:
-                fills = [f for f in self._fills if f.timestamp and f.timestamp >= since]
-            else:
-                # Return unsent fills
+            if since is None:
+                # Return all unsent fills
                 fills = list(self._unsent_fills)
                 self._unsent_fills.clear()
-            return fills
+                return fills
+            else:
+                # Filter by timestamp
+                result = []
+                remaining = []
+                for fill in self._unsent_fills:
+                    if fill.timestamp and fill.timestamp >= since:
+                        result.append(fill)
+                    else:
+                        remaining.append(fill)
+                self._unsent_fills = remaining
+                return result
     
     def get_order_status(self, order_id: str) -> Optional[OrderStatus]:
         """Get order status"""
@@ -715,8 +719,9 @@ class THSBroker(BrokerInterface):
         self._client = None
         self._connected = False
         self._orders: Dict[str, Order] = {}
-        self._seen_fill_ids: set = set()  # Track seen fills to avoid duplicates
+        self._seen_fill_ids: set = set()
         self._last_fill_check: datetime = None
+        self._fetcher = None  # ADDED: lazy init fetcher
         
         try:
             import easytrader
@@ -767,8 +772,8 @@ class THSBroker(BrokerInterface):
         log.info(f"Disconnected from {self.name}")
     
     def get_quote(self, symbol: str) -> Optional[float]:
-        from data.fetcher import DataFetcher
-        fetcher = DataFetcher()
+        """Get current price using shared fetcher"""
+        fetcher = self._get_fetcher()
         quote = fetcher.get_realtime(symbol)
         return quote.price if quote and quote.price > 0 else None
     
@@ -907,16 +912,26 @@ class THSBroker(BrokerInterface):
                 else:
                     side = OrderSide.SELL
                 
+                # Parse timestamp - FIXED: moved outside Fill constructor
+                ts = trade.get("成交时间") or trade.get("time") or None
+                fill_time = datetime.now()
+                if ts:
+                    try:
+                        t = datetime.strptime(str(ts), "%H:%M:%S").time()
+                        fill_time = datetime.combine(date.today(), t)
+                    except Exception:
+                        pass
+                
                 fill = Fill(
                     id=fill_id,
-                    order_id=our_order_id,  # Our order ID, not broker's
+                    order_id=our_order_id,
                     symbol=str(trade.get('证券代码', '')).zfill(6),
                     side=side,
                     quantity=int(trade.get('成交数量', 0)),
                     price=float(trade.get('成交价格', 0)),
                     commission=float(trade.get('手续费', 0) or 0),
                     stamp_tax=float(trade.get('印花税', 0) or 0),
-                    timestamp=datetime.now()
+                    timestamp=fill_time
                 )
                 
                 fills.append(fill)
@@ -1021,6 +1036,12 @@ class THSBroker(BrokerInterface):
         if active_only:
             return [o for o in self._orders.values() if o.is_active]
         return list(self._orders.values())
+    def _get_fetcher(self):
+        """Get shared fetcher instance"""
+        if self._fetcher is None:
+            from data.fetcher import get_fetcher
+            self._fetcher = get_fetcher()
+        return self._fetcher
 
 
 # ============================================================
@@ -1040,6 +1061,7 @@ class ZSZQBroker(BrokerInterface):
         self._connected = False
         self._orders: Dict[str, Order] = {}
         self._seen_fill_ids: set = set()
+        self._fetcher = None
         
         try:
             import easytrader
@@ -1094,11 +1116,11 @@ class ZSZQBroker(BrokerInterface):
         log.info(f"Disconnected from {self.name}")
     
     def get_quote(self, symbol: str) -> Optional[float]:
-        from data.fetcher import DataFetcher
-        fetcher = DataFetcher()
+        """Get current price using shared fetcher"""
+        fetcher = self._get_fetcher()
         quote = fetcher.get_realtime(symbol)
         return quote.price if quote and quote.price > 0 else None
-    
+
     def get_account(self) -> Account:
         if not self.is_connected:
             return Account()
@@ -1253,6 +1275,16 @@ class ZSZQBroker(BrokerInterface):
                 else:
                     side = OrderSide.SELL
                 
+                # Parse timestamp - FIXED
+                ts = trade.get("成交时间") or trade.get("time") or None
+                fill_time = datetime.now()
+                if ts:
+                    try:
+                        t = datetime.strptime(str(ts), "%H:%M:%S").time()
+                        fill_time = datetime.combine(date.today(), t)
+                    except Exception:
+                        pass
+                
                 fill = Fill(
                     id=fill_id,
                     order_id=our_order_id,
@@ -1262,7 +1294,7 @@ class ZSZQBroker(BrokerInterface):
                     price=float(trade.get('成交价格', 0)),
                     commission=float(trade.get('手续费', 0) or 0),
                     stamp_tax=float(trade.get('印花税', 0) or 0),
-                    timestamp=datetime.now()
+                    timestamp=fill_time
                 )
                 
                 fills.append(fill)
@@ -1363,6 +1395,13 @@ class ZSZQBroker(BrokerInterface):
             log.error(f"Cancel failed: {e}")
             return False
     
+    def _get_fetcher(self):
+        """Get shared fetcher instance"""
+        if self._fetcher is None:
+            from data.fetcher import get_fetcher
+            self._fetcher = get_fetcher()
+        return self._fetcher
+
     def get_orders(self, active_only: bool = True) -> List[Order]:
         if active_only:
             return [o for o in self._orders.values() if o.is_active]

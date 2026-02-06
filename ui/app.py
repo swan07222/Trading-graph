@@ -1324,10 +1324,16 @@ class MainApp(QMainWindow):
 
     def _refresh_portfolio(self):
         """Refresh portfolio display"""
+        # FIXED: Check executor FIRST before any access
         if not self.executor:
             return
         
         try:
+            metrics = self.executor.get_risk_metrics()
+            if metrics:
+                if not metrics.can_trade:
+                    self.log("Trading disabled by risk / circuit breaker", "warning")
+            
             account = self.executor.get_account()
             
             self.account_labels['equity'].setText(f"¥{account.equity:,.2f}")

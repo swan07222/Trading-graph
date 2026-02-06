@@ -75,3 +75,680 @@ TypeError: ContinuousLearner.run() got an unexpected keyword argument 'epochs'
 2026-02-05 06:37:50,124 | INFO     | trading:discover_all:147 - Found 0 from Top Losers, total: 0
 2026-02-05 06:37:51,126 | INFO     | trading:discover_all:147 - Found 0 from High Volume, total: 0
 2026-02-05 06:37:52,126 | INFO     | trading:discover_all:147 - Found 0 from Large Cap, total: 0
+2026-02-05 16:19:47,327 | INFO     | trading:main:61 - ============================================================
+2026-02-05 16:19:47,327 | INFO     | trading:main:62 - AI STOCK TRADING SYSTEM - Production Grade
+2026-02-05 16:19:47,327 | INFO     | trading:main:63 - ============================================================
+2026-02-05 16:19:53,040 | INFO     | trading:main:61 - ============================================================
+2026-02-05 16:19:53,041 | INFO     | trading:main:62 - AI STOCK TRADING SYSTEM - Production Grade
+2026-02-05 16:19:53,041 | INFO     | trading:main:63 - ============================================================
+2026-02-05 16:19:54,023 | INFO     | trading.data.fetcher:__init__:241 - AkShare initialized
+2026-02-05 16:19:54,133 | INFO     | trading.data.fetcher:__init__:449 - Yahoo Finance initialized
+2026-02-05 16:19:54,133 | INFO     | trading.data.fetcher:_init_sources:565 - Data source akshare available
+2026-02-05 16:19:54,133 | INFO     | trading.data.fetcher:_init_sources:565 - Data source yahoo available
+2026-02-05 16:19:54,133 | WARNING  | trading:load_scaler:311 - Scaler not found: F:\Trading app\Trading-graph\models_saved\scaler.pkl
+2026-02-05 16:19:54,134 | WARNING  | trading:_load_model:134 - No scaler found. Predictions may be inaccurate.
+2026-02-05 16:19:54,134 | WARNING  | trading:_load_model:135 - Train a model first with: python main.py --train
+2026-02-05 16:19:54,134 | WARNING  | trading:_load_model:139 - No trained model found. Train a model first.
+2026-02-05 16:19:54,134 | WARNING  | trading:_load_model:140 - Run: python main.py --train
+2026-02-05 16:19:54,134 | ERROR    | trading:main:117 - Error: Model not loaded. Train a model first with: python main.py --train
+Traceback (most recent call last):
+  File "F:\Trading app\Trading-graph\main.py", line 97, in main
+    result = predictor.predict(args.predict)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "F:\Trading app\Trading-graph\models\predictor.py", line 169, in predict
+    raise RuntimeError(
+RuntimeError: Model not loaded. Train a model first with: python main.py --train
+2026-02-05 16:23:09,531 | INFO     | trading:main:61 - ============================================================
+2026-02-05 16:23:09,531 | INFO     | trading:main:62 - AI STOCK TRADING SYSTEM - Production Grade
+2026-02-05 16:23:09,532 | INFO     | trading:main:63 - ============================================================
+2026-02-05 16:23:09,695 | INFO     | trading:_continuous_learning_loop:239 - === Learning Cycle 1 ===
+2026-02-05 16:23:09,695 | INFO     | trading:start:171 - Continuous learning started (mode=full, continuous=False)
+2026-02-05 16:24:02,162 | WARNING  | trading:discover_all:101 - Failed to fetch spot data: HTTPSConnectionPool(host='82.push2.eastmoney.com', port=443): Read timed out. (read timeout=15)
+2026-02-05 16:24:02,162 | INFO     | trading:discover_all:147 - Found 0 from All A-Shares, total: 0
+2026-02-05 16:24:03,164 | INFO     | trading:discover_all:147 - Found 0 from Top Gainers, total: 0
+2026-02-05 16:24:04,165 | INFO     | trading:discover_all:147 - Found 0 from Top Losers, total: 0
+2026-02-05 16:24:05,166 | INFO     | trading:discover_all:147 - Found 0 from High Volume, total: 0
+2026-02-05 16:24:06,167 | INFO     | trading:discover_all:147 - Found 0 from Large Cap, total: 0
+2026-02-05 16:26:17,844 | INFO     | trading:discover_all:147 - Found 0 from CSI 300 Index, total: 0
+2026-02-05 16:27:44,039 | INFO     | trading:main:61 - ============================================================
+2026-02-05 16:27:44,039 | INFO     | trading:main:62 - AI STOCK TRADING SYSTEM - Production Grade
+2026-02-05 16:27:44,039 | INFO     | trading:main:63 - ============================================================
+2026-02-05 16:27:44,384 | INFO     | trading.data.fetcher:__init__:241 - AkShare initialized
+2026-02-05 16:27:44,448 | INFO     | trading.data.fetcher:__init__:449 - Yahoo Finance initialized
+2026-02-05 16:27:44,448 | INFO     | trading.data.fetcher:_init_sources:565 - Data source akshare available
+2026-02-05 16:27:44,448 | INFO     | trading.data.fetcher:_init_sources:565 - Data source yahoo available
+2026-02-05 16:27:44,448 | INFO     | trading:train:213 - ======================================================================
+2026-02-05 16:27:44,448 | INFO     | trading:train:214 - STARTING TRAINING PIPELINE
+2026-02-05 16:27:44,448 | INFO     | trading:train:215 - ======================================================================
+2026-02-05 16:27:44,448 | INFO     | trading:prepare_data:55 - Preparing data for 20 stocks...
+2026-02-05 16:27:44,448 | INFO     | trading:prepare_data:56 - Temporal split: Train=70%, Val=15%, Test=15%
+2026-02-05 16:34:25,267 | WARNING  | trading.data.fetcher:_fetch_from_sources:650 - akshare failed for 600519: ('Connection aborted.', ConnectionResetError(10054, 'An existing connection was forcibly closed by the remote host', None, 10054, None))
+2026-02-05 16:34:28,126 | DEBUG    | trading.data.fetcher:_fetch_from_sources:646 - Got 1495 bars from yahoo for 600519
+2026-02-05 16:34:28,457 | INFO     | trading:create_features:170 - Created 47 features, 1435 valid samples
+2026-02-05 16:41:10,736 | WARNING  | trading.data.fetcher:_record_error:143 - Data source akshare disabled
+2026-02-05 16:41:10,736 | WARNING  | trading.data.fetcher:_fetch_from_sources:650 - akshare failed for 601318: ('Connection aborted.', ConnectionResetError(10054, 'An existing connection was forcibly closed by the remote host', None, 10054, None))
+2026-02-05 16:41:12,284 | DEBUG    | trading.data.fetcher:_fetch_from_sources:646 - Got 1495 bars from yahoo for 601318
+2026-02-05 16:41:12,434 | INFO     | trading:create_features:170 - Created 47 features, 1435 valid samples
+2026-02-05 16:41:12,937 | DEBUG    | trading.data.fetcher:_fetch_from_sources:646 - Got 1495 bars from yahoo for 600036
+2026-02-05 16:41:13,069 | INFO     | trading:create_features:170 - Created 47 features, 1435 valid samples
+2026-02-05 16:41:13,584 | DEBUG    | trading.data.fetcher:_fetch_from_sources:646 - Got 1496 bars from yahoo for 000858
+2026-02-05 16:41:13,718 | INFO     | trading:create_features:170 - Created 47 features, 1436 valid samples
+2026-02-05 16:41:14,185 | DEBUG    | trading.data.fetcher:_fetch_from_sources:646 - Got 1484 bars from yahoo for 600900
+2026-02-05 16:41:14,319 | INFO     | trading:create_features:170 - Created 47 features, 1424 valid samples
+2026-02-05 16:41:14,819 | DEBUG    | trading.data.fetcher:_fetch_from_sources:646 - Got 1496 bars from yahoo for 002594
+2026-02-05 16:41:14,935 | INFO     | trading:create_features:170 - Created 47 features, 1436 valid samples
+2026-02-05 16:41:15,369 | DEBUG    | trading.data.fetcher:_fetch_from_sources:646 - Got 1496 bars from yahoo for 300750
+2026-02-05 16:41:15,498 | INFO     | trading:create_features:170 - Created 47 features, 1436 valid samples
+2026-02-05 16:41:16,020 | DEBUG    | trading.data.fetcher:_fetch_from_sources:646 - Got 1496 bars from yahoo for 002475
+2026-02-05 16:41:16,148 | INFO     | trading:create_features:170 - Created 47 features, 1436 valid samples
+2026-02-05 16:41:16,585 | DEBUG    | trading.data.fetcher:_fetch_from_sources:646 - Got 1496 bars from yahoo for 300059
+2026-02-05 16:41:16,702 | INFO     | trading:create_features:170 - Created 47 features, 1436 valid samples
+2026-02-05 16:41:17,103 | DEBUG    | trading.data.fetcher:_fetch_from_sources:646 - Got 1496 bars from yahoo for 002230
+2026-02-05 16:41:17,232 | INFO     | trading:create_features:170 - Created 47 features, 1436 valid samples
+2026-02-05 16:41:17,634 | DEBUG    | trading.data.fetcher:_fetch_from_sources:646 - Got 1496 bars from yahoo for 000333
+2026-02-05 16:41:17,755 | INFO     | trading:create_features:170 - Created 47 features, 1436 valid samples
+2026-02-05 16:41:18,214 | DEBUG    | trading.data.fetcher:_fetch_from_sources:646 - Got 1496 bars from yahoo for 000651
+2026-02-05 16:41:18,498 | INFO     | trading:create_features:170 - Created 47 features, 1436 valid samples
+2026-02-05 16:41:18,946 | DEBUG    | trading.data.fetcher:_fetch_from_sources:646 - Got 1495 bars from yahoo for 600887
+2026-02-05 16:41:19,109 | INFO     | trading:create_features:170 - Created 47 features, 1435 valid samples
+2026-02-05 16:41:19,528 | DEBUG    | trading.data.fetcher:_fetch_from_sources:646 - Got 1495 bars from yahoo for 603288
+2026-02-05 16:41:19,632 | INFO     | trading:create_features:170 - Created 47 features, 1435 valid samples
+2026-02-05 16:41:20,046 | DEBUG    | trading.data.fetcher:_fetch_from_sources:646 - Got 1495 bars from yahoo for 600276
+2026-02-05 16:41:20,155 | INFO     | trading:create_features:170 - Created 47 features, 1435 valid samples
+2026-02-05 16:41:20,563 | DEBUG    | trading.data.fetcher:_fetch_from_sources:646 - Got 1496 bars from yahoo for 300760
+2026-02-05 16:41:20,669 | INFO     | trading:create_features:170 - Created 47 features, 1436 valid samples
+2026-02-05 16:41:21,173 | DEBUG    | trading.data.fetcher:_fetch_from_sources:646 - Got 1495 bars from yahoo for 300015
+2026-02-05 16:41:21,289 | INFO     | trading:create_features:170 - Created 47 features, 1435 valid samples
+2026-02-05 16:41:21,738 | DEBUG    | trading.data.fetcher:_fetch_from_sources:646 - Got 1495 bars from yahoo for 601166
+2026-02-05 16:41:21,856 | INFO     | trading:create_features:170 - Created 47 features, 1435 valid samples
+2026-02-05 16:41:22,283 | DEBUG    | trading.data.fetcher:_fetch_from_sources:646 - Got 1495 bars from yahoo for 601398
+2026-02-05 16:41:22,690 | INFO     | trading:create_features:170 - Created 47 features, 1435 valid samples
+2026-02-05 16:41:23,113 | DEBUG    | trading.data.fetcher:_fetch_from_sources:646 - Got 1489 bars from yahoo for 600030
+2026-02-05 16:41:23,255 | INFO     | trading:create_features:170 - Created 47 features, 1429 valid samples
+2026-02-05 16:41:23,256 | INFO     | trading:prepare_data:88 - Successfully loaded 20 stocks
+2026-02-05 16:41:23,340 | INFO     | trading:prepare_data:137 - Fitting scaler on training data...
+2026-02-05 16:41:23,374 | INFO     | trading:fit_scaler:99 - Scaler fitted on 19677 samples, 47 features
+2026-02-05 16:41:23,375 | INFO     | trading:prepare_data:140 - Scaler fitted on 19677 training samples
+2026-02-05 16:41:23,609 | INFO     | trading:prepare_data:181 - Data prepared:
+2026-02-05 16:41:23,610 | INFO     | trading:prepare_data:182 -   Train: 18497 samples
+2026-02-05 16:41:23,610 | INFO     | trading:prepare_data:183 -   Val:   2718 samples
+2026-02-05 16:41:23,610 | INFO     | trading:prepare_data:184 -   Test:  3037 samples
+2026-02-05 16:41:23,610 | INFO     | trading:prepare_data:185 -   Input size: 47 features
+2026-02-05 16:41:23,610 | INFO     | trading:prepare_data:189 -   Class distribution: DOWN=5580, NEUTRAL=7456, UP=5461
+2026-02-05 16:41:23,613 | INFO     | trading:save_scaler:304 - Scaler saved to F:\Trading app\Trading-graph\models_saved\scaler.pkl
+2026-02-05 16:41:23,664 | DEBUG    | trading:_init_model:100 - Initialized lstm model
+2026-02-05 16:41:23,713 | DEBUG    | trading:_init_model:100 - Initialized transformer model
+2026-02-05 16:41:23,729 | DEBUG    | trading:_init_model:100 - Initialized gru model
+2026-02-05 16:41:23,745 | DEBUG    | trading:_init_model:100 - Initialized tcn model
+2026-02-05 16:41:23,745 | INFO     | trading:__init__:85 - Ensemble initialized: ['lstm', 'transformer', 'gru', 'tcn'] on cpu
+2026-02-05 16:41:23,745 | INFO     | trading:train:233 - Training ensemble with 4 models...
+2026-02-05 16:41:23,746 | INFO     | trading:train:234 - Epochs: 100, Batch size: 64
+2026-02-05 16:41:23,747 | INFO     | trading:train:203 - Training lstm...
+2026-02-05 17:04:00,454 | INFO     | trading:_train_single_model:351 - lstm Epoch 10: val_acc=34.55%
+2026-02-05 17:20:10,838 | INFO     | trading:_train_single_model:344 - lstm: Early stopping at epoch 17
+2026-02-05 17:20:10,844 | INFO     | trading:_train_single_model:358 - lstm complete. Best accuracy: 43.60%
+2026-02-05 17:20:10,846 | INFO     | trading:train:203 - Training transformer...
+2026-02-05 17:55:47,739 | INFO     | trading:_train_single_model:351 - transformer Epoch 10: val_acc=37.93%
+2026-02-05 18:22:10,982 | INFO     | trading:_train_single_model:344 - transformer: Early stopping at epoch 17
+2026-02-05 18:22:10,988 | INFO     | trading:_train_single_model:358 - transformer complete. Best accuracy: 41.69%
+2026-02-05 18:22:10,990 | INFO     | trading:train:203 - Training gru...
+2026-02-05 18:36:24,237 | INFO     | trading:_train_single_model:351 - gru Epoch 10: val_acc=34.03%
+2026-02-05 18:44:27,824 | INFO     | trading:main:61 - ============================================================
+2026-02-05 18:44:27,824 | INFO     | trading:main:62 - AI STOCK TRADING SYSTEM - Production Grade
+2026-02-05 18:44:27,824 | INFO     | trading:main:63 - ============================================================
+2026-02-05 18:44:28,249 | ERROR    | trading:main:117 - Error: expected an indented block after 'with' statement on line 180 (predictor.py, line 182)
+Traceback (most recent call last):
+  File "F:\Trading app\Trading-graph\main.py", line 111, in main
+    from ui.app import run_app
+  File "F:\Trading app\Trading-graph\ui\__init__.py", line 2, in <module>
+    from .app import MainApp, run_app
+  File "F:\Trading app\Trading-graph\ui\app.py", line 23, in <module>
+    from models.predictor import Predictor, Prediction, Signal
+  File "F:\Trading app\Trading-graph\models\__init__.py", line 26, in <module>
+    from .predictor import Predictor
+  File "F:\Trading app\Trading-graph\models\predictor.py", line 182
+    if cache_key in self._feature_cache:
+    ^^
+IndentationError: expected an indented block after 'with' statement on line 180
+2026-02-05 18:46:44,280 | INFO     | trading:main:61 - ============================================================
+2026-02-05 18:46:44,280 | INFO     | trading:main:62 - AI STOCK TRADING SYSTEM - Production Grade
+2026-02-05 18:46:44,280 | INFO     | trading:main:63 - ============================================================
+2026-02-05 18:46:46,005 | INFO     | trading.data.fetcher:__init__:241 - AkShare initialized
+2026-02-05 18:46:46,092 | INFO     | trading.data.fetcher:__init__:358 - Yahoo Finance initialized
+2026-02-05 18:46:46,093 | INFO     | trading.data.fetcher:_init_sources:463 - Data source akshare available
+2026-02-05 18:46:46,093 | INFO     | trading.data.fetcher:_init_sources:463 - Data source yahoo available
+2026-02-05 18:46:46,095 | INFO     | trading:load_scaler:325 - Scaler loaded from F:\Trading app\Trading-graph\models_saved\scaler.pkl
+2026-02-05 18:46:46,095 | WARNING  | trading:_load_model:141 - No trained model found. Train a model first.
+2026-02-05 18:46:46,096 | WARNING  | trading:_load_model:142 - Run: python main.py --train
+2026-02-05 18:47:19,336 | INFO     | trading:main:61 - ============================================================
+2026-02-05 18:47:19,336 | INFO     | trading:main:62 - AI STOCK TRADING SYSTEM - Production Grade
+2026-02-05 18:47:19,336 | INFO     | trading:main:63 - ============================================================
+2026-02-05 18:47:20,408 | INFO     | trading.data.fetcher:__init__:241 - AkShare initialized
+2026-02-05 18:47:20,502 | INFO     | trading.data.fetcher:__init__:358 - Yahoo Finance initialized
+2026-02-05 18:47:20,502 | INFO     | trading.data.fetcher:_init_sources:463 - Data source akshare available
+2026-02-05 18:47:20,502 | INFO     | trading.data.fetcher:_init_sources:463 - Data source yahoo available
+2026-02-05 18:47:20,503 | INFO     | trading:load_scaler:325 - Scaler loaded from F:\Trading app\Trading-graph\models_saved\scaler.pkl
+2026-02-05 18:47:20,503 | WARNING  | trading:_load_model:141 - No trained model found. Train a model first.
+2026-02-05 18:47:20,504 | WARNING  | trading:_load_model:142 - Run: python main.py --train
+2026-02-05 18:47:20,864 | INFO     | trading:_train_single_model:344 - gru: Early stopping at epoch 17
+2026-02-05 18:47:20,864 | INFO     | trading:_train_single_model:358 - gru complete. Best accuracy: 44.00%
+2026-02-05 18:47:20,864 | INFO     | trading:train:203 - Training tcn...
+2026-02-05 18:51:04,171 | INFO     | trading:main:61 - ============================================================
+2026-02-05 18:51:04,172 | INFO     | trading:main:62 - AI STOCK TRADING SYSTEM - Production Grade
+2026-02-05 18:51:04,172 | INFO     | trading:main:63 - ============================================================
+2026-02-05 18:51:05,175 | INFO     | trading.data.fetcher:__init__:241 - AkShare initialized
+2026-02-05 18:51:05,261 | INFO     | trading.data.fetcher:__init__:358 - Yahoo Finance initialized
+2026-02-05 18:51:05,261 | INFO     | trading.data.fetcher:_init_sources:463 - Data source akshare available
+2026-02-05 18:51:05,261 | INFO     | trading.data.fetcher:_init_sources:463 - Data source yahoo available
+2026-02-05 18:51:05,262 | INFO     | trading:load_scaler:325 - Scaler loaded from F:\Trading app\Trading-graph\models_saved\scaler.pkl
+2026-02-05 18:51:05,262 | WARNING  | trading:_load_model:141 - No trained model found. Train a model first.
+2026-02-05 18:51:05,263 | WARNING  | trading:_load_model:142 - Run: python main.py --train
+2026-02-05 18:59:37,373 | INFO     | trading:_train_single_model:351 - tcn Epoch 10: val_acc=36.09%
+2026-02-05 19:12:19,212 | INFO     | trading:_train_single_model:344 - tcn: Early stopping at epoch 19
+2026-02-05 19:12:19,215 | INFO     | trading:_train_single_model:358 - tcn complete. Best accuracy: 40.84%
+2026-02-05 19:12:19,217 | INFO     | trading:_update_weights:374 - Updated weights: {'lstm': 0.2553043324252308, 'transformer': 0.2457200463806497, 'gru': 0.25737919926074204, 'tcn': 0.2415964219333775}
+2026-02-05 19:12:19,218 | INFO     | trading:train:247 - Evaluating on test set...
+2026-02-05 19:12:37,746 | INFO     | trading:train:252 - Calibrating model probabilities...
+2026-02-05 19:12:53,150 | INFO     | trading:calibrate:160 - Calibration complete: temperature=1.25
+2026-02-05 19:12:53,214 | INFO     | trading:save:529 - Ensemble saved to F:\Trading app\Trading-graph\models_saved\ensemble.pt
+2026-02-05 19:12:53,214 | INFO     | trading:train:281 - ======================================================================
+2026-02-05 19:12:53,215 | INFO     | trading:train:282 - TRAINING COMPLETE
+2026-02-05 19:12:53,215 | INFO     | trading:train:283 -   Best Val Accuracy: 44.00%
+2026-02-05 19:12:53,215 | INFO     | trading:train:284 -   Test Accuracy: 53.21%
+2026-02-05 19:12:53,215 | INFO     | trading:train:285 -   Training Time: 165.1 minutes
+2026-02-05 19:12:53,215 | INFO     | trading:train:286 - ======================================================================
+2026-02-05 19:13:52,144 | INFO     | trading:main:61 - ============================================================
+2026-02-05 19:13:52,144 | INFO     | trading:main:62 - AI STOCK TRADING SYSTEM - Production Grade
+2026-02-05 19:13:52,144 | INFO     | trading:main:63 - ============================================================
+2026-02-05 19:13:53,294 | INFO     | trading.data.fetcher:__init__:241 - AkShare initialized
+2026-02-05 19:13:53,356 | INFO     | trading.data.fetcher:__init__:358 - Yahoo Finance initialized
+2026-02-05 19:13:53,356 | INFO     | trading.data.fetcher:_init_sources:463 - Data source akshare available
+2026-02-05 19:13:53,356 | INFO     | trading.data.fetcher:_init_sources:463 - Data source yahoo available
+2026-02-05 19:13:53,357 | INFO     | trading:load_scaler:325 - Scaler loaded from F:\Trading app\Trading-graph\models_saved\scaler.pkl
+2026-02-05 19:13:53,422 | DEBUG    | trading:_init_model:100 - Initialized lstm model
+2026-02-05 19:13:53,445 | DEBUG    | trading:_init_model:100 - Initialized transformer model
+2026-02-05 19:13:53,455 | DEBUG    | trading:_init_model:100 - Initialized gru model
+2026-02-05 19:13:53,464 | DEBUG    | trading:_init_model:100 - Initialized tcn model
+2026-02-05 19:13:53,464 | INFO     | trading:__init__:85 - Ensemble initialized: ['lstm', 'transformer', 'gru', 'tcn'] on cpu
+2026-02-05 19:13:53,526 | DEBUG    | trading:_init_model:100 - Initialized lstm model
+2026-02-05 19:13:53,547 | DEBUG    | trading:_init_model:100 - Initialized transformer model
+2026-02-05 19:13:53,558 | DEBUG    | trading:_init_model:100 - Initialized gru model
+2026-02-05 19:13:53,635 | DEBUG    | trading:_init_model:100 - Initialized tcn model
+2026-02-05 19:13:53,637 | INFO     | trading:load:589 - Ensemble loaded: ['lstm', 'transformer', 'gru', 'tcn'], temp=1.25
+2026-02-05 19:13:53,637 | INFO     | trading:_load_model:153 - Model loaded successfully (4 networks)
+2026-02-05 19:14:04,518 | INFO     | trading:main:61 - ============================================================
+2026-02-05 19:14:04,518 | INFO     | trading:main:62 - AI STOCK TRADING SYSTEM - Production Grade
+2026-02-05 19:14:04,519 | INFO     | trading:main:63 - ============================================================
+2026-02-05 19:14:05,305 | INFO     | trading.data.fetcher:__init__:241 - AkShare initialized
+2026-02-05 19:14:05,375 | INFO     | trading.data.fetcher:__init__:358 - Yahoo Finance initialized
+2026-02-05 19:14:05,376 | INFO     | trading.data.fetcher:_init_sources:463 - Data source akshare available
+2026-02-05 19:14:05,376 | INFO     | trading.data.fetcher:_init_sources:463 - Data source yahoo available
+2026-02-05 19:14:05,377 | INFO     | trading:load_scaler:325 - Scaler loaded from F:\Trading app\Trading-graph\models_saved\scaler.pkl
+2026-02-05 19:14:05,464 | DEBUG    | trading:_init_model:100 - Initialized lstm model
+2026-02-05 19:14:05,488 | DEBUG    | trading:_init_model:100 - Initialized transformer model
+2026-02-05 19:14:05,500 | DEBUG    | trading:_init_model:100 - Initialized gru model
+2026-02-05 19:14:05,508 | DEBUG    | trading:_init_model:100 - Initialized tcn model
+2026-02-05 19:14:05,508 | INFO     | trading:__init__:85 - Ensemble initialized: ['lstm', 'transformer', 'gru', 'tcn'] on cpu
+2026-02-05 19:14:05,577 | DEBUG    | trading:_init_model:100 - Initialized lstm model
+2026-02-05 19:14:05,603 | DEBUG    | trading:_init_model:100 - Initialized transformer model
+2026-02-05 19:14:05,623 | DEBUG    | trading:_init_model:100 - Initialized gru model
+2026-02-05 19:14:05,707 | DEBUG    | trading:_init_model:100 - Initialized tcn model
+2026-02-05 19:14:05,708 | INFO     | trading:load:589 - Ensemble loaded: ['lstm', 'transformer', 'gru', 'tcn'], temp=1.25
+2026-02-05 19:14:05,708 | INFO     | trading:_load_model:153 - Model loaded successfully (4 networks)
+2026-02-05 19:16:19,011 | INFO     | trading:main:61 - ============================================================
+2026-02-05 19:16:19,011 | INFO     | trading:main:62 - AI STOCK TRADING SYSTEM - Production Grade
+2026-02-05 19:16:19,011 | INFO     | trading:main:63 - ============================================================
+2026-02-05 19:16:19,658 | INFO     | trading.data.fetcher:__init__:241 - AkShare initialized
+2026-02-05 19:16:19,721 | INFO     | trading.data.fetcher:__init__:358 - Yahoo Finance initialized
+2026-02-05 19:16:19,721 | INFO     | trading.data.fetcher:_init_sources:463 - Data source akshare available
+2026-02-05 19:16:19,721 | INFO     | trading.data.fetcher:_init_sources:463 - Data source yahoo available
+2026-02-05 19:16:19,722 | INFO     | trading:load_scaler:325 - Scaler loaded from F:\Trading app\Trading-graph\models_saved\scaler.pkl
+2026-02-05 19:16:19,783 | DEBUG    | trading:_init_model:100 - Initialized lstm model
+2026-02-05 19:16:19,801 | DEBUG    | trading:_init_model:100 - Initialized transformer model
+2026-02-05 19:16:19,813 | DEBUG    | trading:_init_model:100 - Initialized gru model
+2026-02-05 19:16:19,822 | DEBUG    | trading:_init_model:100 - Initialized tcn model
+2026-02-05 19:16:19,822 | INFO     | trading:__init__:85 - Ensemble initialized: ['lstm', 'transformer', 'gru', 'tcn'] on cpu
+2026-02-05 19:16:19,888 | DEBUG    | trading:_init_model:100 - Initialized lstm model
+2026-02-05 19:16:19,904 | DEBUG    | trading:_init_model:100 - Initialized transformer model
+2026-02-05 19:16:19,916 | DEBUG    | trading:_init_model:100 - Initialized gru model
+2026-02-05 19:16:19,991 | DEBUG    | trading:_init_model:100 - Initialized tcn model
+2026-02-05 19:16:19,993 | INFO     | trading:load:589 - Ensemble loaded: ['lstm', 'transformer', 'gru', 'tcn'], temp=1.25
+2026-02-05 19:16:19,994 | INFO     | trading:_load_model:153 - Model loaded successfully (4 networks)
+2026-02-05 19:16:39,960 | INFO     | trading.data.fetcher:__init__:241 - AkShare initialized
+2026-02-05 19:16:39,960 | INFO     | trading.data.fetcher:__init__:358 - Yahoo Finance initialized
+2026-02-05 19:16:39,960 | INFO     | trading.data.fetcher:_init_sources:463 - Data source akshare available
+2026-02-05 19:16:39,960 | INFO     | trading.data.fetcher:_init_sources:463 - Data source yahoo available
+2026-02-05 19:16:39,976 | INFO     | trading:load_scaler:325 - Scaler loaded from F:\Trading app\Trading-graph\models_saved\scaler.pkl
+2026-02-05 19:16:40,013 | DEBUG    | trading:_init_model:100 - Initialized lstm model
+2026-02-05 19:16:40,027 | DEBUG    | trading:_init_model:100 - Initialized transformer model
+2026-02-05 19:16:40,044 | DEBUG    | trading:_init_model:100 - Initialized gru model
+2026-02-05 19:16:40,060 | DEBUG    | trading:_init_model:100 - Initialized tcn model
+2026-02-05 19:16:40,060 | INFO     | trading:__init__:85 - Ensemble initialized: ['lstm', 'transformer', 'gru', 'tcn'] on cpu
+2026-02-05 19:16:40,132 | DEBUG    | trading:_init_model:100 - Initialized lstm model
+2026-02-05 19:16:40,152 | DEBUG    | trading:_init_model:100 - Initialized transformer model
+2026-02-05 19:16:40,165 | DEBUG    | trading:_init_model:100 - Initialized gru model
+2026-02-05 19:16:40,175 | DEBUG    | trading:_init_model:100 - Initialized tcn model
+2026-02-05 19:16:40,177 | INFO     | trading:load:589 - Ensemble loaded: ['lstm', 'transformer', 'gru', 'tcn'], temp=1.25
+2026-02-05 19:16:40,177 | INFO     | trading:_load_model:153 - Model loaded successfully (4 networks)
+2026-02-05 19:17:00,910 | INFO     | trading:main:61 - ============================================================
+2026-02-05 19:17:00,910 | INFO     | trading:main:62 - AI STOCK TRADING SYSTEM - Production Grade
+2026-02-05 19:17:00,910 | INFO     | trading:main:63 - ============================================================
+2026-02-05 19:17:01,060 | INFO     | trading:_continuous_learning_loop:239 - === Learning Cycle 1 ===
+2026-02-05 19:17:01,060 | INFO     | trading:start:171 - Continuous learning started (mode=full, continuous=False)
+2026-02-05 19:17:53,410 | WARNING  | trading:discover_all:101 - Failed to fetch spot data: HTTPSConnectionPool(host='82.push2.eastmoney.com', port=443): Read timed out. (read timeout=15)
+2026-02-05 19:17:53,410 | INFO     | trading:discover_all:147 - Found 0 from All A-Shares, total: 0
+2026-02-05 19:17:54,411 | INFO     | trading:discover_all:147 - Found 0 from Top Gainers, total: 0
+2026-02-05 19:17:55,412 | INFO     | trading:discover_all:147 - Found 0 from Top Losers, total: 0
+2026-02-05 19:17:56,412 | INFO     | trading:discover_all:147 - Found 0 from High Volume, total: 0
+2026-02-05 19:17:57,413 | INFO     | trading:discover_all:147 - Found 0 from Large Cap, total: 0
+2026-02-05 19:20:09,940 | INFO     | trading:discover_all:147 - Found 0 from CSI 300 Index, total: 0
+2026-02-05 19:26:26,322 | INFO     | trading:main:61 - ============================================================
+2026-02-05 19:26:26,323 | INFO     | trading:main:62 - AI STOCK TRADING SYSTEM - Production Grade
+2026-02-05 19:26:26,324 | INFO     | trading:main:63 - ============================================================
+2026-02-05 19:26:26,517 | ERROR    | trading:main:117 - Error: unexpected indent (discovery.py, line 69)
+Traceback (most recent call last):
+  File "F:\Trading app\Trading-graph\main.py", line 85, in main
+    from models.auto_learner import AutoLearner
+  File "F:\Trading app\Trading-graph\models\__init__.py", line 20, in <module>
+    from .trainer import Trainer
+  File "F:\Trading app\Trading-graph\models\trainer.py", line 18, in <module>
+    from data.fetcher import DataFetcher
+  File "F:\Trading app\Trading-graph\data\__init__.py", line 9, in <module>
+    from .discovery import UniversalStockDiscovery, DiscoveredStock
+  File "F:\Trading app\Trading-graph\data\discovery.py", line 69
+    def __init__(self):
+IndentationError: unexpected indent
+2026-02-05 19:26:47,865 | INFO     | trading:main:61 - ============================================================
+2026-02-05 19:26:47,866 | INFO     | trading:main:62 - AI STOCK TRADING SYSTEM - Production Grade
+2026-02-05 19:26:47,866 | INFO     | trading:main:63 - ============================================================
+2026-02-05 19:26:48,024 | ERROR    | trading:main:117 - Error: unexpected indent (discovery.py, line 69)
+Traceback (most recent call last):
+  File "F:\Trading app\Trading-graph\main.py", line 111, in main
+    from ui.app import run_app
+  File "F:\Trading app\Trading-graph\ui\__init__.py", line 6, in <module>
+    from .app import MainApp, run_app
+  File "F:\Trading app\Trading-graph\ui\app.py", line 23, in <module>
+    from models.predictor import Predictor, Prediction, Signal
+  File "F:\Trading app\Trading-graph\models\__init__.py", line 20, in <module>
+    from .trainer import Trainer
+  File "F:\Trading app\Trading-graph\models\trainer.py", line 18, in <module>
+    from data.fetcher import DataFetcher
+  File "F:\Trading app\Trading-graph\data\__init__.py", line 9, in <module>
+    from .discovery import UniversalStockDiscovery, DiscoveredStock
+  File "F:\Trading app\Trading-graph\data\discovery.py", line 69
+    def __init__(self):
+IndentationError: unexpected indent
+2026-02-05 19:28:24,509 | INFO     | trading:main:61 - ============================================================
+2026-02-05 19:28:24,509 | INFO     | trading:main:62 - AI STOCK TRADING SYSTEM - Production Grade
+2026-02-05 19:28:24,509 | INFO     | trading:main:63 - ============================================================
+2026-02-05 19:28:25,098 | INFO     | trading.data.fetcher:__init__:262 - AkShare initialized
+2026-02-05 19:28:25,156 | INFO     | trading.data.fetcher:__init__:379 - Yahoo Finance initialized
+2026-02-05 19:28:25,156 | INFO     | trading.data.fetcher:_init_sources:484 - Data source akshare available
+2026-02-05 19:28:25,156 | INFO     | trading.data.fetcher:_init_sources:484 - Data source yahoo available
+2026-02-05 19:28:25,157 | INFO     | trading:load_scaler:325 - Scaler loaded from F:\Trading app\Trading-graph\models_saved\scaler.pkl
+2026-02-05 19:28:25,211 | DEBUG    | trading:_init_model:100 - Initialized lstm model
+2026-02-05 19:28:25,230 | DEBUG    | trading:_init_model:100 - Initialized transformer model
+2026-02-05 19:28:25,242 | DEBUG    | trading:_init_model:100 - Initialized gru model
+2026-02-05 19:28:25,252 | DEBUG    | trading:_init_model:100 - Initialized tcn model
+2026-02-05 19:28:25,252 | INFO     | trading:__init__:85 - Ensemble initialized: ['lstm', 'transformer', 'gru', 'tcn'] on cpu
+2026-02-05 19:28:25,320 | DEBUG    | trading:_init_model:100 - Initialized lstm model
+2026-02-05 19:28:25,336 | DEBUG    | trading:_init_model:100 - Initialized transformer model
+2026-02-05 19:28:25,350 | DEBUG    | trading:_init_model:100 - Initialized gru model
+2026-02-05 19:28:25,429 | DEBUG    | trading:_init_model:100 - Initialized tcn model
+2026-02-05 19:28:25,430 | INFO     | trading:load:589 - Ensemble loaded: ['lstm', 'transformer', 'gru', 'tcn'], temp=1.25
+2026-02-05 19:28:25,431 | INFO     | trading:_load_model:153 - Model loaded successfully (4 networks)
+2026-02-05 19:28:38,195 | INFO     | trading:main:61 - ============================================================
+2026-02-05 19:28:38,195 | INFO     | trading:main:62 - AI STOCK TRADING SYSTEM - Production Grade
+2026-02-05 19:28:38,195 | INFO     | trading:main:63 - ============================================================
+2026-02-05 19:28:38,338 | INFO     | trading:_continuous_learning_loop:239 - === Learning Cycle 1 ===
+2026-02-05 19:28:38,338 | INFO     | trading:start:171 - Continuous learning started (mode=full, continuous=False)
+2026-02-05 19:29:29,792 | WARNING  | trading:_safe_fetch:115 - Attempt 1/3 failed for spot data: HTTPSConnectionPool(host='82.push2.eastmoney.com', port=443): Read timed out. (read timeout=15)
+2026-02-05 19:30:21,876 | WARNING  | trading:_safe_fetch:115 - Attempt 2/3 failed for spot data: HTTPSConnectionPool(host='82.push2.eastmoney.com', port=443): Read timed out. (read timeout=15)
+2026-02-05 19:31:01,810 | WARNING  | trading:_safe_fetch:115 - Attempt 3/3 failed for spot data: ('Connection aborted.', ConnectionResetError(10054, 'An existing connection was forcibly closed by the remote host', None, 10054, None))
+2026-02-05 19:31:01,810 | WARNING  | trading:discover_all:140 - Failed to fetch spot data, trying alternative sources...
+2026-02-05 19:31:01,811 | INFO     | trading:discover_all:183 - Found 0 from All A-Shares, total: 0
+2026-02-05 19:31:01,812 | INFO     | trading:discover_all:183 - Found 0 from Top Gainers, total: 0
+2026-02-05 19:31:01,812 | INFO     | trading:discover_all:183 - Found 0 from Top Losers, total: 0
+2026-02-05 19:31:01,813 | INFO     | trading:discover_all:183 - Found 0 from High Volume, total: 0
+2026-02-05 19:31:01,813 | INFO     | trading:discover_all:183 - Found 0 from Large Cap, total: 0
+2026-02-05 19:31:03,647 | INFO     | trading:discover_all:183 - Found 300 from CSI 300 Index, total: 300
+2026-02-05 19:31:04,264 | INFO     | trading:discover_all:183 - Found 500 from CSI 500 Index, total: 800
+2026-02-05 19:31:04,998 | INFO     | trading:discover_all:183 - Found 1000 from CSI 1000 Index, total: 1800
+2026-02-05 19:31:04,998 | INFO     | trading:discover_all:201 - Total discovered: 0 stocks
+2026-02-05 19:31:04,998 | INFO     | trading:_discover_all_stocks:410 - Discovered 0 valid stocks
+2026-02-05 19:31:11,783 | INFO     | trading:main:61 - ============================================================
+2026-02-05 19:31:11,783 | INFO     | trading:main:62 - AI STOCK TRADING SYSTEM - Production Grade
+2026-02-05 19:31:11,783 | INFO     | trading:main:63 - ============================================================
+2026-02-05 19:31:11,937 | INFO     | trading:_load_state:646 - Loaded learner state: 0 sessions
+2026-02-05 19:31:11,938 | INFO     | trading:_continuous_learning_loop:239 - === Learning Cycle 1 ===
+2026-02-05 19:31:11,938 | INFO     | trading:start:171 - Continuous learning started (mode=full, continuous=False)
+2026-02-05 19:31:26,298 | WARNING  | trading:_safe_fetch:116 - Attempt 1/3 failed for spot data: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-02-05 19:31:33,556 | WARNING  | trading:_safe_fetch:116 - Attempt 2/3 failed for spot data: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-02-05 19:31:42,088 | WARNING  | trading:_safe_fetch:116 - Attempt 3/3 failed for spot data: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-02-05 19:31:42,089 | WARNING  | trading:discover_all:141 - Failed to fetch spot data, trying alternative sources...
+2026-02-05 19:31:42,089 | INFO     | trading:discover_all:185 - Found 0 from All A-Shares, total: 0
+2026-02-05 19:31:42,089 | INFO     | trading:discover_all:185 - Found 0 from Top Gainers, total: 0
+2026-02-05 19:31:42,089 | INFO     | trading:discover_all:185 - Found 0 from Top Losers, total: 0
+2026-02-05 19:31:42,089 | INFO     | trading:discover_all:185 - Found 0 from High Volume, total: 0
+2026-02-05 19:31:42,090 | INFO     | trading:discover_all:185 - Found 0 from Large Cap, total: 0
+2026-02-05 19:31:42,663 | INFO     | trading:discover_all:185 - Found 300 from CSI 300 Index, total: 300
+2026-02-05 19:31:43,238 | INFO     | trading:discover_all:185 - Found 500 from CSI 500 Index, total: 800
+2026-02-05 19:31:43,893 | INFO     | trading:discover_all:185 - Found 1000 from CSI 1000 Index, total: 1800
+2026-02-05 19:31:43,893 | INFO     | trading:discover_all:205 - Total discovered: 0 stocks
+2026-02-05 19:31:43,894 | INFO     | trading:_discover_all_stocks:410 - Discovered 0 valid stocks
+2026-02-05 19:33:43,135 | INFO     | trading:main:61 - ============================================================
+2026-02-05 19:33:43,136 | INFO     | trading:main:62 - AI STOCK TRADING SYSTEM - Production Grade
+2026-02-05 19:33:43,137 | INFO     | trading:main:63 - ============================================================
+2026-02-05 19:33:43,289 | INFO     | trading:_load_state:646 - Loaded learner state: 0 sessions
+2026-02-05 19:33:43,290 | INFO     | trading:_continuous_learning_loop:239 - === Learning Cycle 1 ===
+2026-02-05 19:33:43,290 | INFO     | trading:start:171 - Continuous learning started (mode=full, continuous=False)
+2026-02-05 19:33:43,450 | INFO     | trading:__init__:111 - AkShare initialized for stock discovery
+2026-02-05 19:33:49,263 | WARNING  | trading:_safe_fetch:143 - Attempt 1/3 failed for spot data: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-02-05 19:33:55,961 | WARNING  | trading:_safe_fetch:143 - Attempt 2/3 failed for spot data: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-02-05 19:34:03,850 | WARNING  | trading:_safe_fetch:143 - Attempt 3/3 failed for spot data: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-02-05 19:34:03,850 | WARNING  | trading:discover_all:171 - Failed to fetch spot data, trying index constituents...
+2026-02-05 19:34:04,380 | DEBUG    | trading:_get_csi300:382 - CSI300 columns: ['日期', '指数代码', '指数名称', '指数英文名称', '成分券代码', '成分券名称', '成分券英文名称', '交易所', '交易所英文名称']
+2026-02-05 19:34:04,384 | DEBUG    | trading:discover_all:203 - Raw code from CSI 300 Index: '000001' valid=True
+2026-02-05 19:34:04,384 | DEBUG    | trading:discover_all:203 - Raw code from CSI 300 Index: '000002' valid=True
+2026-02-05 19:34:04,384 | DEBUG    | trading:discover_all:203 - Raw code from CSI 300 Index: '000063' valid=True
+2026-02-05 19:34:04,385 | INFO     | trading:discover_all:223 - Found 300 valid from CSI 300 Index, total: 300
+2026-02-05 19:34:06,408 | DEBUG    | trading:discover_all:203 - Raw code from CSI 500 Index: '000009' valid=True
+2026-02-05 19:34:06,408 | DEBUG    | trading:discover_all:203 - Raw code from CSI 500 Index: '000021' valid=True
+2026-02-05 19:34:06,408 | DEBUG    | trading:discover_all:203 - Raw code from CSI 500 Index: '000027' valid=True
+2026-02-05 19:34:06,409 | INFO     | trading:discover_all:223 - Found 500 valid from CSI 500 Index, total: 800
+2026-02-05 19:34:08,490 | DEBUG    | trading:discover_all:203 - Raw code from CSI 1000 Index: '000012' valid=True
+2026-02-05 19:34:08,490 | DEBUG    | trading:discover_all:203 - Raw code from CSI 1000 Index: '000019' valid=True
+2026-02-05 19:34:08,490 | DEBUG    | trading:discover_all:203 - Raw code from CSI 1000 Index: '000028' valid=True
+2026-02-05 19:34:08,491 | INFO     | trading:discover_all:223 - Found 1000 valid from CSI 1000 Index, total: 1800
+2026-02-05 19:34:08,491 | INFO     | trading:discover_all:246 - Total discovered: 0 stocks
+2026-02-05 19:34:08,491 | INFO     | trading:_discover_all_stocks:410 - Discovered 0 valid stocks
+2026-02-05 19:34:36,092 | INFO     | trading:main:61 - ============================================================
+2026-02-05 19:34:36,093 | INFO     | trading:main:62 - AI STOCK TRADING SYSTEM - Production Grade
+2026-02-05 19:34:36,093 | INFO     | trading:main:63 - ============================================================
+2026-02-05 19:34:36,236 | INFO     | trading:_load_state:646 - Loaded learner state: 0 sessions
+2026-02-05 19:34:36,236 | INFO     | trading:_continuous_learning_loop:239 - === Learning Cycle 1 ===
+2026-02-05 19:34:36,236 | INFO     | trading:start:171 - Continuous learning started (mode=full, continuous=False)
+2026-02-05 19:34:36,400 | INFO     | trading:__init__:111 - AkShare initialized for stock discovery
+2026-02-05 19:35:27,858 | WARNING  | trading:_safe_fetch:143 - Attempt 1/3 failed for spot data: HTTPSConnectionPool(host='82.push2.eastmoney.com', port=443): Read timed out. (read timeout=15)
+2026-02-05 19:35:43,636 | WARNING  | trading:_safe_fetch:143 - Attempt 2/3 failed for spot data: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-02-05 19:35:52,304 | WARNING  | trading:_safe_fetch:143 - Attempt 3/3 failed for spot data: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-02-05 19:35:52,304 | WARNING  | trading:discover_all:171 - Failed to fetch spot data, trying index constituents...
+2026-02-05 19:35:52,855 | DEBUG    | trading:_get_csi300:382 - CSI300 columns: ['日期', '指数代码', '指数名称', '指数英文名称', '成分券代码', '成分券名称', '成分券英文名称', '交易所', '交易所英文名称']
+2026-02-05 19:35:52,860 | DEBUG    | trading:discover_all:203 - Raw code from CSI 300 Index: '000001' valid=True
+2026-02-05 19:35:52,860 | DEBUG    | trading:discover_all:203 - Raw code from CSI 300 Index: '000002' valid=True
+2026-02-05 19:35:52,860 | DEBUG    | trading:discover_all:203 - Raw code from CSI 300 Index: '000063' valid=True
+2026-02-05 19:35:52,861 | INFO     | trading:discover_all:223 - Found 300 valid from CSI 300 Index, total: 300
+2026-02-05 19:35:54,954 | DEBUG    | trading:discover_all:203 - Raw code from CSI 500 Index: '000009' valid=True
+2026-02-05 19:35:54,954 | DEBUG    | trading:discover_all:203 - Raw code from CSI 500 Index: '000021' valid=True
+2026-02-05 19:35:54,954 | DEBUG    | trading:discover_all:203 - Raw code from CSI 500 Index: '000027' valid=True
+2026-02-05 19:35:54,955 | INFO     | trading:discover_all:223 - Found 500 valid from CSI 500 Index, total: 800
+2026-02-05 19:35:56,894 | DEBUG    | trading:discover_all:203 - Raw code from CSI 1000 Index: '000012' valid=True
+2026-02-05 19:35:56,894 | DEBUG    | trading:discover_all:203 - Raw code from CSI 1000 Index: '000019' valid=True
+2026-02-05 19:35:56,894 | DEBUG    | trading:discover_all:203 - Raw code from CSI 1000 Index: '000028' valid=True
+2026-02-05 19:35:56,895 | INFO     | trading:discover_all:223 - Found 1000 valid from CSI 1000 Index, total: 1800
+2026-02-05 19:35:56,896 | INFO     | trading:discover_all:246 - Total discovered: 0 stocks
+2026-02-05 19:35:56,896 | INFO     | trading:_discover_all_stocks:410 - Discovered 0 valid stocks
+2026-02-05 19:37:46,117 | INFO     | trading:main:61 - ============================================================
+2026-02-05 19:37:46,118 | INFO     | trading:main:62 - AI STOCK TRADING SYSTEM - Production Grade
+2026-02-05 19:37:46,118 | INFO     | trading:main:63 - ============================================================
+2026-02-05 19:37:46,269 | INFO     | trading:_load_state:646 - Loaded learner state: 0 sessions
+2026-02-05 19:37:46,270 | INFO     | trading:_continuous_learning_loop:239 - === Learning Cycle 1 ===
+2026-02-05 19:37:46,270 | INFO     | trading:start:171 - Continuous learning started (mode=full, continuous=False)
+2026-02-05 19:37:46,432 | INFO     | trading:__init__:109 - AkShare initialized for stock discovery
+2026-02-05 19:37:53,543 | WARNING  | trading:_safe_fetch:141 - Attempt 1/3 failed for spot data: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-02-05 19:38:00,643 | WARNING  | trading:_safe_fetch:141 - Attempt 2/3 failed for spot data: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-02-05 19:38:09,026 | WARNING  | trading:_safe_fetch:141 - Attempt 3/3 failed for spot data: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+2026-02-05 19:38:09,026 | WARNING  | trading:discover_all:169 - Failed to fetch spot data, trying index constituents...
+2026-02-05 19:38:09,580 | INFO     | trading:discover_all:215 - Found 300 valid from CSI 300 Index, total: 300
+2026-02-05 19:38:11,599 | INFO     | trading:discover_all:215 - Found 500 valid from CSI 500 Index, total: 800
+2026-02-05 19:38:13,955 | INFO     | trading:discover_all:215 - Found 1000 valid from CSI 1000 Index, total: 1800
+2026-02-05 19:38:13,956 | INFO     | trading:discover_all:223 - Before filtering: 1800 stocks
+2026-02-05 19:38:13,957 | INFO     | trading:discover_all:244 - After filtering: 200 stocks
+2026-02-05 19:38:13,957 | INFO     | trading:_discover_all_stocks:410 - Discovered 200 valid stocks
+2026-02-05 19:38:13,958 | INFO     | trading.data.fetcher:__init__:262 - AkShare initialized
+2026-02-05 19:38:14,017 | INFO     | trading.data.fetcher:__init__:379 - Yahoo Finance initialized
+2026-02-05 19:38:14,018 | INFO     | trading.data.fetcher:_init_sources:484 - Data source akshare available
+2026-02-05 19:38:14,018 | INFO     | trading.data.fetcher:_init_sources:484 - Data source yahoo available
+2026-02-05 19:38:15,013 | WARNING  | trading.data.fetcher:_record_error:143 - Data source akshare disabled
+2026-02-05 19:38:15,014 | WARNING  | trading.data.fetcher:_record_error:143 - Data source akshare disabled
+2026-02-05 19:38:15,032 | WARNING  | trading.data.fetcher:_record_error:143 - Data source akshare disabled
+2026-02-05 19:38:15,032 | WARNING  | trading.data.fetcher:_record_error:143 - Data source akshare disabled
+2026-02-05 19:38:15,032 | WARNING  | trading.data.fetcher:_record_error:143 - Data source akshare disabled
+2026-02-05 19:38:20,504 | WARNING  | trading.data.fetcher:_fetch_from_sources:569 - akshare failed for 000001: AkShare not available
+2026-02-05 19:38:20,963 | WARNING  | trading.data.fetcher:_fetch_from_sources:569 - akshare failed for 000338: AkShare not available
+2026-02-05 19:38:20,963 | WARNING  | trading.data.fetcher:_fetch_from_sources:569 - akshare failed for 000425: AkShare not available
+2026-02-05 19:38:20,997 | WARNING  | trading.data.fetcher:_fetch_from_sources:569 - akshare failed for 000157: AkShare not available
+2026-02-05 19:38:21,014 | WARNING  | trading.data.fetcher:_fetch_from_sources:569 - akshare failed for 000408: AkShare not available
+2026-02-05 19:38:21,015 | WARNING  | trading.data.fetcher:_fetch_from_sources:569 - akshare failed for 000100: AkShare not available
+2026-02-05 19:38:21,015 | WARNING  | trading.data.fetcher:_fetch_from_sources:569 - akshare failed for 000002: AkShare not available
+2026-02-05 19:38:21,034 | WARNING  | trading.data.fetcher:_fetch_from_sources:569 - akshare failed for 000166: AkShare not available
+2026-02-05 19:38:21,034 | WARNING  | trading.data.fetcher:_fetch_from_sources:569 - akshare failed for 000063: AkShare not available
+2026-02-05 19:38:21,034 | WARNING  | trading.data.fetcher:_fetch_from_sources:569 - akshare failed for 000301: AkShare not available
+2026-02-05 19:38:23,794 | WARNING  | trading.data.fetcher:_record_error:143 - Data source yahoo disabled
+2026-02-05 19:38:23,794 | WARNING  | trading.data.fetcher:_record_error:143 - Data source yahoo disabled
+2026-02-05 19:38:23,794 | WARNING  | trading.data.fetcher:_record_error:143 - Data source yahoo disabled
+2026-02-05 19:38:23,794 | WARNING  | trading.data.fetcher:_record_error:143 - Data source yahoo disabled
+2026-02-05 19:38:23,877 | WARNING  | trading.data.fetcher:_record_error:143 - Data source yahoo disabled
+2026-02-05 19:38:29,782 | WARNING  | trading.data.fetcher:_fetch_from_sources:569 - yahoo failed for 000002: Yahoo Finance not available
+2026-02-05 19:38:29,783 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 000002
+2026-02-05 19:38:29,784 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 000538
+2026-02-05 19:38:29,784 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 000568
+2026-02-05 19:38:29,785 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 000596
+2026-02-05 19:38:29,786 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 000617
+2026-02-05 19:38:29,787 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 000625
+2026-02-05 19:38:29,787 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 000630
+2026-02-05 19:38:29,789 | WARNING  | trading.data.fetcher:_fetch_from_sources:569 - yahoo failed for 000166: Yahoo Finance not available
+2026-02-05 19:38:29,790 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 000166
+2026-02-05 19:38:29,790 | WARNING  | trading.data.fetcher:_fetch_from_sources:569 - yahoo failed for 000338: Yahoo Finance not available
+2026-02-05 19:38:29,791 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 000338
+2026-02-05 19:38:29,789 | WARNING  | trading.data.fetcher:_fetch_from_sources:569 - yahoo failed for 000425: Yahoo Finance not available
+2026-02-05 19:38:29,790 | WARNING  | trading.data.fetcher:_fetch_from_sources:569 - yahoo failed for 000408: Yahoo Finance not available
+2026-02-05 19:38:29,793 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 000425
+2026-02-05 19:38:29,793 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 000408
+2026-02-05 19:38:29,795 | WARNING  | trading.data.fetcher:_fetch_from_sources:569 - yahoo failed for 000100: Yahoo Finance not available
+2026-02-05 19:38:29,796 | WARNING  | trading.data.fetcher:_fetch_from_sources:569 - yahoo failed for 000001: Yahoo Finance not available
+2026-02-05 19:38:29,797 | WARNING  | trading.data.fetcher:_fetch_from_sources:569 - yahoo failed for 000301: Yahoo Finance not available
+2026-02-05 19:38:29,798 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 000301
+2026-02-05 19:38:29,797 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 000100
+2026-02-05 19:38:29,797 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 000001
+2026-02-05 19:38:29,796 | WARNING  | trading.data.fetcher:_fetch_from_sources:569 - yahoo failed for 000063: Yahoo Finance not available
+2026-02-05 19:38:29,799 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 000661
+2026-02-05 19:38:29,800 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 000768
+2026-02-05 19:38:29,800 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 000776
+2026-02-05 19:38:29,800 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 000786
+2026-02-05 19:38:29,801 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 000708
+2026-02-05 19:38:29,801 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 000725
+2026-02-05 19:38:29,802 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 000792
+2026-02-05 19:38:29,803 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 000807
+2026-02-05 19:38:29,803 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 000063
+2026-02-05 19:38:29,815 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 000983
+2026-02-05 19:38:29,816 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 001391
+2026-02-05 19:38:29,816 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 000977
+2026-02-05 19:38:29,817 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 000938
+2026-02-05 19:38:29,817 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 000975
+2026-02-05 19:38:29,817 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 000963
+2026-02-05 19:38:29,818 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 000876
+2026-02-05 19:38:29,818 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 000895
+2026-02-05 19:38:29,819 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 000999
+2026-02-05 19:38:29,820 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 001965
+2026-02-05 19:38:29,820 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 001979
+2026-02-05 19:38:29,821 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 002001
+2026-02-05 19:38:29,822 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 002027
+2026-02-05 19:38:29,823 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 002028
+2026-02-05 19:38:29,823 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 002049
+2026-02-05 19:38:29,824 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 002050
+2026-02-05 19:38:29,825 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 002074
+2026-02-05 19:38:29,826 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 002142
+2026-02-05 19:38:29,826 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 002179
+2026-02-05 19:38:29,840 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 002415
+2026-02-05 19:38:29,840 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 002311
+2026-02-05 19:38:29,841 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 002384
+2026-02-05 19:38:29,841 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 002352
+2026-02-05 19:38:29,842 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 002241
+2026-02-05 19:38:29,842 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 002236
+2026-02-05 19:38:29,843 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 002252
+2026-02-05 19:38:29,844 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 002371
+2026-02-05 19:38:29,845 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 002422
+2026-02-05 19:38:29,845 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 002304
+2026-02-05 19:38:29,846 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 002459
+2026-02-05 19:38:29,847 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 002460
+2026-02-05 19:38:29,848 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 002463
+2026-02-05 19:38:29,849 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 002466
+2026-02-05 19:38:29,855 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 002493
+2026-02-05 19:38:29,863 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 002600
+2026-02-05 19:38:29,864 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 002736
+2026-02-05 19:38:29,864 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 002625
+2026-02-05 19:38:29,864 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 002714
+2026-02-05 19:38:29,865 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 002709
+2026-02-05 19:38:29,865 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 002920
+2026-02-05 19:38:29,866 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 002916
+2026-02-05 19:38:29,866 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 002601
+2026-02-05 19:38:29,867 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 002648
+2026-02-05 19:38:29,868 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 002938
+2026-02-05 19:38:29,869 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 003816
+2026-02-05 19:38:29,869 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 300014
+2026-02-05 19:38:29,872 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 300033
+2026-02-05 19:38:29,876 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 300122
+2026-02-05 19:38:29,876 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 300408
+2026-02-05 19:38:29,877 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 300347
+2026-02-05 19:38:29,877 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 300316
+2026-02-05 19:38:29,877 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 300394
+2026-02-05 19:38:29,878 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 300274
+2026-02-05 19:38:29,878 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 300308
+2026-02-05 19:38:29,879 | WARNING  | trading.data.fetcher:_fetch_from_sources:569 - yahoo failed for 000157: Yahoo Finance not available
+2026-02-05 19:38:29,880 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 300251
+2026-02-05 19:38:29,880 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 300124
+2026-02-05 19:38:29,881 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 300413
+2026-02-05 19:38:29,882 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 300418
+2026-02-05 19:38:29,882 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 000157
+2026-02-05 19:38:29,882 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 300433
+2026-02-05 19:38:29,883 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 300442
+2026-02-05 19:38:29,884 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 300476
+2026-02-05 19:38:29,885 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 300498
+2026-02-05 19:38:29,885 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 300502
+2026-02-05 19:38:29,886 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 300628
+2026-02-05 19:38:29,886 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 300661
+2026-02-05 19:38:29,889 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 300782
+2026-02-05 19:38:29,890 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 300803
+2026-02-05 19:38:29,891 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 300866
+2026-02-05 19:38:29,891 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 300832
+2026-02-05 19:38:29,892 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 300896
+2026-02-05 19:38:29,893 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 300999
+2026-02-05 19:38:29,894 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 300979
+2026-02-05 19:38:29,894 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 300759
+2026-02-05 19:38:29,895 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 301236
+2026-02-05 19:38:29,896 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 301269
+2026-02-05 19:38:29,897 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 302132
+2026-02-05 19:38:29,898 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 600000
+2026-02-05 19:38:29,899 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 600009
+2026-02-05 19:38:29,899 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 600010
+2026-02-05 19:38:29,900 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 600011
+2026-02-05 19:38:29,901 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 600015
+2026-02-05 19:38:29,902 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 600016
+2026-02-05 19:38:29,902 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 600018
+2026-02-05 19:38:29,903 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 600019
+2026-02-05 19:38:29,903 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 600023
+2026-02-05 19:38:29,904 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 600025
+2026-02-05 19:38:29,904 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 600026
+2026-02-05 19:38:29,905 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 600027
+2026-02-05 19:38:29,906 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 600028
+2026-02-05 19:38:29,906 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 600029
+2026-02-05 19:38:29,907 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 600031
+2026-02-05 19:38:29,916 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 600089
+2026-02-05 19:38:29,917 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 600115
+2026-02-05 19:38:29,917 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 600039
+2026-02-05 19:38:29,917 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 600104
+2026-02-05 19:38:29,918 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 600061
+2026-02-05 19:38:29,918 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 600085
+2026-02-05 19:38:29,918 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 600111
+2026-02-05 19:38:29,919 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 600048
+2026-02-05 19:38:29,919 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 600050
+2026-02-05 19:38:29,919 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 600066
+2026-02-05 19:38:29,921 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 600150
+2026-02-05 19:38:29,921 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 600160
+2026-02-05 19:38:29,922 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 600161
+2026-02-05 19:38:29,922 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 600176
+2026-02-05 19:38:29,923 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 600188
+2026-02-05 19:38:29,924 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 600183
+2026-02-05 19:38:29,924 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 600196
+2026-02-05 19:38:29,925 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 600219
+2026-02-05 19:38:29,926 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 600233
+2026-02-05 19:38:29,935 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 600372
+2026-02-05 19:38:29,936 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 600406
+2026-02-05 19:38:29,936 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 600436
+2026-02-05 19:38:29,936 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 600309
+2026-02-05 19:38:29,937 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 600377
+2026-02-05 19:38:29,937 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 600415
+2026-02-05 19:38:29,937 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 600426
+2026-02-05 19:38:29,938 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 600346
+2026-02-05 19:38:29,938 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 600438
+2026-02-05 19:38:29,939 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 600362
+2026-02-05 19:38:29,939 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 600460
+2026-02-05 19:38:29,940 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 600482
+2026-02-05 19:38:29,941 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 600489
+2026-02-05 19:38:29,942 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 600515
+2026-02-05 19:38:29,945 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 600547
+2026-02-05 19:38:29,945 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 600570
+2026-02-05 19:38:29,946 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 600522
+2026-02-05 19:38:29,947 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 600584
+2026-02-05 19:38:29,947 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 600585
+2026-02-05 19:38:29,948 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 600588
+2026-02-05 19:38:29,949 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 600600
+2026-02-05 19:38:29,950 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 600660
+2026-02-05 19:38:29,950 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 600674
+2026-02-05 19:38:29,951 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 600690
+2026-02-05 19:38:29,952 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 600741
+2026-02-05 19:38:29,953 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 600760
+2026-02-05 19:38:29,954 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 600795
+2026-02-05 19:38:29,954 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 600803
+2026-02-05 19:38:29,955 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 600809
+2026-02-05 19:38:29,956 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 600845
+2026-02-05 19:38:29,956 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 600875
+2026-02-05 19:38:29,957 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 600886
+2026-02-05 19:38:29,966 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 600905
+2026-02-05 19:38:29,966 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 600918
+2026-02-05 19:38:29,967 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 600958
+2026-02-05 19:38:29,967 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 600989
+2026-02-05 19:38:29,968 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 600926
+2026-02-05 19:38:29,968 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 600919
+2026-02-05 19:38:29,968 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 600930
+2026-02-05 19:38:29,969 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 600938
+2026-02-05 19:38:29,969 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 600941
+2026-02-05 19:38:29,970 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 600999
+2026-02-05 19:38:29,971 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 600893
+2026-02-05 19:38:29,971 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 601006
+2026-02-05 19:38:29,972 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 601009
+2026-02-05 19:38:29,973 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 601012
+2026-02-05 19:38:29,974 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 601018
+2026-02-05 19:38:29,974 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 601021
+2026-02-05 19:38:29,975 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 601058
+2026-02-05 19:38:29,976 | ERROR    | trading.data.fetcher:_fetch_from_sources:572 - All sources failed for 601059
+2026-02-05 19:38:29,981 | INFO     | trading.data.fetcher:get_multiple_parallel:664 - Parallel fetch: 16/200 successful
+2026-02-05 19:38:30,058 | INFO     | trading:create_features:170 - Created 47 features, 1436 valid samples
+2026-02-05 19:38:30,134 | INFO     | trading:create_features:170 - Created 47 features, 1436 valid samples
+2026-02-05 19:38:30,203 | INFO     | trading:create_features:170 - Created 47 features, 1436 valid samples
+2026-02-05 19:38:30,273 | INFO     | trading:create_features:170 - Created 47 features, 1436 valid samples
+2026-02-05 19:38:30,341 | INFO     | trading:create_features:170 - Created 47 features, 1436 valid samples
+2026-02-05 19:38:30,410 | INFO     | trading:create_features:170 - Created 47 features, 1436 valid samples
+2026-02-05 19:38:30,477 | INFO     | trading:create_features:170 - Created 47 features, 1435 valid samples
+2026-02-05 19:38:30,546 | INFO     | trading:create_features:170 - Created 47 features, 1436 valid samples
+2026-02-05 19:38:30,614 | INFO     | trading:create_features:170 - Created 47 features, 1436 valid samples
+2026-02-05 19:38:30,687 | INFO     | trading:create_features:170 - Created 47 features, 1436 valid samples
+2026-02-05 19:38:30,757 | INFO     | trading:create_features:170 - Created 47 features, 1429 valid samples
+2026-02-05 19:38:30,828 | INFO     | trading:create_features:170 - Created 47 features, 1435 valid samples
+2026-02-05 19:38:30,895 | INFO     | trading:create_features:170 - Created 47 features, 1435 valid samples
+2026-02-05 19:38:30,963 | INFO     | trading:create_features:170 - Created 47 features, 1435 valid samples
+2026-02-05 19:38:31,032 | INFO     | trading:create_features:170 - Created 47 features, 1435 valid samples
+2026-02-05 19:38:31,101 | INFO     | trading:create_features:170 - Created 47 features, 1424 valid samples
+2026-02-05 19:38:31,102 | INFO     | trading:_download_all_data:456 - Processed 16 stocks with features
+2026-02-05 19:38:31,185 | INFO     | trading:fit_scaler:99 - Scaler fitted on 15741 samples, 47 features
+2026-02-05 19:38:31,186 | INFO     | trading:_prepare_training_data:509 - Scaler fitted on 15741 samples
+2026-02-05 19:38:31,455 | INFO     | trading:save_scaler:305 - Scaler saved atomically to F:\Trading app\Trading-graph\models_saved\scaler.pkl
+2026-02-05 19:39:27,440 | INFO     | trading:main:61 - ============================================================
+2026-02-05 19:39:27,440 | INFO     | trading:main:62 - AI STOCK TRADING SYSTEM - Production Grade
+2026-02-05 19:39:27,440 | INFO     | trading:main:63 - ============================================================
+2026-02-05 19:39:27,594 | INFO     | trading:_load_state:646 - Loaded learner state: 0 sessions
+2026-02-05 19:39:27,594 | INFO     | trading:_continuous_learning_loop:239 - === Learning Cycle 1 ===
+2026-02-05 19:39:27,594 | INFO     | trading:start:171 - Continuous learning started (mode=full, continuous=False)
+2026-02-05 19:39:27,776 | INFO     | trading:__init__:109 - AkShare initialized for stock discovery
+2026-02-05 19:40:19,342 | WARNING  | trading:_safe_fetch:141 - Attempt 1/3 failed for spot data: HTTPSConnectionPool(host='82.push2.eastmoney.com', port=443): Read timed out. (read timeout=15)

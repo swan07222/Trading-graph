@@ -103,6 +103,8 @@ class ExecutionEngine:
         self._recon_thread = threading.Thread(target=self._reconciliation_loop, name="recon", daemon=True)
         self._recon_thread.start()
 
+        self._health_monitor.attach_broker(self.broker)
+
         self._health_monitor.report_component_health(ComponentType.BROKER, HealthStatus.HEALTHY)
         log.info(f"Execution engine started ({self.mode.value})")
 
@@ -246,6 +248,11 @@ class ExecutionEngine:
 
             time.sleep(0.05)
 
+    def get_risk_metrics(self):
+        if self.risk_manager:
+            return self.risk_manager.get_metrics()
+        return None
+
     def _execute(self, signal: TradeSignal):
         """Execute a single signal - NEVER fabricate fills"""
         from trading.oms import get_oms
@@ -386,16 +393,20 @@ class ExecutionEngine:
                         continue
                     
                     # Only update if status actually changed
+                    if broker_status == OrderStatus.FILLED:
+                        oms.update_order_status(
+                            order.id,
+                            order.status,  # keep unchanged
+                            message="Status sync: broker reports FILLED; waiting fills"
+                        )
+                        continue
+
                     if broker_status != order.status:
-                        # For terminal states, update status only
-                        # filled_qty comes from fills, not status sync
                         oms.update_order_status(
                             order.id,
                             broker_status,
                             message=f"Status sync: {broker_status.value}"
-                            # NOTE: Do NOT pass filled_qty or avg_price here
                         )
-                        log.info(f"Order status synced: {order.id} -> {broker_status.value}")
 
             except Exception as e:
                 log.error(f"Status sync error: {e}")

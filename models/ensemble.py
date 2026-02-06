@@ -84,14 +84,15 @@ class EnsembleModel:
         
         log.info(f"Ensemble initialized: {list(self.models.keys())} on {self.device}")
     
-    def _init_model(self, name: str):
+    def _init_model(self, name: str, hidden_size: int = None, dropout: float = None, num_classes: int = None):
+        """Initialize a single model - FIXED: single construction with proper params"""
         try:
             model_class = self.MODEL_CLASSES[name]
             model = model_class(
                 input_size=self.input_size,
-                hidden_size=CONFIG.HIDDEN_SIZE,
-                num_classes=CONFIG.NUM_CLASSES,
-                dropout=CONFIG.DROPOUT
+                hidden_size=hidden_size if hidden_size is not None else CONFIG.HIDDEN_SIZE,
+                num_classes=num_classes if num_classes is not None else CONFIG.NUM_CLASSES,
+                dropout=dropout if dropout is not None else CONFIG.DROPOUT
             )
             model.to(self.device)
             self.models[name] = model
@@ -107,31 +108,49 @@ class EnsembleModel:
         if total > 0:
             self.weights = {k: v / total for k, v in self.weights.items()}
     
-    def calibrate(self, X_val: np.ndarray, y_val: np.ndarray):
-        """Calibrate using WEIGHTED logits (same as inference)"""
-        X_tensor = torch.FloatTensor(X_val).to(self.device)
+    def calibrate(self, X_val: np.ndarray, y_val: np.ndarray, batch_size: int = 512):
+        """Calibrate using WEIGHTED logits (same as inference) - FIXED: batched for memory"""
+        from torch.utils.data import DataLoader, TensorDataset
         
-        # Get weighted logits (same as predict)
-        weighted_logits = None
-        for name, model in self.models.items():
-            model.eval()
-            with torch.no_grad():
-                logits, _ = model(X_tensor)
-                weight = self.weights.get(name, 1.0 / len(self.models))
-                if weighted_logits is None:
-                    weighted_logits = logits * weight
-                else:
-                    weighted_logits += logits * weight
+        dataset = TensorDataset(
+            torch.FloatTensor(X_val),
+            torch.LongTensor(y_val)
+        )
+        loader = DataLoader(dataset, batch_size=batch_size, shuffle=False)
         
-        y_tensor = torch.LongTensor(y_val).to(self.device)
+        # Accumulate weighted logits
+        all_logits = []
+        all_labels = []
+        
+        for batch_X, batch_y in loader:
+            batch_X = batch_X.to(self.device)
+            
+            # Get weighted logits for this batch
+            weighted_logits = None
+            for name, model in self.models.items():
+                model.eval()
+                with torch.no_grad():
+                    logits, _ = model(batch_X)
+                    weight = self.weights.get(name, 1.0 / len(self.models))
+                    if weighted_logits is None:
+                        weighted_logits = logits * weight
+                    else:
+                        weighted_logits += logits * weight
+            
+            all_logits.append(weighted_logits.cpu())
+            all_labels.append(batch_y)
+        
+        # Combine batches
+        combined_logits = torch.cat(all_logits, dim=0)
+        combined_labels = torch.cat(all_labels, dim=0)
         
         # Find optimal temperature
         best_temp = 1.0
         best_nll = float('inf')
         
         for temp in [0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 2.5, 3.0]:
-            scaled = weighted_logits / temp
-            nll = F.cross_entropy(scaled, y_tensor).item()
+            scaled = combined_logits / temp
+            nll = F.cross_entropy(scaled, combined_labels).item()
             
             if nll < best_nll:
                 best_nll = nll
@@ -355,9 +374,19 @@ class EnsembleModel:
         log.info(f"Updated weights: {self.weights}")
     
     def predict(self, X: np.ndarray) -> EnsemblePrediction:
-        """Get ensemble prediction with weighted logits and calibrated probabilities."""
+        """Get ensemble prediction with weighted logits and calibrated probabilities.
+        
+        FIXED: Properly handles single sample, rejects batches.
+        """
+        # Validate input
         if X.ndim == 2:
             X = X[np.newaxis, :]
+        
+        if X.ndim != 3:
+            raise ValueError(f"Expected 2D or 3D input, got shape {X.shape}")
+        
+        if X.shape[0] != 1:
+            raise ValueError(f"predict() expects single sample (batch_size=1), got {X.shape[0]}. Use predict_batch() for multiple samples.")
         
         with self._lock:
             X_tensor = torch.FloatTensor(X).to(self.device)
@@ -373,7 +402,7 @@ class EnsembleModel:
                     probs = F.softmax(logits, dim=-1).cpu().numpy()[0]
                     all_probs[name] = probs
             
-            # FIXED: Weighted average of logits (not just mean)
+            # Weighted average of logits
             weighted_logits = torch.zeros_like(all_logits[0][1])
             for name, logits in all_logits:
                 weight = self.weights.get(name, 1.0 / len(self.models))
@@ -478,23 +507,40 @@ class EnsembleModel:
             return predictions
     
     def save(self, path: str = None):
-        """Save ensemble to file including temperature"""
-        path = path or str(CONFIG.MODEL_DIR / "ensemble.pt")
-        
+        from datetime import datetime
+        from pathlib import Path
+        from utils.atomic_io import atomic_torch_save, atomic_write_json
+
+        path = Path(path or (CONFIG.MODEL_DIR / "ensemble.pt"))
+
         with self._lock:
             state = {
                 'input_size': self.input_size,
                 'model_names': list(self.models.keys()),
                 'models': {name: model.state_dict() for name, model in self.models.items()},
                 'weights': self.weights,
-                'temperature': getattr(self, 'temperature', 1.0),  # ADDED
+                'temperature': getattr(self, 'temperature', 1.0),
+                'arch': {
+                    'hidden_size': CONFIG.HIDDEN_SIZE,
+                    'dropout': CONFIG.DROPOUT,
+                    'num_classes': CONFIG.NUM_CLASSES,
+                }
             }
-            
-            torch.save(state, path)
-        
-        log.info(f"Ensemble saved to {path}")
-    
-    # models/ensemble.py - FIXED load() method ending
+
+        atomic_torch_save(path, state)
+
+        manifest = {
+            "version": datetime.now().strftime("%Y%m%d_%H%M%S"),
+            "saved_at": datetime.now().isoformat(),
+            "ensemble_path": path.name,
+            "scaler_path": "scaler.pkl",
+            "input_size": int(self.input_size),
+            "num_models": len(self.models),
+            "temperature": float(state["temperature"]),
+        }
+        atomic_write_json(CONFIG.MODEL_DIR / "model_manifest.json", manifest)
+
+        log.info(f"Ensemble saved atomically to {path}")
 
     def load(self, path: str = None) -> bool:
         """Load ensemble from file including temperature"""
@@ -512,12 +558,22 @@ class EnsembleModel:
                 
                 model_names = state.get('model_names', list(state['models'].keys()))
                 
+                arch = state.get("arch", {})
+                self._saved_hidden_size = int(arch.get("hidden_size", CONFIG.HIDDEN_SIZE))
+                self._saved_dropout = float(arch.get("dropout", CONFIG.DROPOUT))
+                self._saved_num_classes = int(arch.get("num_classes", CONFIG.NUM_CLASSES))
+
                 self.models = {}
                 self.weights = {}
                 
                 for name in model_names:
                     if name in self.MODEL_CLASSES and name in state['models']:
-                        self._init_model(name)
+                        self._init_model(
+                            name,
+                            hidden_size=self._saved_hidden_size,
+                            dropout=self._saved_dropout,
+                            num_classes=self._saved_num_classes
+                        )
                         self.models[name].load_state_dict(state['models'][name])
                         self.models[name].eval()
                 

@@ -300,7 +300,7 @@ class RiskManager:
             metrics = RiskMetrics()
             warnings = []
             
-            account = self._account
+            account = self._get_unified_account_view()
             equity = account.equity
             
             # ==================== Basic Metrics ====================
@@ -531,11 +531,11 @@ class RiskManager:
             if not staleness_ok:
                 return False, staleness_msg
             
-            # Side-specific validation - PASS UNIFIED ACCOUNT
+            # Side-specific validation - FIXED: pass unified account to both
             if side == OrderSide.BUY:
                 return self._validate_buy_order(symbol, quantity, price, metrics, account)
             else:
-                return self._validate_sell_order(symbol, quantity)
+                return self._validate_sell_order(symbol, quantity, account)  # FIXED: pass account
     
     def _check_quote_staleness(self, symbol: str) -> Tuple[bool, str]:
         """Check if quote for symbol is fresh enough"""
@@ -574,7 +574,8 @@ class RiskManager:
         """Validate buy order against all limits using unified account view"""
         
         # Lot size check
-        lot_size = CONFIG.trading.lot_size
+        from core.constants import get_lot_size
+        lot_size = get_lot_size(symbol)
         if quantity % lot_size != 0:
             return False, f"Quantity must be multiple of {lot_size}"
         
@@ -648,16 +649,21 @@ class RiskManager:
         
         return True, "OK"
     
-    def _validate_sell_order(self, symbol: str, quantity: int) -> Tuple[bool, str]:
-        """Validate sell order"""
+    def _validate_sell_order(self, symbol: str, quantity: int, account: Account = None) -> Tuple[bool, str]:
+        """Validate sell order - FIXED: uses unified account view"""
+        # Use unified account if provided, otherwise fall back to stored account
+        account = account or self._account
+        
+        if account is None:
+            return False, "Account not initialized"
         
         # Check position exists
-        if symbol not in self._account.positions:
+        if symbol not in account.positions:
             return False, f"No position in {symbol}"
         
-        pos = self._account.positions[symbol]
+        pos = account.positions[symbol]
         
-        # Check available quantity (respecting T+1)
+        # Check available quantity (respecting T+1 and OMS reservations)
         if quantity > pos.available_qty:
             return False, (
                 f"Insufficient available shares: "
@@ -784,32 +790,23 @@ class RiskManager:
         return True
     
     def calculate_position_size(
-        self,
-        entry_price: float,
-        stop_loss: float,
-        confidence: float = 1.0,
+        self, 
+        symbol: str, 
+        entry_price: float, 
+        stop_loss: float, 
+        confidence: float = 1.0, 
         signal_strength: float = 1.0
     ) -> int:
         """
         Calculate optimal position size using risk-based sizing
         
-        Uses:
-        - Fixed fractional risk per trade
-        - Kelly criterion adjustment
-        - Position size limits
-        - Available funds limit
-        
-        Args:
-            entry_price: Entry price
-            stop_loss: Stop loss price
-            confidence: Model confidence (0-1)
-            signal_strength: Signal strength (0-1)
-            
-        Returns:
-            Number of shares (rounded to lot size)
+        FIXED: Uses unified account view for accurate available funds
         """
         if self._account is None:
             return 0
+        
+        # Get unified account view
+        account = self._get_unified_account_view()
         
         # Calculate risk per share
         risk_per_share = abs(entry_price - stop_loss)
@@ -827,23 +824,24 @@ class RiskManager:
         kelly_adjusted = adjusted_risk * CONFIG.risk.kelly_fraction
         
         # Calculate risk amount in currency
-        risk_amount = self._account.equity * kelly_adjusted
+        risk_amount = account.equity * kelly_adjusted
         
         # Calculate shares
         shares = int(risk_amount / risk_per_share)
         
         # Round to lot size
-        lot_size = CONFIG.trading.lot_size
+        from core.constants import get_lot_size
+        lot_size = get_lot_size(symbol)
         shares = (shares // lot_size) * lot_size
         
         # Apply position size limit
-        max_position_value = self._account.equity * (CONFIG.risk.max_position_pct / 100)
+        max_position_value = account.equity * (CONFIG.risk.max_position_pct / 100)
         max_shares_by_position = int(max_position_value / entry_price / lot_size) * lot_size
         shares = min(shares, max_shares_by_position)
         
-        # Apply available funds limit (with 5% buffer)
+        # Apply available funds limit (with 5% buffer) - FIXED: use unified account
         max_affordable = int(
-            self._account.available * 0.95 / entry_price / lot_size
+            account.available * 0.95 / entry_price / lot_size
         ) * lot_size
         shares = min(shares, max_affordable)
         
@@ -863,11 +861,13 @@ class RiskManager:
         """
         Get detailed position size recommendation
         
-        Returns:
-            Dictionary with sizing details
+        FIXED: Correctly passes symbol to calculate_position_size
         """
         shares = self.calculate_position_size(
-            entry_price, stop_loss, confidence
+            symbol=symbol,  # FIXED: was missing
+            entry_price=entry_price,
+            stop_loss=stop_loss,
+            confidence=confidence
         )
         
         if shares == 0:

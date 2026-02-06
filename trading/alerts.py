@@ -26,7 +26,7 @@ import queue
 
 from config import CONFIG
 from utils.logger import get_logger
-from utils.security import get_audit_log
+from utils.security import get_secure_storage, get_audit_log  # FIXED: Added get_audit_log
 
 log = get_logger(__name__)
 
@@ -332,9 +332,14 @@ Details:
 """
             msg.attach(MIMEText(body, 'plain'))
             
-            with smtplib.SMTP(CONFIG.alerts.smtp_server, CONFIG.alerts.smtp_port) as server:
+            with smtplib.SMTP(CONFIG.alerts.smtp_server, CONFIG.alerts.smtp_port, timeout=10) as server:
                 server.starttls()
-                # In production, use secure credential storage
+
+                user = CONFIG.alerts.smtp_username
+                pwd = get_secure_storage().get(CONFIG.alerts.smtp_password_key, "")
+                if user and pwd:
+                    server.login(user, pwd)
+
                 server.send_message(msg)
             
             log.info(f"Email alert sent: {alert.title}")

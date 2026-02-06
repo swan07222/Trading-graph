@@ -140,56 +140,56 @@ class DataProcessor:
         self,
         df: pd.DataFrame,
         feature_cols: List[str],
-        fit_scaler: bool = False
-    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-        """
-        Prepare sequences for training or inference.
-        
-        SEQUENCE CONSTRUCTION:
-        - For each valid label at index i, the input sequence is:
-          features[i - seq_len + 1 : i + 1]
-        """
+        fit_scaler: bool = False,
+        return_index: bool = False
+    ):
         seq_len = CONFIG.SEQUENCE_LENGTH
-        
+
         missing_cols = set(feature_cols) - set(df.columns)
         if missing_cols:
             raise ValueError(f"Missing feature columns: {missing_cols}")
-        
+
         if 'label' not in df.columns:
             raise ValueError("DataFrame must have 'label' column. Call create_labels() first.")
-        
+
         features = df[feature_cols].values.astype(np.float32)
         labels = df['label'].values
         returns = df['future_return'].values if 'future_return' in df.columns else np.zeros(len(df))
-        
+
         if fit_scaler:
             valid_mask = ~np.isnan(labels)
             self.fit_scaler(features[valid_mask])
-        
+
         if self._fitted:
             features = self.transform(features)
-        
-        X, y, r = [], [], []
-        
+
+        X, y, r, idx = [], [], [], []
+
         for i in range(seq_len - 1, len(features)):
             if np.isnan(labels[i]):
                 continue
-            
+
             seq = features[i - seq_len + 1 : i + 1]
-            
             if len(seq) == seq_len and not np.isnan(seq).any():
                 X.append(seq)
                 y.append(int(labels[i]))
                 r.append(float(returns[i]) if not np.isnan(returns[i]) else 0.0)
-        
+                idx.append(df.index[i])  # ✅ aligned end-of-sequence timestamp
+
         if not X:
-            return np.array([]), np.array([]), np.array([])
-        
-        return (
+            empty = (np.array([]), np.array([]), np.array([]))
+            if return_index:
+                return (*empty, pd.DatetimeIndex([]))
+            return empty
+
+        out = (
             np.array(X, dtype=np.float32),
             np.array(y, dtype=np.int64),
-            np.array(r, dtype=np.float32)
+            np.array(r, dtype=np.float32),
         )
+        if return_index:
+            return (*out, pd.DatetimeIndex(idx))
+        return out
     
     def prepare_inference_sequence(
         self,
@@ -284,13 +284,15 @@ class DataProcessor:
         return results
     
     def save_scaler(self, path: str = None):
-        """Save fitted scaler for inference"""
         if not self._fitted:
             log.warning("Scaler not fitted, nothing to save")
             return
-        
-        path = path or str(CONFIG.MODEL_DIR / "scaler.pkl")
-        
+
+        from pathlib import Path
+        from utils.atomic_io import atomic_pickle_dump
+
+        path = Path(path or (CONFIG.MODEL_DIR / "scaler.pkl"))
+
         with self._lock:
             data = {
                 'scaler': self.scaler,
@@ -298,10 +300,9 @@ class DataProcessor:
                 'fit_samples': self._fit_samples,
                 'fitted': True
             }
-            with open(path, 'wb') as f:
-                pickle.dump(data, f)
-        
-        log.info(f"Scaler saved to {path}")
+
+        atomic_pickle_dump(path, data)
+        log.info(f"Scaler saved atomically to {path}")
     
     def load_scaler(self, path: str = None) -> bool:
         """Load saved scaler for inference"""

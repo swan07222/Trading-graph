@@ -117,7 +117,7 @@ class PollingFeed(DataFeed):
     def __init__(self, interval: float = 3.0):
         super().__init__()
         self._interval = interval
-        self._fetcher = get_fetcher()
+        self._fetcher = None  # Lazy init
         self._symbols: Set[str] = set()
         self._last_quotes: Dict[str, Quote] = {}
     
@@ -135,6 +135,13 @@ class PollingFeed(DataFeed):
         log.info(f"Polling feed started (interval={self._interval}s)")
         return True
     
+    def _get_fetcher(self):
+        """Lazy init fetcher to avoid circular imports"""
+        if self._fetcher is None:
+            from data.fetcher import get_fetcher
+            self._fetcher = get_fetcher()
+        return self._fetcher
+
     def disconnect(self):
         """Stop polling"""
         self._running = False
@@ -179,18 +186,17 @@ class PollingFeed(DataFeed):
                     if quote and quote.price > 0:
                         last = self._last_quotes.get(symbol)
                         
-                        if last is None or quote.price != last.price:
-                            self._last_quotes[symbol] = quote
-                            self._notify(quote)
-                            
-                            EVENT_BUS.publish(TickEvent(
-                                symbol=symbol,
-                                price=quote.price,
-                                volume=quote.volume,
-                                bid=quote.bid,
-                                ask=quote.ask,
-                                source=self.name
-                            ))
+                        self._last_quotes[symbol] = quote
+                        self._notify(quote)
+
+                        EVENT_BUS.publish(TickEvent(
+                            symbol=symbol,
+                            price=quote.price,
+                            volume=quote.volume,
+                            bid=quote.bid,
+                            ask=quote.ask,
+                            source=self.name
+                        ))
                 
                 time.sleep(self._interval)
                 
@@ -210,8 +216,9 @@ class PollingFeed(DataFeed):
         
         if df is None or df.empty:
             # Fallback to individual fetches
+            fetcher = self._get_fetcher()
             for symbol in symbols:
-                quote = self._fetcher.get_realtime(symbol)
+                quote = fetcher.get_realtime(symbol)
                 if quote and quote.price > 0:
                     result[symbol] = quote
             return result

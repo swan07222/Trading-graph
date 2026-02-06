@@ -12,6 +12,20 @@ import uuid
 # Enums
 # ============================================================
 
+class OrderSide(Enum):
+    BUY = "buy"
+    SELL = "sell"
+
+class OrderStatus(Enum):
+    PENDING = "pending"
+    SUBMITTED = "submitted"
+    ACCEPTED = "accepted"
+    PARTIAL = "partial"
+    FILLED = "filled"
+    CANCELLED = "cancelled"
+    REJECTED = "rejected"
+    EXPIRED = "expired"
+
 class OrderType(Enum):
     MARKET = "market"
     LIMIT = "limit"

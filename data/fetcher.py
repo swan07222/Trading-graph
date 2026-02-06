@@ -1,18 +1,10 @@
+# data/fetcher.py
 """
-High-Performance Data Fetcher
-Score Target: 10/10
-
-Features:
-- Multiple data sources with automatic fallback
-- Parallel downloads (10x faster)
-- Smart caching integration
-- Rate limiting and retry logic
-- Data validation
-- Incremental updates
+High-Performance Data Fetcher with Robust Error Handling
 """
 import time
 import threading
-from datetime import datetime, timedelta, date
+from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple, Callable
 from dataclasses import dataclass
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -22,7 +14,7 @@ import numpy as np
 import requests
 
 from config.settings import CONFIG
-from data.cache import get_cache, cached
+from data.cache import get_cache
 from data.database import get_database
 from core.exceptions import DataFetchError, DataSourceUnavailableError
 from utils.logger import get_logger
@@ -71,22 +63,12 @@ class Quote:
     ask_vol: int = 0
     timestamp: datetime = None
     source: str = ""
-    is_delayed: bool = True  # NEW: flag for delayed/real-time
-    latency_ms: float = 0.0  # NEW: fetch latency
+    is_delayed: bool = True
+    latency_ms: float = 0.0
 
     def __post_init__(self):
         if self.timestamp is None:
             self.timestamp = datetime.now()
-    
-    @property
-    def age_seconds(self) -> float:
-        """Age of quote in seconds"""
-        return (datetime.now() - self.timestamp).total_seconds()
-    
-    @property
-    def is_stale(self) -> bool:
-        """Check if quote is stale (> 30 seconds)"""
-        return self.age_seconds > 30
 
 
 @dataclass
@@ -98,11 +80,13 @@ class DataSourceStatus:
     last_error: str = None
     success_count: int = 0
     error_count: int = 0
+    consecutive_errors: int = 0  # Track consecutive errors
     avg_latency_ms: float = 0.0
+    disabled_until: datetime = None  # Temporary disable
 
 
 class DataSource:
-    """Abstract data source"""
+    """Abstract data source with improved error handling"""
     name: str = "base"
     priority: int = 0
     
@@ -113,6 +97,25 @@ class DataSource:
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
         })
         self._latencies: List[float] = []
+        self._lock = threading.Lock()
+    
+    def is_available(self) -> bool:
+        """Check if source is available (with temporary disable support)"""
+        with self._lock:
+            if not self.status.available:
+                return False
+            
+            # Check if temporarily disabled
+            if self.status.disabled_until:
+                if datetime.now() < self.status.disabled_until:
+                    return False
+                else:
+                    # Re-enable after cooldown
+                    self.status.disabled_until = None
+                    self.status.consecutive_errors = 0
+                    log.info(f"Data source {self.name} re-enabled after cooldown")
+            
+            return True
     
     def get_history(self, code: str, days: int) -> pd.DataFrame:
         raise NotImplementedError
@@ -121,32 +124,36 @@ class DataSource:
         raise NotImplementedError
     
     def _record_success(self, latency_ms: float = 0):
-        self.status.last_success = datetime.now()
-        self.status.success_count += 1
-        self.status.available = True
-        
-        if latency_ms > 0:
-            self._latencies.append(latency_ms)
-            if len(self._latencies) > 100:
-                self._latencies.pop(0)
-            self.status.avg_latency_ms = np.mean(self._latencies)
+        with self._lock:
+            self.status.last_success = datetime.now()
+            self.status.success_count += 1
+            self.status.consecutive_errors = 0  # Reset on success
+            self.status.available = True
+            self.status.disabled_until = None
+            
+            if latency_ms > 0:
+                self._latencies.append(latency_ms)
+                if len(self._latencies) > 100:
+                    self._latencies.pop(0)
+                self.status.avg_latency_ms = np.mean(self._latencies)
     
     def _record_error(self, error: str):
-        self.status.last_error = error
-        self.status.error_count += 1
-        
-        # Disable if too many errors
-        if self.status.error_count > 5:
-            if self.status.last_success is None or \
-               (datetime.now() - self.status.last_success).seconds > 300:
-                self.status.available = False
-                log.warning(f"Data source {self.name} disabled")
+        with self._lock:
+            self.status.last_error = error
+            self.status.error_count += 1
+            self.status.consecutive_errors += 1
+            
+            # Temporary disable after 10 consecutive errors (not 5)
+            if self.status.consecutive_errors >= 10:
+                # Disable for 60 seconds, not permanently
+                self.status.disabled_until = datetime.now() + timedelta(seconds=60)
+                log.warning(f"Data source {self.name} temporarily disabled for 60s")
 
 
 class SpotCache:
     """Thread-safe cached spot data with TTL"""
-    
-    def __init__(self, ttl_seconds: float = 10.0):
+
+    def __init__(self, ttl_seconds: float = 30.0):
         self._cache: Optional[pd.DataFrame] = None
         self._cache_time: float = 0
         self._ttl = ttl_seconds
@@ -172,9 +179,17 @@ class SpotCache:
                 return self._cache
             
             try:
-                self._cache = self._ak.stock_zh_a_spot_em()
-                self._cache_time = now
-                log.debug(f"Spot cache refreshed: {len(self._cache)} stocks")
+                import socket
+                old_timeout = socket.getdefaulttimeout()
+                socket.setdefaulttimeout(60)  # 60 second timeout
+                
+                try:
+                    self._cache = self._ak.stock_zh_a_spot_em()
+                    self._cache_time = now
+                    log.debug(f"Spot cache refreshed: {len(self._cache)} stocks")
+                finally:
+                    socket.setdefaulttimeout(old_timeout)
+                    
             except Exception as e:
                 log.warning(f"Spot cache refresh failed: {e}")
             
@@ -182,28 +197,47 @@ class SpotCache:
     
     def get_quote(self, symbol: str) -> Optional[Dict]:
         """Get single stock quote from cache"""
+        symbol = str(symbol).strip()
+        for prefix in ['sh', 'sz', 'SH', 'SZ', 'bj', 'BJ']:
+            symbol = symbol.replace(prefix, '')
+        symbol = symbol.replace('.', '').replace('-', '').zfill(6)
+        
         df = self.get()
         if df is None or df.empty:
             return None
         
-        row = df[df['代码'] == symbol]
-        if row.empty:
+        try:
+            row = df[df['代码'] == symbol]
+            if row.empty:
+                return None
+            
+            r = row.iloc[0]
+            return {
+                'code': symbol,
+                'name': str(r.get('名称', '')),
+                'price': float(r.get('最新价', 0) or 0),
+                'open': float(r.get('今开', 0) or 0),
+                'high': float(r.get('最高', 0) or 0),
+                'low': float(r.get('最低', 0) or 0),
+                'close': float(r.get('昨收', 0) or 0),
+                'volume': int(r.get('成交量', 0) or 0),
+                'amount': float(r.get('成交额', 0) or 0),
+                'change': float(r.get('涨跌额', 0) or 0),
+                'change_pct': float(r.get('涨跌幅', 0) or 0),
+            }
+        except Exception:
             return None
-        
-        r = row.iloc[0]
-        return {
-            'code': symbol,
-            'name': str(r.get('名称', '')),
-            'price': float(r.get('最新价', 0) or 0),
-            'open': float(r.get('今开', 0) or 0),
-            'high': float(r.get('最高', 0) or 0),
-            'low': float(r.get('最低', 0) or 0),
-            'close': float(r.get('昨收', 0) or 0),
-            'volume': int(r.get('成交量', 0) or 0),
-            'amount': float(r.get('成交额', 0) or 0),
-            'change': float(r.get('涨跌额', 0) or 0),
-            'change_pct': float(r.get('涨跌幅', 0) or 0),
-        }
+
+
+_spot_cache: Optional[SpotCache] = None
+
+
+def get_spot_cache() -> SpotCache:
+    global _spot_cache
+    if _spot_cache is None:
+        _spot_cache = SpotCache(ttl_seconds=30.0)
+    return _spot_cache
+
 
 class AkShareSource(DataSource):
     """AkShare data source - Primary for A-shares"""
@@ -213,7 +247,7 @@ class AkShareSource(DataSource):
     def __init__(self):
         super().__init__()
         self._ak = None
-        self._spot_cache = get_spot_cache()  # Use shared cache
+        self._spot_cache = None
         
         try:
             import akshare as ak
@@ -222,13 +256,74 @@ class AkShareSource(DataSource):
         except ImportError:
             self.status.available = False
             log.warning("AkShare not available")
+    
+    def _get_spot_cache(self) -> SpotCache:
+        if self._spot_cache is None:
+            self._spot_cache = get_spot_cache()
+        return self._spot_cache
 
+    def get_history(self, code: str, days: int) -> pd.DataFrame:
+        if not self._ak or not self.is_available():
+            raise DataSourceUnavailableError("AkShare not available")
+        
+        start = time.time()
+        
+        try:
+            import socket
+            old_timeout = socket.getdefaulttimeout()
+            socket.setdefaulttimeout(60)  # 60 second timeout
+            
+            try:
+                end_date = datetime.now().strftime("%Y%m%d")
+                start_date = (datetime.now() - timedelta(days=int(days * 1.5))).strftime("%Y%m%d")
+                
+                df = self._ak.stock_zh_a_hist(
+                    symbol=code,
+                    period="daily",
+                    start_date=start_date,
+                    end_date=end_date,
+                    adjust="qfq"
+                )
+            finally:
+                socket.setdefaulttimeout(old_timeout)
+            
+            if df is None or df.empty:
+                raise DataFetchError(f"No data for {code}")
+            
+            # Standardize columns
+            column_map = {
+                '日期': 'date', '开盘': 'open', '收盘': 'close',
+                '最高': 'high', '最低': 'low', '成交量': 'volume',
+                '成交额': 'amount', '涨跌幅': 'change_pct', '换手率': 'turnover'
+            }
+            df = df.rename(columns=column_map)
+            
+            df['date'] = pd.to_datetime(df['date'])
+            df = df.set_index('date').sort_index()
+            
+            for col in ['open', 'high', 'low', 'close', 'volume', 'amount']:
+                if col in df.columns:
+                    df[col] = pd.to_numeric(df[col], errors='coerce')
+            
+            df = df.dropna(subset=['close', 'volume'])
+            df = df[df['volume'] > 0]
+            df = df[df['high'] >= df['low']]
+            
+            latency = (time.time() - start) * 1000
+            self._record_success(latency)
+            
+            return df.tail(days)
+            
+        except Exception as e:
+            self._record_error(str(e))
+            raise
+    
     def get_realtime(self, code: str) -> Optional[Quote]:
-        if not self._ak or not self.status.available:
+        if not self._ak or not self.is_available():
             return None
         
         try:
-            data = self._spot_cache.get_quote(code)
+            data = self._get_spot_cache().get_quote(code)
             
             if data is None or data['price'] <= 0:
                 return None
@@ -251,113 +346,8 @@ class AkShareSource(DataSource):
         except Exception as e:
             self._record_error(str(e))
             return None
-
-    def _get_cached_spot(self) -> pd.DataFrame:
-        """Get cached spot data with proper TTL"""
-        now = time.time()
-        # Only refresh if cache is older than TTL
-        if (self._spot_cache is None or 
-            self._spot_cache_time is None or 
-            now - self._spot_cache_time > self._cache_ttl):
-            
-            try:
-                self._spot_cache = self._ak.stock_zh_a_spot_em()
-                self._spot_cache_time = now
-                log.debug(f"Refreshed spot cache: {len(self._spot_cache)} stocks")
-            except Exception as e:
-                log.warning(f"Failed to refresh spot cache: {e}")
-                # Keep old cache if refresh fails
-                if self._spot_cache is None:
-                    self._spot_cache = pd.DataFrame()
-                    
-        return self._spot_cache
-
-    @retry(max_attempts=3, delay=2.0)
-    def get_history(self, code: str, days: int) -> pd.DataFrame:
-        if not self._ak or not self.status.available:
-            raise DataSourceUnavailableError("AkShare not available")
-        
-        start = time.time()
-        
-        try:
-            end_date = datetime.now().strftime("%Y%m%d")
-            start_date = (datetime.now() - timedelta(days=int(days * 1.5))).strftime("%Y%m%d")
-            
-            df = self._ak.stock_zh_a_hist(
-                symbol=code,
-                period="daily",
-                start_date=start_date,
-                end_date=end_date,
-                adjust="qfq"
-            )
-            
-            if df is None or df.empty:
-                raise DataFetchError(f"No data for {code}")
-            
-            # Standardize columns
-            column_map = {
-                '日期': 'date', '开盘': 'open', '收盘': 'close',
-                '最高': 'high', '最低': 'low', '成交量': 'volume',
-                '成交额': 'amount', '涨跌幅': 'change_pct', '换手率': 'turnover'
-            }
-            df = df.rename(columns=column_map)
-            
-            df['date'] = pd.to_datetime(df['date'])
-            df = df.set_index('date').sort_index()
-            
-            # Convert types
-            for col in ['open', 'high', 'low', 'close', 'volume', 'amount']:
-                if col in df.columns:
-                    df[col] = pd.to_numeric(df[col], errors='coerce')
-            
-            # Validate
-            df = df.dropna(subset=['close', 'volume'])
-            df = df[df['volume'] > 0]
-            df = df[df['high'] >= df['low']]
-            
-            latency = (time.time() - start) * 1000
-            self._record_success(latency)
-            
-            return df.tail(days)
-            
-        except Exception as e:
-            self._record_error(str(e))
-            raise
-    
-    def get_realtime(self, code: str) -> Optional[Quote]:
-        if not self._ak or not self.status.available:
-            return None
-        
-        try:
-            df = self._get_cached_spot()
-            row = df[df['代码'] == code]
-            
-            if row.empty:
-                return None
-            
-            r = row.iloc[0]
-            
-            return Quote(
-                code=code,
-                name=str(r.get('名称', '')),
-                price=float(r.get('最新价', 0) or 0),
-                open=float(r.get('今开', 0) or 0),
-                high=float(r.get('最高', 0) or 0),
-                low=float(r.get('最低', 0) or 0),
-                close=float(r.get('昨收', 0) or 0),
-                volume=int(r.get('成交量', 0) or 0),
-                amount=float(r.get('成交额', 0) or 0),
-                change=float(r.get('涨跌额', 0) or 0),
-                change_pct=float(r.get('涨跌幅', 0) or 0),
-                source=self.name
-            )
-            
-        except Exception as e:
-            self._record_error(str(e))
-            return None
     
     def get_all_stocks(self) -> pd.DataFrame:
-        """Get all A-share stocks"""
         if not self._ak:
             return pd.DataFrame()
         
@@ -390,9 +380,8 @@ class YahooSource(DataSource):
         suffix = self.SUFFIX_MAP.get(code[0], '.SS')
         return f"{code}{suffix}"
     
-    @retry(max_attempts=3, delay=2.0)
     def get_history(self, code: str, days: int) -> pd.DataFrame:
-        if not self._yf or not self.status.available:
+        if not self._yf or not self.is_available():
             raise DataSourceUnavailableError("Yahoo Finance not available")
         
         start = time.time()
@@ -431,7 +420,7 @@ class YahooSource(DataSource):
             raise
     
     def get_realtime(self, code: str) -> Optional[Quote]:
-        if not self._yf:
+        if not self._yf or not self.is_available():
             return None
         
         try:
@@ -439,30 +428,20 @@ class YahooSource(DataSource):
             ticker = self._yf.Ticker(symbol)
             info = ticker.info
             
-            if not info:
-                return None
-            
-            price = float(info.get('currentPrice') or 
-                         info.get('regularMarketPrice') or 0)
-            
-            if price <= 0:
+            if not info or 'regularMarketPrice' not in info:
                 return None
             
             return Quote(
                 code=code,
-                name=info.get('shortName', code),
-                price=price,
-                open=float(info.get('open', 0) or 0),
-                high=float(info.get('dayHigh', 0) or 0),
-                low=float(info.get('dayLow', 0) or 0),
-                close=float(info.get('previousClose', 0) or 0),
-                volume=int(info.get('volume', 0) or 0),
-                amount=0,
-                change=price - float(info.get('previousClose', price) or price),
-                change_pct=float(info.get('regularMarketChangePercent', 0) or 0),
+                name=info.get('shortName', ''),
+                price=float(info.get('regularMarketPrice', 0)),
+                open=float(info.get('regularMarketOpen', 0)),
+                high=float(info.get('regularMarketDayHigh', 0)),
+                low=float(info.get('regularMarketDayLow', 0)),
+                close=float(info.get('previousClose', 0)),
+                volume=int(info.get('regularMarketVolume', 0)),
                 source=self.name
             )
-            
         except Exception as e:
             self._record_error(str(e))
             return None
@@ -471,13 +450,6 @@ class YahooSource(DataSource):
 class DataFetcher:
     """
     High-performance data fetcher with multi-source support
-    
-    Features:
-    - Automatic source failover
-    - Parallel downloads
-    - Intelligent caching
-    - Database integration
-    - Rate limiting
     """
     
     def __init__(self):
@@ -486,7 +458,7 @@ class DataFetcher:
         self._db = get_database()
         self._rate_limiter = threading.Semaphore(CONFIG.data.parallel_downloads)
         self._request_times: Dict[str, float] = {}
-        self._min_interval = 0.2  # 200ms between requests
+        self._min_interval = 0.5  # Increased to 500ms between requests
         
         self._init_sources()
     
@@ -499,7 +471,6 @@ class DataFetcher:
                 self._sources.append(source)
                 log.info(f"Data source {source.name} available")
         
-        # Sort by priority
         self._sources.sort(key=lambda x: x.priority)
         
         if not self._sources:
@@ -529,15 +500,7 @@ class DataFetcher:
         use_cache: bool = True,
         update_db: bool = True
     ) -> pd.DataFrame:
-        """
-        Get historical OHLCV data
-        
-        Priority:
-        1. Memory cache
-        2. Disk cache
-        3. Database
-        4. Online sources (with fallback)
-        """
+        """Get historical OHLCV data"""
         code = self.clean_code(code)
         cache_key = f"history:{code}:{days}"
         
@@ -557,10 +520,7 @@ class DataFetcher:
         df = self._fetch_from_sources(code, days)
         
         if not df.empty:
-            # Cache
             self._cache.set(cache_key, df)
-            
-            # Update database
             if update_db:
                 self._db.upsert_bars(code, df)
         
@@ -570,7 +530,7 @@ class DataFetcher:
         """Fetch from online sources with fallback"""
         with self._rate_limiter:
             for source in self._sources:
-                if not source.status.available:
+                if not source.is_available():
                     continue
                 
                 try:
@@ -594,7 +554,7 @@ class DataFetcher:
         
         with self._rate_limiter:
             for source in self._sources:
-                if not source.status.available:
+                if not source.is_available():
                     continue
                 
                 try:
@@ -640,25 +600,27 @@ class DataFetcher:
         callback: Callable[[str, int, int], None] = None,
         max_workers: int = None
     ) -> Dict[str, pd.DataFrame]:
-        """
-        Fetch multiple stocks in parallel (MAJOR SPEED IMPROVEMENT)
-        
-        Args:
-            codes: List of stock codes
-            days: Number of days of history
-            callback: Progress callback (code, completed, total)
-            max_workers: Max parallel workers (default from config)
-        """
+        """Fetch multiple stocks in parallel with better error handling"""
         results = {}
         total = len(codes)
         completed = 0
         lock = threading.Lock()
         
-        def fetch_one(code: str) -> Tuple[str, pd.DataFrame]:
-            df = self.get_history(code, days)
-            return code, df
+        # Reset source status before bulk fetch
+        for source in self._sources:
+            source.status.consecutive_errors = 0
+            source.status.disabled_until = None
         
-        workers = max_workers or CONFIG.data.parallel_downloads
+        def fetch_one(code: str) -> Tuple[str, pd.DataFrame]:
+            try:
+                df = self.get_history(code, days)
+                return code, df
+            except Exception as e:
+                log.debug(f"Failed to fetch {code}: {e}")
+                return code, pd.DataFrame()
+        
+        # Use fewer workers to avoid overwhelming the API
+        workers = min(max_workers or 5, 5)  # Max 5 workers
         
         with ThreadPoolExecutor(max_workers=workers) as executor:
             futures = {executor.submit(fetch_one, c): c for c in codes}
@@ -666,7 +628,7 @@ class DataFetcher:
             for future in as_completed(futures):
                 code = futures[future]
                 try:
-                    code, df = future.result(timeout=60)
+                    code, df = future.result(timeout=120)  # 2 minute timeout
                     if not df.empty and len(df) >= CONFIG.data.min_history_days:
                         results[code] = df
                 except Exception as e:
@@ -683,7 +645,7 @@ class DataFetcher:
     def get_all_stocks(self) -> pd.DataFrame:
         """Get list of all available stocks"""
         for source in self._sources:
-            if source.name == "akshare" and source.status.available:
+            if source.name == "akshare" and source.is_available():
                 try:
                     df = source.get_all_stocks()
                     if not df.empty:
@@ -697,19 +659,14 @@ class DataFetcher:
         """Get status of all data sources"""
         return [s.status for s in self._sources]
     
-    def update_database(self, codes: List[str] = None):
-        """Update database with latest data"""
-        codes = codes or CONFIG.stock_pool
-        
-        log.info(f"Updating database for {len(codes)} stocks...")
-        
-        def update_callback(code, completed, total):
-            log.info(f"Updated {completed}/{total}: {code}")
-        
-        data = self.get_multiple_parallel(codes, days=100, callback=update_callback)
-        
-        log.info(f"Database update complete: {len(data)} stocks")
-        return len(data)
+    def reset_sources(self):
+        """Reset all source error counts - call before bulk operations"""
+        for source in self._sources:
+            with source._lock:
+                source.status.consecutive_errors = 0
+                source.status.disabled_until = None
+                source.status.available = True
+        log.info("All data sources reset")
 
 
 # Global fetcher instance

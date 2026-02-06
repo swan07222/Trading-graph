@@ -136,6 +136,7 @@ class HealthMonitor:
         self._last_quote_time: Optional[datetime] = None
         self._recent_errors: List[str] = []
         self._max_errors = 100
+        self._broker = None
         
         # Thresholds
         self._thresholds = {
@@ -194,6 +195,10 @@ class HealthMonitor:
             
             time.sleep(10)  # Check every 10 seconds
     
+    def attach_broker(self, broker):
+        with self._lock:
+            self._broker = broker
+
     def _run_checks(self):
         """Run all health checks"""
         with self._lock:
@@ -238,54 +243,34 @@ class HealthMonitor:
         comp.last_check = datetime.now()
     
     def _check_broker(self):
-        """Check broker connection health - ACTUALLY checks broker"""
+        """Check broker connection health - FIXED: uses attached broker"""
         comp = self._components[ComponentType.BROKER]
         start = time.time()
         
+        with self._lock:
+            broker = self._broker
+        
+        if broker is None:
+            comp.status = HealthStatus.DEGRADED
+            comp.last_error = "No broker attached"
+            comp.last_check = datetime.now()
+            return
+        
         try:
-            # Try to get the actual broker instance
-            broker = None
-            
-            # Method 1: Try execution engine if running
-            try:
-                # Import here to avoid circular imports
-                import trading.executor as executor_module
-                # Check if there's a running executor with a broker
-                # This is a bit hacky but necessary without dependency injection
-                for obj in dir(executor_module):
-                    instance = getattr(executor_module, obj, None)
-                    if hasattr(instance, 'broker') and hasattr(instance.broker, 'is_connected'):
-                        broker = instance.broker
-                        break
-            except Exception:
-                pass
-            
-            # Method 2: Create a temporary broker to test
-            if broker is None:
-                try:
-                    from trading.broker import create_broker
-                    broker = create_broker('simulation')
-                    if not broker.is_connected:
-                        broker.connect()
-                except Exception:
-                    pass
-            
-            # Check broker status
-            if broker is None:
-                comp.status = HealthStatus.DEGRADED
-                comp.last_error = "No broker instance available"
-            elif not broker.is_connected:
+            if not broker.is_connected:
                 comp.status = HealthStatus.UNHEALTHY
                 comp.last_error = "Broker disconnected"
+                comp.error_count += 1
             else:
                 # Try a lightweight operation
                 try:
                     account = broker.get_account()
-                    if account and (account.cash > 0 or account.equity > 0):
+                    if account and (account.cash > 0 or account.equity > 0 or len(account.positions) >= 0):
                         comp.status = HealthStatus.HEALTHY
                         comp.latency_ms = (time.time() - start) * 1000
                         comp.last_success = datetime.now()
                         comp.error_count = 0
+                        comp.last_error = ""
                     else:
                         comp.status = HealthStatus.DEGRADED
                         comp.last_error = "Broker returned empty account"

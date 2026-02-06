@@ -150,6 +150,9 @@ class AlertConfig:
     position_concentration_alert_pct: float = 20.0
     connection_loss_alert_seconds: int = 30
 
+    from_email: str = ""
+    smtp_username: str = ""
+    smtp_password_key: str = "smtp_password"
 
 class Config:
     """
