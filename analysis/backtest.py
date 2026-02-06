@@ -362,11 +362,9 @@ class Backtester:
         trades: List[BacktestTrade] = []
         predictions, actuals = [], []
 
-        # Collect per-stock daily *values* then sum into a portfolio
         portfolio_values_by_date: Dict[pd.Timestamp, float] = defaultdict(float)
         benchmark_values_by_date: Dict[pd.Timestamp, float] = defaultdict(float)
 
-        # Only allocate capital across stocks that actually have test sequences
         valid_test_codes = []
         prepared = {}
 
@@ -384,19 +382,20 @@ class Backtester:
             if len(X) == 0:
                 continue
 
-            common_idx = fold_df.index.intersection(idx)
-            if len(common_idx) == 0:
-                continue
-
-            idx_mask = idx.isin(common_idx)
+            # ---------- CRITICAL FIX ----------
+            # idx is the master ordering (end-of-sequence timestamps).
+            # Align OHLCV strictly to idx order to prevent mispricing / lookahead bugs.
+            idx_mask = idx.isin(fold_df.index)
             X = X[idx_mask]
             y = y[idx_mask]
             returns = returns[idx_mask]
             idx = idx[idx_mask]
 
-            aligned = fold_df.loc[common_idx]
+            if len(X) == 0:
+                continue
 
-            if len(X) == 0 or aligned.empty:
+            aligned = fold_df.loc[idx]  # ORDERED to match X/y/idx exactly
+            if aligned.empty:
                 continue
 
             valid_test_codes.append(code)
@@ -426,7 +425,7 @@ class Backtester:
                 volumes=aligned["volume"].values,
                 stock_code=code,
                 capital=cap_slice,
-                preds=preds,  # avoid double inference
+                preds=preds,
             )
 
             trades.extend(code_trades)
@@ -436,11 +435,9 @@ class Backtester:
             for dt, v in code_bench_vals.items():
                 benchmark_values_by_date[dt] += float(v)
 
-        # --------- Fold accuracy ----------
         accuracy = float(np.mean(np.array(predictions) == np.array(actuals))) if actuals else 0.0
         log.info(f"  Fold accuracy: {accuracy:.2%}")
 
-        # --------- Convert summed values -> daily returns (%) ----------
         sorted_dates = sorted(portfolio_values_by_date.keys())
         returns_by_date: Dict[pd.Timestamp, float] = {}
         bench_by_date: Dict[pd.Timestamp, float] = {}

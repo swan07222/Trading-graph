@@ -270,10 +270,22 @@ class SimulatorBroker(BrokerInterface):
             log.info("Simulator disconnected")
     
     def get_quote(self, symbol: str) -> Optional[float]:
-        """Get current price"""
+        """
+        Get current price with lowest latency:
+        1) FeedManager last quote (in-memory)
+        2) DataFetcher realtime
+        """
+        try:
+            from data.feeds import get_feed_manager
+            q = get_feed_manager().get_quote(symbol)
+            if q and getattr(q, "price", 0) and q.price > 0:
+                return float(q.price)
+        except Exception:
+            pass
+
         fetcher = self._get_fetcher()
         quote = fetcher.get_realtime(symbol)
-        return quote.price if quote and quote.price > 0 else None
+        return float(quote.price) if quote and quote.price > 0 else None
     
     def get_account(self) -> Account:
         with self._lock:
@@ -455,11 +467,17 @@ class SimulatorBroker(BrokerInterface):
         return True, "OK"
     
     def _execute_order(self, order: Order, market_price: float):
-        """Execute order with realistic simulation."""
+        """Execute order with realistic simulation (FAST: no history download)."""
         import random
 
-        df = self._get_fetcher().get_history(order.symbol, days=2)
-        prev_close = float(df['close'].iloc[-2]) if len(df) >= 2 else float(market_price)
+        prev_close = float(market_price)
+        try:
+            fetcher = self._get_fetcher()
+            q = fetcher.get_realtime(order.symbol)
+            if q and getattr(q, "close", 0) and float(q.close) > 0:
+                prev_close = float(q.close)
+        except Exception:
+            pass
 
         can_trade, reason = self._check_price_limits(order.symbol, order.side, float(market_price), prev_close, order.name)
         if not can_trade:
@@ -502,15 +520,13 @@ class SimulatorBroker(BrokerInterface):
         if remaining <= 0:
             return
 
-        fill_qty = remaining
-
         from core.constants import get_lot_size
         lot = int(get_lot_size(order.symbol))
 
-        if remaining >= 2 * lot:
-            if random.random() < 0.25:
-                half = max(lot, (remaining // 2 // lot) * lot)
-                fill_qty = min(half, remaining)
+        fill_qty = remaining
+        if remaining >= 2 * lot and random.random() < 0.25:
+            half = max(lot, (remaining // 2 // lot) * lot)
+            fill_qty = min(half, remaining)
 
         trade_value = fill_qty * fill_price
         commission = max(trade_value * CONFIG.COMMISSION, 5.0)
@@ -534,7 +550,6 @@ class SimulatorBroker(BrokerInterface):
                     avg_cost=fill_price,
                     current_price=fill_price
                 )
-
             self._purchase_dates[order.symbol] = date.today()
 
         else:
@@ -772,10 +787,18 @@ class THSBroker(BrokerInterface):
         log.info(f"Disconnected from {self.name}")
     
     def get_quote(self, symbol: str) -> Optional[float]:
-        """Get current price using shared fetcher"""
+        """Low-latency quote: feed cache first, then fetcher."""
+        try:
+            from data.feeds import get_feed_manager
+            q = get_feed_manager().get_quote(symbol)
+            if q and getattr(q, "price", 0) and q.price > 0:
+                return float(q.price)
+        except Exception:
+            pass
+
         fetcher = self._get_fetcher()
         quote = fetcher.get_realtime(symbol)
-        return quote.price if quote and quote.price > 0 else None
+        return float(quote.price) if quote and quote.price > 0 else None
     
     def get_account(self) -> Account:
         if not self.is_connected:
@@ -1105,10 +1128,18 @@ class ZSZQBroker(BrokerInterface):
         log.info(f"Disconnected from {self.name}")
     
     def get_quote(self, symbol: str) -> Optional[float]:
-        """Get current price using shared fetcher"""
+        """Low-latency quote: feed cache first, then fetcher."""
+        try:
+            from data.feeds import get_feed_manager
+            q = get_feed_manager().get_quote(symbol)
+            if q and getattr(q, "price", 0) and q.price > 0:
+                return float(q.price)
+        except Exception:
+            pass
+
         fetcher = self._get_fetcher()
         quote = fetcher.get_realtime(symbol)
-        return quote.price if quote and quote.price > 0 else None
+        return float(quote.price) if quote and quote.price > 0 else None
 
     def get_account(self) -> Account:
         if not self.is_connected:

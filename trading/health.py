@@ -200,23 +200,29 @@ class HealthMonitor:
             self._broker = broker
 
     def _run_checks(self):
-        """Run all health checks"""
+        """Run all health checks (cross-platform disk usage)."""
+        import os
+
         with self._lock:
-            # System resources
             cpu = psutil.cpu_percent(interval=1)
             memory = psutil.virtual_memory().percent
-            disk = psutil.disk_usage('/').percent
-            
-            # Check each component
+
+            # Cross-platform disk root:
+            # - On Windows, use the drive of CONFIG.base_dir (e.g. C:\)
+            # - On Linux/macOS, use "/"
+            try:
+                base = str(getattr(CONFIG, "base_dir", os.path.abspath(os.sep)))
+                root = Path(base).anchor or os.path.abspath(os.sep)
+                disk = psutil.disk_usage(root).percent
+            except Exception:
+                disk = psutil.disk_usage(os.path.abspath(os.sep)).percent
+
             self._check_database()
             self._check_broker()
             self._check_data_feed()
             self._check_model()
-            
-            # Calculate overall status
+
             health = self._calculate_overall_health(cpu, memory, disk)
-            
-            # Check for status changes
             self._check_status_change(health)
     
     def _check_database(self):

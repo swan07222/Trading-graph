@@ -164,95 +164,98 @@ class PollingFeed(DataFeed):
         log.debug(f"Unsubscribed from {symbol}")
     
     def _poll_loop(self):
-        """Main polling loop (seconds-level updates)."""
+        """Drift-resistant polling loop."""
+        next_tick = time.monotonic()
         while self._running:
+            next_tick += float(self._interval)
+
             try:
                 with self._lock:
                     symbols = list(self._symbols)
 
-                if not symbols:
-                    time.sleep(self._interval)
-                    continue
+                if symbols:
+                    quotes = self._fetch_batch_quotes(symbols)
+                    now_ts = datetime.now()
 
-                quotes = self._fetch_batch_quotes(symbols)
+                    for symbol, quote in quotes.items():
+                        if quote and quote.price > 0:
+                            if getattr(quote, "timestamp", None) is None:
+                                quote.timestamp = now_ts
 
-                now_ts = datetime.now()
-                for symbol, quote in quotes.items():
-                    if quote and quote.price > 0:
-                        # ensure timestamp exists and is recent
-                        if getattr(quote, "timestamp", None) is None:
-                            quote.timestamp = now_ts
+                            self._last_quotes[symbol] = quote
+                            self._notify(quote)
 
-                        self._last_quotes[symbol] = quote
-                        self._notify(quote)
-
-                        EVENT_BUS.publish(TickEvent(
-                            symbol=symbol,
-                            price=float(quote.price),
-                            volume=int(quote.volume or 0),
-                            bid=float(getattr(quote, "bid", 0.0) or 0.0),
-                            ask=float(getattr(quote, "ask", 0.0) or 0.0),
-                            source=self.name
-                        ))
-
-                time.sleep(self._interval)
-
+                            EVENT_BUS.publish(TickEvent(
+                                symbol=symbol,
+                                price=float(quote.price),
+                                volume=int(quote.volume or 0),
+                                bid=float(getattr(quote, "bid", 0.0) or 0.0),
+                                ask=float(getattr(quote, "ask", 0.0) or 0.0),
+                                source=self.name
+                            ))
             except Exception as e:
                 log.error(f"Polling loop error: {e}")
-                time.sleep(1)
+
+            time.sleep(max(0.0, next_tick - time.monotonic()))
 
     def _fetch_batch_quotes(self, symbols: List[str]) -> Dict[str, 'Quote']:
         """
         Fast batch quotes:
-        1) DataFetcher.get_realtime_batch (Tencent)
-        2) spot cache
-        3) per-symbol fallback
+        1) DataFetcher.get_realtime_batch
+        2) SpotCache fill missing
+        3) Per-symbol fallback only if few missing
         """
-        result = {}
+        result: Dict[str, 'Quote'] = {}
         fetcher = self._get_fetcher()
 
         # 1) Batch
         try:
             batch = fetcher.get_realtime_batch(symbols)
-            if batch:
-                return batch
+            if isinstance(batch, dict) and batch:
+                result.update(batch)
         except Exception:
             pass
 
-        # 2) Spot cache
-        try:
-            from data.fetcher import get_spot_cache, Quote
-            cache = get_spot_cache()
-            df = cache.get()
-            if df is not None and not df.empty:
-                for symbol in symbols:
-                    data = cache.get_quote(symbol)
-                    if data and data.get("price", 0) > 0:
-                        result[symbol] = Quote(
-                            code=symbol,
-                            name=data.get("name", ""),
-                            price=float(data["price"]),
-                            open=float(data.get("open", 0) or 0),
-                            high=float(data.get("high", 0) or 0),
-                            low=float(data.get("low", 0) or 0),
-                            close=float(data.get("close", 0) or 0),
-                            volume=int(data.get("volume", 0) or 0),
-                            amount=float(data.get("amount", 0) or 0),
-                            change=float(data.get("change", 0) or 0),
-                            change_pct=float(data.get("change_pct", 0) or 0),
-                            source="spot_cache",
-                            is_delayed=False,
-                        )
-                if result:
-                    return result
-        except Exception:
-            pass
+        missing = [s for s in symbols if s not in result]
 
-        # 3) Per-symbol
-        for symbol in symbols:
-            q = fetcher.get_realtime(symbol)
-            if q and q.price > 0:
-                result[symbol] = q
+        # 2) SpotCache fill
+        if missing:
+            try:
+                from data.fetcher import get_spot_cache, Quote
+                cache = get_spot_cache()
+                df = cache.get()
+                if df is not None and not df.empty:
+                    for symbol in missing:
+                        data = cache.get_quote(symbol)
+                        if data and data.get("price", 0) > 0:
+                            result[symbol] = Quote(
+                                code=symbol,
+                                name=data.get("name", ""),
+                                price=float(data["price"]),
+                                open=float(data.get("open", 0) or 0),
+                                high=float(data.get("high", 0) or 0),
+                                low=float(data.get("low", 0) or 0),
+                                close=float(data.get("close", 0) or 0),
+                                volume=int(data.get("volume", 0) or 0),
+                                amount=float(data.get("amount", 0) or 0),
+                                change=float(data.get("change", 0) or 0),
+                                change_pct=float(data.get("change_pct", 0) or 0),
+                                source="spot_cache",
+                                is_delayed=False,
+                            )
+            except Exception:
+                pass
+
+        # 3) Per-symbol only if few missing
+        missing = [s for s in symbols if s not in result]
+        if missing and len(missing) <= 8:
+            for symbol in missing:
+                try:
+                    q = fetcher.get_realtime(symbol)
+                    if q and q.price > 0:
+                        result[symbol] = q
+                except Exception:
+                    continue
 
         return result
 
@@ -611,7 +614,7 @@ class BarAggregator:
         }
     
     def _emit_bar(self, symbol: str, bar: Dict):
-        """Emit completed bar"""
+        """Emit completed bar + persist to local DB (intraday history recorder)."""
         EVENT_BUS.publish(BarEvent(
             symbol=symbol,
             open=bar['open'],
@@ -621,13 +624,37 @@ class BarAggregator:
             volume=bar['volume'],
             timestamp=bar['timestamp']
         ))
-        
+
+        # -------- NEW: persist to DB as 1m bars --------
+        try:
+            import pandas as pd
+            from data.database import get_database
+            db = get_database()
+
+            df = pd.DataFrame([{
+                "open": float(bar["open"]),
+                "high": float(bar["high"]),
+                "low": float(bar["low"]),
+                "close": float(bar["close"]),
+                "volume": int(bar["volume"]),
+                "amount": float(0.0),
+            }], index=pd.DatetimeIndex([bar["timestamp"]]))
+
+            # interval_seconds -> interval string
+            interval = f"{int(self._interval // 60)}m" if self._interval >= 60 else f"{int(self._interval)}s"
+            # for 60s it becomes "1m" as desired
+            if interval == "1m":
+                db.upsert_intraday_bars(symbol, "1m", df)
+            else:
+                db.upsert_intraday_bars(symbol, interval, df)
+        except Exception:
+            pass
+
         for callback in self._callbacks:
             try:
                 callback(symbol, bar)
             except Exception as e:
                 log.warning(f"Bar callback error: {e}")
-
 
 class FeedManager:
     """Central manager for all data feeds"""
@@ -733,8 +760,8 @@ _feed_manager: Optional[FeedManager] = None
 
 
 def get_feed_manager() -> FeedManager:
-    """Get global feed manager"""
     global _feed_manager
     if _feed_manager is None:
         _feed_manager = FeedManager()
+        _feed_manager.initialize()  # ADD THIS
     return _feed_manager

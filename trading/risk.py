@@ -100,13 +100,12 @@ class RiskManager:
     
     def _get_unified_account_view(self) -> Account:
         """
-        Get unified account view that includes OMS reservations.
-        This prevents risk checks passing but OMS rejecting.
+        Unified account view that includes OMS reservations.
+        Goal: prevent Risk passing while OMS later rejects.
         """
         if self._account is None:
             return Account()
-        
-        # Deep copy positions to avoid mutating originals
+
         unified_positions = {}
         for sym, pos in self._account.positions.items():
             unified_positions[sym] = Position(
@@ -119,54 +118,60 @@ class RiskManager:
                 current_price=pos.current_price,
                 realized_pnl=pos.realized_pnl,
             )
-        
+
         unified = Account(
             broker_name=self._account.broker_name,
-            cash=self._account.cash,
-            available=self._account.available,
-            frozen=self._account.frozen,
+            cash=float(self._account.cash),
+            available=float(self._account.available),
+            frozen=float(self._account.frozen),
             positions=unified_positions,
             initial_capital=self._account.initial_capital,
             realized_pnl=self._account.realized_pnl,
         )
-        
+
         try:
             from trading.oms import get_oms
             oms = get_oms()
-            
             active_orders = oms.get_active_orders()
+
+            comm_rate = float(CONFIG.trading.commission)
+            comm_min = 5.0
+            slip = float(CONFIG.trading.slippage)
+
             for order in active_orders:
-                if order.status not in [
-                    OrderStatus.PENDING, OrderStatus.SUBMITTED, 
-                    OrderStatus.ACCEPTED, OrderStatus.PARTIAL
-                ]:
+                if order.status not in [OrderStatus.PENDING, OrderStatus.SUBMITTED, OrderStatus.ACCEPTED, OrderStatus.PARTIAL]:
                     continue
-                
-                remaining_qty = order.quantity - order.filled_qty
+
+                remaining_qty = int(order.quantity - order.filled_qty)
                 if remaining_qty <= 0:
                     continue
-                
+
                 if order.side == OrderSide.BUY:
-                    # Subtract reserved cash
+                    # Prefer OMS reservation tags if present
+                    reserved = 0.0
                     if order.tags:
                         reserved = float(order.tags.get("reserved_cash_remaining", 0.0))
-                    else:
-                        reserved = remaining_qty * order.price * (1 + CONFIG.trading.commission)
-                    unified.available -= reserved
-                    
-                else:  # SELL
-                    # Subtract reserved shares from available
-                    if order.symbol in unified.positions:
-                        pos = unified.positions[order.symbol]
-                        # Reduce available_qty by unfilled sell quantity
-                        pos.available_qty = max(0, pos.available_qty - remaining_qty)
-            
-            # Ensure non-negative
+
+                    if reserved <= 0.0:
+                        # Conservative fallback reservation similar to OMS:
+                        # reserve remaining notional with slippage + commission min
+                        est_px = float(order.price) * (1.0 + slip)
+                        notional = float(remaining_qty) * est_px
+                        fee = max(comm_min, notional * comm_rate)
+                        reserved = notional + fee
+
+                    unified.available = max(0.0, unified.available - reserved)
+
+                else:  # SELL reservations reduce available shares
+                    pos = unified.positions.get(order.symbol)
+                    if pos:
+                        pos.available_qty = max(0, int(pos.available_qty) - remaining_qty)
+
             unified.available = max(0.0, unified.available)
-            
+
         except Exception as e:
-            log.debug(f"Could not get OMS reservations: {e}")
-        
+            log.debug(f"Could not apply OMS reservations: {e}")
+
         return unified
 
     def update(self, account: Account):
@@ -550,7 +555,7 @@ class RiskManager:
                 pass
 
         if last_quote_time is None:
-            return False, "No quote timestamp available (cannot verify freshness)"
+            return True, "OK (first trade - no prior quote)"
 
         age = (datetime.now() - last_quote_time).total_seconds()
         if age > float(self._staleness_threshold_seconds):

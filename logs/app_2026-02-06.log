@@ -213,3 +213,202 @@
 2026-02-06 07:43:45,854 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized gru model
 2026-02-06 07:43:45,861 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized tcn model
 2026-02-06 07:43:45,863 | INFO     | trading.models.ensemble:load:610 - Ensemble loaded: ['lstm', 'transformer', 'gru', 'tcn'], interval=1d, horizon=5
+2026-02-06 07:58:01,847 | INFO     | trading:main:67 - ============================================================
+2026-02-06 07:58:01,847 | INFO     | trading:main:68 - AI STOCK TRADING SYSTEM - Production Grade
+2026-02-06 07:58:01,847 | INFO     | trading:main:69 - ============================================================
+2026-02-06 07:58:02,280 | INFO     | trading.data.fetcher:__init__:253 - AkShare initialized
+2026-02-06 07:58:02,350 | INFO     | trading.data.fetcher:__init__:469 - Yahoo Finance initialized
+2026-02-06 07:58:02,354 | INFO     | trading.data.fetcher:_init_sources:758 - Data source akshare available
+2026-02-06 07:58:02,354 | INFO     | trading.data.fetcher:_init_sources:758 - Data source tencent available
+2026-02-06 07:58:02,354 | INFO     | trading.data.fetcher:_init_sources:758 - Data source yahoo available
+2026-02-06 07:58:02,354 | INFO     | trading.analysis.backtest:run:155 - Starting walk-forward backtest:
+2026-02-06 07:58:02,354 | INFO     | trading.analysis.backtest:run:156 -   Stocks: 5
+2026-02-06 07:58:02,354 | INFO     | trading.analysis.backtest:run:157 -   Train: 12 months, Test: 1 months
+2026-02-06 07:58:02,354 | INFO     | trading.analysis.backtest:run:158 -   Capital: ¥100,000.00
+2026-02-06 07:58:02,354 | WARNING  | trading.analysis.backtest:_collect_data:271 - Failed to load 600519: name 'query' is not defined
+2026-02-06 07:58:02,354 | WARNING  | trading.analysis.backtest:_collect_data:271 - Failed to load 601318: name 'query' is not defined
+2026-02-06 07:58:02,354 | WARNING  | trading.analysis.backtest:_collect_data:271 - Failed to load 600036: name 'query' is not defined
+2026-02-06 07:58:02,363 | WARNING  | trading.analysis.backtest:_collect_data:271 - Failed to load 000858: name 'query' is not defined
+2026-02-06 07:58:02,373 | WARNING  | trading.analysis.backtest:_collect_data:271 - Failed to load 600900: name 'query' is not defined
+2026-02-06 07:58:02,373 | ERROR    | trading:main:123 - Error: No valid data available for backtesting
+Traceback (most recent call last):
+  File "F:\Trading app\Trading-graph\main.py", line 113, in main
+    result = bt.run()
+             ^^^^^^^^
+  File "F:\Trading app\Trading-graph\analysis\backtest.py", line 164, in run
+    raise ValueError("No valid data available for backtesting")
+ValueError: No valid data available for backtesting
+2026-02-06 08:01:04,398 | INFO     | trading:main:67 - ============================================================
+2026-02-06 08:01:04,398 | INFO     | trading:main:68 - AI STOCK TRADING SYSTEM - Production Grade
+2026-02-06 08:01:04,398 | INFO     | trading:main:69 - ============================================================
+2026-02-06 08:01:04,725 | INFO     | trading.data.fetcher:__init__:253 - AkShare initialized
+2026-02-06 08:01:04,781 | INFO     | trading.data.fetcher:__init__:469 - Yahoo Finance initialized
+2026-02-06 08:01:04,781 | INFO     | trading.data.fetcher:_init_sources:758 - Data source akshare available
+2026-02-06 08:01:04,781 | INFO     | trading.data.fetcher:_init_sources:758 - Data source tencent available
+2026-02-06 08:01:04,781 | INFO     | trading.data.fetcher:_init_sources:758 - Data source yahoo available
+2026-02-06 08:01:04,781 | INFO     | trading.analysis.backtest:run:155 - Starting walk-forward backtest:
+2026-02-06 08:01:04,781 | INFO     | trading.analysis.backtest:run:156 -   Stocks: 5
+2026-02-06 08:01:04,781 | INFO     | trading.analysis.backtest:run:157 -   Train: 12 months, Test: 1 months
+2026-02-06 08:01:04,781 | INFO     | trading.analysis.backtest:run:158 -   Capital: ¥100,000.00
+2026-02-06 08:01:05,029 | INFO     | trading.data.features:create_features:173 - Created 47 features, 1435 valid samples
+2026-02-06 08:01:05,029 | INFO     | trading.analysis.backtest:_collect_data:268 -   600519: 1435 samples
+2026-02-06 08:01:05,456 | INFO     | trading.data.features:create_features:173 - Created 47 features, 1435 valid samples
+2026-02-06 08:01:05,456 | INFO     | trading.analysis.backtest:_collect_data:268 -   601318: 1435 samples
+2026-02-06 08:01:05,969 | INFO     | trading.data.features:create_features:173 - Created 47 features, 1435 valid samples
+2026-02-06 08:01:05,969 | INFO     | trading.analysis.backtest:_collect_data:268 -   600036: 1435 samples
+2026-02-06 08:01:06,463 | INFO     | trading.data.features:create_features:173 - Created 47 features, 1436 valid samples
+2026-02-06 08:01:06,463 | INFO     | trading.analysis.backtest:_collect_data:268 -   000858: 1436 samples
+2026-02-06 08:01:06,956 | INFO     | trading.data.features:create_features:173 - Created 47 features, 1424 valid samples
+2026-02-06 08:01:06,956 | INFO     | trading.analysis.backtest:_collect_data:268 -   600900: 1424 samples
+2026-02-06 08:01:06,956 | INFO     | trading.analysis.backtest:run:170 -   Date range: 2020-03-11 to 2026-02-05
+2026-02-06 08:01:06,972 | INFO     | trading.analysis.backtest:run:178 -   Folds: 58
+2026-02-06 08:01:06,972 | INFO     | trading.analysis.backtest:run:190 - 
+Fold 1/58:
+2026-02-06 08:01:06,972 | INFO     | trading.analysis.backtest:run:191 -   Train: 2020-03-11 to 2021-03-11
+2026-02-06 08:01:06,972 | INFO     | trading.analysis.backtest:run:192 -   Test:  2021-03-21 to 2021-04-21
+2026-02-06 08:01:06,982 | INFO     | trading.data.processor:fit_scaler:102 - Scaler fitted on 1215 samples, 47 features
+2026-02-06 08:01:07,014 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized lstm model
+2026-02-06 08:01:07,014 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized gru model
+2026-02-06 08:01:07,030 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized tcn model
+2026-02-06 08:01:07,030 | INFO     | trading.models.ensemble:__init__:85 - Ensemble initialized: ['lstm', 'gru', 'tcn'] on cpu
+2026-02-06 08:01:07,030 | INFO     | trading.models.ensemble:train:203 - Training lstm...
+2026-02-06 08:01:35,192 | INFO     | trading:main:121 - Interrupted by user
+2026-02-06 08:02:01,231 | INFO     | trading:main:67 - ============================================================
+2026-02-06 08:02:01,231 | INFO     | trading:main:68 - AI STOCK TRADING SYSTEM - Production Grade
+2026-02-06 08:02:01,231 | INFO     | trading:main:69 - ============================================================
+2026-02-06 08:02:01,552 | INFO     | trading.data.fetcher:__init__:253 - AkShare initialized
+2026-02-06 08:02:01,610 | INFO     | trading.data.fetcher:__init__:469 - Yahoo Finance initialized
+2026-02-06 08:02:01,611 | INFO     | trading.data.fetcher:_init_sources:758 - Data source akshare available
+2026-02-06 08:02:01,611 | INFO     | trading.data.fetcher:_init_sources:758 - Data source tencent available
+2026-02-06 08:02:01,611 | INFO     | trading.data.fetcher:_init_sources:758 - Data source yahoo available
+2026-02-06 08:02:01,612 | INFO     | trading.data.processor:load_scaler:340 - Scaler loaded from F:\Trading app\Trading-graph\models_saved\scaler.pkl
+2026-02-06 08:02:01,665 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized lstm model
+2026-02-06 08:02:01,687 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized transformer model
+2026-02-06 08:02:01,699 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized gru model
+2026-02-06 08:02:01,709 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized tcn model
+2026-02-06 08:02:01,709 | INFO     | trading.models.ensemble:__init__:85 - Ensemble initialized: ['lstm', 'transformer', 'gru', 'tcn'] on cpu
+2026-02-06 08:02:01,765 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized lstm model
+2026-02-06 08:02:01,783 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized transformer model
+2026-02-06 08:02:01,795 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized gru model
+2026-02-06 08:02:01,804 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized tcn model
+2026-02-06 08:02:01,806 | INFO     | trading.models.ensemble:load:610 - Ensemble loaded: ['lstm', 'transformer', 'gru', 'tcn'], interval=1d, horizon=5
+2026-02-06 08:02:01,806 | INFO     | trading.models.predictor:_load_model:286 - Model loaded successfully (4 networks)
+2026-02-06 08:02:01,807 | INFO     | trading.data.processor:load_scaler:340 - Scaler loaded from F:\Trading app\Trading-graph\models_saved\scaler.pkl
+2026-02-06 08:02:01,856 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized lstm model
+2026-02-06 08:02:01,870 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized transformer model
+2026-02-06 08:02:01,878 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized gru model
+2026-02-06 08:02:01,887 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized tcn model
+2026-02-06 08:02:01,887 | INFO     | trading.models.ensemble:__init__:85 - Ensemble initialized: ['lstm', 'transformer', 'gru', 'tcn'] on cpu
+2026-02-06 08:02:01,934 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized lstm model
+2026-02-06 08:02:01,953 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized transformer model
+2026-02-06 08:02:01,964 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized gru model
+2026-02-06 08:02:01,974 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized tcn model
+2026-02-06 08:02:01,975 | INFO     | trading.models.ensemble:load:610 - Ensemble loaded: ['lstm', 'transformer', 'gru', 'tcn'], interval=1d, horizon=5
+2026-02-06 08:03:50,773 | INFO     | trading:main:67 - ============================================================
+2026-02-06 08:03:50,774 | INFO     | trading:main:68 - AI STOCK TRADING SYSTEM - Production Grade
+2026-02-06 08:03:50,774 | INFO     | trading:main:69 - ============================================================
+2026-02-06 08:03:51,112 | INFO     | trading.data.fetcher:__init__:253 - AkShare initialized
+2026-02-06 08:03:51,171 | INFO     | trading.data.fetcher:__init__:469 - Yahoo Finance initialized
+2026-02-06 08:03:51,172 | INFO     | trading.data.fetcher:_init_sources:758 - Data source akshare available
+2026-02-06 08:03:51,172 | INFO     | trading.data.fetcher:_init_sources:758 - Data source tencent available
+2026-02-06 08:03:51,172 | INFO     | trading.data.fetcher:_init_sources:758 - Data source yahoo available
+2026-02-06 08:03:51,172 | INFO     | trading.analysis.backtest:run:155 - Starting walk-forward backtest:
+2026-02-06 08:03:51,172 | INFO     | trading.analysis.backtest:run:156 -   Stocks: 5
+2026-02-06 08:03:51,172 | INFO     | trading.analysis.backtest:run:157 -   Train: 12 months, Test: 1 months
+2026-02-06 08:03:51,172 | INFO     | trading.analysis.backtest:run:158 -   Capital: ¥100,000.00
+2026-02-06 08:03:51,249 | INFO     | trading.data.features:create_features:173 - Created 47 features, 1435 valid samples
+2026-02-06 08:03:51,249 | INFO     | trading.analysis.backtest:_collect_data:268 -   600519: 1435 samples
+2026-02-06 08:03:51,321 | INFO     | trading.data.features:create_features:173 - Created 47 features, 1435 valid samples
+2026-02-06 08:03:51,322 | INFO     | trading.analysis.backtest:_collect_data:268 -   601318: 1435 samples
+2026-02-06 08:03:51,393 | INFO     | trading.data.features:create_features:173 - Created 47 features, 1435 valid samples
+2026-02-06 08:03:51,393 | INFO     | trading.analysis.backtest:_collect_data:268 -   600036: 1435 samples
+2026-02-06 08:03:51,460 | INFO     | trading.data.features:create_features:173 - Created 47 features, 1436 valid samples
+2026-02-06 08:03:51,461 | INFO     | trading.analysis.backtest:_collect_data:268 -   000858: 1436 samples
+2026-02-06 08:03:51,530 | INFO     | trading.data.features:create_features:173 - Created 47 features, 1424 valid samples
+2026-02-06 08:03:51,530 | INFO     | trading.analysis.backtest:_collect_data:268 -   600900: 1424 samples
+2026-02-06 08:03:51,531 | INFO     | trading.analysis.backtest:run:170 -   Date range: 2020-03-11 to 2026-02-05
+2026-02-06 08:03:51,533 | INFO     | trading.analysis.backtest:run:178 -   Folds: 58
+2026-02-06 08:03:51,534 | INFO     | trading.analysis.backtest:run:190 - 
+Fold 1/58:
+2026-02-06 08:03:51,534 | INFO     | trading.analysis.backtest:run:191 -   Train: 2020-03-11 to 2021-03-11
+2026-02-06 08:03:51,534 | INFO     | trading.analysis.backtest:run:192 -   Test:  2021-03-21 to 2021-04-21
+2026-02-06 08:03:51,539 | INFO     | trading.data.processor:fit_scaler:102 - Scaler fitted on 1215 samples, 47 features
+2026-02-06 08:03:51,575 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized lstm model
+2026-02-06 08:03:51,584 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized gru model
+2026-02-06 08:03:51,592 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized tcn model
+2026-02-06 08:03:51,592 | INFO     | trading.models.ensemble:__init__:85 - Ensemble initialized: ['lstm', 'gru', 'tcn'] on cpu
+2026-02-06 08:03:51,592 | INFO     | trading.models.ensemble:train:203 - Training lstm...
+2026-02-06 08:25:14,429 | INFO     | trading:main:67 - ============================================================
+2026-02-06 08:25:14,430 | INFO     | trading:main:68 - AI STOCK TRADING SYSTEM - Production Grade
+2026-02-06 08:25:14,430 | INFO     | trading:main:69 - ============================================================
+2026-02-06 08:25:14,845 | INFO     | trading.data.fetcher:__init__:264 - AkShare initialized
+2026-02-06 08:25:14,899 | INFO     | trading.data.fetcher:__init__:480 - Yahoo Finance initialized
+2026-02-06 08:25:14,899 | INFO     | trading.data.fetcher:_init_sources:777 - Data source akshare available
+2026-02-06 08:25:14,899 | INFO     | trading.data.fetcher:_init_sources:777 - Data source tencent available
+2026-02-06 08:25:14,899 | INFO     | trading.data.fetcher:_init_sources:777 - Data source yahoo available
+2026-02-06 08:25:14,899 | INFO     | trading.analysis.backtest:run:155 - Starting walk-forward backtest:
+2026-02-06 08:25:14,899 | INFO     | trading.analysis.backtest:run:156 -   Stocks: 5
+2026-02-06 08:25:14,899 | INFO     | trading.analysis.backtest:run:157 -   Train: 12 months, Test: 1 months
+2026-02-06 08:25:14,900 | INFO     | trading.analysis.backtest:run:158 -   Capital: ¥100,000.00
+2026-02-06 08:25:14,976 | INFO     | trading.data.features:create_features:173 - Created 47 features, 1435 valid samples
+2026-02-06 08:25:14,977 | INFO     | trading.analysis.backtest:_collect_data:268 -   600519: 1435 samples
+2026-02-06 08:25:15,044 | INFO     | trading.data.features:create_features:173 - Created 47 features, 1435 valid samples
+2026-02-06 08:25:15,045 | INFO     | trading.analysis.backtest:_collect_data:268 -   601318: 1435 samples
+2026-02-06 08:25:15,114 | INFO     | trading.data.features:create_features:173 - Created 47 features, 1435 valid samples
+2026-02-06 08:25:15,115 | INFO     | trading.analysis.backtest:_collect_data:268 -   600036: 1435 samples
+2026-02-06 08:25:15,182 | INFO     | trading.data.features:create_features:173 - Created 47 features, 1436 valid samples
+2026-02-06 08:25:15,183 | INFO     | trading.analysis.backtest:_collect_data:268 -   000858: 1436 samples
+2026-02-06 08:25:15,250 | INFO     | trading.data.features:create_features:173 - Created 47 features, 1424 valid samples
+2026-02-06 08:25:15,251 | INFO     | trading.analysis.backtest:_collect_data:268 -   600900: 1424 samples
+2026-02-06 08:25:15,251 | INFO     | trading.analysis.backtest:run:170 -   Date range: 2020-03-11 to 2026-02-05
+2026-02-06 08:25:15,254 | INFO     | trading.analysis.backtest:run:178 -   Folds: 58
+2026-02-06 08:25:15,254 | INFO     | trading.analysis.backtest:run:190 - 
+Fold 1/58:
+2026-02-06 08:25:15,255 | INFO     | trading.analysis.backtest:run:191 -   Train: 2020-03-11 to 2021-03-11
+2026-02-06 08:25:15,255 | INFO     | trading.analysis.backtest:run:192 -   Test:  2021-03-21 to 2021-04-21
+2026-02-06 08:25:15,261 | INFO     | trading.data.processor:fit_scaler:102 - Scaler fitted on 1215 samples, 47 features
+2026-02-06 08:25:15,300 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized lstm model
+2026-02-06 08:25:15,309 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized gru model
+2026-02-06 08:25:15,317 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized tcn model
+2026-02-06 08:25:15,317 | INFO     | trading.models.ensemble:__init__:85 - Ensemble initialized: ['lstm', 'gru', 'tcn'] on cpu
+2026-02-06 08:25:15,317 | INFO     | trading.models.ensemble:train:203 - Training lstm...
+2026-02-06 08:45:28,199 | INFO     | trading:main:67 - ============================================================
+2026-02-06 08:45:28,199 | INFO     | trading:main:68 - AI STOCK TRADING SYSTEM - Production Grade
+2026-02-06 08:45:28,199 | INFO     | trading:main:69 - ============================================================
+2026-02-06 08:45:28,697 | INFO     | trading.data.fetcher:__init__:264 - AkShare initialized
+2026-02-06 08:45:28,820 | INFO     | trading.data.fetcher:__init__:480 - Yahoo Finance initialized
+2026-02-06 08:45:28,820 | INFO     | trading.data.fetcher:_init_sources:777 - Data source akshare available
+2026-02-06 08:45:28,820 | INFO     | trading.data.fetcher:_init_sources:777 - Data source tencent available
+2026-02-06 08:45:28,821 | INFO     | trading.data.fetcher:_init_sources:777 - Data source yahoo available
+2026-02-06 08:45:28,821 | INFO     | trading.data.processor:load_scaler:340 - Scaler loaded from F:\Trading app\Trading-graph\models_saved\scaler.pkl
+2026-02-06 08:45:28,876 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized lstm model
+2026-02-06 08:45:28,900 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized transformer model
+2026-02-06 08:45:28,913 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized gru model
+2026-02-06 08:45:28,922 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized tcn model
+2026-02-06 08:45:28,922 | INFO     | trading.models.ensemble:__init__:85 - Ensemble initialized: ['lstm', 'transformer', 'gru', 'tcn'] on cpu
+2026-02-06 08:45:28,975 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized lstm model
+2026-02-06 08:45:28,995 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized transformer model
+2026-02-06 08:45:29,009 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized gru model
+2026-02-06 08:45:29,023 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized tcn model
+2026-02-06 08:45:29,025 | INFO     | trading.models.ensemble:load:608 - Ensemble loaded: ['lstm', 'transformer', 'gru', 'tcn'], interval=1d, horizon=5
+2026-02-06 08:45:29,026 | INFO     | trading.models.predictor:_load_model:286 - Model loaded successfully (4 networks)
+2026-02-06 08:49:43,396 | INFO     | trading:main:67 - ============================================================
+2026-02-06 08:49:43,396 | INFO     | trading:main:68 - AI STOCK TRADING SYSTEM - Production Grade
+2026-02-06 08:49:43,396 | INFO     | trading:main:69 - ============================================================
+2026-02-06 08:49:43,969 | INFO     | trading.data.fetcher:__init__:264 - AkShare initialized
+2026-02-06 08:49:44,029 | INFO     | trading.data.fetcher:__init__:480 - Yahoo Finance initialized
+2026-02-06 08:49:44,029 | INFO     | trading.data.fetcher:_init_sources:777 - Data source akshare available
+2026-02-06 08:49:44,029 | INFO     | trading.data.fetcher:_init_sources:777 - Data source tencent available
+2026-02-06 08:49:44,030 | INFO     | trading.data.fetcher:_init_sources:777 - Data source yahoo available
+2026-02-06 08:49:44,030 | INFO     | trading.data.processor:load_scaler:340 - Scaler loaded from F:\Trading app\Trading-graph\models_saved\scaler.pkl
+2026-02-06 08:49:44,088 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized lstm model
+2026-02-06 08:49:44,173 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized transformer model
+2026-02-06 08:49:44,184 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized gru model
+2026-02-06 08:49:44,196 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized tcn model
+2026-02-06 08:49:44,196 | INFO     | trading.models.ensemble:__init__:85 - Ensemble initialized: ['lstm', 'transformer', 'gru', 'tcn'] on cpu
+2026-02-06 08:49:44,244 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized lstm model
+2026-02-06 08:49:44,263 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized transformer model
+2026-02-06 08:49:44,273 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized gru model
+2026-02-06 08:49:44,283 | DEBUG    | trading.models.ensemble:_init_model:106 - Initialized tcn model
+2026-02-06 08:49:44,284 | INFO     | trading.models.ensemble:load:627 - Ensemble loaded: ['lstm', 'transformer', 'gru', 'tcn'], interval=1d, horizon=5
+2026-02-06 08:49:44,285 | INFO     | trading.models.predictor:_load_model:286 - Model loaded successfully (4 networks)

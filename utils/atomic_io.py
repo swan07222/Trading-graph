@@ -28,5 +28,10 @@ def atomic_torch_save(path: Path, obj):
     tmp = path.with_suffix(path.suffix + ".tmp")
     tmp.parent.mkdir(parents=True, exist_ok=True)
 
-    torch.save(obj, tmp)
+    # Write to tmp, then fsync to reduce corruption risk on power loss
+    with open(tmp, "wb") as f:
+        torch.save(obj, f)
+        f.flush()
+        os.fsync(f.fileno())
+
     os.replace(tmp, path)

@@ -1386,3 +1386,12 @@ None
 None
 2026-02-05 21:47:09,939 | ERROR    | trading.data.fetcher:_fetch_from_sources:550 - All sources failed for 000568
 None
+2026-02-06 07:58:02,373 | ERROR    | trading:main:123 - Error: No valid data available for backtesting
+(<class 'ValueError'>, ValueError('No valid data available for backtesting'), <traceback object at 0x0000026E66773500>)
+Traceback (most recent call last):
+  File "F:\Trading app\Trading-graph\main.py", line 113, in main
+    result = bt.run()
+             ^^^^^^^^
+  File "F:\Trading app\Trading-graph\analysis\backtest.py", line 164, in run
+    raise ValueError("No valid data available for backtesting")
+ValueError: No valid data available for backtesting

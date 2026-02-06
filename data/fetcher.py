@@ -165,33 +165,44 @@ class SpotCache:
             pass
     
     def get(self, force_refresh: bool = False) -> Optional[pd.DataFrame]:
-        """Get spot data, refreshing if stale"""
+        """
+        Non-blocking SpotCache refresh:
+        - avoids holding main lock during network call
+        - returns last-known data if refresh fails
+        """
+        now = time.time()
+
         with self._lock:
-            now = time.time()
-            
-            if not force_refresh and self._cache is not None:
-                if now - self._cache_time < self._ttl:
-                    return self._cache
-            
-            if self._ak is None:
+            if not force_refresh and self._cache is not None and (now - self._cache_time) < self._ttl:
                 return self._cache
-            
+            ak = self._ak
+            cached = self._cache
+
+        if ak is None:
+            return cached
+
+        with self._rate_lock:
+            with self._lock:
+                if not force_refresh and self._cache is not None and (now - self._cache_time) < self._ttl:
+                    return self._cache
+
             try:
                 import socket
                 old_timeout = socket.getdefaulttimeout()
-                socket.setdefaulttimeout(60)
-                
+                socket.setdefaulttimeout(15)
                 try:
-                    self._cache = self._ak.stock_zh_a_spot_em()
-                    self._cache_time = now
-                    log.debug(f"Spot cache refreshed: {len(self._cache)} stocks")
+                    fresh = ak.stock_zh_a_spot_em()
                 finally:
                     socket.setdefaulttimeout(old_timeout)
-                    
-            except Exception as e:
-                log.warning(f"Spot cache refresh failed: {e}")
-            
-            return self._cache
+
+                with self._lock:
+                    if fresh is not None and not fresh.empty:
+                        self._cache = fresh
+                        self._cache_time = now
+                    return self._cache
+            except Exception:
+                with self._lock:
+                    return self._cache
     
     def get_quote(self, symbol: str) -> Optional[Dict]:
         """Get single stock quote from cache"""
@@ -715,7 +726,15 @@ class DataFetcher:
         self._rate_limiter = threading.Semaphore(CONFIG.data.parallel_downloads)
         self._request_times: Dict[str, float] = {}
         self._min_interval = 0.5
-        
+
+        # last-good quote store (uptime)
+        self._last_good_quotes: Dict[str, Quote] = {}
+        self._last_good_lock = threading.RLock()
+
+        # micro-caches (latency)
+        self._rt_batch_microcache = {"ts": 0.0, "key": None, "data": {}}
+        self._rt_single_microcache: Dict[str, Dict[str, object]] = {}
+
         self._init_sources()
         self._rate_lock = threading.Lock()
     
@@ -771,7 +790,7 @@ class DataFetcher:
             self._request_times[source] = time.time()
 
     def get_realtime_batch(self, codes: List[str]) -> Dict[str, Quote]:
-        """Efficient CN realtime quotes for many symbols."""
+        """Fast CN realtime quotes for many symbols with uptime fallback."""
         cleaned = [self.clean_code(c) for c in codes]
         cleaned = [c for c in cleaned if c]
         if not cleaned:
@@ -781,54 +800,93 @@ class DataFetcher:
         if offline:
             return {}
 
+        now = time.time()
+        key = ",".join(cleaned)
+
+        # micro-cache 250ms
+        try:
+            mc = self._rt_batch_microcache
+            if mc["key"] == key and (now - float(mc["ts"])) < 0.25:
+                data = mc["data"]
+                if isinstance(data, dict) and data:
+                    return data
+        except Exception:
+            pass
+
+        result: Dict[str, Quote] = {}
+
+        # 1) batch sources (Tencent)
         for source in self._sources:
             if not source.is_available():
                 continue
             fn = getattr(source, "get_realtime_batch", None)
             if callable(fn):
                 try:
-                    self._rate_limit(f"{source.name}_rt_batch")
                     out = fn(cleaned)
                     if isinstance(out, dict) and out:
-                        return out
+                        result.update(out)
+                        break
                 except Exception:
                     continue
 
-        try:
-            cache = get_spot_cache()
-            df = cache.get()
-            if df is not None and not df.empty:
-                out = {}
+        # 2) fill missing from SpotCache
+        missing = [c for c in cleaned if c not in result]
+        if missing:
+            try:
+                cache = get_spot_cache()
+                df = cache.get()
+                if df is not None and not df.empty:
+                    for c in missing:
+                        q = cache.get_quote(c)
+                        if q and q.get("price", 0) > 0:
+                            result[c] = Quote(
+                                code=c,
+                                name=q.get("name", ""),
+                                price=float(q["price"]),
+                                open=float(q.get("open", 0) or 0),
+                                high=float(q.get("high", 0) or 0),
+                                low=float(q.get("low", 0) or 0),
+                                close=float(q.get("close", 0) or 0),
+                                volume=int(q.get("volume", 0) or 0),
+                                amount=float(q.get("amount", 0) or 0),
+                                change=float(q.get("change", 0) or 0),
+                                change_pct=float(q.get("change_pct", 0) or 0),
+                                source="spot_cache",
+                                is_delayed=False,
+                                latency_ms=0.0,
+                            )
+            except Exception:
+                pass
+
+        # 3) last-good fallback if everything failed (uptime)
+        if not result:
+            with self._last_good_lock:
+                fb: Dict[str, Quote] = {}
                 for c in cleaned:
-                    q = cache.get_quote(c)
-                    if q and q.get("price", 0) > 0:
-                        out[c] = Quote(
-                            code=c,
-                            name=q.get("name", ""),
-                            price=float(q["price"]),
-                            open=float(q.get("open", 0) or 0),
-                            high=float(q.get("high", 0) or 0),
-                            low=float(q.get("low", 0) or 0),
-                            close=float(q.get("close", 0) or 0),
-                            volume=int(q.get("volume", 0) or 0),
-                            amount=float(q.get("amount", 0) or 0),
-                            change=float(q.get("change", 0) or 0),
-                            change_pct=float(q.get("change_pct", 0) or 0),
-                            source="spot_cache",
-                            is_delayed=False,
-                            latency_ms=0.0,
-                        )
-                if out:
-                    return out
+                    q = self._last_good_quotes.get(c)
+                    if q and q.price > 0:
+                        age = (datetime.now() - (q.timestamp or datetime.now())).total_seconds()
+                        if age <= 3.0:
+                            fb[c] = q
+                if fb:
+                    return fb
+
+        # update last-good
+        if result:
+            with self._last_good_lock:
+                for c, q in result.items():
+                    if q and q.price > 0:
+                        self._last_good_quotes[c] = q
+
+        # update micro-cache
+        try:
+            self._rt_batch_microcache["ts"] = now
+            self._rt_batch_microcache["key"] = key
+            self._rt_batch_microcache["data"] = result
         except Exception:
             pass
 
-        out: Dict[str, Quote] = {}
-        for c in cleaned:
-            q = self.get_realtime(c)
-            if q and q.price > 0:
-                out[c] = q
-        return out
+        return result
 
     def _fetch_from_sources_instrument(self, inst: dict, days: int, interval: str = "1d") -> pd.DataFrame:
         """Fetch using any source that supports get_history_instrument."""
@@ -896,58 +954,105 @@ class DataFetcher:
         max_age_hours: float = None,
     ) -> pd.DataFrame:
         """
-        Multi-asset/multi-market history fetch.
-
-        FIX:
-        - Add `bars` for intraday intervals like 1m/5m. For interval != 1d, `bars`
-        is the correct unit (not "days").
-        - Use shorter cache TTL for intraday to prevent stale charts.
+        Key change:
+        - For intraday (e.g. 1m): read from local intraday DB FIRST.
+        - If insufficient, fetch online, merge, store, return.
+        This is the main way to get intraday history quality >=8.5 without paid feeds.
         """
         from core.instruments import parse_instrument, instrument_key
 
         inst = instrument or parse_instrument(code)
         key = instrument_key(inst)
+        interval = str(interval).lower()
+
         offline = str(os.environ.get("TRADING_OFFLINE", "0")).lower() in ("1", "true", "yes")
 
         count = int(bars if bars is not None else days)
         count = max(1, count)
 
-        # Cache TTL: intraday should be short
+        # TTL (intraday should be short)
         if max_age_hours is not None:
             ttl = float(max_age_hours)
         else:
-            if str(interval).lower() == "1d":
-                ttl = float(CONFIG.data.cache_ttl_hours)
-            else:
-                ttl = min(float(CONFIG.data.cache_ttl_hours), 1.0 / 60.0)  # ~1 minute
+            ttl = float(CONFIG.data.cache_ttl_hours) if interval == "1d" else min(float(CONFIG.data.cache_ttl_hours), 1.0 / 120.0)
 
         cache_key = f"history:{key}:{interval}:{count}"
 
+        def _clean(df: pd.DataFrame) -> pd.DataFrame:
+            if df is None or df.empty:
+                return pd.DataFrame()
+            out = df.copy()
+            if not isinstance(out.index, pd.DatetimeIndex):
+                out.index = pd.to_datetime(out.index, errors="coerce")
+            out = out[~out.index.duplicated(keep="last")].sort_index()
+
+            for c in ("open", "high", "low", "close", "volume", "amount"):
+                if c in out.columns:
+                    out[c] = pd.to_numeric(out[c], errors="coerce")
+
+            if "close" in out.columns:
+                out = out.dropna(subset=["close"])
+                out = out[out["close"] > 0]
+            if "volume" in out.columns:
+                out = out[out["volume"].fillna(0) >= 0]
+            if "high" in out.columns and "low" in out.columns:
+                out = out[out["high"].fillna(0) >= out["low"].fillna(0)]
+
+            if "amount" not in out.columns and "close" in out.columns and "volume" in out.columns:
+                out["amount"] = out["close"] * out["volume"]
+
+            return out
+
+        # cache
         if use_cache:
             cached_df = self._cache.get(cache_key, ttl)
-            if cached_df is not None and isinstance(cached_df, pd.DataFrame) and len(cached_df) >= min(count, 100):
-                return cached_df.tail(count)
+            if isinstance(cached_df, pd.DataFrame) and not cached_df.empty:
+                cached_df = _clean(cached_df)
+                if len(cached_df) >= min(count, 100):
+                    return cached_df.tail(count)
 
-        # Only daily CN equities are stored in local DB
-        if (str(interval).lower() == "1d" and inst["market"] == "CN" and inst["asset"] == "EQUITY"):
+        # -------- NEW: intraday DB first --------
+        if interval != "1d" and inst.get("market") == "CN" and inst.get("asset") == "EQUITY":
+            try:
+                code6 = str(inst["symbol"]).zfill(6)
+                db_df = self._db.get_intraday_bars(code6, interval=interval, limit=count)
+                db_df = _clean(db_df)
+                if not db_df.empty and len(db_df) >= int(0.8 * count):
+                    out = db_df.tail(count)
+                    self._cache.set(cache_key, out)
+                    return out
+            except Exception:
+                pass
+
+        # daily CN can use daily DB
+        if interval == "1d" and inst["market"] == "CN" and inst["asset"] == "EQUITY":
             db_df = self._db.get_bars(inst["symbol"])
-            if not db_df.empty and len(db_df) >= count:
-                out = db_df.tail(count)
+            if db_df is not None and not db_df.empty and len(db_df) >= count:
+                out = _clean(db_df).tail(count)
                 self._cache.set(cache_key, out)
                 return out
 
         if offline:
             return pd.DataFrame()
 
+        # fetch online
         df = self._fetch_from_sources_instrument(inst, days=count, interval=interval)
-        if df is None or df.empty:
+        df = _clean(df)
+        if df.empty:
             return pd.DataFrame()
 
         out = df.tail(count)
         self._cache.set(cache_key, out)
 
-        # update_db only for 1d CN
-        if update_db and str(interval).lower() == "1d" and inst["market"] == "CN" and inst["asset"] == "EQUITY":
+        # store intraday into DB for future quality/uptime
+        if interval != "1d" and inst.get("market") == "CN" and inst.get("asset") == "EQUITY":
+            try:
+                self._db.upsert_intraday_bars(str(inst["symbol"]).zfill(6), interval, out)
+            except Exception:
+                pass
+
+        # store daily into DB
+        if update_db and interval == "1d" and inst["market"] == "CN" and inst["asset"] == "EQUITY":
             try:
                 self._db.upsert_bars(inst["symbol"], out)
             except Exception:
@@ -978,7 +1083,14 @@ class DataFetcher:
         return pd.DataFrame()
     
     def get_realtime(self, code: str, instrument: dict = None) -> Optional[Quote]:
-        """Best-effort realtime quote."""
+        """
+        Lowest-latency single quote.
+
+        Improvements:
+        - Use batch path first (Tencent) for CN
+        - 250ms microcache
+        - last-good fallback if network fails
+        """
         from core.instruments import parse_instrument
         inst = instrument or parse_instrument(code)
 
@@ -986,23 +1098,49 @@ class DataFetcher:
         if offline:
             return None
 
-        candidates: List[Quote] = []
+        # CN -> try batch route first (fastest)
+        if inst.get("market") == "CN" and inst.get("asset") == "EQUITY":
+            code6 = str(inst.get("symbol") or "").zfill(6)
+            if code6:
+                now = time.time()
 
+                # microcache
+                try:
+                    rec = self._rt_single_microcache.get(code6)
+                    if rec and (now - float(rec["ts"])) < 0.25:
+                        return rec["q"]
+                except Exception:
+                    pass
+
+                try:
+                    out = self.get_realtime_batch([code6])
+                    q = out.get(code6)
+                    if q and q.price > 0:
+                        self._rt_single_microcache[code6] = {"ts": now, "q": q}
+                        return q
+                except Exception:
+                    pass
+
+                # last-good fallback
+                with self._last_good_lock:
+                    q = self._last_good_quotes.get(code6)
+                    if q and q.price > 0:
+                        age = (datetime.now() - (q.timestamp or datetime.now())).total_seconds()
+                        if age <= 3.0:
+                            return q
+
+        # fallback: try sources one-by-one
+        candidates: List[Quote] = []
         with self._rate_limiter:
             for source in self._sources:
                 if not source.is_available():
                     continue
                 try:
-                    self._rate_limit(f"{source.name}_rt")
                     fn = getattr(source, "get_realtime_instrument", None)
                     if callable(fn):
                         q = fn(inst)
                     else:
-                        if inst["market"] == "CN" and inst["asset"] == "EQUITY":
-                            q = source.get_realtime(inst["symbol"])
-                        else:
-                            q = None
-
+                        q = source.get_realtime(inst.get("symbol", ""))
                     if q and q.price and q.price > 0:
                         candidates.append(q)
                 except Exception:
@@ -1013,12 +1151,21 @@ class DataFetcher:
 
         prices = np.array([c.price for c in candidates], dtype=float)
         med = float(np.median(prices))
-
         good = [c for c in candidates if abs(c.price - med) / max(med, 1e-8) < 0.01]
         pool = good if good else candidates
-
         pool.sort(key=lambda q: (q.is_delayed, q.latency_ms))
-        return pool[0]
+        best = pool[0]
+
+        # update last-good
+        try:
+            if inst.get("market") == "CN" and inst.get("asset") == "EQUITY":
+                code6 = str(inst.get("symbol") or "").zfill(6)
+                with self._last_good_lock:
+                    self._last_good_quotes[code6] = best
+        except Exception:
+            pass
+
+        return best
 
     def get_multiple_parallel(
         self,

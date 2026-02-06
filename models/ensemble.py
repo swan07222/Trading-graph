@@ -170,38 +170,53 @@ class EnsembleModel:
         callback: Callable = None,
         stop_flag: Any = None
     ) -> Dict:
-        """Train all models in the ensemble."""
+        """Train all models in the ensemble (faster loaders + stable defaults)."""
+        import os
+
         epochs = epochs or CONFIG.model.epochs
         batch_size = batch_size or CONFIG.model.batch_size
-        
-        train_dataset = TensorDataset(
-            torch.FloatTensor(X_train),
-            torch.LongTensor(y_train)
+
+        train_dataset = TensorDataset(torch.FloatTensor(X_train), torch.LongTensor(y_train))
+        val_dataset = TensorDataset(torch.FloatTensor(X_val), torch.LongTensor(y_val))
+
+        # ---- speed knobs ----
+        pin = (self.device == "cuda")
+        cpu_cnt = os.cpu_count() or 0
+        num_workers = 0 if cpu_cnt <= 2 else min(4, cpu_cnt - 1)
+        persistent = bool(num_workers > 0)
+
+        train_loader = DataLoader(
+            train_dataset,
+            batch_size=batch_size,
+            shuffle=True,
+            num_workers=num_workers,
+            pin_memory=pin,
+            persistent_workers=persistent,
         )
-        val_dataset = TensorDataset(
-            torch.FloatTensor(X_val),
-            torch.LongTensor(y_val)
+        val_loader = DataLoader(
+            val_dataset,
+            batch_size=batch_size,
+            shuffle=False,
+            num_workers=num_workers,
+            pin_memory=pin,
+            persistent_workers=persistent,
         )
-        
-        train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
-        val_loader = DataLoader(val_dataset, batch_size=batch_size)
-        
-        # Class weights for imbalanced data
+
         class_counts = np.bincount(y_train, minlength=CONFIG.model.num_classes)
         weights = 1.0 / (class_counts + 1)
         weights = weights / weights.sum()
         class_weights = torch.FloatTensor(weights).to(self.device)
-        
+
         history = {}
         val_accuracies = {}
-        
+
         for name, model in self.models.items():
             if self._should_stop(stop_flag):
                 log.info("Training stopped by user")
                 break
-                
+
             log.info(f"Training {name}...")
-            
+
             model_history, best_acc = self._train_single_model(
                 model=model,
                 name=name,
@@ -212,16 +227,15 @@ class EnsembleModel:
                 callback=callback,
                 stop_flag=stop_flag
             )
-            
+
             history[name] = model_history
             val_accuracies[name] = best_acc
-        
+
         self._update_weights(val_accuracies)
-        
-        # Calibrate after training
+
         if len(X_val) > 0:
             self.calibrate(X_val, y_val)
-        
+
         return history
     
     def _should_stop(self, stop_flag: Any) -> bool:
@@ -261,7 +275,7 @@ class EnsembleModel:
         callback: Callable = None,
         stop_flag: Any = None
     ) -> Tuple[Dict, float]:
-        """Train a single model (AMP-enabled on CUDA)."""
+        """Train a single model with robust AMP handling."""
 
         optimizer = torch.optim.AdamW(
             model.parameters(),
@@ -270,7 +284,7 @@ class EnsembleModel:
         )
 
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-            optimizer, T_max=epochs, eta_min=1e-6
+            optimizer, T_max=int(epochs), eta_min=1e-6
         )
 
         criterion = nn.CrossEntropyLoss(weight=class_weights)
@@ -281,13 +295,12 @@ class EnsembleModel:
         best_state = None
 
         use_amp = (self.device == "cuda")
-        scaler = torch.cuda.amp.GradScaler(enabled=use_amp)
+        scaler = torch.amp.GradScaler("cuda", enabled=use_amp)
 
         for epoch in range(int(epochs)):
             if self._should_stop(stop_flag):
                 break
 
-            # ---- train ----
             model.train()
             train_losses = []
 
@@ -297,21 +310,27 @@ class EnsembleModel:
 
                 optimizer.zero_grad(set_to_none=True)
 
-                with torch.cuda.amp.autocast(enabled=use_amp):
+                if use_amp:
+                    with torch.amp.autocast("cuda", enabled=True):
+                        logits, _ = model(batch_X)
+                        loss = criterion(logits, batch_y)
+
+                    scaler.scale(loss).backward()
+                    scaler.unscale_(optimizer)
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+                    scaler.step(optimizer)
+                    scaler.update()
+                else:
                     logits, _ = model(batch_X)
                     loss = criterion(logits, batch_y)
-
-                scaler.scale(loss).backward()
-                scaler.unscale_(optimizer)
-                torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-                scaler.step(optimizer)
-                scaler.update()
+                    loss.backward()
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+                    optimizer.step()
 
                 train_losses.append(float(loss.detach().item()))
 
             scheduler.step()
 
-            # ---- validate ----
             model.eval()
             val_losses = []
             correct, total = 0, 0
@@ -321,7 +340,11 @@ class EnsembleModel:
                     batch_X = batch_X.to(self.device, non_blocking=True)
                     batch_y = batch_y.to(self.device, non_blocking=True)
 
-                    with torch.cuda.amp.autocast(enabled=use_amp):
+                    if use_amp:
+                        with torch.amp.autocast("cuda", enabled=True):
+                            logits, _ = model(batch_X)
+                            loss = criterion(logits, batch_y)
+                    else:
                         logits, _ = model(batch_X)
                         loss = criterion(logits, batch_y)
 
@@ -338,7 +361,6 @@ class EnsembleModel:
             history["val_loss"].append(val_loss)
             history["val_acc"].append(val_acc)
 
-            # early stopping
             if val_acc > best_val_acc:
                 best_val_acc = val_acc
                 patience = 0
@@ -351,9 +373,6 @@ class EnsembleModel:
 
             if callback:
                 callback(name, epoch, val_acc)
-
-            if (epoch + 1) % 10 == 0:
-                log.info(f"{name} Epoch {epoch+1}: val_acc={val_acc:.2%}")
 
         if best_state:
             model.load_state_dict(best_state)
@@ -378,136 +397,134 @@ class EnsembleModel:
         log.info(f"Updated weights: {self.weights}")
     
     def predict(self, X: np.ndarray) -> EnsemblePrediction:
-        """Get ensemble prediction for single sample."""
+        """Get ensemble prediction for a single sample (batch_size=1)."""
         if X.ndim == 2:
-            X = X[np.newaxis, :]
-        
+            X = X[np.newaxis, :, :]
+
         if X.ndim != 3:
             raise ValueError(f"Expected 2D or 3D input, got shape {X.shape}")
-        
+
         if X.shape[0] != 1:
             raise ValueError(
-                f"predict() expects single sample (batch_size=1), got {X.shape[0]}. "
+                f"predict() expects a single sample (batch_size=1), got {X.shape[0]}. "
                 f"Use predict_batch() for multiple samples."
             )
-        
-        temp = max(self.temperature, 0.1)  # Prevent division by zero
-        scaled_logits = weighted_logits / temp
-
 
         with self._lock:
-            X_tensor = torch.FloatTensor(X).to(self.device)
-            
-            all_logits = []
-            all_probs = {}
-            
-            for name, model in self.models.items():
+            models = list(self.models.items())
+            weights = dict(self.weights)
+            temperature = float(self.temperature)
+            device = self.device
+
+        X_tensor = torch.FloatTensor(X).to(device)
+
+        all_probs: Dict[str, np.ndarray] = {}
+        weighted_logits: Optional[torch.Tensor] = None
+
+        with torch.inference_mode():
+            for name, model in models:
                 model.eval()
-                with torch.no_grad():
-                    logits, _ = model(X_tensor)
-                    all_logits.append((name, logits))
-                    probs = F.softmax(logits, dim=-1).cpu().numpy()[0]
-                    all_probs[name] = probs
-            
-            # Weighted average of logits
-            weighted_logits = torch.zeros_like(all_logits[0][1])
-            for name, logits in all_logits:
-                weight = self.weights.get(name, 1.0 / len(self.models))
-                weighted_logits += logits * weight
-            
-            # Apply temperature scaling
-            scaled_logits = weighted_logits / self.temperature
-            final_probs = F.softmax(scaled_logits, dim=-1).cpu().numpy()[0]
-            
-            predicted_class = int(np.argmax(final_probs))
-            confidence = float(np.max(final_probs))
-            
-            # Entropy
-            entropy = -np.sum(final_probs * np.log(final_probs + 1e-8))
-            max_entropy = np.log(CONFIG.model.num_classes)
-            normalized_entropy = entropy / max_entropy
-            
-            # Agreement
-            predictions = [np.argmax(p) for p in all_probs.values()]
-            if predictions:
-                most_common = max(set(predictions), key=predictions.count)
-                agreement = predictions.count(most_common) / len(predictions)
-            else:
-                agreement = 0.0
-            
-            return EnsemblePrediction(
-                probabilities=final_probs,
-                predicted_class=predicted_class,
-                confidence=confidence,
-                entropy=normalized_entropy,
-                agreement=agreement,
-                individual_predictions=all_probs
-            )
+                logits, _ = model(X_tensor)
+                all_probs[name] = F.softmax(logits, dim=-1).cpu().numpy()[0]
+
+                w = float(weights.get(name, 1.0 / max(1, len(models))))
+                weighted_logits = logits * w if weighted_logits is None else (weighted_logits + logits * w)
+
+            if weighted_logits is None:
+                raise RuntimeError("No models available for prediction")
+
+            temp = max(temperature, 0.1)
+            final_probs = F.softmax(weighted_logits / temp, dim=-1).cpu().numpy()[0]
+
+        predicted_class = int(np.argmax(final_probs))
+        confidence = float(np.max(final_probs))
+
+        entropy = float(-np.sum(final_probs * np.log(final_probs + 1e-8)))
+        max_entropy = float(np.log(CONFIG.model.num_classes))
+        entropy_norm = float(entropy / max_entropy) if max_entropy > 0 else 0.0
+
+        model_preds = [int(np.argmax(p)) for p in all_probs.values()]
+        if model_preds:
+            most_common = max(set(model_preds), key=model_preds.count)
+            agreement = float(model_preds.count(most_common) / len(model_preds))
+        else:
+            agreement = 0.0
+
+        return EnsemblePrediction(
+            probabilities=final_probs,
+            predicted_class=predicted_class,
+            confidence=confidence,
+            entropy=entropy_norm,
+            agreement=agreement,
+            individual_predictions=all_probs,
+        )
     
     def predict_batch(self, X: np.ndarray, batch_size: int = 1024) -> List[EnsemblePrediction]:
-        """Memory-safe batch inference."""
+        """Batch inference. Returns list[EnsemblePrediction]."""
         if X is None or len(X) == 0:
             return []
 
-        out: List[EnsemblePrediction] = []
-
-        temp = max(self.temperature, 0.1)
-        scaled_logits = weighted_logits / temp
-
         with self._lock:
-            n = len(X)
-            start = 0
-            while start < n:
-                end = min(n, start + batch_size)
-                xb = X[start:end]
-                X_tensor = torch.FloatTensor(xb).to(self.device)
+            models = list(self.models.items())
+            weights = dict(self.weights)
+            temperature = float(self.temperature)
+            device = self.device
 
-                all_logits: Dict[str, torch.Tensor] = {}
-                all_probs: Dict[str, np.ndarray] = {}
+        temp = max(temperature, 0.1)
 
-                for name, model in self.models.items():
+        out: List[EnsemblePrediction] = []
+        n = int(len(X))
+        start = 0
+
+        while start < n:
+            end = min(n, start + int(batch_size))
+            xb = X[start:end]
+            X_tensor = torch.FloatTensor(xb).to(device)
+
+            with torch.inference_mode():
+                per_model_probs: Dict[str, np.ndarray] = {}
+                weighted_logits: Optional[torch.Tensor] = None
+
+                for name, model in models:
                     model.eval()
-                    with torch.inference_mode():
-                        logits, _ = model(X_tensor)
-                        all_logits[name] = logits
-                        all_probs[name] = F.softmax(logits, dim=-1).cpu().numpy()
+                    logits, _ = model(X_tensor)
 
-                first = next(iter(all_logits.values()))
-                weighted_logits = torch.zeros_like(first)
-                for name, logits in all_logits.items():
-                    weight = self.weights.get(name, 1.0 / max(1, len(self.models)))
-                    weighted_logits += logits * weight
+                    per_model_probs[name] = F.softmax(logits, dim=-1).cpu().numpy()
+                    w = float(weights.get(name, 1.0 / max(1, len(models))))
+                    weighted_logits = logits * w if weighted_logits is None else (weighted_logits + logits * w)
 
-                scaled_logits = weighted_logits / self.temperature
-                final_probs = F.softmax(scaled_logits, dim=-1).cpu().numpy()
+                if weighted_logits is None:
+                    break
 
-                for i in range(len(xb)):
-                    probs = final_probs[i]
-                    sample_probs = {n: all_probs[n][i] for n in self.models.keys()}
+                final_probs = F.softmax(weighted_logits / temp, dim=-1).cpu().numpy()
 
-                    pred_cls = int(np.argmax(probs))
-                    conf = float(np.max(probs))
+            for i in range(len(xb)):
+                probs = final_probs[i]
+                pred_cls = int(np.argmax(probs))
+                conf = float(np.max(probs))
 
-                    ent = -np.sum(probs * np.log(probs + 1e-8))
-                    ent_norm = float(ent / np.log(CONFIG.model.num_classes))
+                ent = float(-np.sum(probs * np.log(probs + 1e-8)))
+                ent_norm = float(ent / np.log(CONFIG.model.num_classes))
 
-                    model_preds = [int(np.argmax(p)) for p in sample_probs.values()]
-                    if model_preds:
-                        most_common = max(set(model_preds), key=model_preds.count)
-                        agreement = float(model_preds.count(most_common) / len(model_preds))
-                    else:
-                        agreement = 0.0
+                model_preds = [int(np.argmax(per_model_probs[m][i])) for m in per_model_probs.keys()]
+                if model_preds:
+                    most_common = max(set(model_preds), key=model_preds.count)
+                    agreement = float(model_preds.count(most_common) / len(model_preds))
+                else:
+                    agreement = 0.0
 
-                    out.append(EnsemblePrediction(
-                        probabilities=probs,
-                        predicted_class=pred_cls,
-                        confidence=conf,
-                        entropy=ent_norm,
-                        agreement=agreement,
-                        individual_predictions=sample_probs
-                    ))
+                indiv = {m: per_model_probs[m][i] for m in per_model_probs.keys()}
 
-                start = end
+                out.append(EnsemblePrediction(
+                    probabilities=probs,
+                    predicted_class=pred_cls,
+                    confidence=conf,
+                    entropy=ent_norm,
+                    agreement=agreement,
+                    individual_predictions=indiv
+                ))
+
+            start = end
 
         return out
     

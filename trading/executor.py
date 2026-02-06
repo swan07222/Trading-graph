@@ -44,7 +44,7 @@ class ExecutionEngine:
         self.mode = mode or CONFIG.trading_mode
         self.broker: BrokerInterface = create_broker(self.mode.value)
         self.risk_manager: Optional[RiskManager] = None
-        
+
         self._kill_switch = get_kill_switch()
         self._health_monitor = get_health_monitor()
         self._alert_manager = get_alert_manager()
@@ -59,12 +59,15 @@ class ExecutionEngine:
         self._recon_thread: Optional[threading.Thread] = None
 
         self._processed_fill_ids: Set[str] = set()
-        
+
+        # ---- NEW: fill polling watermark (reduces repeated broker scans) ----
+        self._last_fill_sync: Optional[datetime] = None
+
         self.on_fill: Optional[Callable[[Order, Fill], None]] = None
         self.on_reject: Optional[Callable[[Order, str], None]] = None
 
         self._kill_switch.on_activate(self._on_kill_switch)
-        self._processed_fill_ids: Set[str] = self._load_processed_fills()
+        self._processed_fill_ids = self._load_processed_fills()
 
     def start(self) -> bool:
         if self._running:
@@ -176,7 +179,7 @@ class ExecutionEngine:
         log.info("Execution engine stopped")
 
     def submit(self, signal: TradeSignal) -> bool:
-        """Submit a trading signal for execution"""
+        """Submit a trading signal for execution with minimal latency."""
         if not self._running:
             log.warning("Execution engine not running")
             return False
@@ -189,7 +192,17 @@ class ExecutionEngine:
             self._reject_signal(signal, "Risk manager not initialized")
             return False
 
+        # 1) Determine price fast: use feed cache -> broker quote
         price = float(signal.price or 0.0)
+        if price <= 0:
+            try:
+                from data.feeds import get_feed_manager
+                q = get_feed_manager().get_quote(signal.symbol)
+                if q and getattr(q, "price", 0) and q.price > 0:
+                    price = float(q.price)
+            except Exception:
+                pass
+
         if price <= 0:
             quote_price = self.broker.get_quote(signal.symbol)
             price = float(quote_price) if quote_price else 0.0
@@ -198,6 +211,7 @@ class ExecutionEngine:
             self._reject_signal(signal, f"Cannot get price for {signal.symbol}")
             return False
 
+        # 2) Risk check uses the single resolved price
         passed, msg = self.risk_manager.check_order(signal.symbol, signal.side, signal.quantity, price)
         if not passed:
             log.warning(f"Risk check failed: {msg}")
@@ -205,8 +219,10 @@ class ExecutionEngine:
             self._reject_signal(signal, msg)
             return False
 
+        # 3) Enqueue for execution
+        signal.price = float(price)
         self._queue.put(signal)
-        log.info(f"Signal queued: {signal.side.value} {signal.quantity} {signal.symbol}")
+        log.info(f"Signal queued: {signal.side.value} {signal.quantity} {signal.symbol} @ {price:.2f}")
         return True
 
     def submit_from_prediction(self, pred) -> bool:
@@ -336,9 +352,11 @@ class ExecutionEngine:
         from trading.oms import get_oms
         oms = get_oms()
 
-        try:  # ← ADD THIS TRY
-            with self._fills_lock:
-                fills = self.broker.get_fills()
+        with self._fills_lock:
+            try:
+                fills = self.broker.get_fills(since=self._last_fill_sync)
+                self._last_fill_sync = datetime.now()
+
                 for fill in fills:
                     fill_id = fill.id or ""
                     if fill_id and fill_id in self._processed_fill_ids:
@@ -346,17 +364,15 @@ class ExecutionEngine:
                     if fill_id:
                         self._processed_fill_ids.add(fill_id)
 
-                    # Primary lookup by our order_id
+                    # 1) Primary lookup: our internal order_id
                     order = oms.get_order(fill.order_id)
-                    
-                    # FIXED: Only try broker_id lookup if primary fails AND fill has broker-style ID
-                    if not order and fill.order_id:
-                        # Check if this looks like a broker ID (not our format)
-                        if not fill.order_id.startswith("ORD_"):
-                            order = oms.get_order_by_broker_id(fill.order_id)
-                            if order:
-                                log.info(f"Recovered order {order.id} from broker_id {fill.order_id}")
-                                fill.order_id = order.id
+
+                    # 2) Fallback lookup: treat fill.order_id as broker_id if primary fails
+                    if order is None and fill.order_id:
+                        order = oms.get_order_by_broker_id(fill.order_id)
+                        if order:
+                            log.info(f"Recovered order {order.id} from broker_id {fill.order_id}")
+                            fill.order_id = order.id
 
                     if not order:
                         log.warning(f"Fill for unknown order: {fill.order_id}")
@@ -372,10 +388,13 @@ class ExecutionEngine:
                             log.warning(f"Fill callback error: {e}")
 
                     inc_counter("fills_processed_total", labels={"side": fill.side.value})
-                    observe("fill_latency_seconds", (datetime.now() - fill.timestamp).total_seconds() if fill.timestamp else 0)
+                    observe(
+                        "fill_latency_seconds",
+                        (datetime.now() - fill.timestamp).total_seconds() if fill.timestamp else 0
+                    )
 
-        except Exception as e:  # ← NOW THIS MATCHES THE TRY
-            log.error(f"Fill processing error: {e}")
+            except Exception as e:
+                log.error(f"Fill processing error: {e}")
 
     def _fill_sync_loop(self):
         """Poll broker for fills"""
