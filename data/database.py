@@ -172,22 +172,38 @@ class MarketDatabase:
         return df
 
     def upsert_intraday_bars(self, code: str, interval: str, df: pd.DataFrame):
-        """Insert/update intraday bars (fast executemany)."""
+        """Insert/update intraday bars (fast executemany) with NaN-safe casting."""
         if df is None or df.empty:
             return
+
+        import numpy as np
+        import pandas as pd
+
+        def _to_float(x, default=0.0) -> float:
+            try:
+                if x is None or pd.isna(x) or (isinstance(x, float) and np.isnan(x)):
+                    return float(default)
+                return float(x)
+            except Exception:
+                return float(default)
+
+        def _to_int(x, default=0) -> int:
+            try:
+                if x is None or pd.isna(x) or (isinstance(x, float) and np.isnan(x)):
+                    return int(default)
+                return int(float(x))
+            except Exception:
+                return int(default)
 
         code = str(code).zfill(6)
         interval = str(interval).lower()
 
         work = df.copy()
 
-        # Ensure datetime index
         if not isinstance(work.index, pd.DatetimeIndex):
             work.index = pd.to_datetime(work.index, errors="coerce")
 
-        # Drop rows with invalid timestamps (index NaT)
         work = work[~work.index.isna()]
-
         work = work.sort_index()
         work = work[~work.index.duplicated(keep="last")]
 
@@ -197,12 +213,12 @@ class MarketDatabase:
                 code,
                 ts.isoformat(),
                 interval,
-                float(row.get("open", 0) or 0),
-                float(row.get("high", 0) or 0),
-                float(row.get("low", 0) or 0),
-                float(row.get("close", 0) or 0),
-                int(row.get("volume", 0) or 0),
-                float(row.get("amount", 0) or 0),
+                _to_float(row.get("open", 0)),
+                _to_float(row.get("high", 0)),
+                _to_float(row.get("low", 0)),
+                _to_float(row.get("close", 0)),
+                _to_int(row.get("volume", 0)),
+                _to_float(row.get("amount", 0)),
             ))
 
         with self._transaction() as conn:
@@ -243,15 +259,38 @@ class MarketDatabase:
                   datetime.now().isoformat()))
     
     def upsert_bars(self, code: str, df: pd.DataFrame):
-        """Insert or update daily bars (fast executemany)."""
+        """Insert/update daily bars (fast executemany) with NaN-safe casting and safe DatetimeIndex handling."""
         if df is None or df.empty:
             return
 
+        import numpy as np
+        import pandas as pd
+
+        def _to_float(x, default=0.0) -> float:
+            try:
+                if x is None or pd.isna(x) or (isinstance(x, float) and np.isnan(x)):
+                    return float(default)
+                return float(x)
+            except Exception:
+                return float(default)
+
+        def _to_int(x, default=0) -> int:
+            try:
+                if x is None or pd.isna(x) or (isinstance(x, float) and np.isnan(x)):
+                    return int(default)
+                return int(float(x))
+            except Exception:
+                return int(default)
+
         work = df.copy()
         if not isinstance(work.index, pd.DatetimeIndex):
-            work.index = pd.to_datetime(work.index)
+            work.index = pd.to_datetime(work.index, errors="coerce")
 
+        # CRITICAL: drop NaT and duplicates
+        work = work[~work.index.isna()]
         work = work.sort_index()
+        work = work[~work.index.duplicated(keep="last")]
+
         code = str(code).zfill(6)
 
         rows = []
@@ -259,13 +298,13 @@ class MarketDatabase:
             rows.append((
                 code,
                 idx.strftime("%Y-%m-%d"),
-                float(row.get("open", 0) or 0),
-                float(row.get("high", 0) or 0),
-                float(row.get("low", 0) or 0),
-                float(row.get("close", 0) or 0),
-                int(row.get("volume", 0) or 0),
-                float(row.get("amount", 0) or 0),
-                float(row.get("turnover", 0) or 0),
+                _to_float(row.get("open", 0)),
+                _to_float(row.get("high", 0)),
+                _to_float(row.get("low", 0)),
+                _to_float(row.get("close", 0)),
+                _to_int(row.get("volume", 0)),
+                _to_float(row.get("amount", 0)),
+                _to_float(row.get("turnover", 0)),
             ))
 
         with self._transaction() as conn:

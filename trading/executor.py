@@ -43,7 +43,8 @@ class ExecutionEngine:
     def __init__(self, mode: TradingMode = None):
         self.mode = mode or CONFIG.trading_mode
         self.broker: BrokerInterface = create_broker(self.mode.value)
-        self.risk_manager: Optional[RiskManager] = None
+        from trading.risk import get_risk_manager
+        self.risk_manager = get_risk_manager()
 
         self._kill_switch = get_kill_switch()
         self._health_monitor = get_health_monitor()
@@ -89,14 +90,14 @@ class ExecutionEngine:
         self._rebuild_broker_mappings(oms)
 
         # FIXED: Initialize risk manager BEFORE using it
-        self.risk_manager = get_risk_manager()
         
         # Get account from OMS
         account = oms.get_account()
         
         # Initialize and update risk manager
-        self.risk_manager.initialize(account)
-        self.risk_manager.update(account)
+        if self.risk_manager:
+            self.risk_manager.initialize(account)
+            self.risk_manager.update(account)
 
         self._health_monitor.start()
         self._alert_manager.start()
@@ -132,7 +133,7 @@ class ExecutionEngine:
         try:
             from trading.oms import get_oms
             oms = get_oms()
-            fills = oms.get_fills()  # Gets all fills from DB
+            account = oms.get_account()  # Gets all fills from DB
             return {f.id for f in fills if f.id}
         except Exception as e:
             log.warning(f"Could not load processed fills: {e}")
@@ -179,10 +180,18 @@ class ExecutionEngine:
         log.info("Execution engine stopped")
 
     def submit(self, signal: TradeSignal) -> bool:
-        """Submit a trading signal for execution with minimal latency."""
+        """Submit a trading signal for execution with minimal latency + CN safety checks."""
         if not self._running:
             log.warning("Execution engine not running")
             return False
+
+        # Market hours guard (important for CN)
+        try:
+            if not CONFIG.is_market_open():
+                self._reject_signal(signal, "Market closed")
+                return False
+        except Exception:
+            pass
 
         if not self._kill_switch.can_trade:
             self._reject_signal(signal, "Trading halted - kill switch active")
@@ -192,7 +201,14 @@ class ExecutionEngine:
             self._reject_signal(signal, "Risk manager not initialized")
             return False
 
-        # 1) Determine price fast: use feed cache -> broker quote
+        # Normalize CN symbol
+        try:
+            from data.fetcher import DataFetcher
+            signal.symbol = DataFetcher.clean_code(signal.symbol)
+        except Exception:
+            pass
+
+        # 1) Resolve a price fast: feed cache -> broker quote
         price = float(signal.price or 0.0)
         if price <= 0:
             try:
@@ -210,6 +226,26 @@ class ExecutionEngine:
         if price <= 0:
             self._reject_signal(signal, f"Cannot get price for {signal.symbol}")
             return False
+
+        # 1.5) CN limit up/down sanity (prevents doomed orders)
+        try:
+            from core.constants import get_price_limit
+            from data.fetcher import get_fetcher
+            q = get_fetcher().get_realtime(signal.symbol)
+            prev_close = float(getattr(q, "close", 0.0) or 0.0)
+            if prev_close > 0:
+                lim = float(get_price_limit(signal.symbol))
+                up = prev_close * (1.0 + lim)
+                dn = prev_close * (1.0 - lim)
+
+                if signal.side == OrderSide.BUY and price >= up * 0.999:
+                    self._reject_signal(signal, f"At/near limit-up ({lim*100:.0f}%)")
+                    return False
+                if signal.side == OrderSide.SELL and price <= dn * 1.001:
+                    self._reject_signal(signal, f"At/near limit-down ({lim*100:.0f}%)")
+                    return False
+        except Exception:
+            pass
 
         # 2) Risk check uses the single resolved price
         passed, msg = self.risk_manager.check_order(signal.symbol, signal.side, signal.quantity, price)
@@ -348,26 +384,39 @@ class ExecutionEngine:
             self._alert_manager.system_alert("Execution Failed", f"{signal.symbol}: {e}", AlertPriority.HIGH)
 
     def _process_pending_fills(self):
-        """Process any pending fills from broker - single processing path"""
+        """Process pending fills with safe watermark overlap (avoid missed fills)."""
         from trading.oms import get_oms
         oms = get_oms()
 
         with self._fills_lock:
             try:
+                query_start = datetime.now()
                 fills = self.broker.get_fills(since=self._last_fill_sync)
-                self._last_fill_sync = datetime.now()
+
+                newest_ts = None
+                for f in fills:
+                    if getattr(f, "timestamp", None):
+                        newest_ts = f.timestamp if newest_ts is None else max(newest_ts, f.timestamp)
+
+                # OVERLAP: step watermark slightly back to avoid missing same-timestamp fills
+                if newest_ts:
+                    from datetime import timedelta
+                    self._last_fill_sync = newest_ts - timedelta(seconds=1)
+                else:
+                    self._last_fill_sync = query_start
 
                 for fill in fills:
-                    fill_id = fill.id or ""
-                    if fill_id and fill_id in self._processed_fill_ids:
-                        continue
-                    if fill_id:
-                        self._processed_fill_ids.add(fill_id)
+                    # Robust fill id: if broker doesn't provide one, synthesize composite
+                    fill_id = (fill.id or "").strip()
+                    if not fill_id:
+                        fill_id = f"{fill.order_id}|{fill.symbol}|{fill.side.value}|{fill.quantity}|{fill.price}|{getattr(fill,'timestamp',None)}"
 
-                    # 1) Primary lookup: our internal order_id
+                    if fill_id in self._processed_fill_ids:
+                        continue
+                    self._processed_fill_ids.add(fill_id)
+
                     order = oms.get_order(fill.order_id)
 
-                    # 2) Fallback lookup: treat fill.order_id as broker_id if primary fails
                     if order is None and fill.order_id:
                         order = oms.get_order_by_broker_id(fill.order_id)
                         if order:
@@ -390,7 +439,7 @@ class ExecutionEngine:
                     inc_counter("fills_processed_total", labels={"side": fill.side.value})
                     observe(
                         "fill_latency_seconds",
-                        (datetime.now() - fill.timestamp).total_seconds() if fill.timestamp else 0
+                        (datetime.now() - fill.timestamp).total_seconds() if fill.timestamp else 0.0
                     )
 
             except Exception as e:

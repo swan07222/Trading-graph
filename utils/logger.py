@@ -31,12 +31,15 @@ class ColorFormatter(logging.Formatter):
     }
     
     def format(self, record):
-        # Add color to level name
-        levelname = record.levelname
-        if levelname in self.COLORS:
-            record.levelname = f"{self.COLORS[levelname]}{levelname}{self.COLORS['RESET']}"
-        
-        return super().format(record)
+        # Preserve original to avoid affecting other handlers/formatters
+        original_levelname = record.levelname
+        try:
+            levelname = record.levelname
+            if levelname in self.COLORS:
+                record.levelname = f"{self.COLORS[levelname]}{levelname}{self.COLORS['RESET']}"
+            return super().format(record)
+        finally:
+            record.levelname = original_levelname
 
 
 class LoggerManager:
@@ -64,19 +67,32 @@ class LoggerManager:
         self._log_level = logging.INFO
     
     def setup(self, log_dir: Path = None, level: int = logging.INFO):
-        """Setup logging with optional file output"""
+        """Setup logging and update existing loggers too (safe hot setup)."""
         self._log_level = level
-        
+
         if log_dir:
             self._log_dir = Path(log_dir)
             self._log_dir.mkdir(parents=True, exist_ok=True)
-            
-            # Create file handler
+
             log_file = self._log_dir / f"trading_{datetime.now().strftime('%Y%m%d')}.log"
-            self._file_handler = logging.FileHandler(log_file, encoding='utf-8')
+            self._file_handler = logging.FileHandler(log_file, encoding="utf-8")
+            self._file_handler.setLevel(level)
             self._file_handler.setFormatter(
-                logging.Formatter('%(asctime)s | %(name)s | %(levelname)s | %(message)s')
+                logging.Formatter("%(asctime)s | %(name)s | %(levelname)s | %(message)s")
             )
+
+        # Update any already-created loggers
+        for lg in self._loggers.values():
+            try:
+                lg.setLevel(level)
+                for h in lg.handlers:
+                    h.setLevel(level)
+
+                if self._file_handler:
+                    if not any(isinstance(h, logging.FileHandler) for h in lg.handlers):
+                        lg.addHandler(self._file_handler)
+            except Exception:
+                pass
     
     def get_logger(self, name: str = "trading") -> logging.Logger:
         """Get or create a logger"""

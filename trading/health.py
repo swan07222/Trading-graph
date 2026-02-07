@@ -24,6 +24,7 @@ from config import CONFIG
 from core.types import SystemStatus
 from core.events import EVENT_BUS, EventType, Event
 from utils.logger import get_logger
+from pathlib import Path
 
 log = get_logger(__name__)
 
@@ -317,32 +318,38 @@ class HealthMonitor:
         comp.last_check = datetime.now()
     
     def _check_model(self):
-        """Check ML model health - lightweight check"""
+        """Check ML model health - accept legacy OR interval/horizon models."""
         comp = self._components[ComponentType.MODEL]
-        
+
         try:
-            # Lightweight check: just verify model file exists
-            from config import CONFIG
-            model_path = CONFIG.MODEL_DIR / "ensemble.pt"
-            scaler_path = CONFIG.MODEL_DIR / "scaler.pkl"
-            
-            if model_path.exists() and scaler_path.exists():
+            model_dir = CONFIG.MODEL_DIR
+
+            legacy_model = model_dir / "ensemble.pt"
+            legacy_scaler = model_dir / "scaler.pkl"
+
+            has_new_model = any(model_dir.glob("ensemble_*.pt"))
+            has_new_scaler = any(model_dir.glob("scaler_*.pkl"))
+
+            has_model = legacy_model.exists() or has_new_model
+            has_scaler = legacy_scaler.exists() or has_new_scaler
+
+            if has_model and has_scaler:
                 comp.status = HealthStatus.HEALTHY
                 comp.last_success = datetime.now()
                 comp.last_error = ""
             else:
                 comp.status = HealthStatus.DEGRADED
                 missing = []
-                if not model_path.exists():
+                if not has_model:
                     missing.append("model")
-                if not scaler_path.exists():
+                if not has_scaler:
                     missing.append("scaler")
                 comp.last_error = f"Missing: {', '.join(missing)}"
-                
+
         except Exception as e:
             comp.status = HealthStatus.UNHEALTHY
             comp.last_error = str(e)
-        
+
         comp.last_check = datetime.now()
     
     def _calculate_overall_health(
@@ -455,12 +462,21 @@ class HealthMonitor:
                     comp.error_count += 1
     
     def get_health(self) -> SystemHealth:
-        """Get current system health"""
+        """Get current system health (cross-platform disk root)."""
+        import os
+        from pathlib import Path
+
         with self._lock:
             cpu = psutil.cpu_percent()
             memory = psutil.virtual_memory().percent
-            disk = psutil.disk_usage('/').percent
-            
+
+            try:
+                base = str(getattr(CONFIG, "base_dir", os.path.abspath(os.sep)))
+                root = Path(base).anchor or os.path.abspath(os.sep)
+                disk = psutil.disk_usage(root).percent
+            except Exception:
+                disk = psutil.disk_usage(os.path.abspath(os.sep)).percent
+
             return self._calculate_overall_health(cpu, memory, disk)
     
     def get_health_json(self) -> str:

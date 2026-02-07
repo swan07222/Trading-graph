@@ -307,12 +307,16 @@ class Backtester:
         test_end: pd.Timestamp,
         capital: float
     ) -> Optional[Tuple]:
-        """Run single fold of walk-forward backtest (portfolio-weighted, aligned)."""
-
+        """
+        Run a single fold with realistic context:
+        - Scaler fit only on training
+        - Test set includes a LOOKBACK window before test_start (no leakage if before embargo)
+        - Trades/metrics only counted inside [test_start, test_end)
+        """
         processor = DataProcessor()
         feature_cols = self.feature_engine.get_feature_columns()
 
-        # --------- Fit scaler on training data only ----------
+        # 1) Fit scaler on TRAIN only
         train_features_list = []
         for code, df in all_data.items():
             mask = (df.index >= train_start) & (df.index < train_end)
@@ -327,7 +331,7 @@ class Backtester:
         combined_train = np.concatenate(train_features_list, axis=0)
         processor.fit_scaler(combined_train)
 
-        # --------- Build training sequences ----------
+        # 2) Build training sequences
         X_train_list, y_train_list = [], []
         for code, df in all_data.items():
             mask = (df.index >= train_start) & (df.index < train_end)
@@ -347,7 +351,7 @@ class Backtester:
         X_train = np.concatenate(X_train_list, axis=0)
         y_train = np.concatenate(y_train_list, axis=0)
 
-        # --------- Train model ----------
+        # 3) Train model
         input_size = int(X_train.shape[2])
         model = EnsembleModel(input_size, model_names=["lstm", "gru", "tcn"])
 
@@ -358,7 +362,7 @@ class Backtester:
             epochs=30
         )
 
-        # --------- Test / simulate per stock ----------
+        # 4) Prepare TEST with context lookback
         trades: List[BacktestTrade] = []
         predictions, actuals = [], []
 
@@ -368,8 +372,12 @@ class Backtester:
         valid_test_codes = []
         prepared = {}
 
+        lookback_bars = int(CONFIG.model.sequence_length) + 5
+
         for code, df in all_data.items():
-            mask = (df.index >= test_start) & (df.index < test_end)
+            ctx_start = test_start - pd.Timedelta(days=lookback_bars * 2)
+
+            mask = (df.index >= ctx_start) & (df.index < test_end)
             fold_raw = df.loc[mask].copy()
             fold_df = processor.create_labels(fold_raw)
 
@@ -382,19 +390,16 @@ class Backtester:
             if len(X) == 0:
                 continue
 
-            # ---------- CRITICAL FIX ----------
-            # idx is the master ordering (end-of-sequence timestamps).
-            # Align OHLCV strictly to idx order to prevent mispricing / lookahead bugs.
-            idx_mask = idx.isin(fold_df.index)
-            X = X[idx_mask]
-            y = y[idx_mask]
-            returns = returns[idx_mask]
-            idx = idx[idx_mask]
+            test_mask = (idx >= test_start) & (idx < test_end)
+            X = X[test_mask]
+            y = y[test_mask]
+            returns = returns[test_mask]
+            idx = idx[test_mask]
 
             if len(X) == 0:
                 continue
 
-            aligned = fold_df.loc[idx]  # ORDERED to match X/y/idx exactly
+            aligned = fold_df.loc[idx]
             if aligned.empty:
                 continue
 
@@ -429,7 +434,6 @@ class Backtester:
             )
 
             trades.extend(code_trades)
-
             for dt, v in code_vals.items():
                 portfolio_values_by_date[dt] += float(v)
             for dt, v in code_bench_vals.items():

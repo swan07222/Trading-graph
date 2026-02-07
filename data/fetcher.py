@@ -205,38 +205,56 @@ class SpotCache:
                     return self._cache
     
     def get_quote(self, symbol: str) -> Optional[Dict]:
-        """Get single stock quote from cache"""
+        """Get single stock quote from cache (NaN-safe)."""
+        import numpy as np
+        import pandas as pd
+
+        def _to_float(x, default=0.0) -> float:
+            try:
+                if x is None or pd.isna(x) or (isinstance(x, float) and np.isnan(x)):
+                    return float(default)
+                return float(x)
+            except Exception:
+                return float(default)
+
+        def _to_int(x, default=0) -> int:
+            try:
+                if x is None or pd.isna(x) or (isinstance(x, float) and np.isnan(x)):
+                    return int(default)
+                return int(float(x))
+            except Exception:
+                return int(default)
+
         symbol = str(symbol).strip()
         for prefix in ['sh', 'sz', 'SH', 'SZ', 'bj', 'BJ']:
             symbol = symbol.replace(prefix, '')
         symbol = symbol.replace('.', '').replace('-', '').zfill(6)
-        
+
         df = self.get()
         if df is None or df.empty:
             return None
-        
+
         try:
             row = df[df['代码'] == symbol]
             if row.empty:
                 return None
-            
+
             r = row.iloc[0]
             return {
                 'code': symbol,
-                'name': str(r.get('名称', '')),
-                'price': float(r.get('最新价', 0) or 0),
-                'open': float(r.get('今开', 0) or 0),
-                'high': float(r.get('最高', 0) or 0),
-                'low': float(r.get('最低', 0) or 0),
-                'close': float(r.get('昨收', 0) or 0),
-                'volume': int(r.get('成交量', 0) or 0),
-                'amount': float(r.get('成交额', 0) or 0),
-                'change': float(r.get('涨跌额', 0) or 0),
-                'change_pct': float(r.get('涨跌幅', 0) or 0),
+                'name': str(r.get('名称', '') or ''),
+                'price': _to_float(r.get('最新价', 0)),
+                'open': _to_float(r.get('今开', 0)),
+                'high': _to_float(r.get('最高', 0)),
+                'low': _to_float(r.get('最低', 0)),
+                'close': _to_float(r.get('昨收', 0)),
+                'volume': _to_int(r.get('成交量', 0)),
+                'amount': _to_float(r.get('成交额', 0)),
+                'change': _to_float(r.get('涨跌额', 0)),
+                'change_pct': _to_float(r.get('涨跌幅', 0)),
             }
         except Exception:
             return None
-
 
 _spot_cache: Optional[SpotCache] = None
 
@@ -954,11 +972,14 @@ class DataFetcher:
         max_age_hours: float = None,
     ) -> pd.DataFrame:
         """
-        Key change:
-        - For intraday (e.g. 1m): read from local intraday DB FIRST.
-        - If insufficient, fetch online, merge, store, return.
-        This is the main way to get intraday history quality >=8.5 without paid feeds.
+        History fetch with DB-first + MERGE fallback (intraday), and strict cleaning.
+
+        Upgrades:
+        - Intraday: DB-first; if insufficient, fetch online, MERGE, dedupe, store, return.
+        - Daily: DB-first; if insufficient, fetch online and MERGE.
+        - Always drop NaT index rows.
         """
+        import os
         from core.instruments import parse_instrument, instrument_key
 
         inst = instrument or parse_instrument(code)
@@ -970,7 +991,7 @@ class DataFetcher:
         count = int(bars if bars is not None else days)
         count = max(1, count)
 
-        # TTL (intraday should be short)
+        # TTL
         if max_age_hours is not None:
             ttl = float(max_age_hours)
         else:
@@ -979,11 +1000,15 @@ class DataFetcher:
         cache_key = f"history:{key}:{interval}:{count}"
 
         def _clean(df: pd.DataFrame) -> pd.DataFrame:
+            import pandas as pd
+            import numpy as np
+
             if df is None or df.empty:
                 return pd.DataFrame()
             out = df.copy()
             if not isinstance(out.index, pd.DatetimeIndex):
                 out.index = pd.to_datetime(out.index, errors="coerce")
+            out = out[~out.index.isna()]
             out = out[~out.index.duplicated(keep="last")].sort_index()
 
             for c in ("open", "high", "low", "close", "volume", "amount"):
@@ -1001,9 +1026,10 @@ class DataFetcher:
             if "amount" not in out.columns and "close" in out.columns and "volume" in out.columns:
                 out["amount"] = out["close"] * out["volume"]
 
+            out = out.replace([np.inf, -np.inf], np.nan).ffill().fillna(0)
             return out
 
-        # cache
+        # Cache
         if use_cache:
             cached_df = self._cache.get(cache_key, ttl)
             if isinstance(cached_df, pd.DataFrame) and not cached_df.empty:
@@ -1011,53 +1037,75 @@ class DataFetcher:
                 if len(cached_df) >= min(count, 100):
                     return cached_df.tail(count)
 
-        # -------- NEW: intraday DB first --------
+        # Intraday CN: DB-first + merge
         if interval != "1d" and inst.get("market") == "CN" and inst.get("asset") == "EQUITY":
+            import pandas as pd
+
+            db_df = pd.DataFrame()
             try:
                 code6 = str(inst["symbol"]).zfill(6)
-                db_df = self._db.get_intraday_bars(code6, interval=interval, limit=count)
-                db_df = _clean(db_df)
-                if not db_df.empty and len(db_df) >= int(0.8 * count):
-                    out = db_df.tail(count)
-                    self._cache.set(cache_key, out)
-                    return out
+                db_df = _clean(self._db.get_intraday_bars(code6, interval=interval, limit=count))
             except Exception:
-                pass
+                db_df = pd.DataFrame()
 
-        # daily CN can use daily DB
-        if interval == "1d" and inst["market"] == "CN" and inst["asset"] == "EQUITY":
-            db_df = self._db.get_bars(inst["symbol"])
-            if db_df is not None and not db_df.empty and len(db_df) >= count:
-                out = _clean(db_df).tail(count)
-                self._cache.set(cache_key, out)
-                return out
+            if not offline:
+                online_df = _clean(self._fetch_from_sources_instrument(inst, days=count, interval=interval))
+                merged = _clean(pd.concat([db_df, online_df], axis=0)) if (not db_df.empty or not online_df.empty) else pd.DataFrame()
+            else:
+                merged = db_df
 
-        if offline:
-            return pd.DataFrame()
+            if merged.empty:
+                return pd.DataFrame()
 
-        # fetch online
-        df = self._fetch_from_sources_instrument(inst, days=count, interval=interval)
-        df = _clean(df)
-        if df.empty:
-            return pd.DataFrame()
+            out = merged.tail(count)
+            self._cache.set(cache_key, out)
 
-        out = df.tail(count)
-        self._cache.set(cache_key, out)
-
-        # store intraday into DB for future quality/uptime
-        if interval != "1d" and inst.get("market") == "CN" and inst.get("asset") == "EQUITY":
             try:
                 self._db.upsert_intraday_bars(str(inst["symbol"]).zfill(6), interval, out)
             except Exception:
                 pass
 
-        # store daily into DB
-        if update_db and interval == "1d" and inst["market"] == "CN" and inst["asset"] == "EQUITY":
-            try:
-                self._db.upsert_bars(inst["symbol"], out)
-            except Exception:
-                pass
+            return out
 
+        # Daily CN: DB-first + merge
+        if interval == "1d" and inst.get("market") == "CN" and inst.get("asset") == "EQUITY":
+            import pandas as pd
+
+            db_df = _clean(self._db.get_bars(inst["symbol"], limit=count))
+            if len(db_df) >= count:
+                out = db_df.tail(count)
+                self._cache.set(cache_key, out)
+                return out
+
+            if offline:
+                return db_df.tail(count) if not db_df.empty else pd.DataFrame()
+
+            online_df = _clean(self._fetch_from_sources_instrument(inst, days=count, interval="1d"))
+            merged = _clean(pd.concat([db_df, online_df], axis=0)) if (not db_df.empty or not online_df.empty) else pd.DataFrame()
+            if merged.empty:
+                return pd.DataFrame()
+
+            out = merged.tail(count)
+            self._cache.set(cache_key, out)
+
+            if update_db:
+                try:
+                    self._db.upsert_bars(inst["symbol"], out)
+                except Exception:
+                    pass
+
+            return out
+
+        # Non-CN fallback
+        if offline:
+            return pd.DataFrame()
+
+        df = _clean(self._fetch_from_sources_instrument(inst, days=count, interval=interval))
+        if df.empty:
+            return pd.DataFrame()
+
+        out = df.tail(count)
+        self._cache.set(cache_key, out)
         return out
     
     def _fetch_from_sources(self, code: str, days: int) -> pd.DataFrame:

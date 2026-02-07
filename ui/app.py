@@ -1,10 +1,18 @@
+# ui/app.py
 """
 AI Stock Trading System - Professional Desktop Application
 Real-time trading signals with custom AI model
+
+FIXED:
+- Proper integration with updated processor.py (RealtimePredictor)
+- Correct interval/horizon parameter passing
+- Real-time feed subscription for dealing bars
+- Robust error handling and graceful degradation
 """
 import sys
+import os
 from datetime import datetime
-from typing import Optional, Dict, List
+from typing import Optional, Dict, List, Any
 import threading
 import time
 
@@ -19,97 +27,205 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, QTimer, QThread, pyqtSignal, QSize
 from PyQt6.QtGui import QFont, QColor, QIcon, QAction, QPalette
 
-from config import CONFIG, TradingMode
-from models.predictor import Predictor, Prediction, Signal
-from models.trainer import Trainer
-from trading.executor import ExecutionEngine
-from .widgets import SignalPanel, PositionTable, LogWidget
-from .charts import StockChart
+from config.settings import CONFIG, TradingMode
 from utils.logger import get_logger
-from core.types import Order, OrderSide, OrderStatus, TradeSignal, Account, Position, Fill
-from trading.alerts import AlertPriority
+
+log = get_logger(__name__)
+
+
+# =============================================================================
+# LAZY IMPORTS - Avoid circular imports and improve startup time
+# =============================================================================
+
+def get_predictor_class():
+    """Lazy import Predictor"""
+    from models.predictor import Predictor
+    return Predictor
+
+def get_prediction_class():
+    """Lazy import Prediction"""
+    from models.predictor import Prediction
+    return Prediction
+
+def get_signal_class():
+    """Lazy import Signal"""
+    from models.predictor import Signal
+    return Signal
+
+def get_trainer_class():
+    """Lazy import Trainer"""
+    from models.trainer import Trainer
+    return Trainer
+
+def get_execution_engine():
+    """Lazy import ExecutionEngine"""
+    from trading.executor import ExecutionEngine
+    return ExecutionEngine
+
+def get_realtime_predictor():
+    """Lazy import RealtimePredictor from processor"""
+    from data.processor import RealtimePredictor
+    return RealtimePredictor
+
+
+# =============================================================================
+# REAL-TIME MONITORING THREAD
+# =============================================================================
 
 class RealTimeMonitor(QThread):
     """
-    Real-time market monitoring thread
-    Continuously checks for trading signals
+    Real-time market monitoring thread.
+    Continuously checks for trading signals using the updated processor.
+    
+    Features:
+    - Uses RealtimePredictor for fast inference
+    - Supports multiple intervals (1m, 5m, 1d, etc.)
+    - Graceful error handling with exponential backoff
+    - Thread-safe signal emission
     """
     signal_detected = pyqtSignal(object)  # Prediction
     price_updated = pyqtSignal(str, float)  # code, price
     error_occurred = pyqtSignal(str)
+    status_changed = pyqtSignal(str)  # status message
     
-    def __init__(self, predictor: Predictor, watch_list: List[str], interval: str = "1m", forecast_minutes: int = 30, lookback_bars: int = 1400):
+    def __init__(
+        self, 
+        predictor: Any,  # Predictor instance
+        watch_list: List[str], 
+        interval: str = "1m", 
+        forecast_minutes: int = 30, 
+        lookback_bars: int = 1400
+    ):
         super().__init__()
         self.predictor = predictor
-        self.watch_list = watch_list
+        self.watch_list = list(watch_list)
         self.running = False
-
-        self.interval = 30  # seconds between scan cycles (not the bar interval)
+        self._stop_event = threading.Event()
+        
+        # Configuration
+        self.scan_interval = 30  # seconds between scan cycles
         self.data_interval = str(interval).lower()
         self.forecast_minutes = int(forecast_minutes)
         self.lookback_bars = int(lookback_bars)
+        
+        # Backoff settings
+        self._backoff = 1
+        self._max_backoff = 60
     
     def run(self):
         """
         Monitoring loop:
-        - uses quick batch for speed
-        - runs full prediction (with future graph) only for strongest signals
+        - Uses quick batch for speed
+        - Runs full prediction (with future graph) only for strongest signals
+        - Handles errors gracefully with exponential backoff
         """
         self.running = True
-        backoff = 1
-        max_backoff = 60
-
-        while self.running:
+        self._stop_event.clear()
+        self._backoff = 1
+        
+        self.status_changed.emit("Monitoring started")
+        
+        while self.running and not self._stop_event.is_set():
             loop_start = time.time()
+            
             try:
+                # Quick batch prediction for all watchlist
                 preds = self.predictor.predict_quick_batch(
                     self.watch_list,
                     use_realtime_price=True,
                     interval=self.data_interval,
                     lookback_bars=self.lookback_bars
                 )
-
+                
+                # Emit price updates
                 for p in preds:
-                    self.price_updated.emit(p.stock_code, p.current_price)
-
+                    if hasattr(p, 'current_price') and p.current_price > 0:
+                        self.price_updated.emit(p.stock_code, p.current_price)
+                
+                # Get Signal class
+                Signal = get_signal_class()
+                
+                # Filter for strong signals
                 strong = [
                     p for p in preds
-                    if p.signal in [Signal.STRONG_BUY, Signal.STRONG_SELL, Signal.BUY, Signal.SELL]
-                    and p.confidence >= CONFIG.MIN_CONFIDENCE
+                    if hasattr(p, 'signal') and p.signal in [
+                        Signal.STRONG_BUY, Signal.STRONG_SELL, 
+                        Signal.BUY, Signal.SELL
+                    ]
+                    and hasattr(p, 'confidence') and p.confidence >= CONFIG.MIN_CONFIDENCE
                 ]
+                
+                # Sort by confidence and cap at 2
                 strong.sort(key=lambda x: x.confidence, reverse=True)
-                strong = strong[:2]  # cap
-
+                strong = strong[:2]
+                
+                # Full prediction for strong signals (includes forecast)
                 for p in strong:
-                    full = self.predictor.predict(
-                        p.stock_code,
-                        use_realtime_price=True,
-                        interval=self.data_interval,
-                        forecast_minutes=self.forecast_minutes,
-                        lookback_bars=self.lookback_bars
-                    )
-                    self.signal_detected.emit(full)
-
-                backoff = 1
-
+                    if self._stop_event.is_set():
+                        break
+                    
+                    try:
+                        full = self.predictor.predict(
+                            p.stock_code,
+                            use_realtime_price=True,
+                            interval=self.data_interval,
+                            forecast_minutes=self.forecast_minutes,
+                            lookback_bars=self.lookback_bars
+                        )
+                        self.signal_detected.emit(full)
+                    except Exception as e:
+                        log.warning(f"Full prediction failed for {p.stock_code}: {e}")
+                
+                # Reset backoff on success
+                self._backoff = 1
+                self.status_changed.emit(f"Scanned {len(preds)} stocks, {len(strong)} signals")
+                
             except Exception as e:
-                self.error_occurred.emit(str(e))
-                sleep_s = min(max_backoff, backoff)
-                backoff = min(max_backoff, backoff * 2)
+                error_msg = str(e)
+                self.error_occurred.emit(error_msg)
+                log.warning(f"Monitor error: {error_msg}")
+                
+                # Exponential backoff on error
+                sleep_s = min(self._max_backoff, self._backoff)
+                self._backoff = min(self._max_backoff, self._backoff * 2)
+                
+                self.status_changed.emit(f"Error, retrying in {sleep_s}s")
+                
                 for _ in range(sleep_s):
-                    if not self.running:
+                    if self._stop_event.is_set():
                         break
                     time.sleep(1)
-
+                continue
+            
+            # Wait for next scan cycle
             elapsed = time.time() - loop_start
-            remaining = max(0.0, self.interval - elapsed)
+            remaining = max(0.0, self.scan_interval - elapsed)
+            
             for _ in range(int(remaining)):
-                if not self.running:
+                if self._stop_event.is_set():
                     break
                 time.sleep(1)
+        
+        self.status_changed.emit("Monitoring stopped")
     
     def stop(self):
+        """Stop monitoring gracefully"""
         self.running = False
+        self._stop_event.set()
+    
+    def update_config(
+        self, 
+        interval: str = None, 
+        forecast_minutes: int = None,
+        lookback_bars: int = None
+    ):
+        """Update monitoring configuration"""
+        if interval:
+            self.data_interval = str(interval).lower()
+        if forecast_minutes:
+            self.forecast_minutes = int(forecast_minutes)
+        if lookback_bars:
+            self.lookback_bars = int(lookback_bars)
 
 
 class WorkerThread(QThread):
@@ -123,25 +239,39 @@ class WorkerThread(QThread):
         self.func = func
         self.args = args
         self.kwargs = kwargs
+        self._cancelled = False
     
     def run(self):
         try:
+            if self._cancelled:
+                return
             result = self.func(*self.args, **self.kwargs)
-            self.finished.emit(result)
+            if not self._cancelled:
+                self.finished.emit(result)
         except Exception as e:
-            self.error.emit(str(e))
+            if not self._cancelled:
+                self.error.emit(str(e))
+    
+    def cancel(self):
+        """Cancel the worker"""
+        self._cancelled = True
 
+
+# =============================================================================
+# MAIN APPLICATION
+# =============================================================================
 
 class MainApp(QMainWindow):
     """
     Professional AI Stock Trading Application
     
     Features:
-    - Real-time signal monitoring
-    - Custom AI model with 6 neural networks
+    - Real-time signal monitoring with multiple intervals
+    - Custom AI model with ensemble neural networks
     - Professional dark theme
     - Live/Paper trading support
     - Comprehensive risk management
+    - AI-generated price forecast curves
     """
     
     def __init__(self):
@@ -151,21 +281,27 @@ class MainApp(QMainWindow):
         self.setGeometry(50, 50, 1800, 1000)
         
         # State
-        self.predictor: Optional[Predictor] = None
-        self.executor: Optional[ExecutionEngine] = None
-        self.current_prediction: Optional[Prediction] = None
-        self.workers: Dict = {}
+        self.predictor = None
+        self.executor = None
+        self.current_prediction = None
+        self.workers: Dict[str, WorkerThread] = {}
         self.monitor: Optional[RealTimeMonitor] = None
         self.watch_list: List[str] = CONFIG.STOCK_POOL[:10]
         
-        # Setup
+        # Real-time state
+        self._last_forecast_refresh_ts: float = 0.0
+        self._live_price_series: Dict[str, List[float]] = {}
+        
+        # Setup UI
         self._setup_menubar()
         self._setup_toolbar()
         self._setup_ui()
         self._setup_statusbar()
         self._setup_timers()
         self._apply_professional_style()
-        self._init_components()
+        
+        # Initialize components (deferred to avoid slow startup)
+        QTimer.singleShot(100, self._init_components)
     
     def _setup_menubar(self):
         """Setup professional menu bar"""
@@ -223,6 +359,11 @@ class MainApp(QMainWindow):
         
         # View Menu
         view_menu = menubar.addMenu("&View")
+        
+        refresh_action = QAction("&Refresh", self)
+        refresh_action.setShortcut("F5")
+        refresh_action.triggered.connect(self._refresh_all)
+        view_menu.addAction(refresh_action)
         
         # Help Menu
         help_menu = menubar.addMenu("&Help")
@@ -303,7 +444,7 @@ class MainApp(QMainWindow):
         layout.addWidget(main_splitter)
     
     def _create_left_panel(self) -> QWidget:
-        """Create left control panel (adds forecast minutes + interval selector)."""
+        """Create left control panel with interval/forecast settings"""
         panel = QWidget()
         panel.setMaximumWidth(350)
         layout = QVBoxLayout(panel)
@@ -358,20 +499,31 @@ class MainApp(QMainWindow):
         self.risk_spin.setSuffix(" %")
         settings_layout.addWidget(self.risk_spin, 2, 1)
 
-        # NEW: Interval selector (default 1m)
+        # Interval selector
         settings_layout.addWidget(QLabel("Interval:"), 3, 0)
         self.interval_combo = QComboBox()
-        self.interval_combo.addItems(["1m", "1d"])
+        self.interval_combo.addItems(["1m", "5m", "15m", "30m", "60m", "1d"])
         self.interval_combo.setCurrentText("1m")
+        self.interval_combo.currentTextChanged.connect(self._on_interval_changed)
         settings_layout.addWidget(self.interval_combo, 3, 1)
 
-        # NEW: Forecast minutes (20~30 typical)
+        # Forecast horizon
         settings_layout.addWidget(QLabel("Forecast:"), 4, 0)
         self.forecast_spin = QSpinBox()
-        self.forecast_spin.setRange(5, 60)
+        self.forecast_spin.setRange(5, 120)
         self.forecast_spin.setValue(30)
-        self.forecast_spin.setSuffix(" min")
+        self.forecast_spin.setSuffix(" bars")
+        self.forecast_spin.setToolTip("Number of bars to forecast ahead")
         settings_layout.addWidget(self.forecast_spin, 4, 1)
+
+        # Lookback bars
+        settings_layout.addWidget(QLabel("Lookback:"), 5, 0)
+        self.lookback_spin = QSpinBox()
+        self.lookback_spin.setRange(100, 5000)
+        self.lookback_spin.setValue(1400)
+        self.lookback_spin.setSuffix(" bars")
+        self.lookback_spin.setToolTip("Historical bars to use for analysis")
+        settings_layout.addWidget(self.lookback_spin, 5, 1)
 
         settings_group.setLayout(settings_layout)
         layout.addWidget(settings_group)
@@ -406,8 +558,12 @@ class MainApp(QMainWindow):
         ai_group = QGroupBox("🧠 AI Model")
         ai_layout = QVBoxLayout()
 
-        self.model_status = QLabel("Model: Not Loaded")
+        self.model_status = QLabel("Model: Loading...")
         ai_layout.addWidget(self.model_status)
+
+        self.model_info = QLabel("")
+        self.model_info.setStyleSheet("color: #888; font-size: 10px;")
+        ai_layout.addWidget(self.model_info)
 
         self.train_btn = QPushButton("🎓 Train Model")
         self.train_btn.clicked.connect(self._start_training)
@@ -433,16 +589,27 @@ class MainApp(QMainWindow):
         layout = QVBoxLayout(panel)
         layout.setSpacing(10)
         
-        # Signal Display
-        self.signal_panel = SignalPanel()
+        # Signal Display - lazy import
+        try:
+            from .widgets import SignalPanel
+            self.signal_panel = SignalPanel()
+        except ImportError:
+            self.signal_panel = QLabel("Signal Panel")
+            self.signal_panel.setMinimumHeight(100)
         layout.addWidget(self.signal_panel)
         
         # Chart
         chart_group = QGroupBox("📈 Price Chart & AI Prediction")
         chart_layout = QVBoxLayout()
         
-        self.chart = StockChart()
-        self.chart.setMinimumHeight(400)
+        try:
+            from .charts import StockChart
+            self.chart = StockChart()
+            self.chart.setMinimumHeight(400)
+        except ImportError:
+            self.chart = QLabel("Chart (charts module not found)")
+            self.chart.setMinimumHeight(400)
+            self.chart.setAlignment(Qt.AlignmentFlag.AlignCenter)
         chart_layout.addWidget(self.chart)
         
         chart_group.setLayout(chart_layout)
@@ -515,7 +682,15 @@ class MainApp(QMainWindow):
         portfolio_layout.addWidget(account_frame)
         
         # Positions Table
-        self.positions_table = PositionTable()
+        try:
+            from .widgets import PositionTable
+            self.positions_table = PositionTable()
+        except ImportError:
+            self.positions_table = QTableWidget()
+            self.positions_table.setColumnCount(5)
+            self.positions_table.setHorizontalHeaderLabels(
+                ["Code", "Qty", "Price", "Value", "P&L"]
+            )
         portfolio_layout.addWidget(self.positions_table)
         
         tabs.addTab(portfolio_tab, "💼 Portfolio")
@@ -554,7 +729,13 @@ class MainApp(QMainWindow):
         log_group = QGroupBox("📋 System Log")
         log_layout = QVBoxLayout()
         
-        self.log_widget = LogWidget()
+        try:
+            from .widgets import LogWidget
+            self.log_widget = LogWidget()
+        except ImportError:
+            self.log_widget = QTextEdit()
+            self.log_widget.setReadOnly(True)
+            self.log_widget.setMaximumHeight(150)
         log_layout.addWidget(self.log_widget)
         
         log_group.setLayout(log_layout)
@@ -828,20 +1009,65 @@ class MainApp(QMainWindow):
     def _init_components(self):
         """Initialize trading components"""
         try:
-            self.predictor = Predictor(self.capital_spin.value())
+            Predictor = get_predictor_class()
+            
+            # Get current interval and horizon from UI
+            interval = self.interval_combo.currentText().strip()
+            horizon = self.forecast_spin.value()
+            
+            self.predictor = Predictor(
+                capital=self.capital_spin.value(),
+                interval=interval,
+                prediction_horizon=horizon
+            )
+            
             if self.predictor.ensemble:
-                self.model_status.setText("✅ Model: Loaded (6 networks)")
+                num_models = len(self.predictor.ensemble.models)
+                self.model_status.setText(f"✅ Model: Loaded ({num_models} networks)")
                 self.model_status.setStyleSheet("color: #4CAF50;")
+                self.model_info.setText(f"Interval: {interval}, Horizon: {horizon}")
                 self.log("AI model loaded successfully", "success")
             else:
                 self.model_status.setText("⚠️ Model: Not trained")
                 self.model_status.setStyleSheet("color: #FFD54F;")
+                self.model_info.setText("Train a model to enable predictions")
                 self.log("No trained model found. Please train a model.", "warning")
+                
         except Exception as e:
+            log.error(f"Failed to load model: {e}")
             self.log(f"Failed to load model: {e}", "error")
             self.predictor = None
+            self.model_status.setText("❌ Model: Error")
+            self.model_status.setStyleSheet("color: #F44336;")
         
         self.log("System initialized - Ready for trading", "info")
+    
+    def _on_interval_changed(self, interval: str):
+        """Handle interval change - reload model if needed"""
+        horizon = self.forecast_spin.value()
+        self.model_info.setText(f"Interval: {interval}, Horizon: {horizon}")
+        
+        # Update lookback bars suggestion
+        if interval == "1m":
+            self.lookback_spin.setValue(1400)
+        elif interval in ("5m", "15m"):
+            self.lookback_spin.setValue(600)
+        else:
+            self.lookback_spin.setValue(300)
+        
+        # Optionally reload model for new interval
+        if self.predictor:
+            try:
+                Predictor = get_predictor_class()
+                self.predictor = Predictor(
+                    capital=self.capital_spin.value(),
+                    interval=interval,
+                    prediction_horizon=horizon
+                )
+                if self.predictor.ensemble:
+                    self.log(f"Model reloaded for {interval} interval", "info")
+            except Exception as e:
+                self.log(f"Model reload failed: {e}", "warning")
     
     # ==================== Real-time Monitoring ====================
     
@@ -853,40 +1079,44 @@ class MainApp(QMainWindow):
             self._stop_monitoring()
     
     def _start_monitoring(self):
-        """Start real-time monitoring + ensure feed subscriptions for dealing bars (1m)."""
+        """Start real-time monitoring"""
         if self.predictor is None or self.predictor.ensemble is None:
             self.log("Cannot start monitoring: No model loaded", "error")
             self.monitor_action.setChecked(False)
             return
 
         interval = self.interval_combo.currentText().strip()
-        forecast_min = int(self.forecast_spin.value())
+        forecast_bars = self.forecast_spin.value()
+        lookback = self.lookback_spin.value()
 
-        # Ensure feed subscribes so BarAggregator records 1m dealing bars into local DB
+        # Subscribe to data feeds if available
         try:
             from data.feeds import get_feed_manager
             fm = get_feed_manager()
             fm.subscribe_many(self.watch_list)
+            self.log(f"Subscribed to feeds for {len(self.watch_list)} stocks", "info")
         except Exception as e:
             self.log(f"Feed subscription warning: {e}", "warning")
 
+        # Create and start monitor
         self.monitor = RealTimeMonitor(
             self.predictor,
             self.watch_list,
             interval=interval,
-            forecast_minutes=forecast_min,
-            lookback_bars=1400 if interval == "1m" else 600
+            forecast_minutes=forecast_bars,
+            lookback_bars=lookback
         )
         self.monitor.signal_detected.connect(self._on_signal_detected)
         self.monitor.price_updated.connect(self._on_price_updated)
         self.monitor.error_occurred.connect(lambda e: self.log(f"Monitor: {e}", "warning"))
+        self.monitor.status_changed.connect(lambda s: self.monitor_label.setText(f"📡 {s}"))
         self.monitor.start()
 
-        self.monitor_label.setText("Monitoring: ACTIVE")
+        self.monitor_label.setText("📡 Monitoring: ACTIVE")
         self.monitor_label.setStyleSheet("color: #4CAF50; font-weight: bold;")
-        self.monitor_action.setText("Stop Monitoring")
+        self.monitor_action.setText("⏹ Stop Monitoring")
 
-        self.log(f"Monitoring started ({interval}, forecast={forecast_min}m) for {len(self.watch_list)} stocks", "success")
+        self.log(f"Monitoring started: {interval} interval, {forecast_bars} bar forecast", "success")
     
     def _stop_monitoring(self):
         """Stop real-time monitoring"""
@@ -901,28 +1131,37 @@ class MainApp(QMainWindow):
         
         self.log("Real-time monitoring stopped", "info")
     
-    def _on_signal_detected(self, pred: Prediction):
+    def _on_signal_detected(self, pred):
         """Handle detected trading signal"""
+        Signal = get_signal_class()
+        
         # Add to signals table
         row = 0
         self.signals_table.insertRow(row)
         
         self.signals_table.setItem(row, 0, QTableWidgetItem(
-            pred.timestamp.strftime("%H:%M:%S")
-        ))
-        self.signals_table.setItem(row, 1, QTableWidgetItem(
-            f"{pred.stock_code} - {pred.stock_name}"
+            pred.timestamp.strftime("%H:%M:%S") if hasattr(pred, 'timestamp') else "--"
         ))
         
-        signal_item = QTableWidgetItem(pred.signal.value)
-        if pred.signal in [Signal.STRONG_BUY, Signal.BUY]:
+        stock_text = f"{pred.stock_code}"
+        if hasattr(pred, 'stock_name') and pred.stock_name:
+            stock_text += f" - {pred.stock_name}"
+        self.signals_table.setItem(row, 1, QTableWidgetItem(stock_text))
+        
+        signal_text = pred.signal.value if hasattr(pred.signal, 'value') else str(pred.signal)
+        signal_item = QTableWidgetItem(signal_text)
+        
+        if hasattr(pred, 'signal') and pred.signal in [Signal.STRONG_BUY, Signal.BUY]:
             signal_item.setForeground(QColor("#4CAF50"))
         else:
             signal_item.setForeground(QColor("#F44336"))
         self.signals_table.setItem(row, 2, signal_item)
         
-        self.signals_table.setItem(row, 3, QTableWidgetItem(f"{pred.confidence:.0%}"))
-        self.signals_table.setItem(row, 4, QTableWidgetItem(f"¥{pred.current_price:.2f}"))
+        conf = pred.confidence if hasattr(pred, 'confidence') else 0
+        self.signals_table.setItem(row, 3, QTableWidgetItem(f"{conf:.0%}"))
+        
+        price = pred.current_price if hasattr(pred, 'current_price') else 0
+        self.signals_table.setItem(row, 4, QTableWidgetItem(f"¥{price:.2f}"))
         
         # Action button
         action_btn = QPushButton("Trade")
@@ -935,7 +1174,7 @@ class MainApp(QMainWindow):
         
         # Notification
         self.log(
-            f"🔔 SIGNAL: {pred.signal.value} - {pred.stock_code} @ ¥{pred.current_price:.2f}",
+            f"🔔 SIGNAL: {signal_text} - {pred.stock_code} @ ¥{price:.2f}",
             "success"
         )
         
@@ -943,89 +1182,80 @@ class MainApp(QMainWindow):
         QApplication.alert(self)
     
     def _on_price_updated(self, code: str, price: float):
-        """
-        Real-time chart update:
-        - update watchlist price
-        - if this code is currently selected, refresh BOTH actual series and AI forecast curve
-        with a throttle to avoid heavy CPU.
-        """
-        # Update watchlist price cell
+        """Handle real-time price update"""
+        # Update watchlist
         for row in range(self.watchlist.rowCount()):
             item = self.watchlist.item(row, 0)
             if item and item.text() == code:
                 self.watchlist.setItem(row, 1, QTableWidgetItem(f"¥{price:.2f}"))
                 break
-
-        # Only update chart for the currently selected stock
+        
+        # Update chart if this is the current stock
         try:
             current_code = self.stock_input.text().strip()
             if not current_code or current_code != code:
                 return
             if not self.predictor:
                 return
-        except Exception:
-            return
-
-        # Throttle forecast refresh (e.g., once every 2 seconds)
-        now = time.time()
-        last = float(getattr(self, "_last_forecast_refresh_ts", 0.0))
-        if (now - last) < 2.0:
-            # still update actual series quickly without refreshing forecast
-            try:
-                if self.current_prediction and self.current_prediction.price_history:
-                    series = getattr(self, "_live_price_series", {})
-                    base = series.get(code) or list(self.current_prediction.price_history)
-                    base = base[-180:]
-                    base.append(float(price))
-                    base = base[-180:]
-                    series[code] = base
-                    setattr(self, "_live_price_series", series)
-
-                    levels = {
-                        "stop_loss": self.current_prediction.levels.stop_loss,
-                        "target_1": self.current_prediction.levels.target_1,
-                        "target_2": self.current_prediction.levels.target_2,
-                        "target_3": self.current_prediction.levels.target_3,
-                    }
-                    self.chart.update_data(series[code], self.current_prediction.predicted_prices, levels)
-            except Exception:
-                pass
-            return
-
-        setattr(self, "_last_forecast_refresh_ts", now)
-
-        # Refresh BOTH actual history and forecast curve using Predictor (fast path uses intraday DB)
-        try:
+            
+            # Throttle updates
+            now = time.time()
+            if (now - self._last_forecast_refresh_ts) < 2.0:
+                # Quick price update without forecast refresh
+                if self.current_prediction and hasattr(self.current_prediction, 'price_history'):
+                    series = self._live_price_series.get(code, [])
+                    if not series and hasattr(self.current_prediction, 'price_history'):
+                        series = list(self.current_prediction.price_history or [])
+                    series = series[-180:]
+                    series.append(float(price))
+                    series = series[-180:]
+                    self._live_price_series[code] = series
+                    
+                    if hasattr(self.chart, 'update_data'):
+                        predicted = getattr(self.current_prediction, 'predicted_prices', [])
+                        levels = self._get_levels_dict()
+                        self.chart.update_data(series, predicted, levels)
+                return
+            
+            self._last_forecast_refresh_ts = now
+            
+            # Full forecast refresh
             interval = self.interval_combo.currentText().strip()
-            forecast_min = int(self.forecast_spin.value())
-
-            actual_prices, predicted_prices = self.predictor.get_realtime_forecast_curve(
-                stock_code=code,
-                interval=interval,
-                horizon_steps=forecast_min if interval != "1d" else int(CONFIG.PREDICTION_HORIZON),
-                lookback_bars=1400 if interval == "1m" else 600,
-                use_realtime_price=True,
-            )
-
-            # Update chart using current levels if available
-            levels = None
-            if self.current_prediction and self.current_prediction.stock_code == code:
-                levels = {
-                    "stop_loss": self.current_prediction.levels.stop_loss,
-                    "target_1": self.current_prediction.levels.target_1,
-                    "target_2": self.current_prediction.levels.target_2,
-                    "target_3": self.current_prediction.levels.target_3,
-                }
-
-            self.chart.update_data(actual_prices, predicted_prices, levels)
-
-            # Keep state
-            if self.current_prediction and self.current_prediction.stock_code == code:
-                self.current_prediction.predicted_prices = predicted_prices
+            horizon = self.forecast_spin.value()
+            lookback = self.lookback_spin.value()
+            
+            if hasattr(self.predictor, 'get_realtime_forecast_curve'):
+                actual_prices, predicted_prices = self.predictor.get_realtime_forecast_curve(
+                    stock_code=code,
+                    interval=interval,
+                    horizon_steps=horizon,
+                    lookback_bars=lookback,
+                    use_realtime_price=True,
+                )
+                
+                if hasattr(self.chart, 'update_data'):
+                    self.chart.update_data(actual_prices, predicted_prices, self._get_levels_dict())
+                
+                if self.current_prediction and self.current_prediction.stock_code == code:
+                    self.current_prediction.predicted_prices = predicted_prices
+                    
         except Exception as e:
-            log.warning(f"Realtime forecast refresh failed: {e}")
+            log.debug(f"Price update error: {e}")
     
-    def _quick_trade(self, pred: Prediction):
+    def _get_levels_dict(self) -> Optional[Dict[str, float]]:
+        """Get trading levels as dict"""
+        if not self.current_prediction or not hasattr(self.current_prediction, 'levels'):
+            return None
+        
+        levels = self.current_prediction.levels
+        return {
+            "stop_loss": getattr(levels, 'stop_loss', 0),
+            "target_1": getattr(levels, 'target_1', 0),
+            "target_2": getattr(levels, 'target_2', 0),
+            "target_3": getattr(levels, 'target_3', 0),
+        }
+    
+    def _quick_trade(self, pred):
         """Quick trade from signal"""
         self.stock_input.setText(pred.stock_code)
         self._analyze_stock()
@@ -1033,29 +1263,27 @@ class MainApp(QMainWindow):
     # ==================== Watchlist ====================
     
     def _update_watchlist(self):
-        """Update watchlist - preserve existing prices"""
+        """Update watchlist display"""
         current_count = self.watchlist.rowCount()
         
-        # Only add/remove rows if list changed
         if current_count != len(self.watch_list):
             self.watchlist.setRowCount(len(self.watch_list))
         
         for row, code in enumerate(self.watch_list):
-            # Only set code if different
             current_code = self.watchlist.item(row, 0)
             if current_code is None or current_code.text() != code:
                 self.watchlist.setItem(row, 0, QTableWidgetItem(code))
             
-            # Initialize other columns ONLY if empty
             for col in range(1, 4):
                 if self.watchlist.item(row, col) is None:
                     self.watchlist.setItem(row, col, QTableWidgetItem("--"))
     
     def _on_watchlist_click(self, row, col):
         """Handle watchlist double-click"""
-        code = self.watchlist.item(row, 0).text()
-        self.stock_input.setText(code)
-        self._analyze_stock()
+        item = self.watchlist.item(row, 0)
+        if item:
+            self.stock_input.setText(item.text())
+            self._analyze_stock()
     
     def _add_to_watchlist(self):
         """Add stock to watchlist"""
@@ -1069,15 +1297,18 @@ class MainApp(QMainWindow):
         """Remove selected stock from watchlist"""
         row = self.watchlist.currentRow()
         if row >= 0:
-            code = self.watchlist.item(row, 0).text()
-            self.watch_list.remove(code)
-            self._update_watchlist()
-            self.log(f"Removed {code} from watchlist", "info")
+            item = self.watchlist.item(row, 0)
+            if item:
+                code = item.text()
+                if code in self.watch_list:
+                    self.watch_list.remove(code)
+                    self._update_watchlist()
+                    self.log(f"Removed {code} from watchlist", "info")
     
     # ==================== Analysis ====================
     
     def _analyze_stock(self):
-        """Analyze stock (uses 1m + forecast minutes option)."""
+        """Analyze stock"""
         code = self.stock_input.text().strip()
         if not code:
             self.log("Please enter a stock code", "warning")
@@ -1088,10 +1319,14 @@ class MainApp(QMainWindow):
             return
 
         interval = self.interval_combo.currentText().strip()
-        forecast_min = int(self.forecast_spin.value())
+        forecast_bars = self.forecast_spin.value()
+        lookback = self.lookback_spin.value()
 
         self.analyze_action.setEnabled(False)
-        self.signal_panel.reset()
+        
+        if hasattr(self.signal_panel, 'reset'):
+            self.signal_panel.reset()
+        
         self.status_label.setText(f"Analyzing {code}...")
         self.progress.setRange(0, 0)
         self.progress.show()
@@ -1101,8 +1336,8 @@ class MainApp(QMainWindow):
                 code,
                 use_realtime_price=True,
                 interval=interval,
-                forecast_minutes=forecast_min,
-                lookback_bars=1400 if interval == "1m" else 600
+                forecast_minutes=forecast_bars,
+                lookback_bars=lookback
             )
 
         worker = WorkerThread(analyze)
@@ -1111,7 +1346,7 @@ class MainApp(QMainWindow):
         self.workers["analyze"] = worker
         worker.start()
     
-    def _on_analysis_done(self, pred: Prediction):
+    def _on_analysis_done(self, pred):
         """Handle analysis completion"""
         self.analyze_action.setEnabled(True)
         self.progress.hide()
@@ -1120,20 +1355,15 @@ class MainApp(QMainWindow):
         self.current_prediction = pred
         
         # Update signal panel
-        self.signal_panel.update_prediction(pred)
+        if hasattr(self.signal_panel, 'update_prediction'):
+            self.signal_panel.update_prediction(pred)
         
         # Update chart
-        levels = {
-            'stop_loss': pred.levels.stop_loss,
-            'target_1': pred.levels.target_1,
-            'target_2': pred.levels.target_2,
-            'target_3': pred.levels.target_3,
-        }
-        self.chart.update_data(
-            pred.price_history,
-            pred.predicted_prices,
-            levels
-        )
+        if hasattr(self.chart, 'update_data'):
+            levels = self._get_levels_dict()
+            price_history = getattr(pred, 'price_history', [])
+            predicted_prices = getattr(pred, 'predicted_prices', [])
+            self.chart.update_data(price_history, predicted_prices, levels)
         
         # Update details
         self._update_details(pred)
@@ -1142,14 +1372,14 @@ class MainApp(QMainWindow):
         self._add_to_history(pred)
         
         # Enable buttons based on signal
-        self.buy_btn.setEnabled(pred.signal in [Signal.STRONG_BUY, Signal.BUY])
-        self.sell_btn.setEnabled(pred.signal in [Signal.STRONG_SELL, Signal.SELL])
+        Signal = get_signal_class()
+        if hasattr(pred, 'signal'):
+            self.buy_btn.setEnabled(pred.signal in [Signal.STRONG_BUY, Signal.BUY])
+            self.sell_btn.setEnabled(pred.signal in [Signal.STRONG_SELL, Signal.SELL])
         
-        self.log(
-            f"Analysis complete: {pred.stock_code} - {pred.signal.value} "
-            f"(confidence: {pred.confidence:.0%})",
-            "success"
-        )
+        signal_text = pred.signal.value if hasattr(pred.signal, 'value') else str(pred.signal)
+        conf = getattr(pred, 'confidence', 0)
+        self.log(f"Analysis complete: {pred.stock_code} - {signal_text} (confidence: {conf:.0%})", "success")
         
         if 'analyze' in self.workers:
             del self.workers['analyze']
@@ -1166,8 +1396,10 @@ class MainApp(QMainWindow):
         if 'analyze' in self.workers:
             del self.workers['analyze']
     
-    def _update_details(self, pred: Prediction):
+    def _update_details(self, pred):
         """Update analysis details"""
+        Signal = get_signal_class()
+        
         signal_colors = {
             Signal.STRONG_BUY: "#2ea043",
             Signal.BUY: "#3fb950",
@@ -1176,7 +1408,26 @@ class MainApp(QMainWindow):
             Signal.STRONG_SELL: "#da3633",
         }
         
-        color = signal_colors.get(pred.signal, "#c9d1d9")
+        signal = getattr(pred, 'signal', Signal.HOLD)
+        color = signal_colors.get(signal, "#c9d1d9")
+        signal_text = signal.value if hasattr(signal, 'value') else str(signal)
+        
+        # Safe attribute access
+        def safe_get(obj, attr, default=0):
+            return getattr(obj, attr, default) if hasattr(obj, attr) else default
+        
+        prob_up = safe_get(pred, 'prob_up', 0.33)
+        prob_neutral = safe_get(pred, 'prob_neutral', 0.34)
+        prob_down = safe_get(pred, 'prob_down', 0.33)
+        signal_strength = safe_get(pred, 'signal_strength', 0)
+        rsi = safe_get(pred, 'rsi', 50)
+        macd_signal = safe_get(pred, 'macd_signal', 'N/A')
+        trend = safe_get(pred, 'trend', 'N/A')
+        
+        levels = getattr(pred, 'levels', None)
+        position = getattr(pred, 'position', None)
+        reasons = getattr(pred, 'reasons', [])
+        warnings = getattr(pred, 'warnings', [])
         
         html = f"""
         <style>
@@ -1191,68 +1442,91 @@ class MainApp(QMainWindow):
         
         <div class="section">
             <span class="label">Signal: </span>
-            <span class="signal">{pred.signal.value}</span>
-            <span class="label"> | Strength: {pred.signal_strength:.0%}</span>
+            <span class="signal">{signal_text}</span>
+            <span class="label"> | Strength: {signal_strength:.0%}</span>
         </div>
         
         <div class="section">
             <span class="label">AI Prediction: </span>
-            <span class="positive">UP {pred.prob_up:.0%}</span> | 
-            <span class="neutral">NEUTRAL {pred.prob_neutral:.0%}</span> | 
-            <span class="negative">DOWN {pred.prob_down:.0%}</span>
+            <span class="positive">UP {prob_up:.0%}</span> | 
+            <span class="neutral">NEUTRAL {prob_neutral:.0%}</span> | 
+            <span class="negative">DOWN {prob_down:.0%}</span>
         </div>
         
         <div class="section">
             <span class="label">Technical: </span>
-            RSI={pred.rsi:.0f} | MACD={pred.macd_signal} | Trend={pred.trend}
+            RSI={rsi:.0f} | MACD={macd_signal} | Trend={trend}
         </div>
-        
-        <div class="section">
-            <span class="label">Trading Plan:</span><br/>
-            Entry: ¥{pred.levels.entry:.2f} | 
-            Stop: ¥{pred.levels.stop_loss:.2f} ({pred.levels.stop_loss_pct:+.1f}%)<br/>
-            Target 1: ¥{pred.levels.target_1:.2f} ({pred.levels.target_1_pct:+.1f}%) |
-            Target 2: ¥{pred.levels.target_2:.2f} ({pred.levels.target_2_pct:+.1f}%)
-        </div>
-        
-        <div class="section">
-            <span class="label">Position:</span>
-            {pred.position.shares:,} shares | ¥{pred.position.value:,.2f} | 
-            Risk: ¥{pred.position.risk_amount:,.2f}
-        </div>
-        
-        <div class="section">
-            <span class="label">Analysis:</span><br/>
         """
         
-        for reason in pred.reasons[:5]:
-            html += f"• {reason}<br/>"
+        if levels:
+            entry = safe_get(levels, 'entry', 0)
+            stop_loss = safe_get(levels, 'stop_loss', 0)
+            stop_loss_pct = safe_get(levels, 'stop_loss_pct', 0)
+            target_1 = safe_get(levels, 'target_1', 0)
+            target_1_pct = safe_get(levels, 'target_1_pct', 0)
+            target_2 = safe_get(levels, 'target_2', 0)
+            target_2_pct = safe_get(levels, 'target_2_pct', 0)
+            
+            html += f"""
+            <div class="section">
+                <span class="label">Trading Plan:</span><br/>
+                Entry: ¥{entry:.2f} | 
+                Stop: ¥{stop_loss:.2f} ({stop_loss_pct:+.1f}%)<br/>
+                Target 1: ¥{target_1:.2f} ({target_1_pct:+.1f}%) |
+                Target 2: ¥{target_2:.2f} ({target_2_pct:+.1f}%)
+            </div>
+            """
         
-        if pred.warnings:
-            html += "<br/><span class='negative'>⚠️ Warnings:</span><br/>"
-            for warning in pred.warnings:
+        if position:
+            shares = safe_get(position, 'shares', 0)
+            value = safe_get(position, 'value', 0)
+            risk_amount = safe_get(position, 'risk_amount', 0)
+            
+            html += f"""
+            <div class="section">
+                <span class="label">Position:</span>
+                {shares:,} shares | ¥{value:,.2f} | 
+                Risk: ¥{risk_amount:,.2f}
+            </div>
+            """
+        
+        if reasons:
+            html += '<div class="section"><span class="label">Analysis:</span><br/>'
+            for reason in reasons[:5]:
+                html += f"• {reason}<br/>"
+            html += "</div>"
+        
+        if warnings:
+            html += '<div class="section"><span class="negative">⚠️ Warnings:</span><br/>'
+            for warning in warnings:
                 html += f"• {warning}<br/>"
-        
-        html += "</div>"
+            html += "</div>"
         
         self.details_text.setHtml(html)
     
-    def _add_to_history(self, pred: Prediction):
+    def _add_to_history(self, pred):
         """Add prediction to history"""
         row = 0
         self.history_table.insertRow(row)
         
+        timestamp = getattr(pred, 'timestamp', datetime.now())
         self.history_table.setItem(row, 0, QTableWidgetItem(
-            pred.timestamp.strftime("%H:%M:%S")
+            timestamp.strftime("%H:%M:%S") if hasattr(timestamp, 'strftime') else "--"
         ))
-        self.history_table.setItem(row, 1, QTableWidgetItem(pred.stock_code))
+        self.history_table.setItem(row, 1, QTableWidgetItem(getattr(pred, 'stock_code', '--')))
         
-        signal_item = QTableWidgetItem(pred.signal.value)
+        signal = getattr(pred, 'signal', None)
+        signal_text = signal.value if hasattr(signal, 'value') else str(signal)
+        signal_item = QTableWidgetItem(signal_text)
         signal_item.setForeground(QColor("#58a6ff"))
         self.history_table.setItem(row, 2, signal_item)
         
-        self.history_table.setItem(row, 3, QTableWidgetItem(f"{pred.prob_up:.0%}"))
-        self.history_table.setItem(row, 4, QTableWidgetItem(f"{pred.confidence:.0%}"))
+        prob_up = getattr(pred, 'prob_up', 0)
+        self.history_table.setItem(row, 3, QTableWidgetItem(f"{prob_up:.0%}"))
+        
+        confidence = getattr(pred, 'confidence', 0)
+        self.history_table.setItem(row, 4, QTableWidgetItem(f"{confidence:.0%}"))
         self.history_table.setItem(row, 5, QTableWidgetItem("--"))
         
         while self.history_table.rowCount() > 100:
@@ -1269,7 +1543,9 @@ class MainApp(QMainWindow):
         self.progress.show()
         
         def scan():
-            return self.predictor.get_top_picks(CONFIG.STOCK_POOL, n=10, signal_type="buy")
+            if hasattr(self.predictor, 'get_top_picks'):
+                return self.predictor.get_top_picks(CONFIG.STOCK_POOL, n=10, signal_type="buy")
+            return []
         
         worker = WorkerThread(scan)
         worker.finished.connect(self._on_scan_done)
@@ -1287,12 +1563,12 @@ class MainApp(QMainWindow):
         
         self.log(f"Found {len(picks)} buy signals:", "success")
         
+        Signal = get_signal_class()
         for pred in picks:
-            self.log(
-                f"  📈 {pred.stock_code} {pred.stock_name}: "
-                f"{pred.signal.value} (confidence: {pred.confidence:.0%})",
-                "info"
-            )
+            signal_text = pred.signal.value if hasattr(pred.signal, 'value') else str(pred.signal)
+            conf = getattr(pred, 'confidence', 0)
+            name = getattr(pred, 'stock_name', '')
+            self.log(f"  📈 {pred.stock_code} {name}: {signal_text} (confidence: {conf:.0%})", "info")
         
         # Analyze top pick
         if picks:
@@ -1301,6 +1577,12 @@ class MainApp(QMainWindow):
         
         if 'scan' in self.workers:
             del self.workers['scan']
+    
+    def _refresh_all(self):
+        """Refresh all data"""
+        self._update_watchlist()
+        self._refresh_portfolio()
+        self.log("Refreshed all data", "info")
     
     # ==================== Trading ====================
     
@@ -1328,36 +1610,44 @@ class MainApp(QMainWindow):
                 self.mode_combo.setCurrentIndex(0)
                 return
         
-        self.executor = ExecutionEngine(mode)
-        self.executor.on_fill = self._on_order_filled
-        self.executor.on_reject = self._on_order_rejected
-        
-        if self.executor.start():
-            self.connection_status.setText("● Connected")
-            self.connection_status.setStyleSheet("color: #4CAF50; font-weight: bold;")
-            self.connect_btn.setText("Disconnect")
-            self.connect_btn.setStyleSheet("""
-                QPushButton {
-                    background: #F44336;
-                    color: white;
-                    border: none;
-                    padding: 12px;
-                    border-radius: 6px;
-                    font-weight: bold;
-                }
-                QPushButton:hover { background: #D32F2F; }
-            """)
+        try:
+            ExecutionEngine = get_execution_engine()
+            self.executor = ExecutionEngine(mode)
+            self.executor.on_fill = self._on_order_filled
+            self.executor.on_reject = self._on_order_rejected
             
-            self.log(f"Connected to {mode.value} trading", "success")
-            self._refresh_portfolio()
-        else:
+            if self.executor.start():
+                self.connection_status.setText("● Connected")
+                self.connection_status.setStyleSheet("color: #4CAF50; font-weight: bold;")
+                self.connect_btn.setText("Disconnect")
+                self.connect_btn.setStyleSheet("""
+                    QPushButton {
+                        background: #F44336;
+                        color: white;
+                        border: none;
+                        padding: 12px;
+                        border-radius: 6px;
+                        font-weight: bold;
+                    }
+                    QPushButton:hover { background: #D32F2F; }
+                """)
+                
+                self.log(f"Connected to {mode.value} trading", "success")
+                self._refresh_portfolio()
+            else:
+                self.executor = None
+                self.log("Failed to connect to broker", "error")
+        except Exception as e:
+            self.log(f"Connection error: {e}", "error")
             self.executor = None
-            self.log("Failed to connect to broker", "error")
     
     def _disconnect_trading(self):
         """Disconnect from trading"""
         if self.executor:
-            self.executor.stop()
+            try:
+                self.executor.stop()
+            except Exception:
+                pass
             self.executor = None
         
         self.connection_status.setText("● Disconnected")
@@ -1384,24 +1674,45 @@ class MainApp(QMainWindow):
         
         pred = self.current_prediction
         
+        levels = getattr(pred, 'levels', None)
+        position = getattr(pred, 'position', None)
+        
+        if not levels or not position:
+            self.log("Missing trading levels or position info", "error")
+            return
+        
+        shares = getattr(position, 'shares', 0)
+        entry = getattr(levels, 'entry', 0)
+        value = getattr(position, 'value', 0)
+        stop_loss = getattr(levels, 'stop_loss', 0)
+        target_2 = getattr(levels, 'target_2', 0)
+        stock_name = getattr(pred, 'stock_name', '')
+        
         reply = QMessageBox.question(
             self, "Confirm Buy Order",
-            f"<b>Buy {pred.stock_code} - {pred.stock_name}</b><br><br>"
-            f"Quantity: {pred.position.shares:,} shares<br>"
-            f"Price: ¥{pred.levels.entry:.2f}<br>"
-            f"Value: ¥{pred.position.value:,.2f}<br>"
-            f"Stop Loss: ¥{pred.levels.stop_loss:.2f}<br>"
-            f"Target: ¥{pred.levels.target_2:.2f}",
+            f"<b>Buy {pred.stock_code} - {stock_name}</b><br><br>"
+            f"Quantity: {shares:,} shares<br>"
+            f"Price: ¥{entry:.2f}<br>"
+            f"Value: ¥{value:,.2f}<br>"
+            f"Stop Loss: ¥{stop_loss:.2f}<br>"
+            f"Target: ¥{target_2:.2f}",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No
         )
         
         if reply == QMessageBox.StandardButton.Yes:
-            success = self.executor.submit_from_prediction(pred)
-            if success:
-                self.log(f"Buy order submitted: {pred.stock_code}", "info")
-            else:
-                self.log("Buy order failed risk checks", "error")
+            try:
+                if hasattr(self.executor, 'submit_from_prediction'):
+                    success = self.executor.submit_from_prediction(pred)
+                else:
+                    success = False
+                    
+                if success:
+                    self.log(f"Buy order submitted: {pred.stock_code}", "info")
+                else:
+                    self.log("Buy order failed risk checks", "error")
+            except Exception as e:
+                self.log(f"Buy order error: {e}", "error")
     
     def _execute_sell(self):
         """Execute sell order"""
@@ -1409,43 +1720,55 @@ class MainApp(QMainWindow):
             return
         
         pred = self.current_prediction
-        positions = self.executor.get_positions()
-        position = positions.get(pred.stock_code)
         
-        if not position:
-            self.log("No position to sell", "warning")
-            return
-        
-        reply = QMessageBox.question(
-            self, "Confirm Sell Order",
-            f"<b>Sell {pred.stock_code} - {pred.stock_name}</b><br><br>"
-            f"Available: {position.available_qty:,} shares<br>"
-            f"Current Price: ¥{position.current_price:.2f}",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No
-        )
-        
-        if reply == QMessageBox.StandardButton.Yes:
-            # FIXED: Use core.types
-            signal = TradeSignal(
-                symbol=pred.stock_code,
-                name=pred.stock_name,
-                side=OrderSide.SELL,
-                quantity=position.available_qty,
-                price=position.current_price
+        try:
+            positions = self.executor.get_positions()
+            position = positions.get(pred.stock_code)
+            
+            if not position:
+                self.log("No position to sell", "warning")
+                return
+            
+            available_qty = getattr(position, 'available_qty', 0)
+            current_price = getattr(position, 'current_price', 0)
+            stock_name = getattr(pred, 'stock_name', '')
+            
+            reply = QMessageBox.question(
+                self, "Confirm Sell Order",
+                f"<b>Sell {pred.stock_code} - {stock_name}</b><br><br>"
+                f"Available: {available_qty:,} shares<br>"
+                f"Current Price: ¥{current_price:.2f}",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No
             )
             
-            success = self.executor.submit(signal)
-            if success:
-                self.log(f"Sell order submitted: {pred.stock_code}", "info")
-            else:
-                self.log("Sell order failed", "error")
+            if reply == QMessageBox.StandardButton.Yes:
+                from core.types import TradeSignal, OrderSide
+                
+                signal = TradeSignal(
+                    symbol=pred.stock_code,
+                    name=stock_name,
+                    side=OrderSide.SELL,
+                    quantity=available_qty,
+                    price=current_price
+                )
+                
+                success = self.executor.submit(signal)
+                if success:
+                    self.log(f"Sell order submitted: {pred.stock_code}", "info")
+                else:
+                    self.log("Sell order failed", "error")
+        except Exception as e:
+            self.log(f"Sell order error: {e}", "error")
+    
+    def _on_order_filled(self, order, fill):
+        """Handle order fill"""
+        side = order.side.value.upper() if hasattr(order.side, 'value') else str(order.side)
+        qty = getattr(fill, 'quantity', 0)
+        price = getattr(fill, 'price', 0)
         
-    def _on_order_filled(self, order: Order, fill: Fill):
-        """Handle order fill - now receives both order and fill"""
         self.log(
-            f"✅ Order Filled: {order.side.value.upper()} {fill.quantity} "
-            f"{order.symbol} @ ¥{fill.price:.2f}",
+            f"✅ Order Filled: {side} {qty} {order.symbol} @ ¥{price:.2f}",
             "success"
         )
         self._refresh_portfolio()
@@ -1456,42 +1779,47 @@ class MainApp(QMainWindow):
 
     def _refresh_portfolio(self):
         """Refresh portfolio display"""
-        # FIXED: Check executor FIRST before any access
         if not self.executor:
             return
         
         try:
-            metrics = self.executor.get_risk_metrics()
-            if metrics:
-                if not metrics.can_trade:
-                    self.log("Trading disabled by risk / circuit breaker", "warning")
-            
             account = self.executor.get_account()
             
-            self.account_labels['equity'].setText(f"¥{account.equity:,.2f}")
-            self.account_labels['cash'].setText(f"¥{account.available:,.2f}")
-            self.account_labels['positions'].setText(f"¥{account.market_value:,.2f}")
+            equity = getattr(account, 'equity', 0)
+            available = getattr(account, 'available', 0)
+            market_value = getattr(account, 'market_value', 0)
+            total_pnl = getattr(account, 'total_pnl', 0)
+            positions = getattr(account, 'positions', {})
             
-            pnl_color = "#3fb950" if account.total_pnl >= 0 else "#f85149"
-            self.account_labels['pnl'].setText(f"¥{account.total_pnl:,.2f}")
+            self.account_labels['equity'].setText(f"¥{equity:,.2f}")
+            self.account_labels['cash'].setText(f"¥{available:,.2f}")
+            self.account_labels['positions'].setText(f"¥{market_value:,.2f}")
+            
+            pnl_color = "#3fb950" if total_pnl >= 0 else "#f85149"
+            self.account_labels['pnl'].setText(f"¥{total_pnl:,.2f}")
             self.account_labels['pnl'].setStyleSheet(
                 f"color: {pnl_color}; font-size: 18px; font-weight: bold;"
             )
             
-            self.positions_table.update_positions(account.positions)
-            
+            if hasattr(self.positions_table, 'update_positions'):
+                self.positions_table.update_positions(positions)
+                
         except Exception as e:
-            log.warning(f"Failed to refresh portfolio: {e}")
+            log.debug(f"Portfolio refresh error: {e}")
     
     # ==================== Training ====================
     
     def _start_training(self):
         """Start model training"""
+        interval = self.interval_combo.currentText().strip()
+        horizon = self.forecast_spin.value()
+        
         reply = QMessageBox.question(
             self, "Train AI Model",
             f"Start training with the following settings?\n\n"
-            f"This will train 6 neural networks (LSTM, Transformer, GRU, TCN, Hybrid)\n"
-            f"and may take 30-60 minutes.\n\n"
+            f"Interval: {interval}\n"
+            f"Horizon: {horizon} bars\n\n"
+            f"This will train multiple neural networks and may take 30-60 minutes.\n\n"
             f"Continue?",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No
@@ -1500,26 +1828,37 @@ class MainApp(QMainWindow):
         if reply != QMessageBox.StandardButton.Yes:
             return
         
-        from .dialogs import TrainingDialog
-        dialog = TrainingDialog(self)
-        dialog.exec()
+        try:
+            from .dialogs import TrainingDialog
+            dialog = TrainingDialog(self, interval=interval, horizon=horizon)
+            dialog.exec()
+        except ImportError:
+            self.log("Training dialog not available", "error")
+            return
         
         # Reload model after training
         self._init_components()
     
     def _show_auto_learn(self):
         """Show auto-learning dialog"""
-        from .auto_learn_dialog import show_auto_learn_dialog
-        show_auto_learn_dialog(self)
+        try:
+            from .auto_learn_dialog import show_auto_learn_dialog
+            show_auto_learn_dialog(self)
+        except ImportError:
+            self.log("Auto-learn dialog not available", "error")
+            return
         
         # Reload model after learning
         self._init_components()
     
     def _show_backtest(self):
         """Show backtest dialog"""
-        from .dialogs import BacktestDialog
-        dialog = BacktestDialog(self)
-        dialog.exec()
+        try:
+            from .dialogs import BacktestDialog
+            dialog = BacktestDialog(self)
+            dialog.exec()
+        except ImportError:
+            self.log("Backtest dialog not available", "error")
     
     def _show_about(self):
         """Show about dialog"""
@@ -1530,9 +1869,10 @@ class MainApp(QMainWindow):
             "<p>Professional AI-powered stock trading application</p>"
             "<h3>Features:</h3>"
             "<ul>"
-            "<li>Custom AI model with 6 neural networks</li>"
-            "<li>Real-time signal monitoring</li>"
+            "<li>Custom AI model with ensemble neural networks</li>"
+            "<li>Real-time signal monitoring (1m, 5m, 1d intervals)</li>"
             "<li>Automatic stock discovery from internet</li>"
+            "<li>AI-generated price forecast curves</li>"
             "<li>Paper and live trading support</li>"
             "<li>Comprehensive risk management</li>"
             "</ul>"
@@ -1559,44 +1899,142 @@ class MainApp(QMainWindow):
             self.market_label.setStyleSheet("color: #f85149;")
     
     def log(self, message: str, level: str = "info"):
-        """Log message"""
-        self.log_widget.log(message, level)
+        """Log message to UI"""
+        timestamp = datetime.now().strftime("%H:%M:%S")
+        
+        colors = {
+            "info": "#c9d1d9",
+            "success": "#3fb950",
+            "warning": "#d29922",
+            "error": "#f85149",
+        }
+        color = colors.get(level, "#c9d1d9")
+        
+        formatted = f'<span style="color: #888;">[{timestamp}]</span> <span style="color: {color};">{message}</span>'
+        
+        if hasattr(self.log_widget, 'log'):
+            self.log_widget.log(message, level)
+        elif hasattr(self.log_widget, 'append'):
+            self.log_widget.append(formatted)
+        
+        # Also log to file
+        log.info(message)
     
     def closeEvent(self, event):
         """Handle window close"""
         # Stop monitoring
         if self.monitor:
-            self.monitor.stop()
+                        self.monitor.stop()
             self.monitor.wait(3000)
+            self.monitor = None
         
         # Stop workers
-        for worker in self.workers.values():
-            worker.quit()
-            worker.wait(2000)
+        for name, worker in list(self.workers.items()):
+            try:
+                worker.cancel()
+                worker.quit()
+                worker.wait(2000)
+            except Exception:
+                pass
+        self.workers.clear()
         
         # Disconnect trading
         if self.executor:
-            self.executor.stop()
+            try:
+                self.executor.stop()
+            except Exception:
+                pass
+            self.executor = None
         
         # Stop timers
-        self.clock_timer.stop()
-        self.market_timer.stop()
-        self.portfolio_timer.stop()
-        self.watchlist_timer.stop()
+        for timer in [self.clock_timer, self.market_timer, 
+                      self.portfolio_timer, self.watchlist_timer]:
+            try:
+                timer.stop()
+            except Exception:
+                pass
+        
+        # Save state
+        self._save_state()
         
         event.accept()
+    
+    def _save_state(self):
+        """Save application state for next session"""
+        try:
+            import json
+            state = {
+                'watch_list': self.watch_list,
+                'interval': self.interval_combo.currentText(),
+                'forecast': self.forecast_spin.value(),
+                'lookback': self.lookback_spin.value(),
+                'capital': self.capital_spin.value(),
+                'last_stock': self.stock_input.text(),
+            }
+            
+            state_path = CONFIG.DATA_DIR / "app_state.json"
+            state_path.parent.mkdir(parents=True, exist_ok=True)
+            
+            with open(state_path, 'w') as f:
+                json.dump(state, f, indent=2)
+        except Exception as e:
+            log.debug(f"Failed to save state: {e}")
+    
+    def _load_state(self):
+        """Load application state from previous session"""
+        try:
+            import json
+            state_path = CONFIG.DATA_DIR / "app_state.json"
+            
+            if state_path.exists():
+                with open(state_path, 'r') as f:
+                    state = json.load(f)
+                
+                if 'watch_list' in state:
+                    self.watch_list = state['watch_list']
+                if 'interval' in state:
+                    self.interval_combo.setCurrentText(state['interval'])
+                if 'forecast' in state:
+                    self.forecast_spin.setValue(state['forecast'])
+                if 'lookback' in state:
+                    self.lookback_spin.setValue(state['lookback'])
+                if 'capital' in state:
+                    self.capital_spin.setValue(state['capital'])
+                if 'last_stock' in state:
+                    self.stock_input.setText(state['last_stock'])
+                
+                log.debug("Application state restored")
+        except Exception as e:
+            log.debug(f"Failed to load state: {e}")
 
+
+# =============================================================================
+# APPLICATION ENTRY POINT
+# =============================================================================
 
 def run_app():
     """Run the application"""
+    # Set environment for better performance
+    os.environ.setdefault('QT_AUTO_SCREEN_SCALE_FACTOR', '1')
+    
     app = QApplication(sys.argv)
     app.setStyle('Fusion')
+    
+    # Set application metadata
+    app.setApplicationName("AI Stock Trading System")
+    app.setApplicationVersion("2.0")
+    app.setOrganizationName("AI Trading")
     
     # Set application-wide font
     font = QFont("Segoe UI", 10)
     app.setFont(font)
     
+    # Create and show main window
     window = MainApp()
+    
+    # Load previous state
+    window._load_state()
+    
     window.show()
     
     sys.exit(app.exec())

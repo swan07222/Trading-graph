@@ -568,84 +568,79 @@ class RiskManager:
         quantity: int,
         price: float,
         metrics: RiskMetrics,
-        account: Account  # ADDED parameter
+        account: Account
     ) -> Tuple[bool, str]:
-        """Validate buy order against all limits using unified account view"""
-        
-        # Lot size check
+        """Validate buy order using the SAME conservative reservation as OMS."""
+
         from core.constants import get_lot_size
         lot_size = get_lot_size(symbol)
         if quantity % lot_size != 0:
             return False, f"Quantity must be multiple of {lot_size}"
-        
-        # Cost calculation
-        cost = quantity * price
-        commission = cost * CONFIG.trading.commission
-        total_cost = cost + commission
-        
-        # Funds check - USE UNIFIED ACCOUNT
-        if total_cost > account.available:
+
+        if price <= 0:
+            return False, "Invalid price"
+
+        comm_rate = float(CONFIG.trading.commission)
+        comm_min = 5.0
+        slip = float(CONFIG.trading.slippage)
+
+        # Match OMS conservative reservation
+        est_px = float(price) * (1.0 + slip)
+        notional = float(quantity) * est_px
+        fee = max(comm_min, notional * comm_rate)
+        total_cost = notional + fee
+
+        # Funds check (unified account: includes OMS reservations)
+        if total_cost > float(account.available):
             return False, (
                 f"Insufficient funds: need ¥{total_cost:,.2f}, "
                 f"have ¥{account.available:,.2f}"
             )
-        
-        # Position size limit - USE UNIFIED ACCOUNT
-        existing_value = 0.0
-        if symbol in account.positions:
-            existing_value = account.positions[symbol].market_value
-        
-        new_position_value = existing_value + cost
-        equity = account.equity
-        
+
+        # Position size limit
+        existing_value = float(account.positions[symbol].market_value) if symbol in account.positions else 0.0
+        new_position_value = existing_value + (float(quantity) * float(price))
+        equity = float(account.equity)
+
         if equity > 0:
-            position_pct = (new_position_value / equity) * 100
-            max_pct = CONFIG.risk.max_position_pct
-            
+            position_pct = (new_position_value / equity) * 100.0
+            max_pct = float(CONFIG.risk.max_position_pct)
             if position_pct > max_pct:
-                return False, (
-                    f"Position too large: {position_pct:.1f}% "
-                    f"(max: {max_pct}%)"
-                )
-        
+                return False, f"Position too large: {position_pct:.1f}% (max: {max_pct}%)"
+
         # Max positions check
         if symbol not in account.positions:
-            if metrics.position_count >= CONFIG.risk.max_positions:
-                return False, (
-                    f"Maximum positions reached: {CONFIG.risk.max_positions}"
-                )
-        
-        # Total exposure check
-        max_exposure_pct = CONFIG.risk.max_portfolio_risk_pct
-        new_exposure = metrics.gross_exposure + cost
-        
+            if int(metrics.position_count) >= int(CONFIG.risk.max_positions):
+                return False, f"Maximum positions reached: {CONFIG.risk.max_positions}"
+
+        # Exposure check
+        max_exposure_pct = float(CONFIG.risk.max_portfolio_risk_pct)
+        new_exposure = float(metrics.gross_exposure) + (float(quantity) * float(price))
         if equity > 0:
-            new_exposure_pct = (new_exposure / equity) * 100
+            new_exposure_pct = (new_exposure / equity) * 100.0
             if new_exposure_pct > max_exposure_pct:
                 return False, (
                     f"Would exceed max exposure: {new_exposure_pct:.1f}% "
                     f"(max: {max_exposure_pct}%)"
                 )
-        
-        # Concentration check - USE UNIFIED ACCOUNT
-        conc_ok, conc_msg = self._check_concentration(symbol, cost, account)
+
+        # Concentration
+        conc_ok, conc_msg = self._check_concentration(symbol, float(quantity) * float(price), account)
         if not conc_ok:
             return False, conc_msg
-        
-        # VaR check
+
+        # VaR check (keep your logic)
         max_var_pct = 5.0
-        current_var_pct = (metrics.var_1d_95 / equity * 100) if equity > 0 else 0
-        
+        current_var_pct = (metrics.var_1d_95 / equity * 100) if equity > 0 else 0.0
         if current_var_pct > max_var_pct:
             max_add_pct = 2.0
-            max_add_value = equity * (max_add_pct / 100)
-            
-            if cost > max_add_value:
+            max_add_value = equity * (max_add_pct / 100.0)
+            if (float(quantity) * float(price)) > max_add_value:
                 return False, (
                     f"High VaR ({current_var_pct:.1f}%) - "
                     f"reduce position to max ¥{max_add_value:,.0f}"
                 )
-        
+
         return True, "OK"
     
     def _validate_sell_order(self, symbol: str, quantity: int, account: Account = None) -> Tuple[bool, str]:

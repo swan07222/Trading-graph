@@ -10,10 +10,6 @@ from pathlib import Path
 # Ensure project root is in path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-# Fix config import for all tests
-import config.settings as config_module
-sys.modules['config'] = config_module
-
 
 @pytest.fixture(autouse=True)
 def reset_cache():

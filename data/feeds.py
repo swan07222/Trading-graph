@@ -682,20 +682,45 @@ class FeedManager:
         self._lock = threading.RLock()
     
     def initialize(self):
-        """Initialize feeds (seconds polling + 1m/5m bar aggregation)."""
-        interval = float(CONFIG.data.poll_interval_seconds)  # set to 1.0 for seconds updates
+        """Initialize feeds: prefer WebSocket if available; fallback to polling."""
+        interval = float(CONFIG.data.poll_interval_seconds)
+
+        # Always create polling fallback
         polling = PollingFeed(interval=interval)
         self._feeds["polling"] = polling
-        self._active_feed = polling
 
-        # Choose bar interval: 60 for 1m, 300 for 5m
-        bar_seconds = 60  # change to 300 for 5m
+        # Try websocket first (if websocket-client installed and connect works)
+        active = None
+        try:
+            ws = WebSocketFeed()
+            ok = ws.connect()
+            if ok:
+                self._feeds["websocket"] = ws
+                active = ws
+                log.info("Using WebSocket feed as primary")
+            else:
+                ws.disconnect()
+        except Exception:
+            active = None
+
+        if active is None:
+            polling.connect()
+            active = polling
+            log.info("Using polling feed as primary")
+
+        self._active_feed = active
+
+        # Bar interval: 1m by default
+        bar_seconds = 60
         self._bar_aggregator = BarAggregator(interval_seconds=bar_seconds)
 
-        polling.connect()
-        polling.add_callback(self._bar_aggregator.on_tick)
+        # Attach bar aggregator to primary feed
+        try:
+            self._active_feed.add_callback(self._bar_aggregator.on_tick)
+        except Exception:
+            pass
 
-        log.info(f"Feed manager initialized (poll={interval}s, bar={bar_seconds}s)")
+        log.info(f"Feed manager initialized (primary={self._active_feed.name}, poll={interval}s, bar={bar_seconds}s)")
     
     def subscribe(self, symbol: str) -> bool:
         """Subscribe to symbol"""

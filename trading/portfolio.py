@@ -11,8 +11,9 @@ import numpy as np
 
 from config import CONFIG
 from core.types import Position, Account
-from utils.logger import log
+from utils.logger import get_logger
 
+log = get_logger(__name__)
 
 @dataclass
 class Trade:
