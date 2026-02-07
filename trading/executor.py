@@ -129,12 +129,18 @@ class ExecutionEngine:
         return True
 
     def _load_processed_fills(self) -> Set[str]:
-        """Load already-processed fill IDs from database"""
+        """Load already-processed fill IDs from OMS DB (source of truth)."""
         try:
             from trading.oms import get_oms
             oms = get_oms()
-            account = oms.get_account()  # Gets all fills from DB
-            return {f.id for f in fills if f.id}
+
+            fills = oms.get_fills()  # <-- FIX: fills must come from OMS database
+            out = set()
+            for f in fills:
+                fid = getattr(f, "id", None)
+                if fid:
+                    out.add(str(fid))
+            return out
         except Exception as e:
             log.warning(f"Could not load processed fills: {e}")
             return set()

@@ -227,90 +227,63 @@ class Predictor:
         interval: str = None,
         forecast_minutes: int = None,
         lookback_bars: int = None
-    ) -> Prediction:
+    ):
         """
         Make full prediction with price forecast.
-        
-        Args:
-            stock_code: Stock code to predict
-            use_realtime_price: Use real-time price data
-            interval: Data interval (overrides default)
-            forecast_minutes: Forecast horizon in minutes/bars
-            lookback_bars: Historical bars to fetch
-        
-        Returns:
-            Complete Prediction object
+        Patch: always attach model_agreement + entropy if ensemble is present.
         """
         interval = str(interval or self.interval).lower()
         horizon = int(forecast_minutes or self.horizon)
         lookback = int(lookback_bars or (1400 if interval == "1m" else 600))
-        
-        # Clean stock code
+
         code = self._clean_code(stock_code)
-        
-        # Create base prediction
+
         pred = Prediction(
             stock_code=code,
             timestamp=datetime.now(),
             interval=interval,
             horizon=horizon
         )
-        
+
         try:
-            # Fetch data
             df = self._fetch_data(code, interval, lookback, use_realtime_price)
-            
             if df is None or df.empty or len(df) < CONFIG.SEQUENCE_LENGTH:
                 pred.warnings.append("Insufficient data")
                 return pred
-            
-            # Get stock name
+
             pred.stock_name = self._get_stock_name(code, df)
-            
-            # Current price
-            pred.current_price = float(df['close'].iloc[-1])
-            
-            # Price history
-            pred.price_history = df['close'].tail(180).tolist()
-            
-            # Create features
+            pred.current_price = float(df["close"].iloc[-1])
+            pred.price_history = df["close"].tail(180).tolist()
+
             df = self.feature_engine.create_features(df)
-            
-            # Get technical indicators
             self._extract_technicals(df, pred)
-            
-            # Prepare sequence for prediction
+
             X = self.processor.prepare_inference_sequence(df, self._feature_cols)
-            
-            # Ensemble prediction
+
             if self.ensemble:
                 ensemble_pred = self.ensemble.predict(X)
-                
+
                 pred.prob_up = float(ensemble_pred.probabilities[2])
                 pred.prob_neutral = float(ensemble_pred.probabilities[1])
                 pred.prob_down = float(ensemble_pred.probabilities[0])
                 pred.confidence = float(ensemble_pred.confidence)
-                
-                # Determine signal
+
+                # ---- CRITICAL: attach extra fields used by UI/signal generator ----
+                setattr(pred, "model_agreement", float(getattr(ensemble_pred, "agreement", 1.0)))
+                setattr(pred, "entropy", float(getattr(ensemble_pred, "entropy", 0.0)))
+
                 pred.signal = self._determine_signal(ensemble_pred, pred)
                 pred.signal_strength = self._calculate_signal_strength(ensemble_pred, pred)
-            
-            # Generate price forecast
+
             pred.predicted_prices = self._generate_forecast(X, pred.current_price, horizon)
-            
-            # Calculate trading levels
             pred.levels = self._calculate_levels(pred)
-            
-            # Calculate position size
             pred.position = self._calculate_position(pred)
-            
-            # Generate analysis reasons
             self._generate_reasons(pred)
-            
+
         except Exception as e:
             log.error(f"Prediction failed for {code}: {e}")
             pred.warnings.append(f"Prediction error: {str(e)}")
-        
+
         return pred
     
     def predict_quick_batch(
@@ -320,55 +293,49 @@ class Predictor:
         interval: str = None,
         lookback_bars: int = None
     ) -> List[Prediction]:
-        """
-        Quick batch prediction without full forecasting.
-        Faster for scanning multiple stocks.
-        """
+        """Quick batch prediction without full forecasting (robust fields)."""
         interval = str(interval or self.interval).lower()
         lookback = int(lookback_bars or (1400 if interval == "1m" else 300))
-        
-        predictions = []
-        
+
+        predictions: List[Prediction] = []
+
         for code in stock_codes:
             try:
                 code = self._clean_code(code)
-                
+
                 pred = Prediction(
                     stock_code=code,
                     timestamp=datetime.now(),
                     interval=interval
                 )
-                
-                # Fetch data
+
                 df = self._fetch_data(code, interval, lookback, use_realtime_price)
-                
                 if df is None or df.empty or len(df) < CONFIG.SEQUENCE_LENGTH:
                     continue
-                
-                # Current price
-                pred.current_price = float(df['close'].iloc[-1])
-                
-                # Create features
+
+                pred.current_price = float(df["close"].iloc[-1])
+
                 df = self.feature_engine.create_features(df)
-                
-                # Prepare sequence
                 X = self.processor.prepare_inference_sequence(df, self._feature_cols)
-                
-                # Quick ensemble prediction
+
                 if self.ensemble:
                     ensemble_pred = self.ensemble.predict(X)
-                    
+
                     pred.prob_up = float(ensemble_pred.probabilities[2])
                     pred.prob_neutral = float(ensemble_pred.probabilities[1])
                     pred.prob_down = float(ensemble_pred.probabilities[0])
                     pred.confidence = float(ensemble_pred.confidence)
+
+                    setattr(pred, "model_agreement", float(getattr(ensemble_pred, "agreement", 1.0)))
+                    setattr(pred, "entropy", float(getattr(ensemble_pred, "entropy", 0.0)))
+
                     pred.signal = self._determine_signal(ensemble_pred, pred)
-                
+
                 predictions.append(pred)
-                
+
             except Exception as e:
                 log.debug(f"Quick prediction failed for {code}: {e}")
-        
+
         return predictions
     
     def get_realtime_forecast_curve(

@@ -18,9 +18,12 @@ def check_dependencies(require_gui: bool = False) -> bool:
         ("sklearn", "scikit-learn"),
         ("psutil", "psutil"),
     ]
+
+    # GUI: PyQt6 is required; pyqtgraph is OPTIONAL (you already have fallback).
+    optional = []
     if require_gui:
         required.append(("PyQt6", "PyQt6"))
-        required.append(("pyqtgraph", "pyqtgraph"))
+        optional.append(("pyqtgraph", "pyqtgraph"))
 
     missing = []
     for module, package in required:
@@ -34,11 +37,21 @@ def check_dependencies(require_gui: bool = False) -> bool:
         print(f"Install with: pip install {' '.join(missing)}")
         return False
 
+    # Optional warnings
+    for module, package in optional:
+        try:
+            __import__(module)
+        except ImportError:
+            print(f"Optional package missing: {package} (some UI charts may be simplified)")
+
     return True
 
 def main():
     """Main entry point"""
     import argparse
+    import os
+    import threading
+
     parser = argparse.ArgumentParser(description='AI Stock Trading System')
 
     parser.add_argument('--train', action='store_true', help='Train model')
@@ -53,7 +66,6 @@ def main():
 
     args = parser.parse_args()
 
-    # GUI is only needed if no CLI action chosen
     require_gui = not any([
         args.train, args.auto_learn, args.predict, args.backtest, args.health, args.cli
     ])
@@ -73,6 +85,17 @@ def main():
 
     from utils.metrics import start_process_metrics
     start_process_metrics()
+
+    # ---- NEW: optional Prometheus endpoint ----
+    port = os.environ.get("TRADING_METRICS_PORT")
+    if port:
+        try:
+            from utils.metrics_http import serve
+            t = threading.Thread(target=serve, args=(int(port),), daemon=True, name="metrics_http")
+            t.start()
+            log.info(f"Metrics server started on :{port} (/metrics, /healthz)")
+        except Exception as e:
+            log.warning(f"Metrics server failed: {e}")
 
     from trading.kill_switch import get_kill_switch
     _ = get_kill_switch()
@@ -95,7 +118,6 @@ def main():
                 max_stocks=args.max_stocks,
                 epochs_per_cycle=args.epochs,
                 continuous=args.continuous,
-                search_all=True
             )
 
         elif args.predict:

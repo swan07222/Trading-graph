@@ -103,147 +103,143 @@ class SignalGenerator:
         except Exception as e:
             log.warning(f"Could not init sentiment analyzer: {e}")
     
-    def generate(self, 
-                 prediction,
-                 df=None,
-                 include_sentiment: bool = True) -> TradingSignal:
+    def generate(self, prediction, df=None, include_sentiment: bool = True) -> TradingSignal:
         """
-        Generate comprehensive trading signal
-        
-        Args:
-            prediction: AI prediction result
-            df: Optional DataFrame for technical analysis
-            include_sentiment: Whether to include sentiment analysis
-            
-        Returns:
-            TradingSignal with complete analysis
+        Generate comprehensive trading signal (robust against missing prediction fields).
         """
         from models.predictor import Signal
-        from analysis.technical import TrendDirection
-        
-        reasons = prediction.reasons.copy() if hasattr(prediction, 'reasons') else []
-        warnings = prediction.warnings.copy() if hasattr(prediction, 'warnings') else []
-        
+
+        # Safe getters (Prediction may not have model_agreement etc.)
+        def g(obj, name, default=None):
+            return getattr(obj, name, default)
+
+        reasons = list(g(prediction, "reasons", []) or [])
+        warnings = list(g(prediction, "warnings", []) or [])
+
         # === AI Score ===
         ai_score = self._calculate_ai_score(prediction)
-        
+
         # === Technical Score ===
-        tech_score = 0
+        tech_score = 0.0
         tech_signal = "neutral"
         trend = "sideways"
-        
+
         if df is not None and len(df) >= 60 and self.tech_analyzer:
             try:
                 tech_summary = self.tech_analyzer.analyze(df)
-                tech_score = tech_summary.overall_score
-                tech_signal = tech_summary.overall_signal
-                trend = tech_summary.trend.value if hasattr(tech_summary.trend, 'value') else str(tech_summary.trend)
-                
-                # Add technical reasons
-                for sig in tech_summary.signals[:3]:
-                    if sig.strength.value >= 2:
-                        reasons.append(f"📊 {sig.description}")
-                
+                tech_score = float(getattr(tech_summary, "overall_score", 0.0) or 0.0)
+                tech_signal = str(getattr(tech_summary, "overall_signal", "neutral") or "neutral")
+                t = getattr(tech_summary, "trend", None)
+                trend = t.value if hasattr(t, "value") else str(t or "sideways")
+
+                for sig in getattr(tech_summary, "signals", [])[:3]:
+                    try:
+                        if sig.strength.value >= 2:
+                            reasons.append(f"📊 {sig.description}")
+                    except Exception:
+                        pass
             except Exception as e:
                 log.warning(f"Technical analysis failed: {e}")
-        
+
         # === Sentiment Score ===
-        sentiment_score = 0
+        sentiment_score = 0.0
         sentiment_label = "neutral"
         news_count = 0
-        
+
         if include_sentiment and self.news_scraper:
             try:
-                sent_score, sent_conf = self.news_scraper.get_stock_sentiment(
-                    prediction.stock_code
-                )
+                sent_score, _sent_conf = self.news_scraper.get_stock_sentiment(g(prediction, "stock_code", ""))
                 market_sent = self.news_scraper.get_market_sentiment()
-                
-                sentiment_score = sent_score * 100  # Convert to -100 to +100
+
+                sentiment_score = float(sent_score) * 100.0
                 sentiment_label = "positive" if sent_score > 0.15 else ("negative" if sent_score < -0.15 else "neutral")
-                news_count = market_sent.get('news_count', 0)
-                
+                news_count = int(market_sent.get("news_count", 0) or 0)
+
                 if abs(sent_score) > 0.3:
                     direction = "positive" if sent_score > 0 else "negative"
                     reasons.append(f"📰 News sentiment: {direction} ({sent_score:+.2f})")
-                
             except Exception as e:
                 log.warning(f"Sentiment analysis failed: {e}")
-        
-        # === Combined Score ===
+
+        # === Combined ===
         combined_score = (
-            ai_score * self.WEIGHTS['ai'] +
-            tech_score * self.WEIGHTS['technical'] +
-            sentiment_score * self.WEIGHTS['sentiment']
+            float(ai_score) * self.WEIGHTS["ai"] +
+            float(tech_score) * self.WEIGHTS["technical"] +
+            float(sentiment_score) * self.WEIGHTS["sentiment"]
         )
-        
-        # === Determine Final Signal ===
+
+        # === Final signal ===
         final_signal, signal_strength = self._determine_signal(combined_score, prediction)
-        
-        # === Determine Confidence ===
-        confidence = self._determine_confidence(
-            prediction.confidence,
-            prediction.model_agreement,
-            abs(combined_score) / 100
-        )
-        
-        # === Add Warnings ===
-        if prediction.confidence < CONFIG.MIN_CONFIDENCE:
+
+        # === Confidence ===
+        ai_conf = float(g(prediction, "confidence", 0.0) or 0.0)
+        agreement = float(g(prediction, "model_agreement", 1.0) or 1.0)  # <-- FIX
+        confidence = self._determine_confidence(ai_conf, agreement, abs(combined_score) / 100.0)
+
+        # Warnings (robust)
+        if ai_conf < float(CONFIG.MIN_CONFIDENCE):
             warnings.append("Low AI model confidence")
-        
-        if prediction.model_agreement < 0.6:
+        if agreement < 0.6:
             warnings.append("AI models disagree")
-        
         if abs(tech_score) < 20:
             warnings.append("Weak technical signals")
-        
         if trend == "strong_downtrend" and final_signal in [Signal.BUY, Signal.STRONG_BUY]:
             warnings.append("Buying against strong downtrend")
-        
         if trend == "strong_uptrend" and final_signal in [Signal.SELL, Signal.STRONG_SELL]:
             warnings.append("Selling in strong uptrend")
-        
+
         return TradingSignal(
-            stock_code=prediction.stock_code,
-            stock_name=prediction.stock_name,
-            current_price=prediction.current_price,
+            stock_code=g(prediction, "stock_code", ""),
+            stock_name=g(prediction, "stock_name", ""),
+            current_price=float(g(prediction, "current_price", 0.0) or 0.0),
+
             signal=final_signal.value,
-            signal_strength=signal_strength,
+            signal_strength=float(signal_strength),
             confidence=confidence,
-            ai_signal=prediction.signal.value,
-            ai_confidence=prediction.confidence,
-            ai_prob_up=prediction.prob_up,
-            ai_prob_down=prediction.prob_down,
+
+            ai_signal=(g(prediction, "signal", Signal.HOLD).value if hasattr(g(prediction, "signal", Signal.HOLD), "value") else str(g(prediction, "signal", "HOLD"))),
+            ai_confidence=ai_conf,
+            ai_prob_up=float(g(prediction, "prob_up", 0.33) or 0.33),
+            ai_prob_down=float(g(prediction, "prob_down", 0.33) or 0.33),
+
             tech_signal=tech_signal,
-            tech_score=tech_score,
-            trend=trend,
-            sentiment_score=sentiment_score,
-            sentiment_label=sentiment_label,
-            news_count=news_count,
-            combined_score=combined_score,
-            entry_price=prediction.levels.entry,
-            stop_loss=prediction.levels.stop_loss,
-            take_profit_1=prediction.levels.target_1,
-            take_profit_2=prediction.levels.target_2,
-            position_size=prediction.position.shares,
-            position_value=prediction.position.value,
-            risk_amount=prediction.position.risk_amount,
+            tech_score=float(tech_score),
+            trend=str(trend),
+
+            sentiment_score=float(sentiment_score),
+            sentiment_label=str(sentiment_label),
+            news_count=int(news_count),
+
+            combined_score=float(combined_score),
+
+            entry_price=float(getattr(getattr(prediction, "levels", None), "entry", 0.0) or 0.0),
+            stop_loss=float(getattr(getattr(prediction, "levels", None), "stop_loss", 0.0) or 0.0),
+            take_profit_1=float(getattr(getattr(prediction, "levels", None), "target_1", 0.0) or 0.0),
+            take_profit_2=float(getattr(getattr(prediction, "levels", None), "target_2", 0.0) or 0.0),
+            position_size=int(getattr(getattr(prediction, "position", None), "shares", 0) or 0),
+            position_value=float(getattr(getattr(prediction, "position", None), "value", 0.0) or 0.0),
+            risk_amount=float(getattr(getattr(prediction, "position", None), "risk_amount", 0.0) or 0.0),
+
             reasons=reasons,
-            warnings=warnings
+            warnings=warnings,
         )
     
     def _calculate_ai_score(self, prediction) -> float:
-        """Calculate AI component score"""
-        # Base score from probabilities
-        score = (prediction.prob_up - prediction.prob_down) * 100
-        
-        # Adjust by confidence
-        score *= (0.5 + 0.5 * prediction.confidence)
-        
-        # Adjust by model agreement
-        score *= (0.5 + 0.5 * prediction.model_agreement)
-        
-        return score
+        """Calculate AI component score (robust to missing fields)."""
+        prob_up = float(getattr(prediction, "prob_up", 0.33) or 0.33)
+        prob_down = float(getattr(prediction, "prob_down", 0.33) or 0.33)
+        conf = float(getattr(prediction, "confidence", 0.0) or 0.0)
+
+        # Support both naming conventions
+        agreement = getattr(prediction, "model_agreement", None)
+        if agreement is None:
+            agreement = getattr(prediction, "agreement", 1.0)
+        agreement = float(agreement or 1.0)
+
+        score = (prob_up - prob_down) * 100.0
+        score *= (0.5 + 0.5 * conf)
+        score *= (0.5 + 0.5 * agreement)
+        return float(score)
     
     def _determine_signal(self, combined_score: float, prediction) -> Tuple:
         """Determine final signal from combined score"""

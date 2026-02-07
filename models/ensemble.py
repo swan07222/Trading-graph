@@ -53,32 +53,29 @@ class EnsembleModel:
     
     MODEL_CLASSES = {}  # Will be populated on first use
     
-    def __init__(
-        self, 
-        input_size: int, 
-        model_names: List[str] = None
-    ):
-        self.input_size = input_size
-        self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    def __init__(self, input_size: int, model_names: List[str] = None):
+        self.input_size = int(input_size)
+        self.device = "cuda" if torch.cuda.is_available() else "cpu"
         if self.device == "cuda":
             torch.backends.cudnn.benchmark = True
+
         self._lock = threading.Lock()
         self.temperature = 1.0
-        
-        # Lazy import to avoid circular imports
+
         self._init_model_classes()
-        
-        model_names = model_names or ['lstm', 'transformer', 'gru', 'tcn']
-        
-        self.models: Dict[str, nn.Module] = {}
-        self.weights: Dict[str, float] = {}
-        
+
+        # FAST default ensemble (better for real-time & training time)
+        # You can still pass model_names=["lstm","transformer","hybrid"...] explicitly.
+        model_names = model_names or ["lstm", "gru", "tcn"]
+
+        self.models = {}
+        self.weights = {}
+
         for name in model_names:
             if name in self.MODEL_CLASSES:
                 self._init_model(name)
-        
+
         self._normalize_weights()
-        
         log.info(f"Ensemble initialized: {list(self.models.keys())} on {self.device}")
     
     def _init_model_classes(self):
@@ -281,7 +278,8 @@ class EnsembleModel:
         callback: Callable = None,
         stop_flag: Any = None
     ) -> Tuple[Dict, float]:
-        """Train a single model with robust AMP handling."""
+        """Train a single model with AMP compatibility across torch versions."""
+        from contextlib import nullcontext
 
         optimizer = torch.optim.AdamW(
             model.parameters(),
@@ -301,7 +299,25 @@ class EnsembleModel:
         best_state = None
 
         use_amp = (self.device == "cuda")
-        scaler = torch.amp.GradScaler("cuda", enabled=use_amp) if use_amp else None
+
+        # ---- AMP compatibility layer ----
+        GradScaler = None
+        autocast = None
+        try:
+            from torch.amp import GradScaler as _GradScaler, autocast as _autocast
+            GradScaler, autocast = _GradScaler, _autocast
+            amp_ctx = (lambda: autocast("cuda", enabled=True)) if use_amp else (lambda: nullcontext())
+            scaler = GradScaler("cuda", enabled=use_amp) if use_amp else None
+        except Exception:
+            try:
+                from torch.cuda.amp import GradScaler as _GradScaler, autocast as _autocast
+                GradScaler, autocast = _GradScaler, _autocast
+                amp_ctx = (lambda: autocast(enabled=True)) if use_amp else (lambda: nullcontext())
+                scaler = GradScaler(enabled=use_amp) if use_amp else None
+            except Exception:
+                amp_ctx = lambda: nullcontext()
+                scaler = None
+                use_amp = False
 
         for epoch in range(int(epochs)):
             if self._should_stop(stop_flag):
@@ -316,8 +332,8 @@ class EnsembleModel:
 
                 optimizer.zero_grad(set_to_none=True)
 
-                if use_amp and scaler:
-                    with torch.amp.autocast("cuda", enabled=True):
+                if use_amp and scaler is not None:
+                    with amp_ctx():
                         logits, _ = model(batch_X)
                         loss = criterion(logits, batch_y)
 
@@ -346,11 +362,7 @@ class EnsembleModel:
                     batch_X = batch_X.to(self.device, non_blocking=True)
                     batch_y = batch_y.to(self.device, non_blocking=True)
 
-                    if use_amp:
-                        with torch.amp.autocast("cuda", enabled=True):
-                            logits, _ = model(batch_X)
-                            loss = criterion(logits, batch_y)
-                    else:
+                    with amp_ctx():
                         logits, _ = model(batch_X)
                         loss = criterion(logits, batch_y)
 

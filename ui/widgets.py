@@ -149,38 +149,52 @@ class SignalPanel(QFrame):
         """)
     
     def update_prediction(self, pred):
-        """Update display with prediction data"""
-        self.signal_label.setText(pred.signal.value)
-        self.info_label.setText(
-            f"{pred.stock_code} - {pred.stock_name} | ¥{pred.current_price:.2f}"
-        )
-        
-        self.prob_down.setValue(int(pred.prob_down * 100))
-        self.prob_neutral.setValue(int(pred.prob_neutral * 100))
-        self.prob_up.setValue(int(pred.prob_up * 100))
-        
+        """Update display with prediction data (robust to missing fields)."""
+        sig = getattr(pred, "signal", None)
+        sig_text = sig.value if hasattr(sig, "value") else (str(sig) if sig else "HOLD")
+
+        code = str(getattr(pred, "stock_code", "") or "")
+        name = str(getattr(pred, "stock_name", "") or "")
+        price = float(getattr(pred, "current_price", 0.0) or 0.0)
+
+        self.signal_label.setText(sig_text)
+        self.info_label.setText(f"{code} - {name} | ¥{price:.2f}")
+
+        prob_down = float(getattr(pred, "prob_down", 0.33) or 0.33)
+        prob_neutral = float(getattr(pred, "prob_neutral", 0.34) or 0.34)
+        prob_up = float(getattr(pred, "prob_up", 0.33) or 0.33)
+        self.prob_down.setValue(int(prob_down * 100))
+        self.prob_neutral.setValue(int(prob_neutral * 100))
+        self.prob_up.setValue(int(prob_up * 100))
+
         # Action text
-        if pred.position.shares > 0:
-            if pred.signal in [Signal.STRONG_BUY, Signal.BUY]:
-                self.action_label.setText(
-                    f"📈 BUY {pred.position.shares:,} shares @ ¥{pred.levels.entry:.2f}\n"
-                    f"Stop Loss: ¥{pred.levels.stop_loss:.2f} | Target: ¥{pred.levels.target_2:.2f}"
-                )
-            else:
-                self.action_label.setText(
-                    f"📉 SELL {pred.position.shares:,} shares @ ¥{pred.levels.entry:.2f}"
-                )
+        pos = getattr(pred, "position", None)
+        levels = getattr(pred, "levels", None)
+        shares = int(getattr(pos, "shares", 0) or 0)
+        entry = float(getattr(levels, "entry", 0.0) or 0.0)
+        stop = float(getattr(levels, "stop_loss", 0.0) or 0.0)
+        tgt2 = float(getattr(levels, "target_2", 0.0) or 0.0)
+
+        from models.predictor import Signal
+        if shares > 0 and sig in (Signal.STRONG_BUY, Signal.BUY):
+            self.action_label.setText(
+                f"BUY {shares:,} shares @ ¥{entry:.2f}\nStop Loss: ¥{stop:.2f} | Target: ¥{tgt2:.2f}"
+            )
+        elif shares > 0 and sig in (Signal.STRONG_SELL, Signal.SELL):
+            self.action_label.setText(f"SELL {shares:,} shares @ ¥{entry:.2f}")
         else:
-            self.action_label.setText("⏸️ HOLD - Wait for clearer signal")
-        
-        # Confidence display
+            self.action_label.setText("HOLD - Wait for clearer signal")
+
+        confidence = float(getattr(pred, "confidence", 0.0) or 0.0)
+        agreement = getattr(pred, "model_agreement", getattr(pred, "agreement", 1.0))
+        agreement = float(agreement or 1.0)
+        strength = float(getattr(pred, "signal_strength", 0.0) or 0.0)
+
         self.conf_label.setText(
-            f"Confidence: {pred.confidence:.0%} | "
-            f"Model Agreement: {pred.model_agreement:.0%} | "
-            f"Signal Strength: {pred.signal_strength:.0%}"
+            f"Confidence: {confidence:.0%} | Model Agreement: {agreement:.0%} | Signal Strength: {strength:.0%}"
         )
-        
-        # Style based on signal
+
+        # Styling
         colors = {
             Signal.STRONG_BUY: ("#2ea043", "#0d1117"),
             Signal.BUY: ("#3fb950", "#0d1117"),
@@ -188,9 +202,8 @@ class SignalPanel(QFrame):
             Signal.SELL: ("#f85149", "#0d1117"),
             Signal.STRONG_SELL: ("#da3633", "#0d1117"),
         }
-        
-        fg, bg = colors.get(pred.signal, ("#c9d1d9", "#21262d"))
-        
+        fg, bg = colors.get(sig, ("#c9d1d9", "#21262d"))
+
         self.setStyleSheet(f"""
             SignalPanel {{
                 background: qlineargradient(x1:0, y1:0, x2:0, y2:1,

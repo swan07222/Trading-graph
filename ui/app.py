@@ -1810,32 +1810,31 @@ class MainApp(QMainWindow):
     # ==================== Training ====================
     
     def _start_training(self):
-        """Start model training"""
+        """Start model training (UI dialog)."""
         interval = self.interval_combo.currentText().strip()
         horizon = self.forecast_spin.value()
-        
+
         reply = QMessageBox.question(
             self, "Train AI Model",
             f"Start training with the following settings?\n\n"
             f"Interval: {interval}\n"
             f"Horizon: {horizon} bars\n\n"
-            f"This will train multiple neural networks and may take 30-60 minutes.\n\n"
-            f"Continue?",
+            f"This may take time.\n\nContinue?",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No
         )
-        
         if reply != QMessageBox.StandardButton.Yes:
             return
-        
+
         try:
+            # Your TrainingDialog currently accepts only (parent=None)
             from .dialogs import TrainingDialog
-            dialog = TrainingDialog(self, interval=interval, horizon=horizon)
+            dialog = TrainingDialog(self)
             dialog.exec()
-        except ImportError:
-            self.log("Training dialog not available", "error")
+        except Exception as e:
+            self.log(f"Training dialog failed: {e}", "error")
             return
-        
+
         # Reload model after training
         self._init_components()
     
@@ -1921,13 +1920,16 @@ class MainApp(QMainWindow):
         log.info(message)
     
     def closeEvent(self, event):
-        """Handle window close"""
+        """Handle window close safely (stop threads, stop trading, persist state)."""
         # Stop monitoring
         if self.monitor:
-                        self.monitor.stop()
-            self.monitor.wait(3000)
+            try:
+                self.monitor.stop()
+                self.monitor.wait(3000)
+            except Exception:
+                pass
             self.monitor = None
-        
+
         # Stop workers
         for name, worker in list(self.workers.items()):
             try:
@@ -1937,7 +1939,7 @@ class MainApp(QMainWindow):
             except Exception:
                 pass
         self.workers.clear()
-        
+
         # Disconnect trading
         if self.executor:
             try:
@@ -1945,18 +1947,24 @@ class MainApp(QMainWindow):
             except Exception:
                 pass
             self.executor = None
-        
+
         # Stop timers
-        for timer in [self.clock_timer, self.market_timer, 
-                      self.portfolio_timer, self.watchlist_timer]:
+        for timer in [getattr(self, "clock_timer", None),
+                    getattr(self, "market_timer", None),
+                    getattr(self, "portfolio_timer", None),
+                    getattr(self, "watchlist_timer", None)]:
             try:
-                timer.stop()
+                if timer:
+                    timer.stop()
             except Exception:
                 pass
-        
+
         # Save state
-        self._save_state()
-        
+        try:
+            self._save_state()
+        except Exception:
+            pass
+
         event.accept()
     
     def _save_state(self):

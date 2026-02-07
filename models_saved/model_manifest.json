@@ -1,9 +1,0 @@
-{
-  "version": "20260205_232501",
-  "saved_at": "2026-02-05T23:25:01.115640",
-  "ensemble_path": "ensemble.pt",
-  "scaler_path": "scaler.pkl",
-  "input_size": 47,
-  "num_models": 4,
-  "temperature": 2.0
-}

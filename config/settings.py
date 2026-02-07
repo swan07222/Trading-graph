@@ -214,6 +214,86 @@ class Config:
         self._load()
         self._validate()
     
+    def __getattr__(self, name: str):
+        """
+        Legacy compatibility layer.
+
+        Allows older code/tests/UI to keep using:
+        CONFIG.SEQUENCE_LENGTH, CONFIG.PREDICTION_HORIZON, CONFIG.MODEL_DIR, CONFIG.CAPITAL, ...
+        while the new code uses:
+        CONFIG.model.sequence_length, CONFIG.model.prediction_horizon, CONFIG.model_dir, CONFIG.trading.capital, ...
+        """
+        # ---- Path aliases ----
+        if name in ("DATA_DIR", "dataDir"):
+            return self.data_dir
+        if name in ("MODEL_DIR", "modelDir"):
+            return self.model_dir
+        if name in ("CACHE_DIR", "cacheDir"):
+            return self.cache_dir
+        if name in ("AUDIT_DIR", "auditDir"):
+            return self.audit_dir
+
+        # ---- Stock pool aliases ----
+        if name == "STOCK_POOL":
+            return getattr(self, "stock_pool", [])
+
+        # ---- Model/training aliases ----
+        m = getattr(self, "model", None)
+        if m is not None:
+            legacy_model_map = {
+                "SEQUENCE_LENGTH": "sequence_length",
+                "PREDICTION_HORIZON": "prediction_horizon",
+                "NUM_CLASSES": "num_classes",
+                "HIDDEN_SIZE": "hidden_size",
+                "DROPOUT": "dropout",
+                "EPOCHS": "epochs",
+                "BATCH_SIZE": "batch_size",
+                "LEARNING_RATE": "learning_rate",
+                "WEIGHT_DECAY": "weight_decay",
+                "EARLY_STOP_PATIENCE": "early_stop_patience",
+                "MIN_CONFIDENCE": "min_confidence",
+                "BUY_THRESHOLD": "buy_threshold",
+                "SELL_THRESHOLD": "sell_threshold",
+                "STRONG_BUY_THRESHOLD": "strong_buy_threshold",
+                "STRONG_SELL_THRESHOLD": "strong_sell_threshold",
+                "UP_THRESHOLD": "up_threshold",
+                "DOWN_THRESHOLD": "down_threshold",
+                "EMBARGO_BARS": "embargo_bars",
+                "TRAIN_RATIO": "train_ratio",
+                "VAL_RATIO": "val_ratio",
+                "TEST_RATIO": "test_ratio",
+            }
+            if name in legacy_model_map and hasattr(m, legacy_model_map[name]):
+                return getattr(m, legacy_model_map[name])
+
+        # ---- Trading aliases ----
+        t = getattr(self, "trading", None)
+        if t is not None:
+            legacy_trading_map = {
+                "CAPITAL": "capital",
+                "COMMISSION": "commission",
+                "STAMP_TAX": "stamp_tax",
+                "SLIPPAGE": "slippage",
+                "LOT_SIZE": "lot_size",
+                "BROKER_PATH": "broker_path",
+            }
+            if name in legacy_trading_map and hasattr(t, legacy_trading_map[name]):
+                return getattr(t, legacy_trading_map[name])
+
+        # ---- Risk aliases ----
+        r = getattr(self, "risk", None)
+        if r is not None:
+            legacy_risk_map = {
+                "MAX_POSITION_PCT": "max_position_pct",
+                "MAX_DAILY_LOSS_PCT": "max_daily_loss_pct",
+                "MAX_POSITIONS": "max_positions",
+                "RISK_PER_TRADE": "risk_per_trade_pct",
+            }
+            if name in legacy_risk_map and hasattr(r, legacy_risk_map[name]):
+                return getattr(r, legacy_risk_map[name])
+
+        raise AttributeError(f"{self.__class__.__name__} has no attribute '{name}'")
+
     # ==================== BACKWARD COMPATIBILITY ALIASES ====================
     
     @property
