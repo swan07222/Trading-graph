@@ -1,6 +1,9 @@
 # models/ensemble.py
 """
 Ensemble Model - Combines multiple neural networks
+
+FIXES APPLIED:
+- BUG 13: Unified _should_stop logic consistent with trainer.py
 """
 import torch
 import torch.nn as nn
@@ -65,7 +68,6 @@ class EnsembleModel:
         self._init_model_classes()
 
         # FAST default ensemble (better for real-time & training time)
-        # You can still pass model_names=["lstm","transformer","hybrid"...] explicitly.
         model_names = model_names or ["lstm", "gru", "tcn"]
 
         self.models = {}
@@ -242,30 +244,31 @@ class EnsembleModel:
         return history
     
     def _should_stop(self, stop_flag: Any) -> bool:
-        """Check if training should stop"""
+        """
+        Check if training should stop - unified logic.
+        FIX BUG 13: Consistent with trainer.py's _should_stop
+        """
         if stop_flag is None:
             return False
         
-        if callable(stop_flag):
-            try:
-                return bool(stop_flag())
-            except TypeError:
-                pass
-        
-        is_cancelled = getattr(stop_flag, "is_cancelled", None)
+        # Handle CancellationToken (has is_cancelled property)
+        is_cancelled = getattr(stop_flag, 'is_cancelled', None)
         if is_cancelled is not None:
             if callable(is_cancelled):
                 try:
                     return bool(is_cancelled())
-                except TypeError:
+                except Exception:
                     pass
-            else:
-                return bool(is_cancelled)
+            return bool(is_cancelled)
         
-        try:
-            return bool(stop_flag)
-        except Exception:
-            return False
+        # Handle callable
+        if callable(stop_flag):
+            try:
+                return bool(stop_flag())
+            except Exception:
+                pass
+        
+        return False
 
     def _train_single_model(
         self,

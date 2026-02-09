@@ -1,19 +1,33 @@
+# ui/__init__.py — Replace entire file
+
 """
 UI Module
 Professional trading application interface
 """
 
 from .app import MainApp, run_app
-from .widgets import SignalPanel, PositionTable, LogWidget
 from .charts import StockChart
-from .dialogs import TrainingDialog, BacktestDialog
 from .auto_learn_dialog import AutoLearnDialog, show_auto_learn_dialog
+
+# Lazy imports to avoid cascade failures when torch/models not installed
+try:
+    from .widgets import SignalPanel, PositionTable, LogWidget
+except ImportError:
+    SignalPanel = None
+    PositionTable = None
+    LogWidget = None
+
+try:
+    from .dialogs import TrainingDialog, BacktestDialog
+except ImportError:
+    TrainingDialog = None
+    BacktestDialog = None
 
 __all__ = [
     'MainApp',
     'run_app',
     'SignalPanel',
-    'PositionTable', 
+    'PositionTable',
     'LogWidget',
     'StockChart',
     'TrainingDialog',

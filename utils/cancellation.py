@@ -66,8 +66,14 @@ class CancellationToken:
         return self.is_cancelled
 
     def __bool__(self) -> bool:
-        """Allow using token in boolean context"""
-        return self.is_cancelled
+        """
+        Always True so that 'if token:' doesn't skip checks.
+        Use token.is_cancelled to check cancellation state.
+        
+        FIX: Previously returned is_cancelled which meant
+        bool(fresh_token) was False, breaking 'if stop_flag:' patterns.
+        """
+        return True
     
     def reset(self):
         """Reset the token for reuse"""

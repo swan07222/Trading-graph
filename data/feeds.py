@@ -625,7 +625,7 @@ class BarAggregator:
             timestamp=bar['timestamp']
         ))
 
-        # -------- NEW: persist to DB as 1m bars --------
+        # Persist to DB — guarded against missing database module
         try:
             import pandas as pd
             from data.database import get_database
@@ -640,15 +640,12 @@ class BarAggregator:
                 "amount": float(0.0),
             }], index=pd.DatetimeIndex([bar["timestamp"]]))
 
-            # interval_seconds -> interval string
             interval = f"{int(self._interval // 60)}m" if self._interval >= 60 else f"{int(self._interval)}s"
-            # for 60s it becomes "1m" as desired
-            if interval == "1m":
-                db.upsert_intraday_bars(symbol, "1m", df)
-            else:
-                db.upsert_intraday_bars(symbol, interval, df)
+            db.upsert_intraday_bars(symbol, interval, df)
+        except ImportError:
+            pass  # database module not available
         except Exception:
-            pass
+            pass  # non-critical, don't crash the feed
 
         for callback in self._callbacks:
             try:

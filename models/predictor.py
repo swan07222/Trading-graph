@@ -7,6 +7,8 @@ FIXED:
 - Proper interval/horizon handling
 - Real-time forecast curve generation
 - Robust error handling
+- Removed double ensemble loading bug
+- Removed redundant days parameter in fetch
 """
 import numpy as np
 import pandas as pd
@@ -94,6 +96,10 @@ class Prediction:
     # Metadata
     interval: str = "1d"
     horizon: int = 5
+    
+    # Extra fields for UI/signal generator
+    model_agreement: float = 1.0
+    entropy: float = 0.0
 
 
 class Predictor:
@@ -146,45 +152,54 @@ class Predictor:
             from data.processor import DataProcessor
             from data.features import FeatureEngine
             from data.fetcher import get_fetcher
-            from models.ensemble import EnsembleModel
-            
-            # Initialize components
+
             self.processor = DataProcessor()
             self.feature_engine = FeatureEngine()
             self.fetcher = get_fetcher()
             self._feature_cols = self.feature_engine.get_feature_columns()
-            
+
             # Load scaler
             scaler_path = CONFIG.MODEL_DIR / f"scaler_{self.interval}_{self.horizon}.pkl"
             if not scaler_path.exists():
-                # Try default
                 scaler_path = CONFIG.MODEL_DIR / "scaler_1d_5.pkl"
-            
+
             if scaler_path.exists():
                 self.processor.load_scaler(str(scaler_path))
             else:
                 log.warning("No scaler found")
-            
-            # Load ensemble
-            ensemble_path = CONFIG.MODEL_DIR / f"ensemble_{self.interval}_{self.horizon}.pt"
-            if not ensemble_path.exists():
-                # Try default
-                ensemble_path = CONFIG.MODEL_DIR / "ensemble_1d_5.pt"
-            
-            if ensemble_path.exists():
-                input_size = self.processor.n_features or len(self._feature_cols)
-                self.ensemble = EnsembleModel(input_size=input_size)
-                self.ensemble.load(str(ensemble_path))
-                log.info(f"Ensemble loaded from {ensemble_path}")
-            else:
-                log.warning("No ensemble model found")
-            
+
+            # Load ensemble (single load, properly error-checked)
+            try:
+                from models.ensemble import EnsembleModel
+
+                ensemble_path = CONFIG.MODEL_DIR / f"ensemble_{self.interval}_{self.horizon}.pt"
+                if ensemble_path.exists():
+                    input_size = self.processor.n_features or len(self._feature_cols)
+                    self.ensemble = EnsembleModel(input_size=input_size)
+                    if self.ensemble.load(str(ensemble_path)):
+                        if not self.ensemble.models:
+                            log.warning(f"Ensemble loaded but has no models: {ensemble_path}")
+                            self.ensemble = None
+                        else:
+                            log.info(f"Ensemble loaded from {ensemble_path}")
+                    else:
+                        log.warning(f"Failed to load ensemble: {ensemble_path}")
+                        self.ensemble = None
+                else:
+                    log.warning("No ensemble model found")
+            except ImportError:
+                log.warning("EnsembleModel not available")
+                self.ensemble = None
+
             # Load forecaster (optional)
             self._load_forecaster()
-            
+
             self._loaded = True
             return True
-            
+
+        except ImportError as e:
+            log.error(f"Missing dependency for models: {e}")
+            return False
         except Exception as e:
             log.error(f"Failed to load models: {e}")
             return False
@@ -194,17 +209,17 @@ class Predictor:
         try:
             import torch
             from models.networks import TCNModel
-            
+
             forecast_path = CONFIG.MODEL_DIR / f"forecast_{self.interval}_{self.horizon}.pt"
             if not forecast_path.exists():
                 forecast_path = CONFIG.MODEL_DIR / "forecast_1d_5.pt"
-            
+
             if not forecast_path.exists():
                 log.debug("No forecaster model found")
                 return
-            
+
             data = torch.load(forecast_path, map_location='cpu', weights_only=False)
-            
+
             self.forecaster = TCNModel(
                 input_size=data['input_size'],
                 hidden_size=data['arch']['hidden_size'],
@@ -213,9 +228,12 @@ class Predictor:
             )
             self.forecaster.load_state_dict(data['state_dict'])
             self.forecaster.eval()
-            
+
             log.info(f"Forecaster loaded: horizon={data['horizon']}")
-            
+
+        except ImportError:
+            log.debug("TCNModel not available — forecaster disabled")
+            self.forecaster = None
         except Exception as e:
             log.debug(f"Forecaster not loaded: {e}")
             self.forecaster = None
@@ -230,7 +248,6 @@ class Predictor:
     ):
         """
         Make full prediction with price forecast.
-        Patch: always attach model_agreement + entropy if ensemble is present.
         """
         interval = str(interval or self.interval).lower()
         horizon = int(forecast_minutes or self.horizon)
@@ -268,9 +285,9 @@ class Predictor:
                 pred.prob_down = float(ensemble_pred.probabilities[0])
                 pred.confidence = float(ensemble_pred.confidence)
 
-                # ---- CRITICAL: attach extra fields used by UI/signal generator ----
-                setattr(pred, "model_agreement", float(getattr(ensemble_pred, "agreement", 1.0)))
-                setattr(pred, "entropy", float(getattr(ensemble_pred, "entropy", 0.0)))
+                # Attach extra fields used by UI/signal generator
+                pred.model_agreement = float(getattr(ensemble_pred, "agreement", 1.0))
+                pred.entropy = float(getattr(ensemble_pred, "entropy", 0.0))
 
                 pred.signal = self._determine_signal(ensemble_pred, pred)
                 pred.signal_strength = self._calculate_signal_strength(ensemble_pred, pred)
@@ -293,7 +310,7 @@ class Predictor:
         interval: str = None,
         lookback_bars: int = None
     ) -> List[Prediction]:
-        """Quick batch prediction without full forecasting (robust fields)."""
+        """Quick batch prediction without full forecasting."""
         interval = str(interval or self.interval).lower()
         lookback = int(lookback_bars or (1400 if interval == "1m" else 300))
 
@@ -326,8 +343,8 @@ class Predictor:
                     pred.prob_down = float(ensemble_pred.probabilities[0])
                     pred.confidence = float(ensemble_pred.confidence)
 
-                    setattr(pred, "model_agreement", float(getattr(ensemble_pred, "agreement", 1.0)))
-                    setattr(pred, "entropy", float(getattr(ensemble_pred, "entropy", 0.0)))
+                    pred.model_agreement = float(getattr(ensemble_pred, "agreement", 1.0))
+                    pred.entropy = float(getattr(ensemble_pred, "entropy", 0.0))
 
                     pred.signal = self._determine_signal(ensemble_pred, pred)
 
@@ -359,23 +376,17 @@ class Predictor:
         code = self._clean_code(stock_code)
         
         try:
-            # Fetch data
             df = self._fetch_data(code, interval, lookback, use_realtime_price)
             
             if df is None or df.empty or len(df) < CONFIG.SEQUENCE_LENGTH:
                 return [], []
             
-            # Actual prices
             actual = df['close'].tail(180).tolist()
             current_price = float(df['close'].iloc[-1])
             
-            # Create features
             df = self.feature_engine.create_features(df)
-            
-            # Prepare sequence
             X = self.processor.prepare_inference_sequence(df, self._feature_cols)
             
-            # Generate forecast
             predicted = self._generate_forecast(X, current_price, horizon)
             
             return actual, predicted
@@ -392,15 +403,9 @@ class Predictor:
     ) -> List[Prediction]:
         """
         Get top N stock picks based on signal type.
-        
-        Args:
-            stock_codes: List of codes to scan
-            n: Number of top picks to return
-            signal_type: "buy" or "sell"
         """
         predictions = self.predict_quick_batch(stock_codes)
         
-        # Filter by signal type
         if signal_type.lower() == "buy":
             filtered = [
                 p for p in predictions
@@ -414,7 +419,6 @@ class Predictor:
                 and p.confidence >= CONFIG.MIN_CONFIDENCE
             ]
         
-        # Sort by confidence
         filtered.sort(key=lambda x: x.confidence, reverse=True)
         
         return filtered[:n]
@@ -426,13 +430,12 @@ class Predictor:
         lookback: int,
         use_realtime: bool
     ) -> Optional[pd.DataFrame]:
-        """Fetch stock data"""
+        """Fetch stock data — fixed: no redundant days parameter"""
         try:
             df = self.fetcher.get_history(
                 code,
                 interval=interval,
                 bars=lookback,
-                days=lookback,
                 use_cache=True,
                 update_db=True
             )
@@ -445,7 +448,6 @@ class Predictor:
                 try:
                     quote = self.fetcher.get_realtime(code)
                     if quote and quote.price > 0:
-                        # Update last row
                         df.loc[df.index[-1], 'close'] = quote.price
                         df.loc[df.index[-1], 'high'] = max(df['high'].iloc[-1], quote.price)
                         df.loc[df.index[-1], 'low'] = min(df['low'].iloc[-1], quote.price)
@@ -475,13 +477,12 @@ class Predictor:
                     returns, _ = self.forecaster(X_tensor)
                     returns = returns[0].cpu().numpy()
                 
-                # Convert returns to prices
                 prices = [current_price]
                 for r in returns[:horizon]:
                     next_price = prices[-1] * (1 + r / 100)
                     prices.append(float(next_price))
                 
-                return prices[1:]  # Exclude current price
+                return prices[1:]
                 
             except Exception as e:
                 log.debug(f"Forecaster failed: {e}")
@@ -491,15 +492,14 @@ class Predictor:
             try:
                 pred = self.ensemble.predict(X)
                 
-                # Simple directional forecast
                 direction = pred.probabilities[2] - pred.probabilities[0]
-                volatility = 0.02  # 2% base volatility
+                volatility = 0.02
                 
                 prices = []
                 price = current_price
                 
                 for i in range(horizon):
-                    change = direction * volatility * (1 - i / horizon)  # Decay
+                    change = direction * volatility * (1 - i / horizon)
                     price = price * (1 + change)
                     prices.append(float(price))
                 
@@ -508,13 +508,10 @@ class Predictor:
             except Exception:
                 pass
         
-        # Ultimate fallback: flat forecast
         return [current_price] * horizon
     
     def _determine_signal(self, ensemble_pred, pred: Prediction) -> Signal:
         """Determine trading signal from prediction"""
-        prob_up = ensemble_pred.probabilities[2]
-        prob_down = ensemble_pred.probabilities[0]
         confidence = ensemble_pred.confidence
         predicted_class = ensemble_pred.predicted_class
         
@@ -546,8 +543,7 @@ class Predictor:
         if price <= 0:
             return TradingLevels()
         
-        # ATR-based stops (simplified)
-        atr_pct = 0.02  # 2% default
+        atr_pct = 0.02
         
         levels = TradingLevels(entry=price)
         
@@ -567,7 +563,6 @@ class Predictor:
             levels.target_2 = price * 1.05
             levels.target_3 = price * 1.08
         
-        # Calculate percentages
         levels.stop_loss_pct = (levels.stop_loss / price - 1) * 100
         levels.target_1_pct = (levels.target_1 / price - 1) * 100
         levels.target_2_pct = (levels.target_2 / price - 1) * 100
@@ -582,21 +577,17 @@ class Predictor:
         if price <= 0:
             return PositionSize()
         
-        # Risk-based position sizing
         risk_pct = CONFIG.RISK_PER_TRADE / 100
         risk_amount = self.capital * risk_pct
         
-        # Stop distance
         stop_distance = abs(price - pred.levels.stop_loss)
         if stop_distance <= 0:
             stop_distance = price * 0.02
         
-        # Position size
         shares = int(risk_amount / stop_distance)
         shares = (shares // CONFIG.LOT_SIZE) * CONFIG.LOT_SIZE
         shares = max(CONFIG.LOT_SIZE, shares)
         
-        # Cap at max position
         max_value = self.capital * (CONFIG.MAX_POSITION_PCT / 100)
         if shares * price > max_value:
             shares = int(max_value / price)
@@ -612,11 +603,15 @@ class Predictor:
     def _extract_technicals(self, df: pd.DataFrame, pred: Prediction):
         """Extract technical indicators from dataframe"""
         try:
-            # RSI
             if 'rsi_14' in df.columns:
-                pred.rsi = float(df['rsi_14'].iloc[-1]) * 100 + 50
-            
-            # MACD
+                raw_rsi = float(df['rsi_14'].iloc[-1])
+                if -5.0 <= raw_rsi <= 5.0:
+                    pred.rsi = max(0.0, min(100.0, raw_rsi * 15.0 + 50.0))
+                elif 0.0 <= raw_rsi <= 100.0:
+                    pred.rsi = raw_rsi
+                else:
+                    pred.rsi = 50.0
+
             if 'macd_hist' in df.columns:
                 macd = float(df['macd_hist'].iloc[-1])
                 if macd > 0.001:
@@ -625,8 +620,7 @@ class Predictor:
                     pred.macd_signal = "BEARISH"
                 else:
                     pred.macd_signal = "NEUTRAL"
-            
-            # Trend
+
             if 'ma_ratio_5_20' in df.columns:
                 trend = float(df['ma_ratio_5_20'].iloc[-1])
                 if trend > 1:
@@ -635,7 +629,7 @@ class Predictor:
                     pred.trend = "DOWNTREND"
                 else:
                     pred.trend = "SIDEWAYS"
-                    
+
         except Exception as e:
             log.debug(f"Technical extraction error: {e}")
     
@@ -644,7 +638,6 @@ class Predictor:
         reasons = []
         warnings = []
         
-        # AI confidence
         if pred.confidence >= 0.7:
             reasons.append(f"High AI confidence: {pred.confidence:.0%}")
         elif pred.confidence >= 0.6:
@@ -652,13 +645,11 @@ class Predictor:
         else:
             warnings.append(f"Low AI confidence: {pred.confidence:.0%}")
         
-        # Probabilities
         if pred.prob_up > 0.5:
             reasons.append(f"AI predicts UP with {pred.prob_up:.0%} probability")
         elif pred.prob_down > 0.5:
             reasons.append(f"AI predicts DOWN with {pred.prob_down:.0%} probability")
         
-        # RSI
         if pred.rsi > 70:
             warnings.append(f"RSI overbought: {pred.rsi:.0f}")
         elif pred.rsi < 30:
@@ -666,7 +657,6 @@ class Predictor:
         else:
             reasons.append(f"RSI neutral: {pred.rsi:.0f}")
         
-        # Trend alignment
         if pred.signal in [Signal.STRONG_BUY, Signal.BUY] and pred.trend == "UPTREND":
             reasons.append("Signal aligned with uptrend")
         elif pred.signal in [Signal.STRONG_SELL, Signal.SELL] and pred.trend == "DOWNTREND":
@@ -674,7 +664,6 @@ class Predictor:
         elif pred.trend != "SIDEWAYS":
             warnings.append(f"Signal against trend ({pred.trend})")
         
-        # MACD
         if pred.macd_signal != "NEUTRAL":
             reasons.append(f"MACD: {pred.macd_signal}")
         
@@ -698,17 +687,14 @@ class Predictor:
         
         code = str(code).strip()
         
-        # Remove prefixes
         for prefix in ['sh', 'sz', 'SH', 'SZ', 'bj', 'BJ']:
             if code.startswith(prefix):
                 code = code[len(prefix):]
         
-        # Remove suffixes
         for suffix in ['.SS', '.SZ', '.BJ']:
             if code.endswith(suffix):
                 code = code[:-len(suffix)]
         
-        # Keep only digits
         code = ''.join(c for c in code if c.isdigit())
         
         return code.zfill(6) if code else ""

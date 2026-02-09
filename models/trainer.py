@@ -9,6 +9,9 @@ FIXED Issues:
 - Scaler saved with model for inference
 - Proper interval/horizon parameter handling
 - Robust forecaster training with error handling
+- _skip_scaler_fit support for incremental training
+- Proper embargo gap between splits
+- best_accuracy fallback to test_acc
 """
 import numpy as np
 import torch
@@ -47,6 +50,7 @@ class Trainer:
     - Classification ensemble for trading signals
     - Multi-step forecaster for price curve prediction
     - Multiple intervals (1m, 5m, 15m, 1d, etc.)
+    - Incremental training with _skip_scaler_fit
     """
     
     def __init__(self):
@@ -61,6 +65,9 @@ class Trainer:
         # Training metadata
         self.interval: str = "1d"
         self.prediction_horizon: int = CONFIG.PREDICTION_HORIZON
+        
+        # Incremental training flag — set externally by auto_learner
+        self._skip_scaler_fit: bool = False
     
     def _should_stop(self, stop_flag: Any) -> bool:
         """Check if training should stop - handles multiple stop flag types"""
@@ -68,12 +75,12 @@ class Trainer:
             return False
         
         # Handle CancellationToken
-        if hasattr(stop_flag, 'is_cancelled'):
-            is_cancelled = stop_flag.is_cancelled
+        is_cancelled = getattr(stop_flag, 'is_cancelled', None)
+        if is_cancelled is not None:
             if callable(is_cancelled):
                 try:
                     return bool(is_cancelled())
-                except:
+                except Exception:
                     pass
             return bool(is_cancelled)
         
@@ -81,14 +88,10 @@ class Trainer:
         if callable(stop_flag):
             try:
                 return bool(stop_flag())
-            except:
+            except Exception:
                 pass
         
-        # Handle boolean
-        try:
-            return bool(stop_flag)
-        except:
-            return False
+        return False
     
     def prepare_data(
         self,
@@ -181,19 +184,23 @@ class Trainer:
         split_data = {}
         
         embargo = max(int(CONFIG.EMBARGO_BARS), horizon)
+        seq_len = int(CONFIG.SEQUENCE_LENGTH)
         
         for code, data in stock_data.items():
             df = data['df']
             n = len(df)
             
-            # Calculate split points with embargo
-            train_end = int(n * CONFIG.TRAIN_RATIO) - horizon - embargo
-            val_start = int(n * CONFIG.TRAIN_RATIO)
-            val_end = int(n * (CONFIG.TRAIN_RATIO + CONFIG.VAL_RATIO)) - horizon - embargo
-            test_start = int(n * (CONFIG.TRAIN_RATIO + CONFIG.VAL_RATIO))
+            # Calculate split points with embargo GAP between splits
+            train_end = int(n * CONFIG.TRAIN_RATIO)
+            val_start = train_end + embargo
+            val_end = int(n * (CONFIG.TRAIN_RATIO + CONFIG.VAL_RATIO))
+            test_start = val_end + embargo
             
             if train_end < CONFIG.SEQUENCE_LENGTH + 20:
                 log.debug(f"Insufficient training data for {code}")
+                continue
+            if val_start >= val_end or test_start >= n:
+                log.debug(f"Insufficient val/test data for {code}")
                 continue
             
             # Split raw data BEFORE labeling
@@ -205,6 +212,15 @@ class Trainer:
             train_df = self.processor.create_labels(train_df, horizon=horizon)
             val_df = self.processor.create_labels(val_df, horizon=horizon)
             test_df = self.processor.create_labels(test_df, horizon=horizon)
+            
+            # Invalidate first seq_len labels in val/test where features
+            # may depend on data from prior split (feature lookback contamination)
+            feature_warmup = min(seq_len, len(val_df) // 4) if len(val_df) > seq_len else 0
+            if feature_warmup > 0 and 'label' in val_df.columns:
+                val_df.iloc[:feature_warmup, val_df.columns.get_loc('label')] = np.nan
+            feature_warmup_test = min(seq_len, len(test_df) // 4) if len(test_df) > seq_len else 0
+            if feature_warmup_test > 0 and 'label' in test_df.columns:
+                test_df.iloc[:feature_warmup_test, test_df.columns.get_loc('label')] = np.nan
             
             split_data[code] = {
                 'train': train_df,
@@ -221,11 +237,15 @@ class Trainer:
         if not all_train_features:
             raise ValueError("No valid training data after split")
         
-        # Phase 3: Fit scaler on training data ONLY
-        log.info("Fitting scaler on training data...")
-        combined_train_features = np.concatenate(all_train_features, axis=0)
-        self.processor.fit_scaler(combined_train_features)
-        log.info(f"Scaler fitted on {len(combined_train_features)} training samples")
+        # Phase 3: Fit scaler on training data ONLY (unless skipped for incremental)
+        if self._skip_scaler_fit and self.processor.is_fitted:
+            log.info(f"Skipping scaler refit (incremental mode, "
+                    f"existing scaler has {self.processor.n_features} features)")
+        else:
+            log.info("Fitting scaler on training data...")
+            combined_train_features = np.concatenate(all_train_features, axis=0)
+            self.processor.fit_scaler(combined_train_features)
+            log.info(f"Scaler fitted on {len(combined_train_features)} training samples")
         
         # Phase 4: Create sequences for each split
         all_train = {'X': [], 'y': [], 'r': []}
@@ -338,6 +358,7 @@ class Trainer:
         log.info("=" * 70)
         log.info("STARTING TRAINING PIPELINE (Classifier + Forecaster)")
         log.info(f"Interval: {interval}, Horizon: {horizon} bars, Lookback: {lookback}")
+        log.info(f"Incremental: {incremental}, Skip scaler fit: {self._skip_scaler_fit}")
         log.info("=" * 70)
 
         # --- Phase 1: Prepare data ---
@@ -379,17 +400,21 @@ class Trainer:
         split_data = {}
 
         embargo = max(int(CONFIG.EMBARGO_BARS), horizon)
+        seq_len = int(CONFIG.SEQUENCE_LENGTH)
 
         for code, data in stock_data.items():
             df = data["df"]
             n = len(df)
 
-            train_end = int(n * CONFIG.TRAIN_RATIO) - horizon - embargo
-            val_start = int(n * CONFIG.TRAIN_RATIO)
-            val_end = int(n * (CONFIG.TRAIN_RATIO + CONFIG.VAL_RATIO)) - horizon - embargo
-            test_start = int(n * (CONFIG.TRAIN_RATIO + CONFIG.VAL_RATIO))
+            # Proper embargo GAP between splits
+            train_end = int(n * CONFIG.TRAIN_RATIO)
+            val_start = train_end + embargo
+            val_end = int(n * (CONFIG.TRAIN_RATIO + CONFIG.VAL_RATIO))
+            test_start = val_end + embargo
 
             if train_end < CONFIG.SEQUENCE_LENGTH + 50:
+                continue
+            if val_start >= val_end or test_start >= n:
                 continue
 
             train_df = df.iloc[:train_end].copy()
@@ -399,6 +424,14 @@ class Trainer:
             train_df = self.processor.create_labels(train_df, horizon=horizon)
             val_df = self.processor.create_labels(val_df, horizon=horizon)
             test_df = self.processor.create_labels(test_df, horizon=horizon)
+
+            # Invalidate feature warmup period in val/test
+            feature_warmup = min(seq_len, len(val_df) // 4) if len(val_df) > seq_len else 0
+            if feature_warmup > 0 and 'label' in val_df.columns:
+                val_df.iloc[:feature_warmup, val_df.columns.get_loc('label')] = np.nan
+            feature_warmup_test = min(seq_len, len(test_df) // 4) if len(test_df) > seq_len else 0
+            if feature_warmup_test > 0 and 'label' in test_df.columns:
+                test_df.iloc[:feature_warmup_test, test_df.columns.get_loc('label')] = np.nan
 
             split_data[code] = {"train": train_df, "val": val_df, "test": test_df}
 
@@ -410,10 +443,14 @@ class Trainer:
         if not all_train_features:
             raise ValueError("No valid training data after split")
 
-        # Fit scaler on training data only
-        combined_train_features = np.concatenate(all_train_features, axis=0)
-        self.processor.fit_scaler(combined_train_features)
-        log.info(f"Scaler fitted on {len(combined_train_features)} samples")
+        # Fit scaler on training data only (unless skipped for incremental)
+        if self._skip_scaler_fit and self.processor.is_fitted:
+            log.info(f"Skipping scaler refit (incremental mode, "
+                    f"existing scaler has {self.processor.n_features} features)")
+        else:
+            combined_train_features = np.concatenate(all_train_features, axis=0)
+            self.processor.fit_scaler(combined_train_features)
+            log.info(f"Scaler fitted on {len(combined_train_features)} samples")
 
         # Create sequences for classifier
         all_train = {"X": [], "y": []}
@@ -651,9 +688,15 @@ class Trainer:
 
         # Calculate best validation accuracy
         best_accuracy = 0.0
-        for h in history.values():
-            if h.get("val_acc"):
-                best_accuracy = max(best_accuracy, max(h["val_acc"]))
+        if history:
+            for h in history.values():
+                val_acc_list = h.get("val_acc", [])
+                if val_acc_list:
+                    best_accuracy = max(best_accuracy, max(val_acc_list))
+        
+        # Use test accuracy as fallback if val history is empty
+        if best_accuracy == 0.0 and test_acc > 0.0:
+            best_accuracy = test_acc
 
         return {
             "status": "complete",

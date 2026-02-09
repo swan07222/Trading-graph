@@ -5,10 +5,12 @@ Data Processor - Prepare data for training and REAL-TIME inference
 CRITICAL FEATURES:
 - Scaler fitted ONLY on training data (no leakage)
 - Proper embargo gap between splits
+- Feature warmup invalidation in val/test splits
 - Real-time sequence preparation for live predictions
 - Multi-horizon forecasting support
 - Thread-safe operations
 - Streaming data support
+- Config-driven feature lookback (no magic numbers)
 """
 import numpy as np
 import pandas as pd
@@ -140,15 +142,6 @@ class DataProcessor:
             2 = UP (return >= up_thresh)
         
         IMPORTANT: The last `horizon` rows will have NaN labels.
-        
-        Args:
-            df: DataFrame with 'close' column
-            horizon: Prediction horizon in bars
-            up_thresh: Threshold for UP classification (%)
-            down_thresh: Threshold for DOWN classification (%)
-        
-        Returns:
-            DataFrame with 'label' and 'future_return' columns added
         """
         horizon = int(horizon or CONFIG.PREDICTION_HORIZON)
         up_thresh = float(up_thresh or CONFIG.UP_THRESHOLD)
@@ -159,12 +152,10 @@ class DataProcessor:
         if 'close' not in df.columns:
             raise ValueError("DataFrame must have 'close' column")
         
-        # Calculate future return
         close = pd.to_numeric(df['close'], errors='coerce')
         future_price = close.shift(-horizon)
         future_return = (future_price / close - 1) * 100
         
-        # Create labels
         df['label'] = 1  # Default: NEUTRAL
         df.loc[future_return >= up_thresh, 'label'] = 2  # UP
         df.loc[future_return <= down_thresh, 'label'] = 0  # DOWN
@@ -187,27 +178,17 @@ class DataProcessor:
         """
         Fit scaler on training data ONLY.
         Thread-safe.
-        
-        Args:
-            features: 2D array of features (samples x features)
-            interval: Data interval for metadata
-            horizon: Prediction horizon for metadata
-        
-        Returns:
-            self for method chaining
         """
         with self._lock:
             if features.ndim != 2:
                 raise ValueError(f"Features must be 2D, got shape {features.shape}")
             
-            # Remove invalid samples
             valid_mask = ~(np.isnan(features).any(axis=1) | np.isinf(features).any(axis=1))
             clean_features = features[valid_mask]
             
             if len(clean_features) < 10:
                 raise ValueError(f"Insufficient valid samples for scaler: {len(clean_features)}")
             
-            # Fit RobustScaler (resistant to outliers)
             self.scaler = RobustScaler()
             self.scaler.fit(clean_features)
             
@@ -228,12 +209,6 @@ class DataProcessor:
         """
         Transform features using the fitted scaler.
         Clips extreme values to [-5, 5] for numerical stability.
-        
-        Args:
-            features: 2D or 3D array of features
-        
-        Returns:
-            Transformed features as float32
         """
         with self._lock:
             if not self._fitted:
@@ -247,24 +222,19 @@ class DataProcessor:
             
             original_shape = features.shape
             
-            # Flatten to 2D for transformation
             if features.ndim == 3:
                 features_2d = features.reshape(-1, features.shape[-1])
             else:
                 features_2d = features.copy()
             
-            # Handle NaN/Inf
             nan_mask = np.isnan(features_2d) | np.isinf(features_2d)
             features_2d = np.nan_to_num(features_2d, nan=0.0, posinf=0.0, neginf=0.0)
             
-            # Transform and clip
             transformed = self.scaler.transform(features_2d)
             transformed = np.clip(transformed, -5, 5)
             
-            # Restore NaN positions to 0
             transformed[nan_mask] = 0.0
             
-            # Reshape back if needed
             if len(original_shape) == 3:
                 transformed = transformed.reshape(original_shape)
             
@@ -273,14 +243,7 @@ class DataProcessor:
     def save_scaler(self, path: str = None, 
                     interval: str = None, 
                     horizon: int = None):
-        """
-        Save scaler atomically with metadata.
-        
-        Args:
-            path: Save path (auto-generated if None)
-            interval: Data interval (uses stored value if None)
-            horizon: Prediction horizon (uses stored value if None)
-        """
+        """Save scaler atomically with metadata."""
         if not self._fitted:
             log.warning("Scaler not fitted, nothing to save")
             return
@@ -310,7 +273,6 @@ class DataProcessor:
             from utils.atomic_io import atomic_pickle_dump
             atomic_pickle_dump(path, data)
         except ImportError:
-            # Fallback to standard pickle
             tmp_path = path.with_suffix('.pkl.tmp')
             with open(tmp_path, 'wb') as f:
                 pickle.dump(data, f, protocol=pickle.HIGHEST_PROTOCOL)
@@ -321,17 +283,7 @@ class DataProcessor:
     def load_scaler(self, path: str = None, 
                     interval: str = None, 
                     horizon: int = None) -> bool:
-        """
-        Load saved scaler for inference.
-        
-        Args:
-            path: Load path (auto-generated if None)
-            interval: Data interval for path generation
-            horizon: Prediction horizon for path generation
-        
-        Returns:
-            True if loaded successfully
-        """
+        """Load saved scaler for inference."""
         if path is None:
             interval = interval or "1d"
             horizon = horizon or CONFIG.PREDICTION_HORIZON
@@ -389,19 +341,9 @@ class DataProcessor:
                Tuple[np.ndarray, np.ndarray, np.ndarray, pd.DatetimeIndex]]:
         """
         Prepare sequences for training/validation.
-        
-        Args:
-            df: DataFrame with features and labels
-            feature_cols: List of feature column names
-            fit_scaler: Whether to fit scaler on this data
-            return_index: Whether to return datetime index
-        
-        Returns:
-            (X, y, returns) or (X, y, returns, index) if return_index=True
         """
         seq_len = int(CONFIG.SEQUENCE_LENGTH)
 
-        # Validate columns
         missing_cols = set(feature_cols) - set(df.columns)
         if missing_cols:
             raise ValueError(f"Missing feature columns: {missing_cols}")
@@ -409,40 +351,32 @@ class DataProcessor:
         if 'label' not in df.columns:
             raise ValueError("DataFrame must have 'label' column. Call create_labels() first.")
 
-        # Extract arrays
         features = df[feature_cols].values.astype(np.float32)
         labels = df['label'].values
         returns = df['future_return'].values if 'future_return' in df.columns else np.zeros(len(df))
 
-        # Optionally fit scaler
         if fit_scaler:
             valid_mask = ~np.isnan(labels)
             if valid_mask.sum() > 10:
                 self.fit_scaler(features[valid_mask])
 
-        # Transform features if scaler is fitted
         if self._fitted:
             features = self.transform(features)
 
-        # Build sequences
         X, y, r, idx = [], [], [], []
 
         for i in range(seq_len - 1, len(features)):
-            # Skip if label is NaN
             if np.isnan(labels[i]):
                 continue
 
-            # Extract sequence
             seq = features[i - seq_len + 1 : i + 1]
             
-            # Validate sequence
             if len(seq) == seq_len and not np.isnan(seq).any():
                 X.append(seq)
                 y.append(int(labels[i]))
                 r.append(float(returns[i]) if not np.isnan(returns[i]) else 0.0)
                 idx.append(df.index[i])
 
-        # Handle empty result
         if not X:
             empty = (np.array([]), np.array([]), np.array([]))
             if return_index:
@@ -470,25 +404,10 @@ class DataProcessor:
                Tuple[np.ndarray, np.ndarray, pd.DatetimeIndex]]:
         """
         Prepare multi-step forecasting dataset.
-        
-        Each sample predicts the next `horizon` returns as a vector.
-        
-        Args:
-            df: DataFrame with features and 'close' column
-            feature_cols: List of feature column names
-            horizon: Number of future steps to predict
-            fit_scaler: Whether to fit scaler on this data
-            return_index: Whether to return datetime index
-        
-        Returns:
-            (X, Y) or (X, Y, index) if return_index=True
-            X: (N, seq_len, n_features)
-            Y: (N, horizon) - percentage returns for each future step
         """
         seq_len = int(CONFIG.SEQUENCE_LENGTH)
         horizon = int(horizon)
 
-        # Validate columns
         missing_cols = set(feature_cols) - set(df.columns)
         if missing_cols:
             raise ValueError(f"Missing feature columns: {missing_cols}")
@@ -496,52 +415,42 @@ class DataProcessor:
         if "close" not in df.columns:
             raise ValueError("DataFrame must have 'close' column for forecasting")
 
-        # Extract arrays
         features = df[feature_cols].values.astype(np.float32)
         close = pd.to_numeric(df["close"], errors="coerce").values.astype(np.float32)
 
-        # Optionally fit scaler
         if fit_scaler:
             valid_mask = ~np.isnan(features).any(axis=1)
             if valid_mask.sum() > 10:
                 self.fit_scaler(features[valid_mask])
 
-        # Transform features
         if self._fitted:
             features = self.transform(features)
 
-        # Build sequences
         X, Y, idx = [], [], []
 
         n = len(df)
         for i in range(seq_len - 1, n):
-            # Need horizon bars ahead
             if i + horizon >= n:
                 break
 
-            # Extract input sequence
             seq = features[i - seq_len + 1: i + 1]
             if len(seq) != seq_len or np.isnan(seq).any():
                 continue
 
-            # Current close price
             c0 = float(close[i])
             if not np.isfinite(c0) or c0 <= 0:
                 continue
 
-            # Future prices
             fut = close[i + 1: i + horizon + 1]
             if len(fut) != horizon or np.isnan(fut).any():
                 continue
 
-            # Calculate returns for each future step
             y = (fut / c0 - 1.0) * 100.0
 
             X.append(seq)
             Y.append(y.astype(np.float32))
             idx.append(df.index[i])
 
-        # Handle empty result
         if not X:
             if return_index:
                 return np.array([]), np.array([]), pd.DatetimeIndex([])
@@ -565,17 +474,9 @@ class DataProcessor:
     ) -> np.ndarray:
         """
         Prepare a single sequence for inference using the last SEQUENCE_LENGTH rows.
-        
-        Args:
-            df: DataFrame with feature columns
-            feature_cols: List of feature column names
-        
-        Returns:
-            3D array of shape (1, seq_len, n_features)
         """
         seq_len = int(CONFIG.SEQUENCE_LENGTH)
 
-        # Validate columns
         missing_cols = set(feature_cols) - set(df.columns)
         if missing_cols:
             raise ValueError(f"Missing feature columns: {missing_cols}")
@@ -583,14 +484,11 @@ class DataProcessor:
         if len(df) < seq_len:
             raise ValueError(f"Need at least {seq_len} rows, got {len(df)}")
 
-        # Use last seq_len rows
         df_seq = df.tail(seq_len).copy()
         features = df_seq[feature_cols].values.astype(np.float32)
 
-        # Handle NaN/Inf
         features = np.nan_to_num(features, nan=0.0, posinf=0.0, neginf=0.0)
 
-        # Transform
         if self._fitted:
             features = self.transform(features)
         else:
@@ -608,20 +506,14 @@ class DataProcessor:
     ) -> Optional[np.ndarray]:
         """
         Prepare sequence for real-time prediction with streaming data.
-        
-        This method maintains an internal buffer for each stock and
-        constructs sequences on-the-fly as new bars arrive.
-        
-        Args:
-            code: Stock code
-            new_bar: New bar data dict with OHLCV
-            feature_cols: List of feature column names
-            feature_engine: FeatureEngine instance for feature calculation
-        
-        Returns:
-            3D array (1, seq_len, n_features) or None if buffer not ready
+        Uses config-driven feature lookback instead of magic number.
         """
         seq_len = int(CONFIG.SEQUENCE_LENGTH)
+        
+        # Get feature lookback from config
+        feature_lookback = getattr(CONFIG, 'data', None)
+        feature_lookback = feature_lookback.feature_lookback if feature_lookback else 60
+        min_required = seq_len + feature_lookback
         
         # Get or create buffer for this stock
         with self._buffer_lock:
@@ -629,17 +521,13 @@ class DataProcessor:
                 self._realtime_buffers[code] = RealtimeBuffer(max_size=seq_len * 3)
             buffer = self._realtime_buffers[code]
         
-        # Add new bar to buffer
         buffer.append(new_bar)
         
-        # Check if buffer has enough data
-        if not buffer.is_ready(seq_len + 60):  # Extra for feature calculation
+        if not buffer.is_ready(min_required):
             return None
         
-        # Get buffered data as DataFrame
         df = buffer.to_dataframe()
         
-        # Calculate features if engine provided
         if feature_engine is not None:
             try:
                 df = feature_engine.create_features(df)
@@ -647,13 +535,11 @@ class DataProcessor:
                 log.warning(f"Feature calculation failed for {code}: {e}")
                 return None
         
-        # Validate feature columns
         missing = set(feature_cols) - set(df.columns)
         if missing:
             log.warning(f"Missing features for {code}: {missing}")
             return None
         
-        # Prepare sequence
         try:
             return self.prepare_inference_sequence(df, feature_cols)
         except Exception as e:
@@ -665,23 +551,14 @@ class DataProcessor:
         dataframes: Dict[str, pd.DataFrame],
         feature_cols: List[str]
     ) -> Tuple[np.ndarray, List[str]]:
-        """
-        Prepare batch inference for multiple stocks.
-        
-        Args:
-            dataframes: Dict mapping stock code to DataFrame
-            feature_cols: List of feature column names
-        
-        Returns:
-            (X, codes) where X is (N, seq_len, features) and codes is list of stock codes
-        """
+        """Prepare batch inference for multiple stocks."""
         X_list = []
         codes = []
         
         for code, df in dataframes.items():
             try:
                 seq = self.prepare_inference_sequence(df, feature_cols)
-                X_list.append(seq[0])  # Remove batch dimension
+                X_list.append(seq[0])
                 codes.append(code)
             except Exception as e:
                 log.debug(f"Failed to prepare {code}: {e}")
@@ -710,13 +587,7 @@ class DataProcessor:
         code: str,
         df: pd.DataFrame
     ):
-        """
-        Initialize realtime buffer with historical data.
-        
-        Args:
-            code: Stock code
-            df: Historical DataFrame with OHLCV columns
-        """
+        """Initialize realtime buffer with historical data."""
         with self._buffer_lock:
             if code not in self._realtime_buffers:
                 self._realtime_buffers[code] = RealtimeBuffer()
@@ -724,7 +595,6 @@ class DataProcessor:
         
         buffer.clear()
         
-        # Add rows to buffer
         for _, row in df.iterrows():
             bar = row.to_dict()
             buffer.append(bar)
@@ -742,10 +612,7 @@ class DataProcessor:
         fit_scaler_on_train: bool = True,
         horizon: int = None
     ) -> Dict[str, Tuple[np.ndarray, np.ndarray, np.ndarray]]:
-        """
-        Split data temporally with embargo gap.
-        Alias for split_temporal_single_stock.
-        """
+        """Alias for split_temporal_single_stock."""
         return self.split_temporal_single_stock(
             df, feature_cols, fit_scaler_on_train, horizon
         )
@@ -759,20 +626,7 @@ class DataProcessor:
     ) -> Dict[str, Tuple[np.ndarray, np.ndarray, np.ndarray]]:
         """
         Split a single stock temporally with embargo gap between splits.
-
-        Goals:
-        - No leakage: scaler fit ONLY on train
-        - Val/test get enough rows to form sequences
-        - Embargo is applied as a gap AFTER split boundaries
-        
-        Args:
-            df: DataFrame with OHLCV and features
-            feature_cols: List of feature column names
-            fit_scaler_on_train: Whether to fit scaler on training data
-            horizon: Prediction horizon (uses CONFIG if None)
-        
-        Returns:
-            Dict with 'train', 'val', 'test' keys, each containing (X, y, returns)
+        Includes feature warmup invalidation in val/test.
         """
         n = len(df)
         horizon = int(horizon or CONFIG.PREDICTION_HORIZON)
@@ -785,11 +639,10 @@ class DataProcessor:
             empty = (np.array([]), np.array([]), np.array([]))
             return {"train": empty, "val": empty, "test": empty}
 
-        # Calculate temporal boundaries
+        # Calculate temporal boundaries with embargo GAP
         train_end = int(n * float(CONFIG.TRAIN_RATIO))
         val_end = int(n * float(CONFIG.TRAIN_RATIO + CONFIG.VAL_RATIO))
 
-        # Apply embargo as GAP between splits
         val_start = min(n, train_end + embargo)
         test_start = min(n, val_end + embargo)
 
@@ -802,6 +655,15 @@ class DataProcessor:
         train_df = self.create_labels(train_df, horizon=horizon)
         val_df = self.create_labels(val_df, horizon=horizon)
         test_df = self.create_labels(test_df, horizon=horizon)
+
+        # Invalidate first seq_len labels in val/test where features
+        # may depend on data from prior split (feature lookback contamination)
+        feature_warmup = min(seq_len, len(val_df) // 4) if len(val_df) > seq_len else 0
+        if feature_warmup > 0 and 'label' in val_df.columns:
+            val_df.iloc[:feature_warmup, val_df.columns.get_loc('label')] = np.nan
+        feature_warmup_test = min(seq_len, len(test_df) // 4) if len(test_df) > seq_len else 0
+        if feature_warmup_test > 0 and 'label' in test_df.columns:
+            test_df.iloc[:feature_warmup_test, test_df.columns.get_loc('label')] = np.nan
 
         # Fit scaler on TRAIN only
         if fit_scaler_on_train and len(train_df) >= seq_len:
@@ -875,9 +737,6 @@ class DataProcessor:
 class RealtimePredictor:
     """
     High-level helper for real-time AI predictions.
-    
-    Combines DataProcessor, FeatureEngine, and EnsembleModel
-    for seamless real-time predictions.
     """
     
     def __init__(
@@ -886,14 +745,6 @@ class RealtimePredictor:
         horizon: int = 30,
         auto_load: bool = True
     ):
-        """
-        Initialize realtime predictor.
-        
-        Args:
-            interval: Data interval
-            horizon: Prediction horizon
-            auto_load: Automatically load models
-        """
         self.interval = str(interval).lower()
         self.horizon = int(horizon)
         
@@ -916,17 +767,14 @@ class RealtimePredictor:
         
         with self._lock:
             try:
-                # Load feature engine
                 self.feature_engine = FeatureEngine()
                 self._feature_cols = self.feature_engine.get_feature_columns()
                 
-                # Load scaler
                 scaler_path = CONFIG.MODEL_DIR / f"scaler_{self.interval}_{self.horizon}.pkl"
                 if not self.processor.load_scaler(str(scaler_path)):
                     log.warning(f"Failed to load scaler: {scaler_path}")
                     return False
                 
-                # Load ensemble
                 ensemble_path = CONFIG.MODEL_DIR / f"ensemble_{self.interval}_{self.horizon}.pt"
                 if ensemble_path.exists():
                     self.ensemble = EnsembleModel(
@@ -936,7 +784,6 @@ class RealtimePredictor:
                         log.warning(f"Failed to load ensemble: {ensemble_path}")
                         self.ensemble = None
                 
-                # Load forecaster (optional)
                 forecast_path = CONFIG.MODEL_DIR / f"forecast_{self.interval}_{self.horizon}.pt"
                 if forecast_path.exists():
                     self._load_forecaster(forecast_path)
@@ -976,34 +823,14 @@ class RealtimePredictor:
         df: pd.DataFrame,
         include_forecast: bool = True
     ) -> Optional[Dict[str, Any]]:
-        """
-        Make real-time prediction.
-        
-        Args:
-            df: DataFrame with OHLCV data (needs at least SEQUENCE_LENGTH bars)
-            include_forecast: Whether to include multi-step forecast
-        
-        Returns:
-            Dict with prediction results:
-            {
-                'signal': 'BUY'|'SELL'|'HOLD',
-                'confidence': float,
-                'probabilities': [prob_down, prob_neutral, prob_up],
-                'predicted_class': int,
-                'forecast': [returns...] (if include_forecast),
-                'timestamp': datetime
-            }
-        """
+        """Make real-time prediction."""
         if not self._loaded:
             if not self.load_models():
                 return None
         
         with self._lock:
             try:
-                # Create features
                 df = self.feature_engine.create_features(df.copy())
-                
-                # Prepare sequence
                 X = self.processor.prepare_inference_sequence(df, self._feature_cols)
                 
                 result = {
@@ -1014,7 +841,6 @@ class RealtimePredictor:
                     'predicted_class': 1,
                 }
                 
-                # Classification prediction
                 if self.ensemble:
                     pred = self.ensemble.predict(X)
                     
@@ -1024,7 +850,6 @@ class RealtimePredictor:
                     result['entropy'] = pred.entropy
                     result['agreement'] = pred.agreement
                     
-                    # Determine signal
                     if pred.predicted_class == 2 and pred.confidence >= CONFIG.MIN_CONFIDENCE:
                         if pred.confidence >= CONFIG.STRONG_BUY_THRESHOLD:
                             result['signal'] = 'STRONG_BUY'
@@ -1038,7 +863,6 @@ class RealtimePredictor:
                     else:
                         result['signal'] = 'HOLD'
                 
-                # Multi-step forecast
                 if include_forecast and self.forecaster:
                     import torch
                     
@@ -1059,16 +883,7 @@ class RealtimePredictor:
         dataframes: Dict[str, pd.DataFrame],
         include_forecast: bool = False
     ) -> Dict[str, Dict[str, Any]]:
-        """
-        Make predictions for multiple stocks.
-        
-        Args:
-            dataframes: Dict mapping stock code to DataFrame
-            include_forecast: Whether to include forecasts
-        
-        Returns:
-            Dict mapping stock code to prediction result
-        """
+        """Make predictions for multiple stocks."""
         results = {}
         
         for code, df in dataframes.items():
@@ -1083,17 +898,7 @@ class RealtimePredictor:
         code: str,
         new_bar: Dict[str, float]
     ) -> Optional[Dict[str, Any]]:
-        """
-        Update buffer with new bar and make prediction.
-        
-        Args:
-            code: Stock code
-            new_bar: New OHLCV bar data
-        
-        Returns:
-            Prediction result or None if not ready
-        """
-        # Prepare sequence using realtime buffer
+        """Update buffer with new bar and make prediction."""
         X = self.processor.prepare_realtime_sequence(
             code, new_bar, self._feature_cols, self.feature_engine
         )

@@ -68,6 +68,12 @@ def get_realtime_predictor():
     return RealtimePredictor
 
 
+def get_news_panel():
+    """Lazy import NewsPanel"""
+    from ui.news_widget import NewsPanel
+    return NewsPanel
+
+
 # =============================================================================
 # REAL-TIME MONITORING THREAD
 # =============================================================================
@@ -403,8 +409,8 @@ class MainApp(QMainWindow):
         
         # Spacer
         spacer = QWidget()
-        spacer.setSizePolicy(spacer.sizePolicy().horizontalPolicy(), 
-                            spacer.sizePolicy().verticalPolicy())
+        from PyQt6.QtWidgets import QSizePolicy
+        spacer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         toolbar.addWidget(spacer)
         
         # Stock input in toolbar
@@ -693,7 +699,7 @@ class MainApp(QMainWindow):
         news_tab = QWidget()
         news_layout = QVBoxLayout(news_tab)
         try:
-            NewsPanel = get_news_panel()
+            NewsPanel = get_news_panel()  # Now calls module-level function (Fix 1)
             self.news_panel = NewsPanel()
             news_layout.addWidget(self.news_panel)
         except Exception as e:
@@ -1033,10 +1039,10 @@ class MainApp(QMainWindow):
         self.log("System initialized - Ready for trading", "info")
     
     def _on_interval_changed(self, interval: str):
-        """Handle interval change - reload model if needed"""
+        """Handle interval change - reload model and update monitor if active"""
         horizon = self.forecast_spin.value()
         self.model_info.setText(f"Interval: {interval}, Horizon: {horizon}")
-        
+
         # Update lookback bars suggestion
         if interval == "1m":
             self.lookback_spin.setValue(1400)
@@ -1044,8 +1050,8 @@ class MainApp(QMainWindow):
             self.lookback_spin.setValue(600)
         else:
             self.lookback_spin.setValue(300)
-        
-        # Optionally reload model for new interval
+
+        # Reload model for new interval
         if self.predictor:
             try:
                 Predictor = get_predictor_class()
@@ -1058,7 +1064,17 @@ class MainApp(QMainWindow):
                     self.log(f"Model reloaded for {interval} interval", "info")
             except Exception as e:
                 self.log(f"Model reload failed: {e}", "warning")
-    
+
+        # Update running monitor with new settings
+        if self.monitor and self.monitor.isRunning():
+            lookback = self.lookback_spin.value()
+            self.monitor.update_config(
+                interval=interval,
+                forecast_minutes=horizon,
+                lookback_bars=lookback
+            )
+            self.log(f"Monitor updated: {interval}, {horizon} bars, lookback={lookback}", "info")
+        
     # ==================== Real-time Monitoring ====================
     
     def _toggle_monitoring(self, checked):
@@ -1179,15 +1195,18 @@ class MainApp(QMainWindow):
             if item and item.text() == code:
                 self.watchlist.setItem(row, 1, QTableWidgetItem(f"¥{price:.2f}"))
                 break
-        
-        # Update chart if this is the current stock
+
+        # Skip chart updates if chart doesn't support update_data
+        if not hasattr(self.chart, 'update_data'):
+            return
+
         try:
             current_code = self.stock_input.text().strip()
             if not current_code or current_code != code:
                 return
             if not self.predictor:
                 return
-            
+
             # Throttle updates
             now = time.time()
             if (now - self._last_forecast_refresh_ts) < 2.0:
@@ -1200,20 +1219,19 @@ class MainApp(QMainWindow):
                     series.append(float(price))
                     series = series[-180:]
                     self._live_price_series[code] = series
-                    
-                    if hasattr(self.chart, 'update_data'):
-                        predicted = getattr(self.current_prediction, 'predicted_prices', [])
-                        levels = self._get_levels_dict()
-                        self.chart.update_data(series, predicted, levels)
+
+                    predicted = getattr(self.current_prediction, 'predicted_prices', [])
+                    levels = self._get_levels_dict()
+                    self.chart.update_data(series, predicted, levels)
                 return
-            
+
             self._last_forecast_refresh_ts = now
-            
+
             # Full forecast refresh
             interval = self.interval_combo.currentText().strip()
             horizon = self.forecast_spin.value()
             lookback = self.lookback_spin.value()
-            
+
             if hasattr(self.predictor, 'get_realtime_forecast_curve'):
                 actual_prices, predicted_prices = self.predictor.get_realtime_forecast_curve(
                     stock_code=code,
@@ -1222,13 +1240,12 @@ class MainApp(QMainWindow):
                     lookback_bars=lookback,
                     use_realtime_price=True,
                 )
-                
-                if hasattr(self.chart, 'update_data'):
-                    self.chart.update_data(actual_prices, predicted_prices, self._get_levels_dict())
-                
+
+                self.chart.update_data(actual_prices, predicted_prices, self._get_levels_dict())
+
                 if self.current_prediction and self.current_prediction.stock_code == code:
                     self.current_prediction.predicted_prices = predicted_prices
-                    
+
         except Exception as e:
             log.debug(f"Price update error: {e}")
     
@@ -1968,11 +1985,6 @@ class MainApp(QMainWindow):
         
         # Also log to file
         log.info(message)
-    
-    def get_news_panel():
-        """Lazy import NewsPanel"""
-        from ui.news_widget import NewsPanel
-        return NewsPanel
 
     def closeEvent(self, event):
         """Handle window close safely (stop threads, stop trading, persist state)."""
@@ -2077,29 +2089,26 @@ class MainApp(QMainWindow):
 
 def run_app():
     """Run the application"""
-    # Set environment for better performance
     os.environ.setdefault('QT_AUTO_SCREEN_SCALE_FACTOR', '1')
-    
+
     app = QApplication(sys.argv)
     app.setStyle('Fusion')
-    
-    # Set application metadata
+
     app.setApplicationName("AI Stock Trading System")
     app.setApplicationVersion("2.0")
     app.setOrganizationName("AI Trading")
-    
-    # Set application-wide font
+
     font = QFont("Segoe UI", 10)
     app.setFont(font)
-    
-    # Create and show main window
+
     window = MainApp()
-    
-    # Load previous state
+
+    # Load state BEFORE show so UI reflects saved settings
     window._load_state()
-    
+    window._update_watchlist()
+
     window.show()
-    
+
     sys.exit(app.exec())
 
 

@@ -7,7 +7,7 @@ Central repository for all magic numbers and constant values.
 from datetime import time, date
 from typing import Dict, List, Set, Tuple
 from enum import Enum, auto
-
+from core.types import OrderSide, OrderType, OrderStatus
 
 # =============================================================================
 # EXCHANGES
@@ -101,38 +101,6 @@ HOLIDAYS_2025: Set[date] = {
 }
 
 HOLIDAYS = HOLIDAYS_2024 | HOLIDAYS_2025
-
-
-# =============================================================================
-# ORDER CONSTANTS
-# =============================================================================
-
-class OrderSide(Enum):
-    """Order side"""
-    BUY = "buy"
-    SELL = "sell"
-
-
-class OrderType(Enum):
-    """Order type"""
-    MARKET = "market"
-    LIMIT = "limit"
-    STOP = "stop"
-    STOP_LIMIT = "stop_limit"
-    IOC = "ioc"  # Immediate or Cancel
-    FOK = "fok"  # Fill or Kill
-
-
-class OrderStatus(Enum):
-    """Order status"""
-    PENDING = "pending"
-    SUBMITTED = "submitted"
-    ACCEPTED = "accepted"
-    PARTIAL = "partial"
-    FILLED = "filled"
-    CANCELLED = "cancelled"
-    REJECTED = "rejected"
-    EXPIRED = "expired"
 
 
 ORDER_SIDES = {s.value: s for s in OrderSide}
