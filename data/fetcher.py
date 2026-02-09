@@ -1,6 +1,12 @@
 # data/fetcher.py
 """
-High-Performance Data Fetcher with Robust Error Handling
+High-Performance Data Fetcher with Automatic Network Detection
+
+Automatically detects network environment:
+- China direct (Astrill OFF): Uses AkShare + Tencent
+- VPN active (Astrill ON): Uses Yahoo Finance + Tencent
+
+Network detection is cached and re-checked every 2 minutes.
 """
 import time
 import threading
@@ -24,6 +30,47 @@ from utils.logger import get_logger
 log = get_logger(__name__)
 
 
+# Maximum calendar days each interval can fetch (API limits)
+INTERVAL_MAX_DAYS = {
+    "1m": 7,
+    "2m": 60,
+    "5m": 60,
+    "15m": 60,
+    "30m": 60,
+    "60m": 730,
+    "1h": 730,
+    "1d": 10000,
+    "1wk": 10000,
+    "1mo": 10000,
+}
+
+# Approximate bars per trading day for each interval
+BARS_PER_DAY = {
+    "1m": 240,
+    "2m": 120,
+    "5m": 48,
+    "15m": 16,
+    "30m": 8,
+    "60m": 4,
+    "1h": 4,
+    "1d": 1,
+    "1wk": 0.2,
+    "1mo": 0.05,
+}
+
+
+def bars_to_days(bars: int, interval: str) -> int:
+    """Convert bar count to calendar days needed, respecting API limits."""
+    interval = str(interval).lower()
+    bpd = BARS_PER_DAY.get(interval, 1)
+    if bpd <= 0:
+        bpd = 1
+    trading_days = max(1, int(bars / bpd))
+    calendar_days = int(trading_days * 1.5) + 2
+    max_days = INTERVAL_MAX_DAYS.get(interval, 10000)
+    return min(calendar_days, max_days)
+
+
 def retry(max_attempts: int = 3, delay: float = 1.0, backoff: float = 2.0):
     """Retry decorator with exponential backoff"""
     def decorator(func):
@@ -31,7 +78,6 @@ def retry(max_attempts: int = 3, delay: float = 1.0, backoff: float = 2.0):
         def wrapper(*args, **kwargs):
             last_error = None
             current_delay = delay
-            
             for attempt in range(max_attempts):
                 try:
                     return func(*args, **kwargs)
@@ -40,7 +86,6 @@ def retry(max_attempts: int = 3, delay: float = 1.0, backoff: float = 2.0):
                     if attempt < max_attempts - 1:
                         time.sleep(current_delay)
                         current_delay *= backoff
-            
             raise last_error
         return wrapper
     return decorator
@@ -75,7 +120,6 @@ class Quote:
 
 @dataclass
 class DataSourceStatus:
-    """Data source health status"""
     name: str
     available: bool = True
     last_success: datetime = None
@@ -88,10 +132,14 @@ class DataSourceStatus:
 
 
 class DataSource:
-    """Abstract data source with improved error handling"""
+    """Abstract data source with error tracking"""
     name: str = "base"
     priority: int = 0
-    
+
+    # Which network environment this source needs
+    needs_china_direct: bool = False   # True = only works on China IP
+    needs_vpn: bool = False            # True = only works through VPN
+
     def __init__(self):
         self.status = DataSourceStatus(name=self.name)
         self._session = requests.Session()
@@ -100,13 +148,11 @@ class DataSource:
         })
         self._latencies: List[float] = []
         self._lock = threading.Lock()
-    
+
     def is_available(self) -> bool:
-        """Check if source is available (with temporary disable support)"""
         with self._lock:
             if not self.status.available:
                 return False
-            
             if self.status.disabled_until:
                 if datetime.now() < self.status.disabled_until:
                     return False
@@ -114,15 +160,25 @@ class DataSource:
                     self.status.disabled_until = None
                     self.status.consecutive_errors = 0
                     log.info(f"Data source {self.name} re-enabled after cooldown")
-            
             return True
-    
+
+    def is_suitable_for_network(self) -> bool:
+        """Check if this source works in the current network environment."""
+        from core.network import get_network_env
+        env = get_network_env()
+
+        if self.needs_china_direct and not env.is_china_direct:
+            return False
+        if self.needs_vpn and not env.is_vpn_active:
+            return False
+        return True
+
     def get_history(self, code: str, days: int) -> pd.DataFrame:
         raise NotImplementedError
-    
+
     def get_realtime(self, code: str) -> Optional[Quote]:
         return None
-    
+
     def _record_success(self, latency_ms: float = 0):
         with self._lock:
             self.status.last_success = datetime.now()
@@ -130,26 +186,26 @@ class DataSource:
             self.status.consecutive_errors = 0
             self.status.available = True
             self.status.disabled_until = None
-            
             if latency_ms > 0:
                 self._latencies.append(latency_ms)
                 if len(self._latencies) > 100:
                     self._latencies.pop(0)
                 self.status.avg_latency_ms = np.mean(self._latencies)
-    
+
     def _record_error(self, error: str):
         with self._lock:
             self.status.last_error = error
             self.status.error_count += 1
             self.status.consecutive_errors += 1
-            
-            if self.status.consecutive_errors >= 10:
-                self.status.disabled_until = datetime.now() + timedelta(seconds=60)
-                log.warning(f"Data source {self.name} temporarily disabled for 60s")
+            if self.status.consecutive_errors >= 8:
+                cooldown = min(30 + self.status.consecutive_errors * 3, 120)
+                self.status.disabled_until = datetime.now() + timedelta(seconds=cooldown)
+                log.warning(f"Data source {self.name} disabled for {cooldown}s "
+                           f"({self.status.consecutive_errors} consecutive errors)")
 
 
 class SpotCache:
-    """Thread-safe cached spot data with TTL"""
+    """Thread-safe cached spot data with TTL - only used when AkShare is reachable"""
 
     def __init__(self, ttl_seconds: float = 30.0):
         self._cache: Optional[pd.DataFrame] = None
@@ -158,17 +214,14 @@ class SpotCache:
         self._lock = threading.RLock()
         self._rate_lock = threading.Lock()
         self._ak = None
-        
         try:
             import akshare as ak
             self._ak = ak
         except ImportError:
             pass
-    
-    def get(self, force_refresh: bool = False) -> Optional[pd.DataFrame]:
-        """Non-blocking SpotCache refresh"""
-        now = time.time()
 
+    def get(self, force_refresh: bool = False) -> Optional[pd.DataFrame]:
+        now = time.time()
         with self._lock:
             if not force_refresh and self._cache is not None and (now - self._cache_time) < self._ttl:
                 return self._cache
@@ -178,20 +231,24 @@ class SpotCache:
         if ak is None:
             return cached
 
+        # Only try if we're on China direct
+        from core.network import get_network_env
+        env = get_network_env()
+        if not env.eastmoney_ok:
+            return cached
+
         with self._rate_lock:
             with self._lock:
                 if not force_refresh and self._cache is not None and (now - self._cache_time) < self._ttl:
                     return self._cache
-
             try:
                 import socket
                 old_timeout = socket.getdefaulttimeout()
-                socket.setdefaulttimeout(15)
+                socket.setdefaulttimeout(8)
                 try:
                     fresh = ak.stock_zh_a_spot_em()
                 finally:
                     socket.setdefaulttimeout(old_timeout)
-
                 with self._lock:
                     if fresh is not None and not fresh.empty:
                         self._cache = fresh
@@ -200,9 +257,8 @@ class SpotCache:
             except Exception:
                 with self._lock:
                     return self._cache
-    
+
     def get_quote(self, symbol: str) -> Optional[Dict]:
-        """Get single stock quote from cache (NaN-safe)."""
         def _to_float(x, default=0.0) -> float:
             try:
                 if x is None or pd.isna(x) or (isinstance(x, float) and np.isnan(x)):
@@ -232,7 +288,6 @@ class SpotCache:
             row = df[df['代码'] == symbol]
             if row.empty:
                 return None
-
             r = row.iloc[0]
             return {
                 'code': symbol,
@@ -262,15 +317,15 @@ def get_spot_cache() -> SpotCache:
 
 
 class AkShareSource(DataSource):
-    """AkShare data source - Primary for A-shares"""
+    """AkShare data source - Works ONLY on China direct IP"""
     name = "akshare"
     priority = 1
-    
+    needs_china_direct = True  # Eastmoney blocks foreign IPs
+
     def __init__(self):
         super().__init__()
         self._ak = None
         self._spot_cache = None
-        
         try:
             import akshare as ak
             self._ak = ak
@@ -278,7 +333,14 @@ class AkShareSource(DataSource):
         except ImportError:
             self.status.available = False
             log.warning("AkShare not available")
-    
+
+    def is_available(self) -> bool:
+        if not self._ak:
+            return False
+        if not self.is_suitable_for_network():
+            return False
+        return super().is_available()
+
     def _get_spot_cache(self) -> SpotCache:
         if self._spot_cache is None:
             self._spot_cache = get_spot_cache()
@@ -287,92 +349,70 @@ class AkShareSource(DataSource):
     def get_history(self, code: str, days: int) -> pd.DataFrame:
         if not self._ak or not self.is_available():
             raise DataSourceUnavailableError("AkShare not available")
-        
+
         start = time.time()
-        
         try:
             import socket
             old_timeout = socket.getdefaulttimeout()
-            socket.setdefaulttimeout(60)
-            
+            socket.setdefaulttimeout(15)
             try:
                 end_date = datetime.now().strftime("%Y%m%d")
                 start_date = (datetime.now() - timedelta(days=int(days * 1.5))).strftime("%Y%m%d")
-                
                 df = self._ak.stock_zh_a_hist(
-                    symbol=code,
-                    period="daily",
-                    start_date=start_date,
-                    end_date=end_date,
-                    adjust="qfq"
+                    symbol=code, period="daily",
+                    start_date=start_date, end_date=end_date, adjust="qfq"
                 )
             finally:
                 socket.setdefaulttimeout(old_timeout)
-            
+
             if df is None or df.empty:
                 raise DataFetchError(f"No data for {code}")
-            
+
             column_map = {
                 '日期': 'date', '开盘': 'open', '收盘': 'close',
                 '最高': 'high', '最低': 'low', '成交量': 'volume',
                 '成交额': 'amount', '涨跌幅': 'change_pct', '换手率': 'turnover'
             }
             df = df.rename(columns=column_map)
-            
             df['date'] = pd.to_datetime(df['date'])
             df = df.set_index('date').sort_index()
-            
+
             for col in ['open', 'high', 'low', 'close', 'volume', 'amount']:
                 if col in df.columns:
                     df[col] = pd.to_numeric(df[col], errors='coerce')
-            
+
             df = df.dropna(subset=['close', 'volume'])
             df = df[df['volume'] > 0]
             df = df[df['high'] >= df['low']]
-            
+
             latency = (time.time() - start) * 1000
             self._record_success(latency)
-            
             return df.tail(days)
-            
+
         except Exception as e:
             self._record_error(str(e))
             raise
-    
+
     def get_realtime(self, code: str) -> Optional[Quote]:
         if not self._ak or not self.is_available():
             return None
-        
         try:
             data = self._get_spot_cache().get_quote(code)
-            
             if data is None or data['price'] <= 0:
                 return None
-            
             return Quote(
-                code=code,
-                name=data['name'],
-                price=data['price'],
-                open=data['open'],
-                high=data['high'],
-                low=data['low'],
-                close=data['close'],
-                volume=data['volume'],
-                amount=data['amount'],
-                change=data['change'],
-                change_pct=data['change_pct'],
-                source=self.name
+                code=code, name=data['name'], price=data['price'],
+                open=data['open'], high=data['high'], low=data['low'],
+                close=data['close'], volume=data['volume'], amount=data['amount'],
+                change=data['change'], change_pct=data['change_pct'], source=self.name
             )
-            
         except Exception as e:
             self._record_error(str(e))
             return None
-    
+
     def get_history_instrument(self, inst: dict, days: int, interval: str = "1d") -> pd.DataFrame:
-        """Instrument-aware history for CN equities with interval support."""
         if not self._ak or not self.is_available():
             return pd.DataFrame()
-
         if inst.get("market") != "CN" or inst.get("asset") != "EQUITY":
             return pd.DataFrame()
 
@@ -380,61 +420,55 @@ class AkShareSource(DataSource):
         try:
             import socket
             old_timeout = socket.getdefaulttimeout()
-            socket.setdefaulttimeout(60)
-
+            socket.setdefaulttimeout(15)
             try:
                 min_map = {"1m": "1", "5m": "5", "15m": "15", "30m": "30", "60m": "60"}
                 if interval in min_map:
+                    time.sleep(0.5)
                     df = self._ak.stock_zh_a_hist_min_em(
                         symbol=str(inst["symbol"]).zfill(6),
-                        period=min_map[interval],
-                        adjust="qfq",
+                        period=min_map[interval], adjust="qfq",
                     )
-
                     if df is None or df.empty:
                         return pd.DataFrame()
 
                     col_map_candidates = [
-                        {"时间": "date", "开盘": "open", "收盘": "close", "最高": "high", "最低": "low", "成交量": "volume", "成交额": "amount"},
-                        {"日期": "date", "开盘": "open", "收盘": "close", "最高": "high", "最低": "low", "成交量": "volume", "成交额": "amount"},
+                        {"时间": "date", "开盘": "open", "收盘": "close", "最高": "high",
+                         "最低": "low", "成交量": "volume", "成交额": "amount"},
+                        {"日期": "date", "开盘": "open", "收盘": "close", "最高": "high",
+                         "最低": "low", "成交量": "volume", "成交额": "amount"},
                     ]
                     for cmap in col_map_candidates:
                         if set(cmap.keys()).issubset(set(df.columns)):
                             df = df.rename(columns=cmap)
                             break
-
                     if "date" not in df.columns:
                         df = df.rename(columns={df.columns[0]: "date"})
 
                     df["date"] = pd.to_datetime(df["date"], errors="coerce")
                     df = df.dropna(subset=["date"]).set_index("date").sort_index()
-
                     for c in ["open", "high", "low", "close", "volume", "amount"]:
                         if c in df.columns:
                             df[c] = pd.to_numeric(df[c], errors="coerce")
-
                     df = df.dropna(subset=["close"])
                     if "volume" in df.columns:
                         df = df[df["volume"].fillna(0) >= 0]
 
                     latency = (time.time() - start) * 1000
                     self._record_success(latency)
-                    return df.tail(max(50, int(days)))
+                    return df
 
                 period_map = {"1d": "daily", "1wk": "weekly", "1mo": "monthly"}
                 period = period_map.get(interval, "daily")
-
                 end_date = datetime.now().strftime("%Y%m%d")
-                start_date = (datetime.now() - timedelta(days=int(days * 2.2))).strftime("%Y%m%d")
+                max_cal_days = INTERVAL_MAX_DAYS.get(interval, 10000)
+                cal_days = min(int(days * 2.2), max_cal_days)
+                start_date = (datetime.now() - timedelta(days=cal_days)).strftime("%Y%m%d")
 
                 df = self._ak.stock_zh_a_hist(
-                    symbol=inst["symbol"],
-                    period=period,
-                    start_date=start_date,
-                    end_date=end_date,
-                    adjust="qfq"
+                    symbol=inst["symbol"], period=period,
+                    start_date=start_date, end_date=end_date, adjust="qfq"
                 )
-
             finally:
                 socket.setdefaulttimeout(old_timeout)
 
@@ -449,11 +483,9 @@ class AkShareSource(DataSource):
             df = df.rename(columns=column_map)
             df["date"] = pd.to_datetime(df["date"])
             df = df.set_index("date").sort_index()
-
             for col in ["open", "high", "low", "close", "volume", "amount"]:
                 if col in df.columns:
                     df[col] = pd.to_numeric(df[col], errors="coerce")
-
             df = df.dropna(subset=["close", "volume"])
             df = df[df["volume"] > 0]
             df = df[df["high"] >= df["low"]]
@@ -467,23 +499,25 @@ class AkShareSource(DataSource):
             return pd.DataFrame()
 
     def get_all_stocks(self) -> pd.DataFrame:
-        if not self._ak:
+        if not self._ak or not self.is_available():
             return pd.DataFrame()
-        
         try:
-            df = self._ak.stock_zh_a_spot_em()
-            return df
+            return self._ak.stock_zh_a_spot_em()
         except Exception:
             return pd.DataFrame()
 
 
+# data/fetcher.py
+# Replace the YahooSource.get_history_instrument method
+
 class YahooSource(DataSource):
-    """Yahoo Finance - Fallback source"""
+    """Yahoo Finance - Works ONLY through VPN (foreign IP)"""
     name = "yahoo"
-    priority = 2
-    
+    priority = 1
+    needs_vpn = True
+
     SUFFIX_MAP = {'6': '.SS', '0': '.SZ', '3': '.SZ'}
-    
+
     def __init__(self):
         super().__init__()
         self._yf = None
@@ -494,108 +528,128 @@ class YahooSource(DataSource):
         except ImportError:
             self.status.available = False
             log.warning("yfinance not available")
-    
+
+    def is_available(self) -> bool:
+        if not self._yf:
+            return False
+        if not self.is_suitable_for_network():
+            return False
+        return super().is_available()
+
     def _to_yahoo_symbol(self, code: str) -> str:
+        code = str(code).zfill(6)
         suffix = self.SUFFIX_MAP.get(code[0], '.SS')
         return f"{code}{suffix}"
-    
+
     def get_history(self, code: str, days: int) -> pd.DataFrame:
         if not self._yf or not self.is_available():
             raise DataSourceUnavailableError("Yahoo Finance not available")
-        
+
         start_time = time.time()
-        
         try:
             symbol = self._to_yahoo_symbol(code)
             ticker = self._yf.Ticker(symbol)
-            
             end = datetime.now()
             start_date = end - timedelta(days=int(days * 1.5))
-            
             df = ticker.history(start=start_date, end=end)
-            
+
             if df.empty:
                 raise DataFetchError(f"No data from Yahoo for {code}")
-            
+
             df = df.rename(columns={
                 'Open': 'open', 'High': 'high', 'Low': 'low',
                 'Close': 'close', 'Volume': 'volume'
             })
-            
             df.index.name = 'date'
             df = df[['open', 'high', 'low', 'close', 'volume']].copy()
             df['amount'] = df['close'] * df['volume']
-            
             df = df.dropna()
             df = df[df['volume'] > 0]
-            
+
             latency = (time.time() - start_time) * 1000
             self._record_success(latency)
-            
             return df.tail(days)
-            
         except Exception as e:
             self._record_error(str(e))
             raise
-    
-    def get_history_instrument(self, inst: dict, days: int, interval: str = "1d") -> pd.DataFrame:
-        """Instrument-aware yfinance history with interval support."""
+
+    def get_history_instrument(self, inst: dict, days: int,
+                               interval: str = "1d") -> pd.DataFrame:
         if not self._yf or not self.is_available():
             return pd.DataFrame()
 
-        start_time = time.time()
+        start_time_t = time.time()
         try:
-            yahoo_symbol = inst.get("yahoo") or inst.get("symbol")
+            if inst.get("market") == "CN" and inst.get("asset") == "EQUITY":
+                code6 = str(inst.get("symbol", "")).zfill(6)
+                yahoo_symbol = self._to_yahoo_symbol(code6)
+            else:
+                yahoo_symbol = inst.get("yahoo") or inst.get("symbol")
+
             if not yahoo_symbol:
                 return pd.DataFrame()
 
             ticker = self._yf.Ticker(yahoo_symbol)
+            max_days = INTERVAL_MAX_DAYS.get(interval, 10000)
+            capped_days = min(int(days), max_days)
 
-            end = datetime.now()
-            start_date = end - timedelta(days=int(days * 2.2))
+            # Yahoo uses different period strings for intraday
+            # For intraday, Yahoo needs period like "7d", "60d" etc.
+            # NOT start/end dates (which sometimes fail for intraday)
+            yahoo_interval = interval
+            if interval == "60m":
+                yahoo_interval = "1h"
 
-            df = ticker.history(start=start_date, end=end, interval=interval)
+            if interval in ("1m", "2m", "5m", "15m", "30m", "60m", "1h"):
+                # Use period-based fetch for intraday (more reliable)
+                period_str = f"{capped_days}d"
+                log.debug(f"Yahoo intraday fetch: {yahoo_symbol} "
+                         f"interval={yahoo_interval} period={period_str}")
+                df = ticker.history(period=period_str, interval=yahoo_interval)
+            else:
+                end = datetime.now()
+                start_date = end - timedelta(days=capped_days)
+                df = ticker.history(start=start_date, end=end,
+                                   interval=yahoo_interval)
 
             if df is None or df.empty:
+                log.debug(f"Yahoo returned empty for {yahoo_symbol} ({interval})")
                 return pd.DataFrame()
 
             df = df.rename(columns={
                 'Open': 'open', 'High': 'high', 'Low': 'low',
                 'Close': 'close', 'Volume': 'volume'
             })
-
             df.index.name = 'date'
-            keep = [c for c in ['open', 'high', 'low', 'close', 'volume'] if c in df.columns]
+            keep = [c for c in ['open', 'high', 'low', 'close', 'volume']
+                    if c in df.columns]
             df = df[keep].copy()
             if 'close' in df.columns and 'volume' in df.columns:
                 df['amount'] = df['close'] * df['volume']
-
             df = df.dropna()
-            df = df[df['volume'] > 0]
+            if 'volume' in df.columns:
+                df = df[df['volume'] > 0]
 
-            latency = (time.time() - start_time) * 1000
+            latency = (time.time() - start_time_t) * 1000
             self._record_success(latency)
+            log.debug(f"Yahoo OK: {yahoo_symbol} ({interval}): {len(df)} bars")
             return df.tail(days)
-
         except Exception as e:
             self._record_error(str(e))
+            log.debug(f"Yahoo failed for {inst.get('symbol')} ({interval}): {e}")
             return pd.DataFrame()
 
     def get_realtime(self, code: str) -> Optional[Quote]:
         if not self._yf or not self.is_available():
             return None
-        
         try:
             symbol = self._to_yahoo_symbol(code)
             ticker = self._yf.Ticker(symbol)
             info = ticker.info
-            
             if not info or 'regularMarketPrice' not in info:
                 return None
-            
             return Quote(
-                code=code,
-                name=info.get('shortName', ''),
+                code=code, name=info.get('shortName', ''),
                 price=float(info.get('regularMarketPrice', 0)),
                 open=float(info.get('regularMarketOpen', 0)),
                 high=float(info.get('regularMarketDayHigh', 0)),
@@ -610,9 +664,11 @@ class YahooSource(DataSource):
 
 
 class TencentQuoteSource(DataSource):
-    """Free realtime quotes via Tencent batch endpoint."""
+    """Tencent quotes - Works from ANY IP (China or foreign)"""
     name = "tencent"
-    priority = 1
+    priority = 0  # Highest priority for realtime
+    needs_china_direct = False
+    needs_vpn = False
 
     def get_realtime_batch(self, codes: List[str]) -> Dict[str, Quote]:
         if not self.is_available():
@@ -622,7 +678,6 @@ class TencentQuoteSource(DataSource):
 
         vendor_symbols = []
         vendor_to_code = {}
-
         for c in codes:
             code6 = str(c).zfill(6)
             ex = get_exchange(code6)
@@ -648,7 +703,6 @@ class TencentQuoteSource(DataSource):
             for i in range(0, len(vendor_symbols), CHUNK):
                 chunk = vendor_symbols[i:i + CHUNK]
                 url = "https://qt.gtimg.cn/q=" + ",".join(chunk)
-
                 resp = self._session.get(url, timeout=5)
                 text = resp.text
 
@@ -662,38 +716,24 @@ class TencentQuoteSource(DataSource):
                         parts = payload.split("~")
                         if len(parts) < 10:
                             continue
-
                         code6 = vendor_to_code.get(vendor_sym)
                         if not code6:
                             continue
-
                         name = parts[1]
                         price = float(parts[3] or 0)
                         prev_close = float(parts[4] or 0)
                         open_px = float(parts[5] or 0)
                         volume = int(float(parts[6] or 0))
-
                         if price <= 0:
                             continue
-
                         chg = price - prev_close
                         chg_pct = (chg / prev_close * 100) if prev_close > 0 else 0.0
-
                         out[code6] = Quote(
-                            code=code6,
-                            name=name,
-                            price=price,
-                            open=open_px,
-                            high=price,
-                            low=price,
-                            close=prev_close,
-                            volume=volume,
-                            amount=0.0,
-                            change=chg,
-                            change_pct=chg_pct,
-                            source=self.name,
-                            is_delayed=False,
-                            latency_ms=0.0,
+                            code=code6, name=name, price=price,
+                            open=open_px, high=price, low=price,
+                            close=prev_close, volume=volume, amount=0.0,
+                            change=chg, change_pct=chg_pct,
+                            source=self.name, is_delayed=False, latency_ms=0.0,
                         )
                     except Exception:
                         continue
@@ -702,7 +742,6 @@ class TencentQuoteSource(DataSource):
             self._record_success(latency)
             for q in out.values():
                 q.latency_ms = float(latency)
-
             return out
 
         except Exception as e:
@@ -714,45 +753,48 @@ class TencentQuoteSource(DataSource):
         return res.get(str(code).zfill(6))
 
     def get_history(self, code: str, days: int) -> pd.DataFrame:
-        """TencentQuoteSource is realtime-only. Return empty DF for history."""
         return pd.DataFrame()
 
     def get_history_instrument(self, inst: dict, days: int, interval: str = "1d") -> pd.DataFrame:
-        """Realtime-only source: no history."""
         return pd.DataFrame()
 
 
 class DataFetcher:
-    """High-performance data fetcher with multi-source support"""
+    """
+    High-performance data fetcher with automatic network-aware source selection.
     
+    On each request, checks which sources are suitable for the current network
+    and only tries those. Re-checks network every 2 minutes.
+    """
+
     def __init__(self):
-        self._sources: List[DataSource] = []
+        self._all_sources: List[DataSource] = []
         self._cache = get_cache()
         self._db = get_database()
         self._rate_limiter = threading.Semaphore(CONFIG.data.parallel_downloads)
         self._request_times: Dict[str, float] = {}
         self._min_interval = 0.5
+        self._intraday_interval = 1.2
 
-        # last-good quote store (uptime)
         self._last_good_quotes: Dict[str, Quote] = {}
         self._last_good_lock = threading.RLock()
 
-        # micro-caches (latency)
         self._rt_batch_microcache = {"ts": 0.0, "key": None, "data": {}}
         self._rt_single_microcache: Dict[str, Dict[str, object]] = {}
 
         self._init_sources()
         self._rate_lock = threading.Lock()
-    
-    def _init_sources(self):
-        """Initialize data sources."""
-        self._sources = []
 
-        # Local DB source
+    def _init_sources(self):
+        self._all_sources = []
+
+        # Local DB source (always available, no network needed)
         try:
             class LocalDatabaseSource(DataSource):
                 name = "localdb"
                 priority = 0
+                needs_china_direct = False
+                needs_vpn = False
 
                 def __init__(self):
                     super().__init__()
@@ -773,30 +815,47 @@ class DataFetcher:
                     inst = {"market": "CN", "asset": "EQUITY", "symbol": str(code).zfill(6)}
                     return self.get_history_instrument(inst, days=days, interval="1d")
 
-            self._sources.append(LocalDatabaseSource())
+            self._all_sources.append(LocalDatabaseSource())
         except Exception:
             pass
 
-        for source in [AkShareSource(), TencentQuoteSource(), YahooSource()]:
-            if source.status.available:
-                self._sources.append(source)
-                log.info(f"Data source {source.name} available")
+        # Network sources
+        for source_cls in [AkShareSource, TencentQuoteSource, YahooSource]:
+            try:
+                source = source_cls()
+                if source.status.available:
+                    self._all_sources.append(source)
+                    log.info(f"Data source {source.name} initialized "
+                            f"(china_direct={source.needs_china_direct}, "
+                            f"vpn={source.needs_vpn})")
+            except Exception as e:
+                log.warning(f"Failed to init {source_cls.name}: {e}")
 
-        self._sources.sort(key=lambda x: x.priority)
-        if not self._sources:
+        if not self._all_sources:
             log.error("No data sources available!")
-    
-    def _rate_limit(self, source: str):
+
+    def _get_active_sources(self) -> List[DataSource]:
+        """Get sources suitable for current network environment."""
+        active = []
+        for s in self._all_sources:
+            if s.is_available() and s.is_suitable_for_network():
+                active.append(s)
+        return sorted(active, key=lambda x: x.priority)
+
+    def _rate_limit(self, source: str, interval: str = "1d"):
         with self._rate_lock:
             now = time.time()
             last = self._request_times.get(source, 0)
-            wait = self._min_interval - (now - last)
+            if interval in ("1m", "2m", "5m", "15m", "30m"):
+                min_wait = self._intraday_interval
+            else:
+                min_wait = self._min_interval
+            wait = min_wait - (now - last)
             if wait > 0:
                 time.sleep(wait)
             self._request_times[source] = time.time()
 
     def get_realtime_batch(self, codes: List[str]) -> Dict[str, Quote]:
-        """Fast CN realtime quotes for many symbols with uptime fallback."""
         cleaned = [self.clean_code(c) for c in codes]
         cleaned = [c for c in cleaned if c]
         if not cleaned:
@@ -809,7 +868,6 @@ class DataFetcher:
         now = time.time()
         key = ",".join(cleaned)
 
-        # micro-cache 250ms
         try:
             mc = self._rt_batch_microcache
             if mc["key"] == key and (now - float(mc["ts"])) < 0.25:
@@ -821,10 +879,8 @@ class DataFetcher:
 
         result: Dict[str, Quote] = {}
 
-        # 1) batch sources (Tencent)
-        for source in self._sources:
-            if not source.is_available():
-                continue
+        # Tencent works from any IP — always try it first
+        for source in self._get_active_sources():
             fn = getattr(source, "get_realtime_batch", None)
             if callable(fn):
                 try:
@@ -835,7 +891,7 @@ class DataFetcher:
                 except Exception:
                     continue
 
-        # 2) fill missing from SpotCache
+        # Fallback: spot cache (only works on China direct)
         missing = [c for c in cleaned if c not in result]
         if missing:
             try:
@@ -846,8 +902,7 @@ class DataFetcher:
                         q = cache.get_quote(c)
                         if q and q.get("price", 0) > 0:
                             result[c] = Quote(
-                                code=c,
-                                name=q.get("name", ""),
+                                code=c, name=q.get("name", ""),
                                 price=float(q["price"]),
                                 open=float(q.get("open", 0) or 0),
                                 high=float(q.get("high", 0) or 0),
@@ -857,34 +912,27 @@ class DataFetcher:
                                 amount=float(q.get("amount", 0) or 0),
                                 change=float(q.get("change", 0) or 0),
                                 change_pct=float(q.get("change_pct", 0) or 0),
-                                source="spot_cache",
-                                is_delayed=False,
-                                latency_ms=0.0,
+                                source="spot_cache", is_delayed=False, latency_ms=0.0,
                             )
             except Exception:
                 pass
 
-        # 3) last-good fallback if everything failed (uptime)
+        # Stale fallback
         if not result:
             with self._last_good_lock:
-                fb: Dict[str, Quote] = {}
                 for c in cleaned:
                     q = self._last_good_quotes.get(c)
                     if q and q.price > 0:
                         age = (datetime.now() - (q.timestamp or datetime.now())).total_seconds()
                         if age <= 3.0:
-                            fb[c] = q
-                if fb:
-                    return fb
+                            result[c] = q
 
-        # update last-good
         if result:
             with self._last_good_lock:
                 for c, q in result.items():
                     if q and q.price > 0:
                         self._last_good_quotes[c] = q
 
-        # update micro-cache
         try:
             self._rt_batch_microcache["ts"] = now
             self._rt_batch_microcache["key"] = key
@@ -894,77 +942,117 @@ class DataFetcher:
 
         return result
 
-    def _fetch_from_sources_instrument(self, inst: dict, days: int, interval: str = "1d") -> pd.DataFrame:
-        """Fetch using any source that supports get_history_instrument."""
+    # data/fetcher.py
+    # Replace _fetch_from_sources_instrument method
+
+    def _fetch_from_sources_instrument(self, inst: dict, days: int,
+                                        interval: str = "1d") -> pd.DataFrame:
+        """Fetch using network-appropriate sources with detailed logging."""
+        sources = self._get_active_sources()
+
+        if not sources:
+            log.warning(f"No active sources available for {inst.get('symbol')} "
+                    f"({interval})")
+            return pd.DataFrame()
+
+        # Log available sources
+        source_names = [s.name for s in sources]
+        log.debug(f"Active sources for {inst.get('symbol')} ({interval}): "
+                f"{source_names}")
+
+        # For CN equities, prioritize by network
+        if inst.get("market") == "CN" and inst.get("asset") == "EQUITY":
+            from core.network import get_network_env
+            env = get_network_env()
+
+            if env.is_china_direct:
+                sources.sort(key=lambda s: (
+                    0 if s.name == "akshare" else
+                    1 if s.name == "localdb" else 2,
+                    s.priority
+                ))
+            else:
+                sources.sort(key=lambda s: (
+                    0 if s.name == "yahoo" else
+                    1 if s.name == "localdb" else 2,
+                    s.priority
+                ))
+
         with self._rate_limiter:
-            for source in self._sources:
+            for source in sources:
                 if not source.is_available():
+                    log.debug(f"Source {source.name} not available")
+                    continue
+                if not source.is_suitable_for_network():
+                    log.debug(f"Source {source.name} not suitable for "
+                            f"current network")
                     continue
                 try:
-                    self._rate_limit(source.name)
-
+                    self._rate_limit(source.name, interval)
                     fn = getattr(source, "get_history_instrument", None)
                     if callable(fn):
                         df = fn(inst, days=days, interval=interval)
                     else:
-                        if inst["market"] == "CN" and inst["asset"] == "EQUITY":
+                        if (inst.get("market") == "CN" and
+                                inst.get("asset") == "EQUITY"):
                             df = source.get_history(inst["symbol"], days)
                         else:
                             continue
 
-                    if df is not None and not df.empty and len(df) >= min(days // 2, 50):
-                        return df
-
+                    if df is not None and not df.empty:
+                        min_required = min(days // 4, 30)
+                        if len(df) >= min_required:
+                            log.debug(f"Got {len(df)} bars from {source.name} "
+                                    f"for {inst.get('symbol')} ({interval})")
+                            return df
+                        else:
+                            log.debug(f"{source.name} returned {len(df)} bars "
+                                    f"for {inst.get('symbol')} ({interval}), "
+                                    f"need >= {min_required}")
+                    else:
+                        log.debug(f"{source.name} returned empty for "
+                                f"{inst.get('symbol')} ({interval})")
                 except Exception as e:
-                    log.warning(f"{source.name} failed for {inst}: {e}")
+                    log.debug(f"{source.name} failed for "
+                            f"{inst.get('symbol')} ({interval}): {e}")
                     continue
 
+        log.warning(f"All sources failed for {inst.get('symbol')} ({interval})")
         return pd.DataFrame()
-    
+
     @staticmethod
     def clean_code(code: str) -> str:
-        """Robust normalization for CN A-share codes."""
         if code is None:
             return ""
-
         s = str(code).strip()
         if not s:
             return ""
-
         s = s.replace(" ", "").replace("-", "").replace("_", "")
-
-        prefixes = ("sh.", "sz.", "bj.", "SH.", "SZ.", "BJ.", "sh", "sz", "bj", "SH", "SZ", "BJ")
+        prefixes = ("sh.", "sz.", "bj.", "SH.", "SZ.", "BJ.",
+                    "sh", "sz", "bj", "SH", "SZ", "BJ")
         for p in prefixes:
             if s.startswith(p):
                 s = s[len(p):]
                 break
-
         suffixes = (".SS", ".SZ", ".BJ", ".ss", ".sz", ".bj")
         for suf in suffixes:
             if s.endswith(suf):
                 s = s[:-len(suf)]
                 break
-
         digits = "".join(ch for ch in s if ch.isdigit())
         return digits.zfill(6) if digits else ""
-    
+
     def _clean_dataframe(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Clean and validate a dataframe."""
         if df is None or df.empty:
             return pd.DataFrame()
-        
         out = df.copy()
-        
         if not isinstance(out.index, pd.DatetimeIndex):
             out.index = pd.to_datetime(out.index, errors="coerce")
-        
         out = out[~out.index.isna()]
         out = out[~out.index.duplicated(keep="last")].sort_index()
-
         for c in ("open", "high", "low", "close", "volume", "amount"):
             if c in out.columns:
                 out[c] = pd.to_numeric(out[c], errors="coerce")
-
         if "close" in out.columns:
             out = out.dropna(subset=["close"])
             out = out[out["close"] > 0]
@@ -972,25 +1060,17 @@ class DataFetcher:
             out = out[out["volume"].fillna(0) >= 0]
         if "high" in out.columns and "low" in out.columns:
             out = out[out["high"].fillna(0) >= out["low"].fillna(0)]
-
         if "amount" not in out.columns and "close" in out.columns and "volume" in out.columns:
             out["amount"] = out["close"] * out["volume"]
-
         out = out.replace([np.inf, -np.inf], np.nan).ffill().fillna(0)
         return out
-    
+
     def get_history(
-        self,
-        code: str,
-        days: int = 500,
-        bars: int = None,
-        use_cache: bool = True,
-        update_db: bool = True,
-        instrument: dict = None,
-        interval: str = "1d",
+        self, code: str, days: int = 500, bars: int = None,
+        use_cache: bool = True, update_db: bool = True,
+        instrument: dict = None, interval: str = "1d",
         max_age_hours: float = None,
     ) -> pd.DataFrame:
-        """History fetch with DB-first + MERGE fallback."""
         from core.instruments import parse_instrument, instrument_key
 
         inst = instrument or parse_instrument(code)
@@ -999,18 +1079,22 @@ class DataFetcher:
 
         offline = str(os.environ.get("TRADING_OFFLINE", "0")).lower() in ("1", "true", "yes")
 
-        count = int(bars if bars is not None else days)
-        count = max(1, count)
+        if bars is not None:
+            count = max(1, int(bars))
+            fetch_days = bars_to_days(count, interval)
+        else:
+            count = max(1, int(days))
+            max_days = INTERVAL_MAX_DAYS.get(interval, 10000)
+            fetch_days = min(count, max_days)
 
-        # TTL
         if max_age_hours is not None:
             ttl = float(max_age_hours)
         else:
-            ttl = float(CONFIG.data.cache_ttl_hours) if interval == "1d" else min(float(CONFIG.data.cache_ttl_hours), 1.0 / 120.0)
+            ttl = float(CONFIG.data.cache_ttl_hours) if interval == "1d" \
+                else min(float(CONFIG.data.cache_ttl_hours), 1.0 / 120.0)
 
         cache_key = f"history:{key}:{interval}:{count}"
 
-        # Cache check
         if use_cache:
             cached_df = self._cache.get(cache_key, ttl)
             if isinstance(cached_df, pd.DataFrame) and not cached_df.empty:
@@ -1018,97 +1102,84 @@ class DataFetcher:
                 if len(cached_df) >= min(count, 100):
                     return cached_df.tail(count)
 
-        # Intraday CN: DB-first + merge
+        # Intraday CN
         if interval != "1d" and inst.get("market") == "CN" and inst.get("asset") == "EQUITY":
             db_df = pd.DataFrame()
             try:
                 code6 = str(inst["symbol"]).zfill(6)
-                db_df = self._clean_dataframe(self._db.get_intraday_bars(code6, interval=interval, limit=count))
+                db_df = self._clean_dataframe(
+                    self._db.get_intraday_bars(code6, interval=interval, limit=count))
             except Exception:
-                db_df = pd.DataFrame()
+                pass
 
             if not offline:
-                online_df = self._clean_dataframe(self._fetch_from_sources_instrument(inst, days=count, interval=interval))
-                merged = self._clean_dataframe(pd.concat([db_df, online_df], axis=0)) if (not db_df.empty or not online_df.empty) else pd.DataFrame()
+                online_df = self._clean_dataframe(
+                    self._fetch_from_sources_instrument(inst, days=fetch_days, interval=interval))
+                merged = self._clean_dataframe(pd.concat([db_df, online_df], axis=0)) \
+                    if (not db_df.empty or not online_df.empty) else pd.DataFrame()
             else:
                 merged = db_df
 
             if merged.empty:
                 return pd.DataFrame()
-
             out = merged.tail(count)
             self._cache.set(cache_key, out)
-
             try:
                 self._db.upsert_intraday_bars(str(inst["symbol"]).zfill(6), interval, out)
             except Exception:
                 pass
-
             return out
 
-        # Daily CN: DB-first + merge
+        # Daily CN
         if interval == "1d" and inst.get("market") == "CN" and inst.get("asset") == "EQUITY":
             db_df = self._clean_dataframe(self._db.get_bars(inst["symbol"], limit=count))
             if len(db_df) >= count:
                 out = db_df.tail(count)
                 self._cache.set(cache_key, out)
                 return out
-
             if offline:
                 return db_df.tail(count) if not db_df.empty else pd.DataFrame()
 
-            online_df = self._clean_dataframe(self._fetch_from_sources_instrument(inst, days=count, interval="1d"))
-            merged = self._clean_dataframe(pd.concat([db_df, online_df], axis=0)) if (not db_df.empty or not online_df.empty) else pd.DataFrame()
+            online_df = self._clean_dataframe(
+                self._fetch_from_sources_instrument(inst, days=fetch_days, interval="1d"))
+            merged = self._clean_dataframe(pd.concat([db_df, online_df], axis=0)) \
+                if (not db_df.empty or not online_df.empty) else pd.DataFrame()
             if merged.empty:
                 return pd.DataFrame()
-
             out = merged.tail(count)
             self._cache.set(cache_key, out)
-
             if update_db:
                 try:
                     self._db.upsert_bars(inst["symbol"], out)
                 except Exception:
                     pass
-
             return out
 
-        # Non-CN fallback
+        # Non-CN
         if offline:
             return pd.DataFrame()
-
-        df = self._clean_dataframe(self._fetch_from_sources_instrument(inst, days=count, interval=interval))
+        df = self._clean_dataframe(
+            self._fetch_from_sources_instrument(inst, days=fetch_days, interval=interval))
         if df.empty:
             return pd.DataFrame()
-
         out = df.tail(count)
         self._cache.set(cache_key, out)
         return out
-    
+
     def _fetch_from_sources(self, code: str, days: int) -> pd.DataFrame:
-        """Fetch from online sources with fallback"""
         with self._rate_limiter:
-            for source in self._sources:
-                if not source.is_available():
-                    continue
-                
+            for source in self._get_active_sources():
                 try:
                     self._rate_limit(source.name)
                     df = source.get_history(code, days)
-                    
                     if not df.empty and len(df) >= min(days // 2, 50):
-                        log.debug(f"Got {len(df)} bars from {source.name} for {code}")
                         return df
-                        
                 except Exception as e:
                     log.warning(f"{source.name} failed for {code}: {e}")
-                    continue
-        
         log.error(f"All sources failed for {code}")
         return pd.DataFrame()
-    
+
     def get_realtime(self, code: str, instrument: dict = None) -> Optional[Quote]:
-        """Lowest-latency single quote."""
         from core.instruments import parse_instrument
         inst = instrument or parse_instrument(code)
 
@@ -1116,20 +1187,16 @@ class DataFetcher:
         if offline:
             return None
 
-        # CN -> try batch route first (fastest)
         if inst.get("market") == "CN" and inst.get("asset") == "EQUITY":
             code6 = str(inst.get("symbol") or "").zfill(6)
             if code6:
                 now = time.time()
-
-                # microcache
                 try:
                     rec = self._rt_single_microcache.get(code6)
                     if rec and (now - float(rec["ts"])) < 0.25:
                         return rec["q"]
                 except Exception:
                     pass
-
                 try:
                     out = self.get_realtime_batch([code6])
                     q = out.get(code6)
@@ -1138,8 +1205,6 @@ class DataFetcher:
                         return q
                 except Exception:
                     pass
-
-                # last-good fallback
                 with self._last_good_lock:
                     q = self._last_good_quotes.get(code6)
                     if q and q.price > 0:
@@ -1147,12 +1212,9 @@ class DataFetcher:
                         if age <= 3.0:
                             return q
 
-        # fallback: try sources one-by-one
         candidates: List[Quote] = []
         with self._rate_limiter:
-            for source in self._sources:
-                if not source.is_available():
-                    continue
+            for source in self._get_active_sources():
                 try:
                     fn = getattr(source, "get_realtime_instrument", None)
                     if callable(fn):
@@ -1174,7 +1236,6 @@ class DataFetcher:
         pool.sort(key=lambda q: (q.is_delayed, q.latency_ms))
         best = pool[0]
 
-        # update last-good
         try:
             if inst.get("market") == "CN" and inst.get("asset") == "EQUITY":
                 code6 = str(inst.get("symbol") or "").zfill(6)
@@ -1186,35 +1247,34 @@ class DataFetcher:
         return best
 
     def get_multiple_parallel(
-        self,
-        codes: List[str],
-        days: int = 500,
+        self, codes: List[str], days: int = 500,
         callback: Callable[[str, int, int], None] = None,
-        max_workers: int = None
+        max_workers: int = None, interval: str = "1d",
     ) -> Dict[str, pd.DataFrame]:
-        """Fetch multiple stocks in parallel"""
         results = {}
         total = len(codes)
         completed = 0
         lock = threading.Lock()
-        
-        for source in self._sources:
+
+        for source in self._all_sources:
             source.status.consecutive_errors = 0
             source.status.disabled_until = None
-        
+
         def fetch_one(code: str) -> Tuple[str, pd.DataFrame]:
             try:
-                df = self.get_history(code, days)
+                df = self.get_history(code, days, interval=interval)
                 return code, df
             except Exception as e:
                 log.debug(f"Failed to fetch {code}: {e}")
                 return code, pd.DataFrame()
-        
-        workers = min(max_workers or 5, 5)
-        
+
+        if interval in ("1m", "5m", "15m", "30m"):
+            workers = min(max_workers or 2, 2)
+        else:
+            workers = min(max_workers or 5, 5)
+
         with ThreadPoolExecutor(max_workers=workers) as executor:
             futures = {executor.submit(fetch_one, c): c for c in codes}
-            
             for future in as_completed(futures):
                 code = futures[future]
                 try:
@@ -1223,48 +1283,45 @@ class DataFetcher:
                         results[code] = df
                 except Exception as e:
                     log.warning(f"Failed to fetch {code}: {e}")
-                
                 with lock:
                     completed += 1
                     if callback:
                         callback(code, completed, total)
-        
+
         log.info(f"Parallel fetch: {len(results)}/{total} successful")
         return results
-        
+
     def get_all_stocks(self) -> pd.DataFrame:
-        """Get list of all available stocks"""
-        for source in self._sources:
-            if source.name == "akshare" and source.is_available():
+        for source in self._get_active_sources():
+            if source.name == "akshare":
                 try:
                     df = source.get_all_stocks()
                     if not df.empty:
                         return df
                 except Exception as e:
                     log.warning(f"Failed to get stock list: {e}")
-            
         return pd.DataFrame()
-    
+
     def get_source_status(self) -> List[DataSourceStatus]:
-        """Get status of all data sources"""
-        return [s.status for s in self._sources]
-    
+        return [s.status for s in self._all_sources]
+
     def reset_sources(self):
-        """Reset all source error counts"""
-        for source in self._sources:
+        """Reset all sources and re-detect network."""
+        from core.network import invalidate_network_cache
+        invalidate_network_cache()
+
+        for source in self._all_sources:
             with source._lock:
                 source.status.consecutive_errors = 0
                 source.status.disabled_until = None
                 source.status.available = True
-        log.info("All data sources reset")
+        log.info("All data sources reset, network cache invalidated")
 
 
-# Global fetcher instance
 _fetcher = None
 
 
 def get_fetcher() -> DataFetcher:
-    """Get global fetcher instance"""
     global _fetcher
     if _fetcher is None:
         _fetcher = DataFetcher()

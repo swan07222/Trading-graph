@@ -144,7 +144,6 @@ class Trainer:
                 # Fetch data with proper interval
                 df = self.fetcher.get_history(
                     code, 
-                    days=bars,
                     bars=bars,
                     interval=interval,
                     use_cache=True,
@@ -356,7 +355,6 @@ class Trainer:
                     code, 
                     interval=interval, 
                     bars=lookback, 
-                    days=lookback, 
                     use_cache=True,
                     update_db=True
                 )

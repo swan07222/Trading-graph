@@ -630,31 +630,30 @@ class MainApp(QMainWindow):
         
         return panel
     
+    # ui/app.py — Replace _create_right_panel method
+
     def _create_right_panel(self) -> QWidget:
-        """Create right panel with portfolio and orders"""
+        """Create right panel with portfolio, news, and orders"""
         panel = QWidget()
         layout = QVBoxLayout(panel)
         layout.setSpacing(10)
-        
-        # Tabs
+
         tabs = QTabWidget()
-        
-        # Portfolio Tab
+
+        # Portfolio Tab (unchanged)
         portfolio_tab = QWidget()
         portfolio_layout = QVBoxLayout(portfolio_tab)
-        
-        # Account Summary
+
         account_frame = QFrame()
         account_frame.setStyleSheet("""
             QFrame {
                 background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
                     stop:0 #1a1a3e, stop:1 #2a2a5a);
-                border-radius: 10px;
-                padding: 15px;
+                border-radius: 10px; padding: 15px;
             }
         """)
         account_layout = QGridLayout(account_frame)
-        
+
         self.account_labels = {}
         labels = [
             ('equity', 'Total Equity', 0, 0),
@@ -662,26 +661,22 @@ class MainApp(QMainWindow):
             ('positions', 'Positions Value', 1, 0),
             ('pnl', 'Total P&L', 1, 1),
         ]
-        
+
         for key, text, row, col in labels:
             container = QWidget()
             cont_layout = QVBoxLayout(container)
             cont_layout.setContentsMargins(5, 5, 5, 5)
-            
             title = QLabel(text)
             title.setStyleSheet("color: #888; font-size: 11px;")
             value = QLabel("--")
             value.setStyleSheet("color: #00E5FF; font-size: 18px; font-weight: bold;")
-            
             cont_layout.addWidget(title)
             cont_layout.addWidget(value)
-            
             account_layout.addWidget(container, row, col)
             self.account_labels[key] = value
-        
+
         portfolio_layout.addWidget(account_frame)
-        
-        # Positions Table
+
         try:
             from .widgets import PositionTable
             self.positions_table = PositionTable()
@@ -689,46 +684,55 @@ class MainApp(QMainWindow):
             self.positions_table = QTableWidget()
             self.positions_table.setColumnCount(5)
             self.positions_table.setHorizontalHeaderLabels(
-                ["Code", "Qty", "Price", "Value", "P&L"]
-            )
+                ["Code", "Qty", "Price", "Value", "P&L"])
         portfolio_layout.addWidget(self.positions_table)
-        
+
         tabs.addTab(portfolio_tab, "💼 Portfolio")
-        
-        # Real-time Signals Tab
+
+        # ===== NEW: News Tab =====
+        news_tab = QWidget()
+        news_layout = QVBoxLayout(news_tab)
+        try:
+            NewsPanel = get_news_panel()
+            self.news_panel = NewsPanel()
+            news_layout.addWidget(self.news_panel)
+        except Exception as e:
+            log.warning(f"News panel not available: {e}")
+            self.news_panel = QLabel("News panel unavailable")
+            news_layout.addWidget(self.news_panel)
+        tabs.addTab(news_tab, "📰 News & Policy")
+
+        # Live Signals Tab (unchanged)
         signals_tab = QWidget()
         signals_layout = QVBoxLayout(signals_tab)
-        
         self.signals_table = QTableWidget()
         self.signals_table.setColumnCount(6)
         self.signals_table.setHorizontalHeaderLabels([
             "Time", "Code", "Signal", "Confidence", "Price", "Action"
         ])
-        self.signals_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        self.signals_table.horizontalHeader().setSectionResizeMode(
+            QHeaderView.ResizeMode.Stretch)
         signals_layout.addWidget(self.signals_table)
-        
         tabs.addTab(signals_tab, "📡 Live Signals")
-        
-        # History Tab
+
+        # History Tab (unchanged)
         history_tab = QWidget()
         history_layout = QVBoxLayout(history_tab)
-        
         self.history_table = QTableWidget()
         self.history_table.setColumnCount(6)
         self.history_table.setHorizontalHeaderLabels([
             "Time", "Code", "Signal", "Prob UP", "Confidence", "Result"
         ])
-        self.history_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        self.history_table.horizontalHeader().setSectionResizeMode(
+            QHeaderView.ResizeMode.Stretch)
         history_layout.addWidget(self.history_table)
-        
         tabs.addTab(history_tab, "📜 History")
-        
+
         layout.addWidget(tabs)
-        
-        # Log
+
+        # Log (unchanged)
         log_group = QGroupBox("📋 System Log")
         log_layout = QVBoxLayout()
-        
         try:
             from .widgets import LogWidget
             self.log_widget = LogWidget()
@@ -737,60 +741,46 @@ class MainApp(QMainWindow):
             self.log_widget.setReadOnly(True)
             self.log_widget.setMaximumHeight(150)
         log_layout.addWidget(self.log_widget)
-        
         log_group.setLayout(log_layout)
         layout.addWidget(log_group)
-        
-        # Action Buttons
+
+        # Action Buttons (unchanged)
         action_frame = QFrame()
         action_frame.setStyleSheet("""
-            QFrame {
-                background: #1a1a3e;
-                border-radius: 8px;
-                padding: 10px;
-            }
+            QFrame { background: #1a1a3e; border-radius: 8px; padding: 10px; }
         """)
         action_layout = QHBoxLayout(action_frame)
-        
+
         self.buy_btn = QPushButton("📈 BUY")
         self.buy_btn.setStyleSheet("""
             QPushButton {
-                background: #4CAF50;
-                color: white;
-                border: none;
-                padding: 15px 40px;
-                border-radius: 6px;
-                font-weight: bold;
-                font-size: 16px;
+                background: #4CAF50; color: white; border: none;
+                padding: 15px 40px; border-radius: 6px;
+                font-weight: bold; font-size: 16px;
             }
             QPushButton:hover { background: #388E3C; }
             QPushButton:disabled { background: #333; color: #666; }
         """)
         self.buy_btn.clicked.connect(self._execute_buy)
         self.buy_btn.setEnabled(False)
-        
+
         self.sell_btn = QPushButton("📉 SELL")
         self.sell_btn.setStyleSheet("""
             QPushButton {
-                background: #F44336;
-                color: white;
-                border: none;
-                padding: 15px 40px;
-                border-radius: 6px;
-                font-weight: bold;
-                font-size: 16px;
+                background: #F44336; color: white; border: none;
+                padding: 15px 40px; border-radius: 6px;
+                font-weight: bold; font-size: 16px;
             }
             QPushButton:hover { background: #D32F2F; }
             QPushButton:disabled { background: #333; color: #666; }
         """)
         self.sell_btn.clicked.connect(self._execute_sell)
         self.sell_btn.setEnabled(False)
-        
+
         action_layout.addWidget(self.buy_btn)
         action_layout.addWidget(self.sell_btn)
-        
         layout.addWidget(action_frame)
-        
+
         return panel
     
     def _setup_statusbar(self):
@@ -1346,41 +1336,50 @@ class MainApp(QMainWindow):
         self.workers["analyze"] = worker
         worker.start()
     
+    # ui/app.py — Update _analyze_stock to also fetch news
+
     def _on_analysis_done(self, pred):
-        """Handle analysis completion"""
+        """Handle analysis completion — also triggers news fetch"""
         self.analyze_action.setEnabled(True)
         self.progress.hide()
         self.status_label.setText("Ready")
-        
+
         self.current_prediction = pred
-        
+
         # Update signal panel
         if hasattr(self.signal_panel, 'update_prediction'):
             self.signal_panel.update_prediction(pred)
-        
+
         # Update chart
         if hasattr(self.chart, 'update_data'):
             levels = self._get_levels_dict()
             price_history = getattr(pred, 'price_history', [])
             predicted_prices = getattr(pred, 'predicted_prices', [])
             self.chart.update_data(price_history, predicted_prices, levels)
-        
-        # Update details
+
+        # Update details (with news sentiment)
         self._update_details(pred)
-        
+
+        # Fetch news for this stock
+        if hasattr(self, 'news_panel') and hasattr(self.news_panel, 'set_stock'):
+            try:
+                self.news_panel.set_stock(pred.stock_code)
+            except Exception as e:
+                log.debug(f"News fetch for {pred.stock_code}: {e}")
+
         # Add to history
         self._add_to_history(pred)
-        
-        # Enable buttons based on signal
+
+        # Enable buttons
         Signal = get_signal_class()
         if hasattr(pred, 'signal'):
             self.buy_btn.setEnabled(pred.signal in [Signal.STRONG_BUY, Signal.BUY])
             self.sell_btn.setEnabled(pred.signal in [Signal.STRONG_SELL, Signal.SELL])
-        
+
         signal_text = pred.signal.value if hasattr(pred.signal, 'value') else str(pred.signal)
         conf = getattr(pred, 'confidence', 0)
-        self.log(f"Analysis complete: {pred.stock_code} - {signal_text} (confidence: {conf:.0%})", "success")
-        
+        self.log(f"Analysis complete: {pred.stock_code} - {signal_text} ({conf:.0%})", "success")
+
         if 'analyze' in self.workers:
             del self.workers['analyze']
     
@@ -1396,26 +1395,25 @@ class MainApp(QMainWindow):
         if 'analyze' in self.workers:
             del self.workers['analyze']
     
+    # ui/app.py — Update _update_details to include news sentiment
+
     def _update_details(self, pred):
-        """Update analysis details"""
+        """Update analysis details with news sentiment"""
         Signal = get_signal_class()
-        
+
         signal_colors = {
-            Signal.STRONG_BUY: "#2ea043",
-            Signal.BUY: "#3fb950",
-            Signal.HOLD: "#d29922",
-            Signal.SELL: "#f85149",
+            Signal.STRONG_BUY: "#2ea043", Signal.BUY: "#3fb950",
+            Signal.HOLD: "#d29922", Signal.SELL: "#f85149",
             Signal.STRONG_SELL: "#da3633",
         }
-        
+
         signal = getattr(pred, 'signal', Signal.HOLD)
         color = signal_colors.get(signal, "#c9d1d9")
         signal_text = signal.value if hasattr(signal, 'value') else str(signal)
-        
-        # Safe attribute access
+
         def safe_get(obj, attr, default=0):
             return getattr(obj, attr, default) if hasattr(obj, attr) else default
-        
+
         prob_up = safe_get(pred, 'prob_up', 0.33)
         prob_neutral = safe_get(pred, 'prob_neutral', 0.34)
         prob_down = safe_get(pred, 'prob_down', 0.33)
@@ -1423,12 +1421,64 @@ class MainApp(QMainWindow):
         rsi = safe_get(pred, 'rsi', 50)
         macd_signal = safe_get(pred, 'macd_signal', 'N/A')
         trend = safe_get(pred, 'trend', 'N/A')
-        
         levels = getattr(pred, 'levels', None)
         position = getattr(pred, 'position', None)
         reasons = getattr(pred, 'reasons', [])
         warnings = getattr(pred, 'warnings', [])
-        
+
+        # Get news sentiment
+        news_html = ""
+        try:
+            from data.news import get_news_aggregator
+            from core.network import get_network_env
+
+            env = get_network_env()
+            if env.is_china_direct or env.tencent_ok:
+                agg = get_news_aggregator()
+                sentiment = agg.get_sentiment_summary(pred.stock_code)
+
+                if sentiment and sentiment.get('total', 0) > 0:
+                    sent_score = sentiment['overall_sentiment']
+                    sent_label = sentiment['label']
+
+                    if sent_label == "positive":
+                        sent_color = "#3fb950"
+                        sent_emoji = "📈"
+                    elif sent_label == "negative":
+                        sent_color = "#f85149"
+                        sent_emoji = "📉"
+                    else:
+                        sent_color = "#d29922"
+                        sent_emoji = "➡️"
+
+                    news_html = f"""
+                    <div class="section">
+                        <span class="label">News Sentiment: </span>
+                        <span style="color: {sent_color}; font-weight: bold;">
+                            {sent_emoji} {sent_score:+.2f} ({sent_label})
+                        </span>
+                        <span class="label"> | 
+                            {sentiment['positive_count']} positive, 
+                            {sentiment['negative_count']} negative, 
+                            {sentiment['total']} total
+                        </span>
+                    </div>
+                    """
+
+                    # Show top headlines
+                    top_pos = sentiment.get('top_positive', [])
+                    top_neg = sentiment.get('top_negative', [])
+
+                    if top_pos or top_neg:
+                        news_html += '<div class="section"><span class="label">Key Headlines:</span><br/>'
+                        for n in top_pos[:2]:
+                            news_html += f'<span class="positive">📈 {n["title"]}</span><br/>'
+                        for n in top_neg[:2]:
+                            news_html += f'<span class="negative">📉 {n["title"]}</span><br/>'
+                        news_html += '</div>'
+        except Exception as e:
+            log.debug(f"News sentiment fetch: {e}")
+
         html = f"""
         <style>
             body {{ color: #c9d1d9; font-family: Consolas; }}
@@ -1439,26 +1489,28 @@ class MainApp(QMainWindow):
             .negative {{ color: #f85149; }}
             .neutral {{ color: #d29922; }}
         </style>
-        
+
         <div class="section">
             <span class="label">Signal: </span>
             <span class="signal">{signal_text}</span>
             <span class="label"> | Strength: {signal_strength:.0%}</span>
         </div>
-        
+
         <div class="section">
             <span class="label">AI Prediction: </span>
             <span class="positive">UP {prob_up:.0%}</span> | 
             <span class="neutral">NEUTRAL {prob_neutral:.0%}</span> | 
             <span class="negative">DOWN {prob_down:.0%}</span>
         </div>
-        
+
+        {news_html}
+
         <div class="section">
             <span class="label">Technical: </span>
             RSI={rsi:.0f} | MACD={macd_signal} | Trend={trend}
         </div>
         """
-        
+
         if levels:
             entry = safe_get(levels, 'entry', 0)
             stop_loss = safe_get(levels, 'stop_loss', 0)
@@ -1467,7 +1519,7 @@ class MainApp(QMainWindow):
             target_1_pct = safe_get(levels, 'target_1_pct', 0)
             target_2 = safe_get(levels, 'target_2', 0)
             target_2_pct = safe_get(levels, 'target_2_pct', 0)
-            
+
             html += f"""
             <div class="section">
                 <span class="label">Trading Plan:</span><br/>
@@ -1477,32 +1529,30 @@ class MainApp(QMainWindow):
                 Target 2: ¥{target_2:.2f} ({target_2_pct:+.1f}%)
             </div>
             """
-        
+
         if position:
             shares = safe_get(position, 'shares', 0)
             value = safe_get(position, 'value', 0)
             risk_amount = safe_get(position, 'risk_amount', 0)
-            
             html += f"""
             <div class="section">
                 <span class="label">Position:</span>
-                {shares:,} shares | ¥{value:,.2f} | 
-                Risk: ¥{risk_amount:,.2f}
+                {shares:,} shares | ¥{value:,.2f} | Risk: ¥{risk_amount:,.2f}
             </div>
             """
-        
+
         if reasons:
             html += '<div class="section"><span class="label">Analysis:</span><br/>'
             for reason in reasons[:5]:
                 html += f"• {reason}<br/>"
             html += "</div>"
-        
+
         if warnings:
             html += '<div class="section"><span class="negative">⚠️ Warnings:</span><br/>'
             for warning in warnings:
                 html += f"• {warning}<br/>"
             html += "</div>"
-        
+
         self.details_text.setHtml(html)
     
     def _add_to_history(self, pred):
@@ -1919,6 +1969,11 @@ class MainApp(QMainWindow):
         # Also log to file
         log.info(message)
     
+    def get_news_panel():
+        """Lazy import NewsPanel"""
+        from ui.news_widget import NewsPanel
+        return NewsPanel
+
     def closeEvent(self, event):
         """Handle window close safely (stop threads, stop trading, persist state)."""
         # Stop monitoring
