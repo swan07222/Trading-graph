@@ -125,32 +125,41 @@ NEGATIVE_WORDS = {
 
 def analyze_sentiment(text: str) -> Tuple[float, str]:
     """
-    Analyze sentiment of Chinese financial text.
-    Returns (score, label) where score is -1.0 to +1.0.
+    Improved sentiment scoring:
+    - Uses weighted sum
+    - Normalizes by total absolute weight contribution
+    - Applies tanh to avoid easy saturation at ±1.0
     """
     if not text:
         return 0.0, "neutral"
 
-    score = 0.0
-    matches = 0
+    raw_score = 0.0
+    abs_contrib = 0.0
 
+    # cap each keyword count to avoid spam
     for word, weight in POSITIVE_WORDS.items():
-        count = text.count(word)
-        if count > 0:
-            score += weight * min(count, 3)
-            matches += count
+        c = text.count(word)
+        if c > 0:
+            c = min(c, 3)
+            raw_score += float(weight) * c
+            abs_contrib += abs(float(weight)) * c
 
     for word, weight in NEGATIVE_WORDS.items():
-        count = text.count(word)
-        if count > 0:
-            score += weight * min(count, 3)
-            matches += count
+        c = text.count(word)
+        if c > 0:
+            c = min(c, 3)
+            raw_score += float(weight) * c
+            abs_contrib += abs(float(weight)) * c
 
-    if matches == 0:
+    if abs_contrib <= 1e-9:
         return 0.0, "neutral"
 
-    # Normalize to [-1, 1]
-    normalized = max(-1.0, min(1.0, score / max(matches, 1)))
+    # normalized base in [-inf, inf]
+    base = raw_score / abs_contrib
+
+    # squash to [-1, 1] smoothly
+    import math
+    normalized = math.tanh(1.25 * base)
 
     if normalized >= 0.2:
         label = "positive"
@@ -159,7 +168,7 @@ def analyze_sentiment(text: str) -> Tuple[float, str]:
     else:
         label = "neutral"
 
-    return round(normalized, 3), label
+    return round(float(normalized), 3), label
 
 
 # =============================================================================
@@ -670,6 +679,18 @@ _aggregator: Optional[NewsAggregator] = None
 
 def get_news_aggregator() -> NewsAggregator:
     global _aggregator
+    try:
+        lock = globals().get("_aggregator_lock")
+    except Exception:
+        lock = None
+
+    if lock is None:
+        import threading
+        globals()["_aggregator_lock"] = threading.Lock()
+        lock = globals()["_aggregator_lock"]
+
     if _aggregator is None:
-        _aggregator = NewsAggregator()
+        with lock:
+            if _aggregator is None:
+                _aggregator = NewsAggregator()
     return _aggregator

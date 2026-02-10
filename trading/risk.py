@@ -100,9 +100,20 @@ class RiskManager:
     
     def _get_unified_account_view(self) -> Account:
         """
-        Unified account view that includes OMS reservations.
-        Goal: prevent Risk passing while OMS later rejects.
+        Prefer OMS as base account view if available (already includes reservations/T+1 state).
+        Fallback: use self._account and apply OMS active-order reservations conservatively.
         """
+        # 1) If OMS exists, it already maintains available cash and frozen shares correctly.
+        try:
+            from trading.oms import get_oms
+            oms = get_oms()
+            acc = oms.get_account()
+            if acc:
+                return acc
+        except Exception:
+            pass
+
+        # 2) Fallback to stored account
         if self._account is None:
             return Account()
 
@@ -129,6 +140,7 @@ class RiskManager:
             realized_pnl=self._account.realized_pnl,
         )
 
+        # 3) Apply OMS reservations only if OMS is present but we couldn't use OMS account directly
         try:
             from trading.oms import get_oms
             oms = get_oms()
@@ -147,14 +159,11 @@ class RiskManager:
                     continue
 
                 if order.side == OrderSide.BUY:
-                    # Prefer OMS reservation tags if present
                     reserved = 0.0
                     if order.tags:
                         reserved = float(order.tags.get("reserved_cash_remaining", 0.0))
 
                     if reserved <= 0.0:
-                        # Conservative fallback reservation similar to OMS:
-                        # reserve remaining notional with slippage + commission min
                         est_px = float(order.price) * (1.0 + slip)
                         notional = float(remaining_qty) * est_px
                         fee = max(comm_min, notional * comm_rate)
@@ -162,7 +171,7 @@ class RiskManager:
 
                     unified.available = max(0.0, unified.available - reserved)
 
-                else:  # SELL reservations reduce available shares
+                else:
                     pos = unified.positions.get(order.symbol)
                     if pos:
                         pos.available_qty = max(0, int(pos.available_qty) - remaining_qty)
@@ -485,62 +494,61 @@ class RiskManager:
     
 
 
-    def check_order(
-        self,
-        symbol: str,
-        side: OrderSide,
-        quantity: int,
-        price: float
-    ) -> Tuple[bool, str]:
-        """Comprehensive order validation"""
+    def check_order(self, symbol: str, side: OrderSide, quantity: int, price: float) -> Tuple[bool, str]:
+        """Comprehensive order validation (rate-limit recorded only if OK)."""
         with self._lock:
             if self._account is None:
-                return False, "Risk manager not initialized"
-            
+                # allow OMS-backed unified view even if _account not set yet
+                try:
+                    from trading.oms import get_oms
+                    if get_oms().get_account():
+                        pass
+                    else:
+                        return False, "Risk manager not initialized"
+                except Exception:
+                    return False, "Risk manager not initialized"
+
             if price <= 0:
                 return False, "Invalid price"
-            
             if quantity <= 0:
                 return False, "Invalid quantity"
 
-            # GET UNIFIED ACCOUNT VIEW
             account = self._get_unified_account_view()
-            
-            # Kill switch check
+
+            # Kill switch
             try:
                 from trading.kill_switch import get_kill_switch
-                kill_switch = get_kill_switch()
-                
-                if not kill_switch.can_trade:
+                if not get_kill_switch().can_trade:
                     return False, "Trading halted - kill switch or circuit breaker active"
-                    
-            except ImportError:
+            except Exception:
                 pass
-            
-            # Daily loss limit check
+
             metrics = self.get_metrics()
-            
             if not metrics.can_trade:
                 return False, f"Trading disabled - daily loss: {metrics.daily_pnl_pct:.1f}%"
-            
-            # Rate limit check
+
+            # Rate-limit check (NO mutation)
             if not self._check_rate_limit():
                 return False, "Order rate limit exceeded - please wait"
-            
-            # Error rate check
+
             if not self._check_error_rate():
                 return False, "High error rate detected - trading paused for safety"
-            
-            # Quote staleness check
+
             staleness_ok, staleness_msg = self._check_quote_staleness(symbol)
             if not staleness_ok:
                 return False, staleness_msg
-            
-            # Side-specific validation - FIXED: pass unified account to both
+
             if side == OrderSide.BUY:
-                return self._validate_buy_order(symbol, quantity, price, metrics, account)
+                ok, msg = self._validate_buy_order(symbol, quantity, price, metrics, account)
             else:
-                return self._validate_sell_order(symbol, quantity, account)  # FIXED: pass account
+                ok, msg = self._validate_sell_order(symbol, quantity, account)
+
+            if not ok:
+                return False, msg
+
+            # NOW mutate counters (successful validation)
+            self._record_order_attempt()
+            return True, "OK"
     
     def _check_quote_staleness(self, symbol: str) -> Tuple[bool, str]:
         last_quote_time = self._quote_timestamps.get(symbol)
@@ -715,59 +723,51 @@ class RiskManager:
         return True, "OK"
     
     def _record_daily_return(self, equity: float):
-        """Record daily return for VaR calculation - called once per day"""
+        """Record daily return using last available recorded day (handles weekends/holidays)."""
         today = date.today()
-        
-        # Skip if already recorded today
         if self._last_var_day == today:
             return
-        
-        # Get yesterday's equity
-        yesterday = today - timedelta(days=1)
-        prev_equity = self._equity_by_day.get(yesterday)
-        
+
+        prev_equity = None
+        prev_day = None
+        for i in range(1, 10):  # look back up to 9 days
+            d = today - timedelta(days=i)
+            if d in self._equity_by_day:
+                prev_equity = self._equity_by_day.get(d)
+                prev_day = d
+                break
+
         if prev_equity and prev_equity > 0:
             daily_return = (equity - prev_equity) / prev_equity
-            self._returns_history.append(daily_return)
-            
-            # Keep rolling window
+            self._returns_history.append(float(daily_return))
             if len(self._returns_history) > self._max_history:
                 self._returns_history.pop(0)
-            
-            log.debug(f"VaR: recorded daily return {daily_return:.4f}")
-        
+            log.debug(f"VaR: recorded return {daily_return:.4f} vs {prev_day}")
+
         self._equity_by_day[today] = equity
         self._last_var_day = today
 
     def _check_rate_limit(self) -> bool:
-        """Check order rate limits"""
+        """Check order rate limits WITHOUT mutating counters."""
         now = datetime.now()
-        
-        # Clean old entries (older than 1 minute)
         cutoff = now - timedelta(minutes=1)
-        self._orders_this_minute = [
-            t for t in self._orders_this_minute if t > cutoff
-        ]
-        
-        # Check per-minute limit
-        if len(self._orders_this_minute) >= CONFIG.risk.max_orders_per_minute:
+
+        self._orders_this_minute = [t for t in self._orders_this_minute if t > cutoff]
+
+        if len(self._orders_this_minute) >= int(CONFIG.risk.max_orders_per_minute):
             log.warning(
                 f"Rate limit: {len(self._orders_this_minute)} orders/minute "
                 f"(max: {CONFIG.risk.max_orders_per_minute})"
             )
             return False
-        
-        # FIXED: Check per-day limit using order submissions, not fills
-        if self._orders_submitted_today >= CONFIG.risk.max_orders_per_day:
+
+        if int(self._orders_submitted_today) >= int(CONFIG.risk.max_orders_per_day):
             log.warning(
                 f"Daily limit: {self._orders_submitted_today} orders today "
                 f"(max: {CONFIG.risk.max_orders_per_day})"
             )
             return False
-        
-        # Record this order attempt
-        self._orders_this_minute.append(now)
-        self._orders_submitted_today += 1
+
         return True
     
     def _check_error_rate(self) -> bool:
@@ -783,6 +783,12 @@ class RiskManager:
         
         return True
     
+    def _record_order_attempt(self):
+        """Record an order attempt AFTER all validations pass."""
+        now = datetime.now()
+        self._orders_this_minute.append(now)
+        self._orders_submitted_today += 1
+
     def calculate_position_size(
         self, 
         symbol: str, 
@@ -897,6 +903,12 @@ class RiskManager:
         """Get current account snapshot"""
         return self._account
     
+    def _record_order_attempt(self):
+        """Record an order attempt AFTER all validations pass."""
+        now = datetime.now()
+        self._orders_this_minute.append(now)
+        self._orders_submitted_today += 1
+
     def get_daily_pnl(self) -> Tuple[float, float]:
         """Get daily P&L in absolute and percentage"""
         if self._account is None or self._daily_start_equity <= 0:
@@ -942,10 +954,21 @@ _risk_manager: Optional[RiskManager] = None
 
 
 def get_risk_manager() -> RiskManager:
-    """Get global risk manager instance"""
     global _risk_manager
+    try:
+        lock = globals().get("_risk_lock")
+    except Exception:
+        lock = None
+
+    if lock is None:
+        import threading
+        globals()["_risk_lock"] = threading.Lock()
+        lock = globals()["_risk_lock"]
+
     if _risk_manager is None:
-        _risk_manager = RiskManager()
+        with lock:
+            if _risk_manager is None:
+                _risk_manager = RiskManager()
     return _risk_manager
 
 

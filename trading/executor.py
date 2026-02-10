@@ -145,6 +145,50 @@ class ExecutionEngine:
             log.warning(f"Could not load processed fills: {e}")
             return set()
 
+    def _resolve_price(self, symbol: str, hinted_price: float = 0.0) -> float:
+        """
+        Resolve one authoritative price for this submission, fast + safe:
+        1) hinted_price (if >0)
+        2) FeedManager cached quote (DO NOT auto-init feeds here)
+        3) broker.get_quote()
+        4) fetcher.get_realtime()
+        """
+        try:
+            px = float(hinted_price or 0.0)
+            if px > 0:
+                return px
+        except Exception:
+            pass
+
+        # 2) Feed cache without blocking init
+        try:
+            from data.feeds import get_feed_manager
+            fm = get_feed_manager(auto_init=False)  # important: don't block execution path
+            q = fm.get_quote(symbol)
+            if q and getattr(q, "price", 0) and float(q.price) > 0:
+                return float(q.price)
+        except Exception:
+            pass
+
+        # 3) Broker quote
+        try:
+            px = self.broker.get_quote(symbol)
+            if px and float(px) > 0:
+                return float(px)
+        except Exception:
+            pass
+
+        # 4) Fetcher realtime
+        try:
+            from data.fetcher import get_fetcher
+            q = get_fetcher().get_realtime(symbol)
+            if q and getattr(q, "price", 0) and float(q.price) > 0:
+                return float(q.price)
+        except Exception:
+            pass
+
+        return 0.0
+
     def _rebuild_broker_mappings(self, oms):
         """Rebuild broker ID mappings from persisted orders after restart"""
         try:
@@ -191,7 +235,7 @@ class ExecutionEngine:
             log.warning("Execution engine not running")
             return False
 
-        # Market hours guard (important for CN)
+        # Market hours guard
         try:
             if not CONFIG.is_market_open():
                 self._reject_signal(signal, "Market closed")
@@ -214,33 +258,20 @@ class ExecutionEngine:
         except Exception:
             pass
 
-        # 1) Resolve a price fast: feed cache -> broker quote
-        price = float(signal.price or 0.0)
-        if price <= 0:
-            try:
-                from data.feeds import get_feed_manager
-                q = get_feed_manager().get_quote(signal.symbol)
-                if q and getattr(q, "price", 0) and q.price > 0:
-                    price = float(q.price)
-            except Exception:
-                pass
-
-        if price <= 0:
-            quote_price = self.broker.get_quote(signal.symbol)
-            price = float(quote_price) if quote_price else 0.0
-
+        # Resolve ONE price for whole pipeline
+        price = self._resolve_price(signal.symbol, hinted_price=float(getattr(signal, "price", 0.0) or 0.0))
         if price <= 0:
             self._reject_signal(signal, f"Cannot get price for {signal.symbol}")
             return False
 
-        # 1.5) CN limit up/down sanity (prevents doomed orders)
+        # CN limit up/down sanity (use one realtime quote fetch; do NOT re-resolve price multiple times)
         try:
             from core.constants import get_price_limit
             from data.fetcher import get_fetcher
             q = get_fetcher().get_realtime(signal.symbol)
             prev_close = float(getattr(q, "close", 0.0) or 0.0)
             if prev_close > 0:
-                lim = float(get_price_limit(signal.symbol))
+                lim = float(get_price_limit(signal.symbol, getattr(q, "name", None)))
                 up = prev_close * (1.0 + lim)
                 dn = prev_close * (1.0 - lim)
 
@@ -253,15 +284,15 @@ class ExecutionEngine:
         except Exception:
             pass
 
-        # 2) Risk check uses the single resolved price
-        passed, msg = self.risk_manager.check_order(signal.symbol, signal.side, signal.quantity, price)
+        # Risk check uses this SAME resolved price
+        passed, msg = self.risk_manager.check_order(signal.symbol, signal.side, signal.quantity, float(price))
         if not passed:
             log.warning(f"Risk check failed: {msg}")
             self._alert_manager.risk_alert("Order Rejected (Risk)", f"{signal.symbol}: {msg}")
             self._reject_signal(signal, msg)
             return False
 
-        # 3) Enqueue for execution
+        # Enqueue
         signal.price = float(price)
         self._queue.put(signal)
         log.info(f"Signal queued: {signal.side.value} {signal.quantity} {signal.symbol} @ {price:.2f}")
@@ -463,9 +494,11 @@ class ExecutionEngine:
                 log.error(f"Fill sync loop error: {e}")
 
     def _status_sync_loop(self):
-        """Poll broker for order status updates - STATUS ONLY, not filled_qty"""
+        """Poll broker for order status updates; if broker says FILLED, pull fills immediately."""
         from trading.oms import get_oms
         oms = get_oms()
+
+        broker_filled_first_seen: Dict[str, datetime] = {}
 
         while self._running:
             try:
@@ -474,22 +507,31 @@ class ExecutionEngine:
                     continue
 
                 active_orders = oms.get_active_orders()
+
                 for order in active_orders:
-                    # Get status from broker (don't use filled_qty from broker)
                     broker_status = self.broker.get_order_status(order.id)
-                    
                     if broker_status is None:
                         continue
-                    
-                    # Only update if status actually changed
+
                     if broker_status == OrderStatus.FILLED:
-                        oms.update_order_status(
-                            order.id,
-                            order.status,  # keep unchanged
-                            message="Status sync: broker reports FILLED; waiting fills"
-                        )
+                        # Canonical: process fills (never fabricate)
+                        self._process_pending_fills()
+
+                        refreshed = oms.get_order(order.id)
+                        if refreshed and refreshed.status != OrderStatus.FILLED:
+                            first = broker_filled_first_seen.get(order.id)
+                            if first is None:
+                                broker_filled_first_seen[order.id] = datetime.now()
+                            else:
+                                if (datetime.now() - first).total_seconds() > 30:
+                                    self._alert_manager.risk_alert(
+                                        "Missing Fills After Broker FILLED",
+                                        f"{order.symbol}: broker says FILLED but OMS still {refreshed.status.value}",
+                                        details={"order_id": order.id, "broker_id": order.broker_id}
+                                    )
                         continue
 
+                    # Normal status changes
                     if broker_status != order.status:
                         oms.update_order_status(
                             order.id,
@@ -558,10 +600,12 @@ class ExecutionEngine:
             self.on_reject(order, reason)
 
     def get_account(self) -> Account:
-        return self.broker.get_account()
+        from trading.oms import get_oms
+        return get_oms().get_account()
 
     def get_positions(self):
-        return self.broker.get_positions()
+        from trading.oms import get_oms
+        return get_oms().get_positions()
 
     def get_orders(self):
         return self.broker.get_orders()

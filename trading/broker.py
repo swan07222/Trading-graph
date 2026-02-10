@@ -271,14 +271,15 @@ class SimulatorBroker(BrokerInterface):
     
     def get_quote(self, symbol: str) -> Optional[float]:
         """
-        Get current price with lowest latency:
-        1) FeedManager last quote (in-memory)
+        Low-latency quote:
+        1) FeedManager cached quote (do NOT auto-init here)
         2) DataFetcher realtime
         """
         try:
             from data.feeds import get_feed_manager
-            q = get_feed_manager().get_quote(symbol)
-            if q and getattr(q, "price", 0) and q.price > 0:
+            fm = get_feed_manager(auto_init=False)
+            q = fm.get_quote(symbol)
+            if q and getattr(q, "price", 0) and float(q.price) > 0:
                 return float(q.price)
         except Exception:
             pass
@@ -1128,11 +1129,12 @@ class ZSZQBroker(BrokerInterface):
         log.info(f"Disconnected from {self.name}")
     
     def get_quote(self, symbol: str) -> Optional[float]:
-        """Low-latency quote: feed cache first, then fetcher."""
+        """Low-latency quote: feed cache first (no auto-init), then fetcher."""
         try:
             from data.feeds import get_feed_manager
-            q = get_feed_manager().get_quote(symbol)
-            if q and getattr(q, "price", 0) and q.price > 0:
+            fm = get_feed_manager(auto_init=False)
+            q = fm.get_quote(symbol)
+            if q and getattr(q, "price", 0) and float(q.price) > 0:
                 return float(q.price)
         except Exception:
             pass

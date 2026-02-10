@@ -227,7 +227,7 @@ class NewsPanel(QWidget):
         self._fetch_thread.start()
 
     def _on_news_received(self, news_items: list):
-        """Update table with received news"""
+        """Update table with received news + cleanup finished thread."""
         self.table.setRowCount(len(news_items))
 
         for row, item in enumerate(news_items):
@@ -238,7 +238,7 @@ class NewsPanel(QWidget):
             self.table.setItem(row, 0, time_item)
 
             # Sentiment
-            score = item.sentiment_score
+            score = float(getattr(item, "sentiment_score", 0.0) or 0.0)
             if score > 0.2:
                 sent_text = f"📈 +{score:.1f}"
                 sent_color = "#3fb950"
@@ -255,7 +255,8 @@ class NewsPanel(QWidget):
             self.table.setItem(row, 1, sent_item)
 
             # Title
-            title_item = QTableWidgetItem(item.title)
+            title = str(getattr(item, "title", "") or "")
+            title_item = QTableWidgetItem(title)
             if score > 0.3:
                 title_item.setForeground(QColor("#3fb950"))
             elif score < -0.3:
@@ -265,6 +266,14 @@ class NewsPanel(QWidget):
             self.table.setItem(row, 2, title_item)
 
             # Source
-            source_item = QTableWidgetItem(item.source)
+            source = str(getattr(item, "source", "") or "")
+            source_item = QTableWidgetItem(source)
             source_item.setForeground(QColor("#8b949e"))
             self.table.setItem(row, 3, source_item)
+
+        # Cleanup finished thread to avoid leaks
+        try:
+            if self._fetch_thread:
+                self._fetch_thread.deleteLater()
+        except Exception:
+            pass

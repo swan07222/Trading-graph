@@ -486,12 +486,11 @@ class Config:
     def data_dir(self) -> Path:
         return self.DATA_DIR
     
-     @property
+    @property
     def MODEL_DIR(self) -> Path:
         try:
-            # Invalidate cache if override changed
             override = self._model_dir_override
-            cached = getattr(self, '_model_dir_cached_override', None)
+            cached = getattr(self, "_model_dir_cached_override", None)
             if override == cached:
                 return self._model_dir_cached
         except AttributeError:
@@ -501,6 +500,7 @@ class Config:
             path = Path(self._model_dir_override)
         else:
             path = self._base_dir / "models_saved"
+
         path.mkdir(parents=True, exist_ok=True)
         self._model_dir_cached = path
         self._model_dir_cached_override = self._model_dir_override

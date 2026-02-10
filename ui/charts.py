@@ -125,34 +125,26 @@ class StockChart(QWidget):
             log.warning(f"Chart update failed: {e}")
     
     def _update_plot(self):
-        """Update the plot with current data"""
+        """Update the plot with current data (safe for empty arrays)."""
         if not self._actual_prices:
+            self.actual_line.clear()
+            self.predicted_line.clear()
+            self._update_level_lines()
             return
-        
-        # X axis for actual data
+
         x_actual = np.arange(len(self._actual_prices))
-        y_actual = np.array(self._actual_prices)
-        
-        # Update actual line
+        y_actual = np.array(self._actual_prices, dtype=float)
         self.actual_line.setData(x_actual, y_actual)
-        
-        # Update predicted line
-        if self._predicted_prices:
-            # Predicted starts from last actual point
+
+        if self._predicted_prices and len(self._actual_prices) >= 1:
             start_x = len(self._actual_prices) - 1
             x_pred = np.arange(start_x, start_x + len(self._predicted_prices) + 1)
-            
-            # Include last actual price as first point for continuity
-            y_pred = np.array([self._actual_prices[-1]] + self._predicted_prices)
-            
+            y_pred = np.array([self._actual_prices[-1]] + list(self._predicted_prices), dtype=float)
             self.predicted_line.setData(x_pred, y_pred)
         else:
             self.predicted_line.clear()
-        
-        # Update level lines
+
         self._update_level_lines()
-        
-        # Auto-range
         self.plot_widget.autoRange()
     
     def _update_level_lines(self):

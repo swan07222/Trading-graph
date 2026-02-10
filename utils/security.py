@@ -196,18 +196,23 @@ class AuditLog:
         self._session_id = secrets.token_hex(16)
     
     def _get_file(self):
-        """Get current log file"""
+        """Get current log file (avoid appending to same .gz across restarts)."""
         today = date.today()
-        
+
         if self._current_date != today:
             if self._current_file:
                 self._flush()
-                self._current_file.close()
-            
-            path = self._log_dir / f"audit_{today.isoformat()}.jsonl.gz"
-            self._current_file = gzip.open(path, 'at', encoding='utf-8')
+                try:
+                    self._current_file.close()
+                except Exception:
+                    pass
+
+            # Session-suffixed file prevents concatenated gzip streams
+            sid = (self._session_id or "nosession")[:8]
+            path = self._log_dir / f"audit_{today.isoformat()}_{sid}.jsonl.gz"
+            self._current_file = gzip.open(path, "at", encoding="utf-8")
             self._current_date = today
-        
+
         return self._current_file
     
     def _write(self, record: AuditRecord):
@@ -334,43 +339,39 @@ class AuditLog:
         event_type: str = None,
         limit: int = 1000
     ) -> List[Dict]:
-        """Query audit records"""
+        """Query audit records (reads audit_YYYY-MM-DD_*.jsonl.gz)."""
         results = []
-        
-        # Determine files to search
+
         start = start_date.date() if start_date else date.today() - timedelta(days=30)
         end = end_date.date() if end_date else date.today()
-        
+
         current = start
         while current <= end:
-            path = self._log_dir / f"audit_{current.isoformat()}.jsonl.gz"
-            
-            if path.exists():
+            # new pattern:
+            pattern = f"audit_{current.isoformat()}_*.jsonl.gz"
+            for path in sorted(self._log_dir.glob(pattern)):
                 try:
-                    with gzip.open(path, 'rt', encoding='utf-8') as f:
+                    with gzip.open(path, "rt", encoding="utf-8") as f:
                         for line in f:
                             record = json.loads(line)
-                            
-                            # Filter by event type
-                            if event_type and record.get('event_type') != event_type:
+
+                            if event_type and record.get("event_type") != event_type:
                                 continue
-                            
-                            # Filter by time range
-                            ts = datetime.fromisoformat(record['timestamp'])
+
+                            ts = datetime.fromisoformat(record["timestamp"])
                             if start_date and ts < start_date:
                                 continue
                             if end_date and ts > end_date:
                                 continue
-                            
+
                             results.append(record)
-                            
                             if len(results) >= limit:
                                 return results
                 except Exception:
-                    pass
-            
+                    continue
+
             current += timedelta(days=1)
-        
+
         return results
 
 
@@ -495,27 +496,71 @@ _access_control: Optional[AccessControl] = None
 
 def get_secure_storage() -> SecureStorage:
     global _secure_storage
+    try:
+        lock = globals().get("_sec_lock")
+    except Exception:
+        lock = None
+
+    if lock is None:
+        globals()["_sec_lock"] = threading.Lock()
+        lock = globals()["_sec_lock"]
+
     if _secure_storage is None:
-        _secure_storage = SecureStorage()
+        with lock:
+            if _secure_storage is None:
+                _secure_storage = SecureStorage()
     return _secure_storage
 
 
 def get_audit_log() -> AuditLog:
     global _audit_log
+    try:
+        lock = globals().get("_audit_lock")
+    except Exception:
+        lock = None
+
+    if lock is None:
+        globals()["_audit_lock"] = threading.Lock()
+        lock = globals()["_audit_lock"]
+
     if _audit_log is None:
-        _audit_log = AuditLog()
+        with lock:
+            if _audit_log is None:
+                _audit_log = AuditLog()
     return _audit_log
 
 
 def get_rate_limiter() -> RateLimiter:
     global _rate_limiter
+    try:
+        lock = globals().get("_rl_lock")
+    except Exception:
+        lock = None
+
+    if lock is None:
+        globals()["_rl_lock"] = threading.Lock()
+        lock = globals()["_rl_lock"]
+
     if _rate_limiter is None:
-        _rate_limiter = RateLimiter()
+        with lock:
+            if _rate_limiter is None:
+                _rate_limiter = RateLimiter()
     return _rate_limiter
 
 
 def get_access_control() -> AccessControl:
     global _access_control
+    try:
+        lock = globals().get("_ac_lock")
+    except Exception:
+        lock = None
+
+    if lock is None:
+        globals()["_ac_lock"] = threading.Lock()
+        lock = globals()["_ac_lock"]
+
     if _access_control is None:
-        _access_control = AccessControl()
+        with lock:
+            if _access_control is None:
+                _access_control = AccessControl()
     return _access_control

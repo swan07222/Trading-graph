@@ -724,6 +724,26 @@ class OrderManagementSystem:
             # Reload positions
             self._account.positions = self._db.load_positions()
     
+    def _enforce_position_invariants(self, pos: Position):
+        """Keep (available_qty, frozen_qty, quantity) consistent."""
+        pos.quantity = max(0, int(pos.quantity or 0))
+        pos.available_qty = max(0, int(pos.available_qty or 0))
+        pos.frozen_qty = max(0, int(pos.frozen_qty or 0))
+
+        # Total reserved shares can't exceed total shares
+        total = pos.available_qty + pos.frozen_qty
+        if total > pos.quantity:
+            # Prefer reducing frozen first (more conservative)
+            overflow = total - pos.quantity
+            reduce_frozen = min(overflow, pos.frozen_qty)
+            pos.frozen_qty -= reduce_frozen
+            overflow -= reduce_frozen
+            if overflow > 0:
+                pos.available_qty = max(0, pos.available_qty - overflow)
+
+        # Available cannot exceed quantity
+        pos.available_qty = min(pos.available_qty, pos.quantity)
+
     def _check_new_day(self):
         """Check and handle new trading day"""
         today = date.today()
@@ -753,11 +773,17 @@ class OrderManagementSystem:
         order.tags[key] = value
 
     def _enforce_invariants(self):
-        """Ensure account invariants are maintained"""
-        # Available should never exceed cash
-        self._account.available = max(0.0, min(self._account.available, self._account.cash))
-        # Cash should never be negative
-        self._account.cash = max(0.0, self._account.cash)
+        """Ensure account + positions invariants are maintained."""
+        self._account.cash = max(0.0, float(self._account.cash or 0.0))
+        self._account.available = max(0.0, float(self._account.available or 0.0))
+        self._account.available = min(self._account.available, self._account.cash)
+
+        # Enforce per-position invariants
+        for pos in list(self._account.positions.values()):
+            try:
+                self._enforce_position_invariants(pos)
+            except Exception:
+                pass
     
     def get_active_orders(self) -> List[Order]:
         """Get all active (non-terminal) orders"""
@@ -828,22 +854,17 @@ class OrderManagementSystem:
         """Validate buy order and reserve cash (available only)."""
         if order.price <= 0:
             raise OrderValidationError("BUY reservation requires price > 0")
-        
-        # Get trading config with safe defaults
-        trading_config = getattr(CONFIG, 'trading', None)
-        risk_config = getattr(CONFIG, 'risk', None)
-        
-        slip = float(getattr(trading_config, 'slippage', 0.002) if trading_config else 0.002)
-        comm_rate = float(getattr(trading_config, 'commission', 0.0003) if trading_config else 0.0003)
+
+        trading_config = getattr(CONFIG, "trading", None)
+        slip = float(getattr(trading_config, "slippage", 0.001) if trading_config else 0.001)
+        comm_rate = float(getattr(trading_config, "commission", 0.00025) if trading_config else 0.00025)
         comm_min = 5.0
-        
-        # Conservative reservation (covers slippage + min commission)
+
         est_price = float(order.price) * (1.0 + slip)
         est_value = float(order.quantity) * est_price
         est_commission = max(est_value * comm_rate, comm_min)
         reserved_total = est_value + est_commission
-        
-        # Store reservation details
+
         order.tags = order.tags or {}
         order.tags["reserved_price"] = float(order.price)
         order.tags["reserved_slip"] = slip
@@ -851,30 +872,30 @@ class OrderManagementSystem:
         order.tags["reserved_commission_min"] = comm_min
         order.tags["reserved_cash_total"] = float(reserved_total)
         order.tags["reserved_cash_remaining"] = float(reserved_total)
-        
-        if reserved_total > self._account.available:
+
+        if reserved_total > float(self._account.available):
             raise InsufficientFundsError(
-                f"Insufficient funds: need ¥{reserved_total:,.2f}, "
-                f"have ¥{self._account.available:,.2f}"
+                f"Insufficient funds: need ¥{reserved_total:,.2f}, have ¥{self._account.available:,.2f}"
             )
-        
-        # Position limit check
-        max_position_pct = float(getattr(risk_config, 'max_position_pct', 20.0) if risk_config else 20.0)
-        
+
+        # CONSISTENT position limit: always CONFIG.risk.max_position_pct
+        max_position_pct = float(getattr(CONFIG.risk, "max_position_pct", 15.0))
+
         existing_value = 0.0
         if order.symbol in self._account.positions:
-            existing_value = self._account.positions[order.symbol].market_value
-        
-        new_position_value = existing_value + (order.quantity * order.price)
-        if self._account.equity > 0:
-            position_pct = new_position_value / self._account.equity * 100
+            existing_value = float(self._account.positions[order.symbol].market_value)
+
+        new_position_value = existing_value + (float(order.quantity) * float(order.price))
+        equity = float(self._account.equity)
+
+        if equity > 0:
+            position_pct = new_position_value / equity * 100.0
             if position_pct > max_position_pct:
                 raise OrderValidationError(
                     f"Position too large: {position_pct:.1f}% (max {max_position_pct}%)"
                 )
-        
-        # Reserve available cash
-        self._account.available -= reserved_total
+
+        self._account.available -= float(reserved_total)
         self._enforce_invariants()
     
     def _validate_sell_order(self, order: Order):
@@ -999,35 +1020,31 @@ class OrderManagementSystem:
         """Release reserved funds/shares for cancelled/rejected/expired orders."""
         if order.side == OrderSide.BUY:
             tags = order.tags or {}
-            reserved_rem = float(tags.get("reserved_cash_remaining", 0.0))
-            
-            # Fallback for partial fills or older orders
-            if reserved_rem <= 0.0:
-                reserved_total = float(tags.get("reserved_cash_total", 0.0))
-                if reserved_total > 0:
-                    # Calculate what was actually used
-                    actual_used = (order.filled_qty * order.avg_price) + order.commission
-                    reserved_rem = max(0.0, reserved_total - actual_used)
-            
+
+            # Only fallback-recompute if key is missing (NOT if it's 0.0)
+            if "reserved_cash_remaining" in tags:
+                reserved_rem = float(tags.get("reserved_cash_remaining", 0.0) or 0.0)
+            else:
+                reserved_total = float(tags.get("reserved_cash_total", 0.0) or 0.0)
+                actual_used = (float(order.filled_qty) * float(order.avg_price)) + float(order.commission or 0.0)
+                reserved_rem = max(0.0, reserved_total - actual_used)
+
             if reserved_rem > 0:
                 self._account.available += reserved_rem
                 self._enforce_invariants()
-            
-            # Clear remaining reservation
+
             tags["reserved_cash_remaining"] = 0.0
             order.tags = tags
-        
-        else:  # SELL
-            position = self._account.positions.get(order.symbol)
-            if position:
-                # Release unfilled frozen shares
-                remaining_qty = max(0, order.quantity - order.filled_qty)
-                to_release = min(remaining_qty, position.frozen_qty)
-                position.frozen_qty = max(0, position.frozen_qty - to_release)
-                position.available_qty = min(
-                    position.available_qty + to_release,
-                    position.quantity
-                )
+            return
+
+        # SELL: release shares
+        position = self._account.positions.get(order.symbol)
+        if position:
+            remaining_qty = max(0, int(order.quantity) - int(order.filled_qty))
+            to_release = min(int(remaining_qty), int(position.frozen_qty))
+            position.frozen_qty = max(0, int(position.frozen_qty) - to_release)
+            position.available_qty = min(int(position.available_qty) + to_release, int(position.quantity))
+            self._enforce_invariants()
     
     def process_fill(self, order: Order, fill: Fill):
         """
@@ -1208,15 +1225,15 @@ class OrderManagementSystem:
         # Enforce invariants
         self._enforce_invariants()
     
-    def _apply_sell_fill(self, order: Order, fill: Fill, 
-                         conn: sqlite3.Connection):
-        """Apply a SELL fill to account + positions."""
+    def _apply_sell_fill(self, order: Order, fill: Fill, conn: sqlite3.Connection):
+        """Apply a SELL fill to account + positions with invariants."""
         qty = int(fill.quantity)
         px = float(fill.price)
         fees = float(fill.commission + fill.stamp_tax)
+
         trade_value = qty * px
         proceeds = trade_value - fees
-        
+
         pos = self._account.positions.get(order.symbol)
         if pos is None:
             log.warning(f"SELL fill for missing position: {order.symbol}")
@@ -1224,35 +1241,32 @@ class OrderManagementSystem:
             self._account.commission_paid += fees
             self._enforce_invariants()
             return
-        
-        # Cash increases on fill
+
         self._account.cash += proceeds
-        self._account.cash = max(0.0, self._account.cash)
         self._account.commission_paid += fees
-        
-        # Position qty decreases; frozen decreases
+
+        # Reduce frozen first (since OMS froze shares at submit)
         pos.frozen_qty = max(0, int(pos.frozen_qty) - qty)
         pos.quantity = max(0, int(pos.quantity) - qty)
         pos.current_price = px
         pos.commission_paid += fees
-        
-        # Realized PnL on sold shares
+
         gross = (px - float(pos.avg_cost)) * qty
         realized = gross - fees
         pos.realized_pnl += realized
         self._account.realized_pnl += realized
-        
+
         pos.last_updated = datetime.now()
-        
+
         if pos.quantity <= 0:
-            # Remove position entirely
             self._account.positions.pop(order.symbol, None)
             self._db.delete_position(order.symbol, conn)
             self._db.clear_t1_pending(order.symbol, conn=conn)
         else:
+            # If quantity reduced below available, clamp
+            self._enforce_position_invariants(pos)
             self._db.save_position(pos, conn)
-        
-        # Enforce invariants
+
         self._enforce_invariants()
     
     def cancel_order(self, order_id: str) -> bool:

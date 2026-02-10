@@ -494,6 +494,18 @@ _health_monitor: Optional[HealthMonitor] = None
 
 def get_health_monitor() -> HealthMonitor:
     global _health_monitor
+    try:
+        lock = globals().get("_health_lock")
+    except Exception:
+        lock = None
+
+    if lock is None:
+        import threading
+        globals()["_health_lock"] = threading.Lock()
+        lock = globals()["_health_lock"]
+
     if _health_monitor is None:
-        _health_monitor = HealthMonitor()
-    return _health_monitor# trading/health.py
+        with lock:
+            if _health_monitor is None:
+                _health_monitor = HealthMonitor()
+    return _health_monitor

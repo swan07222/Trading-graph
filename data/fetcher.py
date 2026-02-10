@@ -856,17 +856,23 @@ class DataFetcher:
         if offline:
             return {}
 
+        # ensure lock exists
+        if not hasattr(self, "_rt_cache_lock"):
+            self._rt_cache_lock = threading.RLock()
+
         now = time.time()
         key = ",".join(cleaned)
 
-        try:
-            mc = self._rt_batch_microcache
-            if mc["key"] == key and (now - float(mc["ts"])) < 0.25:
-                data = mc["data"]
-                if isinstance(data, dict) and data:
-                    return data
-        except Exception:
-            pass
+        # microcache read (locked)
+        with self._rt_cache_lock:
+            try:
+                mc = self._rt_batch_microcache
+                if mc["key"] == key and (now - float(mc["ts"])) < 0.25:
+                    data = mc["data"]
+                    if isinstance(data, dict) and data:
+                        return data
+            except Exception:
+                pass
 
         result: Dict[str, Quote] = {}
 
@@ -921,12 +927,14 @@ class DataFetcher:
                     if q and q.price > 0:
                         self._last_good_quotes[c] = q
 
-        try:
-            self._rt_batch_microcache["ts"] = now
-            self._rt_batch_microcache["key"] = key
-            self._rt_batch_microcache["data"] = result
-        except Exception:
-            pass
+        # microcache write (locked)
+        with self._rt_cache_lock:
+            try:
+                self._rt_batch_microcache["ts"] = now
+                self._rt_batch_microcache["key"] = key
+                self._rt_batch_microcache["data"] = result
+            except Exception:
+                pass
 
         return result
 
@@ -1165,24 +1173,29 @@ class DataFetcher:
         if offline:
             return None
 
+        if not hasattr(self, "_rt_cache_lock"):
+            self._rt_cache_lock = threading.RLock()
+
         if inst.get("market") == "CN" and inst.get("asset") == "EQUITY":
             code6 = str(inst.get("symbol") or "").zfill(6)
             if code6:
                 now = time.time()
-                try:
+
+                with self._rt_cache_lock:
                     rec = self._rt_single_microcache.get(code6)
                     if rec and (now - float(rec["ts"])) < 0.25:
                         return rec["q"]
-                except Exception:
-                    pass
+
                 try:
                     out = self.get_realtime_batch([code6])
                     q = out.get(code6)
                     if q and q.price > 0:
-                        self._rt_single_microcache[code6] = {"ts": now, "q": q}
+                        with self._rt_cache_lock:
+                            self._rt_single_microcache[code6] = {"ts": now, "q": q}
                         return q
                 except Exception:
                     pass
+
                 with self._last_good_lock:
                     q = self._last_good_quotes.get(code6)
                     if q and q.price > 0:

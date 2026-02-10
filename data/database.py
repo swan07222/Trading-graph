@@ -467,11 +467,13 @@ class MarketDatabase:
 
 # Global database instance
 _db = None
-
+_db_lock = threading.Lock()
 
 def get_database() -> MarketDatabase:
-    """Get global database instance"""
+    """Get global database instance (thread-safe)."""
     global _db
     if _db is None:
-        _db = MarketDatabase()
+        with _db_lock:
+            if _db is None:
+                _db = MarketDatabase()
     return _db

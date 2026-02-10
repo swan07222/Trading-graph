@@ -251,22 +251,39 @@ class KillSwitch:
             return True
     
     def _on_risk_event(self, event: Event):
-        """Handle risk events"""
-        data = event.data
-        risk_type = data.get('risk_type', '')
-        
-        if risk_type == 'daily_loss_limit':
+        """
+        Handle RiskEvent correctly.
+        RiskEvent has dataclass fields (risk_type/current_value/limit_value),
+        not necessarily values inside event.data.
+        """
+        risk_type = getattr(event, "risk_type", "") or ""
+        current_value = float(getattr(event, "current_value", 0.0) or 0.0)
+
+        # Backward compatibility if someone publishes plain Event with data
+        if not risk_type:
+            data = getattr(event, "data", {}) or {}
+            risk_type = str(data.get("risk_type", "") or "")
+            current_value = float(data.get("current_value", current_value) or current_value)
+
+        if not risk_type:
+            return
+
+        if risk_type == "daily_loss_limit":
             self.trigger_circuit_breaker(
                 CircuitBreakerType.DAILY_LOSS,
-                data.get('current_value', 0),
-                f"Daily loss: {data.get('current_value', 0):.2f}%"
+                current_value,
+                f"Daily loss: {current_value:.2f}%"
             )
-        elif risk_type == 'max_drawdown':
+        elif risk_type == "max_drawdown":
             self.trigger_circuit_breaker(
                 CircuitBreakerType.DRAWDOWN,
-                data.get('current_value', 0),
-                f"Drawdown: {data.get('current_value', 0):.2f}%"
+                current_value,
+                f"Drawdown: {current_value:.2f}%"
             )
+        elif risk_type == "kill_switch_threshold":
+            self.activate(f"Kill switch threshold reached: {current_value:.2f}%", "risk_manager")
+        elif risk_type == "kill_switch_drawdown":
+            self.activate(f"Kill switch drawdown reached: {current_value:.2f}%", "risk_manager")
     
     def get_status(self) -> dict:
         """Get kill switch status"""
@@ -376,6 +393,17 @@ _kill_switch: Optional[KillSwitch] = None
 
 def get_kill_switch() -> KillSwitch:
     global _kill_switch
+    try:
+        lock = globals().get("_kill_switch_lock")
+    except Exception:
+        lock = None
+
+    if lock is None:
+        globals()["_kill_switch_lock"] = threading.Lock()
+        lock = globals()["_kill_switch_lock"]
+
     if _kill_switch is None:
-        _kill_switch = KillSwitch()
+        with lock:
+            if _kill_switch is None:
+                _kill_switch = KillSwitch()
     return _kill_switch

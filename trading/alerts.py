@@ -510,6 +510,18 @@ _alert_manager: Optional[AlertManager] = None
 
 def get_alert_manager() -> AlertManager:
     global _alert_manager
+    try:
+        lock = globals().get("_alert_lock")
+    except Exception:
+        lock = None
+
+    if lock is None:
+        import threading
+        globals()["_alert_lock"] = threading.Lock()
+        lock = globals()["_alert_lock"]
+
     if _alert_manager is None:
-        _alert_manager = AlertManager()
+        with lock:
+            if _alert_manager is None:
+                _alert_manager = AlertManager()
     return _alert_manager

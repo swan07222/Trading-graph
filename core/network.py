@@ -100,57 +100,50 @@ class NetworkDetector:
         self._env_time = 0.0
 
     def _detect(self) -> NetworkEnv:
-        """Probe endpoints and determine network environment."""
+        """Probe endpoints concurrently and determine network environment."""
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
         env = NetworkEnv(detected_at=datetime.now())
         start = time.time()
 
-        # Probe 1: Tencent (domestic, always works from China, may work from abroad too)
-        env.tencent_ok = self._probe("https://qt.gtimg.cn/q=sh600519", timeout=3)
+        probes = {
+            "tencent_ok": ("https://qt.gtimg.cn/q=sh600519", 3),
+            "eastmoney_ok": ("https://82.push2.eastmoney.com/api/qt/clist/get?pn=1&pz=1&fields=f2&fid=f3&fs=m:0+t:6", 3),
+            "yahoo_ok": ("https://query1.finance.yahoo.com/v8/finance/chart/AAPL?range=1d", 4),
+            "csindex_ok": ("https://www.csindex.com.cn/", 3),
+        }
 
-        # Probe 2: Eastmoney (domestic, BLOCKS foreign IPs)
-        env.eastmoney_ok = self._probe(
-            "https://82.push2.eastmoney.com/api/qt/clist/get?pn=1&pz=1&fields=f2&fid=f3&fs=m:0+t:6",
-            timeout=3
-        )
+        def run_probe(url, timeout):
+            return self._probe(url, timeout=timeout)
 
-        # Probe 3: Yahoo Finance (international, blocked in China without VPN)
-        env.yahoo_ok = self._probe(
-            "https://query1.finance.yahoo.com/v8/finance/chart/AAPL?range=1d",
-            timeout=4
-        )
-
-        # Probe 4: CSIndex (domestic, sometimes blocks foreign IPs)
-        env.csindex_ok = self._probe("https://www.csindex.com.cn/", timeout=3)
+        with ThreadPoolExecutor(max_workers=4) as ex:
+            fut_map = {ex.submit(run_probe, url, to): k for k, (url, to) in probes.items()}
+            for fut in as_completed(fut_map):
+                k = fut_map[fut]
+                try:
+                    setattr(env, k, bool(fut.result()))
+                except Exception:
+                    setattr(env, k, False)
 
         # Determine environment
         if env.eastmoney_ok and not env.yahoo_ok:
-            # Classic China direct: eastmoney works, Yahoo blocked
             env.is_china_direct = True
             env.is_vpn_active = False
             env.detection_method = "eastmoney_ok+yahoo_blocked"
-
         elif env.yahoo_ok and not env.eastmoney_ok:
-            # VPN active: Yahoo works, eastmoney blocked (foreign IP)
             env.is_china_direct = False
             env.is_vpn_active = True
             env.detection_method = "yahoo_ok+eastmoney_blocked"
-
         elif env.eastmoney_ok and env.yahoo_ok:
-            # Both work: could be smart-route VPN or corporate network
-            # Prefer AkShare since it has better CN data
             env.is_china_direct = True
             env.is_vpn_active = False
             env.detection_method = "both_ok_prefer_domestic"
-
-        elif not env.eastmoney_ok and not env.yahoo_ok:
-            # Nothing works: network issue
-            # Fall back to Tencent if available
-            env.is_china_direct = env.tencent_ok
+        else:
+            env.is_china_direct = bool(env.tencent_ok)
             env.is_vpn_active = False
             env.detection_method = "both_failed_fallback"
 
         env.latency_ms = (time.time() - start) * 1000
-
         log.info(
             f"Network detected: {'CHINA_DIRECT' if env.is_china_direct else 'VPN_FOREIGN'} "
             f"({env.detection_method}) "
@@ -159,7 +152,6 @@ class NetworkDetector:
             f"yahoo={'OK' if env.yahoo_ok else 'FAIL'}] "
             f"({env.latency_ms:.0f}ms)"
         )
-
         return env
 
     def _probe(self, url: str, timeout: float = 3) -> bool:

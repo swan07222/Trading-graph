@@ -32,6 +32,9 @@ from data.features import FeatureEngine
 from models.ensemble import EnsembleModel
 from utils.logger import get_logger
 from utils.cancellation import CancelledException
+from __future__ import annotations
+import pandas as pd
+
 
 log = get_logger(__name__)
 

@@ -282,10 +282,10 @@ class MainApp(QMainWindow):
     
     def __init__(self):
         super().__init__()
-        
+
         self.setWindowTitle("AI Stock Trading System v2.0")
         self.setGeometry(50, 50, 1800, 1000)
-        
+
         # State
         self.predictor = None
         self.executor = None
@@ -293,11 +293,11 @@ class MainApp(QMainWindow):
         self.workers: Dict[str, WorkerThread] = {}
         self.monitor: Optional[RealTimeMonitor] = None
         self.watch_list: List[str] = CONFIG.STOCK_POOL[:10]
-        
+
         # Real-time state
         self._last_forecast_refresh_ts: float = 0.0
         self._live_price_series: Dict[str, List[float]] = {}
-        
+
         # Setup UI
         self._setup_menubar()
         self._setup_toolbar()
@@ -305,9 +305,16 @@ class MainApp(QMainWindow):
         self._setup_statusbar()
         self._setup_timers()
         self._apply_professional_style()
-        
-        # Initialize components (deferred to avoid slow startup)
-        QTimer.singleShot(100, self._init_components)
+
+        # Load state BEFORE initializing model
+        try:
+            self._load_state()
+            self._update_watchlist()
+        except Exception:
+            pass
+
+        # Initialize components AFTER state load
+        QTimer.singleShot(0, self._init_components)
     
     def _setup_menubar(self):
         """Setup professional menu bar"""
@@ -1085,7 +1092,10 @@ class MainApp(QMainWindow):
             self._stop_monitoring()
     
     def _start_monitoring(self):
-        """Start real-time monitoring"""
+        """Start real-time monitoring safely (no orphan threads)."""
+        if self.monitor and self.monitor.isRunning():
+            self._stop_monitoring()
+
         if self.predictor is None or self.predictor.ensemble is None:
             self.log("Cannot start monitoring: No model loaded", "error")
             self.monitor_action.setChecked(False)
@@ -1095,16 +1105,14 @@ class MainApp(QMainWindow):
         forecast_bars = self.forecast_spin.value()
         lookback = self.lookback_spin.value()
 
-        # Subscribe to data feeds if available
         try:
             from data.feeds import get_feed_manager
-            fm = get_feed_manager()
+            fm = get_feed_manager(auto_init=True, async_init=True)
             fm.subscribe_many(self.watch_list)
             self.log(f"Subscribed to feeds for {len(self.watch_list)} stocks", "info")
         except Exception as e:
             self.log(f"Feed subscription warning: {e}", "warning")
 
-        # Create and start monitor
         self.monitor = RealTimeMonitor(
             self.predictor,
             self.watch_list,
@@ -1188,66 +1196,74 @@ class MainApp(QMainWindow):
         QApplication.alert(self)
     
     def _on_price_updated(self, code: str, price: float):
-        """Handle real-time price update"""
-        # Update watchlist
+        """Handle real-time price update (UI-safe; forecast refresh in background)."""
+        # Watchlist cell update
         for row in range(self.watchlist.rowCount()):
             item = self.watchlist.item(row, 0)
             if item and item.text() == code:
                 self.watchlist.setItem(row, 1, QTableWidgetItem(f"¥{price:.2f}"))
                 break
 
-        # Skip chart updates if chart doesn't support update_data
-        if not hasattr(self.chart, 'update_data'):
+        if not hasattr(self.chart, "update_data"):
             return
 
-        try:
-            current_code = self.stock_input.text().strip()
-            if not current_code or current_code != code:
-                return
-            if not self.predictor:
-                return
+        current_code = self.stock_input.text().strip()
+        if not current_code or current_code != code:
+            return
+        if not self.predictor:
+            return
 
-            # Throttle updates
-            now = time.time()
-            if (now - self._last_forecast_refresh_ts) < 2.0:
-                # Quick price update without forecast refresh
-                if self.current_prediction and hasattr(self.current_prediction, 'price_history'):
-                    series = self._live_price_series.get(code, [])
-                    if not series and hasattr(self.current_prediction, 'price_history'):
-                        series = list(self.current_prediction.price_history or [])
-                    series = series[-180:]
-                    series.append(float(price))
-                    series = series[-180:]
-                    self._live_price_series[code] = series
+        # Fast chart update (no inference)
+        if self.current_prediction and hasattr(self.current_prediction, "price_history"):
+            series = self._live_price_series.get(code) or list(self.current_prediction.price_history or [])
+            series = (series[-180:] + [float(price)])[-180:]
+            self._live_price_series[code] = series
+            predicted = getattr(self.current_prediction, "predicted_prices", [])
+            self.chart.update_data(series, predicted, self._get_levels_dict())
 
-                    predicted = getattr(self.current_prediction, 'predicted_prices', [])
-                    levels = self._get_levels_dict()
-                    self.chart.update_data(series, predicted, levels)
-                return
+        # Throttle expensive refresh
+        now = time.time()
+        if (now - self._last_forecast_refresh_ts) < 2.0:
+            return
+        self._last_forecast_refresh_ts = now
 
-            self._last_forecast_refresh_ts = now
+        interval = self.interval_combo.currentText().strip()
+        horizon = self.forecast_spin.value()
+        lookback = self.lookback_spin.value()
 
-            # Full forecast refresh
-            interval = self.interval_combo.currentText().strip()
-            horizon = self.forecast_spin.value()
-            lookback = self.lookback_spin.value()
-
-            if hasattr(self.predictor, 'get_realtime_forecast_curve'):
-                actual_prices, predicted_prices = self.predictor.get_realtime_forecast_curve(
+        def do_forecast():
+            if hasattr(self.predictor, "get_realtime_forecast_curve"):
+                return self.predictor.get_realtime_forecast_curve(
                     stock_code=code,
                     interval=interval,
                     horizon_steps=horizon,
                     lookback_bars=lookback,
                     use_realtime_price=True,
                 )
+            return None
 
+        # Avoid piling up forecast workers
+        w_old = self.workers.get("forecast_refresh")
+        if w_old and w_old.isRunning():
+            return
+
+        worker = WorkerThread(do_forecast)
+        self.workers["forecast_refresh"] = worker
+
+        def on_done(res):
+            try:
+                if not res:
+                    return
+                actual_prices, predicted_prices = res
                 self.chart.update_data(actual_prices, predicted_prices, self._get_levels_dict())
-
                 if self.current_prediction and self.current_prediction.stock_code == code:
                     self.current_prediction.predicted_prices = predicted_prices
+            finally:
+                self.workers.pop("forecast_refresh", None)
 
-        except Exception as e:
-            log.debug(f"Price update error: {e}")
+        worker.finished.connect(on_done)
+        worker.error.connect(lambda e: self.workers.pop("forecast_refresh", None))
+        worker.start()
     
     def _get_levels_dict(self) -> Optional[Dict[str, float]]:
         """Get trading levels as dict"""
