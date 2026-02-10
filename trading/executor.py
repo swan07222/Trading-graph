@@ -126,6 +126,9 @@ class ExecutionEngine:
             f"Mode: {self.mode.value}, Equity: {account.equity:,.2f}",
             priority=AlertPriority.MEDIUM,
         )
+        self._startup_sync()
+        self._reconnect_thread = threading.Thread(target=self._broker_reconnect_loop, name="broker_reconnect", daemon=True)
+        self._reconnect_thread.start()
         return True
 
     def _load_processed_fills(self) -> Set[str]:
@@ -229,13 +232,77 @@ class ExecutionEngine:
 
         log.info("Execution engine stopped")
 
+    def _get_quote_snapshot(self, symbol: str) -> Tuple[float, Optional[datetime], str]:
+        """
+        Returns (price, timestamp, source).
+        Tries:
+        1) FeedManager cached quote (no auto-init)
+        2) broker.get_quote (price only)
+        3) DataFetcher realtime (has timestamp)
+        """
+        # 1) feed cache
+        try:
+            from data.feeds import get_feed_manager
+            fm = get_feed_manager(auto_init=False)
+            q = fm.get_quote(symbol)
+            if q and float(getattr(q, "price", 0.0) or 0.0) > 0:
+                ts = getattr(q, "timestamp", None)
+                return float(q.price), ts, "feed"
+        except Exception:
+            pass
+
+        # 2) broker quote (usually no timestamp)
+        try:
+            px = self.broker.get_quote(symbol)
+            if px and float(px) > 0:
+                return float(px), None, "broker"
+        except Exception:
+            pass
+
+        # 3) fetcher realtime
+        try:
+            from data.fetcher import get_fetcher
+            q = get_fetcher().get_realtime(symbol)
+            if q and float(getattr(q, "price", 0.0) or 0.0) > 0:
+                return float(q.price), getattr(q, "timestamp", None), f"fetcher:{getattr(q,'source','')}"
+        except Exception:
+            pass
+
+        return 0.0, None, "none"
+
+
+    def _require_fresh_quote(self, symbol: str, max_age_seconds: float = 15.0) -> Tuple[bool, str, float]:
+        """
+        Strict quote freshness gate for order submission.
+        Returns (ok, message, price).
+        """
+        px, ts, src = self._get_quote_snapshot(symbol)
+        if px <= 0:
+            return False, "No valid quote", 0.0
+
+        # if no timestamp, be conservative in LIVE mode
+        if ts is None:
+            if str(self.mode.value).lower() == "live":
+                return False, f"No timestamped quote (source={src})", 0.0
+            return True, "OK", px
+
+        try:
+            age = (datetime.now() - ts).total_seconds()
+        except Exception:
+            age = 0.0
+
+        if age > float(max_age_seconds):
+            return False, f"Quote stale: {age:.0f}s (source={src})", 0.0
+
+        return True, "OK", px
+
     def submit(self, signal: TradeSignal) -> bool:
-        """Submit a trading signal for execution with minimal latency + CN safety checks."""
+        """Submit a trading signal for execution with strict quote freshness."""
         if not self._running:
             log.warning("Execution engine not running")
             return False
 
-        # Market hours guard
+        # Market hours guard (holiday-aware via CONFIG.is_market_open fix)
         try:
             if not CONFIG.is_market_open():
                 self._reject_signal(signal, "Market closed")
@@ -258,13 +325,17 @@ class ExecutionEngine:
         except Exception:
             pass
 
-        # Resolve ONE price for whole pipeline
-        price = self._resolve_price(signal.symbol, hinted_price=float(getattr(signal, "price", 0.0) or 0.0))
-        if price <= 0:
-            self._reject_signal(signal, f"Cannot get price for {signal.symbol}")
+        # STRICT quote freshness for LIVE (and recommended for paper too)
+        max_age = float(getattr(CONFIG.risk, "quote_staleness_seconds", 15.0)) if hasattr(CONFIG, "risk") else 15.0
+        ok, msg, fresh_px = self._require_fresh_quote(signal.symbol, max_age_seconds=max_age)
+        if not ok:
+            self._reject_signal(signal, msg)
             return False
 
-        # CN limit up/down sanity (use one realtime quote fetch; do NOT re-resolve price multiple times)
+        # Use ONE authoritative price for entire pipeline
+        signal.price = float(fresh_px)
+
+        # CN limit up/down sanity (single realtime fetch)
         try:
             from core.constants import get_price_limit
             from data.fetcher import get_fetcher
@@ -275,27 +346,27 @@ class ExecutionEngine:
                 up = prev_close * (1.0 + lim)
                 dn = prev_close * (1.0 - lim)
 
-                if signal.side == OrderSide.BUY and price >= up * 0.999:
+                if signal.side == OrderSide.BUY and signal.price >= up * 0.999:
                     self._reject_signal(signal, f"At/near limit-up ({lim*100:.0f}%)")
                     return False
-                if signal.side == OrderSide.SELL and price <= dn * 1.001:
+                if signal.side == OrderSide.SELL and signal.price <= dn * 1.001:
                     self._reject_signal(signal, f"At/near limit-down ({lim*100:.0f}%)")
                     return False
         except Exception:
             pass
 
-        # Risk check uses this SAME resolved price
-        passed, msg = self.risk_manager.check_order(signal.symbol, signal.side, signal.quantity, float(price))
+        # Risk check (same resolved price)
+        passed, rmsg = self.risk_manager.check_order(
+            signal.symbol, signal.side, int(signal.quantity), float(signal.price)
+        )
         if not passed:
-            log.warning(f"Risk check failed: {msg}")
-            self._alert_manager.risk_alert("Order Rejected (Risk)", f"{signal.symbol}: {msg}")
-            self._reject_signal(signal, msg)
+            log.warning(f"Risk check failed: {rmsg}")
+            self._alert_manager.risk_alert("Order Rejected (Risk)", f"{signal.symbol}: {rmsg}")
+            self._reject_signal(signal, rmsg)
             return False
 
-        # Enqueue
-        signal.price = float(price)
         self._queue.put(signal)
-        log.info(f"Signal queued: {signal.side.value} {signal.quantity} {signal.symbol} @ {price:.2f}")
+        log.info(f"Signal queued: {signal.side.value} {signal.quantity} {signal.symbol} @ {signal.price:.2f}")
         return True
 
     def submit_from_prediction(self, pred) -> bool:
@@ -357,7 +428,7 @@ class ExecutionEngine:
         return None
 
     def _execute(self, signal: TradeSignal):
-        """Execute a single signal - NEVER fabricate fills"""
+        """Execute a single signal - NEVER fabricate fills."""
         from trading.oms import get_oms
         oms = get_oms()
 
@@ -379,15 +450,15 @@ class ExecutionEngine:
                 signal_id=signal.id,
             )
 
-            # OMS validates and reserves resources, sets status to SUBMITTED
+            # OMS reserves resources
             order = oms.submit_order(order)
 
-            # Submit to broker
-            result = self.broker.submit_order(order)
+            # Submit to broker with retry
+            result = self._submit_with_retry(order, attempts=3)
 
             inc_counter("orders_submitted_total", labels={"side": order.side.value, "symbol": order.symbol})
 
-            # Persist broker_id and update status through OMS
+            # Persist broker_id/status in OMS
             oms.update_order_status(
                 order.id,
                 result.status,
@@ -404,10 +475,8 @@ class ExecutionEngine:
                     self.on_reject(order, result.message or "Rejected")
                 return
 
-            # For simulator: immediately pull and process fills
-            # This ensures single fill processing path
-            if result.status in (OrderStatus.PARTIAL, OrderStatus.FILLED):
-                self._process_pending_fills()
+            # Pull fills immediately (sim) / early sync
+            self._process_pending_fills()
 
             log.info(f"Order sent: {order.id} -> broker_id={result.broker_id}, status={result.status.value}")
 
@@ -419,6 +488,36 @@ class ExecutionEngine:
                 except Exception:
                     pass
             self._alert_manager.system_alert("Execution Failed", f"{signal.symbol}: {e}", AlertPriority.HIGH)
+
+    
+    def _startup_sync(self):
+        """
+        Run once after broker.connect():
+        - rebuild broker mappings
+        - pull fills
+        - sync active order statuses
+        """
+        from trading.oms import get_oms
+        oms = get_oms()
+
+        # Rebuild mappings (already exists)
+        self._rebuild_broker_mappings(oms)
+
+        # Process any fills immediately
+        self._process_pending_fills()
+
+        # Sync active orders
+        for order in oms.get_active_orders():
+            try:
+                synced = self.broker.sync_order(order)
+                if synced and synced.status and synced.status != order.status:
+                    oms.update_order_status(
+                        order.id, synced.status,
+                        message="Startup sync",
+                        broker_id=synced.broker_id or order.broker_id or ""
+                    )
+            except Exception:
+                continue
 
     def _process_pending_fills(self):
         """Process pending fills with safe watermark overlap (avoid missed fills)."""
@@ -494,11 +593,19 @@ class ExecutionEngine:
                 log.error(f"Fill sync loop error: {e}")
 
     def _status_sync_loop(self):
-        """Poll broker for order status updates; if broker says FILLED, pull fills immediately."""
+        """
+        Poll broker for order status updates.
+        Adds:
+        - stuck order watchdog (submitted/accepted too long)
+        - broker sync fallback when get_order_status returns None
+        """
         from trading.oms import get_oms
         oms = get_oms()
 
-        broker_filled_first_seen: Dict[str, datetime] = {}
+        first_seen: Dict[str, datetime] = {}
+
+        # configurable threshold
+        stuck_seconds = int(getattr(CONFIG.risk, "order_stuck_seconds", 60)) if hasattr(CONFIG, "risk") else 60
 
         while self._running:
             try:
@@ -507,37 +614,59 @@ class ExecutionEngine:
                     continue
 
                 active_orders = oms.get_active_orders()
+                now = datetime.now()
 
                 for order in active_orders:
-                    broker_status = self.broker.get_order_status(order.id)
+                    first_seen.setdefault(order.id, now)
+                    age = (now - first_seen[order.id]).total_seconds()
+
+                    broker_status = None
+                    try:
+                        broker_status = self.broker.get_order_status(order.id)
+                    except Exception:
+                        broker_status = None
+
+                    # If broker_status missing, try broker.sync_order
                     if broker_status is None:
-                        continue
+                        try:
+                            synced = self.broker.sync_order(order)
+                            broker_status = getattr(synced, "status", None)
+                            if synced and getattr(synced, "broker_id", None) and not order.broker_id:
+                                oms.update_order_status(order.id, order.status, broker_id=synced.broker_id, message="Recovered broker_id")
+                        except Exception:
+                            broker_status = None
 
+                    # If broker says FILLED: process fills immediately
                     if broker_status == OrderStatus.FILLED:
-                        # Canonical: process fills (never fabricate)
                         self._process_pending_fills()
-
                         refreshed = oms.get_order(order.id)
-                        if refreshed and refreshed.status != OrderStatus.FILLED:
-                            first = broker_filled_first_seen.get(order.id)
-                            if first is None:
-                                broker_filled_first_seen[order.id] = datetime.now()
-                            else:
-                                if (datetime.now() - first).total_seconds() > 30:
-                                    self._alert_manager.risk_alert(
-                                        "Missing Fills After Broker FILLED",
-                                        f"{order.symbol}: broker says FILLED but OMS still {refreshed.status.value}",
-                                        details={"order_id": order.id, "broker_id": order.broker_id}
-                                    )
+                        if refreshed and refreshed.status != OrderStatus.FILLED and age > 30:
+                            self._alert_manager.risk_alert(
+                                "Missing Fills After Broker FILLED",
+                                f"{order.symbol}: broker FILLED but OMS {refreshed.status.value}",
+                                details={"order_id": order.id, "broker_id": order.broker_id}
+                            )
                         continue
 
                     # Normal status changes
-                    if broker_status != order.status:
-                        oms.update_order_status(
-                            order.id,
-                            broker_status,
-                            message=f"Status sync: {broker_status.value}"
+                    if broker_status and broker_status != order.status:
+                        oms.update_order_status(order.id, broker_status, message=f"Status sync: {broker_status.value}")
+                        if broker_status in (OrderStatus.CANCELLED, OrderStatus.REJECTED, OrderStatus.FILLED, OrderStatus.EXPIRED):
+                            first_seen.pop(order.id, None)
+                        continue
+
+                    # --- Watchdog: stuck too long in non-terminal state ---
+                    if age >= stuck_seconds and order.status in (OrderStatus.SUBMITTED, OrderStatus.ACCEPTED, OrderStatus.PARTIAL):
+                        self._alert_manager.risk_alert(
+                            "Order Stuck Watchdog",
+                            f"{order.symbol}: {order.status.value} for {int(age)}s",
+                            details={"order_id": order.id, "broker_id": order.broker_id, "status": order.status.value}
                         )
+                        # Optionally attempt cancel if too long (conservative)
+                        try:
+                            self.broker.cancel_order(order.id)
+                        except Exception:
+                            pass
 
             except Exception as e:
                 log.error(f"Status sync error: {e}")
@@ -568,6 +697,60 @@ class ExecutionEngine:
                     )
             except Exception as e:
                 log.error(f"Reconciliation error: {e}")
+
+    def _submit_with_retry(self, order: Order, attempts: int = 3) -> Order:
+        """
+        Retry broker.submit_order for transient failures.
+        Does NOT retry validation failures (broker REJECTED).
+        """
+        delay = 0.5
+        last_exc = None
+        for i in range(int(attempts)):
+            try:
+                result = self.broker.submit_order(order)
+                # If broker explicitly rejects, do not retry
+                if getattr(result, "status", None) == OrderStatus.REJECTED:
+                    return result
+                return result
+            except Exception as e:
+                last_exc = e
+                time.sleep(delay)
+                delay = min(delay * 2.0, 5.0)
+
+        raise last_exc if last_exc else RuntimeError("submit_order failed")
+
+    def _broker_reconnect_loop(self):
+        """
+        If broker drops, attempt reconnect with exponential backoff.
+        On reconnect, run startup sync again.
+        """
+        backoff = 1.0
+        while self._running:
+            try:
+                time.sleep(2.0)
+                if self.broker.is_connected:
+                    backoff = 1.0
+                    continue
+
+                log.warning(f"Broker disconnected. Reconnecting in {backoff:.0f}s...")
+                time.sleep(backoff)
+
+                # reconnect attempt (use CONFIG.BROKER_PATH if broker needs it)
+                try:
+                    ok = self.broker.connect(exe_path=getattr(CONFIG, "broker_path", "") or getattr(CONFIG, "BROKER_PATH", ""))
+                except TypeError:
+                    ok = self.broker.connect()
+
+                if ok:
+                    log.info("Broker reconnected successfully")
+                    backoff = 1.0
+                    self._startup_sync()
+                else:
+                    backoff = min(backoff * 2.0, 60.0)
+
+            except Exception as e:
+                log.warning(f"Reconnect loop error: {e}")
+                backoff = min(backoff * 2.0, 60.0)
 
     def _on_kill_switch(self, reason: str):
         """Handle kill switch activation"""

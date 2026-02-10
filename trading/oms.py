@@ -83,7 +83,7 @@ class OrderDatabase:
     """
     
     def __init__(self, db_path: Path = None):
-        self._db_path = db_path or CONFIG.data_dir / "orders.db"
+        self._db_path = Path(db_path) if db_path else (CONFIG.data_dir / "orders.db")
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
         self._local = threading.local()
         self._init_lock = threading.Lock()
@@ -675,21 +675,17 @@ class OrderManagementSystem:
     - Idempotent fill processing
     """
     
-    def __init__(self, initial_capital: float = None):
+    def __init__(self, initial_capital: float = None, db_path: Path = None):
         self._lock = threading.RLock()
-        self._db = OrderDatabase()
+        self._db = OrderDatabase(db_path=db_path)
         self._audit = get_audit_log()
-        
-        # Callbacks
+
         self._on_order_update: List[Callable] = []
         self._on_fill: List[Callable] = []
-        
-        # Recovery on startup
+
         self._account = self._recover_or_init(initial_capital)
-        
-        # Process T+1 settlement
         self._process_settlement()
-        
+
         log.info(f"OMS initialized: equity=¥{self._account.equity:,.2f}")
     
     def _recover_or_init(self, initial_capital: float = None) -> Account:
@@ -1455,13 +1451,13 @@ _oms: Optional[OrderManagementSystem] = None
 _oms_lock = threading.Lock()
 
 
-def get_oms(initial_capital: float = None) -> OrderManagementSystem:
+def get_oms(initial_capital: float = None, db_path: Path = None) -> OrderManagementSystem:
     """Get or create global OMS instance"""
     global _oms
     if _oms is None:
         with _oms_lock:
             if _oms is None:
-                _oms = OrderManagementSystem(initial_capital)
+                _oms = OrderManagementSystem(initial_capital=initial_capital, db_path=db_path)
     return _oms
 
 

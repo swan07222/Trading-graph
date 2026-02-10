@@ -8,6 +8,8 @@ from datetime import time, date
 from typing import Dict, List, Set, Tuple
 from enum import Enum, auto
 from core.types import OrderSide, OrderType, OrderStatus
+from pathlib import Path
+from functools import lru_cache
 
 # =============================================================================
 # EXCHANGES
@@ -285,6 +287,35 @@ def get_exchange(code: str) -> str:
     return 'UNKNOWN'
 
 
+@lru_cache(maxsize=1)
+def get_holidays() -> Set[date]:
+    """
+    Return holiday set.
+    - Uses built-in HOLIDAYS as baseline
+    - Extends with optional external file: <data_dir>/holidays_cn.json
+      Format: ["2026-01-01", "2026-02-10", ...]
+    """
+    base = set(HOLIDAYS)
+
+    # optional external file (lets you extend beyond 2025 without code changes)
+    try:
+        from config.settings import CONFIG
+        path = Path(CONFIG.data_dir) / "holidays_cn.json"
+        if path.exists():
+            import json
+            data = json.loads(path.read_text(encoding="utf-8"))
+            for s in data if isinstance(data, list) else []:
+                try:
+                    y, m, d = map(int, str(s).split("-"))
+                    base.add(date(y, m, d))
+                except Exception:
+                    continue
+    except Exception:
+        pass
+
+    return base
+
+
 def get_price_limit(code: str, name: str = None) -> float:
     """
     Get price limit for stock.
@@ -330,15 +361,11 @@ def get_lot_size(code: str) -> int:
 
 
 def is_trading_day(d: date) -> bool:
-    """Check if date is a trading day"""
-    # Weekend
+    """Check if date is a trading day (weekend + holiday aware)."""
     if d.weekday() >= 5:
         return False
-    
-    # Holiday
-    if d in HOLIDAYS:
+    if d in get_holidays():
         return False
-    
     return True
 
 

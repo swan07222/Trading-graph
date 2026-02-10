@@ -651,17 +651,34 @@ class Config:
             print(f"Warning: Failed to save config: {e}")
     
     def is_market_open(self) -> bool:
-        """Check if market is currently open"""
-        now = datetime.now()
-        if now.weekday() >= 5:
-            return False
-        
+        """
+        Check if market is currently open.
+        Fixes:
+        - Uses China trading calendar (holidays)
+        - Uses Asia/Shanghai timezone (avoids machine-local timezone issues)
+        - Handles lunch break via your existing AM/PM session windows
+        """
+        try:
+            from zoneinfo import ZoneInfo
+            now = datetime.now(tz=ZoneInfo("Asia/Shanghai"))
+        except Exception:
+            now = datetime.now()
+
+        # holiday/weekend check (core.constants)
+        try:
+            from core.constants import is_trading_day
+            if not is_trading_day(now.date()):
+                return False
+        except Exception:
+            if now.weekday() >= 5:
+                return False
+
         current_time = now.time()
         t = self.trading
-        
+
         morning = t.market_open_am <= current_time <= t.market_close_am
         afternoon = t.market_open_pm <= current_time <= t.market_close_pm
-        
+
         return morning or afternoon
     
     def get_min_data_required(self) -> int:

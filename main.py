@@ -63,6 +63,7 @@ def main():
     parser.add_argument('--max-stocks', type=int, default=200, help='Max stocks for training')
     parser.add_argument('--continuous', action='store_true', help='Continuous learning mode')
     parser.add_argument('--cli', action='store_true', help='CLI mode')
+    parser.add_argument('--recovery-drill', action='store_true', help='Run crash recovery drill')
 
     args = parser.parse_args()
 
@@ -120,6 +121,9 @@ def main():
                 continuous=args.continuous,
             )
 
+        elif args.recovery_drill:
+            run_recovery_drill()
+
         elif args.predict:
             from models.predictor import Predictor
             predictor = Predictor()
@@ -148,6 +152,48 @@ def main():
         EVENT_BUS.stop()
         from utils.security import get_audit_log
         get_audit_log().close()
+
+def run_recovery_drill():
+    """
+    Recovery drill:
+    1) Create isolated OMS DB in temp folder
+    2) Submit an order, process a fill
+    3) Simulate crash: drop OMS instance
+    4) Re-open OMS from same DB and verify fills are not duplicated
+    """
+    import tempfile
+    from pathlib import Path
+    from trading.oms import get_oms, reset_oms
+    from core.types import Order, OrderSide, OrderType, Fill
+
+    tmpdir = Path(tempfile.mkdtemp(prefix="recovery_drill_"))
+    db_path = tmpdir / "orders_drill.db"
+
+    print(f"[DRILL] Using temp OMS db: {db_path}")
+
+    reset_oms()
+    oms = get_oms(initial_capital=100000, db_path=db_path)
+
+    # submit synthetic order
+    order = Order(symbol="600519", side=OrderSide.BUY, order_type=OrderType.LIMIT, quantity=100, price=100.0)
+    oms.submit_order(order)
+
+    # process synthetic fill
+    fill = Fill(order_id=order.id, symbol=order.symbol, side=OrderSide.BUY, quantity=100, price=100.0, commission=5.0)
+    oms.process_fill(order, fill)
+
+    fills_before = oms.get_fills(order.id)
+    print(f"[DRILL] fills before restart: {len(fills_before)}")
+
+    # simulate crash/restart
+    reset_oms()
+    oms2 = get_oms(initial_capital=100000, db_path=db_path)
+
+    fills_after = oms2.get_fills(order.id)
+    print(f"[DRILL] fills after restart: {len(fills_after)}")
+
+    assert len(fills_after) == len(fills_before), "Fill count changed after restart (dedup broken)"
+    print("[DRILL] PASS: fill dedup + recovery OK")
 
 if __name__ == "__main__":
     main()
