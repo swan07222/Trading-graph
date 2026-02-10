@@ -1,25 +1,13 @@
-# models/trainer.py
 """
 Model Trainer - Complete Training Pipeline
-
-FIXES APPLIED:
-- Issue 1:  Features computed WITHIN each split (no cross-split leakage)
-- Issue 2:  Warmup uses CONFIG.data.feature_lookback (not seq_len)
-- Issue 5:  _skip_scaler_fit is a documented public attribute
-- Issue 13: min_periods=1 instability handled by warmup invalidation
-- Issue 19: interval/horizon set on ensemble before save
-- Proper temporal split per stock (no data leakage)
-- Scaler fitted only on training data
-- Labels created WITHIN each split
-- Scaler saved with model for inference
-- Proper interval/horizon parameter handling
-- Robust forecaster training with error handling
-- Proper embargo gap between splits
-- best_accuracy fallback to test_acc
+...
 """
+from __future__ import annotations  # <-- must be here (right after docstring)
+
 import numpy as np
 import torch
 import random
+import pandas as pd
 from typing import Dict, List, Optional, Callable, Tuple, Any
 from pathlib import Path
 from datetime import datetime
@@ -32,8 +20,6 @@ from data.features import FeatureEngine
 from models.ensemble import EnsembleModel
 from utils.logger import get_logger
 from utils.cancellation import CancelledException
-from __future__ import annotations
-import pandas as pd
 
 
 log = get_logger(__name__)
