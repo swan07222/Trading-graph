@@ -22,6 +22,7 @@ from collections import OrderedDict
 from dataclasses import dataclass, field
 import numpy as np
 import pandas as pd
+from functools import wraps
 
 from config.settings import CONFIG
 from utils.logger import get_logger
@@ -354,40 +355,31 @@ def get_cache() -> TieredCache:
     return _cache
 
 
+# data/cache.py
+from functools import wraps
+
 def cached(
     key_fn: Callable[..., str] = None,
     max_age_hours: float = None,
     persist: bool = True
 ):
-    """
-    Decorator for cached functions
-    
-    Usage:
-        @cached(lambda x: f"data:{x}")
-        def get_data(symbol: str):
-            ...
-    """
     def decorator(func):
+        @wraps(func)
         def wrapper(*args, **kwargs):
-            # Generate cache key
             if key_fn:
                 key = key_fn(*args, **kwargs)
             else:
                 key = f"{func.__module__}.{func.__name__}:{args}:{kwargs}"
-            
-            # Try cache
+
             result = _cache.get(key, max_age_hours)
             if result is not None:
                 return result
-            
-            # Compute
+
             result = func(*args, **kwargs)
-            
-            # Store
+
             if result is not None:
                 _cache.set(key, result, persist)
-            
+
             return result
-        
         return wrapper
     return decorator

@@ -788,26 +788,7 @@ class DataFetcher:
                 priority = 0
                 needs_china_direct = False
                 needs_vpn = False
-
-                def __init__(self):
-                    super().__init__()
-                    self.status.available = True
-
-                def get_history_instrument(self, inst: dict, days: int, interval: str = "1d") -> pd.DataFrame:
-                    if inst.get("market") != "CN" or inst.get("asset") != "EQUITY" or interval != "1d":
-                        return pd.DataFrame()
-                    try:
-                        from data.database import get_database
-                        db = get_database()
-                        df = db.get_bars(inst["symbol"], limit=days)
-                        return df.tail(days) if df is not None else pd.DataFrame()
-                    except Exception:
-                        return pd.DataFrame()
-
-                def get_history(self, code: str, days: int) -> pd.DataFrame:
-                    inst = {"market": "CN", "asset": "EQUITY", "symbol": str(code).zfill(6)}
-                    return self.get_history_instrument(inst, days=days, interval="1d")
-
+                ...
             self._all_sources.append(LocalDatabaseSource())
         except Exception:
             pass
@@ -817,14 +798,19 @@ class DataFetcher:
                 source = source_cls()
                 if source.status.available:
                     self._all_sources.append(source)
-                    log.info(f"Data source {source.name} initialized "
-                            f"(china_direct={source.needs_china_direct}, "
-                            f"vpn={source.needs_vpn})")
+                    log.info(
+                        f"Data source {source.name} initialized "
+                        f"(china_direct={source.needs_china_direct}, vpn={source.needs_vpn})"
+                    )
             except Exception as e:
                 log.warning(f"Failed to init {source_cls.name}: {e}")
 
         if not self._all_sources:
             log.error("No data sources available!")
+
+        # --- BACKWARD COMPATIBILITY (tests/older code) ---
+        # tests expect fetcher._sources
+        self._sources = self._all_sources
 
     def _get_active_sources(self) -> List[DataSource]:
         active = []

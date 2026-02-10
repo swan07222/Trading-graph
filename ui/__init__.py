@@ -1,15 +1,19 @@
-# ui/__init__.py — Replace entire file
+# ui/__init__.py
 
 """
 UI Module
 Professional trading application interface
 """
 
-from .app import MainApp, run_app
+try:
+    from .app import MainApp, run_app
+except ImportError:
+    MainApp = None
+    run_app = None
+
 from .charts import StockChart
 from .auto_learn_dialog import AutoLearnDialog, show_auto_learn_dialog
 
-# Lazy imports to avoid cascade failures when torch/models not installed
 try:
     from .widgets import SignalPanel, PositionTable, LogWidget
 except ImportError:
@@ -24,14 +28,14 @@ except ImportError:
     BacktestDialog = None
 
 __all__ = [
-    'MainApp',
-    'run_app',
-    'SignalPanel',
-    'PositionTable',
-    'LogWidget',
-    'StockChart',
-    'TrainingDialog',
-    'BacktestDialog',
-    'AutoLearnDialog',
-    'show_auto_learn_dialog',
+    "MainApp",
+    "run_app",
+    "SignalPanel",
+    "PositionTable",
+    "LogWidget",
+    "StockChart",
+    "TrainingDialog",
+    "BacktestDialog",
+    "AutoLearnDialog",
+    "show_auto_learn_dialog",
 ]

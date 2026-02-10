@@ -132,7 +132,7 @@ class BacktestResult:
 """
 
 
-class Backtester:
+class Backtester:s Backtester:
     """Walk-Forward Backtesting with proper methodology."""
     
     def __init__(self):
@@ -279,66 +279,45 @@ class Backtester:
         return default_stocks
     
     def _collect_data(self, stocks: List[str], min_days: int) -> Dict[str, pd.DataFrame]:
-        """Collect and validate data for all stocks with detailed logging"""
-        all_data = {}
+        """Collect RAW OHLCV only (NO features here to avoid fold leakage)."""
+        all_data: Dict[str, pd.DataFrame] = {}
         errors = []
-        
-        # Get sequence length safely
-        seq_length = 60  # default
-        if hasattr(CONFIG, 'model') and hasattr(CONFIG.model, 'sequence_length'):
-            seq_length = CONFIG.model.sequence_length
-        elif hasattr(CONFIG, 'MODEL') and isinstance(CONFIG.MODEL, dict):
-            seq_length = CONFIG.MODEL.get('sequence_length', 60)
-        
+
         for code in stocks:
             try:
                 log.info(f"  Fetching data for {code}...")
-                
-                # Try to fetch data
-                df = self.fetcher.get_history(code, days=2000)
-                
+                df = self.fetcher.get_history(code, days=2000, interval="1d")
+
                 if df is None:
                     errors.append(f"{code}: No data returned (None)")
                     continue
-                
                 if df.empty:
                     errors.append(f"{code}: Empty dataframe returned")
                     continue
-                
-                log.info(f"    Raw data: {len(df)} rows, columns: {list(df.columns)}")
-                
-                # Validate required columns
+
                 required_cols = ['open', 'high', 'low', 'close', 'volume']
                 missing_cols = [c for c in required_cols if c not in df.columns]
                 if missing_cols:
                     errors.append(f"{code}: Missing columns {missing_cols}")
                     continue
-                
+
                 if len(df) < min_days:
                     errors.append(f"{code}: Only {len(df)} days (need {min_days})")
                     continue
-                
-                # Create features
-                df = self.feature_engine.create_features(df)
-                log.info(f"    After features: {len(df)} rows")
-                
-                min_required = seq_length + 50
-                if len(df) >= min_required:
-                    all_data[code] = df
-                    log.info(f"    ✓ {code}: {len(df)} samples ready")
-                else:
-                    errors.append(f"{code}: After features only {len(df)} rows (need {min_required})")
-                    
+
+                # Keep RAW; fold will compute features within split
+                all_data[code] = df.sort_index()
+                log.info(f"    ✓ {code}: {len(df)} raw rows ready")
+
             except Exception as e:
                 errors.append(f"{code}: Exception - {str(e)}")
                 log.warning(f"  Failed to load {code}: {e}")
-        
-        # Log summary
+
         if errors:
-            log.warning(f"Data collection issues:")
+            log.warning("Data collection issues:")
             for err in errors:
                 log.warning(f"  - {err}")
-        
+
         return all_data
     
     def _diagnose_data_issue(self, stocks: List[str]) -> str:
@@ -398,32 +377,42 @@ class Backtester:
             train_start = train_start + pd.DateOffset(months=test_months)
         
         return folds
-    
+        
     def _run_fold(
         self,
-        all_data: Dict[str, pd.DataFrame],
+        all_data: Dict[str, pd.DataFrame],   # RAW OHLCV now
         train_start: pd.Timestamp,
         train_end: pd.Timestamp,
         test_start: pd.Timestamp,
         test_end: pd.Timestamp,
         capital: float
     ) -> Optional[Tuple]:
-        """Run a single fold"""
         processor = DataProcessor()
         feature_cols = self.feature_engine.get_feature_columns()
-        
-        # Get sequence length safely
-        seq_length = 60
-        if hasattr(CONFIG, 'model') and hasattr(CONFIG.model, 'sequence_length'):
-            seq_length = CONFIG.model.sequence_length
 
-        # 1) Fit scaler on TRAIN only
+        seq_length = int(getattr(getattr(CONFIG, "model", None), "sequence_length", 60))
+        feature_lookback = int(getattr(getattr(CONFIG, "data", None), "feature_lookback", 60))
+
+        # -------------------------
+        # 1) Build TRAIN features (per-stock) and fit scaler on TRAIN only
+        # -------------------------
         train_features_list = []
-        for code, df in all_data.items():
-            mask = (df.index >= train_start) & (df.index < train_end)
-            fold_df = df.loc[mask]
-            if len(fold_df) >= seq_length:
-                train_features_list.append(fold_df[feature_cols].values)
+        train_split_data = {}  # code -> featured+labels df
+
+        for code, raw in all_data.items():
+            raw_train = raw.loc[(raw.index >= train_start) & (raw.index < train_end)].copy()
+            if len(raw_train) < (seq_length + feature_lookback + 10):
+                continue
+
+            feat_train = self.feature_engine.create_features(raw_train)
+            feat_train = processor.create_labels(feat_train)  # uses CONFIG horizon/thresholds
+
+            valid = feat_train["label"].notna()
+            if valid.sum() <= 10:
+                continue
+
+            train_features_list.append(feat_train.loc[valid, feature_cols].values)
+            train_split_data[code] = feat_train
 
         if not train_features_list:
             log.warning("No training data for this fold")
@@ -432,15 +421,14 @@ class Backtester:
         combined_train = np.concatenate(train_features_list, axis=0)
         processor.fit_scaler(combined_train)
 
+        # -------------------------
         # 2) Build training sequences
+        # -------------------------
         X_train_list, y_train_list = [], []
-        for code, df in all_data.items():
-            mask = (df.index >= train_start) & (df.index < train_end)
-            fold_raw = df.loc[mask].copy()
-            fold_df = processor.create_labels(fold_raw)
 
-            if len(fold_df) >= seq_length + 10:
-                X, y, _ = processor.prepare_sequences(fold_df, feature_cols, fit_scaler=False)
+        for code, feat_train in train_split_data.items():
+            if len(feat_train) >= seq_length + 10:
+                X, y, _ = processor.prepare_sequences(feat_train, feature_cols, fit_scaler=False)
                 if len(X) > 0:
                     X_train_list.append(X)
                     y_train_list.append(y)
@@ -452,7 +440,9 @@ class Backtester:
         X_train = np.concatenate(X_train_list, axis=0)
         y_train = np.concatenate(y_train_list, axis=0)
 
+        # -------------------------
         # 3) Train model
+        # -------------------------
         input_size = int(X_train.shape[2])
         model = EnsembleModel(input_size, model_names=["lstm", "gru", "tcn"])
 
@@ -463,7 +453,9 @@ class Backtester:
             epochs=30
         )
 
-        # 4) Prepare TEST
+        # -------------------------
+        # 4) Prepare TEST (compute features inside fold, with lookback context)
+        # -------------------------
         trades: List[BacktestTrade] = []
         predictions, actuals = [], []
 
@@ -473,20 +465,20 @@ class Backtester:
         valid_test_codes = []
         prepared = {}
 
-        lookback_bars = seq_length + 5
+        # Need enough context so rolling features can warm up BEFORE test_start
+        ctx_days = int((seq_length + feature_lookback + 10) * 2)
 
-        for code, df in all_data.items():
-            ctx_start = test_start - pd.Timedelta(days=lookback_bars * 2)
-
-            mask = (df.index >= ctx_start) & (df.index < test_end)
-            fold_raw = df.loc[mask].copy()
-            fold_df = processor.create_labels(fold_raw)
-
-            if len(fold_df) < seq_length + 5:
+        for code, raw in all_data.items():
+            ctx_start = test_start - pd.Timedelta(days=ctx_days)
+            raw_ctx = raw.loc[(raw.index >= ctx_start) & (raw.index < test_end)].copy()
+            if len(raw_ctx) < seq_length + feature_lookback + 10:
                 continue
 
+            feat = self.feature_engine.create_features(raw_ctx)
+            feat = processor.create_labels(feat)
+
             X, y, returns, idx = processor.prepare_sequences(
-                fold_df, feature_cols, fit_scaler=False, return_index=True
+                feat, feature_cols, fit_scaler=False, return_index=True
             )
             if len(X) == 0:
                 continue
@@ -500,7 +492,7 @@ class Backtester:
             if len(X) == 0:
                 continue
 
-            aligned = fold_df.loc[idx]
+            aligned = feat.loc[idx]
             if aligned.empty:
                 continue
 

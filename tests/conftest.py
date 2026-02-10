@@ -23,12 +23,12 @@ def reset_cache():
 
 @pytest.fixture
 def temp_model_dir(tmp_path):
-    """Temporary directory for model saves"""
+    """Temporary directory for model saves (cache-safe)."""
     from config.settings import CONFIG
-    old_dir = CONFIG.model_dir
-    CONFIG._model_dir_override = tmp_path
+    old = str(CONFIG.model_dir)
+    CONFIG.set_model_dir(str(tmp_path))
     yield tmp_path
-    CONFIG._model_dir_override = None
+    CONFIG.set_model_dir("")  
 
 @pytest.fixture(autouse=True, scope="session")
 def force_offline_for_tests():
