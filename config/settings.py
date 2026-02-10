@@ -474,21 +474,36 @@ class Config:
     
     @property
     def DATA_DIR(self) -> Path:
-        path = self._base_dir / "data_storage"
-        path.mkdir(parents=True, exist_ok=True)
-        return path
+        try:
+            return self._data_dir_cached
+        except AttributeError:
+            path = self._base_dir / "data_storage"
+            path.mkdir(parents=True, exist_ok=True)
+            self._data_dir_cached = path
+            return path
     
     @property
     def data_dir(self) -> Path:
         return self.DATA_DIR
     
-    @property
+     @property
     def MODEL_DIR(self) -> Path:
+        try:
+            # Invalidate cache if override changed
+            override = self._model_dir_override
+            cached = getattr(self, '_model_dir_cached_override', None)
+            if override == cached:
+                return self._model_dir_cached
+        except AttributeError:
+            pass
+
         if self._model_dir_override:
             path = Path(self._model_dir_override)
         else:
             path = self._base_dir / "models_saved"
         path.mkdir(parents=True, exist_ok=True)
+        self._model_dir_cached = path
+        self._model_dir_cached_override = self._model_dir_override
         return path
     
     @property
@@ -497,9 +512,13 @@ class Config:
     
     @property
     def LOG_DIR(self) -> Path:
-        path = self._base_dir / "logs"
-        path.mkdir(parents=True, exist_ok=True)
-        return path
+        try:
+            return self._log_dir_cached
+        except AttributeError:
+            path = self._base_dir / "logs"
+            path.mkdir(parents=True, exist_ok=True)
+            self._log_dir_cached = path
+            return path
     
     @property
     def log_dir(self) -> Path:
@@ -507,9 +526,13 @@ class Config:
     
     @property
     def CACHE_DIR(self) -> Path:
-        path = self._base_dir / "cache"
-        path.mkdir(parents=True, exist_ok=True)
-        return path
+        try:
+            return self._cache_dir_cached
+        except AttributeError:
+            path = self._base_dir / "cache"
+            path.mkdir(parents=True, exist_ok=True)
+            self._cache_dir_cached = path
+            return path
     
     @property
     def cache_dir(self) -> Path:
@@ -517,17 +540,27 @@ class Config:
     
     @property
     def AUDIT_DIR(self) -> Path:
-        path = self._base_dir / "audit"
-        path.mkdir(parents=True, exist_ok=True)
-        return path
+        try:
+            return self._audit_dir_cached
+        except AttributeError:
+            path = self._base_dir / "audit"
+            path.mkdir(parents=True, exist_ok=True)
+            self._audit_dir_cached = path
+            return path
     
     @property
     def audit_dir(self) -> Path:
         return self.AUDIT_DIR
     
     def set_model_dir(self, path: str):
-        """Override model directory path"""
+        """Override model directory path — invalidates cache"""
         self._model_dir_override = str(path) if path else None
+        # Force re-evaluation next access
+        try:
+            del self._model_dir_cached
+            del self._model_dir_cached_override
+        except AttributeError:
+            pass
     
     def _load(self):
         """Load configuration from file and environment"""

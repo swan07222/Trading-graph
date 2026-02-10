@@ -7,6 +7,9 @@ Automatically detects network environment:
 - VPN active (Astrill ON): Uses Yahoo Finance + Tencent
 
 Network detection is cached and re-checked every 2 minutes.
+
+FIXES APPLIED:
+- Issue 16: get_fetcher() is thread-safe with double-checked locking
 """
 import time
 import threading
@@ -136,9 +139,8 @@ class DataSource:
     name: str = "base"
     priority: int = 0
 
-    # Which network environment this source needs
-    needs_china_direct: bool = False   # True = only works on China IP
-    needs_vpn: bool = False            # True = only works through VPN
+    needs_china_direct: bool = False
+    needs_vpn: bool = False
 
     def __init__(self):
         self.status = DataSourceStatus(name=self.name)
@@ -205,7 +207,7 @@ class DataSource:
 
 
 class SpotCache:
-    """Thread-safe cached spot data with TTL - only used when AkShare is reachable"""
+    """Thread-safe cached spot data with TTL"""
 
     def __init__(self, ttl_seconds: float = 30.0):
         self._cache: Optional[pd.DataFrame] = None
@@ -231,7 +233,6 @@ class SpotCache:
         if ak is None:
             return cached
 
-        # Only try if we're on China direct
         from core.network import get_network_env
         env = get_network_env()
         if not env.eastmoney_ok:
@@ -307,12 +308,15 @@ class SpotCache:
 
 
 _spot_cache: Optional[SpotCache] = None
+_spot_cache_lock = threading.Lock()
 
 
 def get_spot_cache() -> SpotCache:
     global _spot_cache
     if _spot_cache is None:
-        _spot_cache = SpotCache(ttl_seconds=30.0)
+        with _spot_cache_lock:
+            if _spot_cache is None:
+                _spot_cache = SpotCache(ttl_seconds=30.0)
     return _spot_cache
 
 
@@ -320,7 +324,7 @@ class AkShareSource(DataSource):
     """AkShare data source - Works ONLY on China direct IP"""
     name = "akshare"
     priority = 1
-    needs_china_direct = True  # Eastmoney blocks foreign IPs
+    needs_china_direct = True
 
     def __init__(self):
         super().__init__()
@@ -507,9 +511,6 @@ class AkShareSource(DataSource):
             return pd.DataFrame()
 
 
-# data/fetcher.py
-# Replace the YahooSource.get_history_instrument method
-
 class YahooSource(DataSource):
     """Yahoo Finance - Works ONLY through VPN (foreign IP)"""
     name = "yahoo"
@@ -593,15 +594,11 @@ class YahooSource(DataSource):
             max_days = INTERVAL_MAX_DAYS.get(interval, 10000)
             capped_days = min(int(days), max_days)
 
-            # Yahoo uses different period strings for intraday
-            # For intraday, Yahoo needs period like "7d", "60d" etc.
-            # NOT start/end dates (which sometimes fail for intraday)
             yahoo_interval = interval
             if interval == "60m":
                 yahoo_interval = "1h"
 
             if interval in ("1m", "2m", "5m", "15m", "30m", "60m", "1h"):
-                # Use period-based fetch for intraday (more reliable)
                 period_str = f"{capped_days}d"
                 log.debug(f"Yahoo intraday fetch: {yahoo_symbol} "
                          f"interval={yahoo_interval} period={period_str}")
@@ -666,7 +663,7 @@ class YahooSource(DataSource):
 class TencentQuoteSource(DataSource):
     """Tencent quotes - Works from ANY IP (China or foreign)"""
     name = "tencent"
-    priority = 0  # Highest priority for realtime
+    priority = 0
     needs_china_direct = False
     needs_vpn = False
 
@@ -762,9 +759,6 @@ class TencentQuoteSource(DataSource):
 class DataFetcher:
     """
     High-performance data fetcher with automatic network-aware source selection.
-    
-    On each request, checks which sources are suitable for the current network
-    and only tries those. Re-checks network every 2 minutes.
     """
 
     def __init__(self):
@@ -788,7 +782,6 @@ class DataFetcher:
     def _init_sources(self):
         self._all_sources = []
 
-        # Local DB source (always available, no network needed)
         try:
             class LocalDatabaseSource(DataSource):
                 name = "localdb"
@@ -819,7 +812,6 @@ class DataFetcher:
         except Exception:
             pass
 
-        # Network sources
         for source_cls in [AkShareSource, TencentQuoteSource, YahooSource]:
             try:
                 source = source_cls()
@@ -835,7 +827,6 @@ class DataFetcher:
             log.error("No data sources available!")
 
     def _get_active_sources(self) -> List[DataSource]:
-        """Get sources suitable for current network environment."""
         active = []
         for s in self._all_sources:
             if s.is_available() and s.is_suitable_for_network():
@@ -879,7 +870,6 @@ class DataFetcher:
 
         result: Dict[str, Quote] = {}
 
-        # Tencent works from any IP — always try it first
         for source in self._get_active_sources():
             fn = getattr(source, "get_realtime_batch", None)
             if callable(fn):
@@ -891,7 +881,6 @@ class DataFetcher:
                 except Exception:
                     continue
 
-        # Fallback: spot cache (only works on China direct)
         missing = [c for c in cleaned if c not in result]
         if missing:
             try:
@@ -917,7 +906,6 @@ class DataFetcher:
             except Exception:
                 pass
 
-        # Stale fallback
         if not result:
             with self._last_good_lock:
                 for c in cleaned:
@@ -942,25 +930,17 @@ class DataFetcher:
 
         return result
 
-    # data/fetcher.py
-    # Replace _fetch_from_sources_instrument method
-
     def _fetch_from_sources_instrument(self, inst: dict, days: int,
                                         interval: str = "1d") -> pd.DataFrame:
-        """Fetch using network-appropriate sources with detailed logging."""
         sources = self._get_active_sources()
 
         if not sources:
-            log.warning(f"No active sources available for {inst.get('symbol')} "
-                    f"({interval})")
+            log.warning(f"No active sources available for {inst.get('symbol')} ({interval})")
             return pd.DataFrame()
 
-        # Log available sources
         source_names = [s.name for s in sources]
-        log.debug(f"Active sources for {inst.get('symbol')} ({interval}): "
-                f"{source_names}")
+        log.debug(f"Active sources for {inst.get('symbol')} ({interval}): {source_names}")
 
-        # For CN equities, prioritize by network
         if inst.get("market") == "CN" and inst.get("asset") == "EQUITY":
             from core.network import get_network_env
             env = get_network_env()
@@ -984,8 +964,7 @@ class DataFetcher:
                     log.debug(f"Source {source.name} not available")
                     continue
                 if not source.is_suitable_for_network():
-                    log.debug(f"Source {source.name} not suitable for "
-                            f"current network")
+                    log.debug(f"Source {source.name} not suitable for current network")
                     continue
                 try:
                     self._rate_limit(source.name, interval)
@@ -993,8 +972,7 @@ class DataFetcher:
                     if callable(fn):
                         df = fn(inst, days=days, interval=interval)
                     else:
-                        if (inst.get("market") == "CN" and
-                                inst.get("asset") == "EQUITY"):
+                        if inst.get("market") == "CN" and inst.get("asset") == "EQUITY":
                             df = source.get_history(inst["symbol"], days)
                         else:
                             continue
@@ -1306,7 +1284,6 @@ class DataFetcher:
         return [s.status for s in self._all_sources]
 
     def reset_sources(self):
-        """Reset all sources and re-detect network."""
         from core.network import invalidate_network_cache
         invalidate_network_cache()
 
@@ -1318,11 +1295,18 @@ class DataFetcher:
         log.info("All data sources reset, network cache invalidated")
 
 
-_fetcher = None
+# =============================================================================
+# Thread-safe singleton (Issue 16: double-checked locking)
+# =============================================================================
+
+_fetcher: Optional[DataFetcher] = None
+_fetcher_lock = threading.Lock()
 
 
 def get_fetcher() -> DataFetcher:
     global _fetcher
     if _fetcher is None:
-        _fetcher = DataFetcher()
+        with _fetcher_lock:
+            if _fetcher is None:
+                _fetcher = DataFetcher()
     return _fetcher

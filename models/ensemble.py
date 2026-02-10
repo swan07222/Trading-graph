@@ -4,6 +4,7 @@ Ensemble Model - Combines multiple neural networks
 
 FIXES APPLIED:
 - BUG 13: Unified _should_stop logic consistent with trainer.py
+- Issue 19: train() accepts interval/horizon so save() uses correct values
 """
 import torch
 import torch.nn as nn
@@ -31,19 +32,19 @@ class EnsemblePrediction:
     entropy: float
     agreement: float
     individual_predictions: Dict[str, np.ndarray]
-    
+
     @property
     def prob_up(self) -> float:
         return float(self.probabilities[2])
-    
+
     @property
     def prob_neutral(self) -> float:
         return float(self.probabilities[1])
-    
+
     @property
     def prob_down(self) -> float:
         return float(self.probabilities[0])
-    
+
     @property
     def is_confident(self) -> bool:
         return self.confidence >= CONFIG.model.min_confidence
@@ -53,9 +54,9 @@ class EnsembleModel:
     """
     Ensemble of multiple neural networks with weighted voting.
     """
-    
-    MODEL_CLASSES = {}  # Will be populated on first use
-    
+
+    MODEL_CLASSES = {}  # Populated on first use
+
     def __init__(self, input_size: int, model_names: List[str] = None):
         self.input_size = int(input_size)
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -65,9 +66,12 @@ class EnsembleModel:
         self._lock = threading.Lock()
         self.temperature = 1.0
 
+        # Issue 19: Always have defaults so save() never falls back to wrong values
+        self.interval: str = "1d"
+        self.prediction_horizon: int = CONFIG.model.prediction_horizon
+
         self._init_model_classes()
 
-        # FAST default ensemble (better for real-time & training time)
         model_names = model_names or ["lstm", "gru", "tcn"]
 
         self.models = {}
@@ -79,7 +83,7 @@ class EnsembleModel:
 
         self._normalize_weights()
         log.info(f"Ensemble initialized: {list(self.models.keys())} on {self.device}")
-    
+
     def _init_model_classes(self):
         """Initialize model classes lazily"""
         if not self.MODEL_CLASSES:
@@ -91,13 +95,13 @@ class EnsembleModel:
                 'tcn': TCNModel,
                 'hybrid': HybridModel,
             })
-    
+
     def _init_model(
-        self, 
-        name: str, 
-        hidden_size: int = None, 
-        dropout: float = None, 
-        num_classes: int = None
+        self,
+        name: str,
+        hidden_size: int = None,
+        dropout: float = None,
+        num_classes: int = None,
     ):
         """Initialize a single model with proper params"""
         try:
@@ -106,7 +110,7 @@ class EnsembleModel:
                 input_size=self.input_size,
                 hidden_size=hidden_size or CONFIG.model.hidden_size,
                 num_classes=num_classes or CONFIG.model.num_classes,
-                dropout=dropout or CONFIG.model.dropout
+                dropout=dropout or CONFIG.model.dropout,
             )
             model.to(self.device)
             self.models[name] = model
@@ -114,28 +118,28 @@ class EnsembleModel:
             log.debug(f"Initialized {name} model")
         except Exception as e:
             log.error(f"Failed to initialize {name}: {e}")
-    
+
     def _normalize_weights(self):
         if not self.weights:
             return
         total = sum(self.weights.values())
         if total > 0:
             self.weights = {k: v / total for k, v in self.weights.items()}
-    
+
     def calibrate(self, X_val: np.ndarray, y_val: np.ndarray, batch_size: int = 512):
         """Calibrate using weighted logits"""
         dataset = TensorDataset(
             torch.FloatTensor(X_val),
-            torch.LongTensor(y_val)
+            torch.LongTensor(y_val),
         )
         loader = DataLoader(dataset, batch_size=batch_size, shuffle=False)
-        
+
         all_logits = []
         all_labels = []
-        
+
         for batch_X, batch_y in loader:
             batch_X = batch_X.to(self.device)
-            
+
             weighted_logits = None
             for name, model in self.models.items():
                 model.eval()
@@ -146,24 +150,24 @@ class EnsembleModel:
                         weighted_logits = logits * weight
                     else:
                         weighted_logits += logits * weight
-            
+
             all_logits.append(weighted_logits.cpu())
             all_labels.append(batch_y)
-        
+
         combined_logits = torch.cat(all_logits, dim=0)
         combined_labels = torch.cat(all_labels, dim=0)
-        
+
         best_temp = 1.0
         best_nll = float('inf')
-        
+
         for temp in [0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 2.5, 3.0]:
             scaled = combined_logits / temp
             nll = F.cross_entropy(scaled, combined_labels).item()
-            
+
             if nll < best_nll:
                 best_nll = nll
                 best_temp = temp
-        
+
         self.temperature = best_temp
         log.info(f"Calibration complete: temperature={best_temp:.2f}")
 
@@ -176,9 +180,22 @@ class EnsembleModel:
         epochs: int = None,
         batch_size: int = None,
         callback: Callable = None,
-        stop_flag: Any = None
+        stop_flag: Any = None,
+        interval: str = None,
+        horizon: int = None,
     ) -> Dict:
-        """Train all models in the ensemble."""
+        """
+        Train all models in the ensemble.
+
+        Issue 19 fix: accepts interval/horizon so that save() will
+        use the correct values even if the ensemble was freshly created.
+        """
+        # Store interval/horizon if provided
+        if interval is not None:
+            self.interval = str(interval)
+        if horizon is not None:
+            self.prediction_horizon = int(horizon)
+
         epochs = epochs or CONFIG.model.epochs
         batch_size = batch_size or CONFIG.model.batch_size
 
@@ -230,7 +247,7 @@ class EnsembleModel:
                 class_weights=class_weights,
                 epochs=epochs,
                 callback=callback,
-                stop_flag=stop_flag
+                stop_flag=stop_flag,
             )
 
             history[name] = model_history
@@ -242,16 +259,12 @@ class EnsembleModel:
             self.calibrate(X_val, y_val)
 
         return history
-    
+
     def _should_stop(self, stop_flag: Any) -> bool:
-        """
-        Check if training should stop - unified logic.
-        FIX BUG 13: Consistent with trainer.py's _should_stop
-        """
+        """Check if training should stop - unified logic."""
         if stop_flag is None:
             return False
-        
-        # Handle CancellationToken (has is_cancelled property)
+
         is_cancelled = getattr(stop_flag, 'is_cancelled', None)
         if is_cancelled is not None:
             if callable(is_cancelled):
@@ -260,14 +273,13 @@ class EnsembleModel:
                 except Exception:
                     pass
             return bool(is_cancelled)
-        
-        # Handle callable
+
         if callable(stop_flag):
             try:
                 return bool(stop_flag())
             except Exception:
                 pass
-        
+
         return False
 
     def _train_single_model(
@@ -279,7 +291,7 @@ class EnsembleModel:
         class_weights: torch.Tensor,
         epochs: int,
         callback: Callable = None,
-        stop_flag: Any = None
+        stop_flag: Any = None,
     ) -> Tuple[Dict, float]:
         """Train a single model with AMP compatibility across torch versions."""
         from contextlib import nullcontext
@@ -287,7 +299,7 @@ class EnsembleModel:
         optimizer = torch.optim.AdamW(
             model.parameters(),
             lr=CONFIG.model.learning_rate,
-            weight_decay=CONFIG.model.weight_decay
+            weight_decay=CONFIG.model.weight_decay,
         )
 
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
@@ -303,7 +315,7 @@ class EnsembleModel:
 
         use_amp = (self.device == "cuda")
 
-        # ---- AMP compatibility layer ----
+        # AMP compatibility layer
         GradScaler = None
         autocast = None
         try:
@@ -389,7 +401,7 @@ class EnsembleModel:
             else:
                 patience += 1
                 if patience >= int(CONFIG.model.early_stop_patience):
-                    log.info(f"{name}: Early stopping at epoch {epoch+1}")
+                    log.info(f"{name}: Early stopping at epoch {epoch + 1}")
                     break
 
             if callback:
@@ -401,22 +413,22 @@ class EnsembleModel:
 
         log.info(f"{name} complete. Best accuracy: {best_val_acc:.2%}")
         return history, best_val_acc
-    
+
     def _update_weights(self, val_accuracies: Dict[str, float]):
         """Update model weights based on validation accuracy"""
         if not val_accuracies:
             return
-        
+
         accs = np.array([val_accuracies.get(name, 0.5) for name in self.models.keys()])
-        
+
         temp = 0.5
         weights = np.exp(accs / temp)
         weights = weights / weights.sum()
-        
+
         self.weights = {name: float(w) for name, w in zip(self.models.keys(), weights)}
-        
+
         log.info(f"Updated weights: {self.weights}")
-    
+
     def predict(self, X: np.ndarray) -> EnsemblePrediction:
         """Get ensemble prediction for a single sample (batch_size=1)."""
         if X.ndim == 2:
@@ -479,7 +491,7 @@ class EnsembleModel:
             agreement=agreement,
             individual_predictions=all_probs,
         )
-    
+
     def predict_batch(self, X: np.ndarray, batch_size: int = 1024) -> List[EnsemblePrediction]:
         """Batch inference. Returns list[EnsemblePrediction]."""
         if X is None or len(X) == 0:
@@ -542,20 +554,21 @@ class EnsembleModel:
                     confidence=conf,
                     entropy=ent_norm,
                     agreement=agreement,
-                    individual_predictions=indiv
+                    individual_predictions=indiv,
                 ))
 
             start = end
 
         return out
-    
+
     def save(self, path: str = None):
         """Save ensemble to file atomically."""
         from datetime import datetime
         from utils.atomic_io import atomic_torch_save, atomic_write_json
 
-        interval = getattr(self, "interval", "1d")
-        horizon = int(getattr(self, "prediction_horizon", CONFIG.model.prediction_horizon))
+        # Issue 19: use instance attributes (set during train or load)
+        interval = str(self.interval)
+        horizon = int(self.prediction_horizon)
 
         if path is None:
             path = CONFIG.model_dir / f"ensemble_{interval}_{horizon}.pt"
@@ -569,8 +582,8 @@ class EnsembleModel:
                 "weights": self.weights,
                 "temperature": self.temperature,
                 "meta": {
-                    "interval": str(interval),
-                    "prediction_horizon": int(horizon),
+                    "interval": interval,
+                    "prediction_horizon": horizon,
                 },
                 "arch": {
                     "hidden_size": CONFIG.model.hidden_size,
@@ -589,8 +602,8 @@ class EnsembleModel:
             "input_size": int(self.input_size),
             "num_models": len(self.models),
             "temperature": float(self.temperature),
-            "interval": str(interval),
-            "prediction_horizon": int(horizon),
+            "interval": interval,
+            "prediction_horizon": horizon,
         }
 
         manifest_path = path.parent / f"model_manifest_{path.stem}.json"
@@ -602,7 +615,7 @@ class EnsembleModel:
         """Load ensemble from file."""
         if path is None:
             path = str(CONFIG.model_dir / "ensemble_1d_5.pt")
-        
+
         if not Path(path).exists():
             log.warning(f"No saved model at {path}")
             return False
@@ -616,14 +629,15 @@ class EnsembleModel:
 
                 meta = state.get("meta", {})
                 self.interval = meta.get("interval", "1d")
-                self.prediction_horizon = int(meta.get("prediction_horizon", CONFIG.model.prediction_horizon))
+                self.prediction_horizon = int(
+                    meta.get("prediction_horizon", CONFIG.model.prediction_horizon)
+                )
 
                 arch = state.get("arch", {})
                 saved_hidden = int(arch.get("hidden_size", CONFIG.model.hidden_size))
                 saved_dropout = float(arch.get("dropout", CONFIG.model.dropout))
                 saved_classes = int(arch.get("num_classes", CONFIG.model.num_classes))
 
-                # Ensure model classes are initialized
                 self._init_model_classes()
 
                 self.models = {}
@@ -649,7 +663,8 @@ class EnsembleModel:
 
             log.info(
                 f"Ensemble loaded: {list(self.models.keys())}, "
-                f"interval={getattr(self, 'interval', '?')}, horizon={getattr(self, 'prediction_horizon', '?')}"
+                f"interval={self.interval}, "
+                f"horizon={self.prediction_horizon}"
             )
             return True
 
