@@ -147,51 +147,87 @@ class Predictor:
         self._load_models()
     
     def _load_models(self) -> bool:
-        """Load all required models"""
+        """Load all required models (robust fallback to any available ensemble)."""
         try:
             from data.processor import DataProcessor
             from data.features import FeatureEngine
             from data.fetcher import get_fetcher
+            from models.ensemble import EnsembleModel
 
             self.processor = DataProcessor()
             self.feature_engine = FeatureEngine()
             self.fetcher = get_fetcher()
             self._feature_cols = self.feature_engine.get_feature_columns()
 
-            # Load scaler
-            scaler_path = CONFIG.MODEL_DIR / f"scaler_{self.interval}_{self.horizon}.pkl"
-            if not scaler_path.exists():
-                scaler_path = CONFIG.MODEL_DIR / "scaler_1d_5.pkl"
+            model_dir = CONFIG.MODEL_DIR
 
-            if scaler_path.exists():
-                self.processor.load_scaler(str(scaler_path))
+            # ----------------------------
+            # Pick best ensemble + scaler pair
+            # ----------------------------
+            req_ens = model_dir / f"ensemble_{self.interval}_{self.horizon}.pt"
+            req_scl = model_dir / f"scaler_{self.interval}_{self.horizon}.pkl"
+
+            chosen_ens = None
+            chosen_scl = None
+
+            if req_ens.exists():
+                chosen_ens = req_ens
+                chosen_scl = req_scl if req_scl.exists() else None
             else:
-                log.warning("No scaler found")
-
-            # Load ensemble (single load, properly error-checked)
-            try:
-                from models.ensemble import EnsembleModel
-
-                ensemble_path = CONFIG.MODEL_DIR / f"ensemble_{self.interval}_{self.horizon}.pt"
-                if ensemble_path.exists():
-                    input_size = self.processor.n_features or len(self._feature_cols)
-                    self.ensemble = EnsembleModel(input_size=input_size)
-                    if self.ensemble.load(str(ensemble_path)):
-                        if not self.ensemble.models:
-                            log.warning(f"Ensemble loaded but has no models: {ensemble_path}")
-                            self.ensemble = None
-                        else:
-                            log.info(f"Ensemble loaded from {ensemble_path}")
-                    else:
-                        log.warning(f"Failed to load ensemble: {ensemble_path}")
-                        self.ensemble = None
+                # 1) common fallback
+                fb_ens = model_dir / "ensemble_1d_5.pt"
+                fb_scl = model_dir / "scaler_1d_5.pkl"
+                if fb_ens.exists():
+                    chosen_ens = fb_ens
+                    chosen_scl = fb_scl if fb_scl.exists() else None
                 else:
-                    log.warning("No ensemble model found")
-            except ImportError:
-                log.warning("EnsembleModel not available")
-                self.ensemble = None
+                    # 2) any available ensemble, prefer one that has matching scaler
+                    ensembles = sorted(model_dir.glob("ensemble_*.pt"), key=lambda p: p.stat().st_mtime, reverse=True)
+                    for ep in ensembles:
+                        parts = ep.stem.split("_", 2)  # ensemble_{interval}_{horizon}
+                        if len(parts) == 3:
+                            interval = parts[1]
+                            horizon = parts[2]
+                            sp = model_dir / f"scaler_{interval}_{horizon}.pkl"
+                            if sp.exists():
+                                chosen_ens = ep
+                                chosen_scl = sp
+                                break
+                    if chosen_ens is None and ensembles:
+                        chosen_ens = ensembles[0]  # last resort
 
-            # Load forecaster (optional)
+            # ----------------------------
+            # Load scaler (best effort)
+            # ----------------------------
+            if chosen_scl and chosen_scl.exists():
+                self.processor.load_scaler(str(chosen_scl))
+            else:
+                # keep your legacy fallback
+                legacy = model_dir / "scaler_1d_5.pkl"
+                if legacy.exists():
+                    self.processor.load_scaler(str(legacy))
+                else:
+                    log.warning("No scaler found")
+
+            # ----------------------------
+            # Load ensemble
+            # ----------------------------
+            self.ensemble = None
+            if chosen_ens and chosen_ens.exists():
+                input_size = self.processor.n_features or len(self._feature_cols)
+                ens = EnsembleModel(input_size=input_size)
+                if ens.load(str(chosen_ens)) and ens.models:
+                    self.ensemble = ens
+                    # adopt loaded interval/horizon from model meta for UI consistency
+                    self.interval = str(getattr(self.ensemble, "interval", self.interval))
+                    self.horizon = int(getattr(self.ensemble, "prediction_horizon", self.horizon))
+                    log.info(f"Ensemble loaded from {chosen_ens.name} (interval={self.interval}, horizon={self.horizon})")
+                else:
+                    log.warning(f"Failed to load ensemble: {chosen_ens}")
+            else:
+                log.warning("No ensemble model found")
+
+            # Load forecaster (optional, keep existing behavior)
             self._load_forecaster()
 
             self._loaded = True

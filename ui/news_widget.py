@@ -21,8 +21,8 @@ log = get_logger(__name__)
 
 class NewsFetchThread(QThread):
     """Background thread to fetch news"""
-    finished = pyqtSignal(list)  # List[NewsItem]
-    sentiment_updated = pyqtSignal(dict)  # sentiment summary
+    news_ready = pyqtSignal(list)          # List[NewsItem]
+    sentiment_updated = pyqtSignal(dict)   # sentiment summary
 
     def __init__(self, stock_code: str = None, fetch_type: str = "market"):
         super().__init__()
@@ -41,12 +41,12 @@ class NewsFetchThread(QThread):
                 news = agg.get_market_news(count=30)
                 sentiment = agg.get_sentiment_summary()
 
-            self.finished.emit(news)
+            self.news_ready.emit(news)
             self.sentiment_updated.emit(sentiment)
 
         except Exception as e:
             log.warning(f"News fetch error: {e}")
-            self.finished.emit([])
+            self.news_ready.emit([])
             self.sentiment_updated.emit({})
 
 
@@ -205,8 +205,18 @@ class NewsPanel(QWidget):
         self.mode_label.setText("📰 Market News")
         self.refresh(force=True)
 
+    def _cleanup_fetch_thread(self):
+        """Safely drop references to finished/deleted QThread."""
+        th = getattr(self, "_fetch_thread", None)
+        self._fetch_thread = None
+        if th is not None:
+            try:
+                th.deleteLater()
+            except Exception:
+                pass
+
     def refresh(self, force: bool = False):
-        """Fetch news in background"""
+        """Fetch news in background safely (no deleted-thread access)."""
         # Check if on China network (news only available there)
         try:
             from core.network import get_network_env
@@ -217,17 +227,33 @@ class NewsPanel(QWidget):
         except Exception:
             pass
 
-        if self._fetch_thread and self._fetch_thread.isRunning():
-            return
+        # If previous thread exists, check running state safely
+        th = getattr(self, "_fetch_thread", None)
+        if th is not None:
+            try:
+                if th.isRunning():
+                    return
+            except RuntimeError:
+                # Qt object deleted; drop reference
+                self._fetch_thread = None
 
         fetch_type = "stock" if self._current_stock else "market"
-        self._fetch_thread = NewsFetchThread(self._current_stock, fetch_type)
-        self._fetch_thread.finished.connect(self._on_news_received)
-        self._fetch_thread.sentiment_updated.connect(self.sentiment_gauge.update_sentiment)
-        self._fetch_thread.start()
+        th = NewsFetchThread(self._current_stock, fetch_type)
+
+        # Keep reference (prevents GC)
+        self._fetch_thread = th
+
+        # Data signals
+        th.news_ready.connect(self._on_news_received)
+        th.sentiment_updated.connect(self.sentiment_gauge.update_sentiment)
+
+        # Lifecycle cleanup (QThread.finished is now available again)
+        th.finished.connect(self._cleanup_fetch_thread)
+
+        th.start()
 
     def _on_news_received(self, news_items: list):
-        """Update table with received news + cleanup finished thread."""
+        """Update table with received news."""
         self.table.setRowCount(len(news_items))
 
         for row, item in enumerate(news_items):
