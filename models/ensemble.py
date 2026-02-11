@@ -18,6 +18,8 @@ FIXES APPLIED:
       to support thread-local LR override from auto_learner.py
     - train() now accepts optional learning_rate parameter for explicit override
     - Improved docstrings and type hints
+    - FIX CANCEL: CancelledException no longer swallowed in callback handler
+    - FIX CANCEL: Per-batch stop check added to training loop
 """
 from __future__ import annotations
 
@@ -41,13 +43,25 @@ log = get_logger(__name__)
 
 
 # ---------------------------------------------------------------------------
+# CancelledException import (FIX CANCEL)
+# ---------------------------------------------------------------------------
+
+try:
+    from utils.cancellation import CancelledException
+except ImportError:
+    # Fallback if cancellation module is not available
+    class CancelledException(Exception):  # type: ignore[no-redef]
+        pass
+
+
+# ---------------------------------------------------------------------------
 # Thread-local LR support (FIX C1)
 # ---------------------------------------------------------------------------
 
 def _get_effective_learning_rate() -> float:
     """
     Get effective learning rate, checking thread-local override first.
-    
+
     This supports the thread-local LR pattern from auto_learner.py
     which avoids global CONFIG mutation race conditions.
     """
@@ -56,7 +70,7 @@ def _get_effective_learning_rate() -> float:
         return get_effective_learning_rate()
     except ImportError:
         pass
-    
+
     return CONFIG.model.learning_rate
 
 
@@ -126,7 +140,7 @@ def _build_amp_context(device: str):
 class EnsembleModel:
     """
     Ensemble of multiple neural networks with calibrated weighted voting.
-    
+
     Supports:
     - Multiple model architectures (LSTM, GRU, TCN, Transformer, Hybrid)
     - Weighted voting based on validation accuracy
@@ -144,10 +158,10 @@ class EnsembleModel:
     ):
         """
         Initialize ensemble with specified models.
-        
+
         Args:
             input_size: Number of input features
-            model_names: List of model types to include 
+            model_names: List of model types to include
                         (default: ['lstm', 'gru', 'tcn'])
         """
         if input_size <= 0:
@@ -336,7 +350,7 @@ class EnsembleModel:
     ) -> Dict:
         """
         Train all models in the ensemble.
-        
+
         Args:
             X_train: Training features (N, seq_len, n_features)
             y_train: Training labels (N,)
@@ -349,7 +363,7 @@ class EnsembleModel:
             interval: Data interval metadata
             horizon: Prediction horizon metadata
             learning_rate: Explicit learning rate override (FIX C1)
-        
+
         Returns:
             Dict mapping model name to training history
         """
@@ -365,7 +379,7 @@ class EnsembleModel:
 
         epochs = epochs or CONFIG.model.epochs
         batch_size = batch_size or CONFIG.model.batch_size
-        
+
         # FIX C1: Use explicit LR if provided, else try thread-local, else CONFIG
         if learning_rate is not None:
             effective_lr = float(learning_rate)
@@ -449,7 +463,14 @@ class EnsembleModel:
         callback: Optional[Callable] = None,
         stop_flag: Any = None,
     ) -> Tuple[Dict, float]:
-        """Train one model with early stopping, warmup + cosine schedule, optional AMP."""
+        """
+        Train one model with early stopping, warmup + cosine schedule,
+        optional AMP.
+
+        FIX CANCEL: CancelledException is now propagated from callback
+        instead of being swallowed by `except Exception: pass`.
+        Also checks stop_flag every N batches for faster cancellation.
+        """
 
         optimizer = torch.optim.AdamW(
             model.parameters(),
@@ -482,6 +503,9 @@ class EnsembleModel:
         best_state: Optional[Dict] = None
         patience_limit = int(CONFIG.model.early_stop_patience)
 
+        # FIX CANCEL: Check stop_flag every N batches for faster response
+        _STOP_CHECK_INTERVAL = 10  # Check every 10 batches
+
         for epoch in range(int(epochs)):
             if self._should_stop(stop_flag):
                 break
@@ -489,8 +513,15 @@ class EnsembleModel:
             # --- train ---
             model.train()
             train_losses: list[float] = []
+            cancelled = False
 
-            for batch_X, batch_y in train_loader:
+            for batch_idx, (batch_X, batch_y) in enumerate(train_loader):
+                # FIX CANCEL: Per-batch stop check for faster cancellation
+                if batch_idx % _STOP_CHECK_INTERVAL == 0 and batch_idx > 0:
+                    if self._should_stop(stop_flag):
+                        cancelled = True
+                        break
+
                 batch_X = batch_X.to(self.device, non_blocking=True)
                 batch_y = batch_y.to(self.device, non_blocking=True)
 
@@ -513,6 +544,9 @@ class EnsembleModel:
                     optimizer.step()
 
                 train_losses.append(float(loss.detach()))
+
+            if cancelled:
+                break
 
             scheduler.step()
 
@@ -556,10 +590,17 @@ class EnsembleModel:
                     log.info(f"{name}: early stop at epoch {epoch + 1}")
                     break
 
+            # FIX CANCEL: Propagate CancelledException from callback
+            # instead of swallowing it with `except Exception: pass`
             if callback is not None:
                 try:
                     callback(name, epoch, val_acc)
+                except CancelledException:
+                    # Must propagate — user requested cancellation
+                    log.info(f"{name}: cancelled via callback at epoch {epoch + 1}")
+                    raise
                 except Exception:
+                    # Other callback errors are non-fatal
                     pass
 
         # Restore best weights
@@ -586,21 +627,21 @@ class EnsembleModel:
             self.weights = {n: float(w) for n, w in zip(names, exp_w)}
 
         log.info(f"Ensemble weights: {self.weights}")
-    
-        # ------------------------------------------------------------------
+
+    # ------------------------------------------------------------------
     # Prediction
     # ------------------------------------------------------------------
 
     def predict(self, X: np.ndarray) -> EnsemblePrediction:
         """
         Predict a single sample.
-        
+
         Args:
             X: Input array of shape (seq_len, n_features) or (1, seq_len, n_features)
-        
+
         Returns:
             EnsemblePrediction with probabilities, class, confidence, etc.
-        
+
         Raises:
             ValueError: If input shape is invalid
             RuntimeError: If no models are available
@@ -622,11 +663,11 @@ class EnsembleModel:
     ) -> List[EnsemblePrediction]:
         """
         Batch prediction.
-        
+
         Args:
             X: Input array of shape (N, seq_len, n_features)
             batch_size: Processing batch size
-        
+
         Returns:
             List of EnsemblePrediction, one per sample
         """
@@ -717,12 +758,12 @@ class EnsembleModel:
     def save(self, path: Optional[str] = None):
         """
         Save ensemble atomically.
-        
+
         Args:
             path: Target file path (default: ensemble_{interval}_{horizon}.pt)
         """
         from datetime import datetime
-        
+
         try:
             from utils.atomic_io import atomic_torch_save, atomic_write_json
         except ImportError:
@@ -761,7 +802,6 @@ class EnsembleModel:
             atomic_torch_save(path, state)
         else:
             # Fallback to regular torch.save
-            import torch
             torch.save(state, path)
 
         manifest = {
@@ -777,7 +817,7 @@ class EnsembleModel:
         }
 
         manifest_path = path.parent / f"model_manifest_{path.stem}.json"
-        
+
         if atomic_write_json is not None:
             atomic_write_json(manifest_path, manifest)
         else:
@@ -791,15 +831,13 @@ class EnsembleModel:
     def load(self, path: Optional[str] = None) -> bool:
         """
         Load ensemble from file.
-        
+
         Args:
             path: Source file path (default: ensemble_1d_5.pt)
-        
+
         Returns:
             True if load succeeded, False otherwise
         """
-        import torch
-        
         if path is None:
             path = str(CONFIG.model_dir / "ensemble_1d_5.pt")
 
@@ -901,10 +939,10 @@ class EnsembleModel:
     def to(self, device: str) -> "EnsembleModel":
         """
         Move all models to specified device.
-        
+
         Args:
             device: Target device ('cpu', 'cuda', 'cuda:0', etc.)
-        
+
         Returns:
             self for chaining
         """

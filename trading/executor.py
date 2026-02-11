@@ -1,12 +1,19 @@
 # trading/executor.py
 """
-Execution Engine - Production Grade with Full Fill Sync
+Execution Engine - Production Grade with Full Fill Sync + Auto-Trading
 
 CRITICAL for Live Trading:
 - Proper fill sync loop with broker
 - Order status polling
 - OMS integration with correct order IDs
 - Reconciliation
+
+AUTO-TRADING ADDITIONS:
+- AutoTrader class: autonomous trading loop driven by Predictor
+- Respects all risk limits, cooldowns, daily caps
+- MANUAL / AUTO / SEMI_AUTO modes
+- Full audit trail via AutoTradeAction
+- Thread-safe integration with ExecutionEngine
 
 FIXES APPLIED:
 - Added Tuple to typing imports (was causing crash)
@@ -20,11 +27,14 @@ from __future__ import annotations
 import queue
 import threading
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 from typing import Dict, Optional, Callable, Set, List, Tuple
 
 from config import CONFIG, TradingMode
-from core.types import Order, OrderSide, OrderStatus, TradeSignal, Account, Fill
+from core.types import (
+    Order, OrderSide, OrderStatus, TradeSignal, Account, Fill,
+    AutoTradeMode, AutoTradeState, AutoTradeAction,
+)
 from trading.broker import BrokerInterface, create_broker
 from trading.risk import RiskManager, get_risk_manager
 from trading.kill_switch import get_kill_switch
@@ -36,6 +46,735 @@ from utils.metrics import inc_counter, set_gauge, observe
 log = get_logger(__name__)
 
 
+# =============================================================================
+# AUTO-TRADER
+# =============================================================================
+
+class AutoTrader:
+    """
+    Autonomous trading engine that scans the watchlist using the AI
+    predictor and submits orders via ExecutionEngine when signals meet
+    the configured thresholds.
+
+    Lifecycle:
+        auto_trader = AutoTrader(engine, predictor, watchlist)
+        auto_trader.set_mode(AutoTradeMode.AUTO)
+        auto_trader.start()
+        ...
+        auto_trader.stop()
+
+    Thread Safety:
+        - All public methods acquire ``_lock``
+        - The scan loop runs on a dedicated daemon thread
+        - State mutations are atomic under the lock
+        - UI reads ``state`` via ``get_state()`` which returns a snapshot
+
+    Modes:
+        MANUAL:    Scan loop does NOT run. All trading is user-initiated.
+        AUTO:      Scan loop runs. Qualifying signals auto-execute.
+        SEMI_AUTO: Scan loop runs. Qualifying signals queued as pending
+                   approvals for one-click accept/reject in the UI.
+    """
+
+    # Safety: max consecutive errors before auto-pause
+    MAX_CONSECUTIVE_ERRORS: int = 5
+    ERROR_PAUSE_SECONDS: int = 300  # 5 min pause after too many errors
+
+    def __init__(
+        self,
+        engine: "ExecutionEngine",
+        predictor,
+        watch_list: List[str],
+    ):
+        self._engine = engine
+        self._predictor = predictor
+        self._watch_list = list(watch_list)
+
+        self._lock = threading.RLock()
+        self._stop_event = threading.Event()
+        self._thread: Optional[threading.Thread] = None
+
+        self.state = AutoTradeState()
+
+        # Callbacks for UI notifications
+        self.on_action: Optional[Callable[[AutoTradeAction], None]] = None
+        self.on_state_changed: Optional[Callable[[AutoTradeState], None]] = None
+        self.on_pending_approval: Optional[Callable[[AutoTradeAction], None]] = None
+
+    # -----------------------------------------------------------------
+    # Public API
+    # -----------------------------------------------------------------
+
+    def set_mode(self, mode: AutoTradeMode):
+        """Change trading mode. Stops/starts scan loop as needed."""
+        with self._lock:
+            old_mode = self.state.mode
+            self.state.mode = mode
+
+            if mode == AutoTradeMode.MANUAL:
+                if self._is_loop_running():
+                    self._stop_loop()
+                self.state.is_running = False
+            else:
+                # AUTO or SEMI_AUTO — start loop if not running
+                if not self._is_loop_running():
+                    self._start_loop()
+                self.state.is_running = True
+
+            log.info(f"Auto-trade mode changed: {old_mode.value} -> {mode.value}")
+            self._notify_state_changed()
+
+    def get_mode(self) -> AutoTradeMode:
+        """Get current mode."""
+        with self._lock:
+            return self.state.mode
+
+    def start(self):
+        """Start the auto-trader (uses current mode)."""
+        with self._lock:
+            if self.state.mode == AutoTradeMode.MANUAL:
+                log.info("Auto-trader in MANUAL mode — scan loop not started")
+                return
+
+            if self._is_loop_running():
+                return
+
+            self._start_loop()
+            self.state.is_running = True
+            self._notify_state_changed()
+            log.info(f"Auto-trader started in {self.state.mode.value} mode")
+
+    def stop(self):
+        """Stop the auto-trader scan loop."""
+        with self._lock:
+            self._stop_loop()
+            self.state.is_running = False
+            self._notify_state_changed()
+            log.info("Auto-trader stopped")
+
+    def update_watchlist(self, watch_list: List[str]):
+        """Update the watchlist (thread-safe)."""
+        with self._lock:
+            self._watch_list = list(watch_list)[:50]
+
+    def update_predictor(self, predictor):
+        """Update the predictor instance (after model reload)."""
+        with self._lock:
+            self._predictor = predictor
+
+    def get_state(self) -> AutoTradeState:
+        """Get a snapshot of the current state."""
+        with self._lock:
+            return self.state
+
+    def get_recent_actions(self, n: int = 50) -> List[AutoTradeAction]:
+        """Get recent auto-trade actions."""
+        with self._lock:
+            return list(self.state.recent_actions[:n])
+
+    def get_pending_approvals(self) -> List[AutoTradeAction]:
+        """Get pending approvals (SEMI_AUTO mode)."""
+        with self._lock:
+            return list(self.state.pending_approvals)
+
+    def approve_pending(self, action_id: str) -> bool:
+        """Approve a pending auto-trade action (SEMI_AUTO mode)."""
+        with self._lock:
+            action = self.state.remove_pending(action_id)
+            if action is None:
+                log.warning(f"Pending approval not found: {action_id}")
+                return False
+
+            # Execute the trade
+            success = self._execute_action(action)
+            if success:
+                action.decision = "EXECUTED"
+                log.info(
+                    f"Pending approval APPROVED and executed: "
+                    f"{action.stock_code} {action.side}"
+                )
+            else:
+                action.decision = "REJECTED"
+                action.skip_reason = "Execution failed after approval"
+                log.warning(f"Pending approval execution failed: {action_id}")
+
+            self.state.record_action(action)
+            self._notify_action(action)
+            self._notify_state_changed()
+            return success
+
+    def reject_pending(self, action_id: str) -> bool:
+        """Reject a pending auto-trade action (SEMI_AUTO mode)."""
+        with self._lock:
+            action = self.state.remove_pending(action_id)
+            if action is None:
+                return False
+
+            action.decision = "REJECTED"
+            action.skip_reason = "Manually rejected by user"
+            self.state.record_action(action)
+            self.state.record_skip()
+            self._notify_action(action)
+            self._notify_state_changed()
+            log.info(f"Pending approval REJECTED: {action.stock_code}")
+            return True
+
+    def pause(self, reason: str, duration_seconds: int = 0):
+        """Pause auto-trading temporarily."""
+        with self._lock:
+            self.state.is_paused = True
+            self.state.pause_reason = reason
+            if duration_seconds > 0:
+                self.state.pause_until = (
+                    datetime.now() + timedelta(seconds=duration_seconds)
+                )
+            else:
+                self.state.pause_until = None
+            log.info(f"Auto-trader paused: {reason}")
+            self._notify_state_changed()
+
+    def resume(self):
+        """Resume auto-trading after pause."""
+        with self._lock:
+            self.state.is_paused = False
+            self.state.pause_reason = ""
+            self.state.pause_until = None
+            log.info("Auto-trader resumed")
+            self._notify_state_changed()
+
+    # -----------------------------------------------------------------
+    # Internal: loop management
+    # -----------------------------------------------------------------
+
+    def _is_loop_running(self) -> bool:
+        """Check if scan thread is alive."""
+        return self._thread is not None and self._thread.is_alive()
+
+    def _start_loop(self):
+        """Start the scan loop thread."""
+        self._stop_event.clear()
+        self._thread = threading.Thread(
+            target=self._scan_loop,
+            name="auto_trader",
+            daemon=True,
+        )
+        self._thread.start()
+
+    def _stop_loop(self):
+        """Stop the scan loop thread."""
+        self._stop_event.set()
+        if self._thread and self._thread.is_alive():
+            self._thread.join(timeout=10)
+        self._thread = None
+
+    # -----------------------------------------------------------------
+    # Internal: main scan loop
+    # -----------------------------------------------------------------
+
+    def _scan_loop(self):
+        """
+        Main auto-trading scan loop.
+
+        Runs on a dedicated daemon thread.  Each cycle:
+        1. Check pre-conditions (market open, broker connected, etc.)
+        2. Day rollover if needed
+        3. Run predictor batch scan on watchlist
+        4. Filter signals against auto-trade thresholds
+        5. Execute or queue for approval
+        6. Sleep until next cycle
+        """
+        log.info("Auto-trade scan loop started")
+
+        while not self._stop_event.is_set():
+            cycle_start = time.time()
+
+            try:
+                with self._lock:
+                    # Day rollover
+                    today = date.today()
+                    if self.state.session_date != today:
+                        self.state.reset_daily()
+                        log.info("Auto-trader: new trading day, counters reset")
+
+                    # Check if we should scan
+                    if not self._should_scan():
+                        self._sleep_interruptible(5)
+                        continue
+
+                    self.state.last_scan_time = datetime.now()
+
+                # Run scan OUTSIDE the lock to avoid blocking UI
+                self._run_scan_cycle()
+
+            except Exception as e:
+                with self._lock:
+                    self.state.record_error(str(e))
+                    log.error(f"Auto-trade scan error: {e}", exc_info=True)
+
+                    # Auto-pause on too many consecutive errors
+                    if self.state.consecutive_errors >= self.MAX_CONSECUTIVE_ERRORS:
+                        self.state.is_paused = True
+                        self.state.pause_reason = (
+                            f"Too many errors ({self.state.consecutive_errors})"
+                        )
+                        self.state.pause_until = (
+                            datetime.now()
+                            + timedelta(seconds=self.ERROR_PAUSE_SECONDS)
+                        )
+                        log.warning(
+                            f"Auto-trader paused for {self.ERROR_PAUSE_SECONDS}s "
+                            f"due to {self.state.consecutive_errors} consecutive errors"
+                        )
+                        self._notify_state_changed()
+
+            # Sleep until next cycle
+            elapsed = time.time() - cycle_start
+            interval = CONFIG.auto_trade.scan_interval_seconds
+            remaining = max(1.0, interval - elapsed)
+            self._sleep_interruptible(remaining)
+
+        log.info("Auto-trade scan loop exited")
+
+    def _should_scan(self) -> bool:
+        """
+        Check all pre-conditions for scanning.
+        MUST be called with ``_lock`` held.
+        """
+        cfg = CONFIG.auto_trade
+
+        # Mode check
+        if self.state.mode == AutoTradeMode.MANUAL:
+            return False
+
+        # Enabled check
+        if not cfg.enabled:
+            return False
+
+        # Safety pause
+        if self.state.is_safety_paused:
+            return False
+
+        # Market hours
+        if cfg.require_market_open and not CONFIG.is_market_open():
+            return False
+
+        # Broker connected
+        if cfg.require_broker_connected:
+            if not self._engine or not self._engine._running:
+                return False
+            if not self._engine.broker.is_connected:
+                return False
+
+        # Daily trade limit
+        if self.state.trades_today >= cfg.max_trades_per_day:
+            return False
+
+        # Predictor available
+        if self._predictor is None or self._predictor.ensemble is None:
+            return False
+
+        # Watchlist not empty
+        if not self._watch_list:
+            return False
+
+        return True
+
+    def _run_scan_cycle(self):
+        """
+        Execute one scan cycle: predict → filter → execute/queue.
+        Called WITHOUT lock held (acquires as needed).
+        """
+        # Get snapshot of watchlist and config under lock
+        with self._lock:
+            watch_list = list(self._watch_list)
+            predictor = self._predictor
+
+        if not predictor or not watch_list:
+            return
+
+        cfg = CONFIG.auto_trade
+
+        # --- Step 1: Quick batch prediction ---
+        try:
+            preds = predictor.predict_quick_batch(
+                watch_list,
+                use_realtime_price=True,
+            )
+        except Exception as e:
+            with self._lock:
+                self.state.record_error(f"Batch predict failed: {e}")
+            log.warning(f"Auto-trade batch prediction error: {e}")
+            return
+
+        if not preds:
+            return
+
+        # --- Step 2: Import Signal enum ---
+        try:
+            from models.predictor import Signal
+        except ImportError:
+            log.error("Cannot import Signal enum")
+            return
+
+        # --- Step 3: Filter by auto-trade thresholds ---
+        signal_allow_map = {
+            Signal.STRONG_BUY: cfg.allow_strong_buy,
+            Signal.BUY: cfg.allow_buy,
+            Signal.SELL: cfg.allow_sell,
+            Signal.STRONG_SELL: cfg.allow_strong_sell,
+            Signal.HOLD: cfg.allow_hold,
+        }
+
+        candidates = []
+        for p in preds:
+            sig = getattr(p, 'signal', Signal.HOLD)
+            conf = getattr(p, 'confidence', 0.0)
+            strength = getattr(p, 'signal_strength', 0.0)
+            agreement = getattr(p, 'model_agreement', 1.0)
+
+            # Signal type allowed?
+            if not signal_allow_map.get(sig, False):
+                continue
+
+            # Confidence threshold
+            if conf < cfg.min_confidence:
+                continue
+
+            # Signal strength threshold
+            if strength < cfg.min_signal_strength:
+                continue
+
+            # Model agreement threshold
+            if agreement < cfg.min_model_agreement:
+                continue
+
+            candidates.append(p)
+
+        if not candidates:
+            return
+
+        # Sort by confidence descending
+        candidates.sort(
+            key=lambda x: getattr(x, 'confidence', 0),
+            reverse=True,
+        )
+
+        # --- Step 4: Process each candidate ---
+        for pred in candidates:
+            if self._stop_event.is_set():
+                break
+
+            with self._lock:
+                # Re-check daily limit
+                if self.state.trades_today >= cfg.max_trades_per_day:
+                    break
+
+                # Check per-stock daily limit
+                code = getattr(pred, 'stock_code', '')
+                if not self.state.can_trade_stock(
+                    code, cfg.max_trades_per_stock_per_day
+                ):
+                    self._record_skip(
+                        pred, Signal,
+                        f"Per-stock daily limit ({cfg.max_trades_per_stock_per_day})"
+                    )
+                    continue
+
+                # Cooldown check
+                if self.state.is_on_cooldown(code):
+                    self._record_skip(pred, Signal, "On cooldown")
+                    continue
+
+                # Safety pause re-check
+                if self.state.is_safety_paused:
+                    break
+
+            # Run full prediction for this candidate (outside lock)
+            try:
+                full_pred = predictor.predict(
+                    code,
+                    use_realtime_price=True,
+                    skip_cache=True,
+                )
+            except Exception as e:
+                log.warning(f"Auto-trade full predict failed for {code}: {e}")
+                with self._lock:
+                    self.state.record_error(f"Predict {code}: {e}")
+                continue
+
+            # Re-validate after full prediction
+            full_sig = getattr(full_pred, 'signal', Signal.HOLD)
+            full_conf = getattr(full_pred, 'confidence', 0.0)
+
+            if not signal_allow_map.get(full_sig, False):
+                continue
+            if full_conf < cfg.min_confidence:
+                continue
+
+            # Check position value limit
+            price = getattr(full_pred, 'current_price', 0.0)
+            position = getattr(full_pred, 'position', None)
+            shares = getattr(position, 'shares', 0) if position else 0
+            order_value = shares * price if (shares > 0 and price > 0) else 0
+
+            if order_value > cfg.max_auto_order_value:
+                # Cap shares
+                if price > 0:
+                    lot_size = max(1, CONFIG.LOT_SIZE)
+                    shares = int(cfg.max_auto_order_value / price)
+                    shares = (shares // lot_size) * lot_size
+                    if shares <= 0:
+                        with self._lock:
+                            self._record_skip(
+                                full_pred, Signal,
+                                f"Order value exceeds limit (¥{cfg.max_auto_order_value:,.0f})"
+                            )
+                        continue
+                    order_value = shares * price
+
+            if shares <= 0 or price <= 0:
+                with self._lock:
+                    self._record_skip(full_pred, Signal, "No valid position size")
+                continue
+
+            # Volatility pause check
+            if cfg.pause_on_high_volatility:
+                atr_pct = getattr(full_pred, 'atr_pct_value', 0.02)
+                if atr_pct * 100 > cfg.volatility_pause_threshold:
+                    with self._lock:
+                        self._record_skip(
+                            full_pred, Signal,
+                            f"High volatility (ATR {atr_pct*100:.1f}%)"
+                        )
+                    continue
+
+            # Determine side
+            if full_sig in (Signal.STRONG_BUY, Signal.BUY):
+                side = OrderSide.BUY
+            elif full_sig in (Signal.STRONG_SELL, Signal.SELL):
+                side = OrderSide.SELL
+            else:
+                continue
+
+            # Auto-trade position limit (separate from risk manager)
+            if side == OrderSide.BUY:
+                try:
+                    account = self._engine.get_account()
+                    current_positions = len([
+                        p for p in account.positions.values()
+                        if p.quantity > 0
+                    ])
+                    if current_positions >= cfg.max_auto_positions:
+                        with self._lock:
+                            self._record_skip(
+                                full_pred, Signal,
+                                f"Auto-trade position limit ({cfg.max_auto_positions})"
+                            )
+                        continue
+
+                    # Position concentration for auto-trade
+                    equity = account.equity
+                    if equity > 0:
+                        existing = account.positions.get(code)
+                        existing_value = (
+                            existing.market_value if existing else 0.0
+                        )
+                        new_pct = (
+                            (existing_value + order_value) / equity * 100
+                        )
+                        if new_pct > cfg.max_auto_position_pct:
+                            with self._lock:
+                                self._record_skip(
+                                    full_pred, Signal,
+                                    f"Auto position limit ({new_pct:.1f}% > {cfg.max_auto_position_pct}%)"
+                                )
+                            continue
+                except Exception as e:
+                    log.debug(f"Account check failed: {e}")
+
+            # Build the action record
+            action = AutoTradeAction(
+                stock_code=code,
+                stock_name=getattr(full_pred, 'stock_name', ''),
+                signal_type=full_sig.value if hasattr(full_sig, 'value') else str(full_sig),
+                confidence=full_conf,
+                signal_strength=getattr(full_pred, 'signal_strength', 0.0),
+                model_agreement=getattr(full_pred, 'model_agreement', 1.0),
+                price=price,
+                predicted_direction=(
+                    "UP" if full_sig in (Signal.STRONG_BUY, Signal.BUY)
+                    else "DOWN"
+                ),
+                side=side.value,
+                quantity=shares,
+            )
+
+            # --- Step 5: Execute or queue ---
+            with self._lock:
+                if self.state.mode == AutoTradeMode.AUTO:
+                    # Direct execution
+                    success = self._execute_action(action)
+                    if success:
+                        action.decision = "EXECUTED"
+                        self.state.record_trade(code, side.value)
+                        self.state.set_cooldown(
+                            code, cfg.cooldown_after_trade_seconds
+                        )
+                    else:
+                        action.decision = "REJECTED"
+                        action.skip_reason = "Execution/risk check failed"
+
+                    self.state.record_action(action)
+                    self._notify_action(action)
+                    self._notify_state_changed()
+
+                elif self.state.mode == AutoTradeMode.SEMI_AUTO:
+                    # Queue for approval
+                    action.decision = "PENDING"
+                    self.state.add_pending_approval(action)
+                    self._notify_pending(action)
+                    self._notify_state_changed()
+                    log.info(
+                        f"Auto-trade PENDING approval: "
+                        f"{action.signal_type} {code} @ ¥{price:.2f}"
+                    )
+
+    def _execute_action(self, action: AutoTradeAction) -> bool:
+        """
+        Execute a single auto-trade action via ExecutionEngine.submit().
+
+        Returns True if the signal was accepted by the engine.
+        MUST be called with ``_lock`` held (for state updates).
+        """
+        try:
+            from models.predictor import Signal as PredSignal
+        except ImportError:
+            action.skip_reason = "Cannot import Signal"
+            return False
+
+        cfg = CONFIG.auto_trade
+
+        # Build TradeSignal
+        side = OrderSide(action.side)
+        levels_entry = action.price
+        levels_stop = 0.0
+        levels_target = 0.0
+
+        # Try to get levels from a fresh prediction
+        try:
+            pred = self._predictor.predict(
+                action.stock_code,
+                use_realtime_price=True,
+                skip_cache=True,
+            )
+            if pred and pred.levels:
+                levels_entry = pred.levels.entry or action.price
+                levels_stop = pred.levels.stop_loss or 0.0
+                levels_target = pred.levels.target_2 or 0.0
+                # Update price to latest
+                if pred.current_price > 0:
+                    action.price = pred.current_price
+                    levels_entry = pred.current_price
+        except Exception:
+            pass
+
+        signal = TradeSignal(
+            symbol=action.stock_code,
+            name=action.stock_name,
+            side=side,
+            quantity=action.quantity,
+            price=levels_entry,
+            stop_loss=levels_stop if cfg.auto_stop_loss else 0.0,
+            take_profit=levels_target,
+            confidence=action.confidence,
+            strategy="auto_trade",
+            reasons=[
+                f"Auto-trade: {action.signal_type}",
+                f"Confidence: {action.confidence:.0%}",
+                f"Agreement: {action.model_agreement:.0%}",
+            ],
+            auto_generated=True,
+            auto_trade_action_id=action.id,
+        )
+
+        # Submit through execution engine (which runs risk checks)
+        success = self._engine.submit(signal)
+
+        if success:
+            action.signal_id = signal.id
+            log.info(
+                f"Auto-trade EXECUTED: {side.value.upper()} "
+                f"{action.quantity} {action.stock_code} "
+                f"@ ¥{levels_entry:.2f} (conf={action.confidence:.0%})"
+            )
+        else:
+            log.warning(
+                f"Auto-trade REJECTED by engine: {action.stock_code}"
+            )
+
+        return success
+
+    def _record_skip(self, pred, Signal, reason: str):
+        """Record a skipped signal. MUST be called with _lock held."""
+        code = getattr(pred, 'stock_code', '?')
+        sig = getattr(pred, 'signal', Signal.HOLD)
+
+        action = AutoTradeAction(
+            stock_code=code,
+            stock_name=getattr(pred, 'stock_name', ''),
+            signal_type=sig.value if hasattr(sig, 'value') else str(sig),
+            confidence=getattr(pred, 'confidence', 0.0),
+            signal_strength=getattr(pred, 'signal_strength', 0.0),
+            price=getattr(pred, 'current_price', 0.0),
+            decision="SKIPPED",
+            skip_reason=reason,
+        )
+
+        self.state.record_action(action)
+        self.state.record_skip()
+
+        if CONFIG.auto_trade.notify_on_skip:
+            self._notify_action(action)
+
+    # -----------------------------------------------------------------
+    # Internal: notification helpers
+    # -----------------------------------------------------------------
+
+    def _notify_action(self, action: AutoTradeAction):
+        """Notify UI of an action."""
+        if self.on_action:
+            try:
+                self.on_action(action)
+            except Exception as e:
+                log.debug(f"Action callback error: {e}")
+
+    def _notify_state_changed(self):
+        """Notify UI of state change."""
+        if self.on_state_changed:
+            try:
+                self.on_state_changed(self.state)
+            except Exception as e:
+                log.debug(f"State callback error: {e}")
+
+    def _notify_pending(self, action: AutoTradeAction):
+        """Notify UI of pending approval."""
+        if self.on_pending_approval:
+            try:
+                self.on_pending_approval(action)
+            except Exception as e:
+                log.debug(f"Pending callback error: {e}")
+
+    def _sleep_interruptible(self, seconds: float):
+        """Sleep that can be interrupted by stop event."""
+        end = time.time() + seconds
+        while time.time() < end and not self._stop_event.is_set():
+            time.sleep(min(1.0, end - time.time()))
+
+
+# =============================================================================
+# EXECUTION ENGINE
+# =============================================================================
+
 class ExecutionEngine:
     """
     Production execution engine with correct broker synchronization.
@@ -45,6 +784,11 @@ class ExecutionEngine:
     2. OMS is the single source of truth for order state
     3. Broker ID mapping is persisted through OMS for crash recovery
     4. Status sync captures previous state before mutation
+
+    AUTO-TRADE INTEGRATION:
+    - Owns an AutoTrader instance
+    - Provides start_auto_trade() / stop_auto_trade() / set_auto_mode()
+    - AutoTrader submits through self.submit() so all risk checks apply
     """
 
     # Configurable: whether to auto-cancel stuck orders
@@ -82,6 +826,73 @@ class ExecutionEngine:
 
         self._kill_switch.on_activate(self._on_kill_switch)
         self._processed_fill_ids = self._load_processed_fills()
+
+        # Auto-trader (created but not started until explicitly requested)
+        self.auto_trader: Optional[AutoTrader] = None
+
+    # -----------------------------------------------------------------
+    # Auto-trade public API
+    # -----------------------------------------------------------------
+
+    def init_auto_trader(self, predictor, watch_list: List[str]):
+        """
+        Initialize the auto-trader with a predictor and watchlist.
+        Must be called before start_auto_trade().
+        """
+        self.auto_trader = AutoTrader(
+            engine=self,
+            predictor=predictor,
+            watch_list=watch_list,
+        )
+        log.info("Auto-trader initialized")
+
+    def start_auto_trade(self, mode: AutoTradeMode = AutoTradeMode.AUTO):
+        """Start auto-trading in the specified mode."""
+        if self.auto_trader is None:
+            log.error("Auto-trader not initialized. Call init_auto_trader() first.")
+            return
+
+        if not self._running:
+            log.error("Execution engine not running. Call start() first.")
+            return
+
+        # Safety confirmation for live auto-trading
+        if (
+            self.mode == TradingMode.LIVE
+            and CONFIG.auto_trade.confirm_live_auto_trade
+            and mode != AutoTradeMode.MANUAL
+        ):
+            log.warning(
+                "Live auto-trading requested — "
+                "CONFIG.auto_trade.confirm_live_auto_trade is True. "
+                "UI must confirm before proceeding."
+            )
+            # The UI layer handles the confirmation dialog
+            # and calls set_auto_mode() directly after user confirms.
+
+        self.auto_trader.set_mode(mode)
+        log.info(f"Auto-trading started: mode={mode.value}")
+
+    def stop_auto_trade(self):
+        """Stop auto-trading (switch to MANUAL)."""
+        if self.auto_trader:
+            self.auto_trader.set_mode(AutoTradeMode.MANUAL)
+            log.info("Auto-trading stopped (switched to MANUAL)")
+
+    def set_auto_mode(self, mode: AutoTradeMode):
+        """Change auto-trade mode."""
+        if self.auto_trader:
+            self.auto_trader.set_mode(mode)
+
+    def get_auto_trade_state(self) -> Optional[AutoTradeState]:
+        """Get auto-trade state snapshot."""
+        if self.auto_trader:
+            return self.auto_trader.get_state()
+        return None
+
+    # -----------------------------------------------------------------
+    # Engine lifecycle
+    # -----------------------------------------------------------------
 
     def start(self) -> bool:
         if self._running:
@@ -156,6 +967,13 @@ class ExecutionEngine:
             daemon=True,
         )
         self._reconnect_thread.start()
+
+        # Start auto-trader if it was initialized and config says enabled
+        if self.auto_trader and CONFIG.auto_trade.enabled:
+            auto_mode = AutoTradeMode.AUTO
+            self.auto_trader.start()
+            log.info("Auto-trader auto-started (config.auto_trade.enabled=True)")
+
         return True
 
     def _load_processed_fills(self) -> Set[str]:
@@ -232,6 +1050,14 @@ class ExecutionEngine:
     def stop(self):
         if not self._running:
             return
+
+        # Stop auto-trader first
+        if self.auto_trader:
+            try:
+                self.auto_trader.stop()
+            except Exception as e:
+                log.warning(f"Auto-trader stop error: {e}")
+
         self._running = False
 
         try:
@@ -419,6 +1245,7 @@ class ExecutionEngine:
         log.info(
             f"Signal queued: {signal.side.value} {signal.quantity} "
             f"{signal.symbol} @ {signal.price:.2f}"
+            f"{' [AUTO]' if signal.auto_generated else ''}"
         )
         return True
 
@@ -517,7 +1344,14 @@ class ExecutionEngine:
                     float(signal.take_profit) if signal.take_profit else 0.0
                 ),
                 signal_id=signal.id,
+                strategy=signal.strategy or "",
             )
+
+            # Tag auto-trade orders for audit
+            if signal.auto_generated:
+                order.tags["auto_trade"] = True
+                order.tags["auto_trade_action_id"] = signal.auto_trade_action_id
+                order.strategy = order.strategy or "auto_trade"
 
             # OMS reserves resources
             order = oms.submit_order(order)
@@ -553,6 +1387,7 @@ class ExecutionEngine:
             log.info(
                 f"Order sent: {order.id} -> broker_id={result.broker_id}, "
                 f"status={result.status.value}"
+                f"{' [AUTO]' if signal.auto_generated else ''}"
             )
 
         except Exception as e:
@@ -666,6 +1501,13 @@ class ExecutionEngine:
                         except Exception as e:
                             log.warning(f"Fill callback error: {e}")
 
+                    # Update auto-trader state if this was an auto-trade
+                    if (
+                        self.auto_trader
+                        and order.tags.get("auto_trade")
+                    ):
+                        self._update_auto_trade_fill(order, fill)
+
                     inc_counter(
                         "fills_processed_total",
                         labels={"side": fill.side.value},
@@ -684,6 +1526,23 @@ class ExecutionEngine:
 
             # Prune inside the same lock acquisition
             self._prune_processed_fills_unlocked(max_size=50000)
+
+    def _update_auto_trade_fill(self, order: Order, fill: Fill):
+        """Update auto-trader state with fill information."""
+        if not self.auto_trader:
+            return
+
+        action_id = order.tags.get("auto_trade_action_id", "")
+        if not action_id:
+            return
+
+        with self.auto_trader._lock:
+            for action in self.auto_trader.state.recent_actions:
+                if action.id == action_id:
+                    action.fill_price = fill.price
+                    action.fill_quantity += fill.quantity
+                    action.order_id = order.id
+                    break
 
     def _fill_sync_loop(self):
         """Poll broker for fills."""
@@ -932,6 +1791,13 @@ class ExecutionEngine:
     def _on_kill_switch(self, reason: str):
         """Handle kill switch activation."""
         log.critical(f"Kill switch activated: {reason}")
+
+        # Stop auto-trading immediately
+        if self.auto_trader:
+            try:
+                self.auto_trader.pause(f"Kill switch: {reason}")
+            except Exception:
+                pass
 
         try:
             for order in self.broker.get_orders(active_only=True):

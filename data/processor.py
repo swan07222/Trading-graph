@@ -29,7 +29,11 @@ FIXES APPLIED:
 - Fix: save_scaler updates instance metadata when overridden
 - Fix: feature_cols validated early in split_temporal_single_stock
 - Fix: Logging for skipped invalid labels
+- FIX SCALER: save_scaler deep-copies scaler inside lock before serialization
+- FIX INDENT: initialize_realtime_buffer indentation corrected
+- FIX WARN: prepare_sequences warns when scaler not fitted and fit_scaler=False
 """
+import copy
 import numpy as np
 import pandas as pd
 from typing import Tuple, List, Optional, Dict, Union, Any
@@ -348,6 +352,11 @@ class DataProcessor:
 
         If ``interval`` or ``horizon`` are provided, the instance metadata
         is updated to match (keeps instance and saved file consistent).
+
+        FIX SCALER: Deep-copy the scaler INSIDE the lock so that
+        serialization (which happens outside the lock for performance)
+        operates on a frozen snapshot. Without this, a concurrent
+        fit_scaler() call could mutate self.scaler mid-pickle.
         """
         if not self._fitted:
             log.warning("Scaler not fitted, nothing to save")
@@ -369,8 +378,10 @@ class DataProcessor:
             path = Path(path)
             path.parent.mkdir(parents=True, exist_ok=True)
 
+            # FIX SCALER: Deep-copy scaler inside lock so serialization
+            # operates on a frozen snapshot, not the live object
             data = {
-                "scaler": self.scaler,
+                "scaler": copy.deepcopy(self.scaler),
                 "n_features": self._n_features,
                 "fit_samples": self._fit_samples,
                 "fitted": True,
@@ -380,9 +391,9 @@ class DataProcessor:
                 "saved_at": datetime.now().isoformat(),
             }
 
+        # Now safe to serialize outside lock — data is a snapshot
         try:
             from utils.atomic_io import atomic_pickle_dump
-
             atomic_pickle_dump(path, data)
         except ImportError:
             tmp_path = path.with_suffix(".pkl.tmp")
@@ -532,6 +543,18 @@ class DataProcessor:
 
         if self._fitted:
             features = self.transform(features)
+        else:
+            # FIX WARN: Log warning when features pass through unscaled
+            if not fit_scaler:
+                log.warning(
+                    "Scaler not fitted and fit_scaler=False — "
+                    "features will be clipped but NOT scaled. "
+                    "Model predictions may be unreliable."
+                )
+            features = np.clip(
+                np.nan_to_num(features, nan=0.0, posinf=0.0, neginf=0.0),
+                -FEATURE_CLIP_VALUE, FEATURE_CLIP_VALUE,
+            ).astype(np.float32)
 
         X, y, r, idx = [], [], [], []
         skipped_invalid = 0
@@ -545,7 +568,7 @@ class DataProcessor:
                 skipped_invalid += 1
                 continue
 
-            seq = features[i - seq_len + 1 : i + 1]
+            seq = features[i - seq_len + 1: i + 1]
 
             if len(seq) == seq_len and not np.isnan(seq).any():
                 X.append(seq)
@@ -635,7 +658,7 @@ class DataProcessor:
             if i + horizon >= n:
                 break
 
-            seq = features[i - seq_len + 1 : i + 1]
+            seq = features[i - seq_len + 1: i + 1]
             if len(seq) != seq_len or np.isnan(seq).any():
                 continue
 
@@ -643,7 +666,7 @@ class DataProcessor:
             if not np.isfinite(c0) or c0 <= 0:
                 continue
 
-            fut = close[i + 1 : i + horizon + 1]
+            fut = close[i + 1: i + horizon + 1]
             if len(fut) != horizon or np.isnan(fut).any():
                 continue
 
@@ -815,6 +838,7 @@ class DataProcessor:
             else:
                 self._realtime_buffers.clear()
 
+    # FIX INDENT: This method was incorrectly nested inside clear_realtime_buffer
     def initialize_realtime_buffer(
         self, code: str, df: pd.DataFrame
     ):
@@ -833,7 +857,8 @@ class DataProcessor:
         log.debug(
             f"Initialized buffer for {code} with {len(buffer)} bars"
         )
-            # =========================================================================
+
+    # =========================================================================
     # TEMPORAL SPLITTING
     # =========================================================================
 
@@ -900,7 +925,6 @@ class DataProcessor:
 
         # ---- validate feature_cols early when feature_engine is provided ----
         if feature_engine is not None:
-            # Check that feature_cols matches what the engine produces
             engine_cols = set(feature_engine.get_feature_columns())
             requested_cols = set(feature_cols)
             missing_from_engine = requested_cols - engine_cols
@@ -1198,16 +1222,17 @@ class RealtimePredictor:
         The forecaster outputs ``horizon`` regression values (not class
         probabilities), so ``num_classes`` in the TCN is set to the
         horizon value from the saved checkpoint.
+
+        WARNING: Uses weights_only=False which can execute arbitrary code.
+        Only load from trusted model files.
         """
         import torch
         from models.networks import TCNModel
 
         try:
-            # WARNING: weights_only=False allows arbitrary code execution.
-            # Only load from trusted model files.
             data = torch.load(
                 path, map_location="cpu", weights_only=False
-            )  # noqa: S301
+            )
 
             # Validate expected keys
             required_keys = {"input_size", "horizon", "arch", "state_dict"}

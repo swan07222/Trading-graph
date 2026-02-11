@@ -17,17 +17,23 @@ FIXES APPLIED:
 - FIX T2: Added missing `import torch` in train() method
 - FIX M11: Fixed incremental load logic to use temp variable
 - FIX m7: Use log-sum for returns to prevent np.prod overflow
+- FIX LR: train() accepts and passes learning_rate to ensemble
+- FIX CAL: Removed redundant second calibration call
+- FIX FLR: Forecaster uses resolved LR instead of CONFIG.model.learning_rate
+- FIX FSTOP: Forecaster batch loop checks stop_flag for faster cancellation
 """
 from __future__ import annotations
 
 import numpy as np
 import torch
+import torch.nn as nn
 import random
 import pandas as pd
 from typing import Dict, List, Optional, Callable, Tuple, Any
 from pathlib import Path
 from datetime import datetime
 from tqdm import tqdm
+from torch.utils.data import DataLoader, TensorDataset
 
 from config.settings import CONFIG
 from data.fetcher import DataFetcher, get_fetcher
@@ -55,6 +61,31 @@ if torch.cuda.is_available():
 
 # Epsilon for division-by-zero protection
 _EPS = 1e-8
+
+# Stop check interval for batch loops (check every N batches)
+_STOP_CHECK_INTERVAL = 10
+
+
+def _resolve_learning_rate(explicit_lr: Optional[float] = None) -> float:
+    """
+    Resolve learning rate from multiple sources in priority order:
+    1. Explicit parameter (highest priority)
+    2. Thread-local override from auto_learner
+    3. CONFIG.model.learning_rate (default)
+
+    This centralizes LR resolution so both classifier and forecaster
+    use the same value.
+    """
+    if explicit_lr is not None:
+        return float(explicit_lr)
+
+    try:
+        from models.auto_learner import get_effective_learning_rate
+        return get_effective_learning_rate()
+    except ImportError:
+        pass
+
+    return CONFIG.model.learning_rate
 
 
 class Trainer:
@@ -459,7 +490,8 @@ class Trainer:
             safe(X_val), safe(y_val), safe(r_val),
             safe(X_test), safe(y_test), safe(r_test),
         )
-        # =========================================================================
+
+    # =========================================================================
     # MAIN train() METHOD
     # =========================================================================
 
@@ -476,19 +508,17 @@ class Trainer:
         interval: str = "1d",
         prediction_horizon: int = None,
         lookback_bars: int = 2400,
+        learning_rate: float = None,  # FIX LR: Accept explicit LR parameter
     ) -> Dict:
         """
         Train complete pipeline:
         1) Classification ensemble for trading signals
         2) Multi-step forecaster for AI-generated price curves
-        
-        FIX T2: Import torch at the beginning of this method.
+
         FIX M11: Use temp variable for incremental ensemble load.
+        FIX LR: Accept and pass learning_rate to ensemble and forecaster.
+        FIX CAL: Remove redundant second calibration (ensemble.train does it).
         """
-        # FIX T2: Import torch here (was missing)
-        import torch
-        import torch.nn as nn
-        from torch.utils.data import DataLoader, TensorDataset
         from models.networks import TCNModel
 
         epochs = int(epochs or CONFIG.EPOCHS)
@@ -500,6 +530,9 @@ class Trainer:
         self.interval = interval
         self.prediction_horizon = horizon
 
+        # FIX LR: Resolve LR once, use everywhere in this pipeline
+        effective_lr = _resolve_learning_rate(learning_rate)
+
         log.info("=" * 70)
         log.info("STARTING TRAINING PIPELINE (Classifier + Forecaster)")
         log.info(
@@ -508,7 +541,8 @@ class Trainer:
         )
         log.info(
             f"Incremental: {incremental}, "
-            f"Skip scaler fit: {self._skip_scaler_fit}"
+            f"Skip scaler fit: {self._skip_scaler_fit}, "
+            f"LR: {effective_lr:.6f}"
         )
         log.info("=" * 70)
 
@@ -618,6 +652,9 @@ class Trainer:
             f"{len(X_val)} val samples"
         )
 
+        # FIX LR: Pass learning_rate explicitly to ensemble.train()
+        # FIX CAL: ensemble.train() already calls calibrate() internally,
+        #          so we do NOT call it again after this returns.
         history = self.ensemble.train(
             X_train,
             y_train,
@@ -627,13 +664,17 @@ class Trainer:
             batch_size=batch_size,
             callback=callback,
             stop_flag=stop_flag,
+            learning_rate=effective_lr,  # FIX LR: Pass through
         )
 
         if self._should_stop(stop_flag):
             log.info("Training stopped by user")
             return {"status": "cancelled", "history": history}
 
-        self.ensemble.calibrate(X_val, y_val)
+        # FIX CAL: REMOVED redundant self.ensemble.calibrate(X_val, y_val)
+        # ensemble.train() already calls self.calibrate(X_val, y_val) internally
+        # Calling it again wastes compute and could give slightly different
+        # results if the calibration grid search is non-deterministic.
 
         if save_model:
             ensemble_path = (
@@ -646,6 +687,7 @@ class Trainer:
         forecaster_trained = self._train_forecaster(
             split_data, feature_cols, horizon, interval,
             batch_size, epochs, stop_flag, save_model,
+            effective_lr,  # FIX FLR: Pass resolved LR to forecaster
         )
 
         # --- Phase 6: Evaluate on test set ---
@@ -706,11 +748,14 @@ class Trainer:
         epochs: int,
         stop_flag: Any,
         save_model: bool,
+        learning_rate: float,  # FIX FLR: Accept resolved LR
     ) -> bool:
-        """Train multi-step forecaster. Returns True if successful."""
-        import torch
-        import torch.nn as nn
-        from torch.utils.data import DataLoader, TensorDataset
+        """
+        Train multi-step forecaster. Returns True if successful.
+
+        FIX FLR: Uses passed learning_rate instead of CONFIG.model.learning_rate.
+        FIX FSTOP: Checks stop_flag per-batch for faster cancellation.
+        """
         from models.networks import TCNModel
 
         Xf_train_list, Yf_train_list = [], []
@@ -761,9 +806,10 @@ class Trainer:
                 dropout=CONFIG.model.dropout,
             ).to(device)
 
+            # FIX FLR: Use resolved LR instead of CONFIG.model.learning_rate
             optimizer = torch.optim.AdamW(
                 forecaster.parameters(),
-                lr=CONFIG.model.learning_rate,
+                lr=learning_rate,
                 weight_decay=CONFIG.model.weight_decay,
             )
 
@@ -798,7 +844,7 @@ class Trainer:
 
             log.info(
                 f"Training forecaster: {len(Xf_train)} samples, "
-                f"horizon={horizon}"
+                f"horizon={horizon}, lr={learning_rate:.6f}"
             )
 
             for ep in range(fore_epochs):
@@ -808,8 +854,18 @@ class Trainer:
 
                 forecaster.train()
                 train_losses = []
+                cancelled = False
 
-                for xb, yb in train_loader:
+                for batch_idx, (xb, yb) in enumerate(train_loader):
+                    # FIX FSTOP: Per-batch stop check for faster cancellation
+                    if (
+                        batch_idx % _STOP_CHECK_INTERVAL == 0
+                        and batch_idx > 0
+                        and self._should_stop(stop_flag)
+                    ):
+                        cancelled = True
+                        break
+
                     xb = xb.to(device)
                     yb = yb.to(device)
 
@@ -822,6 +878,10 @@ class Trainer:
                     )
                     optimizer.step()
                     train_losses.append(float(loss.item()))
+
+                if cancelled:
+                    log.info("Forecaster training cancelled mid-epoch")
+                    break
 
                 forecaster.eval()
                 val_losses = []
@@ -890,6 +950,9 @@ class Trainer:
 
                 return True
 
+        except CancelledException:
+            log.info("Forecaster training cancelled")
+            return False
         except Exception as e:
             log.error(f"Forecaster training failed: {e}")
             import traceback
@@ -993,7 +1056,7 @@ class Trainer:
         """
         Simulate trading with proper compounding and consistent units.
         All internal calculations use DECIMAL returns (not percentage).
-        
+
         FIX m7: Use log-sum instead of np.prod to prevent overflow.
         """
         confidence_mask = confs >= CONFIG.MIN_CONFIDENCE
@@ -1033,9 +1096,6 @@ class Trainer:
             trades = np.array(trades_decimal)
 
             # FIX m7: Use log-sum to prevent overflow/underflow
-            # Instead of: total_return_factor = np.prod(1 + trades)
-            # Use: total_return_factor = exp(sum(log(1 + trades)))
-            # Handle edge case where (1 + trade) could be <= 0
             safe_factors = np.maximum(1 + trades, _EPS)
             total_return_factor = np.exp(np.sum(np.log(safe_factors)))
             total_return_pct = (total_return_factor - 1) * 100
@@ -1066,7 +1126,7 @@ class Trainer:
             log_returns = np.log(safe_factors)
             cumulative_log = np.cumsum(log_returns)
             cumulative = np.exp(cumulative_log)
-            
+
             running_max = np.maximum.accumulate(cumulative)
             drawdown = (cumulative - running_max) / (running_max + _EPS)
             max_drawdown = (
@@ -1088,7 +1148,7 @@ class Trainer:
                 range(0, len(period_returns), max(horizon, 1))
             )
             bh_returns = period_returns[indices]
-            
+
             # FIX m7: Use log-sum for buy-hold too
             safe_bh = np.maximum(1 + bh_returns, _EPS)
             buyhold_factor = np.exp(np.sum(np.log(safe_bh)))

@@ -16,6 +16,7 @@ FIXES APPLIED (comprehensive):
 10. is_market_open uses robust fallback
 11. Directory creation moved to explicit ensure_dirs() — no side effects in getters
 12. Added __init__.py guidance in docstring
+13. Added AutoTradeConfig for auto/manual trading support
 """
 from __future__ import annotations
 
@@ -178,6 +179,59 @@ class AlertConfig:
     smtp_password_key: str = "smtp_password"
 
 
+@dataclass
+class AutoTradeConfig:
+    """
+    Auto-trading configuration.
+
+    Controls the autonomous trading engine that can execute trades
+    without manual confirmation when enabled.
+    """
+    # Master enable/disable
+    enabled: bool = False
+
+    # Signal filters — minimum thresholds for auto-execution
+    min_confidence: float = 0.70
+    min_signal_strength: float = 0.60
+    min_model_agreement: float = 0.65
+
+    # Which signals to auto-trade
+    allow_strong_buy: bool = True
+    allow_buy: bool = True
+    allow_sell: bool = True
+    allow_strong_sell: bool = True
+    allow_hold: bool = False  # HOLD never auto-trades by default
+
+    # Position limits for auto-trading (can be tighter than manual)
+    max_auto_positions: int = 5
+    max_auto_position_pct: float = 10.0
+    max_auto_order_value: float = 50000.0
+
+    # Timing
+    scan_interval_seconds: int = 60
+    cooldown_after_trade_seconds: int = 300
+    max_trades_per_day: int = 10
+    max_trades_per_stock_per_day: int = 2
+
+    # Safety
+    require_market_open: bool = True
+    require_broker_connected: bool = True
+    pause_on_high_volatility: bool = True
+    volatility_pause_threshold: float = 5.0  # ATR% above this pauses
+
+    # Auto-stop loss management
+    auto_stop_loss: bool = True
+    trailing_stop_enabled: bool = False
+    trailing_stop_pct: float = 3.0
+
+    # Notification
+    notify_on_trade: bool = True
+    notify_on_skip: bool = False
+
+    # Paper trading safety — require explicit confirmation for live
+    confirm_live_auto_trade: bool = True
+
+
 def _safe_dataclass_from_dict(dc_instance, data: Dict) -> List[str]:
     """
     Apply dict values to a dataclass instance with type checking.
@@ -287,6 +341,7 @@ class Config:
         self.risk = RiskConfig()
         self.security = SecurityConfig()
         self.alerts = AlertConfig()
+        self.auto_trade = AutoTradeConfig()
 
         # Main settings
         self.capital: float = 100_000.0
@@ -537,6 +592,7 @@ class Config:
             ),
             "MAX_POSITION_PCT": ("risk.max_position_pct", float),
             "MAX_DAILY_LOSS_PCT": ("risk.max_daily_loss_pct", float),
+            "AUTO_TRADE_ENABLED": ("auto_trade.enabled", lambda x: x.lower() in ("true", "1", "yes")),
         }
 
         for env_key, (attr_path, converter) in env_mappings.items():
@@ -562,6 +618,7 @@ class Config:
                 "risk": self.risk,
                 "security": self.security,
                 "alerts": self.alerts,
+                "auto_trade": self.auto_trade,
             }
 
             for key, value in data.items():
@@ -663,6 +720,21 @@ class Config:
                 f"Split ratios must sum to 1.0, got {ratio_sum:.4f}"
             )
 
+        # Auto-trade validation
+        if self.auto_trade.enabled:
+            if self.auto_trade.min_confidence < 0.5:
+                self._validation_warnings.append(
+                    "Auto-trade min_confidence should be >= 0.5 for safety"
+                )
+            if self.auto_trade.max_auto_positions > self.risk.max_positions:
+                self._validation_warnings.append(
+                    "Auto-trade max_positions exceeds risk max_positions"
+                )
+            if self.auto_trade.max_auto_position_pct > self.risk.max_position_pct:
+                self._validation_warnings.append(
+                    "Auto-trade max_position_pct exceeds risk max_position_pct"
+                )
+
         for w in self._validation_warnings:
             _log.warning("Config validation: %s", w)
 
@@ -704,6 +776,7 @@ class Config:
                 "risk": _dataclass_to_dict(self.risk),
                 "security": _dataclass_to_dict(self.security),
                 "alerts": _dataclass_to_dict(self.alerts),
+                "auto_trade": _dataclass_to_dict(self.auto_trade),
             }
 
             try:
@@ -728,6 +801,7 @@ class Config:
             self.risk = RiskConfig()
             self.security = SecurityConfig()
             self.alerts = AlertConfig()
+            self.auto_trade = AutoTradeConfig()
 
             self._load()
             self._validate()
@@ -781,7 +855,8 @@ class Config:
         return (
             f"Config(mode={self.trading_mode.value}, "
             f"capital={self.capital}, "
-            f"risk={self.risk_profile.value})"
+            f"risk={self.risk_profile.value}, "
+            f"auto_trade={'ON' if self.auto_trade.enabled else 'OFF'})"
         )
 
 
