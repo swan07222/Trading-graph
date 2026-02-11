@@ -158,7 +158,7 @@ class EnsembleModel:
         self.interval: str = "1d"
         self.prediction_horizon: int = int(CONFIG.model.prediction_horizon)
 
-        model_names = model_names or ["lstm", "gru", "tcn"]
+        model_names = model_names or ["lstm", "gru", "tcn", "transformer", "hybrid"]
 
         self.models: Dict[str, nn.Module] = {}
         self.weights: Dict[str, float] = {}
