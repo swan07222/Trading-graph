@@ -1,10 +1,4 @@
 # trading/alerts.py
-"""
-Production Alerting System
-
-FIXES APPLIED:
-- Module-level lock instead of globals() dict pattern
-"""
 import threading
 import smtplib
 import json

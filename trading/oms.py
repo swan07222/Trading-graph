@@ -1,34 +1,4 @@
 # trading/oms.py
-"""
-Production Order Management System
-Score Target: 10/10
-
-Features:
-- SQLite persistence with WAL mode
-- Crash recovery with reservation reconstruction
-- Order state machine with validation
-- Fill tracking with deduplication
-- Position management with T+1
-- Audit trail
-- Reconciliation support
-- Atomic transactions with consistent rollback
-
-Fixes applied vs original:
-- Config import path
-- Fill deduplication using composite key
-- T+1 uses fill timestamp date
-- Partial fill release calculation
-- Transaction wrapping for atomicity — mutations inside transaction only
-- Thread-local connection cleanup
-- Consistent available/cash invariant
-- Price update persistence
-- Reservation reconstruction on recovery
-- Position field name alignment (last_updated)
-- Cash never silently clamped to zero
-- Average price calculated before mutating filled_qty
-- New-day check in process_fill
-- Account.frozen maintained
-"""
 import sqlite3
 import threading
 import json

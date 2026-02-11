@@ -1,20 +1,4 @@
 # ui/news_widget.py
-"""
-News Panel Widget for the Trading UI.
-Shows real-time news with sentiment coloring.
-
-FIXES APPLIED:
-1. NewsFetchThread no longer collides with QThread.finished signal
-   - Uses explicit _cleanup signal instead of relying on QThread.finished
-2. Thread cleanup is robust against RuntimeError (deleted C++ object)
-3. Refresh guards against concurrent fetches properly
-4. SentimentGauge handles None/empty data without crashing
-5. _on_news_received handles missing attributes on news items
-6. Timer cleanup in destructor to prevent orphaned timers
-7. All float/string conversions have explicit fallbacks
-8. Network check doesn't block UI thread
-9. Thread reference management prevents garbage collection crashes
-"""
 from datetime import datetime
 from typing import List, Optional
 

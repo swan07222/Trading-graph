@@ -1,24 +1,4 @@
 # ui/app.py
-"""
-AI Stock Trading System - Professional Desktop Application
-Real-time trading signals with custom AI model
-
-FIXES APPLIED:
-1.  Added missing _ui_norm() method
-2.  Thread-safe _live_price_series with dedicated lock
-3.  closeEvent calls super().closeEvent(event)
-4.  Removed dead get_realtime_predictor() import
-5.  Added watchlist size guard (MAX_WATCHLIST_SIZE = 50)
-6.  WorkerThread timeout support
-7.  Stock code input validation
-8.  Portfolio error visibility (not silently swallowed)
-9.  Bounds check on watchlist click
-10. predict() called with skip_cache=True for real-time updates
-11. Fixed _on_bar_ui to handle missing chart methods gracefully
-12. Proper cleanup of workers in closeEvent
-13. Feed subscription error handling improved
-14. Monitor thread stops cleanly before restart
-"""
 import sys
 import os
 from datetime import datetime

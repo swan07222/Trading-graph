@@ -1,21 +1,4 @@
 # ui/dialogs.py
-"""
-Dialogs: Training, Backtest, Broker Settings, Risk Settings
-PyQt6
-
-FIXES APPLIED:
-1. Import path fixed: "from config.settings import CONFIG, TradingMode"
-   (was "from config import CONFIG" which crashes without config/__init__.py)
-2. TrainWorker.cancel() uses proper cancellation token
-3. TrainWorker handles CancelledException cleanly
-4. BacktestWorker has cancellation support
-5. TrainingDialog.stop_training waits properly and resets UI
-6. TrainingDialog._on_finished handles cancelled results
-7. BrokerSettingsDialog and RiskSettingsDialog use safe CONFIG attribute access
-8. All dialogs call super().closeEvent() where overridden
-9. Progress bar calculation handles multi-model training better
-10. Added missing imports and type annotations
-"""
 from __future__ import annotations
 
 from typing import List, Optional, Dict, Any

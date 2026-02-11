@@ -1,15 +1,4 @@
 # utils/metrics_http.py
-"""
-HTTP server for Prometheus metrics scraping and health checks.
-
-FIXES APPLIED:
-1.  serve() returns server reference and runs in background thread
-2.  Binds to 127.0.0.1 by default (not 0.0.0.0)
-3.  Added basic security headers
-4.  Added request timeout via socket timeout
-5.  Explicit method handling (reject non-GET)
-6.  Graceful shutdown support
-"""
 from __future__ import annotations
 
 import threading

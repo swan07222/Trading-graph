@@ -1,42 +1,10 @@
 # data/processor.py
-"""
-Data Processor - Prepare data for training and REAL-TIME inference
+from __future__ import annotations
 
-CRITICAL FEATURES:
-- Scaler fitted ONLY on training data (no leakage)
-- Proper embargo gap between splits
-- Feature warmup invalidation using actual feature_lookback (not seq_len)
-- Real-time sequence preparation for live predictions
-- Multi-horizon forecasting support
-- Thread-safe operations
-- Streaming data support
-- Config-driven feature lookback (no magic numbers)
-
-FIXES APPLIED:
-- Issue 1: split_temporal_single_stock accepts feature_engine, splits BEFORE features
-- Issue 2: Warmup uses CONFIG.data.feature_lookback instead of seq_len
-- Issue 6: create_labels validates thresholds
-- Issue 7: prepare_realtime_sequence safe config access
-- Issue 14: Clip value is a class constant
-- Fix: prepare_sequences passes horizon/interval to fit_scaler
-- Fix: get_class_distribution is dynamic for any NUM_CLASSES
-- Fix: _load_forecaster uses correct output_size (not num_classes)
-- Fix: Thread-safe atomicity in prepare_realtime_sequence
-- Fix: Index sort validation in temporal splitting
-- Fix: Consistent warmup logic across paths
-- Fix: transform() avoids unnecessary copy
-- Fix: Label dtype safety (float cast before NaN check)
-- Fix: save_scaler updates instance metadata when overridden
-- Fix: feature_cols validated early in split_temporal_single_stock
-- Fix: Logging for skipped invalid labels
-- FIX SCALER: save_scaler deep-copies scaler inside lock before serialization
-- FIX INDENT: initialize_realtime_buffer indentation corrected
-- FIX WARN: prepare_sequences warns when scaler not fitted and fit_scaler=False
-"""
 import copy
 import numpy as np
 import pandas as pd
-from typing import Tuple, List, Optional, Dict, Union, Any
+from typing import Tuple, List, Optional, Dict, Union, Any, Protocol
 from sklearn.preprocessing import RobustScaler
 import pickle
 from pathlib import Path
@@ -56,6 +24,15 @@ FEATURE_CLIP_VALUE = 5.0
 _DEFAULT_LABEL_NAMES = {0: "DOWN", 1: "NEUTRAL", 2: "UP"}
 
 
+class FeatureEngineProtocol(Protocol):
+    """Protocol for type-checking feature engine compatibility."""
+
+    MIN_ROWS: int
+
+    def create_features(self, df: pd.DataFrame) -> pd.DataFrame: ...
+    def get_feature_columns(self) -> List[str]: ...
+
+
 class RealtimeBuffer:
     """
     Thread-safe circular buffer for real-time data streaming.
@@ -66,7 +43,7 @@ class RealtimeBuffer:
     ``with buffer.lock:`` to hold the lock across multiple calls.
     """
 
-    def __init__(self, max_size: int = None):
+    def __init__(self, max_size: Optional[int] = None):
         self.max_size = max_size or CONFIG.SEQUENCE_LENGTH * 2
         self._buffer: deque = deque(maxlen=self.max_size)
         self._lock = threading.RLock()
@@ -77,13 +54,13 @@ class RealtimeBuffer:
         """Expose lock for compound atomic operations."""
         return self._lock
 
-    def append(self, row: Dict[str, float]):
+    def append(self, row: Dict[str, float]) -> None:
         """Add a new bar to the buffer."""
         with self._lock:
             self._buffer.append(row)
             self._last_update = datetime.now()
 
-    def extend(self, rows: List[Dict[str, float]]):
+    def extend(self, rows: List[Dict[str, float]]) -> None:
         """Add multiple bars to the buffer."""
         with self._lock:
             for row in rows:
@@ -98,7 +75,7 @@ class RealtimeBuffer:
                 return pd.DataFrame()
             return pd.DataFrame(list(self._buffer))
 
-    def get_latest(self, n: int = None) -> pd.DataFrame:
+    def get_latest(self, n: Optional[int] = None) -> pd.DataFrame:
         """Get the latest N bars as DataFrame."""
         n = n or CONFIG.SEQUENCE_LENGTH
         with self._lock:
@@ -107,13 +84,13 @@ class RealtimeBuffer:
             data = list(self._buffer)[-n:]
             return pd.DataFrame(data)
 
-    def is_ready(self, min_bars: int = None) -> bool:
+    def is_ready(self, min_bars: Optional[int] = None) -> bool:
         """Check if buffer has enough data for prediction."""
         min_bars = min_bars or CONFIG.SEQUENCE_LENGTH
         with self._lock:
             return len(self._buffer) >= min_bars
 
-    def clear(self):
+    def clear(self) -> None:
         """Clear the buffer."""
         with self._lock:
             self._buffer.clear()
@@ -135,6 +112,25 @@ class RealtimeBuffer:
             if len(self._buffer) < min_required:
                 return None
             return pd.DataFrame(list(self._buffer))
+
+    def initialize_from_dataframe(self, df: pd.DataFrame) -> int:
+        """
+        Atomically clear and initialize buffer from DataFrame.
+
+        Returns the number of rows added.
+
+        FIX THREAD: This replaces the separate clear() + append() calls
+        that had a race condition window.
+        """
+        with self._lock:
+            self._buffer.clear()
+            count = 0
+            for _, row in df.iterrows():
+                self._buffer.append(row.to_dict())
+                count += 1
+            if count > 0:
+                self._last_update = datetime.now()
+            return count
 
     def __len__(self) -> int:
         with self._lock:
@@ -165,7 +161,7 @@ class DataProcessor:
     - RealtimeBuffer: For streaming data management
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.scaler: Optional[RobustScaler] = None
         self._fitted = False
         self._lock = threading.RLock()
@@ -188,9 +184,9 @@ class DataProcessor:
     def create_labels(
         self,
         df: pd.DataFrame,
-        horizon: int = None,
-        up_thresh: float = None,
-        down_thresh: float = None,
+        horizon: Optional[int] = None,
+        up_thresh: Optional[float] = None,
+        down_thresh: Optional[float] = None,
     ) -> pd.DataFrame:
         """
         Create classification labels based on future returns.
@@ -207,7 +203,7 @@ class DataProcessor:
         Raises:
             ValueError: If thresholds are inconsistent or ``close`` is missing.
         """
-        horizon = int(horizon or CONFIG.PREDICTION_HORIZON)
+        horizon = int(horizon if horizon is not None else CONFIG.PREDICTION_HORIZON)
         up_thresh = float(up_thresh if up_thresh is not None else CONFIG.UP_THRESHOLD)
         down_thresh = float(
             down_thresh if down_thresh is not None else CONFIG.DOWN_THRESHOLD
@@ -256,8 +252,8 @@ class DataProcessor:
     def fit_scaler(
         self,
         features: np.ndarray,
-        interval: str = None,
-        horizon: int = None,
+        interval: Optional[str] = None,
+        horizon: Optional[int] = None,
     ) -> "DataProcessor":
         """
         Fit scaler on training data ONLY.
@@ -303,12 +299,19 @@ class DataProcessor:
         Transform features using the fitted scaler.
         Clips extreme values to [-FEATURE_CLIP_VALUE, FEATURE_CLIP_VALUE]
         for numerical stability.
+
+        FIX TRANSFORM: Handles 1D input gracefully by reshaping.
         """
         with self._lock:
             if not self._fitted:
                 raise RuntimeError(
                     "Scaler not fitted! Call fit_scaler() first or load_scaler()."
                 )
+
+            # FIX TRANSFORM: Handle 1D input
+            original_ndim = features.ndim
+            if original_ndim == 1:
+                features = features.reshape(1, -1)
 
             if features.shape[-1] != self._n_features:
                 raise ValueError(
@@ -322,14 +325,14 @@ class DataProcessor:
             if is_3d:
                 features_2d = features.reshape(-1, features.shape[-1])
             else:
-                features_2d = features  # No copy needed; scaler.transform returns new array
+                features_2d = features
 
             nan_mask = np.isnan(features_2d) | np.isinf(features_2d)
-            features_2d = np.nan_to_num(
+            features_clean = np.nan_to_num(
                 features_2d, nan=0.0, posinf=0.0, neginf=0.0
             )
 
-            transformed = self.scaler.transform(features_2d)
+            transformed = self.scaler.transform(features_clean)
             transformed = np.clip(
                 transformed, -FEATURE_CLIP_VALUE, FEATURE_CLIP_VALUE
             )
@@ -339,14 +342,20 @@ class DataProcessor:
             if is_3d:
                 transformed = transformed.reshape(original_shape)
 
-            return transformed.astype(np.float32)
+            result = transformed.astype(np.float32)
+
+            # Restore original ndim if input was 1D
+            if original_ndim == 1:
+                result = result.reshape(-1)
+
+            return result
 
     def save_scaler(
         self,
-        path: str = None,
-        interval: str = None,
-        horizon: int = None,
-    ):
+        path: Optional[Union[str, Path]] = None,
+        interval: Optional[str] = None,
+        horizon: Optional[int] = None,
+    ) -> None:
         """
         Save scaler atomically with metadata.
 
@@ -399,6 +408,12 @@ class DataProcessor:
             tmp_path = path.with_suffix(".pkl.tmp")
             with open(tmp_path, "wb") as f:
                 pickle.dump(data, f, protocol=pickle.HIGHEST_PROTOCOL)
+                f.flush()
+                try:
+                    import os
+                    os.fsync(f.fileno())
+                except OSError:
+                    pass
             tmp_path.replace(path)
 
         log.info(
@@ -407,9 +422,9 @@ class DataProcessor:
 
     def load_scaler(
         self,
-        path: str = None,
-        interval: str = None,
-        horizon: int = None,
+        path: Optional[Union[str, Path]] = None,
+        interval: Optional[str] = None,
+        horizon: Optional[int] = None,
     ) -> bool:
         """
         Load saved scaler for inference.
@@ -424,14 +439,13 @@ class DataProcessor:
                 CONFIG.MODEL_DIR / f"scaler_{interval}_{horizon}.pkl"
             )
 
-        if not Path(path).exists():
+        path = Path(path)
+        if not path.exists():
             log.warning(f"Scaler not found: {path}")
             return False
 
         try:
             # WARNING: pickle.load is inherently unsafe for untrusted data.
-            # In production, consider signing scaler files or using a safe
-            # serialization format for the scaler parameters.
             with open(path, "rb") as f:
                 data = pickle.load(f)  # noqa: S301
 
@@ -488,8 +502,8 @@ class DataProcessor:
         feature_cols: List[str],
         fit_scaler: bool = False,
         return_index: bool = False,
-        interval: str = None,
-        horizon: int = None,
+        interval: Optional[str] = None,
+        horizon: Optional[int] = None,
     ) -> Union[
         Tuple[np.ndarray, np.ndarray, np.ndarray],
         Tuple[np.ndarray, np.ndarray, np.ndarray, pd.DatetimeIndex],
@@ -507,9 +521,16 @@ class DataProcessor:
 
         Returns:
             (X, y, returns) or (X, y, returns, index) if return_index=True.
+
+        Note:
+            Empty results return arrays with correct ndim:
+            - X: shape (0, seq_len, n_features)
+            - y: shape (0,)
+            - returns: shape (0,)
         """
         seq_len = int(CONFIG.SEQUENCE_LENGTH)
         num_classes = int(CONFIG.NUM_CLASSES)
+        n_features = len(feature_cols)
 
         missing_cols = set(feature_cols) - set(df.columns)
         if missing_cols:
@@ -520,6 +541,17 @@ class DataProcessor:
                 "DataFrame must have 'label' column. "
                 "Call create_labels() first."
             )
+
+        # FIX SHAPE: Define properly shaped empty arrays for early return
+        empty_X = np.zeros((0, seq_len, n_features), dtype=np.float32)
+        empty_y = np.zeros((0,), dtype=np.int64)
+        empty_r = np.zeros((0,), dtype=np.float32)
+        empty_idx = pd.DatetimeIndex([])
+
+        if len(df) < seq_len:
+            if return_index:
+                return empty_X, empty_y, empty_r, empty_idx
+            return empty_X, empty_y, empty_r
 
         features = df[feature_cols].values.astype(np.float32)
 
@@ -556,7 +588,10 @@ class DataProcessor:
                 -FEATURE_CLIP_VALUE, FEATURE_CLIP_VALUE,
             ).astype(np.float32)
 
-        X, y, r, idx = [], [], [], []
+        X_list: List[np.ndarray] = []
+        y_list: List[int] = []
+        r_list: List[float] = []
+        idx_list: List[Any] = []
         skipped_invalid = 0
 
         for i in range(seq_len - 1, len(features)):
@@ -570,15 +605,22 @@ class DataProcessor:
 
             seq = features[i - seq_len + 1: i + 1]
 
-            if len(seq) == seq_len and not np.isnan(seq).any():
-                X.append(seq)
-                y.append(label_val)
-                r.append(
+            if len(seq) == seq_len:
+                # FIX SEQNAN: Replace NaN in sequences with 0 instead of
+                # skipping the entire sequence. After scaling, occasional
+                # NaN can appear from edge effects; discarding them wastes
+                # valid labels. Zero is the neutral value after RobustScaler.
+                if np.isnan(seq).any():
+                    seq = np.nan_to_num(seq, nan=0.0, posinf=0.0, neginf=0.0)
+
+                X_list.append(seq)
+                y_list.append(label_val)
+                r_list.append(
                     float(returns[i])
                     if not np.isnan(returns[i])
                     else 0.0
                 )
-                idx.append(df.index[i])
+                idx_list.append(df.index[i])
 
         if skipped_invalid > 0:
             log.warning(
@@ -586,20 +628,19 @@ class DataProcessor:
                 f"outside [0, {num_classes})"
             )
 
-        if not X:
-            empty = (np.array([]), np.array([]), np.array([]))
+        if not X_list:
             if return_index:
-                return (*empty, pd.DatetimeIndex([]))
-            return empty
+                return empty_X, empty_y, empty_r, empty_idx
+            return empty_X, empty_y, empty_r
 
         out = (
-            np.array(X, dtype=np.float32),
-            np.array(y, dtype=np.int64),
-            np.array(r, dtype=np.float32),
+            np.array(X_list, dtype=np.float32),
+            np.array(y_list, dtype=np.int64),
+            np.array(r_list, dtype=np.float32),
         )
 
         if return_index:
-            return (*out, pd.DatetimeIndex(idx))
+            return (*out, pd.DatetimeIndex(idx_list))
         return out
 
     def prepare_forecast_sequences(
@@ -609,7 +650,7 @@ class DataProcessor:
         horizon: int,
         fit_scaler: bool = False,
         return_index: bool = False,
-        interval: str = None,
+        interval: Optional[str] = None,
     ) -> Union[
         Tuple[np.ndarray, np.ndarray],
         Tuple[np.ndarray, np.ndarray, pd.DatetimeIndex],
@@ -618,11 +659,23 @@ class DataProcessor:
         Prepare multi-step forecasting dataset.
 
         Returns:
-            (X, Y) or (X, Y, index) where Y has shape (N, horizon)
-            containing future percentage returns for each step.
+            (X, Y) or (X, Y, index) where:
+            - X has shape (N, seq_len, n_features)
+            - Y has shape (N, horizon) containing future percentage returns
+
+        Note:
+            Empty results return properly shaped arrays:
+            - X: shape (0, seq_len, n_features)
+            - Y: shape (0, horizon)
         """
         seq_len = int(CONFIG.SEQUENCE_LENGTH)
         horizon = int(horizon)
+        n_features = len(feature_cols)
+
+        # FIX SHAPE: Define properly shaped empty arrays
+        empty_X = np.zeros((0, seq_len, n_features), dtype=np.float32)
+        empty_Y = np.zeros((0, horizon), dtype=np.float32)
+        empty_idx = pd.DatetimeIndex([])
 
         missing_cols = set(feature_cols) - set(df.columns)
         if missing_cols:
@@ -633,10 +686,15 @@ class DataProcessor:
                 "DataFrame must have 'close' column for forecasting"
             )
 
+        if len(df) < seq_len + horizon:
+            if return_index:
+                return empty_X, empty_Y, empty_idx
+            return empty_X, empty_Y
+
         features = df[feature_cols].values.astype(np.float32)
         close = (
             pd.to_numeric(df["close"], errors="coerce")
-            .values.astype(np.float32)
+            .values.astype(np.float64)
         )
 
         if fit_scaler:
@@ -650,8 +708,15 @@ class DataProcessor:
 
         if self._fitted:
             features = self.transform(features)
+        else:
+            features = np.clip(
+                np.nan_to_num(features, nan=0.0, posinf=0.0, neginf=0.0),
+                -FEATURE_CLIP_VALUE, FEATURE_CLIP_VALUE,
+            ).astype(np.float32)
 
-        X, Y, idx = [], [], []
+        X_list: List[np.ndarray] = []
+        Y_list: List[np.ndarray] = []
+        idx_list: List[Any] = []
 
         n = len(df)
         for i in range(seq_len - 1, n):
@@ -659,33 +724,41 @@ class DataProcessor:
                 break
 
             seq = features[i - seq_len + 1: i + 1]
-            if len(seq) != seq_len or np.isnan(seq).any():
+            if len(seq) != seq_len:
                 continue
+
+            # FIX SEQNAN: Replace NaN instead of skipping
+            if np.isnan(seq).any():
+                seq = np.nan_to_num(seq, nan=0.0, posinf=0.0, neginf=0.0)
 
             c0 = float(close[i])
             if not np.isfinite(c0) or c0 <= 0:
                 continue
 
             fut = close[i + 1: i + horizon + 1]
-            if len(fut) != horizon or np.isnan(fut).any():
+            if len(fut) != horizon:
+                continue
+
+            # Check for NaN in future prices
+            if np.isnan(fut).any():
                 continue
 
             y_vals = (fut / c0 - 1.0) * 100.0
 
-            X.append(seq)
-            Y.append(y_vals.astype(np.float32))
-            idx.append(df.index[i])
+            X_list.append(seq)
+            Y_list.append(y_vals.astype(np.float32))
+            idx_list.append(df.index[i])
 
-        if not X:
+        if not X_list:
             if return_index:
-                return np.array([]), np.array([]), pd.DatetimeIndex([])
-            return np.array([]), np.array([])
+                return empty_X, empty_Y, empty_idx
+            return empty_X, empty_Y
 
-        X = np.array(X, dtype=np.float32)
-        Y = np.array(Y, dtype=np.float32)
+        X = np.array(X_list, dtype=np.float32)
+        Y = np.array(Y_list, dtype=np.float32)
 
         if return_index:
-            return X, Y, pd.DatetimeIndex(idx)
+            return X, Y, pd.DatetimeIndex(idx_list)
         return X, Y
 
     # =========================================================================
@@ -747,7 +820,7 @@ class DataProcessor:
         code: str,
         new_bar: Dict[str, float],
         feature_cols: List[str],
-        feature_engine: Any = None,
+        feature_engine: Optional[Any] = None,
     ) -> Optional[np.ndarray]:
         """
         Prepare sequence for real-time prediction with streaming data.
@@ -774,10 +847,11 @@ class DataProcessor:
 
         if feature_engine is not None:
             try:
-                if len(df) < getattr(feature_engine, "MIN_ROWS", 60):
+                engine_min_rows = getattr(feature_engine, "MIN_ROWS", 60)
+                if len(df) < engine_min_rows:
                     log.debug(
                         f"Insufficient rows for feature engine: "
-                        f"{len(df)} < {getattr(feature_engine, 'MIN_ROWS', 60)}"
+                        f"{len(df)} < {engine_min_rows}"
                     )
                     return None
                 df = feature_engine.create_features(df)
@@ -806,8 +880,8 @@ class DataProcessor:
         feature_cols: List[str],
     ) -> Tuple[np.ndarray, List[str]]:
         """Prepare batch inference for multiple stocks."""
-        X_list = []
-        codes = []
+        X_list: List[np.ndarray] = []
+        codes: List[str] = []
 
         for code, df in dataframes.items():
             try:
@@ -829,7 +903,7 @@ class DataProcessor:
         with self._buffer_lock:
             return self._realtime_buffers.get(code)
 
-    def clear_realtime_buffer(self, code: str = None):
+    def clear_realtime_buffer(self, code: Optional[str] = None) -> None:
         """Clear realtime buffer(s)."""
         with self._buffer_lock:
             if code:
@@ -838,24 +912,25 @@ class DataProcessor:
             else:
                 self._realtime_buffers.clear()
 
-    # FIX INDENT: This method was incorrectly nested inside clear_realtime_buffer
     def initialize_realtime_buffer(
         self, code: str, df: pd.DataFrame
-    ):
-        """Initialize realtime buffer with historical data."""
+    ) -> None:
+        """
+        Initialize realtime buffer with historical data.
+
+        FIX THREAD: Uses atomic initialize_from_dataframe to prevent
+        race conditions between clear() and append() calls.
+        """
         with self._buffer_lock:
             if code not in self._realtime_buffers:
                 self._realtime_buffers[code] = RealtimeBuffer()
             buffer = self._realtime_buffers[code]
 
-        buffer.clear()
-
-        for _, row in df.iterrows():
-            bar = row.to_dict()
-            buffer.append(bar)
+        # Atomic initialization under buffer's internal lock
+        count = buffer.initialize_from_dataframe(df)
 
         log.debug(
-            f"Initialized buffer for {code} with {len(buffer)} bars"
+            f"Initialized buffer for {code} with {count} bars"
         )
 
     # =========================================================================
@@ -867,8 +942,8 @@ class DataProcessor:
         df: pd.DataFrame,
         feature_cols: List[str],
         fit_scaler_on_train: bool = True,
-        horizon: int = None,
-        feature_engine: Any = None,
+        horizon: Optional[int] = None,
+        feature_engine: Optional[Any] = None,
     ) -> Dict[str, Tuple[np.ndarray, np.ndarray, np.ndarray]]:
         """Alias for split_temporal_single_stock."""
         return self.split_temporal_single_stock(
@@ -884,8 +959,8 @@ class DataProcessor:
         df: pd.DataFrame,
         feature_cols: List[str],
         fit_scaler_on_train: bool = True,
-        horizon: int = None,
-        feature_engine: Any = None,
+        horizon: Optional[int] = None,
+        feature_engine: Optional[Any] = None,
     ) -> Dict[str, Tuple[np.ndarray, np.ndarray, np.ndarray]]:
         """
         Split a single stock temporally with embargo gap between splits.
@@ -900,6 +975,21 @@ class DataProcessor:
         -  Warmup length uses ``CONFIG.data.feature_lookback`` (the true
            max indicator lookback) instead of ``seq_len``.
         """
+        seq_len = int(CONFIG.SEQUENCE_LENGTH)
+        n_features = len(feature_cols)
+
+        # FIX SHAPE: Define properly shaped empty arrays
+        empty: Tuple[np.ndarray, np.ndarray, np.ndarray] = (
+            np.zeros((0, seq_len, n_features), dtype=np.float32),
+            np.zeros((0,), dtype=np.int64),
+            np.zeros((0,), dtype=np.float32),
+        )
+
+        # Early validation
+        if not feature_cols:
+            log.error("feature_cols cannot be empty")
+            return {"train": empty, "val": empty, "test": empty}
+
         # Validate index is sorted chronologically
         if not df.index.is_monotonic_increasing:
             log.warning(
@@ -910,10 +1000,7 @@ class DataProcessor:
         n = len(df)
         horizon = int(horizon or CONFIG.PREDICTION_HORIZON)
         embargo = int(CONFIG.EMBARGO_BARS)
-        seq_len = int(CONFIG.SEQUENCE_LENGTH)
         feature_lookback = self._get_feature_lookback()
-
-        empty = (np.array([]), np.array([]), np.array([]))
 
         min_required = seq_len + horizon + embargo + 50
         if n < min_required:
@@ -925,14 +1012,17 @@ class DataProcessor:
 
         # ---- validate feature_cols early when feature_engine is provided ----
         if feature_engine is not None:
-            engine_cols = set(feature_engine.get_feature_columns())
-            requested_cols = set(feature_cols)
-            missing_from_engine = requested_cols - engine_cols
-            if missing_from_engine:
-                log.warning(
-                    f"feature_cols contains columns not produced by "
-                    f"feature_engine: {missing_from_engine}"
-                )
+            try:
+                engine_cols = set(feature_engine.get_feature_columns())
+                requested_cols = set(feature_cols)
+                missing_from_engine = requested_cols - engine_cols
+                if missing_from_engine:
+                    log.warning(
+                        f"feature_cols contains columns not produced by "
+                        f"feature_engine: {missing_from_engine}"
+                    )
+            except Exception as e:
+                log.warning(f"Could not validate feature_cols against engine: {e}")
 
         # ---- temporal boundaries ----
         train_end = int(n * float(CONFIG.TRAIN_RATIO))
@@ -953,20 +1043,34 @@ class DataProcessor:
             test_raw = df.iloc[test_raw_begin:].copy()
 
             # Compute features WITHIN each split
+            min_rows = getattr(feature_engine, "MIN_ROWS", 60)
+
             try:
+                if len(train_raw) < min_rows:
+                    log.warning(
+                        f"Train split too small for features: "
+                        f"{len(train_raw)} < {min_rows}"
+                    )
+                    return {"train": empty, "val": empty, "test": empty}
                 train_df = feature_engine.create_features(train_raw)
             except ValueError as e:
                 log.warning(f"Train feature creation failed: {e}")
                 return {"train": empty, "val": empty, "test": empty}
 
             try:
-                val_df = feature_engine.create_features(val_raw)
+                if len(val_raw) >= min_rows:
+                    val_df = feature_engine.create_features(val_raw)
+                else:
+                    val_df = pd.DataFrame()
             except ValueError as e:
                 log.warning(f"Val feature creation failed: {e}")
                 val_df = pd.DataFrame()
 
             try:
-                test_df = feature_engine.create_features(test_raw)
+                if len(test_raw) >= min_rows:
+                    test_df = feature_engine.create_features(test_raw)
+                else:
+                    test_df = pd.DataFrame()
             except ValueError as e:
                 log.warning(f"Test feature creation failed: {e}")
                 test_df = pd.DataFrame()
@@ -984,9 +1088,9 @@ class DataProcessor:
             val_df = df.iloc[val_start:val_end].copy()
             test_df = df.iloc[test_start:].copy()
 
-            # Use feature_lookback as warmup (Issue 2), consistent with engine path
-            warmup_val = min(feature_lookback, len(val_df) // 4)
-            warmup_test = min(feature_lookback, len(test_df) // 4)
+            # Use feature_lookback as warmup (Issue 2)
+            warmup_val = min(feature_lookback, len(val_df) // 4) if len(val_df) > 0 else 0
+            warmup_test = min(feature_lookback, len(test_df) // 4) if len(test_df) > 0 else 0
 
         # ---- validate feature_cols exist in computed DataFrames ----
         for name, split_df in [("train", train_df), ("val", val_df), ("test", test_df)]:
@@ -997,7 +1101,8 @@ class DataProcessor:
                         f"Split '{name}' is missing feature columns: {missing}. "
                         f"Available: {sorted(split_df.columns.tolist())}"
                     )
-                    return {"train": empty, "val": empty, "test": empty}
+                    if name == "train":
+                        return {"train": empty, "val": empty, "test": empty}
 
         # ---- create labels WITHIN each split ----
         if len(train_df) > 0:
@@ -1008,26 +1113,33 @@ class DataProcessor:
             test_df = self.create_labels(test_df, horizon=horizon)
 
         # ---- invalidate warmup rows in val/test ----
+        # FIX WARMUP2: Clamp warmup to actual DataFrame length
         if warmup_val > 0 and len(val_df) > 0 and "label" in val_df.columns:
-            val_df.iloc[
-                :warmup_val, val_df.columns.get_loc("label")
-            ] = np.nan
+            clamp_val = min(warmup_val, len(val_df))
+            if clamp_val > 0:
+                val_df.iloc[
+                    :clamp_val, val_df.columns.get_loc("label")
+                ] = np.nan
         if warmup_test > 0 and len(test_df) > 0 and "label" in test_df.columns:
-            test_df.iloc[
-                :warmup_test, test_df.columns.get_loc("label")
-            ] = np.nan
+            clamp_test = min(warmup_test, len(test_df))
+            if clamp_test > 0:
+                test_df.iloc[
+                    :clamp_test, test_df.columns.get_loc("label")
+                ] = np.nan
 
         # ---- fit scaler on TRAIN only ----
         if fit_scaler_on_train and len(train_df) >= seq_len:
             if "label" in train_df.columns:
-                train_features = train_df[feature_cols].values
-                valid_mask = ~train_df["label"].isna()
-                if int(valid_mask.sum()) > 10:
-                    self.fit_scaler(
-                        train_features[valid_mask],
-                        interval=self._interval,
-                        horizon=horizon,
-                    )
+                avail_cols = [c for c in feature_cols if c in train_df.columns]
+                if len(avail_cols) == len(feature_cols):
+                    train_features = train_df[feature_cols].values
+                    valid_mask = ~train_df["label"].isna()
+                    if int(valid_mask.sum()) > 10:
+                        self.fit_scaler(
+                            train_features[valid_mask],
+                            interval=self._interval,
+                            horizon=horizon,
+                        )
 
         # ---- prepare sequences for each split ----
         results: Dict[str, Tuple[np.ndarray, np.ndarray, np.ndarray]] = {}
@@ -1038,22 +1150,31 @@ class DataProcessor:
             ("test", test_df),
         ]:
             if len(split_df) >= seq_len + 5:
-                X, y, r = self.prepare_sequences(
-                    split_df, feature_cols, fit_scaler=False
-                )
-                results[name] = (X, y, r)
-                if len(X) > 0:
-                    log.info(
-                        f"Split '{name}': {len(X)} samples, "
-                        f"class dist: {self.get_class_distribution(y)}"
+                try:
+                    X, y, r = self.prepare_sequences(
+                        split_df, feature_cols, fit_scaler=False
                     )
-                else:
-                    log.debug(f"Split '{name}': 0 valid samples")
+                    results[name] = (X, y, r)
+                    if len(X) > 0:
+                        log.info(
+                            f"Split '{name}': {len(X)} samples, "
+                            f"class dist: {self.get_class_distribution(y)}"
+                        )
+                    else:
+                        log.debug(f"Split '{name}': 0 valid samples")
+                except Exception as e:
+                    log.warning(f"Sequence preparation failed for split '{name}': {e}")
+                    results[name] = empty
             else:
                 results[name] = empty
                 log.debug(
                     f"Split '{name}': 0 samples (insufficient data: {len(split_df)} rows)"
                 )
+
+        # Ensure all splits present
+        for name in ("train", "val", "test"):
+            if name not in results:
+                results[name] = empty
 
         return results
 
@@ -1071,6 +1192,8 @@ class DataProcessor:
         """
         Get class distribution for logging.
         Dynamically handles any NUM_CLASSES value.
+
+        FIX BINCOUNT: Guards against negative labels which would crash bincount.
         """
         num_classes = int(CONFIG.NUM_CLASSES)
 
@@ -1083,13 +1206,32 @@ class DataProcessor:
             return dist
 
         y_int = y.astype(int)
+
+        # FIX BINCOUNT: Filter out invalid labels before bincount
+        valid_mask = (y_int >= 0) & (y_int < num_classes)
+        if not valid_mask.all():
+            invalid_count = (~valid_mask).sum()
+            log.warning(
+                f"get_class_distribution: {invalid_count} labels outside "
+                f"[0, {num_classes}) — excluding from distribution"
+            )
+            y_int = y_int[valid_mask]
+
+        if len(y_int) == 0:
+            dist = {}
+            for i in range(num_classes):
+                label_name = _DEFAULT_LABEL_NAMES.get(i, f"CLASS_{i}")
+                dist[label_name] = 0
+            dist["total"] = 0
+            return dist
+
         counts = np.bincount(y_int, minlength=num_classes)
 
         dist = {}
         for i in range(num_classes):
             label_name = _DEFAULT_LABEL_NAMES.get(i, f"CLASS_{i}")
             dist[label_name] = int(counts[i]) if i < len(counts) else 0
-        dist["total"] = int(len(y))
+        dist["total"] = int(len(y))  # Original length including invalid
 
         return dist
 
@@ -1139,83 +1281,118 @@ class RealtimePredictor:
         self.horizon = int(horizon)
 
         self.processor = DataProcessor()
-        self.feature_engine = None
-        self.ensemble = None
-        self.forecaster = None
+        self.feature_engine: Optional[Any] = None
+        self.ensemble: Optional[Any] = None
+        self.forecaster: Optional[Any] = None
 
         self._feature_cols: List[str] = []
         self._loaded = False
+        self._loading = False
         self._lock = threading.RLock()
+        self._device: str = "cpu"
 
         if auto_load:
             self.load_models()
 
     def load_models(self) -> bool:
-        """Load all required models for prediction."""
+        """
+        Load all required models for prediction.
+
+        FIX RACE: Uses double-check locking to prevent redundant loads
+        when multiple threads call load_models() simultaneously.
+        """
+        # Fast path: already loaded
+        if self._loaded:
+            return True
+
+        with self._lock:
+            # Double-check under lock
+            if self._loaded:
+                return True
+
+            # Prevent concurrent loading
+            if self._loading:
+                log.debug("load_models() already in progress, waiting...")
+                return self._loaded
+
+            self._loading = True
+
+        # Do the actual loading
+        try:
+            return self._do_load_models()
+        finally:
+            with self._lock:
+                self._loading = False
+
+    def _do_load_models(self) -> bool:
+        """Internal model loading implementation."""
         from data.features import FeatureEngine
         from models.ensemble import EnsembleModel
 
-        with self._lock:
-            try:
-                self.feature_engine = FeatureEngine()
-                self._feature_cols = (
-                    self.feature_engine.get_feature_columns()
-                )
+        try:
+            self.feature_engine = FeatureEngine()
+            self._feature_cols = (
+                self.feature_engine.get_feature_columns()
+            )
 
-                scaler_path = (
-                    CONFIG.MODEL_DIR
-                    / f"scaler_{self.interval}_{self.horizon}.pkl"
-                )
-                if not self.processor.load_scaler(str(scaler_path)):
-                    log.warning(f"Failed to load scaler: {scaler_path}")
-                    return False
-
-                # Validate feature count matches scaler
-                if (
-                    self.processor.n_features is not None
-                    and self.processor.n_features != len(self._feature_cols)
-                ):
-                    log.error(
-                        f"Feature count mismatch: scaler expects "
-                        f"{self.processor.n_features}, engine produces "
-                        f"{len(self._feature_cols)}"
-                    )
-                    return False
-
-                ensemble_path = (
-                    CONFIG.MODEL_DIR
-                    / f"ensemble_{self.interval}_{self.horizon}.pt"
-                )
-                if ensemble_path.exists():
-                    self.ensemble = EnsembleModel(
-                        input_size=self.processor.n_features
-                        or len(self._feature_cols)
-                    )
-                    if not self.ensemble.load(str(ensemble_path)):
-                        log.warning(
-                            f"Failed to load ensemble: {ensemble_path}"
-                        )
-                        self.ensemble = None
-
-                forecast_path = (
-                    CONFIG.MODEL_DIR
-                    / f"forecast_{self.interval}_{self.horizon}.pt"
-                )
-                if forecast_path.exists():
-                    self._load_forecaster(forecast_path)
-
-                self._loaded = True
-                log.info(
-                    f"Models loaded: interval={self.interval}, "
-                    f"horizon={self.horizon}"
-                )
-                return True
-
-            except Exception as e:
-                log.error(f"Failed to load models: {e}")
+            scaler_path = (
+                CONFIG.MODEL_DIR
+                / f"scaler_{self.interval}_{self.horizon}.pkl"
+            )
+            if not self.processor.load_scaler(str(scaler_path)):
+                log.warning(f"Failed to load scaler: {scaler_path}")
                 return False
 
-    def _load_forecaster(self, path: Path):
+            # Validate feature count matches scaler
+            if (
+                self.processor.n_features is not None
+                and self.processor.n_features != len(self._feature_cols)
+            ):
+                log.error(
+                    f"Feature count mismatch: scaler expects "
+                    f"{self.processor.n_features}, engine produces "
+                    f"{len(self._feature_cols)}"
+                )
+                return False
+
+            ensemble_path = (
+                CONFIG.MODEL_DIR
+                / f"ensemble_{self.interval}_{self.horizon}.pt"
+            )
+            if ensemble_path.exists():
+                self.ensemble = EnsembleModel(
+                    input_size=self.processor.n_features
+                    or len(self._feature_cols)
+                )
+                if not self.ensemble.load(str(ensemble_path)):
+                    log.warning(
+                        f"Failed to load ensemble: {ensemble_path}"
+                    )
+                    self.ensemble = None
+                else:
+                    self._device = self.ensemble.device
+
+            forecast_path = (
+                CONFIG.MODEL_DIR
+                / f"forecast_{self.interval}_{self.horizon}.pt"
+            )
+            if forecast_path.exists():
+                self._load_forecaster(forecast_path)
+
+            with self._lock:
+                self._loaded = True
+
+            log.info(
+                f"Models loaded: interval={self.interval}, "
+                f"horizon={self.horizon}, device={self._device}"
+            )
+            return True
+
+        except Exception as e:
+            log.error(f"Failed to load models: {e}")
+            return False
+
+    def _load_forecaster(self, path: Path) -> None:
         """
         Load TCN forecaster model.
 
@@ -1243,8 +1420,6 @@ class RealtimePredictor:
                 )
                 return
 
-            # TCNModel's num_classes parameter is used as the output
-            # dimension. For forecasting, this equals the horizon.
             output_size = int(data["horizon"])
 
             self.forecaster = TCNModel(
@@ -1256,9 +1431,12 @@ class RealtimePredictor:
             self.forecaster.load_state_dict(data["state_dict"])
             self.forecaster.eval()
 
+            # FIX DEVICE: Move forecaster to same device as ensemble
+            self.forecaster.to(self._device)
+
             log.info(
                 f"Forecaster loaded: {path} "
-                f"(output_size={output_size})"
+                f"(output_size={output_size}, device={self._device})"
             )
         except Exception as e:
             log.warning(f"Failed to load forecaster: {e}")
@@ -1272,6 +1450,10 @@ class RealtimePredictor:
         """
         Make real-time prediction.
 
+        FIX LOCK: Does NOT hold self._lock during inference, only during
+        state checks. This prevents blocking other threads during the
+        potentially slow forward pass.
+
         Args:
             df: DataFrame with OHLCV data (must have >= MIN_ROWS rows
                 for feature computation + SEQUENCE_LENGTH for sequence).
@@ -1280,88 +1462,96 @@ class RealtimePredictor:
         Returns:
             Dict with signal, confidence, probabilities, etc. or None on failure.
         """
-        if not self._loaded:
+        # Check loaded state under lock (fast)
+        with self._lock:
+            is_loaded = self._loaded
+
+        if not is_loaded:
             if not self.load_models():
                 return None
 
-        with self._lock:
-            try:
-                # Validate minimum data requirement
-                min_rows = getattr(self.feature_engine, "MIN_ROWS", 60)
-                if len(df) < min_rows:
-                    log.warning(
-                        f"Insufficient data for prediction: "
-                        f"{len(df)} rows < {min_rows} minimum"
-                    )
-                    return None
+        # FIX LOCK: Perform inference WITHOUT holding lock
+        return self._do_predict(df, include_forecast)
 
-                df = self.feature_engine.create_features(df.copy())
-                X = self.processor.prepare_inference_sequence(
-                    df, self._feature_cols
+    def _do_predict(
+        self,
+        df: pd.DataFrame,
+        include_forecast: bool,
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Internal prediction logic.
+
+        FIX LOCK: No longer requires self._lock to be held.
+        The models are only modified during load_models() which is
+        protected by its own locking. During prediction, models are
+        read-only (eval mode).
+        """
+        try:
+            # Validate minimum data requirement
+            min_rows = getattr(self.feature_engine, "MIN_ROWS", 60)
+            if len(df) < min_rows:
+                log.warning(
+                    f"Insufficient data for prediction: "
+                    f"{len(df)} rows < {min_rows} minimum"
                 )
-
-                result: Dict[str, Any] = {
-                    "timestamp": datetime.now(),
-                    "signal": "HOLD",
-                    "confidence": 0.0,
-                    "probabilities": [
-                        1.0 / CONFIG.NUM_CLASSES
-                    ] * CONFIG.NUM_CLASSES,
-                    "predicted_class": 1,
-                }
-
-                if self.ensemble:
-                    pred = self.ensemble.predict(X)
-
-                    result["probabilities"] = (
-                        pred.probabilities.tolist()
-                    )
-                    result["predicted_class"] = pred.predicted_class
-                    result["confidence"] = pred.confidence
-                    result["entropy"] = pred.entropy
-                    result["agreement"] = pred.agreement
-
-                    if (
-                        pred.predicted_class == 2
-                        and pred.confidence >= CONFIG.MIN_CONFIDENCE
-                    ):
-                        if (
-                            pred.confidence
-                            >= CONFIG.STRONG_BUY_THRESHOLD
-                        ):
-                            result["signal"] = "STRONG_BUY"
-                        else:
-                            result["signal"] = "BUY"
-                    elif (
-                        pred.predicted_class == 0
-                        and pred.confidence >= CONFIG.MIN_CONFIDENCE
-                    ):
-                        if (
-                            pred.confidence
-                            >= CONFIG.STRONG_SELL_THRESHOLD
-                        ):
-                            result["signal"] = "STRONG_SELL"
-                        else:
-                            result["signal"] = "SELL"
-                    else:
-                        result["signal"] = "HOLD"
-
-                if include_forecast and self.forecaster:
-                    import torch
-
-                    self.forecaster.eval()
-                    with torch.inference_mode():
-                        X_tensor = torch.FloatTensor(X)
-                        forecast, _ = self.forecaster(X_tensor)
-                        result["forecast"] = (
-                            forecast[0].cpu().numpy().tolist()
-                        )
-
-                return result
-
-            except Exception as e:
-                log.error(f"Prediction failed: {e}")
                 return None
+
+            df_features = self.feature_engine.create_features(df.copy())
+            X = self.processor.prepare_inference_sequence(
+                df_features, self._feature_cols
+            )
+
+            num_classes = int(CONFIG.NUM_CLASSES)
+            result: Dict[str, Any] = {
+                "timestamp": datetime.now(),
+                "signal": "HOLD",
+                "confidence": 0.0,
+                "probabilities": [1.0 / num_classes] * num_classes,
+                "predicted_class": 1,
+            }
+
+            if self.ensemble is not None:
+                pred = self.ensemble.predict(X)
+
+                result["probabilities"] = pred.probabilities.tolist()
+                result["predicted_class"] = pred.predicted_class
+                result["confidence"] = pred.confidence
+                result["entropy"] = pred.entropy
+                result["agreement"] = pred.agreement
+
+                min_conf = float(CONFIG.MIN_CONFIDENCE)
+                strong_buy = float(CONFIG.STRONG_BUY_THRESHOLD)
+                strong_sell = float(CONFIG.STRONG_SELL_THRESHOLD)
+
+                if pred.predicted_class == 2 and pred.confidence >= min_conf:
+                    if pred.confidence >= strong_buy:
+                        result["signal"] = "STRONG_BUY"
+                    else:
+                        result["signal"] = "BUY"
+                elif pred.predicted_class == 0 and pred.confidence >= min_conf:
+                    if pred.confidence >= strong_sell:
+                        result["signal"] = "STRONG_SELL"
+                    else:
+                        result["signal"] = "SELL"
+                else:
+                    result["signal"] = "HOLD"
+
+            if include_forecast and self.forecaster is not None:
+                import torch
+
+                self.forecaster.eval()
+                with torch.inference_mode():
+                    X_tensor = torch.FloatTensor(X).to(self._device)
+                    forecast, _ = self.forecaster(X_tensor)
+                    result["forecast"] = (
+                        forecast[0].cpu().numpy().tolist()
+                    )
+
+            return result
+
+        except Exception as e:
+            log.error(f"Prediction failed: {e}")
+            return None
 
     def predict_batch(
         self,
@@ -1369,13 +1559,13 @@ class RealtimePredictor:
         include_forecast: bool = False,
     ) -> Dict[str, Dict[str, Any]]:
         """Make predictions for multiple stocks."""
-        results = {}
+        results: Dict[str, Dict[str, Any]] = {}
 
         for code, df in dataframes.items():
             pred = self.predict(
                 df, include_forecast=include_forecast
             )
-            if pred:
+            if pred is not None:
                 results[code] = pred
 
         return results
@@ -1386,6 +1576,23 @@ class RealtimePredictor:
         new_bar: Dict[str, float],
     ) -> Optional[Dict[str, Any]]:
         """Update buffer with new bar and make prediction."""
+        # Check loaded state
+        with self._lock:
+            is_loaded = self._loaded
+
+        if not is_loaded:
+            if not self.load_models():
+                return None
+
+        # FIX LOCK: No lock held during prediction
+        return self._do_update_and_predict(code, new_bar)
+
+    def _do_update_and_predict(
+        self,
+        code: str,
+        new_bar: Dict[str, float],
+    ) -> Optional[Dict[str, Any]]:
+        """Internal update and predict logic."""
         X = self.processor.prepare_realtime_sequence(
             code, new_bar, self._feature_cols, self.feature_engine
         )
@@ -1393,31 +1600,36 @@ class RealtimePredictor:
         if X is None:
             return None
 
+        result: Dict[str, Any] = {
+            "code": code,
+            "timestamp": datetime.now(),
+            "signal": "HOLD",
+            "confidence": 0.0,
+        }
+
+        if self.ensemble is not None:
+            pred = self.ensemble.predict(X)
+            result["probabilities"] = pred.probabilities.tolist()
+            result["predicted_class"] = pred.predicted_class
+            result["confidence"] = pred.confidence
+
+            min_conf = float(CONFIG.MIN_CONFIDENCE)
+
+            if pred.predicted_class == 2 and pred.confidence >= min_conf:
+                result["signal"] = "BUY"
+            elif pred.predicted_class == 0 and pred.confidence >= min_conf:
+                result["signal"] = "SELL"
+
+        return result
+
+    @property
+    def is_loaded(self) -> bool:
+        """Check if models are loaded."""
         with self._lock:
-            result: Dict[str, Any] = {
-                "code": code,
-                "timestamp": datetime.now(),
-                "signal": "HOLD",
-                "confidence": 0.0,
-            }
+            return self._loaded
 
-            if self.ensemble:
-                pred = self.ensemble.predict(X)
-                result["probabilities"] = (
-                    pred.probabilities.tolist()
-                )
-                result["predicted_class"] = pred.predicted_class
-                result["confidence"] = pred.confidence
-
-                if (
-                    pred.predicted_class == 2
-                    and pred.confidence >= CONFIG.MIN_CONFIDENCE
-                ):
-                    result["signal"] = "BUY"
-                elif (
-                    pred.predicted_class == 0
-                    and pred.confidence >= CONFIG.MIN_CONFIDENCE
-                ):
-                    result["signal"] = "SELL"
-
-            return result
+    @property
+    def device(self) -> str:
+        """Get the device models are running on."""
+        with self._lock:
+            return self._device

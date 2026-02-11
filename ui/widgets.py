@@ -1,16 +1,4 @@
 # ui/widgets.py
-"""
-Custom UI Widgets - Professional English Interface
-
-FIXES APPLIED:
-1. Signal import uses lazy import to avoid circular dependency at module load
-2. update_prediction handles all missing/None fields robustly
-3. PositionTable handles missing Position attributes gracefully
-4. LogWidget uses safer line trimming (avoids cursor manipulation issues)
-5. MetricCard set_value accepts optional color without crashing
-6. All widgets guard against None/missing data
-7. Consistent type coercion with explicit float()/int() and fallbacks
-"""
 from datetime import datetime
 from typing import Dict, List, Optional
 

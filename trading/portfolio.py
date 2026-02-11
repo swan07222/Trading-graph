@@ -1,15 +1,4 @@
 # trading/portfolio.py
-"""
-Portfolio Management — track positions, trades, and performance.
-
-Production-quality implementation:
-- Thread-safe via RLock on all mutable state
-- Bounded equity history with configurable max size
-- Robust persistence (saves/loads daily_performance, validates on load)
-- Correct financial metrics (annualized Calmar, proper profit factor)
-- Deep-copy isolation between Portfolio and Account positions
-- Top-level imports only (no deferred pandas import)
-"""
 
 import copy
 import json

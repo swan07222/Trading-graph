@@ -1,11 +1,4 @@
 # trading/kill_switch.py
-"""
-Kill Switch and Circuit Breaker System
-
-FIXES APPLIED:
-- Module-level lock instead of globals() pattern
-- _load_state documents that previously-active kill switch persists intentionally
-"""
 import threading
 from datetime import datetime, timedelta
 from typing import Optional, Callable, List, Dict

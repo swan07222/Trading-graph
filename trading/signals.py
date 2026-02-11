@@ -1,18 +1,4 @@
 # trading/signals.py
-"""
-Signal Generation - Combine AI predictions with technical analysis
-
-FIXES APPLIED:
-- Correct import path for CONFIG
-- All imports at top level with TYPE_CHECKING guard for type hints
-- Consistent safe attribute access throughout
-- Type hints on all methods
-- Input validation
-- Constants extracted from magic numbers
-- Proper enum comparisons
-- Comprehensive error handling
-- Full docstrings
-"""
 from __future__ import annotations
 
 from dataclasses import dataclass, field

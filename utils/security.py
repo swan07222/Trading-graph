@@ -1,29 +1,4 @@
 # utils/security.py
-"""
-Security and Compliance Module.
-
-Features:
-- Encrypted credential storage (Fernet or explicit warning)
-- Comprehensive audit logging with no data loss on flush failure
-- Rate limiting with proper window management
-- Session management
-- Access control without circular init
-
-FIXES APPLIED (comprehensive):
-1.  SecureStorage: added close(), has() is thread-safe
-2.  SecureStorage: base64 fallback issues loud warning every set/get
-3.  AuditLog: _flush only clears buffer on success
-4.  AuditLog: atexit uses weakref to avoid preventing GC
-5.  AuditLog: _get_file thread safety
-6.  AuditLog: query() flushes current buffer first for consistency
-7.  RateLimiter: check() doesn't double-count, wait_if_needed is safe
-8.  RateLimiter: set_limit validates value
-9.  RateLimiter: bounded window memory
-10. AccessControl: lazy audit with no recursion risk
-11. AccessControl: input validation on set_role, check, require
-12. Module-level singletons with proper locks
-13. SecureStorage: input validation on set/get/delete
-"""
 from __future__ import annotations
 
 import atexit

@@ -1,12 +1,4 @@
-"""
-Canonical Types - SINGLE SOURCE OF TRUTH for all trading types
-All other modules MUST import from here
 
-ADDITIONS:
-- AutoTradeMode enum (MANUAL, AUTO, SEMI_AUTO)
-- AutoTradeState dataclass (tracks auto-trader runtime state)
-- AutoTradeAction dataclass (records each auto-trade decision)
-"""
 from dataclasses import dataclass, field
 from datetime import datetime, date
 from enum import Enum

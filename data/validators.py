@@ -1,9 +1,4 @@
-"""
-Data Validation Module
-Score Target: 10/10
 
-Comprehensive data validation for all inputs.
-"""
 import re
 from datetime import datetime, date, timedelta
 from typing import List, Dict, Optional, Tuple, Any, Union

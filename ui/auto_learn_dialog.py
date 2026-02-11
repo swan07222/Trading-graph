@@ -1,32 +1,4 @@
 # ui/auto_learn_dialog.py
-"""
-Auto-Learning Dialog
-Provides UI for continuous learning functionality with both
-automatic stock rotation AND targeted stock training.
-
-FEATURES:
-- Tab 1: Auto Learn — discovers and trains on random stocks (existing)
-- Tab 2: Train by Search — user searches/selects specific stocks to train
-
-FIXES APPLIED:
-1. AutoLearnWorker runs learner in a separate daemon thread to prevent
-   blocking if learner.start() is synchronous/blocking
-2. Proper stop sequence: stop learner first, then exit QThread loop
-3. Worker handles missing AutoLearner/ContinuousLearner gracefully
-4. Progress callback guards against dead worker
-5. closeEvent calls super().closeEvent()
-6. _stop_learning handles already-stopped worker safely
-7. Results dict always has all expected keys
-8. Timer-based cleanup for worker thread after stop
-9. Exception traceback only logged, not emitted to UI in full
-10. Mode config properly maps all three combo options
-11. NEW: TargetedLearnWorker for training on specific stocks
-12. NEW: Stock search with validation via validate_stock_code()
-13. NEW: Stock list management (add/remove/clear)
-14. NEW: Quick-add buttons for popular stocks
-15. NEW: Code normalization handles sh/sz prefix and bare 6-digit codes
-16. NEW: Both tabs share progress bar and activity log
-"""
 
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,

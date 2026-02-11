@@ -1,15 +1,4 @@
 # trading/__init__.py
-"""
-Trading Package - Production Grade
-
-FIXES APPLIED:
-- Lazy imports to prevent cascading import failures
-- If executor.py or any submodule fails to import, the rest of
-  the trading package still works
-- Re-exports are preserved for backward compatibility
-"""
-
-
 def __getattr__(name: str):
     """
     Lazy import dispatcher.

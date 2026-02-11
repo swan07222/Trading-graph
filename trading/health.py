@@ -1,12 +1,4 @@
 # trading/health.py
-"""
-Health Monitoring System
-
-FIXES APPLIED:
-- Module-level lock instead of globals() pattern
-- _check_database tests market database directly instead of importing OMS
-- Cross-platform disk usage handling
-"""
 import threading
 import time
 from datetime import datetime, timedelta

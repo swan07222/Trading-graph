@@ -1,41 +1,5 @@
 # models/auto_learner.py
-"""
-Continuous Learning System - Production Grade
 
-GUARANTEES:
-1. Model knowledge ACCUMULATES — never lost
-2. Best model ALWAYS protected with versioned backups
-3. Each cycle validated against STRICT holdout data
-4. Plateau detected and responded to gradually
-5. Full state persistence with atomic writes
-6. Crash recovery from any point
-
-FIXES APPLIED:
-- Issue 3:  Holdout drawn from separate source, periodic refresh
-- Issue 4:  Training accuracy never bypasses holdout validation
-- Issue 5:  Scaler injection via public API (no private attribute hack)
-- Issue 8:  Checksum uses canonical nested format
-- Issue 9:  All holdout_codes access under lock
-- Issue 10: ParallelFetcher uses semaphore for real rate limiting
-- Issue 11: Bounded error/warning lists via add_error/add_warning
-- FIX:      ParallelFetcher.fetch_batch() fully implemented
-- FIX:      LRScheduler output actually passed to Trainer
-- FIX:      CancelledException handling in _train()
-- FIX:      StockRotator public reset methods for plateau handler
-- FIX C1:   Thread-local LR override instead of global CONFIG mutation
-- FIX C2:   Validation loads exact model path (no discovery fallback)
-- FIX C3:   Holdout TOCTOU race fixed with atomic check-and-swap
-- FIX M2:   Complete BARS_PER_DAY fallback dictionary
-- FIX M3:   ExperienceReplayBuffer.sample() logs shortfall warning
-- FIX M4:   MetricTracker uses lock for _plateau_count access
-- FIX M5:   LearningProgress.to_dict() includes all fields
-- NEW:      start_targeted() for training on user-selected stocks
-- NEW:      validate_stock_code() for UI search validation
-- NEW:      _targeted_loop() and _run_targeted_cycle() methods
-- FIX EBADF: _save_state uses atomic_write_json (no hand-rolled fsync)
-- FIX VAL:  _validate_and_decide requires minimum holdout predictions
-- FIX LR:   _train() passes learning_rate explicitly, no CONFIG mutation
-"""
 import os
 import json
 import time
@@ -219,7 +183,7 @@ class MetricTracker:
         self._plateau_threshold = plateau_threshold
         self._plateau_count = 0
         self._best_ema: float = 0.0
-        self._lock = threading.Lock()  # FIX M4: Add lock
+        self._lock = threading.Lock()
 
     def record(self, accuracy: float):
         """Record a new accuracy measurement"""
@@ -234,8 +198,9 @@ class MetricTracker:
                 return "stable"
 
             recent = list(self._history)
-            first_half = np.mean(recent[: len(recent) // 2])
-            second_half = np.mean(recent[len(recent) // 2:])
+            mid = len(recent) // 2
+            first_half = np.mean(recent[:mid])
+            second_half = np.mean(recent[mid:])
             diff = second_half - first_half
 
             if diff > self._plateau_threshold:
@@ -260,10 +225,7 @@ class MetricTracker:
     def is_plateau(self) -> bool:
         """Check if accuracy has plateaued"""
         with self._lock:
-            if len(self._history) < self._window:
-                return False
-            spread = max(self._history) - min(self._history)
-            return spread < self._plateau_threshold
+            return self._is_plateau_unlocked()
 
     @property
     def plateau_count(self) -> int:
@@ -272,9 +234,7 @@ class MetricTracker:
             return self._plateau_count
 
     def get_plateau_response(self) -> Dict[str, Any]:
-        """
-        Graduated response to plateau.
-        """
+        """Graduated response to plateau."""
         with self._lock:
             if not self._is_plateau_unlocked():
                 self._plateau_count = 0
@@ -351,6 +311,7 @@ class ExperienceReplayBuffer:
     Bounded size, cache TTL, stratified sampling.
 
     FIX M3: sample() logs warning when returning fewer items than requested.
+    FIX SAMP: sample() handles edge cases (n=0, empty strata).
     """
 
     def __init__(
@@ -389,10 +350,12 @@ class ExperienceReplayBuffer:
         Stratified sampling.
 
         FIX M3: Log warning if returning fewer than n items.
+        FIX SAMP: Handle edge cases properly.
         """
         with self._lock:
-            if not self._buffer:
+            if not self._buffer or n <= 0:
                 return []
+
             n = min(n, len(self._buffer))
             if n >= len(self._buffer):
                 return list(self._buffer)
@@ -412,7 +375,7 @@ class ExperienceReplayBuffer:
 
             n_top = max(1, int(n * 0.3))
             n_mid = max(1, int(n * 0.4))
-            n_low = n - n_top - n_mid
+            n_low = max(0, n - n_top - n_mid)
 
             def safe_sample(pool, count):
                 count = min(count, len(pool))
@@ -424,6 +387,7 @@ class ExperienceReplayBuffer:
                 + safe_sample(low, n_low)
             )
 
+            # Fill remaining from any stratum
             remaining = n - len(selected)
             if remaining > 0:
                 selected_set = set(selected)
@@ -542,6 +506,8 @@ class ModelGuardian:
     Protects best model from degradation.
 
     FIX C2: validate_model() loads exact model path instead of using discovery.
+    FIX GUARD: validate_model() handles individual stock errors without
+    aborting the entire validation.
     """
 
     def __init__(self, model_dir: Path = None, max_backups: int = 5):
@@ -566,13 +532,15 @@ class ModelGuardian:
                 backup_dir = self.model_dir / "backups" / timestamp
                 backup_dir.mkdir(parents=True, exist_ok=True)
                 files = self._model_files(interval, horizon)
+                copied_any = False
                 for filename in files:
                     src = self.model_dir / filename
                     if src.exists():
                         shutil.copy2(src, backup_dir / filename)
                         shutil.copy2(src, self.model_dir / f"{filename}.backup")
+                        copied_any = True
                 self._prune_backups()
-                return True
+                return copied_any
             except Exception as e:
                 log.warning(f"Backup failed: {e}")
                 return False
@@ -603,11 +571,19 @@ class ModelGuardian:
                     dst = self.model_dir / f"{filename}.best"
                     if src.exists():
                         shutil.copy2(src, dst)
+
                 metrics_path = (
                     self.model_dir / f"best_metrics_{interval}_{horizon}.json"
                 )
-                with open(metrics_path, 'w') as f:
-                    json.dump(metrics, f, indent=2)
+
+                # Use atomic write if available
+                try:
+                    from utils.atomic_io import atomic_write_json
+                    atomic_write_json(metrics_path, metrics, use_lock=True)
+                except ImportError:
+                    with open(metrics_path, 'w') as f:
+                        json.dump(metrics, f, indent=2)
+
                 self._best_metrics = dict(metrics)
                 log.info(f"Saved as all-time best: acc={metrics.get('accuracy', 0):.1%}")
                 return True
@@ -637,43 +613,49 @@ class ModelGuardian:
 
         FIX C2: Loads the EXACT model file instead of using Predictor's
         discovery fallback which may load a different model.
+        FIX GUARD: Individual stock errors don't abort validation.
         """
+        _empty_result = {'accuracy': 0, 'avg_confidence': 0, 'predictions_made': 0}
+
+        if not validation_codes:
+            return _empty_result
+
         try:
             from models.ensemble import EnsembleModel
             from data.features import FeatureEngine
             from data.processor import DataProcessor
 
-            # Build exact path to the model we want to validate
             model_path = self.model_dir / f"ensemble_{interval}_{horizon}.pt"
             scaler_path = self.model_dir / f"scaler_{interval}_{horizon}.pkl"
 
             if not model_path.exists():
                 log.warning(f"Model file not found for validation: {model_path}")
-                return {'accuracy': 0, 'avg_confidence': 0, 'predictions_made': 0}
+                return _empty_result
 
-            # Initialize components
             feature_engine = FeatureEngine()
             processor = DataProcessor()
             feature_cols = feature_engine.get_feature_columns()
 
-            # Load scaler
             if scaler_path.exists():
-                processor.load_scaler(str(scaler_path))
+                if not processor.load_scaler(str(scaler_path)):
+                    log.warning(f"Failed to load scaler: {scaler_path}")
+                    return _empty_result
             else:
                 log.warning(f"Scaler not found: {scaler_path}")
+                return _empty_result
 
-            # Load ensemble directly (FIX C2: no discovery fallback)
             input_size = processor.n_features or len(feature_cols)
             ensemble = EnsembleModel(input_size=input_size)
 
             if not ensemble.load(str(model_path)):
                 log.warning(f"Failed to load ensemble for validation: {model_path}")
-                return {'accuracy': 0, 'avg_confidence': 0, 'predictions_made': 0}
+                return _empty_result
 
             fetcher = get_fetcher()
             correct = 0
             total = 0
             confidences = []
+            errors = 0
 
             for code in validation_codes:
                 try:
@@ -684,6 +666,13 @@ class ModelGuardian:
                         continue
 
                     df = feature_engine.create_features(df)
+
+                    # Validate feature columns exist
+                    missing = set(feature_cols) - set(df.columns)
+                    if missing:
+                        log.debug(f"Validation: {code} missing features: {missing}")
+                        continue
+
                     cutoff = len(df) - horizon
                     if cutoff < CONFIG.SEQUENCE_LENGTH:
                         continue
@@ -691,11 +680,18 @@ class ModelGuardian:
                     pred_df = df.iloc[:cutoff].copy()
                     future_df = df.iloc[cutoff:].copy()
 
+                    if len(future_df) == 0 or 'close' not in future_df.columns:
+                        continue
+
                     X = processor.prepare_inference_sequence(pred_df, feature_cols)
                     ensemble_pred = ensemble.predict(X)
 
                     price_at = float(pred_df['close'].iloc[-1])
                     price_after = float(future_df['close'].iloc[-1])
+
+                    if price_at <= 0:
+                        continue
+
                     ret_pct = (price_after / price_at - 1) * 100
 
                     if ret_pct >= CONFIG.UP_THRESHOLD:
@@ -709,23 +705,30 @@ class ModelGuardian:
                         correct += 1
                     total += 1
                     confidences.append(float(ensemble_pred.confidence))
-                except Exception:
+
+                except Exception as e:
+                    errors += 1
+                    log.debug(f"Validation error for {code}: {e}")
                     continue
 
+            if errors > 0:
+                log.debug(f"Validation: {errors} stocks had errors")
+
             if total == 0:
-                return {'accuracy': 0, 'avg_confidence': 0, 'predictions_made': 0}
+                return _empty_result
 
             return {
                 'accuracy': float(correct / total),
-                'avg_confidence': float(np.mean(confidences)),
+                'avg_confidence': float(np.mean(confidences)) if confidences else 0.0,
                 'predictions_made': total,
                 'coverage': total / max(len(validation_codes), 1),
+                'errors': errors,
             }
         except Exception as e:
             log.warning(f"Validation failed: {e}")
             import traceback
             traceback.print_exc()
-            return {'accuracy': 0, 'avg_confidence': 0, 'predictions_made': 0}
+            return _empty_result
 
     def _model_files(self, interval, horizon) -> List[str]:
         return [
@@ -753,7 +756,12 @@ class ModelGuardian:
 # =============================================================================
 
 class StockRotator:
-    """Manages stock discovery and rotation."""
+    """
+    Manages stock discovery and rotation.
+
+    FIX PRIV: Provides public methods for state migration in _load_state
+    instead of requiring direct private attribute access.
+    """
 
     def __init__(self):
         self._processed: Set[str] = set()
@@ -796,7 +804,7 @@ class StockRotator:
     def clear_old_failures(self):
         self._failed.clear()
 
-    # Public methods for plateau handler (avoids accessing private attrs)
+    # Public methods for plateau handler and state migration
     def reset_processed(self):
         """Clear processed set — used by plateau handler."""
         self._processed.clear()
@@ -808,6 +816,15 @@ class StockRotator:
     def clear_pool(self):
         """Clear the stock pool — used by reset_rotation()."""
         self._pool.clear()
+
+    # FIX PRIV: Public methods for state migration from old format
+    def set_processed(self, codes: Set[str]):
+        """Set processed codes from loaded state."""
+        self._processed = set(codes)
+
+    def set_failed(self, failed: Dict[str, int]):
+        """Set failed codes from loaded state."""
+        self._failed = dict(failed)
 
     def _maybe_refresh_pool(self, max_stocks, min_market_cap, stop_check, progress_cb):
         now = time.time()
@@ -927,7 +944,11 @@ class LRScheduler:
 # =============================================================================
 
 class ParallelFetcher:
-    """Fetch stock data with thread pool and proper rate limiting."""
+    """
+    Fetch stock data with thread pool and proper rate limiting.
+
+    FIX FETCH: Handles empty codes list without error.
+    """
 
     def __init__(self, max_workers: int = 5):
         self._max_workers = max_workers
@@ -945,6 +966,10 @@ class ParallelFetcher:
         Fetch data for multiple stocks in parallel.
         Returns (ok_codes, failed_codes).
         """
+        # FIX FETCH: Handle empty codes list
+        if not codes:
+            return [], []
+
         fetcher = get_fetcher()
         ok_codes: List[str] = []
         failed_codes: List[str] = []
@@ -968,8 +993,12 @@ class ParallelFetcher:
             if stop_check():
                 return code, False
 
-            from data.fetcher import BARS_PER_DAY
-            bpd = float(BARS_PER_DAY.get(str(interval).lower(), 1))
+            try:
+                from data.fetcher import BARS_PER_DAY
+                bpd = float(BARS_PER_DAY.get(str(interval).lower(), 1))
+            except ImportError:
+                bpd = 1.0
+
             min_cache_bars = int(max(14 * bpd, 14))
 
             with semaphore:
@@ -985,7 +1014,8 @@ class ParallelFetcher:
                     if df is not None and not df.empty and len(df) >= min_bars:
                         return code, True
                     return code, False
-                except Exception:
+                except Exception as e:
+                    log.debug(f"Fetch failed for {code}: {e}")
                     return code, False
 
         workers = min(self._max_workers, max_concurrent, len(codes))
@@ -1133,6 +1163,15 @@ class ContinuousLearner:
             self._holdout_codes = list(codes)
         self._guardian.set_holdout(codes)
 
+    # FIX PAUSE: Extracted to reusable method
+    def _wait_if_paused(self) -> bool:
+        """
+        Block while paused. Returns True if should stop.
+        """
+        while self.progress.is_paused and not self._should_stop():
+            time.sleep(1)
+        return self._should_stop()
+
     # =========================================================================
     # LIFECYCLE — AUTO MODE
     # =========================================================================
@@ -1231,9 +1270,7 @@ class ContinuousLearner:
         continuous: bool = False,
         cycle_interval_seconds: int = 900,
     ):
-        """
-        Train on specific user-selected stocks instead of random rotation.
-        """
+        """Train on specific user-selected stocks instead of random rotation."""
         if not stock_codes:
             log.warning("No stock codes provided for targeted training")
             return
@@ -1302,9 +1339,7 @@ class ContinuousLearner:
     def validate_stock_code(
         self, code: str, interval: str = "1d"
     ) -> Dict[str, Any]:
-        """
-        Validate that a stock code exists and has sufficient data.
-        """
+        """Validate that a stock code exists and has sufficient data."""
         code = str(code).strip()
         if not code:
             return {
@@ -1336,7 +1371,6 @@ class ContinuousLearner:
                     ),
                 }
 
-            # Try to extract stock name from spot cache
             name = ''
             try:
                 from data.fetcher import get_spot_cache
@@ -1382,9 +1416,7 @@ class ContinuousLearner:
                     progress=0.0,
                 )
 
-                while self.progress.is_paused and not self._should_stop():
-                    time.sleep(1)
-                if self._should_stop():
+                if self._wait_if_paused():
                     break
 
                 plateau = self._metrics.get_plateau_response()
@@ -1416,10 +1448,7 @@ class ContinuousLearner:
                     message=f"Cycle {cycle} done. Next in {cycle_seconds}s...",
                     progress=100.0,
                 )
-                for _ in range(cycle_seconds):
-                    if self._should_stop():
-                        break
-                    time.sleep(1)
+                self._interruptible_sleep(cycle_seconds)
 
         except CancelledException:
             log.info("Learning cancelled")
@@ -1448,10 +1477,7 @@ class ContinuousLearner:
         continuous: bool,
         cycle_seconds: int,
     ):
-        """
-        Main loop for targeted training.
-        Uses fixed stock list instead of rotation/discovery.
-        """
+        """Main loop for targeted training."""
         cycle = 0
 
         try:
@@ -1467,9 +1493,7 @@ class ContinuousLearner:
                     progress=0.0,
                 )
 
-                while self.progress.is_paused and not self._should_stop():
-                    time.sleep(1)
-                if self._should_stop():
+                if self._wait_if_paused():
                     break
 
                 success = self._run_targeted_cycle(
@@ -1494,10 +1518,7 @@ class ContinuousLearner:
                     message=f"Targeted cycle {cycle} done. Next in {cycle_seconds}s...",
                     progress=100.0,
                 )
-                for _ in range(cycle_seconds):
-                    if self._should_stop():
-                        break
-                    time.sleep(1)
+                self._interruptible_sleep(cycle_seconds)
 
         except CancelledException:
             log.info("Targeted learning cancelled")
@@ -1510,6 +1531,13 @@ class ContinuousLearner:
             self.progress.is_running = False
             self._save_state()
             self._notify()
+
+    def _interruptible_sleep(self, seconds: int):
+        """Sleep for up to `seconds`, checking cancellation each second."""
+        for _ in range(seconds):
+            if self._should_stop():
+                break
+            time.sleep(1)
 
     def _handle_plateau(
         self, plateau: Dict, current_epochs: int, incremental: bool,
@@ -1622,7 +1650,8 @@ class ContinuousLearner:
             for code in failed_codes:
                 self._rotator.mark_failed(code)
 
-            if len(ok_codes) < max(3, int(len(codes) * 0.05)):
+            min_ok = max(3, int(len(codes) * 0.05))
+            if len(ok_codes) < min_ok:
                 for code in new_batch:
                     self._rotator.mark_processed([code])
                 self._update(
@@ -1677,48 +1706,12 @@ class ContinuousLearner:
             )
 
             # === 10. Update state ===
-            if accepted:
-                self._replay.add(ok_codes, confidence=acc)
-                self._rotator.mark_processed(new_batch)
-                self._cache_training_sequences(
-                    ok_codes, eff_interval, eff_horizon, eff_lookback,
-                )
-                self.progress.total_stocks_learned += len(ok_codes)
-                duration = (datetime.now() - start_time).total_seconds() / 3600
-                self.progress.total_training_hours += duration
-
-                if acc > self.progress.best_accuracy_ever:
-                    self.progress.best_accuracy_ever = acc
-                    self._guardian.save_as_best(
-                        eff_interval, eff_horizon,
-                        {
-                            'accuracy': acc, 'cycle': cycle_number,
-                            'total_learned': len(self._replay),
-                            'timestamp': datetime.now().isoformat(),
-                        },
-                    )
-
-                self._update(
-                    stage="complete", progress=100.0,
-                    message=(
-                        f"✅ Cycle {cycle_number}: acc={acc:.1%}, "
-                        f"{len(ok_codes)} trained, "
-                        f"total={len(self._replay)} | ACCEPTED"
-                    ),
-                )
-            else:
-                self.progress.model_was_rejected = True
-                self._update(
-                    stage="complete", progress=100.0,
-                    message=(
-                        f"⚠️ Cycle {cycle_number}: acc={acc:.1%} | "
-                        f"REJECTED — previous model restored"
-                    ),
-                )
-
-            self._log_cycle(
-                cycle_number, new_batch, replay_batch, ok_codes, acc, accepted,
+            self._finalize_cycle(
+                accepted, ok_codes, new_batch, replay_batch,
+                eff_interval, eff_horizon, eff_lookback,
+                acc, cycle_number, start_time,
             )
+
             return accepted
 
         except CancelledException:
@@ -1745,10 +1738,7 @@ class ContinuousLearner:
         incremental: bool,
         cycle_number: int,
     ) -> bool:
-        """
-        Single training cycle on user-specified stocks.
-        Skips rotation/discovery but keeps holdout validation.
-        """
+        """Single training cycle on user-specified stocks."""
         start_time = datetime.now()
 
         try:
@@ -1757,7 +1747,7 @@ class ContinuousLearner:
                 self._resolve_interval(interval, horizon, lookback)
             )
 
-            # === 2. Setup holdout (exclude user stocks from holdout) ===
+            # === 2. Setup holdout ===
             self._ensure_holdout(eff_interval, eff_lookback, min_bars, cycle_number)
 
             holdout_set = self._get_holdout_set()
@@ -1870,50 +1860,12 @@ class ContinuousLearner:
             )
 
             # === 8. Update state ===
-            if accepted:
-                self._replay.add(ok_codes, confidence=acc)
-                self._cache_training_sequences(
-                    ok_codes, eff_interval, eff_horizon, eff_lookback,
-                )
-                self.progress.total_stocks_learned += len(ok_codes)
-                duration = (datetime.now() - start_time).total_seconds() / 3600
-                self.progress.total_training_hours += duration
-
-                if acc > self.progress.best_accuracy_ever:
-                    self.progress.best_accuracy_ever = acc
-                    self._guardian.save_as_best(
-                        eff_interval, eff_horizon,
-                        {
-                            'accuracy': acc,
-                            'cycle': cycle_number,
-                            'total_learned': len(self._replay),
-                            'targeted_stocks': ok_codes[:50],
-                            'timestamp': datetime.now().isoformat(),
-                        },
-                    )
-
-                self._update(
-                    stage="complete",
-                    progress=100.0,
-                    message=(
-                        f"✅ Targeted Cycle {cycle_number}: acc={acc:.1%}, "
-                        f"{len(ok_codes)} stocks trained | ACCEPTED"
-                    ),
-                )
-            else:
-                self.progress.model_was_rejected = True
-                self._update(
-                    stage="complete",
-                    progress=100.0,
-                    message=(
-                        f"⚠️ Targeted Cycle {cycle_number}: acc={acc:.1%} | "
-                        f"REJECTED — previous model restored"
-                    ),
-                )
-
-            self._log_cycle(
-                cycle_number, ok_codes, [], ok_codes, acc, accepted,
+            self._finalize_cycle(
+                accepted, ok_codes, ok_codes, [],
+                eff_interval, eff_horizon, eff_lookback,
+                acc, cycle_number, start_time,
             )
+
             return accepted
 
         except CancelledException:
@@ -1925,6 +1877,69 @@ class ContinuousLearner:
             self._update(stage="error", message=str(e))
             self.progress.add_error(str(e))
             return False
+
+    # =========================================================================
+    # SHARED CYCLE FINALIZATION (DRY)
+    # =========================================================================
+
+    def _finalize_cycle(
+        self, accepted: bool,
+        ok_codes: List[str], new_batch: List[str], replay_batch: List[str],
+        interval: str, horizon: int, lookback: int,
+        acc: float, cycle_number: int, start_time: datetime,
+    ):
+        """Shared logic for finalizing a training cycle (auto or targeted)."""
+        mode = self.progress.training_mode
+
+        if accepted:
+            self._replay.add(ok_codes, confidence=acc)
+            if mode == "auto":
+                self._rotator.mark_processed(new_batch)
+            self._cache_training_sequences(
+                ok_codes, interval, horizon, lookback,
+            )
+            self.progress.total_stocks_learned += len(ok_codes)
+            duration = (datetime.now() - start_time).total_seconds() / 3600
+            self.progress.total_training_hours += duration
+
+            if acc > self.progress.best_accuracy_ever:
+                self.progress.best_accuracy_ever = acc
+                extra_meta = {}
+                if mode == "targeted":
+                    extra_meta['targeted_stocks'] = ok_codes[:50]
+                self._guardian.save_as_best(
+                    interval, horizon,
+                    {
+                        'accuracy': acc, 'cycle': cycle_number,
+                        'total_learned': len(self._replay),
+                        'timestamp': datetime.now().isoformat(),
+                        **extra_meta,
+                    },
+                )
+
+            label = "Targeted " if mode == "targeted" else ""
+            self._update(
+                stage="complete", progress=100.0,
+                message=(
+                    f"✅ {label}Cycle {cycle_number}: acc={acc:.1%}, "
+                    f"{len(ok_codes)} trained, "
+                    f"total={len(self._replay)} | ACCEPTED"
+                ),
+            )
+        else:
+            self.progress.model_was_rejected = True
+            label = "Targeted " if mode == "targeted" else ""
+            self._update(
+                stage="complete", progress=100.0,
+                message=(
+                    f"⚠️ {label}Cycle {cycle_number}: acc={acc:.1%} | "
+                    f"REJECTED — previous model restored"
+                ),
+            )
+
+        self._log_cycle(
+            cycle_number, new_batch, replay_batch, ok_codes, acc, accepted,
+        )
 
     # =========================================================================
     # HELPERS
@@ -1962,9 +1977,7 @@ class ContinuousLearner:
         return eff_interval, eff_horizon, eff_lookback, min_bars
 
     def _ensure_holdout(self, interval, lookback, min_bars, cycle_number):
-        """
-        FIX C3: Atomic holdout refresh with check-and-swap pattern.
-        """
+        """FIX C3: Atomic holdout refresh with check-and-swap pattern."""
         with self._lock:
             should_refresh = (
                 not self._holdout_codes
@@ -1972,7 +1985,6 @@ class ContinuousLearner:
             )
             if not should_refresh:
                 return
-            old_holdout = list(self._holdout_codes)
             old_holdout_set = set(self._holdout_codes)
 
         # Build candidate list (slow — outside lock)
@@ -2015,7 +2027,7 @@ class ContinuousLearner:
 
         self._guardian.set_holdout(new_holdout)
 
-        if not old_holdout:
+        if not old_holdout_set:
             log.info(f"Holdout set initialized: {len(new_holdout)} stocks: {new_holdout[:5]}...")
         else:
             log.info(f"Holdout set refreshed: {len(new_holdout)} stocks: {new_holdout[:5]}...")
@@ -2027,8 +2039,7 @@ class ContinuousLearner:
         Train model.
 
         FIX LR: Passes learning_rate explicitly to trainer.train() instead
-        of mutating global CONFIG.model.learning_rate. Thread-local LR is
-        still set as a fallback for any code that reads it.
+        of mutating global CONFIG.model.learning_rate.
         """
         from models.trainer import Trainer
 
@@ -2053,11 +2064,9 @@ class ContinuousLearner:
                 progress=50.0 + 35.0 * ((epoch_idx + 1) / max(1, epochs)),
             )
 
-        # FIX LR: Set thread-local LR as fallback for code that reads it
         set_thread_local_lr(lr)
 
         try:
-            # FIX LR: Pass learning_rate explicitly — NO CONFIG mutation
             result = trainer.train(
                 stock_codes=ok_codes,
                 epochs=epochs,
@@ -2068,7 +2077,7 @@ class ContinuousLearner:
                 interval=interval,
                 prediction_horizon=horizon,
                 lookback_bars=lookback,
-                learning_rate=lr,  # FIX LR: Explicit parameter
+                learning_rate=lr,
             )
         except CancelledException:
             return {"status": "cancelled"}
@@ -2085,9 +2094,7 @@ class ContinuousLearner:
         holdout validation.
 
         FIX VAL: Requires minimum number of holdout predictions before
-        making rejection decisions. When holdout stocks fail data fetch
-        (network issue, delisted, etc.), the model should NOT be rejected
-        for what is actually a data problem, not a model quality problem.
+        making rejection decisions.
         """
         MAX_DEGRADATION = 0.15
         MIN_PREDS = self._MIN_HOLDOUT_PREDICTIONS
@@ -2107,9 +2114,7 @@ class ContinuousLearner:
         self.progress.old_stock_accuracy = post_acc
         self.progress.old_stock_confidence = post_conf
 
-        # FIX VAL: If holdout validation couldn't produce enough predictions,
-        # we can't make a reliable accept/reject decision. Accept based on
-        # training accuracy instead, with a warning.
+        # FIX VAL: Insufficient holdout predictions
         if post_preds < MIN_PREDS:
             log.warning(
                 f"Holdout produced only {post_preds} predictions "
@@ -2121,7 +2126,6 @@ class ContinuousLearner:
             )
             return new_acc >= 0.30
 
-        # FIX VAL: Pre-validation also needs minimum predictions for comparison
         if not pre_val or pre_val.get('predictions_made', 0) < MIN_PREDS:
             log.info(
                 f"No reliable pre-validation baseline "
@@ -2188,7 +2192,7 @@ class ContinuousLearner:
                 except Exception:
                     continue
 
-            log.debug(f"Cached sequences for {cached}/{len(codes)} stocks")
+            log.debug(f"Cached sequences for {cached}/{min(len(codes), 30)} stocks")
         except Exception as e:
             log.debug(f"Sequence caching failed: {e}")
 
@@ -2209,7 +2213,6 @@ class ContinuousLearner:
                 'trend': self._metrics.trend,
                 'ema': self._metrics.ema,
             }
-            # Use atomic_write_json for consistency
             try:
                 from utils.atomic_io import atomic_write_json
                 path = history_dir / f"cycle_{cycle:04d}.json"
@@ -2230,15 +2233,7 @@ class ContinuousLearner:
     # =========================================================================
 
     def _save_state(self):
-        """
-        Persist learner state atomically.
-
-        FIX EBADF: Delegates to atomic_write_json instead of hand-rolling
-        open/flush/fsync/replace. This ensures:
-        1. Same directory lock as all other atomic writes (no fd races)
-        2. Consistent error handling
-        3. No duplicate fsync logic
-        """
+        """Persist learner state atomically."""
         state = {
             'version': 3,
             'total_sessions': self.progress.total_training_sessions,
@@ -2257,20 +2252,16 @@ class ContinuousLearner:
         try:
             self.state_path.parent.mkdir(parents=True, exist_ok=True)
 
-            # Canonical JSON for checksum reproducibility
             data_str = json.dumps(state, indent=2, sort_keys=True)
             checksum = hashlib.sha256(data_str.encode()).hexdigest()[:16]
             envelope = {'_checksum': checksum, '_data': state}
 
-            # FIX EBADF: Use atomic_write_json which handles
-            # temp file, fsync, rename, and directory locking
             try:
                 from utils.atomic_io import atomic_write_json
                 atomic_write_json(
                     self.state_path, envelope, indent=2, use_lock=True
                 )
             except ImportError:
-                # Fallback: write with resilient fsync
                 envelope_str = json.dumps(envelope, indent=2, sort_keys=True)
                 tmp = self.state_path.with_suffix('.json.tmp')
                 with open(tmp, 'w') as f:
@@ -2279,7 +2270,7 @@ class ContinuousLearner:
                     try:
                         os.fsync(f.fileno())
                     except OSError:
-                        pass  # flush() is sufficient for state files
+                        pass
                 os.replace(tmp, self.state_path)
 
         except Exception as e:
@@ -2289,13 +2280,12 @@ class ContinuousLearner:
         """
         Load learner state from disk.
 
-        Handles both old format (hand-rolled JSON) and new format
-        (atomic_write_json output).
+        FIX PRIV: Uses public StockRotator methods for state migration
+        instead of directly accessing private attributes.
         """
         if not self.state_path.exists():
             return
         try:
-            # Try atomic reader first, fall back to standard json
             try:
                 from utils.atomic_io import read_json
                 raw = read_json(self.state_path)
@@ -2311,8 +2301,9 @@ class ContinuousLearner:
                 if saved_checksum != expected:
                     log.warning("State file checksum mismatch — may be corrupted")
             elif '_checksum' in raw:
-                raw.pop('_checksum', None)
-                state = raw
+                raw_copy = dict(raw)
+                raw_copy.pop('_checksum', None)
+                state = raw_copy
             else:
                 state = raw
 
@@ -2335,15 +2326,18 @@ class ContinuousLearner:
 
             self._set_holdout_codes(state.get('holdout_codes', []))
 
+            # FIX PRIV: Migrate old format using public methods
             if state.get('version', 1) < 3:
                 old_processed = state.get('processed_stocks', [])
                 old_failed = state.get('failed_stocks', {})
                 if old_processed or old_failed:
-                    self._rotator._processed = set(old_processed)
+                    self._rotator.set_processed(set(old_processed))
                     if isinstance(old_failed, list):
-                        self._rotator._failed = {c: 1 for c in old_failed}
+                        self._rotator.set_failed({c: 1 for c in old_failed})
                     else:
-                        self._rotator._failed = dict(old_failed)
+                        self._rotator.set_failed(
+                            {k: int(v) for k, v in old_failed.items()}
+                        )
                 old_replay = state.get('replay_buffer', {})
                 if old_replay and not replay_data:
                     self._replay.from_dict(old_replay)

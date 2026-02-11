@@ -10,22 +10,6 @@ Supports:
 - 国金证券 (GJ)
 - 银河证券 (YH)
 
-FIXES APPLIED:
- 1.  SimulatorBroker._execution_worker: re-checks order.is_active after
-     acquiring lock AND after get_quote (close race window)
- 2.  get_fills() no longer clears _unsent_fills; uses cursor-based tracking
- 3.  _parse_status extracted to module-level shared function
- 4.  submit_order: SUBMITTED status is emitted before ACCEPTED
- 5.  _execute_order: consistent CONFIG.trading.X access (not legacy aliases)
- 6.  _order_id_to_broker_id bounded with LRU eviction
- 7.  get_account returns deep-copied positions
- 8.  buy/sell convenience methods handle price=0 for market orders correctly
- 9.  _validate_order allows price=0 for MARKET orders
-10.  SimulatorBroker uses context-manager for ThreadPoolExecutor cleanup
-11.  EasytraderBroker base class extracts THS/ZSZQ shared code (~80% dedup)
-12.  make_fill_uid: fallback path uses stable hash instead of datetime.now()
-13.  _check_settlement: proper T+1 logic using is_trading_day
-14.  Fill tracking uses _fill_cursor instead of clearing list
 """
 from abc import ABC, abstractmethod
 from collections import OrderedDict

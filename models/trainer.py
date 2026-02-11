@@ -1,27 +1,4 @@
 # models/trainer.py
-"""
-Model Trainer - Complete Training Pipeline
-
-FIXES APPLIED:
-- Eliminated code duplication between prepare_data() and train() via shared helpers
-- _evaluate() is now actually called in train()
-- _skip_scaler_fit guarded: crashes prevented when no prior scaler exists
-- Buy-and-hold calculation uses compounding
-- Sharpe ratio uses consistent decimal units
-- Incremental training loads existing ensemble BEFORE creating new one
-- LR scheduler added for forecaster (ReduceLROnPlateau)
-- atomic_torch_save imported once at module level (not inside loop)
-- Division-by-zero uses explicit epsilon constant
-- Forecaster loss_fn explicitly defined in validation scope
-- _should_stop unified and robust
-- FIX T2: Added missing `import torch` in train() method
-- FIX M11: Fixed incremental load logic to use temp variable
-- FIX m7: Use log-sum for returns to prevent np.prod overflow
-- FIX LR: train() accepts and passes learning_rate to ensemble
-- FIX CAL: Removed redundant second calibration call
-- FIX FLR: Forecaster uses resolved LR instead of CONFIG.model.learning_rate
-- FIX FSTOP: Forecaster batch loop checks stop_flag for faster cancellation
-"""
 from __future__ import annotations
 
 import numpy as np
@@ -225,19 +202,24 @@ class Trainer:
         if len(test_df) > 0:
             test_df = self.processor.create_labels(test_df, horizon=horizon)
 
+        # FIX WARMUP: Clamp warmup indices to actual DataFrame length
         warmup_val = val_start - val_raw_begin
         warmup_test = test_start - test_raw_begin
 
         if warmup_val > 0 and len(val_df) > 0 and "label" in val_df.columns:
-            val_df.iloc[
-                : min(warmup_val, len(val_df)),
-                val_df.columns.get_loc("label"),
-            ] = np.nan
+            clamp_val = min(warmup_val, len(val_df))
+            if clamp_val > 0:
+                val_df.iloc[
+                    :clamp_val,
+                    val_df.columns.get_loc("label"),
+                ] = np.nan
         if warmup_test > 0 and len(test_df) > 0 and "label" in test_df.columns:
-            test_df.iloc[
-                : min(warmup_test, len(test_df)),
-                test_df.columns.get_loc("label"),
-            ] = np.nan
+            clamp_test = min(warmup_test, len(test_df))
+            if clamp_test > 0:
+                test_df.iloc[
+                    :clamp_test,
+                    test_df.columns.get_loc("label"),
+                ] = np.nan
 
         return {
             "train": train_df,
@@ -320,10 +302,12 @@ class Trainer:
 
             train_df = splits["train"]
             if len(train_df) > 0 and "label" in train_df.columns:
-                train_features = train_df[feature_cols].values
-                valid_mask = ~train_df["label"].isna()
-                if valid_mask.sum() > 0:
-                    all_train_features.append(train_features[valid_mask])
+                avail_cols = [c for c in feature_cols if c in train_df.columns]
+                if len(avail_cols) == len(feature_cols):
+                    train_features = train_df[feature_cols].values
+                    valid_mask = ~train_df["label"].isna()
+                    if valid_mask.sum() > 0:
+                        all_train_features.append(train_features[valid_mask])
 
         if not all_train_features:
             return split_data, False
@@ -482,13 +466,21 @@ class Trainer:
         scaler_path = CONFIG.MODEL_DIR / f"scaler_{interval}_{horizon}.pkl"
         self.processor.save_scaler(str(scaler_path))
 
-        def safe(arr):
-            return arr if arr is not None else np.array([])
+        # FIX EMPTY: Return properly shaped empty arrays instead of 1D empty
+        seq_len = int(CONFIG.SEQUENCE_LENGTH)
+        n_feat = self.input_size
+
+        def safe(arr, is_X=False):
+            if arr is not None:
+                return arr
+            if is_X:
+                return np.zeros((0, seq_len, n_feat), dtype=np.float32)
+            return np.zeros((0,), dtype=np.float32)
 
         return (
-            safe(X_train), safe(y_train), safe(r_train),
-            safe(X_val), safe(y_val), safe(r_val),
-            safe(X_test), safe(y_test), safe(r_test),
+            safe(X_train, True), safe(y_train), safe(r_train),
+            safe(X_val, True), safe(y_val), safe(r_val),
+            safe(X_test, True), safe(y_test), safe(r_test),
         )
 
     # =========================================================================
@@ -508,16 +500,12 @@ class Trainer:
         interval: str = "1d",
         prediction_horizon: int = None,
         lookback_bars: int = 2400,
-        learning_rate: float = None,  # FIX LR: Accept explicit LR parameter
+        learning_rate: float = None,
     ) -> Dict:
         """
         Train complete pipeline:
         1) Classification ensemble for trading signals
         2) Multi-step forecaster for AI-generated price curves
-
-        FIX M11: Use temp variable for incremental ensemble load.
-        FIX LR: Accept and pass learning_rate to ensemble and forecaster.
-        FIX CAL: Remove redundant second calibration (ensemble.train does it).
         """
         from models.networks import TCNModel
 
@@ -530,7 +518,6 @@ class Trainer:
         self.interval = interval
         self.prediction_horizon = horizon
 
-        # FIX LR: Resolve LR once, use everywhere in this pipeline
         effective_lr = _resolve_learning_rate(learning_rate)
 
         log.info("=" * 70)
@@ -593,25 +580,21 @@ class Trainer:
         self.processor.save_scaler(str(scaler_path))
 
         # --- Phase 4: Train classifier ensemble ---
-        # FIX M11: Use temp variable to prevent broken state on load failure
         if incremental:
             ensemble_path = (
                 CONFIG.MODEL_DIR / f"ensemble_{interval}_{horizon}.pt"
             )
             if ensemble_path.exists():
-                # Create temp ensemble for loading attempt
                 temp_ensemble = EnsembleModel(
                     input_size=self.input_size,
                     model_names=model_names,
                 )
                 if temp_ensemble.load(str(ensemble_path)):
-                    # Load succeeded - use this ensemble
                     self.ensemble = temp_ensemble
                     log.info(
                         "Loaded existing ensemble for incremental training"
                     )
                 else:
-                    # Load failed - create fresh ensemble
                     log.warning(
                         "Failed to load existing ensemble — "
                         "training from scratch"
@@ -621,19 +604,16 @@ class Trainer:
                         model_names=model_names,
                     )
             else:
-                # No existing model file
                 self.ensemble = EnsembleModel(
                     input_size=self.input_size,
                     model_names=model_names,
                 )
         else:
-            # Non-incremental: always create fresh
             self.ensemble = EnsembleModel(
                 input_size=self.input_size,
                 model_names=model_names,
             )
 
-        # Set metadata after ensemble is created
         self.ensemble.interval = str(interval)
         self.ensemble.prediction_horizon = int(horizon)
 
@@ -652,9 +632,6 @@ class Trainer:
             f"{len(X_val)} val samples"
         )
 
-        # FIX LR: Pass learning_rate explicitly to ensemble.train()
-        # FIX CAL: ensemble.train() already calls calibrate() internally,
-        #          so we do NOT call it again after this returns.
         history = self.ensemble.train(
             X_train,
             y_train,
@@ -664,17 +641,12 @@ class Trainer:
             batch_size=batch_size,
             callback=callback,
             stop_flag=stop_flag,
-            learning_rate=effective_lr,  # FIX LR: Pass through
+            learning_rate=effective_lr,
         )
 
         if self._should_stop(stop_flag):
             log.info("Training stopped by user")
             return {"status": "cancelled", "history": history}
-
-        # FIX CAL: REMOVED redundant self.ensemble.calibrate(X_val, y_val)
-        # ensemble.train() already calls self.calibrate(X_val, y_val) internally
-        # Calling it again wastes compute and could give slightly different
-        # results if the calibration grid search is non-deterministic.
 
         if save_model:
             ensemble_path = (
@@ -684,11 +656,17 @@ class Trainer:
             log.info(f"Ensemble saved: {ensemble_path}")
 
         # --- Phase 5: Train forecaster ---
-        forecaster_trained = self._train_forecaster(
-            split_data, feature_cols, horizon, interval,
-            batch_size, epochs, stop_flag, save_model,
-            effective_lr,  # FIX FLR: Pass resolved LR to forecaster
-        )
+        # FIX CANCEL2: _train_forecaster now re-raises CancelledException
+        forecaster_trained = False
+        try:
+            forecaster_trained = self._train_forecaster(
+                split_data, feature_cols, horizon, interval,
+                batch_size, epochs, stop_flag, save_model,
+                effective_lr,
+            )
+        except CancelledException:
+            log.info("Training cancelled during forecaster phase")
+            return {"status": "cancelled", "history": history}
 
         # --- Phase 6: Evaluate on test set ---
         test_metrics = {}
@@ -748,13 +726,13 @@ class Trainer:
         epochs: int,
         stop_flag: Any,
         save_model: bool,
-        learning_rate: float,  # FIX FLR: Accept resolved LR
+        learning_rate: float,
     ) -> bool:
         """
         Train multi-step forecaster. Returns True if successful.
 
-        FIX FLR: Uses passed learning_rate instead of CONFIG.model.learning_rate.
-        FIX FSTOP: Checks stop_flag per-batch for faster cancellation.
+        FIX CANCEL2: Re-raises CancelledException instead of swallowing it,
+        so the caller (train()) knows to return cancelled status.
         """
         from models.networks import TCNModel
 
@@ -806,7 +784,6 @@ class Trainer:
                 dropout=CONFIG.model.dropout,
             ).to(device)
 
-            # FIX FLR: Use resolved LR instead of CONFIG.model.learning_rate
             optimizer = torch.optim.AdamW(
                 forecaster.parameters(),
                 lr=learning_rate,
@@ -857,7 +834,6 @@ class Trainer:
                 cancelled = False
 
                 for batch_idx, (xb, yb) in enumerate(train_loader):
-                    # FIX FSTOP: Per-batch stop check for faster cancellation
                     if (
                         batch_idx % _STOP_CHECK_INTERVAL == 0
                         and batch_idx > 0
@@ -951,8 +927,9 @@ class Trainer:
                 return True
 
         except CancelledException:
+            # FIX CANCEL2: Re-raise so train() can handle it
             log.info("Forecaster training cancelled")
-            return False
+            raise
         except Exception as e:
             log.error(f"Forecaster training failed: {e}")
             import traceback
@@ -1007,6 +984,9 @@ class Trainer:
         r_eval = r[:min_len]
 
         cm = confusion_matrix(y_eval, pred_classes, labels=[0, 1, 2])
+
+        # FIX EVAL: Use average='binary' style with safe extraction
+        # labels=[2] with average=None returns arrays of length 1
         pr, rc, f1, _ = precision_recall_fscore_support(
             y_eval,
             pred_classes,
@@ -1014,6 +994,10 @@ class Trainer:
             average=None,
             zero_division=0,
         )
+
+        up_precision = float(pr[0]) if len(pr) > 0 else 0.0
+        up_recall = float(rc[0]) if len(rc) > 0 else 0.0
+        up_f1 = float(f1[0]) if len(f1) > 0 else 0.0
 
         confidences = np.array(
             [p.confidence for p in predictions[:min_len]]
@@ -1042,9 +1026,9 @@ class Trainer:
             ),
             "trading": trading_metrics,
             "confusion_matrix": cm.tolist(),
-            "up_precision": float(pr[0]) if len(pr) > 0 else 0.0,
-            "up_recall": float(rc[0]) if len(rc) > 0 else 0.0,
-            "up_f1": float(f1[0]) if len(f1) > 0 else 0.0,
+            "up_precision": up_precision,
+            "up_recall": up_recall,
+            "up_f1": up_f1,
         }
 
     def _simulate_trading(
@@ -1055,8 +1039,10 @@ class Trainer:
     ) -> Dict:
         """
         Simulate trading with proper compounding and consistent units.
-        All internal calculations use DECIMAL returns (not percentage).
 
+        FIX TRADE: Accumulates returns over the actual holding period
+        instead of using a single returns[entry_idx] value.
+        FIX COST: Stamp tax only on sells (China A-share rule).
         FIX m7: Use log-sum instead of np.prod to prevent overflow.
         """
         confidence_mask = confs >= CONFIG.MIN_CONFIDENCE
@@ -1067,11 +1053,10 @@ class Trainer:
 
         horizon = self.prediction_horizon
 
-        costs_decimal = (
-            CONFIG.COMMISSION * 2
-            + CONFIG.SLIPPAGE * 2
-            + CONFIG.STAMP_TAX
-        )
+        # FIX COST: Commission on both sides, stamp tax only on sell,
+        # slippage on both sides
+        entry_costs = CONFIG.COMMISSION + CONFIG.SLIPPAGE
+        exit_costs = CONFIG.COMMISSION + CONFIG.SLIPPAGE + CONFIG.STAMP_TAX
 
         entries = np.diff(position, prepend=0) > 0
         exits = np.diff(position, prepend=0) < 0
@@ -1085,9 +1070,19 @@ class Trainer:
                 in_position = True
                 entry_idx = i
             elif (exits[i] or i == len(position) - 1) and in_position:
-                if entry_idx < len(returns):
-                    trade_return = returns[entry_idx] / 100.0 - costs_decimal
+                # FIX TRADE: Accumulate returns over holding period
+                # Each returns[j] is a percentage return for that period
+                exit_idx = i
+                holding_returns = returns[entry_idx:exit_idx + 1]
+
+                if len(holding_returns) > 0:
+                    # Convert percentage returns to factors, compound them
+                    factors = 1.0 + holding_returns / 100.0
+                    safe_factors = np.maximum(factors, _EPS)
+                    cumulative = np.exp(np.sum(np.log(safe_factors)))
+                    trade_return = cumulative - 1.0 - entry_costs - exit_costs
                     trades_decimal.append(trade_return)
+
                 in_position = False
 
         num_trades = len(trades_decimal)
@@ -1200,7 +1195,12 @@ class Trainer:
         report["timestamp"] = datetime.now().isoformat()
 
         Path(path).parent.mkdir(parents=True, exist_ok=True)
-        with open(path, "w") as f:
-            json.dump(report, f, indent=2)
+
+        try:
+            from utils.atomic_io import atomic_write_json
+            atomic_write_json(path, report)
+        except ImportError:
+            with open(path, "w") as f:
+                json.dump(report, f, indent=2)
 
         log.info(f"Training report saved to {path}")

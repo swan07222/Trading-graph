@@ -1,14 +1,4 @@
 # core/exceptions.py
-"""
-Custom Exceptions — comprehensive error handling.
-
-FIXES APPLIED:
-1. Added __str__ that includes code and details (not just message)
-2. to_dict includes exception class name and timestamp
-3. details is defensively copied to prevent caller mutation
-4. Renamed SecurityError → TradingSecurityError to avoid shadowing builtins
-5. Added __repr__ for debugging
-"""
 from __future__ import annotations
 
 from datetime import datetime

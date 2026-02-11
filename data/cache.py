@@ -1,21 +1,4 @@
 # data/cache.py
-"""
-High-Performance Multi-Tier Cache System
-
-Features:
-- L1: In-memory LRU with TTL enforcement (microseconds)
-- L2: Disk pickle (milliseconds, fast recovery)
-- L3: Compressed disk (persistent, long-term)
-- Thread-safe operations with bounded concurrency
-- Atomic disk writes (write-then-rename)
-- Statistics tracking
-
-FIXES APPLIED:
-- FIX C4: Close file descriptor immediately after mkstemp to prevent
-  fd leak and Windows PermissionError on rename
-- Added proper cleanup in DiskCache.set() exception handling
-- Improved _estimate_size to handle more types accurately
-"""
 import os
 import pickle
 import gzip

@@ -1,16 +1,4 @@
 # core/constants.py
-"""
-System Constants - Immutable configuration values
-
-Central repository for all magic numbers and constant values.
-
-FIXES APPLIED:
-- is_trading_day: added @lru_cache on get_holidays() result conversion to frozenset
-  so the set lookup is O(1) and the file is only read once
-- get_exchange: uses tuple prefix matching instead of loop for common cases
-- Removed duplicate RiskLevel enum (already defined in core.types)
-- is_trading_time: uses Asia/Shanghai timezone instead of local machine time
-"""
 from datetime import time, date, datetime
 from typing import Dict, List, Set, Tuple
 from enum import Enum, auto

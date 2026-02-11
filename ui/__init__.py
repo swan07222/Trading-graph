@@ -1,14 +1,4 @@
 # ui/__init__.py
-"""
-UI Module
-Professional trading application interface
-
-FIXES APPLIED:
-1. All imports wrapped in try/except to prevent crash when dependencies missing
-2. StockChart import guarded (requires pyqtgraph)
-3. AutoLearnDialog import guarded (requires utils.cancellation)
-4. Consistent None fallback for all optional components
-"""
 
 try:
     from .app import MainApp, run_app

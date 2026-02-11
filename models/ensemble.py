@@ -1,26 +1,5 @@
 # models/ensemble.py
-"""
-Ensemble Model — combines multiple neural networks with weighted voting.
 
-Key fixes vs original:
-    - Thread-safe train/predict/save/load with proper locking
-    - Unified _should_stop logic
-    - train() accepts interval/horizon so save() uses correct values
-    - predict() handles arbitrary batch sizes; predict_batch() is the workhorse
-    - Input shape validation against self.input_size
-    - AMP handled cleanly via a single helper
-    - Proper GPU memory cleanup after training
-    - Learning-rate warmup before cosine annealing
-    - Robust calibration with finer temperature grid
-
-FIXES APPLIED:
-    - FIX C1 SUPPORT: Added get_effective_learning_rate() import and usage
-      to support thread-local LR override from auto_learner.py
-    - train() now accepts optional learning_rate parameter for explicit override
-    - Improved docstrings and type hints
-    - FIX CANCEL: CancelledException no longer swallowed in callback handler
-    - FIX CANCEL: Per-batch stop check added to training loop
-"""
 from __future__ import annotations
 
 import os
@@ -99,7 +78,7 @@ class EnsemblePrediction:
 
     @property
     def prob_down(self) -> float:
-        return float(self.probabilities[0])
+        return float(self.probabilities[0]) if len(self.probabilities) > 0 else 0.0
 
     @property
     def is_confident(self) -> bool:
@@ -188,6 +167,10 @@ class EnsembleModel:
         for name in model_names:
             if name in cls_map:
                 self._init_model(name)
+            else:
+                log.warning(
+                    f"Unknown model name '{name}', available: {list(cls_map.keys())}"
+                )
 
         self._normalize_weights()
         total_params = sum(
@@ -240,9 +223,17 @@ class EnsembleModel:
             log.error(f"Failed to initialise {name}: {e}")
 
     def _normalize_weights(self):
+        # FIX NORM: Handle empty weights dict gracefully
+        if not self.weights:
+            return
         total = sum(self.weights.values())
         if total > 0:
             self.weights = {k: v / total for k, v in self.weights.items()}
+        else:
+            # All weights are zero — set uniform
+            n = len(self.weights)
+            if n > 0:
+                self.weights = {k: 1.0 / n for k in self.weights}
 
     # ------------------------------------------------------------------
     # Stopping helper
@@ -279,6 +270,10 @@ class EnsembleModel:
         self, X_val: np.ndarray, y_val: np.ndarray, batch_size: int = 512
     ):
         """Temperature-scale the ensemble's weighted logits on a held-out set."""
+        if len(X_val) == 0 or len(y_val) == 0:
+            log.warning("Empty validation data for calibration — skipping")
+            return
+
         dataset = TensorDataset(torch.FloatTensor(X_val), torch.LongTensor(y_val))
         loader = DataLoader(dataset, batch_size=batch_size, shuffle=False)
 
@@ -289,6 +284,10 @@ class EnsembleModel:
             models = list(self.models.items())
             weights = dict(self.weights)
 
+        if not models:
+            log.warning("No models available for calibration")
+            return
+
         for batch_X, batch_y in loader:
             batch_X = batch_X.to(self.device)
             weighted_logits: Optional[torch.Tensor] = None
@@ -298,11 +297,10 @@ class EnsembleModel:
                     model.eval()
                     logits, _ = model(batch_X)
                     w = weights.get(name, 1.0 / max(1, len(models)))
-                    weighted_logits = (
-                        logits * w
-                        if weighted_logits is None
-                        else weighted_logits + logits * w
-                    )
+                    if weighted_logits is None:
+                        weighted_logits = logits * w
+                    else:
+                        weighted_logits = weighted_logits + logits * w
 
             if weighted_logits is not None:
                 all_logits.append(weighted_logits.cpu())
@@ -317,9 +315,14 @@ class EnsembleModel:
         best_temp = 1.0
         best_nll = float("inf")
 
-        for temp in [
-            0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0, 4.0,
-        ]:
+        # FIX CALIB: Finer temperature grid with more granularity
+        # at low temperatures where calibration is more sensitive
+        temp_grid = [
+            0.1, 0.15, 0.2, 0.25, 0.3, 0.4, 0.5, 0.6, 0.7, 0.75,
+            0.8, 0.9, 1.0, 1.1, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0, 4.0, 5.0,
+        ]
+
+        for temp in temp_grid:
             nll = F.cross_entropy(combined_logits / temp, combined_labels).item()
             if nll < best_nll:
                 best_nll = nll
@@ -346,7 +349,7 @@ class EnsembleModel:
         stop_flag: Any = None,
         interval: Optional[str] = None,
         horizon: Optional[int] = None,
-        learning_rate: Optional[float] = None,  # FIX C1: Explicit LR parameter
+        learning_rate: Optional[float] = None,
     ) -> Dict:
         """
         Train all models in the ensemble.
@@ -362,7 +365,7 @@ class EnsembleModel:
             stop_flag: Optional cancellation token/callable
             interval: Data interval metadata
             horizon: Prediction horizon metadata
-            learning_rate: Explicit learning rate override (FIX C1)
+            learning_rate: Explicit learning rate override
 
         Returns:
             Dict mapping model name to training history
@@ -380,7 +383,6 @@ class EnsembleModel:
         epochs = epochs or CONFIG.model.epochs
         batch_size = batch_size or CONFIG.model.batch_size
 
-        # FIX C1: Use explicit LR if provided, else try thread-local, else CONFIG
         if learning_rate is not None:
             effective_lr = float(learning_rate)
         else:
@@ -433,7 +435,7 @@ class EnsembleModel:
                 val_loader=val_loader,
                 class_weights=class_weights,
                 epochs=epochs,
-                learning_rate=effective_lr,  # Pass LR to single model training
+                learning_rate=effective_lr,
                 callback=callback,
                 stop_flag=stop_flag,
             )
@@ -459,7 +461,7 @@ class EnsembleModel:
         val_loader: DataLoader,
         class_weights: torch.Tensor,
         epochs: int,
-        learning_rate: float,  # FIX C1: Accept LR as parameter
+        learning_rate: float,
         callback: Optional[Callable] = None,
         stop_flag: Any = None,
     ) -> Tuple[Dict, float]:
@@ -467,14 +469,14 @@ class EnsembleModel:
         Train one model with early stopping, warmup + cosine schedule,
         optional AMP.
 
-        FIX CANCEL: CancelledException is now propagated from callback
-        instead of being swallowed by `except Exception: pass`.
-        Also checks stop_flag every N batches for faster cancellation.
+        FIX RESTORE: best_state is always restored even when
+        CancelledException is raised, preventing a half-trained model
+        from being left as the active model.
         """
 
         optimizer = torch.optim.AdamW(
             model.parameters(),
-            lr=learning_rate,  # FIX C1: Use passed LR instead of CONFIG
+            lr=learning_rate,
             weight_decay=CONFIG.model.weight_decay,
         )
 
@@ -503,107 +505,111 @@ class EnsembleModel:
         best_state: Optional[Dict] = None
         patience_limit = int(CONFIG.model.early_stop_patience)
 
-        # FIX CANCEL: Check stop_flag every N batches for faster response
-        _STOP_CHECK_INTERVAL = 10  # Check every 10 batches
+        _STOP_CHECK_INTERVAL = 10
 
-        for epoch in range(int(epochs)):
-            if self._should_stop(stop_flag):
-                break
+        try:
+            for epoch in range(int(epochs)):
+                if self._should_stop(stop_flag):
+                    break
 
-            # --- train ---
-            model.train()
-            train_losses: list[float] = []
-            cancelled = False
+                # --- train ---
+                model.train()
+                train_losses: list[float] = []
+                cancelled = False
 
-            for batch_idx, (batch_X, batch_y) in enumerate(train_loader):
-                # FIX CANCEL: Per-batch stop check for faster cancellation
-                if batch_idx % _STOP_CHECK_INTERVAL == 0 and batch_idx > 0:
-                    if self._should_stop(stop_flag):
-                        cancelled = True
-                        break
+                for batch_idx, (batch_X, batch_y) in enumerate(train_loader):
+                    if batch_idx % _STOP_CHECK_INTERVAL == 0 and batch_idx > 0:
+                        if self._should_stop(stop_flag):
+                            cancelled = True
+                            break
 
-                batch_X = batch_X.to(self.device, non_blocking=True)
-                batch_y = batch_y.to(self.device, non_blocking=True)
-
-                optimizer.zero_grad(set_to_none=True)
-
-                if use_amp:
-                    with amp_ctx():
-                        logits, _ = model(batch_X)
-                        loss = criterion(logits, batch_y)
-                    scaler.scale(loss).backward()
-                    scaler.unscale_(optimizer)
-                    torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-                    scaler.step(optimizer)
-                    scaler.update()
-                else:
-                    logits, _ = model(batch_X)
-                    loss = criterion(logits, batch_y)
-                    loss.backward()
-                    torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-                    optimizer.step()
-
-                train_losses.append(float(loss.detach()))
-
-            if cancelled:
-                break
-
-            scheduler.step()
-
-            # --- validate ---
-            model.eval()
-            val_losses: list[float] = []
-            correct = 0
-            total = 0
-
-            with torch.inference_mode():
-                for batch_X, batch_y in val_loader:
                     batch_X = batch_X.to(self.device, non_blocking=True)
                     batch_y = batch_y.to(self.device, non_blocking=True)
 
-                    with amp_ctx():
+                    optimizer.zero_grad(set_to_none=True)
+
+                    if use_amp:
+                        with amp_ctx():
+                            logits, _ = model(batch_X)
+                            loss = criterion(logits, batch_y)
+                        scaler.scale(loss).backward()
+                        scaler.unscale_(optimizer)
+                        torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+                        scaler.step(optimizer)
+                        scaler.update()
+                    else:
                         logits, _ = model(batch_X)
                         loss = criterion(logits, batch_y)
+                        loss.backward()
+                        torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+                        optimizer.step()
 
-                    val_losses.append(float(loss))
-                    preds = logits.argmax(dim=-1)
-                    correct += int((preds == batch_y).sum())
-                    total += len(batch_y)
+                    train_losses.append(float(loss.detach()))
 
-            train_loss = float(np.mean(train_losses)) if train_losses else 0.0
-            val_loss = float(np.mean(val_losses)) if val_losses else 0.0
-            val_acc = correct / max(total, 1)
-
-            history["train_loss"].append(train_loss)
-            history["val_loss"].append(val_loss)
-            history["val_acc"].append(val_acc)
-
-            if val_acc > best_val_acc:
-                best_val_acc = val_acc
-                patience_counter = 0
-                best_state = {
-                    k: v.detach().cpu().clone() for k, v in model.state_dict().items()
-                }
-            else:
-                patience_counter += 1
-                if patience_counter >= patience_limit:
-                    log.info(f"{name}: early stop at epoch {epoch + 1}")
+                if cancelled:
                     break
 
-            # FIX CANCEL: Propagate CancelledException from callback
-            # instead of swallowing it with `except Exception: pass`
-            if callback is not None:
-                try:
-                    callback(name, epoch, val_acc)
-                except CancelledException:
-                    # Must propagate — user requested cancellation
-                    log.info(f"{name}: cancelled via callback at epoch {epoch + 1}")
-                    raise
-                except Exception:
-                    # Other callback errors are non-fatal
-                    pass
+                scheduler.step()
 
-        # Restore best weights
+                # --- validate ---
+                model.eval()
+                val_losses: list[float] = []
+                correct = 0
+                total = 0
+
+                with torch.inference_mode():
+                    for batch_X, batch_y in val_loader:
+                        batch_X = batch_X.to(self.device, non_blocking=True)
+                        batch_y = batch_y.to(self.device, non_blocking=True)
+
+                        with amp_ctx():
+                            logits, _ = model(batch_X)
+                            loss = criterion(logits, batch_y)
+
+                        val_losses.append(float(loss))
+                        preds = logits.argmax(dim=-1)
+                        correct += int((preds == batch_y).sum())
+                        total += len(batch_y)
+
+                train_loss = float(np.mean(train_losses)) if train_losses else 0.0
+                val_loss = float(np.mean(val_losses)) if val_losses else 0.0
+                val_acc = correct / max(total, 1)
+
+                history["train_loss"].append(train_loss)
+                history["val_loss"].append(val_loss)
+                history["val_acc"].append(val_acc)
+
+                if val_acc > best_val_acc:
+                    best_val_acc = val_acc
+                    patience_counter = 0
+                    best_state = {
+                        k: v.detach().cpu().clone() for k, v in model.state_dict().items()
+                    }
+                else:
+                    patience_counter += 1
+                    if patience_counter >= patience_limit:
+                        log.info(f"{name}: early stop at epoch {epoch + 1}")
+                        break
+
+                # FIX CANCEL: Propagate CancelledException from callback
+                if callback is not None:
+                    try:
+                        callback(name, epoch, val_acc)
+                    except CancelledException:
+                        log.info(f"{name}: cancelled via callback at epoch {epoch + 1}")
+                        raise
+                    except Exception:
+                        pass
+
+        except CancelledException:
+            # FIX RESTORE: Still restore best state before re-raising
+            if best_state is not None:
+                model.load_state_dict(best_state)
+                model.to(self.device)
+                log.info(f"{name}: restored best state before cancellation (acc={best_val_acc:.2%})")
+            raise
+
+        # Normal completion — restore best weights
         if best_state is not None:
             model.load_state_dict(best_state)
             model.to(self.device)
@@ -619,8 +625,14 @@ class EnsembleModel:
         names = list(self.models.keys())
         accs = np.array([val_accuracies.get(n, 0.5) for n in names])
 
+        # Guard against all-identical accuracies (would make exp uniform anyway)
+        if len(accs) == 0:
+            return
+
         temperature = 0.5
-        exp_w = np.exp(accs / temperature)
+        # Numerical stability: subtract max before exp
+        shifted = (accs - np.max(accs)) / temperature
+        exp_w = np.exp(shifted)
         exp_w /= exp_w.sum()
 
         with self._lock:
@@ -689,6 +701,10 @@ class EnsembleModel:
             weights = dict(self.weights)
             temp = max(self.temperature, 0.1)
 
+        if not models:
+            log.warning("No models available for prediction")
+            return []
+
         num_classes = CONFIG.model.num_classes
         max_entropy = float(np.log(num_classes)) if num_classes > 1 else 1.0
         results: List[EnsemblePrediction] = []
@@ -708,14 +724,16 @@ class EnsembleModel:
                     per_model_probs[name] = F.softmax(logits, dim=-1).cpu().numpy()
 
                     w = weights.get(name, 1.0 / max(1, len(models)))
-                    weighted_logits = (
-                        logits * w
-                        if weighted_logits is None
-                        else weighted_logits + logits * w
-                    )
+                    if weighted_logits is None:
+                        weighted_logits = logits * w
+                    else:
+                        weighted_logits = weighted_logits + logits * w
 
+            # FIX EMPTY: Skip batch if no logits produced (shouldn't happen
+            # with the models check above, but defensive)
             if weighted_logits is None:
-                break
+                log.warning(f"No logits produced for batch {start}:{end}")
+                continue
 
             final_probs = F.softmax(weighted_logits / temp, dim=-1).cpu().numpy()
 
@@ -724,8 +742,10 @@ class EnsembleModel:
                 pred_cls = int(np.argmax(probs))
                 conf = float(np.max(probs))
 
-                ent = float(-np.sum(probs * np.log(probs + 1e-8)))
-                ent_norm = ent / max_entropy
+                # Entropy with numerical stability
+                probs_safe = np.clip(probs, 1e-8, 1.0)
+                ent = float(-np.sum(probs_safe * np.log(probs_safe)))
+                ent_norm = ent / max_entropy if max_entropy > 0 else 0.0
 
                 model_preds = [
                     int(np.argmax(per_model_probs[m][i])) for m in per_model_probs
@@ -759,6 +779,9 @@ class EnsembleModel:
         """
         Save ensemble atomically.
 
+        FIX SAVE: Captures state_dict copies under lock to prevent
+        concurrent model mutation during serialization.
+
         Args:
             path: Target file path (default: ensemble_{interval}_{horizon}.pt)
         """
@@ -781,10 +804,19 @@ class EnsembleModel:
             path = Path(path)
             path.parent.mkdir(parents=True, exist_ok=True)
 
+            # FIX SAVE: Copy state dicts under lock to prevent mutation
+            # during serialization
+            model_states = {}
+            for n, m in self.models.items():
+                model_states[n] = {
+                    k: v.detach().cpu().clone()
+                    for k, v in m.state_dict().items()
+                }
+
             state = {
                 "input_size": self.input_size,
                 "model_names": list(self.models.keys()),
-                "models": {n: m.state_dict() for n, m in self.models.items()},
+                "models": model_states,
                 "weights": dict(self.weights),
                 "temperature": self.temperature,
                 "meta": {
@@ -798,10 +830,10 @@ class EnsembleModel:
                 },
             }
 
+        # Save outside lock (I/O bound)
         if atomic_torch_save is not None:
             atomic_torch_save(path, state)
         else:
-            # Fallback to regular torch.save
             torch.save(state, path)
 
         manifest = {
@@ -810,7 +842,7 @@ class EnsembleModel:
             "ensemble_path": path.name,
             "scaler_path": f"scaler_{interval}_{horizon}.pkl",
             "input_size": self.input_size,
-            "num_models": len(self.models),
+            "num_models": len(model_states),
             "temperature": self.temperature,
             "interval": interval,
             "prediction_horizon": horizon,
@@ -821,7 +853,6 @@ class EnsembleModel:
         if atomic_write_json is not None:
             atomic_write_json(manifest_path, manifest)
         else:
-            # Fallback to regular json write
             import json
             with open(manifest_path, 'w') as f:
                 json.dump(manifest, f, indent=2)
@@ -870,18 +901,25 @@ class EnsembleModel:
                 self.weights = {}
 
                 for name in model_names:
-                    if name not in cls_map or name not in state["models"]:
-                        log.warning(f"Skipping unknown/missing model: {name}")
+                    if name not in cls_map:
+                        log.warning(f"Skipping unknown model type: {name}")
+                        continue
+                    if name not in state["models"]:
+                        log.warning(f"Skipping model {name}: no saved state")
                         continue
 
                     self._init_model(name, hidden_size=h, dropout=d, num_classes=c)
+
+                    if name not in self.models:
+                        # _init_model failed
+                        continue
 
                     try:
                         self.models[name].load_state_dict(state["models"][name])
                     except RuntimeError as e:
                         log.error(f"Shape mismatch loading {name}: {e}")
                         del self.models[name]
-                        del self.weights[name]
+                        self.weights.pop(name, None)
                         continue
 
                     self.models[name].eval()
@@ -892,6 +930,10 @@ class EnsembleModel:
 
                 self._normalize_weights()
                 self.temperature = float(state.get("temperature", 1.0))
+
+            if not self.models:
+                log.error(f"No models successfully loaded from {path}")
+                return False
 
             log.info(
                 f"Ensemble loaded: {list(self.models.keys())}, "
@@ -965,4 +1007,5 @@ class EnsembleModel:
 
     def __len__(self) -> int:
         """Return number of models in ensemble."""
-        return len(self.models)
+        with self._lock:
+            return len(self.models)

@@ -1,29 +1,4 @@
 # core/instruments.py
-"""
-Instrument Parsing & Normalization
-Single place to normalize user-provided symbols into an instrument dict.
-
-This module is intentionally dependency-light and stable because it is used by:
-- data.fetcher.DataFetcher.get_history()
-- data.fetcher.DataFetcher.get_realtime()
-
-Instrument dict schema (returned by parse_instrument):
-{
-  "market": "CN" | "HK" | "US" | "CRYPTO" | "UNKNOWN",
-  "asset": "EQUITY" | "CRYPTO",
-  "symbol": str,          # normalized internal symbol (CN: 6 digits, HK: 5 digits, US: ticker)
-  "currency": str,        # "CNY" | "HKD" | "USD" | ...
-  "yahoo": str,           # best-effort yfinance symbol (e.g. 600519.SS, 0700.HK, AAPL)
-  "raw": str,             # original input (cleaned)
-  "vendor": { ... }       # optional vendor-specific hints
-}
-
-Notes:
-- Ambiguity: '0700' could be CN '000700' or HK '00700'. We treat digit strings
-  shorter than 6 as CN by default (to keep your previous behavior). For HK,
-  use explicit hint: "0700.HK" or "hk0700" or "HK:0700".
-"""
-
 from __future__ import annotations
 
 import re

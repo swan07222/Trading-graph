@@ -1,8 +1,4 @@
 # data/discovery.py
-"""
-Universal Stock Discovery System
-Network-aware: uses AkShare on China IP, fallback+Tencent otherwise.
-"""
 from __future__ import annotations
 
 import re

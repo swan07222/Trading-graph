@@ -1,15 +1,4 @@
 # utils/helpers.py
-"""
-Helper functions for formatting, date handling, and performance metrics.
-
-FIXES APPLIED:
-- Added NaN/Inf guards to all formatting functions
-- calculate_sharpe uses np.isclose instead of == 0
-- calculate_max_drawdown handles edge cases (empty, all-zero, negative)
-- get_trading_dates documents the weekend-only limitation
-- Added input validation to metric functions
-- Added type hints throughout
-"""
 from __future__ import annotations
 
 import math

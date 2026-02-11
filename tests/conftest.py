@@ -1,7 +1,4 @@
 # tests/conftest.py
-"""
-Pytest configuration and shared fixtures
-"""
 import pytest
 import sys
 import os

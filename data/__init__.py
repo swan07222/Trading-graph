@@ -1,12 +1,4 @@
 # data/__init__.py
-"""
-Data Package
-
-FIXES APPLIED:
-- Lazy imports to prevent cascading failures
-- If discovery.py, processor.py, or any optional submodule fails,
-  the core data modules (database, cache, fetcher) still work
-"""
 
 
 def __getattr__(name: str):

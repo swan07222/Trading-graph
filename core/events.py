@@ -1,19 +1,4 @@
 # core/events.py
-"""
-Event System - For decoupled, event-driven architecture
-
-FIXES APPLIED:
-1. History uses collections.deque with maxlen instead of list.pop(0) O(n)
-2. deque is thread-safe for append and iteration
-3. get_history returns proper list copy from deque
-4. clear_history is safe with deque
-5. publish() uses deque append (O(1) amortized, auto-bounded)
-6. Worker thread handles shutdown more gracefully
-7. Error dispatch prevents infinite recursion
-8. subscribe/unsubscribe properly thread-safe
-9. Added clear_subscribers method for testing
-10. EventBus.stop() drains queue before exit
-"""
 from enum import Enum, auto
 from dataclasses import dataclass, field
 from datetime import datetime

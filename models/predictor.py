@@ -1,25 +1,4 @@
 # models/predictor.py
-"""
-AI Stock Predictor - Real-time prediction with ensemble models
-
-FIXES APPLIED:
-1. Added skip_cache parameter to predict() for real-time updates
-2. Removed duplicate _clean_code() fallback — simplified to minimal fallback
-3. Cache TTL configurable and properly invalidated
-4. Thread safety: all public methods acquire _predict_lock
-5. Bounds checking on ensemble probabilities
-6. RSI interpretation fixed: FeatureEngine outputs rsi_14 as (raw/100 - 0.5)
-7. Reuse DataFetcher.clean_code() instead of custom logic
-8. Use actual atr_pct from features for trading levels
-9. Position sizing guards against 0 shares and unaffordable lots
-10. macd_hist used for direction (not macd_signal which is numeric)
-11. Forecast fallback uses stochastic random walk instead of flat decay
-12. Constructor param override is explicit and logged
-13. Error handling improved with structured warnings
-14. Cache eviction uses bounded size with proper locking
-15. _generate_forecast seed is deterministic per stock+time for consistency
-16. get_realtime_forecast_curve properly returns empty on error
-"""
 import numpy as np
 import pandas as pd
 from datetime import datetime

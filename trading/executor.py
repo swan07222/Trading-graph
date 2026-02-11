@@ -1,27 +1,4 @@
 # trading/executor.py
-"""
-Execution Engine - Production Grade with Full Fill Sync + Auto-Trading
-
-CRITICAL for Live Trading:
-- Proper fill sync loop with broker
-- Order status polling
-- OMS integration with correct order IDs
-- Reconciliation
-
-AUTO-TRADING ADDITIONS:
-- AutoTrader class: autonomous trading loop driven by Predictor
-- Respects all risk limits, cooldowns, daily caps
-- MANUAL / AUTO / SEMI_AUTO modes
-- Full audit trail via AutoTradeAction
-- Thread-safe integration with ExecutionEngine
-
-FIXES APPLIED:
-- Added Tuple to typing imports (was causing crash)
-- Removed redundant import of get_risk_manager inside start()
-- Fixed _prune_processed_fills double-lock
-- Added configurable auto_cancel_stuck flag
-- Improved watermark overlap
-"""
 from __future__ import annotations
 
 import queue

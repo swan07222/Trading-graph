@@ -1,16 +1,4 @@
-"""
-Critical Tests for Data Leakage and Correctness
 
-These tests verify the most important invariants:
-1. No scaler leakage between train/val/test
-2. No label leakage (embargo properly applied)
-3. Consistent sequence construction
-4. Proper temporal ordering
-
-Run with: pytest tests/test_data_leakage.py -v
-
-Author: AI Trading System v3.0
-"""
 import pytest
 import numpy as np
 import pandas as pd

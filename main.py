@@ -1,7 +1,4 @@
-#!/usr/bin/env python3
-"""
-AI Stock Trading System - Production Grade
-"""
+
 import sys
 import argparse
 from pathlib import Path

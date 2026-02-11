@@ -1,15 +1,4 @@
 # data/database.py
-"""
-Local Database for Market Data Storage
-
-Features:
-- SQLite backend with WAL mode
-- Efficient time-series storage with vectorized inserts
-- Incremental updates with schema versioning
-- Data integrity checks
-- Thread-safe connection pooling
-- Proper resource cleanup
-"""
 import sqlite3
 import atexit
 import weakref

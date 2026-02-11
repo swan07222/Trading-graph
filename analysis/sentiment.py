@@ -1,7 +1,4 @@
 # analysis/sentiment.py
-"""
-Sentiment Analysis - News and Social Media Analysis
-"""
 import re
 import time
 import hashlib

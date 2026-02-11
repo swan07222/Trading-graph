@@ -1,29 +1,4 @@
 # data/news.py
-"""
-Chinese Financial News & Policy Fetcher
-
-Sources (all domestic, work WITHOUT VPN):
-1. Sina Finance — Real-time news feed
-2. Eastmoney — Stock-specific news & announcements
-3. Tencent Finance — Market news
-
-Features:
-- Auto-detects network (China direct vs VPN)
-- Sentiment analysis using weighted keyword scoring with tanh normalization
-- Caches news to avoid repeated fetches (5 min TTL)
-- Thread-safe for real-time updates
-- Deduplication by title similarity (configurable threshold)
-
-FIXES APPLIED:
-- Singleton lock uses module-level threading.Lock (not globals() hack)
-- analyze_sentiment: math import moved to module level
-- numpy import moved to module level
-- _deduplicate uses longer prefix (40 chars) to avoid false merges
-- Unused variable removed from SinaNewsFetcher.fetch_stock_news
-- NewsItem.__post_init__ skips sentiment when both title and content are empty
-- All news fetchers have explicit timeouts
-- Deque access is consistently locked
-"""
 import math
 import re
 import time

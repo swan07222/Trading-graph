@@ -1,24 +1,4 @@
 # data/fetcher.py
-"""
-High-Performance Data Fetcher with Automatic Network Detection
-
-Automatically detects network environment:
-- China direct (Astrill OFF): Uses AkShare + Tencent
-- VPN active (Astrill ON): Uses Yahoo Finance + Tencent
-
-Network detection is cached and re-checked every 2 minutes.
-
-FIXES APPLIED:
-- Issue 16: get_fetcher() is thread-safe with double-checked locking
-- Fixed: _db_is_fresh_enough moved from nested function to proper method
-- Fixed: _rt_cache_lock initialized in __init__ (no lazy creation race)
-- Fixed: SpotCache helpers moved to module-level
-- Fixed: retry decorator applied where appropriate
-- Fixed: Consistent days vs bars handling
-- Fixed: _sources kept as property for backward compat
-- Fixed: Micro-cache TTL configurable
-- Fixed: Better _clean_dataframe NaN handling
-"""
 import math
 import os
 import socket

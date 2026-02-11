@@ -1,17 +1,4 @@
 # ui/charts.py
-"""
-Stock Chart Widget with AI Predictions
-
-FIXES APPLIED:
-1. CandlestickItem defined at module scope (was inside factory AND referenced
-   as undefined name — crashed on _setup_pyqtgraph)
-2. Removed duplicate candle creation in _setup_pyqtgraph
-3. Safe fallback when pyqtgraph not installed
-4. update_candles and update_data guard against None/empty data
-5. _update_level_lines guards against missing plot_widget
-6. All pyqtgraph operations wrapped in try/except for robustness
-7. MiniChart handles missing pyqtgraph gracefully
-"""
 from typing import List, Dict, Optional
 import numpy as np
 

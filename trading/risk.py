@@ -1,34 +1,4 @@
 # trading/risk.py
-"""
-Production Risk Management System
-
-Responsibilities:
-- Real-time position and P&L monitoring
-- VaR and Expected Shortfall calculation
-- Position size limits and concentration limits
-- Daily loss limits and drawdown tracking
-- Quote staleness detection
-- Rate limiting and error rate monitoring
-- Order pre-trade validation
-
-FIXES APPLIED:
- 1. Removed no-op _on_trade handler — saves event bus cycles
- 2. _returns_history uses deque(maxlen=252) — O(1) append, auto-prune
- 3. _get_unified_account_view deep-copy now copies ALL Position fields
- 4. _check_risk_breaches no longer double-fetches unified account
-    (get_metrics receives pre-built account, skips second OMS call)
- 5. check_order: kill switch failure now blocks trading instead of
-    silently passing
- 6. Consistent CONFIG access — always CONFIG.trading.X, never legacy
- 7. Audit log import made safe with fallback stub
- 8. _orders_this_minute / _errors_this_minute use deque for O(1) ops
- 9. _quote_timestamps bounded to MAX_TRACKED_SYMBOLS
-10. calculate_position_size releases lock before OMS call, re-acquires
-11. get_position_size_recommendation no longer double-locks
-12. _record_daily_return lookback extended to 30 days
-13. Added _cleanup_minute_deques helper to avoid repeated code
-14. _estimate_order_cost validates inputs
-"""
 
 import threading
 import numpy as np

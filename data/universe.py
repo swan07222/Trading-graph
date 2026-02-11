@@ -1,17 +1,10 @@
 # data/universe.py
-"""
-Stock Universe Management
 
-Maintains a cached JSON file of all known A-share stock codes.
-Network-aware: refreshes from AkShare on China direct IP,
-uses cached data on VPN/foreign connections.
-"""
 from __future__ import annotations
 
 import json
 import time
 import threading
-from dataclasses import dataclass
 from datetime import datetime, date, timedelta
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -22,8 +15,15 @@ from utils.logger import get_logger
 
 log = get_logger(__name__)
 
-# Module-level lock for file writes (protects within this process;
-# cross-process safety would require fcntl/msvcrt file locking).
+# Import pandas at module level with proper fallback
+try:
+    import pandas as pd
+    _HAS_PANDAS = True
+except ImportError:
+    pd = None  # type: ignore[assignment]
+    _HAS_PANDAS = False
+
+# Module-level lock for file writes
 _universe_lock = threading.Lock()
 
 
@@ -52,34 +52,46 @@ def save_universe(data: Dict) -> None:
     """
     Atomically save universe to disk.
 
-    Uses write-to-temp-then-rename for crash safety.
-    Thread-safe within this process via ``_universe_lock``.
+    FIX FSYNC: Uses atomic write pattern (write-to-temp, fsync, rename)
+    for crash safety instead of direct write without fsync.
     """
     path = _universe_path()
     with _universe_lock:
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
+
+            # Try atomic_io first
+            try:
+                from utils.atomic_io import atomic_write_json
+                atomic_write_json(path, data, use_lock=False)  # We already hold _universe_lock
+                return
+            except ImportError:
+                pass
+
+            # Fallback: manual atomic write with fsync
+            import os
             tmp = path.with_suffix(".json.tmp")
-            tmp.write_text(
-                json.dumps(data, ensure_ascii=False, indent=2),
-                encoding="utf-8",
-            )
+            json_str = json.dumps(data, ensure_ascii=False, indent=2)
+            with open(tmp, "w", encoding="utf-8") as f:
+                f.write(json_str)
+                f.flush()
+                try:
+                    os.fsync(f.fileno())
+                except OSError:
+                    pass
             tmp.replace(path)
+
         except OSError as exc:
             log.warning(f"Failed to save universe: {exc}")
-            # Clean up temp file if rename failed
             try:
+                tmp = path.with_suffix(".json.tmp")
                 tmp.unlink(missing_ok=True)
             except OSError:
                 pass
 
 
 def _parse_updated_ts(data: Dict) -> float:
-    """
-    Safely extract ``updated_ts`` as a float.
-
-    Handles missing keys, None, empty strings, and non-numeric values.
-    """
+    """Safely extract ``updated_ts`` as a float."""
     raw = data.get("updated_ts")
     if raw is None:
         return 0.0
@@ -120,13 +132,6 @@ def get_universe_codes(
     - China direct: refresh from AkShare if data is stale or forced.
     - VPN/foreign: use cached universe; warn if stale; fall back to
       CONFIG.stock_pool if cache is empty.
-
-    Args:
-        force_refresh:  Force a network refresh regardless of cache age.
-        max_age_hours:  Maximum cache age before considering stale.
-
-    Returns:
-        List of 6-digit stock code strings.
     """
     data = load_universe()
     now = time.time()
@@ -158,9 +163,6 @@ def refresh_universe() -> Dict:
 
     On VPN/foreign connections, returns the existing cached data
     without destroying it.
-
-    Returns:
-        Dict with keys: ``codes``, ``updated_ts``, ``updated_at``, ``source``.
     """
     from core.network import get_network_env
 
@@ -179,7 +181,6 @@ def refresh_universe() -> Dict:
             "source": "empty",
         }
 
-    # ---- China direct: refresh from AkShare -------------------------
     try:
         import akshare as ak
 
@@ -188,7 +189,6 @@ def refresh_universe() -> Dict:
             log.warning("AkShare returned empty spot data — keeping existing universe")
             return existing
 
-        # Find the code column
         code_col = None
         for c in ("代码", "code", "证券代码"):
             if c in df.columns:
@@ -237,13 +237,13 @@ def get_new_listings(
     Only works on China direct connections with AkShare.
     Returns an empty list on failure (never breaks the pipeline).
 
-    Args:
-        days: Look-back window in calendar days.
-        force_refresh: Currently unused but reserved for cache control.
-
-    Returns:
-        List of 6-digit stock code strings.
+    FIX PANDAS: Guards against pd being None if pandas import failed.
     """
+    # FIX PANDAS: Need pandas for date filtering
+    if not _HAS_PANDAS:
+        log.debug("get_new_listings: pandas not available")
+        return []
+
     from core.network import get_network_env
 
     env = get_network_env()
@@ -320,10 +320,3 @@ def get_new_listings(
         log.warning(f"get_new_listings failed: {exc}")
 
     return []
-
-
-# Need pandas for date filtering in get_new_listings
-try:
-    import pandas as pd
-except ImportError:
-    pd = None  # type: ignore

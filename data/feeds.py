@@ -1,21 +1,4 @@
 # data/feeds.py
-"""
-Real-Time Data Feeds
-
-FIXES APPLIED:
-1. BarAggregator supports both cumulative and delta volume modes
-2. WebSocketFeed has maximum reconnect attempt limit (MAX_RECONNECT_ATTEMPTS=50)
-3. PollingFeed back-pressure jump is smoother (doesn't skip full interval)
-4. Thread-safe quote caching with dedicated locks
-5. FeedManager preserves bar callbacks across re-initialization
-6. BarAggregator callbacks use safe copy under lock
-7. BarAggregator time alignment handles all intervals correctly
-8. WebSocket reconnect semaphore prevents orphan threads
-9. FeedManager.shutdown resets all state properly
-10. Safe int conversion for volume in WebSocket messages
-11. DB persist failures logged but don't break bar emission
-12. PollingFeed._poll_loop uses monotonic time for drift resistance
-"""
 import json
 import queue
 import threading

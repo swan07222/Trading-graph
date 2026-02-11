@@ -1,16 +1,4 @@
 # utils/logger.py
-"""
-Logging utility with colored output and file logging.
-
-FIXES APPLIED:
-1.  ColorFormatter no longer mutates shared LogRecord — uses copy
-2.  Colorama detection: only enable color on actual TTYs
-3.  teardown() avoids double-closing file handler
-4.  Singleton properly handles get_logger before/after setup
-5.  Thread-safe colorama init with lock
-6.  Added explicit handler identity tracking to prevent duplicates
-7.  Module-level `log` object documented as pre-setup logger
-"""
 from __future__ import annotations
 
 import copy
@@ -30,7 +18,7 @@ _colorama_available = False
 
 def _ensure_colorama() -> bool:
     """
-    FIX #5: Thread-safe, lazy colorama initialization.
+    Thread-safe, lazy colorama initialization.
     Returns True if colorama is available and initialized.
     """
     global _colorama_initialized, _colorama_available
@@ -56,7 +44,7 @@ class ColorFormatter(logging.Formatter):
     """
     Custom formatter with ANSI colors for terminal output.
 
-    FIX #1: Uses a shallow copy of the LogRecord instead of mutating
+    Uses a shallow copy of the LogRecord instead of mutating
     the original, which is shared across handlers in multi-handler setups.
     """
 
@@ -70,7 +58,6 @@ class ColorFormatter(logging.Formatter):
     RESET = "\033[0m"
 
     def format(self, record: logging.LogRecord) -> str:
-        # FIX #1: Copy record so other handlers see the unmodified version
         record_copy = copy.copy(record)
         color = self.COLORS.get(record_copy.levelname)
         if color:
@@ -163,9 +150,7 @@ class LoggerManager:
                 self._attach_file_handler(logger)
 
     def get_logger(self, name: str = "trading") -> logging.Logger:
-        """
-        Get or create a named logger. Thread-safe, cached.
-        """
+        """Get or create a named logger. Thread-safe, cached."""
         with self._logger_lock:
             if name in self._loggers:
                 return self._loggers[name]
@@ -174,8 +159,7 @@ class LoggerManager:
             logger.setLevel(self._log_level)
             logger.propagate = False
 
-            # FIX #6: Clear any pre-existing handlers to prevent duplicates
-            # from repeated get_logger calls or external logging.getLogger usage
+            # Clear any pre-existing handlers to prevent duplicates
             existing_handlers = logger.handlers[:]
             for h in existing_handlers:
                 logger.removeHandler(h)
@@ -193,15 +177,12 @@ class LoggerManager:
         """
         Remove all handlers and clear cached loggers.
         Call during shutdown or between tests.
-
-        FIX #3: Track file handler separately to avoid double-close.
         """
         with self._logger_lock:
-            file_handler = self._file_handler  # Remember before loop
+            file_handler = self._file_handler
 
             for logger in self._loggers.values():
                 for handler in logger.handlers[:]:
-                    # Don't close the file handler here — we do it below
                     if handler is file_handler:
                         logger.removeHandler(handler)
                         continue
@@ -212,7 +193,6 @@ class LoggerManager:
                     logger.removeHandler(handler)
             self._loggers.clear()
 
-        # Close file handler exactly once
         self._close_file_handler()
 
     # -----------------------------------------------------------------
@@ -224,12 +204,10 @@ class LoggerManager:
         handler = logging.StreamHandler(sys.stdout)
         handler.setLevel(self._log_level)
 
-        # FIX #2: Only enable color on actual TTYs
         use_color = False
         try:
             if sys.stdout.isatty():
                 use_color = True
-                # On Windows, colorama is needed for ANSI support on TTY
                 if sys.platform == "win32":
                     use_color = _ensure_colorama()
         except Exception:
@@ -296,6 +274,6 @@ def teardown_logging() -> None:
     _manager.teardown()
 
 
-# FIX #7: Document that this logger is created before setup_logging() runs.
+# This logger is created before setup_logging() runs.
 # It will be updated when setup_logging() is called later.
 log: logging.Logger = get_logger("trading")

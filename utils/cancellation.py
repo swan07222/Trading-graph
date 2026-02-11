@@ -1,17 +1,4 @@
 # utils/cancellation.py
-"""
-Cooperative Cancellation Support
-
-Provides a thread-safe cancellation mechanism for long-running operations.
-Use instead of QThread.terminate() which is unsafe.
-
-FIXES APPLIED:
-- Replaced bare except with except Exception
-- reset() now clears callbacks by default
-- Added remove_callback() to prevent memory leaks
-- Clarified wait() return value semantics
-- Added timeout support to raise_if_cancelled
-"""
 from __future__ import annotations
 
 import threading

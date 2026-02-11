@@ -1,15 +1,4 @@
 # utils/__init__.py
-"""
-Utility modules for the trading system.
-
-Exports:
-- Logging: get_logger, setup_logging, teardown_logging, log
-- Formatting: format_number, format_pct, format_price
-- Date utilities: get_trading_dates
-- Metrics: calculate_sharpe, calculate_max_drawdown
-- Cancellation: CancellationToken, CancelledException, cancellable_operation
-- Atomic I/O: atomic_write_bytes, atomic_write_json, etc.
-"""
 from .logger import get_logger, setup_logging, teardown_logging, log
 from .helpers import (
     format_number,

@@ -1,13 +1,4 @@
 # analysis/backtest.py
-"""
-Walk-Forward Backtesting System v3.2
-
-FIXES:
-- Better data collection with fallback options
-- More informative error messages
-- Graceful handling of missing data
-- Support for different data sources
-"""
 import os
 import numpy as np
 import pandas as pd

@@ -1,8 +1,4 @@
-"""
-Unit Tests for Models Module
 
-Run with: pytest tests/test_models.py -v
-"""
 import pytest
 import numpy as np
 import torch

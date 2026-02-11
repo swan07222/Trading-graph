@@ -1,18 +1,4 @@
 # utils/metrics.py
-"""
-Prometheus-style Metrics Export.
-
-FIXES APPLIED:
-1.  Removed unused Metric dataclass and json import
-2.  _make_key sanitizes metric names for Prometheus validity
-3.  to_prometheus emits # TYPE and # HELP annotations
-4.  Histogram emits proper _bucket, _count, _sum lines
-5.  start_process_metrics uses lock for thread safety
-6.  cpu_percent(interval=None) first-call warmup
-7.  Added reset() and remove() methods for lifecycle management
-8.  Added configurable histogram buckets
-9.  Stale key eviction via max_keys limit
-"""
 from __future__ import annotations
 
 import re

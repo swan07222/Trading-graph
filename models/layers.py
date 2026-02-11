@@ -1,9 +1,4 @@
 # models/layers.py
-"""
-Custom Neural Network Layers for Time-Series Classification.
-
-All temporal layers enforce CAUSAL (no future leakage) semantics where applicable.
-"""
 import torch
 import torch.nn as nn
 import torch.nn.functional as F

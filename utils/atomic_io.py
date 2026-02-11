@@ -1,37 +1,12 @@
 # utils/atomic_io.py
-"""
-Atomic File I/O Operations
 
-Provides atomic write operations using the write-to-temp-then-rename pattern.
-This prevents data corruption on crashes or power loss.
-
-Features:
-- Atomic writes for bytes, JSON, pickle, and PyTorch files
-- fsync to ensure data is flushed to disk
-- Proper cleanup of temp files on failure
-- Cross-platform compatibility (Windows, Linux, macOS)
-- Bounded lock cache to prevent memory leaks
-- Thread-safe file-level locking
-
-FIXES APPLIED:
-- Bounded LRU lock cache replaces unbounded dict
-- Temp file uses PID + thread ID to avoid collisions
-- torch.save writes to path (not file handle) for compatibility
-- Removed misleading "atomic read" claims from docstrings
-- Added __all__ for clean imports
-- Added max_pickle_size guard for deserialization safety
-- FIX EBADF: _fsync_file uses try/except OSError for resilience
-- FIX EBADF: atomic_torch_save writes via file handle (no close/reopen gap)
-- FIX EBADF: All atomic writes use use_lock=True by default
-- FIX EBADF: Added directory-level lock to prevent fd reuse races
-  across concurrent writes to different files in the same directory
-"""
 from __future__ import annotations
 
 import json
 import os
 import pickle
 import threading
+import time
 from collections import OrderedDict
 from pathlib import Path
 from typing import Any, Optional, Union
@@ -96,17 +71,7 @@ def _get_lock(path: Path) -> threading.Lock:
 
 
 # =====================================================================
-# FIX EBADF: Directory-level lock cache
-#
-# Per-file locks are insufficient because fd reuse races happen
-# across ANY files in the same directory. When thread A closes a
-# temp file fd and thread B immediately opens a new file in the
-# same directory, the OS can assign the same fd number. If thread A
-# then tries to fsync "its" fd, it's actually fsyncing thread B's
-# file (or gets EBADF if B already closed it).
-#
-# Directory-level locks serialize all atomic writes within the same
-# directory, eliminating this class of race condition entirely.
+# Directory-level lock cache
 # =====================================================================
 
 _dir_lock_cache: OrderedDict[str, threading.Lock] = OrderedDict()
@@ -153,23 +118,13 @@ def _fsync_file(f) -> None:
     Flush and fsync a file object.
 
     FIX EBADF: Wrapped in try/except OSError. If the fd is somehow
-    invalid (race condition, OS-level issue), we log a debug message
-    and continue. flush() already pushes data to OS buffers, so fsync
-    failure means data is in OS cache but may not be on physical disk —
-    acceptable for state/config files.
-
-    For financial transaction logs where durability is critical,
-    callers should verify fsync success separately.
+    invalid, we continue. flush() already pushes data to OS buffers.
     """
     f.flush()
     try:
         fd = f.fileno()
         os.fsync(fd)
     except OSError:
-        # flush() already pushed data to OS buffers.
-        # fsync failure means data may not be on physical disk yet,
-        # but will survive normal process termination.
-        # This is acceptable for config/state/model files.
         pass
     except (ValueError, AttributeError):
         # fileno() can raise ValueError if file is closed or
@@ -186,6 +141,25 @@ def _cleanup_tmp(tmp: Path) -> None:
         pass
 
 
+def _safe_replace(src: Path, dst: Path, max_retries: int = 3) -> None:
+    """
+    Replace dst with src, with retry logic for Windows.
+
+    FIX REPLACE: On Windows, os.replace can fail with PermissionError
+    if the target file is momentarily open by another process (e.g.
+    antivirus scanner). A brief retry handles this transient condition.
+    """
+    for attempt in range(max_retries):
+        try:
+            os.replace(src, dst)
+            return
+        except PermissionError:
+            if attempt < max_retries - 1:
+                time.sleep(0.05 * (attempt + 1))
+            else:
+                raise
+
+
 # =====================================================================
 # ATOMIC WRITE FUNCTIONS
 # =====================================================================
@@ -194,22 +168,17 @@ def _cleanup_tmp(tmp: Path) -> None:
 def atomic_write_bytes(
     path: Union[str, Path],
     data: bytes,
-    use_lock: bool = True,  # FIX EBADF: Default changed to True
+    use_lock: bool = True,
 ) -> None:
     """
     Atomically write bytes to a file.
 
     Uses write-to-temp-then-rename pattern to prevent corruption.
 
-    The entire operation (open → write → fsync → rename) is performed
-    under a directory-level lock when use_lock=True, preventing fd
-    reuse races with concurrent writes to the same directory.
-
     Args:
         path: Target file path
         data: Bytes to write
         use_lock: If True (default), acquire a directory-level thread lock
-                  to prevent fd reuse races across concurrent writes
 
     Raises:
         TypeError: If data is not bytes
@@ -222,7 +191,6 @@ def atomic_write_bytes(
     tmp = _make_tmp_path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
 
-    # FIX EBADF: Use directory lock to serialize writes in same directory
     lock = _get_dir_lock(path) if use_lock else None
 
     if lock:
@@ -232,7 +200,7 @@ def atomic_write_bytes(
             with open(tmp, "wb") as f:
                 f.write(data)
                 _fsync_file(f)
-            os.replace(tmp, path)
+            _safe_replace(tmp, path)
         except BaseException:
             _cleanup_tmp(tmp)
             raise
@@ -245,7 +213,7 @@ def atomic_write_text(
     path: Union[str, Path],
     text: str,
     encoding: str = "utf-8",
-    use_lock: bool = True,  # FIX EBADF: Default changed to True
+    use_lock: bool = True,
 ) -> None:
     """
     Atomically write text to a file.
@@ -266,7 +234,7 @@ def atomic_write_json(
     obj: Any,
     indent: int = 2,
     ensure_ascii: bool = False,
-    use_lock: bool = True,  # FIX EBADF: Default changed to True
+    use_lock: bool = True,
 ) -> None:
     """
     Atomically write a JSON-serializable object to a file.
@@ -289,7 +257,7 @@ def atomic_pickle_dump(
     path: Union[str, Path],
     obj: Any,
     protocol: Optional[int] = None,
-    use_lock: bool = True,  # FIX EBADF: Default changed to True
+    use_lock: bool = True,
 ) -> None:
     """
     Atomically pickle an object to a file.
@@ -312,23 +280,13 @@ def atomic_pickle_dump(
 def atomic_torch_save(
     path: Union[str, Path],
     obj: Any,
-    use_lock: bool = True,  # FIX EBADF: Default changed to True
+    use_lock: bool = True,
 ) -> None:
     """
     Atomically save a PyTorch object to a file.
 
-    FIX EBADF: The original implementation had a critical race condition:
-
-        1. torch.save(obj, str(tmp))  ← opens tmp, writes, CLOSES fd
-        2. with open(tmp, "rb") as f: ← reopens tmp, gets NEW fd
-        3.     os.fsync(f.fileno())   ← fsyncs the new fd
-
-    Between steps 1 and 2, another thread could open a file that gets
-    the same fd number as the one closed in step 1. If that other
-    thread then closes its file, step 3 gets EBADF.
-
-    The fix: open the file handle ourselves, pass the handle to
-    torch.save(), then fsync the SAME handle. No close/reopen gap.
+    FIX EBADF: Opens file handle ourselves, passes to torch.save(),
+    then fsyncs the SAME handle. No close/reopen gap.
 
     Args:
         path: Target file path
@@ -348,20 +306,16 @@ def atomic_torch_save(
     tmp = _make_tmp_path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
 
-    # FIX EBADF: Use directory lock to prevent concurrent writes
     lock = _get_dir_lock(path) if use_lock else None
 
     if lock:
         lock.acquire()
     try:
         try:
-            # FIX EBADF: Open file handle ourselves, pass to torch.save,
-            # fsync the SAME handle, then close. No close/reopen gap
-            # where the fd number could be stolen by another thread.
             with open(tmp, "wb") as f:
                 torch.save(obj, f)
                 _fsync_file(f)
-            os.replace(tmp, path)
+            _safe_replace(tmp, path)
         except BaseException:
             _cleanup_tmp(tmp)
             raise
@@ -372,7 +326,6 @@ def atomic_torch_save(
 
 # =====================================================================
 # READ FUNCTIONS
-# (NOT truly atomic — documented honestly)
 # =====================================================================
 
 _DEFAULT_MAX_PICKLE_BYTES = 500 * 1024 * 1024  # 500 MB

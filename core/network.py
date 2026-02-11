@@ -1,19 +1,5 @@
 # core/network.py
-"""
-Network Environment Detection & Routing
 
-Detects whether we're on a direct China IP or routing through VPN (foreign IP).
-All data sources check this to decide which backends to use.
-
-Usage:
-    from core.network import get_network_env, NetworkEnv
-
-    env = get_network_env()
-    if env.is_china_direct:
-        # Use AkShare, Tencent
-    else:
-        # Use Yahoo Finance
-"""
 import time
 import threading
 import requests
@@ -72,10 +58,6 @@ class NetworkDetector:
         self._env_time: float = 0.0
         self._ttl: float = 120.0  # Re-detect every 2 minutes
         self._probe_lock = threading.Lock()
-        self._session = requests.Session()
-        self._session.headers.update({
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-        })
 
     def get_env(self, force_refresh: bool = False) -> NetworkEnv:
         """Get current network environment (cached)."""
@@ -113,17 +95,35 @@ class NetworkDetector:
             "csindex_ok": ("https://www.csindex.com.cn/", 3),
         }
 
-        def run_probe(url, timeout):
-            return self._probe(url, timeout=timeout)
+        # FIX REUSE: Create fresh session per detection to avoid stale connections
+        session = requests.Session()
+        session.headers.update({
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        })
 
-        with ThreadPoolExecutor(max_workers=4) as ex:
-            fut_map = {ex.submit(run_probe, url, to): k for k, (url, to) in probes.items()}
-            for fut in as_completed(fut_map):
-                k = fut_map[fut]
-                try:
-                    setattr(env, k, bool(fut.result()))
-                except Exception:
-                    setattr(env, k, False)
+        def run_probe(url, timeout):
+            try:
+                r = session.get(url, timeout=timeout)
+                return r.status_code == 200
+            except Exception:
+                return False
+
+        try:
+            with ThreadPoolExecutor(max_workers=4) as ex:
+                fut_map = {
+                    ex.submit(run_probe, url, to): k
+                    for k, (url, to) in probes.items()
+                }
+                for fut in as_completed(fut_map, timeout=10):
+                    k = fut_map[fut]
+                    try:
+                        setattr(env, k, bool(fut.result()))
+                    except Exception:
+                        setattr(env, k, False)
+        except Exception as e:
+            log.debug(f"Network detection thread pool error: {e}")
+        finally:
+            session.close()
 
         # Determine environment
         if env.eastmoney_ok and not env.yahoo_ok:
@@ -139,9 +139,13 @@ class NetworkDetector:
             env.is_vpn_active = False
             env.detection_method = "both_ok_prefer_domestic"
         else:
+            # FIX FALLBACK: Both failed — use tencent as secondary indicator
             env.is_china_direct = bool(env.tencent_ok)
             env.is_vpn_active = False
-            env.detection_method = "both_failed_fallback"
+            env.detection_method = (
+                "both_failed_tencent_ok" if env.tencent_ok
+                else "both_failed_all_down"
+            )
 
         env.latency_ms = (time.time() - start) * 1000
         log.info(
@@ -153,14 +157,6 @@ class NetworkDetector:
             f"({env.latency_ms:.0f}ms)"
         )
         return env
-
-    def _probe(self, url: str, timeout: float = 3) -> bool:
-        """Quick HTTP probe - returns True if endpoint responds with 200."""
-        try:
-            r = self._session.get(url, timeout=timeout)
-            return r.status_code == 200
-        except Exception:
-            return False
 
 
 # Module-level convenience functions

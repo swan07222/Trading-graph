@@ -1,8 +1,4 @@
-"""
-Unit Tests for Data Module
 
-Run with: pytest tests/ -v
-"""
 import pytest
 import numpy as np
 import pandas as pd
