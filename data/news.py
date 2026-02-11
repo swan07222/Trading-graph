@@ -3,17 +3,28 @@
 Chinese Financial News & Policy Fetcher
 
 Sources (all domestic, work WITHOUT VPN):
-1. Sina Finance - Real-time news feed
-2. Eastmoney - Stock-specific news & announcements  
-3. Tencent Finance - Market news
-4. CCTV/Xinhua - Policy announcements
+1. Sina Finance — Real-time news feed
+2. Eastmoney — Stock-specific news & announcements
+3. Tencent Finance — Market news
 
 Features:
 - Auto-detects network (China direct vs VPN)
-- Sentiment analysis using keyword scoring
-- Caches news to avoid repeated fetches
+- Sentiment analysis using weighted keyword scoring with tanh normalization
+- Caches news to avoid repeated fetches (5 min TTL)
 - Thread-safe for real-time updates
+- Deduplication by title similarity (configurable threshold)
+
+FIXES APPLIED:
+- Singleton lock uses module-level threading.Lock (not globals() hack)
+- analyze_sentiment: math import moved to module level
+- numpy import moved to module level
+- _deduplicate uses longer prefix (40 chars) to avoid false merges
+- Unused variable removed from SinaNewsFetcher.fetch_stock_news
+- NewsItem.__post_init__ skips sentiment when both title and content are empty
+- All news fetchers have explicit timeouts
+- Deque access is consistently locked
 """
+import math
 import re
 import time
 import json
@@ -23,6 +34,7 @@ from typing import List, Dict, Optional, Tuple
 from dataclasses import dataclass, field
 from collections import deque
 
+import numpy as np
 import requests
 import pandas as pd
 
@@ -32,59 +44,29 @@ from utils.logger import get_logger
 log = get_logger(__name__)
 
 
-@dataclass
-class NewsItem:
-    """Single news article"""
-    title: str
-    content: str = ""
-    source: str = ""
-    url: str = ""
-    publish_time: datetime = field(default_factory=datetime.now)
-    stock_codes: List[str] = field(default_factory=list)
-    category: str = ""  # policy, earnings, market, industry, company
-    sentiment_score: float = 0.0  # -1.0 (very negative) to +1.0 (very positive)
-    sentiment_label: str = "neutral"  # positive, negative, neutral
-    importance: float = 0.5  # 0.0 to 1.0
-    keywords: List[str] = field(default_factory=list)
+# ---------------------------------------------------------------------------
+# Constants
+# ---------------------------------------------------------------------------
 
-    def __post_init__(self):
-        if self.sentiment_score == 0.0 and self.title:
-            self.sentiment_score, self.sentiment_label = analyze_sentiment(self.title + " " + self.content)
-
-    def age_minutes(self) -> float:
-        return (datetime.now() - self.publish_time).total_seconds() / 60.0
-
-    def is_relevant_to(self, stock_code: str) -> bool:
-        if stock_code in self.stock_codes:
-            return True
-        return False
-
-    def to_dict(self) -> Dict:
-        return {
-            'title': self.title,
-            'source': self.source,
-            'time': self.publish_time.strftime("%Y-%m-%d %H:%M"),
-            'sentiment': self.sentiment_score,
-            'sentiment_label': self.sentiment_label,
-            'importance': self.importance,
-            'category': self.category,
-            'codes': self.stock_codes,
-        }
+_NEWS_CACHE_TTL: int = 300          # 5 minutes
+_NEWS_BUFFER_SIZE: int = 200        # Rolling buffer max items
+_DEDUP_PREFIX_LEN: int = 40         # Title prefix length for dedup
+_FETCH_TIMEOUT: int = 5             # HTTP timeout for news fetchers
+_SENTIMENT_NEUTRAL_BAND: float = 0.2  # |score| < this → neutral
 
 
-# =============================================================================
-# SENTIMENT ANALYSIS (Keyword-based, no external dependencies)
-# =============================================================================
+# ---------------------------------------------------------------------------
+# Sentiment dictionaries
+# ---------------------------------------------------------------------------
 
 # Positive keywords (Chinese financial)
-POSITIVE_WORDS = {
+POSITIVE_WORDS: Dict[str, float] = {
     # Strong positive
     "涨停": 2.0, "大涨": 1.8, "暴涨": 1.8, "创新高": 1.5, "突破": 1.3,
     "利好": 1.5, "重大利好": 2.0, "超预期": 1.5, "业绩大增": 1.8,
     "净利润增长": 1.3, "营收增长": 1.2, "盈利": 1.0, "扭亏": 1.5,
     "分红": 1.0, "回购": 1.2, "增持": 1.3, "大股东增持": 1.5,
     "机构买入": 1.3, "北向资金流入": 1.2, "外资增持": 1.2,
-    
     # Moderate positive
     "上涨": 0.8, "走高": 0.8, "反弹": 0.7, "回升": 0.7,
     "利率下调": 0.8, "降准": 1.0, "降息": 1.0, "宽松": 0.8,
@@ -92,7 +74,6 @@ POSITIVE_WORDS = {
     "中标": 1.0, "签约": 0.8, "合作": 0.6, "战略合作": 0.8,
     "新产品": 0.7, "技术突破": 1.0, "专利": 0.7, "创新": 0.6,
     "产能扩张": 0.8, "订单增长": 1.0, "市场份额提升": 0.9,
-    
     # Policy positive
     "减税": 1.0, "补贴": 0.8, "政策支持": 1.0, "国家战略": 0.9,
     "改革": 0.5, "开放": 0.5, "自贸区": 0.7, "新基建": 0.8,
@@ -100,7 +81,7 @@ POSITIVE_WORDS = {
 }
 
 # Negative keywords
-NEGATIVE_WORDS = {
+NEGATIVE_WORDS: Dict[str, float] = {
     # Strong negative
     "跌停": -2.0, "大跌": -1.8, "暴跌": -1.8, "崩盘": -2.0,
     "利空": -1.5, "重大利空": -2.0, "爆雷": -2.0, "违规": -1.5,
@@ -108,27 +89,34 @@ NEGATIVE_WORDS = {
     "亏损": -1.3, "业绩下滑": -1.5, "净利润下降": -1.3,
     "减持": -1.3, "大股东减持": -1.5, "高管减持": -1.2,
     "质押": -0.8, "爆仓": -1.8, "违约": -1.5,
-    
     # Moderate negative
     "下跌": -0.8, "走低": -0.8, "回调": -0.5, "下探": -0.7,
     "加息": -0.8, "收紧": -0.8, "监管": -0.6, "审查": -0.7,
     "限制": -0.6, "禁止": -0.8, "制裁": -1.0, "贸易战": -1.0,
     "疫情": -0.7, "停产": -1.0, "停工": -0.8, "召回": -0.8,
     "诉讼": -0.7, "仲裁": -0.6, "调查": -0.7,
-    
     # Risk keywords
     "风险": -0.5, "警告": -0.6, "预警": -0.6, "泡沫": -0.8,
     "过热": -0.6, "通胀": -0.5, "滞涨": -0.7,
     "北向资金流出": -1.0, "外资减持": -1.0,
 }
 
+# Max times a single keyword is counted (prevents spam amplification)
+_MAX_KEYWORD_COUNT: int = 3
+
+
+# ---------------------------------------------------------------------------
+# Sentiment analysis
+# ---------------------------------------------------------------------------
 
 def analyze_sentiment(text: str) -> Tuple[float, str]:
     """
-    Improved sentiment scoring:
-    - Uses weighted sum
+    Weighted keyword sentiment scoring.
+
+    - Counts each keyword up to _MAX_KEYWORD_COUNT times
     - Normalizes by total absolute weight contribution
-    - Applies tanh to avoid easy saturation at ±1.0
+    - Applies tanh to produce smooth [-1, 1] output
+    - Returns (score, label) where label ∈ {positive, negative, neutral}
     """
     if not text:
         return 0.0, "neutral"
@@ -136,34 +124,27 @@ def analyze_sentiment(text: str) -> Tuple[float, str]:
     raw_score = 0.0
     abs_contrib = 0.0
 
-    # cap each keyword count to avoid spam
     for word, weight in POSITIVE_WORDS.items():
-        c = text.count(word)
+        c = min(text.count(word), _MAX_KEYWORD_COUNT)
         if c > 0:
-            c = min(c, 3)
-            raw_score += float(weight) * c
-            abs_contrib += abs(float(weight)) * c
+            raw_score += weight * c
+            abs_contrib += abs(weight) * c
 
     for word, weight in NEGATIVE_WORDS.items():
-        c = text.count(word)
+        c = min(text.count(word), _MAX_KEYWORD_COUNT)
         if c > 0:
-            c = min(c, 3)
-            raw_score += float(weight) * c
-            abs_contrib += abs(float(weight)) * c
+            raw_score += weight * c
+            abs_contrib += abs(weight) * c
 
-    if abs_contrib <= 1e-9:
+    if abs_contrib < 1e-9:
         return 0.0, "neutral"
 
-    # normalized base in [-inf, inf]
     base = raw_score / abs_contrib
-
-    # squash to [-1, 1] smoothly
-    import math
     normalized = math.tanh(1.25 * base)
 
-    if normalized >= 0.2:
+    if normalized >= _SENTIMENT_NEUTRAL_BAND:
         label = "positive"
-    elif normalized <= -0.2:
+    elif normalized <= -_SENTIMENT_NEUTRAL_BAND:
         label = "negative"
     else:
         label = "neutral"
@@ -171,53 +152,120 @@ def analyze_sentiment(text: str) -> Tuple[float, str]:
     return round(float(normalized), 3), label
 
 
-# =============================================================================
-# NEWS FETCHERS (Work on China direct IP)
-# =============================================================================
+# ---------------------------------------------------------------------------
+# Data classes
+# ---------------------------------------------------------------------------
 
-class SinaNewsFetcher:
-    """Fetch news from Sina Finance (works on China IP)"""
+@dataclass
+class NewsItem:
+    """Single news article with auto-computed sentiment."""
+
+    title: str
+    content: str = ""
+    source: str = ""
+    url: str = ""
+    publish_time: datetime = field(default_factory=datetime.now)
+    stock_codes: List[str] = field(default_factory=list)
+    category: str = ""  # policy, earnings, market, industry, company
+    sentiment_score: float = 0.0  # -1.0 … +1.0
+    sentiment_label: str = "neutral"  # positive, negative, neutral
+    importance: float = 0.5  # 0.0 … 1.0
+    keywords: List[str] = field(default_factory=list)
+
+    def __post_init__(self):
+        # Only auto-compute sentiment if not already set and text exists
+        if self.sentiment_score == 0.0 and (self.title or self.content):
+            combined = (self.title or "") + " " + (self.content or "")
+            self.sentiment_score, self.sentiment_label = analyze_sentiment(
+                combined.strip()
+            )
+
+    def age_minutes(self) -> float:
+        return (datetime.now() - self.publish_time).total_seconds() / 60.0
+
+    def is_relevant_to(self, stock_code: str) -> bool:
+        return stock_code in self.stock_codes
+
+    def to_dict(self) -> Dict:
+        return {
+            "title": self.title,
+            "source": self.source,
+            "time": self.publish_time.strftime("%Y-%m-%d %H:%M"),
+            "sentiment": self.sentiment_score,
+            "sentiment_label": self.sentiment_label,
+            "importance": self.importance,
+            "category": self.category,
+            "codes": self.stock_codes,
+        }
+
+
+# ---------------------------------------------------------------------------
+# News fetcher base
+# ---------------------------------------------------------------------------
+
+class _BaseNewsFetcher:
+    """Shared session setup for news fetchers."""
+
+    def __init__(self, referer: str = ""):
+        self._session = requests.Session()
+        headers = {
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36"
+            ),
+        }
+        if referer:
+            headers["Referer"] = referer
+        self._session.headers.update(headers)
+
+
+# ---------------------------------------------------------------------------
+# Sina Finance
+# ---------------------------------------------------------------------------
+
+class SinaNewsFetcher(_BaseNewsFetcher):
+    """Fetch news from Sina Finance (works on China IP)."""
 
     def __init__(self):
-        self._session = requests.Session()
-        self._session.headers.update({
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-            'Referer': 'https://finance.sina.com.cn/',
-        })
+        super().__init__(referer="https://finance.sina.com.cn/")
 
     def fetch_market_news(self, count: int = 20) -> List[NewsItem]:
-        """Fetch general market news"""
+        """Fetch general market news."""
         try:
             url = "https://feed.mix.sina.com.cn/api/roll/get"
             params = {
-                'pageid': '153',
-                'lid': '2516',
-                'k': '',
-                'num': str(min(count, 50)),
-                'page': '1',
+                "pageid": "153",
+                "lid": "2516",
+                "k": "",
+                "num": str(min(count, 50)),
+                "page": "1",
             }
-            r = self._session.get(url, params=params, timeout=5)
+            r = self._session.get(url, params=params, timeout=_FETCH_TIMEOUT)
             data = r.json()
 
-            items = []
-            for article in data.get('result', {}).get('data', []):
-                title = article.get('title', '').strip()
+            items: List[NewsItem] = []
+            for article in data.get("result", {}).get("data", []):
+                title = article.get("title", "").strip()
                 if not title:
                     continue
 
                 pub_time = datetime.now()
-                try:
-                    ctime = article.get('ctime', '')
-                    if ctime:
+                ctime = article.get("ctime", "")
+                if ctime:
+                    try:
                         pub_time = datetime.fromtimestamp(int(ctime))
-                except Exception:
-                    pass
+                    except (ValueError, OSError):
+                        pass
 
                 items.append(NewsItem(
                     title=title,
-                    content=article.get('summary', '') or article.get('intro', '') or '',
+                    content=(
+                        article.get("summary", "")
+                        or article.get("intro", "")
+                        or ""
+                    ),
                     source="sina",
-                    url=article.get('url', ''),
+                    url=article.get("url", ""),
                     publish_time=pub_time,
                     category="market",
                 ))
@@ -225,37 +273,30 @@ class SinaNewsFetcher:
             log.debug(f"Sina: fetched {len(items)} market news")
             return items
 
-        except Exception as e:
-            log.warning(f"Sina market news failed: {e}")
+        except Exception as exc:
+            log.warning(f"Sina market news failed: {exc}")
             return []
 
-    def fetch_stock_news(self, stock_code: str, count: int = 10) -> List[NewsItem]:
-        """Fetch news for specific stock"""
+    def fetch_stock_news(
+        self, stock_code: str, count: int = 10
+    ) -> List[NewsItem]:
+        """Fetch news for a specific stock via Sina search."""
         try:
             code6 = str(stock_code).zfill(6)
-
-            if code6.startswith(('6', '5')):
-                symbol = f"sh{code6}"
-            else:
-                symbol = f"sz{code6}"
-
-            url = f"https://search.sina.com.cn/news"
+            url = "https://search.sina.com.cn/news"
             params = {
-                'q': code6,
-                'c': 'news',
-                'from': 'channel',
-                'ie': 'utf-8',
-                'num': str(min(count, 20)),
+                "q": code6,
+                "c": "news",
+                "from": "channel",
+                "ie": "utf-8",
+                "num": str(min(count, 20)),
             }
-            r = self._session.get(url, params=params, timeout=5)
+            r = self._session.get(url, params=params, timeout=_FETCH_TIMEOUT)
 
-            # Parse results (simplified)
-            items = []
-            # Sina search returns HTML, extract titles
-            import re
-            titles = re.findall(r'<h2><a[^>]*>(.+?)</a></h2>', r.text)
-            for title in titles[:count]:
-                title = re.sub(r'<[^>]+>', '', title).strip()
+            items: List[NewsItem] = []
+            titles = re.findall(r"<h2><a[^>]*>(.+?)</a></h2>", r.text)
+            for raw_title in titles[:count]:
+                title = re.sub(r"<[^>]+>", "", raw_title).strip()
                 if title:
                     items.append(NewsItem(
                         title=title,
@@ -266,72 +307,94 @@ class SinaNewsFetcher:
 
             return items
 
-        except Exception as e:
-            log.debug(f"Sina stock news failed for {stock_code}: {e}")
+        except Exception as exc:
+            log.debug(f"Sina stock news failed for {stock_code}: {exc}")
             return []
 
 
-class EastmoneyNewsFetcher:
-    """Fetch news from Eastmoney (works on China IP only)"""
+# ---------------------------------------------------------------------------
+# Eastmoney
+# ---------------------------------------------------------------------------
+
+class EastmoneyNewsFetcher(_BaseNewsFetcher):
+    """Fetch news from Eastmoney (works on China IP only)."""
 
     def __init__(self):
-        self._session = requests.Session()
-        self._session.headers.update({
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-            'Referer': 'https://www.eastmoney.com/',
-        })
+        super().__init__(referer="https://www.eastmoney.com/")
 
-    def fetch_stock_news(self, stock_code: str, count: int = 10) -> List[NewsItem]:
-        """Fetch stock-specific news and announcements"""
+    def fetch_stock_news(
+        self, stock_code: str, count: int = 10
+    ) -> List[NewsItem]:
+        """Fetch stock-specific news and announcements."""
         try:
             code6 = str(stock_code).zfill(6)
-
             url = "https://search-api-web.eastmoney.com/search/jsonp"
             params = {
-                'cb': 'jQuery_callback',
-                'param': json.dumps({
+                "cb": "jQuery_callback",
+                "param": json.dumps({
                     "uid": "",
                     "keyword": code6,
                     "type": ["cmsArticleWebOld"],
                     "client": "web",
                     "clientType": "web",
                     "clientVersion": "curr",
-                    "param": {"cmsArticleWebOld": {"searchScope": "default", "sort": "default", "pageIndex": 1, "pageSize": count}}
-                })
+                    "param": {
+                        "cmsArticleWebOld": {
+                            "searchScope": "default",
+                            "sort": "default",
+                            "pageIndex": 1,
+                            "pageSize": count,
+                        }
+                    },
+                }),
             }
 
-            r = self._session.get(url, params=params, timeout=5)
+            r = self._session.get(url, params=params, timeout=_FETCH_TIMEOUT)
             text = r.text
 
-            # Extract JSON from JSONP
-            json_str = text[text.index('(') + 1:text.rindex(')')]
+            # Extract JSON from JSONP wrapper
+            lparen = text.index("(")
+            rparen = text.rindex(")")
+            json_str = text[lparen + 1 : rparen]
             data = json.loads(json_str)
 
-            items = []
-            articles = data.get('result', {}).get('cmsArticleWebOld', {}).get('list', [])
+            items: List[NewsItem] = []
+            articles = (
+                data.get("result", {})
+                .get("cmsArticleWebOld", {})
+                .get("list", [])
+            )
 
             for article in articles:
-                title = article.get('title', '').strip()
-                title = re.sub(r'<[^>]+>', '', title)  # Remove HTML tags
+                title = re.sub(
+                    r"<[^>]+>", "", article.get("title", "")
+                ).strip()
                 if not title:
                     continue
 
                 pub_time = datetime.now()
-                try:
-                    date_str = article.get('date', '')
-                    if date_str:
-                        pub_time = datetime.strptime(date_str[:19], "%Y-%m-%d %H:%M:%S")
-                except Exception:
-                    pass
+                date_str = article.get("date", "")
+                if date_str:
+                    try:
+                        pub_time = datetime.strptime(
+                            date_str[:19], "%Y-%m-%d %H:%M:%S"
+                        )
+                    except ValueError:
+                        pass
 
-                content = article.get('content', '') or article.get('mediaName', '') or ''
-                content = re.sub(r'<[^>]+>', '', content)
+                content = re.sub(
+                    r"<[^>]+>",
+                    "",
+                    article.get("content", "")
+                    or article.get("mediaName", "")
+                    or "",
+                )
 
                 items.append(NewsItem(
                     title=title,
                     content=content[:500],
                     source="eastmoney",
-                    url=article.get('url', ''),
+                    url=article.get("url", ""),
                     publish_time=pub_time,
                     stock_codes=[code6],
                     category="company",
@@ -340,28 +403,27 @@ class EastmoneyNewsFetcher:
             log.debug(f"Eastmoney: fetched {len(items)} news for {code6}")
             return items
 
-        except Exception as e:
-            log.debug(f"Eastmoney news failed for {stock_code}: {e}")
+        except Exception as exc:
+            log.debug(f"Eastmoney news failed for {stock_code}: {exc}")
             return []
 
     def fetch_policy_news(self, count: int = 15) -> List[NewsItem]:
-        """Fetch policy and regulatory news"""
+        """Fetch policy and regulatory news."""
         try:
             url = "https://np-listapi.eastmoney.com/comm/web/getNewsByColumns"
             params = {
-                'columns': 'CSRC,PBOC,MOF',  # 证监会, 央行, 财政部
-                'pageSize': str(min(count, 30)),
-                'pageIndex': '1',
+                "columns": "CSRC,PBOC,MOF",
+                "pageSize": str(min(count, 30)),
+                "pageIndex": "1",
             }
-            r = self._session.get(url, params=params, timeout=5)
+            r = self._session.get(url, params=params, timeout=_FETCH_TIMEOUT)
             data = r.json()
 
-            items = []
-            for article in data.get('data', {}).get('list', []):
-                title = article.get('title', '').strip()
+            items: List[NewsItem] = []
+            for article in data.get("data", {}).get("list", []):
+                title = article.get("title", "").strip()
                 if not title:
                     continue
-
                 items.append(NewsItem(
                     title=title,
                     source="eastmoney_policy",
@@ -372,50 +434,51 @@ class EastmoneyNewsFetcher:
 
             return items
 
-        except Exception as e:
-            log.debug(f"Eastmoney policy news failed: {e}")
+        except Exception as exc:
+            log.debug(f"Eastmoney policy news failed: {exc}")
             return []
 
 
-class TencentNewsFetcher:
-    """Fetch news from Tencent Finance (works from ANY IP)"""
+# ---------------------------------------------------------------------------
+# Tencent Finance
+# ---------------------------------------------------------------------------
+
+class TencentNewsFetcher(_BaseNewsFetcher):
+    """Fetch news from Tencent Finance (works from ANY IP)."""
 
     def __init__(self):
-        self._session = requests.Session()
-        self._session.headers.update({
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-        })
+        super().__init__()
 
     def fetch_market_news(self, count: int = 20) -> List[NewsItem]:
-        """Fetch general financial news via Tencent"""
+        """Fetch general financial news via Tencent."""
         try:
             url = "https://r.inews.qq.com/getSimpleNews"
             params = {
-                'ids': 'finance_hot',
-                'num': str(min(count, 30)),
+                "ids": "finance_hot",
+                "num": str(min(count, 30)),
             }
-            r = self._session.get(url, params=params, timeout=5)
+            r = self._session.get(url, params=params, timeout=_FETCH_TIMEOUT)
             data = r.json()
 
-            items = []
-            for article in data.get('newslist', []):
-                title = article.get('title', '').strip()
+            items: List[NewsItem] = []
+            for article in data.get("newslist", []):
+                title = article.get("title", "").strip()
                 if not title:
                     continue
 
                 pub_time = datetime.now()
-                try:
-                    ts = article.get('timestamp', '')
-                    if ts:
+                ts = article.get("timestamp", "")
+                if ts:
+                    try:
                         pub_time = datetime.fromtimestamp(int(ts))
-                except Exception:
-                    pass
+                    except (ValueError, OSError):
+                        pass
 
                 items.append(NewsItem(
                     title=title,
-                    content=article.get('abstract', '') or '',
+                    content=article.get("abstract", "") or "",
                     source="tencent",
-                    url=article.get('url', ''),
+                    url=article.get("url", ""),
                     publish_time=pub_time,
                     category="market",
                 ))
@@ -423,14 +486,24 @@ class TencentNewsFetcher:
             log.debug(f"Tencent: fetched {len(items)} market news")
             return items
 
-        except Exception as e:
-            log.warning(f"Tencent market news failed: {e}")
+        except Exception as exc:
+            log.warning(f"Tencent market news failed: {exc}")
             return []
 
 
-# =============================================================================
-# NEWS AGGREGATOR
-# =============================================================================
+# ---------------------------------------------------------------------------
+# Policy keywords for filtering
+# ---------------------------------------------------------------------------
+
+_POLICY_KEYWORDS: Tuple[str, ...] = (
+    "央行", "证监会", "财政部", "国务院",
+    "政策", "监管", "改革", "法规",
+)
+
+
+# ---------------------------------------------------------------------------
+# News aggregator
+# ---------------------------------------------------------------------------
 
 class NewsAggregator:
     """
@@ -445,17 +518,26 @@ class NewsAggregator:
 
         self._cache: Dict[str, List[NewsItem]] = {}
         self._cache_time: Dict[str, float] = {}
-        self._cache_ttl = 300  # 5 minutes
+        self._cache_ttl: int = _NEWS_CACHE_TTL
         self._lock = threading.RLock()
 
-        # Rolling news buffer (last 200 items)
-        self._all_news: deque = deque(maxlen=200)
+        # Rolling news buffer (last N items)
+        self._all_news: deque = deque(maxlen=_NEWS_BUFFER_SIZE)
+
+    # -- cache helpers -------------------------------------------------------
 
     def _is_cache_valid(self, key: str) -> bool:
-        return (key in self._cache and
-                (time.time() - self._cache_time.get(key, 0)) < self._cache_ttl)
+        """Check if cached entry exists and is within TTL."""
+        return (
+            key in self._cache
+            and (time.time() - self._cache_time.get(key, 0)) < self._cache_ttl
+        )
 
-    def get_market_news(self, count: int = 30, force_refresh: bool = False) -> List[NewsItem]:
+    # -- market news ---------------------------------------------------------
+
+    def get_market_news(
+        self, count: int = 30, force_refresh: bool = False
+    ) -> List[NewsItem]:
         """Get aggregated market news from all available sources."""
         cache_key = f"market_{count}"
 
@@ -468,7 +550,7 @@ class NewsAggregator:
 
         all_items: List[NewsItem] = []
 
-        # Tencent always works
+        # Tencent always works (China or VPN)
         if env.tencent_ok:
             try:
                 all_items.extend(self._tencent.fetch_market_news(count))
@@ -488,10 +570,7 @@ class NewsAggregator:
                 except Exception:
                     pass
 
-        # Deduplicate by title similarity
         unique = self._deduplicate(all_items)
-
-        # Sort by time (newest first)
         unique.sort(key=lambda x: x.publish_time, reverse=True)
         unique = unique[:count]
 
@@ -504,8 +583,14 @@ class NewsAggregator:
         log.info(f"Aggregated {len(unique)} market news items")
         return unique
 
-    def get_stock_news(self, stock_code: str, count: int = 15,
-                       force_refresh: bool = False) -> List[NewsItem]:
+    # -- stock news ----------------------------------------------------------
+
+    def get_stock_news(
+        self,
+        stock_code: str,
+        count: int = 15,
+        force_refresh: bool = False,
+    ) -> List[NewsItem]:
         """Get news for a specific stock."""
         code6 = str(stock_code).zfill(6)
         cache_key = f"stock_{code6}_{count}"
@@ -528,11 +613,13 @@ class NewsAggregator:
 
             if env.eastmoney_ok:
                 try:
-                    all_items.extend(self._eastmoney.fetch_stock_news(code6, count))
+                    all_items.extend(
+                        self._eastmoney.fetch_stock_news(code6, count)
+                    )
                 except Exception:
                     pass
 
-        # Filter market news for this stock code
+        # Also search rolling buffer for this stock
         with self._lock:
             for item in self._all_news:
                 if code6 in item.title or code6 in str(item.stock_codes):
@@ -542,7 +629,7 @@ class NewsAggregator:
         unique.sort(key=lambda x: x.publish_time, reverse=True)
         unique = unique[:count]
 
-        # Tag all with stock code
+        # Ensure all items are tagged with this stock code
         for item in unique:
             if code6 not in item.stock_codes:
                 item.stock_codes.append(code6)
@@ -553,144 +640,182 @@ class NewsAggregator:
 
         return unique
 
+    # -- policy news ---------------------------------------------------------
+
     def get_policy_news(self, count: int = 10) -> List[NewsItem]:
         """Get policy/regulatory news only."""
         all_news = self.get_market_news(count=50)
-        policy = [n for n in all_news if n.category == "policy" or
-                  any(kw in n.title for kw in ["央行", "证监会", "财政部", "国务院",
-                                                 "政策", "监管", "改革", "法规"])]
+        policy = [
+            n for n in all_news
+            if n.category == "policy"
+            or any(kw in n.title for kw in _POLICY_KEYWORDS)
+        ]
         return policy[:count]
 
-    def get_sentiment_summary(self, stock_code: str = None) -> Dict:
+    # -- sentiment summary ---------------------------------------------------
+
+    def get_sentiment_summary(
+        self, stock_code: Optional[str] = None
+    ) -> Dict:
         """Get aggregated sentiment for stock or market."""
-        if stock_code:
-            news = self.get_stock_news(stock_code)
-        else:
-            news = self.get_market_news()
+        news = (
+            self.get_stock_news(stock_code)
+            if stock_code
+            else self.get_market_news()
+        )
 
         if not news:
             return {
-                'overall_sentiment': 0.0,
-                'label': 'neutral',
-                'positive_count': 0,
-                'negative_count': 0,
-                'neutral_count': 0,
-                'total': 0,
-                'top_positive': [],
-                'top_negative': [],
+                "overall_sentiment": 0.0,
+                "label": "neutral",
+                "positive_count": 0,
+                "negative_count": 0,
+                "neutral_count": 0,
+                "total": 0,
+                "top_positive": [],
+                "top_negative": [],
             }
 
         scores = [n.sentiment_score for n in news]
-        overall = sum(scores) / len(scores) if scores else 0.0
+        overall = sum(scores) / len(scores)
 
         positive = [n for n in news if n.sentiment_label == "positive"]
         negative = [n for n in news if n.sentiment_label == "negative"]
         neutral = [n for n in news if n.sentiment_label == "neutral"]
 
         return {
-            'overall_sentiment': round(overall, 3),
-            'label': "positive" if overall > 0.1 else ("negative" if overall < -0.1 else "neutral"),
-            'positive_count': len(positive),
-            'negative_count': len(negative),
-            'neutral_count': len(neutral),
-            'total': len(news),
-            'top_positive': [n.to_dict() for n in sorted(positive, key=lambda x: x.sentiment_score, reverse=True)[:3]],
-            'top_negative': [n.to_dict() for n in sorted(negative, key=lambda x: x.sentiment_score)[:3]],
+            "overall_sentiment": round(overall, 3),
+            "label": (
+                "positive" if overall > 0.1
+                else ("negative" if overall < -0.1 else "neutral")
+            ),
+            "positive_count": len(positive),
+            "negative_count": len(negative),
+            "neutral_count": len(neutral),
+            "total": len(news),
+            "top_positive": [
+                n.to_dict()
+                for n in sorted(
+                    positive, key=lambda x: x.sentiment_score, reverse=True
+                )[:3]
+            ],
+            "top_negative": [
+                n.to_dict()
+                for n in sorted(negative, key=lambda x: x.sentiment_score)[:3]
+            ],
         }
 
-    def get_news_features(self, stock_code: str = None,
-                          hours_lookback: int = 24) -> Dict[str, float]:
+    # -- numerical features for AI model -------------------------------------
+
+    def get_news_features(
+        self,
+        stock_code: Optional[str] = None,
+        hours_lookback: int = 24,
+    ) -> Dict[str, float]:
         """
         Get numerical features from news for AI model input.
-        These can be appended to the technical features.
+        These can be appended to the technical feature vector.
         """
-        if stock_code:
-            news = self.get_stock_news(stock_code, count=50)
-        else:
-            news = self.get_market_news(count=50)
+        news = (
+            self.get_stock_news(stock_code, count=50)
+            if stock_code
+            else self.get_market_news(count=50)
+        )
 
         cutoff = datetime.now() - timedelta(hours=hours_lookback)
         recent = [n for n in news if n.publish_time >= cutoff]
 
         if not recent:
             return {
-                'news_sentiment_avg': 0.0,
-                'news_sentiment_std': 0.0,
-                'news_positive_ratio': 0.0,
-                'news_negative_ratio': 0.0,
-                'news_volume': 0.0,
-                'news_importance_avg': 0.5,
-                'news_recency_score': 0.0,
-                'policy_sentiment': 0.0,
+                "news_sentiment_avg": 0.0,
+                "news_sentiment_std": 0.0,
+                "news_positive_ratio": 0.0,
+                "news_negative_ratio": 0.0,
+                "news_volume": 0.0,
+                "news_importance_avg": 0.5,
+                "news_recency_score": 0.0,
+                "policy_sentiment": 0.0,
             }
 
         scores = [n.sentiment_score for n in recent]
+        total = len(scores)
         positive = sum(1 for s in scores if s > 0.1)
         negative = sum(1 for s in scores if s < -0.1)
-        total = len(scores)
 
         # Recency-weighted sentiment (newer news matters more)
-        recency_weights = []
+        recency_weights: List[float] = []
         for n in recent:
-            age_hours = (datetime.now() - n.publish_time).total_seconds() / 3600.0
+            age_hours = (
+                (datetime.now() - n.publish_time).total_seconds() / 3600.0
+            )
             weight = max(0.1, 1.0 - (age_hours / hours_lookback))
             recency_weights.append(weight)
 
-        weighted_sentiment = sum(s * w for s, w in zip(scores, recency_weights)) / sum(recency_weights) if recency_weights else 0.0
+        weight_sum = sum(recency_weights)
+        weighted_sentiment = (
+            sum(s * w for s, w in zip(scores, recency_weights)) / weight_sum
+            if weight_sum > 0
+            else 0.0
+        )
 
-        # Policy sentiment
+        # Policy-specific sentiment
         policy_items = [n for n in recent if n.category == "policy"]
-        policy_sentiment = sum(n.sentiment_score for n in policy_items) / max(len(policy_items), 1)
+        policy_sentiment = (
+            sum(n.sentiment_score for n in policy_items) / len(policy_items)
+            if policy_items
+            else 0.0
+        )
 
-        import numpy as np
+        importances = [n.importance for n in recent]
 
         return {
-            'news_sentiment_avg': round(float(np.mean(scores)), 4),
-            'news_sentiment_std': round(float(np.std(scores)), 4) if len(scores) > 1 else 0.0,
-            'news_positive_ratio': round(positive / total, 4),
-            'news_negative_ratio': round(negative / total, 4),
-            'news_volume': min(total / 20.0, 1.0),  # Normalized 0-1
-            'news_importance_avg': round(float(np.mean([n.importance for n in recent])), 4),
-            'news_recency_score': round(weighted_sentiment, 4),
-            'policy_sentiment': round(policy_sentiment, 4),
+            "news_sentiment_avg": round(float(np.mean(scores)), 4),
+            "news_sentiment_std": (
+                round(float(np.std(scores)), 4) if len(scores) > 1 else 0.0
+            ),
+            "news_positive_ratio": round(positive / total, 4),
+            "news_negative_ratio": round(negative / total, 4),
+            "news_volume": min(total / 20.0, 1.0),  # Normalized 0–1
+            "news_importance_avg": round(float(np.mean(importances)), 4),
+            "news_recency_score": round(weighted_sentiment, 4),
+            "policy_sentiment": round(policy_sentiment, 4),
         }
 
-    def _deduplicate(self, items: List[NewsItem]) -> List[NewsItem]:
-        """Remove duplicate news by title similarity."""
-        seen_titles = set()
-        unique = []
+    # -- deduplication -------------------------------------------------------
+
+    @staticmethod
+    def _deduplicate(items: List[NewsItem]) -> List[NewsItem]:
+        """Remove duplicate news by title prefix similarity."""
+        seen_titles: set = set()
+        unique: List[NewsItem] = []
         for item in items:
-            # Simple dedup: first 20 chars of title
-            key = item.title[:20] if item.title else ""
+            key = item.title[:_DEDUP_PREFIX_LEN] if item.title else ""
             if key and key not in seen_titles:
                 seen_titles.add(key)
                 unique.append(item)
         return unique
 
-    def clear_cache(self):
+    # -- cache management ----------------------------------------------------
+
+    def clear_cache(self) -> None:
         with self._lock:
             self._cache.clear()
             self._cache_time.clear()
 
 
-# Singleton
+# ===========================================================================
+# Thread-safe singleton
+# ===========================================================================
+
 _aggregator: Optional[NewsAggregator] = None
+_aggregator_lock = threading.Lock()
 
 
 def get_news_aggregator() -> NewsAggregator:
+    """Double-checked locking singleton for NewsAggregator."""
     global _aggregator
-    try:
-        lock = globals().get("_aggregator_lock")
-    except Exception:
-        lock = None
-
-    if lock is None:
-        import threading
-        globals()["_aggregator_lock"] = threading.Lock()
-        lock = globals()["_aggregator_lock"]
-
     if _aggregator is None:
-        with lock:
+        with _aggregator_lock:
             if _aggregator is None:
                 _aggregator = NewsAggregator()
     return _aggregator

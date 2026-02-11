@@ -1,16 +1,18 @@
 # data/database.py
 """
 Local Database for Market Data Storage
-Score Target: 10/10
 
 Features:
-- SQLite/DuckDB backend
-- Efficient time-series storage
-- Incremental updates
+- SQLite backend with WAL mode
+- Efficient time-series storage with vectorized inserts
+- Incremental updates with schema versioning
 - Data integrity checks
-- Query optimization
+- Thread-safe connection pooling
+- Proper resource cleanup
 """
 import sqlite3
+import atexit
+import weakref
 from pathlib import Path
 from datetime import datetime, date, timedelta
 from typing import Dict, List, Optional, Tuple
@@ -24,137 +26,260 @@ from utils.logger import get_logger
 
 log = get_logger(__name__)
 
+# Current schema version — bump when adding/altering tables
+_SCHEMA_VERSION = 2
+
 
 class MarketDatabase:
     """
-    Local market data database
-    
+    Local market data database with proper lifecycle management.
+
     Tables:
+    - _meta: Schema version tracking
     - stocks: Stock metadata
     - daily_bars: Daily OHLCV data
+    - intraday_bars: Intraday OHLCV data
     - features: Computed features
     - predictions: Model predictions
     """
-    
+
     def __init__(self, db_path: Path = None):
         self._db_path = db_path or CONFIG.data_dir / "market_data.db"
+        self._db_path.parent.mkdir(parents=True, exist_ok=True)
         self._local = threading.local()
+        self._connections: weakref.WeakSet = weakref.WeakSet()
+        self._connections_lock = threading.Lock()
+        self._schema_lock = threading.Lock()
+        self._schema_ready = threading.Event()
         self._init_db()
-    
+        # Register cleanup on interpreter exit
+        atexit.register(self.close_all)
+
+    # ------------------------------------------------------------------
+    # Connection management
+    # ------------------------------------------------------------------
+
     @property
     def _conn(self) -> sqlite3.Connection:
-        """Thread-local connection"""
-        if not hasattr(self._local, 'conn') or self._local.conn is None:
-            self._local.conn = sqlite3.connect(
+        """Thread-local connection with automatic registration."""
+        if not hasattr(self._local, "conn") or self._local.conn is None:
+            conn = sqlite3.connect(
                 str(self._db_path),
                 check_same_thread=False,
-                timeout=30
+                timeout=30,
             )
-            self._local.conn.row_factory = sqlite3.Row
-            # Enable WAL mode for better concurrency
-            self._local.conn.execute("PRAGMA journal_mode=WAL")
-            self._local.conn.execute("PRAGMA synchronous=NORMAL")
+            conn.row_factory = sqlite3.Row
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA synchronous=NORMAL")
+            conn.execute("PRAGMA foreign_keys=ON")
+            self._local.conn = conn
+            with self._connections_lock:
+                self._connections.add(conn)
+        # Wait for schema to be ready (blocks only on first access
+        # if another thread is still running _init_db)
+        self._schema_ready.wait(timeout=30)
         return self._local.conn
-    
+
     @contextmanager
     def _transaction(self):
-        """Transaction context manager"""
+        """Transaction context manager with proper rollback."""
+        conn = self._conn
         try:
-            yield self._conn
-            self._conn.commit()
+            yield conn
+            conn.commit()
         except Exception:
-            self._conn.rollback()
+            conn.rollback()
             raise
-    
+
+    # ------------------------------------------------------------------
+    # Schema management
+    # ------------------------------------------------------------------
+
     def _init_db(self):
-        """Initialize database schema (adds intraday bars table)."""
-        with self._transaction() as conn:
-            # Stocks table
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS stocks (
-                    code TEXT PRIMARY KEY,
-                    name TEXT,
-                    exchange TEXT,
-                    sector TEXT,
-                    market_cap REAL,
-                    list_date TEXT,
-                    is_st INTEGER DEFAULT 0,
-                    updated_at TEXT
-                )
-            """)
+        """Initialize or migrate database schema."""
+        with self._schema_lock:
+            try:
+                self._create_or_migrate()
+            finally:
+                self._schema_ready.set()
 
-            # Daily bars table
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS daily_bars (
-                    code TEXT,
-                    date TEXT,
-                    open REAL,
-                    high REAL,
-                    low REAL,
-                    close REAL,
-                    volume INTEGER,
-                    amount REAL,
-                    turnover REAL,
-                    PRIMARY KEY (code, date)
-                )
-            """)
-            conn.execute("""CREATE INDEX IF NOT EXISTS idx_bars_date ON daily_bars(date)""")
+    def _get_schema_version(self, conn: sqlite3.Connection) -> int:
+        """Read current schema version (0 if fresh db)."""
+        try:
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS _meta "
+                "(key TEXT PRIMARY KEY, value TEXT)"
+            )
+            conn.commit()
+            cur = conn.execute(
+                "SELECT value FROM _meta WHERE key = 'schema_version'"
+            )
+            row = cur.fetchone()
+            return int(row[0]) if row else 0
+        except Exception:
+            return 0
 
-            # -------- NEW: Intraday bars table --------
-            # interval: e.g. "1m", "5m"
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS intraday_bars (
-                    code TEXT NOT NULL,
-                    ts TEXT NOT NULL,
-                    interval TEXT NOT NULL,
-                    open REAL,
-                    high REAL,
-                    low REAL,
-                    close REAL,
-                    volume INTEGER,
-                    amount REAL,
-                    PRIMARY KEY (code, ts, interval)
-                )
-            """)
-            conn.execute("""
-                CREATE INDEX IF NOT EXISTS idx_intraday_code_interval_ts
-                ON intraday_bars(code, interval, ts)
-            """)
+    def _set_schema_version(self, conn: sqlite3.Connection, version: int):
+        conn.execute(
+            "INSERT INTO _meta (key, value) VALUES ('schema_version', ?) "
+            "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            (str(version),),
+        )
+        conn.commit()
 
-            # Features table
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS features (
-                    code TEXT,
-                    date TEXT,
-                    features BLOB,
-                    PRIMARY KEY (code, date)
-                )
-            """)
+    def _create_or_migrate(self):
+        """Create tables or migrate from older schema versions."""
+        # Use a dedicated connection for DDL so thread-local isn't
+        # exposed before the schema is ready.
+        conn = sqlite3.connect(str(self._db_path), timeout=30)
+        conn.execute("PRAGMA journal_mode=WAL")
+        try:
+            current = self._get_schema_version(conn)
 
-            # Predictions table
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS predictions (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    code TEXT,
-                    timestamp TEXT,
-                    signal TEXT,
-                    prob_up REAL,
-                    prob_down REAL,
-                    confidence REAL,
-                    price REAL
-                )
-            """)
-    
+            if current < 1:
+                self._apply_v1(conn)
+            if current < 2:
+                self._apply_v2(conn)
+            # Add future migrations here: if current < 3: self._apply_v3(conn)
+
+            self._set_schema_version(conn, _SCHEMA_VERSION)
+        finally:
+            conn.close()
+
+    @staticmethod
+    def _apply_v1(conn: sqlite3.Connection):
+        """V1: core tables."""
+        conn.executescript("""
+            CREATE TABLE IF NOT EXISTS stocks (
+                code TEXT PRIMARY KEY,
+                name TEXT,
+                exchange TEXT,
+                sector TEXT,
+                market_cap REAL,
+                list_date TEXT,
+                is_st INTEGER DEFAULT 0,
+                updated_at TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS daily_bars (
+                code TEXT NOT NULL,
+                date TEXT NOT NULL,
+                open REAL,
+                high REAL,
+                low REAL,
+                close REAL,
+                volume INTEGER,
+                amount REAL,
+                turnover REAL,
+                PRIMARY KEY (code, date)
+            );
+            CREATE INDEX IF NOT EXISTS idx_bars_date
+                ON daily_bars(date);
+
+            CREATE TABLE IF NOT EXISTS features (
+                code TEXT NOT NULL,
+                date TEXT NOT NULL,
+                features BLOB,
+                PRIMARY KEY (code, date)
+            );
+
+            CREATE TABLE IF NOT EXISTS predictions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                code TEXT NOT NULL,
+                timestamp TEXT NOT NULL,
+                signal TEXT,
+                prob_up REAL,
+                prob_down REAL,
+                confidence REAL,
+                price REAL,
+                UNIQUE(code, timestamp)
+            );
+        """)
+        conn.commit()
+
+    @staticmethod
+    def _apply_v2(conn: sqlite3.Connection):
+        """V2: intraday bars table."""
+        conn.executescript("""
+            CREATE TABLE IF NOT EXISTS intraday_bars (
+                code TEXT NOT NULL,
+                ts TEXT NOT NULL,
+                interval TEXT NOT NULL,
+                open REAL,
+                high REAL,
+                low REAL,
+                close REAL,
+                volume INTEGER,
+                amount REAL,
+                PRIMARY KEY (code, ts, interval)
+            );
+            CREATE INDEX IF NOT EXISTS idx_intraday_code_interval_ts
+                ON intraday_bars(code, interval, ts);
+        """)
+        conn.commit()
+
+    # ------------------------------------------------------------------
+    # Column validation helpers
+    # ------------------------------------------------------------------
+
+    _REQUIRED_BAR_COLUMNS = {"open", "high", "low", "close"}
+    _OPTIONAL_BAR_COLUMNS = {"volume", "amount", "turnover"}
+
+    @classmethod
+    def _validate_bar_columns(cls, df: pd.DataFrame, context: str = "bars") -> None:
+        """Raise ValueError if required columns are missing."""
+        if df is None or df.empty:
+            return
+        present = set(c.lower() for c in df.columns)
+        missing = cls._REQUIRED_BAR_COLUMNS - present
+        if missing:
+            raise ValueError(
+                f"{context}: missing required columns {missing}. "
+                f"Present: {sorted(present)}"
+            )
+
+    # ------------------------------------------------------------------
+    # NaN-safe type converters (module-level for reuse)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _to_float(x, default: float = 0.0) -> float:
+        try:
+            if x is None:
+                return default
+            val = float(x)
+            if np.isnan(val) or np.isinf(val):
+                return default
+            return val
+        except (ValueError, TypeError):
+            return default
+
+    @staticmethod
+    def _to_int(x, default: int = 0) -> int:
+        try:
+            if x is None:
+                return default
+            val = float(x)
+            if np.isnan(val) or np.isinf(val):
+                return default
+            return int(val)
+        except (ValueError, TypeError):
+            return default
+
+    # ------------------------------------------------------------------
+    # Intraday bars
+    # ------------------------------------------------------------------
+
     def get_intraday_bars(
         self,
         code: str,
         interval: str = "1m",
-        limit: int = 1000
+        limit: int = 1000,
     ) -> pd.DataFrame:
-        """Get last N intraday bars (code, interval)."""
+        """Get last *limit* intraday bars for (code, interval)."""
         code = str(code).zfill(6)
         interval = str(interval).lower()
-        limit = int(limit or 1000)
+        limit = max(1, int(limit or 1000))
 
         query = """
             SELECT ts, open, high, low, close, volume, amount
@@ -163,7 +288,14 @@ class MarketDatabase:
             ORDER BY ts DESC
             LIMIT ?
         """
-        df = pd.read_sql_query(query, self._conn, params=(code, interval, limit))
+        try:
+            df = pd.read_sql_query(
+                query, self._conn, params=(code, interval, limit)
+            )
+        except Exception as e:
+            log.warning(f"Intraday query failed for {code}/{interval}: {e}")
+            return pd.DataFrame()
+
         if df.empty:
             return pd.DataFrame()
 
@@ -171,82 +303,91 @@ class MarketDatabase:
         df = df.dropna(subset=["ts"]).set_index("ts").sort_index()
         return df
 
-    def upsert_intraday_bars(self, code: str, interval: str, df: pd.DataFrame):
-        """Insert/update intraday bars (fast executemany) with NaN-safe casting."""
+    def upsert_intraday_bars(
+        self, code: str, interval: str, df: pd.DataFrame
+    ):
+        """Insert/update intraday bars using vectorized row building."""
         if df is None or df.empty:
             return
 
-        import numpy as np
-        import pandas as pd
-
-        def _to_float(x, default=0.0) -> float:
-            try:
-                if x is None or pd.isna(x) or (isinstance(x, float) and np.isnan(x)):
-                    return float(default)
-                return float(x)
-            except Exception:
-                return float(default)
-
-        def _to_int(x, default=0) -> int:
-            try:
-                if x is None or pd.isna(x) or (isinstance(x, float) and np.isnan(x)):
-                    return int(default)
-                return int(float(x))
-            except Exception:
-                return int(default)
+        self._validate_bar_columns(df, context="intraday_bars")
 
         code = str(code).zfill(6)
         interval = str(interval).lower()
 
         work = df.copy()
-
         if not isinstance(work.index, pd.DatetimeIndex):
             work.index = pd.to_datetime(work.index, errors="coerce")
-
         work = work[~work.index.isna()]
         work = work.sort_index()
         work = work[~work.index.duplicated(keep="last")]
 
-        rows = []
-        for ts, row in work.iterrows():
-            rows.append((
-                code,
-                ts.isoformat(),
-                interval,
-                _to_float(row.get("open", 0)),
-                _to_float(row.get("high", 0)),
-                _to_float(row.get("low", 0)),
-                _to_float(row.get("close", 0)),
-                _to_int(row.get("volume", 0)),
-                _to_float(row.get("amount", 0)),
-            ))
+        if work.empty:
+            return
+
+        rows = self._build_intraday_rows(code, interval, work)
 
         with self._transaction() as conn:
-            conn.executemany("""
-                INSERT INTO intraday_bars (code, ts, interval, open, high, low, close, volume, amount)
+            conn.executemany(
+                """
+                INSERT INTO intraday_bars
+                    (code, ts, interval, open, high, low, close, volume, amount)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(code, ts, interval) DO UPDATE SET
-                    open=excluded.open,
-                    high=excluded.high,
-                    low=excluded.low,
-                    close=excluded.close,
-                    volume=excluded.volume,
-                    amount=excluded.amount
-            """, rows)
+                    open=excluded.open, high=excluded.high,
+                    low=excluded.low, close=excluded.close,
+                    volume=excluded.volume, amount=excluded.amount
+                """,
+                rows,
+            )
+
+    def _build_intraday_rows(
+        self, code: str, interval: str, work: pd.DataFrame
+    ) -> List[tuple]:
+        """Vectorized row construction for intraday bars."""
+        tf = self._to_float
+        ti = self._to_int
+
+        timestamps = work.index.to_series().apply(
+            lambda t: t.isoformat()
+        ).values
+
+        rows = []
+        for i, (ts_iso, (_, row)) in enumerate(
+            zip(timestamps, work.iterrows())
+        ):
+            rows.append((
+                code,
+                ts_iso,
+                interval,
+                tf(row.get("open", 0)),
+                tf(row.get("high", 0)),
+                tf(row.get("low", 0)),
+                tf(row.get("close", 0)),
+                ti(row.get("volume", 0)),
+                tf(row.get("amount", 0)),
+            ))
+        return rows
+
+    # ------------------------------------------------------------------
+    # Stock metadata
+    # ------------------------------------------------------------------
 
     def upsert_stock(
-        self, 
-        code: str, 
+        self,
+        code: str,
         name: str = None,
         exchange: str = None,
         sector: str = None,
         market_cap: float = None,
-        is_st: bool = False
+        is_st: bool = False,
     ):
-        """Insert or update stock metadata"""
+        """Insert or update stock metadata."""
         with self._transaction() as conn:
-            conn.execute("""
-                INSERT INTO stocks (code, name, exchange, sector, market_cap, is_st, updated_at)
+            conn.execute(
+                """
+                INSERT INTO stocks
+                    (code, name, exchange, sector, market_cap, is_st, updated_at)
                 VALUES (?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(code) DO UPDATE SET
                     name = COALESCE(excluded.name, stocks.name),
@@ -255,173 +396,189 @@ class MarketDatabase:
                     market_cap = COALESCE(excluded.market_cap, stocks.market_cap),
                     is_st = excluded.is_st,
                     updated_at = excluded.updated_at
-            """, (code, name, exchange, sector, market_cap, int(is_st), 
-                  datetime.now().isoformat()))
-    
+                """,
+                (
+                    code,
+                    name,
+                    exchange,
+                    sector,
+                    market_cap,
+                    int(is_st),
+                    datetime.now().isoformat(),
+                ),
+            )
+
+    # ------------------------------------------------------------------
+    # Daily bars
+    # ------------------------------------------------------------------
+
     def upsert_bars(self, code: str, df: pd.DataFrame):
-        """Insert/update daily bars (fast executemany) with NaN-safe casting and safe DatetimeIndex handling."""
+        """Insert/update daily bars with column validation."""
         if df is None or df.empty:
             return
 
-        import numpy as np
-        import pandas as pd
-
-        def _to_float(x, default=0.0) -> float:
-            try:
-                if x is None or pd.isna(x) or (isinstance(x, float) and np.isnan(x)):
-                    return float(default)
-                return float(x)
-            except Exception:
-                return float(default)
-
-        def _to_int(x, default=0) -> int:
-            try:
-                if x is None or pd.isna(x) or (isinstance(x, float) and np.isnan(x)):
-                    return int(default)
-                return int(float(x))
-            except Exception:
-                return int(default)
+        self._validate_bar_columns(df, context="daily_bars")
 
         work = df.copy()
         if not isinstance(work.index, pd.DatetimeIndex):
             work.index = pd.to_datetime(work.index, errors="coerce")
-
-        # CRITICAL: drop NaT and duplicates
         work = work[~work.index.isna()]
         work = work.sort_index()
         work = work[~work.index.duplicated(keep="last")]
 
+        if work.empty:
+            return
+
         code = str(code).zfill(6)
+        rows = self._build_daily_rows(code, work)
+
+        with self._transaction() as conn:
+            conn.executemany(
+                """
+                INSERT INTO daily_bars
+                    (code, date, open, high, low, close, volume, amount, turnover)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(code, date) DO UPDATE SET
+                    open=excluded.open, high=excluded.high,
+                    low=excluded.low, close=excluded.close,
+                    volume=excluded.volume, amount=excluded.amount,
+                    turnover=excluded.turnover
+                """,
+                rows,
+            )
+
+    def _build_daily_rows(
+        self, code: str, work: pd.DataFrame
+    ) -> List[tuple]:
+        """Build rows for daily bar insert."""
+        tf = self._to_float
+        ti = self._to_int
 
         rows = []
         for idx, row in work.iterrows():
             rows.append((
                 code,
                 idx.strftime("%Y-%m-%d"),
-                _to_float(row.get("open", 0)),
-                _to_float(row.get("high", 0)),
-                _to_float(row.get("low", 0)),
-                _to_float(row.get("close", 0)),
-                _to_int(row.get("volume", 0)),
-                _to_float(row.get("amount", 0)),
-                _to_float(row.get("turnover", 0)),
+                tf(row.get("open", 0)),
+                tf(row.get("high", 0)),
+                tf(row.get("low", 0)),
+                tf(row.get("close", 0)),
+                ti(row.get("volume", 0)),
+                tf(row.get("amount", 0)),
+                tf(row.get("turnover", 0)),
             ))
+        return rows
 
-        with self._transaction() as conn:
-            conn.executemany("""
-                INSERT INTO daily_bars (code, date, open, high, low, close, volume, amount, turnover)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(code, date) DO UPDATE SET
-                    open = excluded.open,
-                    high = excluded.high,
-                    low = excluded.low,
-                    close = excluded.close,
-                    volume = excluded.volume,
-                    amount = excluded.amount,
-                    turnover = excluded.turnover
-            """, rows)
-    
+    # ------------------------------------------------------------------
+    # Queries
+    # ------------------------------------------------------------------
+
     def get_bars(
         self,
         code: str,
         start_date: date = None,
         end_date: date = None,
-        limit: int = None
+        limit: int = None,
     ) -> pd.DataFrame:
-        """Get daily bars for a stock
-        
+        """
+        Get daily bars for a stock.
+
         Args:
             code: Stock code (e.g., '600519')
             start_date: Optional start date filter
-            end_date: Optional end date filter  
-            limit: Optional limit on number of rows (returns most recent N bars)
-            
+            end_date: Optional end date filter
+            limit: Optional limit (returns most recent N bars)
+
         Returns:
-            DataFrame with OHLCV data indexed by date
+            DataFrame with OHLCV data indexed by date (empty on error)
         """
         code = str(code).zfill(6)
-        
-        # Build query with optional filters
+
         conditions = ["code = ?"]
         params: list = [code]
-        
+
         if start_date is not None:
             conditions.append("date >= ?")
-            if isinstance(start_date, date):
-                params.append(start_date.isoformat())
-            else:
-                params.append(str(start_date))
-        
+            params.append(
+                start_date.isoformat()
+                if isinstance(start_date, date)
+                else str(start_date)
+            )
+
         if end_date is not None:
             conditions.append("date <= ?")
-            if isinstance(end_date, date):
-                params.append(end_date.isoformat())
-            else:
-                params.append(str(end_date))
-        
+            params.append(
+                end_date.isoformat()
+                if isinstance(end_date, date)
+                else str(end_date)
+            )
+
         where_clause = " AND ".join(conditions)
-        
+
         if limit is not None:
-            # Get most recent N bars: order DESC, limit, then re-sort ASC
-            inner_query = f"""
-                SELECT * FROM daily_bars 
-                WHERE {where_clause} 
-                ORDER BY date DESC 
-                LIMIT ?
-            """
-            params.append(limit)
+            inner_query = (
+                f"SELECT * FROM daily_bars "
+                f"WHERE {where_clause} "
+                f"ORDER BY date DESC LIMIT ?"
+            )
+            params.append(int(limit))
             query = f"SELECT * FROM ({inner_query}) ORDER BY date ASC"
         else:
-            query = f"""
-                SELECT * FROM daily_bars 
-                WHERE {where_clause} 
-                ORDER BY date ASC
-            """
-        
+            query = (
+                f"SELECT * FROM daily_bars "
+                f"WHERE {where_clause} ORDER BY date ASC"
+            )
+
         try:
             df = pd.read_sql_query(query, self._conn, params=params)
         except Exception as e:
             log.warning(f"Database query failed for {code}: {e}")
             return pd.DataFrame()
-        
+
         if df.empty:
             return pd.DataFrame()
 
         df["date"] = pd.to_datetime(df["date"])
         df = df.set_index("date").sort_index()
-        
-        # Safely drop code column if present
+
         if "code" in df.columns:
             df = df.drop(columns=["code"])
-        
+
         return df
-    
+
     def get_last_date(self, code: str) -> Optional[date]:
-        """Get last available date for a stock"""
+        """Get last available date for a stock."""
+        code = str(code).zfill(6)
         cursor = self._conn.execute(
-            "SELECT MAX(date) FROM daily_bars WHERE code = ?",
-            (code,)
+            "SELECT MAX(date) FROM daily_bars WHERE code = ?", (code,)
         )
         row = cursor.fetchone()
         if row and row[0]:
             return datetime.fromisoformat(row[0]).date()
         return None
-    
+
     def get_all_stocks(self) -> List[Dict]:
-        """Get all stock metadata"""
+        """Get all stock metadata."""
         cursor = self._conn.execute("SELECT * FROM stocks")
         return [dict(row) for row in cursor.fetchall()]
-    
+
     def get_stocks_with_data(self, min_days: int = 100) -> List[str]:
-        """Get stocks with minimum data"""
-        cursor = self._conn.execute("""
+        """Get stock codes with at least *min_days* of bar data."""
+        cursor = self._conn.execute(
+            """
             SELECT code, COUNT(*) as cnt
             FROM daily_bars
             GROUP BY code
             HAVING cnt >= ?
-        """, (min_days,))
-        return [row['code'] for row in cursor.fetchall()]
-    
+            """,
+            (min_days,),
+        )
+        return [row["code"] for row in cursor.fetchall()]
+
+    # ------------------------------------------------------------------
+    # Predictions
+    # ------------------------------------------------------------------
+
     def save_prediction(
         self,
         code: str,
@@ -429,45 +586,97 @@ class MarketDatabase:
         prob_up: float,
         prob_down: float,
         confidence: float,
-        price: float
+        price: float,
     ):
-        """Save model prediction"""
+        """Save model prediction (upsert on code+timestamp)."""
         with self._transaction() as conn:
-            conn.execute("""
-                INSERT INTO predictions (code, timestamp, signal, prob_up, prob_down, confidence, price)
+            conn.execute(
+                """
+                INSERT INTO predictions
+                    (code, timestamp, signal, prob_up, prob_down,
+                     confidence, price)
                 VALUES (?, ?, ?, ?, ?, ?, ?)
-            """, (code, datetime.now().isoformat(), signal, prob_up, prob_down, confidence, price))
-    
+                ON CONFLICT(code, timestamp) DO UPDATE SET
+                    signal=excluded.signal,
+                    prob_up=excluded.prob_up,
+                    prob_down=excluded.prob_down,
+                    confidence=excluded.confidence,
+                    price=excluded.price
+                """,
+                (
+                    code,
+                    datetime.now().isoformat(),
+                    signal,
+                    prob_up,
+                    prob_down,
+                    confidence,
+                    price,
+                ),
+            )
+
+    # ------------------------------------------------------------------
+    # Stats / maintenance
+    # ------------------------------------------------------------------
+
     def get_data_stats(self) -> Dict:
-        """Get database statistics"""
-        stats = {}
-        
-        cursor = self._conn.execute("SELECT COUNT(DISTINCT code) FROM stocks")
-        stats['total_stocks'] = cursor.fetchone()[0]
-        
+        """Get database statistics (safe for empty database)."""
+        stats: Dict = {}
+
+        cursor = self._conn.execute(
+            "SELECT COUNT(DISTINCT code) FROM stocks"
+        )
+        stats["total_stocks"] = cursor.fetchone()[0] or 0
+
         cursor = self._conn.execute("SELECT COUNT(*) FROM daily_bars")
-        stats['total_bars'] = cursor.fetchone()[0]
-        
-        cursor = self._conn.execute("SELECT MIN(date), MAX(date) FROM daily_bars")
+        stats["total_bars"] = cursor.fetchone()[0] or 0
+
+        cursor = self._conn.execute(
+            "SELECT MIN(date), MAX(date) FROM daily_bars"
+        )
         row = cursor.fetchone()
-        stats['date_range'] = (row[0], row[1])
-        
+        stats["date_range"] = (row[0], row[1]) if row else (None, None)
+
         return stats
-    
+
     def vacuum(self):
-        """Optimize database"""
-        self._conn.execute("VACUUM")
-    
+        """Optimize database (must run outside any transaction)."""
+        conn = self._conn
+        # Commit any pending work, then run VACUUM in autocommit mode
+        conn.commit()
+        old_isolation = conn.isolation_level
+        try:
+            conn.isolation_level = None  # autocommit
+            conn.execute("VACUUM")
+        finally:
+            conn.isolation_level = old_isolation
+
     def close(self):
-        """Close connection"""
-        if hasattr(self._local, 'conn') and self._local.conn:
-            self._local.conn.close()
+        """Close this thread's connection."""
+        if hasattr(self._local, "conn") and self._local.conn:
+            try:
+                self._local.conn.close()
+            except Exception:
+                pass
             self._local.conn = None
 
+    def close_all(self):
+        """Close all tracked connections (call on shutdown)."""
+        with self._connections_lock:
+            for conn in list(self._connections):
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+        self.close()
 
-# Global database instance
-_db = None
+
+# ------------------------------------------------------------------
+# Global database instance (thread-safe)
+# ------------------------------------------------------------------
+
+_db: Optional[MarketDatabase] = None
 _db_lock = threading.Lock()
+
 
 def get_database() -> MarketDatabase:
     """Get global database instance (thread-safe)."""

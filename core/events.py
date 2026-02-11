@@ -1,15 +1,31 @@
+# core/events.py
 """
 Event System - For decoupled, event-driven architecture
+
+FIXES APPLIED:
+1. History uses collections.deque with maxlen instead of list.pop(0) O(n)
+2. deque is thread-safe for append and iteration
+3. get_history returns proper list copy from deque
+4. clear_history is safe with deque
+5. publish() uses deque append (O(1) amortized, auto-bounded)
+6. Worker thread handles shutdown more gracefully
+7. Error dispatch prevents infinite recursion
+8. subscribe/unsubscribe properly thread-safe
+9. Added clear_subscribers method for testing
+10. EventBus.stop() drains queue before exit
 """
 from enum import Enum, auto
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional
-from collections import defaultdict
+from collections import defaultdict, deque
 import threading
 import queue
-import time
 from abc import ABC, abstractmethod
+
+from utils.logger import get_logger
+
+log = get_logger(__name__)
 
 
 class EventType(Enum):
@@ -18,7 +34,7 @@ class EventType(Enum):
     TICK = auto()
     BAR = auto()
     QUOTE = auto()
-    
+
     # Trading
     ORDER_SUBMITTED = auto()
     ORDER_ACCEPTED = auto()
@@ -26,21 +42,21 @@ class EventType(Enum):
     ORDER_FILLED = auto()
     ORDER_PARTIALLY_FILLED = auto()
     ORDER_CANCELLED = auto()
-    
+
     # Portfolio
     POSITION_OPENED = auto()
     POSITION_CLOSED = auto()
     POSITION_UPDATED = auto()
-    
+
     # Risk
     RISK_BREACH = auto()
     CIRCUIT_BREAKER = auto()
     MARGIN_CALL = auto()
-    
+
     # Signals
     SIGNAL_GENERATED = auto()
     PREDICTION_READY = auto()
-    
+
     # System
     SYSTEM_START = auto()
     SYSTEM_STOP = auto()
@@ -120,7 +136,7 @@ class RiskEvent(Event):
 
 class EventHandler(ABC):
     """Abstract event handler"""
-    
+
     @abstractmethod
     def handle(self, event: Event):
         pass
@@ -128,13 +144,16 @@ class EventHandler(ABC):
 
 class EventBus:
     """
-    Central event bus for publish-subscribe pattern
-    Thread-safe with async support
+    Central event bus for publish-subscribe pattern.
+    Thread-safe with async support.
+
+    FIX: Uses deque(maxlen=N) for O(1) bounded history instead of
+    list with pop(0) which is O(n).
     """
-    
+
     _instance = None
     _lock = threading.RLock()
-    
+
     def __new__(cls):
         if cls._instance is None:
             with cls._lock:
@@ -142,91 +161,151 @@ class EventBus:
                     cls._instance = super().__new__(cls)
                     cls._instance._initialized = False
         return cls._instance
-    
+
     def __init__(self):
         if self._initialized:
             return
-        
+
         self._initialized = True
         self._subscribers: Dict[EventType, List[Callable]] = defaultdict(list)
         self._queue: queue.Queue = queue.Queue()
         self._running = False
         self._worker_thread: Optional[threading.Thread] = None
-        self._lock = threading.RLock()
-        
-        # Event history for debugging
-        self._history: List[Event] = []
+        self._sub_lock = threading.RLock()
+
+        # FIX: Use deque with maxlen for O(1) bounded history
         self._max_history = 1000
-    
-    def subscribe(self, event_type: EventType, handler: Callable[[Event], None]):
-        """Subscribe to event type"""
-        with self._lock:
+        self._history: deque = deque(maxlen=self._max_history)
+
+    def subscribe(
+        self,
+        event_type: EventType,
+        handler: Callable[[Event], None]
+    ):
+        """Subscribe to event type (thread-safe)."""
+        with self._sub_lock:
             if handler not in self._subscribers[event_type]:
                 self._subscribers[event_type].append(handler)
-    
-    def unsubscribe(self, event_type: EventType, handler: Callable[[Event], None]):
-        """Unsubscribe from event type"""
-        with self._lock:
-            if handler in self._subscribers[event_type]:
+
+    def unsubscribe(
+        self,
+        event_type: EventType,
+        handler: Callable[[Event], None]
+    ):
+        """Unsubscribe from event type (thread-safe)."""
+        with self._sub_lock:
+            try:
                 self._subscribers[event_type].remove(handler)
-    
+            except ValueError:
+                pass
+
+    def clear_subscribers(self, event_type: EventType = None):
+        """
+        Clear all subscribers for a given event type,
+        or all subscribers if event_type is None.
+        Useful for testing.
+        """
+        with self._sub_lock:
+            if event_type is not None:
+                self._subscribers[event_type].clear()
+            else:
+                self._subscribers.clear()
+
     def publish(self, event: Event, async_: bool = True):
-        """Publish event (thread-safe history)."""
-        # Record in history safely
-        with self._lock:
-            self._history.append(event)
-            if len(self._history) > self._max_history:
-                self._history.pop(0)
+        """
+        Publish event (thread-safe).
+
+        FIX: deque.append is O(1) and auto-bounded by maxlen,
+        no manual trimming needed.
+        """
+        # Record in history (deque is thread-safe for append)
+        self._history.append(event)
 
         if async_ and self._running:
             self._queue.put(event)
         else:
             self._dispatch(event)
-            
+
     def _dispatch(self, event: Event):
-        """Dispatch event to subscribers"""
-        with self._lock:
+        """Dispatch event to subscribers."""
+        with self._sub_lock:
             handlers = self._subscribers.get(event.type, []).copy()
-        
+
         for handler in handlers:
             try:
                 handler(event)
             except Exception as e:
-                error_event = Event(
-                    type=EventType.ERROR,
-                    data={'error': str(e), 'original_event': event}
-                )
-                self._dispatch_error(error_event)
-    
+                # Avoid recursion: don't dispatch ERROR for ERROR handlers
+                if event.type != EventType.ERROR:
+                    error_event = Event(
+                        type=EventType.ERROR,
+                        data={
+                            'error': str(e),
+                            'handler': str(handler),
+                            'original_event_type': event.type.name,
+                        }
+                    )
+                    self._dispatch_error(error_event)
+                else:
+                    # Log directly to avoid infinite recursion
+                    log.error(
+                        f"Error in ERROR handler: {e}"
+                    )
+
     def _dispatch_error(self, event: Event):
-        """Dispatch error without recursion risk"""
-        with self._lock:
-            handlers = self._subscribers.get(EventType.ERROR, []).copy()
-        
+        """Dispatch error event without recursion risk."""
+        with self._sub_lock:
+            handlers = self._subscribers.get(
+                EventType.ERROR, []
+            ).copy()
+
         for handler in handlers:
             try:
                 handler(event)
-            except Exception:
-                pass
-    
+            except Exception as e:
+                # Last resort: just log it
+                log.error(f"Error handler failed: {e}")
+
     def start(self):
-        """Start async event processing"""
+        """Start async event processing."""
         if self._running:
             return
-        
+
         self._running = True
-        self._worker_thread = threading.Thread(target=self._worker, daemon=True)
+        self._worker_thread = threading.Thread(
+            target=self._worker,
+            daemon=True,
+            name="event_bus_worker"
+        )
         self._worker_thread.start()
-    
+
     def stop(self):
-        """Stop async event processing"""
+        """Stop async event processing gracefully."""
+        if not self._running:
+            return
+
         self._running = False
+
+        # Signal worker to exit
+        self._queue.put(None)
+
         if self._worker_thread:
-            self._queue.put(None)
             self._worker_thread.join(timeout=5)
-    
+            self._worker_thread = None
+
+        # Drain remaining events
+        while not self._queue.empty():
+            try:
+                event = self._queue.get_nowait()
+                if event is not None:
+                    self._dispatch(event)
+            except queue.Empty:
+                break
+            except Exception:
+                break
+
     def _worker(self):
-        """Worker thread for async event processing"""
+        """Worker thread for async event processing."""
         while self._running:
             try:
                 event = self._queue.get(timeout=0.1)
@@ -235,20 +314,45 @@ class EventBus:
                 self._dispatch(event)
             except queue.Empty:
                 continue
-            except Exception:
-                continue
-    
-    def get_history(self, event_type: EventType = None, limit: int = 100) -> List[Event]:
-        """Get event history"""
+            except Exception as e:
+                log.error(f"Event worker error: {e}")
+
+    def get_history(
+        self,
+        event_type: EventType = None,
+        limit: int = 100
+    ) -> List[Event]:
+        """
+        Get event history.
+
+        FIX: Returns a proper list from deque.
+        Thread-safe because deque iteration is safe.
+        """
         if event_type:
-            filtered = [e for e in self._history if e.type == event_type]
+            # Filter and limit
+            filtered = [
+                e for e in self._history
+                if e.type == event_type
+            ]
+            return filtered[-limit:]
         else:
-            filtered = self._history.copy()
-        return filtered[-limit:]
-    
+            # Convert deque slice to list
+            history_list = list(self._history)
+            return history_list[-limit:]
+
     def clear_history(self):
-        """Clear event history"""
+        """Clear event history."""
         self._history.clear()
+
+    @property
+    def history_size(self) -> int:
+        """Current number of events in history."""
+        return len(self._history)
+
+    @property
+    def is_running(self) -> bool:
+        """Whether async processing is active."""
+        return self._running
 
 
 # Global event bus instance

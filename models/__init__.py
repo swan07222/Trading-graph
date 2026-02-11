@@ -18,7 +18,6 @@ from .networks import (
 )
 from .ensemble import EnsembleModel, EnsemblePrediction
 from .trainer import Trainer
-import threading
 
 
 # Optional imports
@@ -35,7 +34,7 @@ except ImportError:
 
 __all__ = [
     'MultiHeadAttention',
-    'PositionalEncoding', 
+    'PositionalEncoding',
     'LSTMBlock',
     'TransformerBlock',
     'TemporalConvBlock',

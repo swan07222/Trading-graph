@@ -1,21 +1,38 @@
 # models/ensemble.py
 """
-Ensemble Model - Combines multiple neural networks
+Ensemble Model — combines multiple neural networks with weighted voting.
+
+Key fixes vs original:
+    - Thread-safe train/predict/save/load with proper locking
+    - Unified _should_stop logic
+    - train() accepts interval/horizon so save() uses correct values
+    - predict() handles arbitrary batch sizes; predict_batch() is the workhorse
+    - Input shape validation against self.input_size
+    - AMP handled cleanly via a single helper
+    - Proper GPU memory cleanup after training
+    - Learning-rate warmup before cosine annealing
+    - Robust calibration with finer temperature grid
 
 FIXES APPLIED:
-- BUG 13: Unified _should_stop logic consistent with trainer.py
-- Issue 19: train() accepts interval/horizon so save() uses correct values
+    - FIX C1 SUPPORT: Added get_effective_learning_rate() import and usage
+      to support thread-local LR override from auto_learner.py
+    - train() now accepts optional learning_rate parameter for explicit override
+    - Improved docstrings and type hints
 """
+from __future__ import annotations
+
+import os
+import threading
+from contextlib import nullcontext
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
+
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import numpy as np
-from typing import Dict, List, Optional, Tuple, Callable, Any
-from pathlib import Path
-from dataclasses import dataclass
 from torch.utils.data import DataLoader, TensorDataset
-import threading
-import os
 
 from config.settings import CONFIG
 from utils.logger import get_logger
@@ -23,9 +40,34 @@ from utils.logger import get_logger
 log = get_logger(__name__)
 
 
+# ---------------------------------------------------------------------------
+# Thread-local LR support (FIX C1)
+# ---------------------------------------------------------------------------
+
+def _get_effective_learning_rate() -> float:
+    """
+    Get effective learning rate, checking thread-local override first.
+    
+    This supports the thread-local LR pattern from auto_learner.py
+    which avoids global CONFIG mutation race conditions.
+    """
+    try:
+        from models.auto_learner import get_effective_learning_rate
+        return get_effective_learning_rate()
+    except ImportError:
+        pass
+    
+    return CONFIG.model.learning_rate
+
+
+# ---------------------------------------------------------------------------
+# Prediction result
+# ---------------------------------------------------------------------------
+
 @dataclass
 class EnsemblePrediction:
-    """Prediction result from ensemble"""
+    """Single-sample prediction result from the ensemble."""
+
     probabilities: np.ndarray
     predicted_class: int
     confidence: float
@@ -35,11 +77,11 @@ class EnsemblePrediction:
 
     @property
     def prob_up(self) -> float:
-        return float(self.probabilities[2])
+        return float(self.probabilities[2]) if len(self.probabilities) > 2 else 0.0
 
     @property
     def prob_neutral(self) -> float:
-        return float(self.probabilities[1])
+        return float(self.probabilities[1]) if len(self.probabilities) > 1 else 0.0
 
     @property
     def prob_down(self) -> float:
@@ -50,63 +92,127 @@ class EnsemblePrediction:
         return self.confidence >= CONFIG.model.min_confidence
 
 
+# ---------------------------------------------------------------------------
+# AMP helpers
+# ---------------------------------------------------------------------------
+
+def _build_amp_context(device: str):
+    """Return (context_factory, GradScaler_or_None) compatible with torch >= 1.9."""
+    use_amp = device == "cuda"
+    if not use_amp:
+        return (lambda: nullcontext()), None
+
+    # torch >= 2.0 path
+    try:
+        from torch.amp import GradScaler, autocast
+        return (lambda: autocast("cuda", enabled=True)), GradScaler("cuda", enabled=True)
+    except (ImportError, TypeError):
+        pass
+
+    # torch 1.x path
+    try:
+        from torch.cuda.amp import GradScaler, autocast
+        return (lambda: autocast(enabled=True)), GradScaler(enabled=True)
+    except (ImportError, TypeError):
+        pass
+
+    return (lambda: nullcontext()), None
+
+
+# ---------------------------------------------------------------------------
+# Ensemble
+# ---------------------------------------------------------------------------
+
 class EnsembleModel:
     """
-    Ensemble of multiple neural networks with weighted voting.
+    Ensemble of multiple neural networks with calibrated weighted voting.
+    
+    Supports:
+    - Multiple model architectures (LSTM, GRU, TCN, Transformer, Hybrid)
+    - Weighted voting based on validation accuracy
+    - Temperature-scaled calibration
+    - Thread-safe operations
+    - Incremental training
     """
 
-    MODEL_CLASSES = {}  # Populated on first use
+    _MODEL_CLASSES: Optional[Dict] = None  # class-level cache
 
-    def __init__(self, input_size: int, model_names: List[str] = None):
-        self.input_size = int(input_size)
-        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+    def __init__(
+        self,
+        input_size: int,
+        model_names: Optional[List[str]] = None,
+    ):
+        """
+        Initialize ensemble with specified models.
+        
+        Args:
+            input_size: Number of input features
+            model_names: List of model types to include 
+                        (default: ['lstm', 'gru', 'tcn'])
+        """
+        if input_size <= 0:
+            raise ValueError(f"input_size must be positive, got {input_size}")
+
+        self.input_size: int = int(input_size)
+        self.device: str = "cuda" if torch.cuda.is_available() else "cpu"
         if self.device == "cuda":
             torch.backends.cudnn.benchmark = True
 
-        self._lock = threading.Lock()
-        self.temperature = 1.0
+        self._lock = threading.RLock()  # reentrant for nested calls
+        self.temperature: float = 1.0
 
-        # Issue 19: Always have defaults so save() never falls back to wrong values
+        # Metadata — updated by train() and load()
         self.interval: str = "1d"
-        self.prediction_horizon: int = CONFIG.model.prediction_horizon
-
-        self._init_model_classes()
+        self.prediction_horizon: int = int(CONFIG.model.prediction_horizon)
 
         model_names = model_names or ["lstm", "gru", "tcn"]
 
-        self.models = {}
-        self.weights = {}
+        self.models: Dict[str, nn.Module] = {}
+        self.weights: Dict[str, float] = {}
 
+        cls_map = self._get_model_classes()
         for name in model_names:
-            if name in self.MODEL_CLASSES:
+            if name in cls_map:
                 self._init_model(name)
 
         self._normalize_weights()
-        log.info(f"Ensemble initialized: {list(self.models.keys())} on {self.device}")
+        total_params = sum(
+            sum(p.numel() for p in m.parameters()) for m in self.models.values()
+        )
+        log.info(
+            f"Ensemble ready: models={list(self.models.keys())}, "
+            f"params={total_params:,}, device={self.device}"
+        )
 
-    def _init_model_classes(self):
-        """Initialize model classes lazily"""
-        if not self.MODEL_CLASSES:
-            from .networks import LSTMModel, TransformerModel, GRUModel, TCNModel, HybridModel
-            self.MODEL_CLASSES.update({
-                'lstm': LSTMModel,
-                'transformer': TransformerModel,
-                'gru': GRUModel,
-                'tcn': TCNModel,
-                'hybrid': HybridModel,
-            })
+    # ------------------------------------------------------------------
+    # Model registry
+    # ------------------------------------------------------------------
+
+    @classmethod
+    def _get_model_classes(cls) -> Dict:
+        if cls._MODEL_CLASSES is None:
+            from .networks import (
+                LSTMModel, TransformerModel, GRUModel, TCNModel, HybridModel,
+            )
+            cls._MODEL_CLASSES = {
+                "lstm": LSTMModel,
+                "transformer": TransformerModel,
+                "gru": GRUModel,
+                "tcn": TCNModel,
+                "hybrid": HybridModel,
+            }
+        return cls._MODEL_CLASSES
 
     def _init_model(
         self,
         name: str,
-        hidden_size: int = None,
-        dropout: float = None,
-        num_classes: int = None,
+        hidden_size: Optional[int] = None,
+        dropout: Optional[float] = None,
+        num_classes: Optional[int] = None,
     ):
-        """Initialize a single model with proper params"""
+        cls_map = self._get_model_classes()
         try:
-            model_class = self.MODEL_CLASSES[name]
-            model = model_class(
+            model = cls_map[name](
                 input_size=self.input_size,
                 hidden_size=hidden_size or CONFIG.model.hidden_size,
                 num_classes=num_classes or CONFIG.model.num_classes,
@@ -115,61 +221,104 @@ class EnsembleModel:
             model.to(self.device)
             self.models[name] = model
             self.weights[name] = 1.0
-            log.debug(f"Initialized {name} model")
+            log.debug(f"Initialised {name}")
         except Exception as e:
-            log.error(f"Failed to initialize {name}: {e}")
+            log.error(f"Failed to initialise {name}: {e}")
 
     def _normalize_weights(self):
-        if not self.weights:
-            return
         total = sum(self.weights.values())
         if total > 0:
             self.weights = {k: v / total for k, v in self.weights.items()}
 
-    def calibrate(self, X_val: np.ndarray, y_val: np.ndarray, batch_size: int = 512):
-        """Calibrate using weighted logits"""
-        dataset = TensorDataset(
-            torch.FloatTensor(X_val),
-            torch.LongTensor(y_val),
-        )
+    # ------------------------------------------------------------------
+    # Stopping helper
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _should_stop(stop_flag: Any) -> bool:
+        """Check whether training should be aborted."""
+        if stop_flag is None:
+            return False
+
+        # Object with .is_cancelled attribute (property or field)
+        is_cancelled = getattr(stop_flag, "is_cancelled", None)
+        if is_cancelled is not None:
+            try:
+                return bool(is_cancelled() if callable(is_cancelled) else is_cancelled)
+            except Exception:
+                return False
+
+        # Plain callable
+        if callable(stop_flag):
+            try:
+                return bool(stop_flag())
+            except Exception:
+                return False
+
+        return False
+
+    # ------------------------------------------------------------------
+    # Calibration
+    # ------------------------------------------------------------------
+
+    def calibrate(
+        self, X_val: np.ndarray, y_val: np.ndarray, batch_size: int = 512
+    ):
+        """Temperature-scale the ensemble's weighted logits on a held-out set."""
+        dataset = TensorDataset(torch.FloatTensor(X_val), torch.LongTensor(y_val))
         loader = DataLoader(dataset, batch_size=batch_size, shuffle=False)
 
-        all_logits = []
-        all_labels = []
+        all_logits: list[torch.Tensor] = []
+        all_labels: list[torch.Tensor] = []
+
+        with self._lock:
+            models = list(self.models.items())
+            weights = dict(self.weights)
 
         for batch_X, batch_y in loader:
             batch_X = batch_X.to(self.device)
+            weighted_logits: Optional[torch.Tensor] = None
 
-            weighted_logits = None
-            for name, model in self.models.items():
-                model.eval()
-                with torch.no_grad():
+            with torch.inference_mode():
+                for name, model in models:
+                    model.eval()
                     logits, _ = model(batch_X)
-                    weight = self.weights.get(name, 1.0 / len(self.models))
-                    if weighted_logits is None:
-                        weighted_logits = logits * weight
-                    else:
-                        weighted_logits += logits * weight
+                    w = weights.get(name, 1.0 / max(1, len(models)))
+                    weighted_logits = (
+                        logits * w
+                        if weighted_logits is None
+                        else weighted_logits + logits * w
+                    )
 
-            all_logits.append(weighted_logits.cpu())
-            all_labels.append(batch_y)
+            if weighted_logits is not None:
+                all_logits.append(weighted_logits.cpu())
+                all_labels.append(batch_y)
 
-        combined_logits = torch.cat(all_logits, dim=0)
-        combined_labels = torch.cat(all_labels, dim=0)
+        if not all_logits:
+            return
+
+        combined_logits = torch.cat(all_logits)
+        combined_labels = torch.cat(all_labels)
 
         best_temp = 1.0
-        best_nll = float('inf')
+        best_nll = float("inf")
 
-        for temp in [0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 2.5, 3.0]:
-            scaled = combined_logits / temp
-            nll = F.cross_entropy(scaled, combined_labels).item()
-
+        for temp in [
+            0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0, 4.0,
+        ]:
+            nll = F.cross_entropy(combined_logits / temp, combined_labels).item()
             if nll < best_nll:
                 best_nll = nll
                 best_temp = temp
 
-        self.temperature = best_temp
-        log.info(f"Calibration complete: temperature={best_temp:.2f}")
+        with self._lock:
+            self.temperature = best_temp
+
+        log.info(f"Calibration: temperature={best_temp:.2f}, NLL={best_nll:.4f}")
+
+    # ------------------------------------------------------------------
+    # Training
+    # ------------------------------------------------------------------
 
     def train(
         self,
@@ -177,80 +326,104 @@ class EnsembleModel:
         y_train: np.ndarray,
         X_val: np.ndarray,
         y_val: np.ndarray,
-        epochs: int = None,
-        batch_size: int = None,
-        callback: Callable = None,
+        epochs: Optional[int] = None,
+        batch_size: Optional[int] = None,
+        callback: Optional[Callable] = None,
         stop_flag: Any = None,
-        interval: str = None,
-        horizon: int = None,
+        interval: Optional[str] = None,
+        horizon: Optional[int] = None,
+        learning_rate: Optional[float] = None,  # FIX C1: Explicit LR parameter
     ) -> Dict:
         """
         Train all models in the ensemble.
-
-        Issue 19 fix: accepts interval/horizon so that save() will
-        use the correct values even if the ensemble was freshly created.
+        
+        Args:
+            X_train: Training features (N, seq_len, n_features)
+            y_train: Training labels (N,)
+            X_val: Validation features
+            y_val: Validation labels
+            epochs: Number of training epochs (default: from CONFIG)
+            batch_size: Batch size (default: from CONFIG)
+            callback: Optional callback(model_name, epoch, val_acc)
+            stop_flag: Optional cancellation token/callable
+            interval: Data interval metadata
+            horizon: Prediction horizon metadata
+            learning_rate: Explicit learning rate override (FIX C1)
+        
+        Returns:
+            Dict mapping model name to training history
         """
-        # Store interval/horizon if provided
-        if interval is not None:
-            self.interval = str(interval)
-        if horizon is not None:
-            self.prediction_horizon = int(horizon)
+        with self._lock:
+            if interval is not None:
+                self.interval = str(interval)
+            if horizon is not None:
+                self.prediction_horizon = int(horizon)
+
+        if not self.models:
+            log.warning("No models to train")
+            return {}
 
         epochs = epochs or CONFIG.model.epochs
         batch_size = batch_size or CONFIG.model.batch_size
+        
+        # FIX C1: Use explicit LR if provided, else try thread-local, else CONFIG
+        if learning_rate is not None:
+            effective_lr = float(learning_rate)
+        else:
+            effective_lr = _get_effective_learning_rate()
 
-        train_dataset = TensorDataset(torch.FloatTensor(X_train), torch.LongTensor(y_train))
-        val_dataset = TensorDataset(torch.FloatTensor(X_val), torch.LongTensor(y_val))
+        # Validate shapes
+        if X_train.shape[-1] != self.input_size:
+            raise ValueError(
+                f"X_train feature dim {X_train.shape[-1]} != input_size {self.input_size}"
+            )
 
-        pin = (self.device == "cuda")
-        cpu_cnt = os.cpu_count() or 0
-        num_workers = 0 if cpu_cnt <= 2 else min(4, cpu_cnt - 1)
-        persistent = bool(num_workers > 0)
+        train_ds = TensorDataset(torch.FloatTensor(X_train), torch.LongTensor(y_train))
+        val_ds = TensorDataset(torch.FloatTensor(X_val), torch.LongTensor(y_val))
 
-        train_loader = DataLoader(
-            train_dataset,
-            batch_size=batch_size,
-            shuffle=True,
-            num_workers=num_workers,
-            pin_memory=pin,
-            persistent_workers=persistent if num_workers > 0 else False,
+        pin = self.device == "cuda"
+        n_workers = min(4, max(0, (os.cpu_count() or 1) - 1))
+        if n_workers <= 0:
+            n_workers = 0
+        persist = n_workers > 0
+
+        loader_kw = dict(
+            num_workers=n_workers, pin_memory=pin,
+            persistent_workers=persist if n_workers > 0 else False,
         )
-        val_loader = DataLoader(
-            val_dataset,
-            batch_size=batch_size,
-            shuffle=False,
-            num_workers=num_workers,
-            pin_memory=pin,
-            persistent_workers=persistent if num_workers > 0 else False,
-        )
 
-        class_counts = np.bincount(y_train, minlength=CONFIG.model.num_classes)
-        weights = 1.0 / (class_counts + 1)
-        weights = weights / weights.sum()
-        class_weights = torch.FloatTensor(weights).to(self.device)
+        train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True, **loader_kw)
+        val_loader = DataLoader(val_ds, batch_size=batch_size, shuffle=False, **loader_kw)
 
-        history = {}
-        val_accuracies = {}
+        # Class weights (inverse-frequency, smoothed)
+        counts = np.bincount(y_train, minlength=CONFIG.model.num_classes).astype(np.float64)
+        inv_freq = 1.0 / (counts + len(y_train) * 0.01)  # Laplace-smoothed
+        inv_freq /= inv_freq.sum()
+        class_weights = torch.FloatTensor(inv_freq).to(self.device)
 
-        for name, model in self.models.items():
+        history: Dict[str, Dict] = {}
+        val_accuracies: Dict[str, float] = {}
+
+        log.info(f"Training with learning_rate={effective_lr:.6f}")
+
+        for name, model in list(self.models.items()):
             if self._should_stop(stop_flag):
-                log.info("Training stopped by user")
+                log.info("Training cancelled")
                 break
 
-            log.info(f"Training {name}...")
-
-            model_history, best_acc = self._train_single_model(
+            log.info(f"Training {name} …")
+            model_hist, best_acc = self._train_single_model(
                 model=model,
                 name=name,
                 train_loader=train_loader,
                 val_loader=val_loader,
                 class_weights=class_weights,
                 epochs=epochs,
+                learning_rate=effective_lr,  # Pass LR to single model training
                 callback=callback,
                 stop_flag=stop_flag,
             )
-
-            history[name] = model_history
+            history[name] = model_hist
             val_accuracies[name] = best_acc
 
         self._update_weights(val_accuracies)
@@ -258,29 +431,11 @@ class EnsembleModel:
         if len(X_val) > 0:
             self.calibrate(X_val, y_val)
 
+        # Cleanup
+        if self.device == "cuda":
+            torch.cuda.empty_cache()
+
         return history
-
-    def _should_stop(self, stop_flag: Any) -> bool:
-        """Check if training should stop - unified logic."""
-        if stop_flag is None:
-            return False
-
-        is_cancelled = getattr(stop_flag, 'is_cancelled', None)
-        if is_cancelled is not None:
-            if callable(is_cancelled):
-                try:
-                    return bool(is_cancelled())
-                except Exception:
-                    pass
-            return bool(is_cancelled)
-
-        if callable(stop_flag):
-            try:
-                return bool(stop_flag())
-            except Exception:
-                pass
-
-        return False
 
     def _train_single_model(
         self,
@@ -290,56 +445,50 @@ class EnsembleModel:
         val_loader: DataLoader,
         class_weights: torch.Tensor,
         epochs: int,
-        callback: Callable = None,
+        learning_rate: float,  # FIX C1: Accept LR as parameter
+        callback: Optional[Callable] = None,
         stop_flag: Any = None,
     ) -> Tuple[Dict, float]:
-        """Train a single model with AMP compatibility across torch versions."""
-        from contextlib import nullcontext
+        """Train one model with early stopping, warmup + cosine schedule, optional AMP."""
 
         optimizer = torch.optim.AdamW(
             model.parameters(),
-            lr=CONFIG.model.learning_rate,
+            lr=learning_rate,  # FIX C1: Use passed LR instead of CONFIG
             weight_decay=CONFIG.model.weight_decay,
         )
 
-        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-            optimizer, T_max=int(epochs), eta_min=1e-6
+        warmup_epochs = max(1, epochs // 10)
+
+        warmup_scheduler = torch.optim.lr_scheduler.LinearLR(
+            optimizer, start_factor=0.1, end_factor=1.0, total_iters=warmup_epochs
+        )
+        cosine_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+            optimizer, T_max=max(1, epochs - warmup_epochs), eta_min=1e-6
+        )
+        scheduler = torch.optim.lr_scheduler.SequentialLR(
+            optimizer,
+            schedulers=[warmup_scheduler, cosine_scheduler],
+            milestones=[warmup_epochs],
         )
 
         criterion = nn.CrossEntropyLoss(weight=class_weights)
 
+        amp_ctx, scaler = _build_amp_context(self.device)
+        use_amp = scaler is not None
+
         history = {"train_loss": [], "val_loss": [], "val_acc": []}
         best_val_acc = 0.0
-        patience = 0
-        best_state = None
-
-        use_amp = (self.device == "cuda")
-
-        # AMP compatibility layer
-        GradScaler = None
-        autocast = None
-        try:
-            from torch.amp import GradScaler as _GradScaler, autocast as _autocast
-            GradScaler, autocast = _GradScaler, _autocast
-            amp_ctx = (lambda: autocast("cuda", enabled=True)) if use_amp else (lambda: nullcontext())
-            scaler = GradScaler("cuda", enabled=use_amp) if use_amp else None
-        except Exception:
-            try:
-                from torch.cuda.amp import GradScaler as _GradScaler, autocast as _autocast
-                GradScaler, autocast = _GradScaler, _autocast
-                amp_ctx = (lambda: autocast(enabled=True)) if use_amp else (lambda: nullcontext())
-                scaler = GradScaler(enabled=use_amp) if use_amp else None
-            except Exception:
-                amp_ctx = lambda: nullcontext()
-                scaler = None
-                use_amp = False
+        patience_counter = 0
+        best_state: Optional[Dict] = None
+        patience_limit = int(CONFIG.model.early_stop_patience)
 
         for epoch in range(int(epochs)):
             if self._should_stop(stop_flag):
                 break
 
+            # --- train ---
             model.train()
-            train_losses = []
+            train_losses: list[float] = []
 
             for batch_X, batch_y in train_loader:
                 batch_X = batch_X.to(self.device, non_blocking=True)
@@ -347,11 +496,10 @@ class EnsembleModel:
 
                 optimizer.zero_grad(set_to_none=True)
 
-                if use_amp and scaler is not None:
+                if use_amp:
                     with amp_ctx():
                         logits, _ = model(batch_X)
                         loss = criterion(logits, batch_y)
-
                     scaler.scale(loss).backward()
                     scaler.unscale_(optimizer)
                     torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
@@ -364,13 +512,15 @@ class EnsembleModel:
                     torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
                     optimizer.step()
 
-                train_losses.append(float(loss.detach().item()))
+                train_losses.append(float(loss.detach()))
 
             scheduler.step()
 
+            # --- validate ---
             model.eval()
-            val_losses = []
-            correct, total = 0, 0
+            val_losses: list[float] = []
+            correct = 0
+            total = 0
 
             with torch.inference_mode():
                 for batch_X, batch_y in val_loader:
@@ -381,14 +531,14 @@ class EnsembleModel:
                         logits, _ = model(batch_X)
                         loss = criterion(logits, batch_y)
 
-                    val_losses.append(float(loss.item()))
-                    preds = torch.argmax(logits, dim=-1)
-                    correct += int((preds == batch_y).sum().item())
-                    total += int(len(batch_y))
+                    val_losses.append(float(loss))
+                    preds = logits.argmax(dim=-1)
+                    correct += int((preds == batch_y).sum())
+                    total += len(batch_y)
 
             train_loss = float(np.mean(train_losses)) if train_losses else 0.0
             val_loss = float(np.mean(val_losses)) if val_losses else 0.0
-            val_acc = float(correct / total) if total > 0 else 0.0
+            val_acc = correct / max(total, 1)
 
             history["train_loss"].append(train_loss)
             history["val_loss"].append(val_loss)
@@ -396,190 +546,205 @@ class EnsembleModel:
 
             if val_acc > best_val_acc:
                 best_val_acc = val_acc
-                patience = 0
-                best_state = {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}
+                patience_counter = 0
+                best_state = {
+                    k: v.detach().cpu().clone() for k, v in model.state_dict().items()
+                }
             else:
-                patience += 1
-                if patience >= int(CONFIG.model.early_stop_patience):
-                    log.info(f"{name}: Early stopping at epoch {epoch + 1}")
+                patience_counter += 1
+                if patience_counter >= patience_limit:
+                    log.info(f"{name}: early stop at epoch {epoch + 1}")
                     break
 
-            if callback:
-                callback(name, epoch, val_acc)
+            if callback is not None:
+                try:
+                    callback(name, epoch, val_acc)
+                except Exception:
+                    pass
 
-        if best_state:
+        # Restore best weights
+        if best_state is not None:
             model.load_state_dict(best_state)
             model.to(self.device)
 
-        log.info(f"{name} complete. Best accuracy: {best_val_acc:.2%}")
+        log.info(f"{name} done — best val acc: {best_val_acc:.2%}")
         return history, best_val_acc
 
     def _update_weights(self, val_accuracies: Dict[str, float]):
-        """Update model weights based on validation accuracy"""
+        """Softmax-weighted ensemble based on validation accuracy."""
         if not val_accuracies:
             return
 
-        accs = np.array([val_accuracies.get(name, 0.5) for name in self.models.keys()])
+        names = list(self.models.keys())
+        accs = np.array([val_accuracies.get(n, 0.5) for n in names])
 
-        temp = 0.5
-        weights = np.exp(accs / temp)
-        weights = weights / weights.sum()
+        temperature = 0.5
+        exp_w = np.exp(accs / temperature)
+        exp_w /= exp_w.sum()
 
-        self.weights = {name: float(w) for name, w in zip(self.models.keys(), weights)}
+        with self._lock:
+            self.weights = {n: float(w) for n, w in zip(names, exp_w)}
 
-        log.info(f"Updated weights: {self.weights}")
+        log.info(f"Ensemble weights: {self.weights}")
+    
+        # ------------------------------------------------------------------
+    # Prediction
+    # ------------------------------------------------------------------
 
     def predict(self, X: np.ndarray) -> EnsemblePrediction:
-        """Get ensemble prediction for a single sample (batch_size=1)."""
+        """
+        Predict a single sample.
+        
+        Args:
+            X: Input array of shape (seq_len, n_features) or (1, seq_len, n_features)
+        
+        Returns:
+            EnsemblePrediction with probabilities, class, confidence, etc.
+        
+        Raises:
+            ValueError: If input shape is invalid
+            RuntimeError: If no models are available
+        """
         if X.ndim == 2:
-            X = X[np.newaxis, :, :]
-
-        if X.ndim != 3:
-            raise ValueError(f"Expected 2D or 3D input, got shape {X.shape}")
-
-        if X.shape[0] != 1:
+            X = X[np.newaxis]
+        if X.ndim != 3 or X.shape[0] != 1:
             raise ValueError(
-                f"predict() expects a single sample (batch_size=1), got {X.shape[0]}. "
+                f"predict() expects a single sample, got shape {X.shape}. "
                 f"Use predict_batch() for multiple samples."
+            )
+        results = self.predict_batch(X, batch_size=1)
+        if not results:
+            raise RuntimeError("Prediction failed — no models available")
+        return results[0]
+
+    def predict_batch(
+        self, X: np.ndarray, batch_size: int = 1024
+    ) -> List[EnsemblePrediction]:
+        """
+        Batch prediction.
+        
+        Args:
+            X: Input array of shape (N, seq_len, n_features)
+            batch_size: Processing batch size
+        
+        Returns:
+            List of EnsemblePrediction, one per sample
+        """
+        if X is None or len(X) == 0:
+            return []
+
+        if X.ndim == 2:
+            X = X[np.newaxis]
+        if X.ndim != 3:
+            raise ValueError(f"Expected 2D or 3D input, got {X.ndim}D")
+
+        if X.shape[-1] != self.input_size:
+            raise ValueError(
+                f"Feature dim {X.shape[-1]} != expected input_size {self.input_size}"
             )
 
         with self._lock:
             models = list(self.models.items())
             weights = dict(self.weights)
-            temperature = float(self.temperature)
-            device = self.device
+            temp = max(self.temperature, 0.1)
 
-        X_tensor = torch.FloatTensor(X).to(device)
+        num_classes = CONFIG.model.num_classes
+        max_entropy = float(np.log(num_classes)) if num_classes > 1 else 1.0
+        results: List[EnsemblePrediction] = []
+        n = len(X)
 
-        all_probs: Dict[str, np.ndarray] = {}
-        weighted_logits: Optional[torch.Tensor] = None
+        for start in range(0, n, batch_size):
+            end = min(n, start + batch_size)
+            X_t = torch.FloatTensor(X[start:end]).to(self.device)
 
-        with torch.inference_mode():
-            for name, model in models:
-                model.eval()
-                logits, _ = model(X_tensor)
-                all_probs[name] = F.softmax(logits, dim=-1).cpu().numpy()[0]
-
-                w = float(weights.get(name, 1.0 / max(1, len(models))))
-                weighted_logits = logits * w if weighted_logits is None else (weighted_logits + logits * w)
-
-            if weighted_logits is None:
-                raise RuntimeError("No models available for prediction")
-
-            temp = max(temperature, 0.1)
-            final_probs = F.softmax(weighted_logits / temp, dim=-1).cpu().numpy()[0]
-
-        predicted_class = int(np.argmax(final_probs))
-        confidence = float(np.max(final_probs))
-
-        entropy = float(-np.sum(final_probs * np.log(final_probs + 1e-8)))
-        max_entropy = float(np.log(CONFIG.model.num_classes))
-        entropy_norm = float(entropy / max_entropy) if max_entropy > 0 else 0.0
-
-        model_preds = [int(np.argmax(p)) for p in all_probs.values()]
-        if model_preds:
-            most_common = max(set(model_preds), key=model_preds.count)
-            agreement = float(model_preds.count(most_common) / len(model_preds))
-        else:
-            agreement = 0.0
-
-        return EnsemblePrediction(
-            probabilities=final_probs,
-            predicted_class=predicted_class,
-            confidence=confidence,
-            entropy=entropy_norm,
-            agreement=agreement,
-            individual_predictions=all_probs,
-        )
-
-    def predict_batch(self, X: np.ndarray, batch_size: int = 1024) -> List[EnsemblePrediction]:
-        """Batch inference. Returns list[EnsemblePrediction]."""
-        if X is None or len(X) == 0:
-            return []
-
-        with self._lock:
-            models = list(self.models.items())
-            weights = dict(self.weights)
-            temperature = float(self.temperature)
-            device = self.device
-
-        temp = max(temperature, 0.1)
-
-        out: List[EnsemblePrediction] = []
-        n = int(len(X))
-        start = 0
-
-        while start < n:
-            end = min(n, start + int(batch_size))
-            xb = X[start:end]
-            X_tensor = torch.FloatTensor(xb).to(device)
+            per_model_probs: Dict[str, np.ndarray] = {}
+            weighted_logits: Optional[torch.Tensor] = None
 
             with torch.inference_mode():
-                per_model_probs: Dict[str, np.ndarray] = {}
-                weighted_logits: Optional[torch.Tensor] = None
-
                 for name, model in models:
                     model.eval()
-                    logits, _ = model(X_tensor)
-
+                    logits, _ = model(X_t)
                     per_model_probs[name] = F.softmax(logits, dim=-1).cpu().numpy()
-                    w = float(weights.get(name, 1.0 / max(1, len(models))))
-                    weighted_logits = logits * w if weighted_logits is None else (weighted_logits + logits * w)
 
-                if weighted_logits is None:
-                    break
+                    w = weights.get(name, 1.0 / max(1, len(models)))
+                    weighted_logits = (
+                        logits * w
+                        if weighted_logits is None
+                        else weighted_logits + logits * w
+                    )
 
-                final_probs = F.softmax(weighted_logits / temp, dim=-1).cpu().numpy()
+            if weighted_logits is None:
+                break
 
-            for i in range(len(xb)):
+            final_probs = F.softmax(weighted_logits / temp, dim=-1).cpu().numpy()
+
+            for i in range(end - start):
                 probs = final_probs[i]
                 pred_cls = int(np.argmax(probs))
                 conf = float(np.max(probs))
 
                 ent = float(-np.sum(probs * np.log(probs + 1e-8)))
-                ent_norm = float(ent / np.log(CONFIG.model.num_classes))
+                ent_norm = ent / max_entropy
 
-                model_preds = [int(np.argmax(per_model_probs[m][i])) for m in per_model_probs.keys()]
+                model_preds = [
+                    int(np.argmax(per_model_probs[m][i])) for m in per_model_probs
+                ]
                 if model_preds:
                     most_common = max(set(model_preds), key=model_preds.count)
-                    agreement = float(model_preds.count(most_common) / len(model_preds))
+                    agreement = model_preds.count(most_common) / len(model_preds)
                 else:
                     agreement = 0.0
 
-                indiv = {m: per_model_probs[m][i] for m in per_model_probs.keys()}
+                indiv = {m: per_model_probs[m][i] for m in per_model_probs}
 
-                out.append(EnsemblePrediction(
-                    probabilities=probs,
-                    predicted_class=pred_cls,
-                    confidence=conf,
-                    entropy=ent_norm,
-                    agreement=agreement,
-                    individual_predictions=indiv,
-                ))
+                results.append(
+                    EnsemblePrediction(
+                        probabilities=probs,
+                        predicted_class=pred_cls,
+                        confidence=conf,
+                        entropy=float(ent_norm),
+                        agreement=float(agreement),
+                        individual_predictions=indiv,
+                    )
+                )
 
-            start = end
+        return results
 
-        return out
+    # ------------------------------------------------------------------
+    # Persistence
+    # ------------------------------------------------------------------
 
-    def save(self, path: str = None):
-        """Save ensemble to file atomically."""
+    def save(self, path: Optional[str] = None):
+        """
+        Save ensemble atomically.
+        
+        Args:
+            path: Target file path (default: ensemble_{interval}_{horizon}.pt)
+        """
         from datetime import datetime
-        from utils.atomic_io import atomic_torch_save, atomic_write_json
-
-        # Issue 19: use instance attributes (set during train or load)
-        interval = str(self.interval)
-        horizon = int(self.prediction_horizon)
-
-        if path is None:
-            path = CONFIG.model_dir / f"ensemble_{interval}_{horizon}.pt"
-        path = Path(path)
+        
+        try:
+            from utils.atomic_io import atomic_torch_save, atomic_write_json
+        except ImportError:
+            atomic_torch_save = None
+            atomic_write_json = None
 
         with self._lock:
+            interval = str(self.interval)
+            horizon = int(self.prediction_horizon)
+
+            if path is None:
+                save_dir = Path(CONFIG.model_dir)
+                save_dir.mkdir(parents=True, exist_ok=True)
+                path = save_dir / f"ensemble_{interval}_{horizon}.pt"
+            path = Path(path)
+            path.parent.mkdir(parents=True, exist_ok=True)
+
             state = {
                 "input_size": self.input_size,
                 "model_names": list(self.models.keys()),
-                "models": {name: model.state_dict() for name, model in self.models.items()},
-                "weights": self.weights,
+                "models": {n: m.state_dict() for n, m in self.models.items()},
+                "weights": dict(self.weights),
                 "temperature": self.temperature,
                 "meta": {
                     "interval": interval,
@@ -592,40 +757,62 @@ class EnsembleModel:
                 },
             }
 
-        atomic_torch_save(path, state)
+        if atomic_torch_save is not None:
+            atomic_torch_save(path, state)
+        else:
+            # Fallback to regular torch.save
+            import torch
+            torch.save(state, path)
 
         manifest = {
             "version": datetime.now().strftime("%Y%m%d_%H%M%S"),
             "saved_at": datetime.now().isoformat(),
             "ensemble_path": path.name,
             "scaler_path": f"scaler_{interval}_{horizon}.pkl",
-            "input_size": int(self.input_size),
+            "input_size": self.input_size,
             "num_models": len(self.models),
-            "temperature": float(self.temperature),
+            "temperature": self.temperature,
             "interval": interval,
             "prediction_horizon": horizon,
         }
 
         manifest_path = path.parent / f"model_manifest_{path.stem}.json"
-        atomic_write_json(manifest_path, manifest)
+        
+        if atomic_write_json is not None:
+            atomic_write_json(manifest_path, manifest)
+        else:
+            # Fallback to regular json write
+            import json
+            with open(manifest_path, 'w') as f:
+                json.dump(manifest, f, indent=2)
 
-        log.info(f"Ensemble saved to {path}")
+        log.info(f"Ensemble saved → {path}")
 
-    def load(self, path: str = None) -> bool:
-        """Load ensemble from file."""
+    def load(self, path: Optional[str] = None) -> bool:
+        """
+        Load ensemble from file.
+        
+        Args:
+            path: Source file path (default: ensemble_1d_5.pt)
+        
+        Returns:
+            True if load succeeded, False otherwise
+        """
+        import torch
+        
         if path is None:
             path = str(CONFIG.model_dir / "ensemble_1d_5.pt")
 
-        if not Path(path).exists():
+        path = Path(path)
+        if not path.exists():
             log.warning(f"No saved model at {path}")
             return False
 
         try:
-            with self._lock:
-                state = torch.load(path, map_location=self.device, weights_only=False)
+            state = torch.load(path, map_location=self.device, weights_only=False)
 
+            with self._lock:
                 self.input_size = int(state["input_size"])
-                model_names = state.get("model_names", list(state["models"].keys()))
 
                 meta = state.get("meta", {})
                 self.interval = meta.get("interval", "1d")
@@ -634,40 +821,110 @@ class EnsembleModel:
                 )
 
                 arch = state.get("arch", {})
-                saved_hidden = int(arch.get("hidden_size", CONFIG.model.hidden_size))
-                saved_dropout = float(arch.get("dropout", CONFIG.model.dropout))
-                saved_classes = int(arch.get("num_classes", CONFIG.model.num_classes))
+                h = int(arch.get("hidden_size", CONFIG.model.hidden_size))
+                d = float(arch.get("dropout", CONFIG.model.dropout))
+                c = int(arch.get("num_classes", CONFIG.model.num_classes))
 
-                self._init_model_classes()
+                model_names = state.get("model_names", list(state["models"].keys()))
+                cls_map = self._get_model_classes()
 
                 self.models = {}
                 self.weights = {}
 
                 for name in model_names:
-                    if name in self.MODEL_CLASSES and name in state["models"]:
-                        self._init_model(
-                            name,
-                            hidden_size=saved_hidden,
-                            dropout=saved_dropout,
-                            num_classes=saved_classes,
-                        )
-                        self.models[name].load_state_dict(state["models"][name])
-                        self.models[name].eval()
+                    if name not in cls_map or name not in state["models"]:
+                        log.warning(f"Skipping unknown/missing model: {name}")
+                        continue
 
-                saved_weights = state.get("weights", {})
-                for name in self.models.keys():
-                    self.weights[name] = float(saved_weights.get(name, 1.0))
+                    self._init_model(name, hidden_size=h, dropout=d, num_classes=c)
+
+                    try:
+                        self.models[name].load_state_dict(state["models"][name])
+                    except RuntimeError as e:
+                        log.error(f"Shape mismatch loading {name}: {e}")
+                        del self.models[name]
+                        del self.weights[name]
+                        continue
+
+                    self.models[name].eval()
+
+                saved_w = state.get("weights", {})
+                for name in list(self.models.keys()):
+                    self.weights[name] = float(saved_w.get(name, 1.0))
 
                 self._normalize_weights()
                 self.temperature = float(state.get("temperature", 1.0))
 
             log.info(
                 f"Ensemble loaded: {list(self.models.keys())}, "
-                f"interval={self.interval}, "
-                f"horizon={self.prediction_horizon}"
+                f"interval={self.interval}, horizon={self.prediction_horizon}"
             )
             return True
 
         except Exception as e:
-            log.error(f"Failed to load ensemble: {e}")
+            log.error(f"Failed to load ensemble from {path}: {e}", exc_info=True)
             return False
+
+    # ------------------------------------------------------------------
+    # Utilities
+    # ------------------------------------------------------------------
+
+    def get_model_info(self) -> Dict[str, Any]:
+        """Get information about the ensemble models."""
+        with self._lock:
+            return {
+                "input_size": self.input_size,
+                "interval": self.interval,
+                "prediction_horizon": self.prediction_horizon,
+                "temperature": self.temperature,
+                "models": list(self.models.keys()),
+                "weights": dict(self.weights),
+                "total_params": sum(
+                    sum(p.numel() for p in m.parameters())
+                    for m in self.models.values()
+                ),
+                "device": self.device,
+            }
+
+    def set_eval_mode(self):
+        """Set all models to evaluation mode."""
+        with self._lock:
+            for model in self.models.values():
+                model.eval()
+
+    def set_train_mode(self):
+        """Set all models to training mode."""
+        with self._lock:
+            for model in self.models.values():
+                model.train()
+
+    def to(self, device: str) -> "EnsembleModel":
+        """
+        Move all models to specified device.
+        
+        Args:
+            device: Target device ('cpu', 'cuda', 'cuda:0', etc.)
+        
+        Returns:
+            self for chaining
+        """
+        with self._lock:
+            self.device = device
+            for model in self.models.values():
+                model.to(device)
+        return self
+
+    def __repr__(self) -> str:
+        with self._lock:
+            names = list(self.models.keys())
+            total_p = sum(
+                sum(p.numel() for p in m.parameters()) for m in self.models.values()
+            )
+        return (
+            f"EnsembleModel(input_size={self.input_size}, models={names}, "
+            f"params={total_p:,}, device={self.device}, temp={self.temperature:.2f})"
+        )
+
+    def __len__(self) -> int:
+        """Return number of models in ensemble."""
+        return len(self.models)

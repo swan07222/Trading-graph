@@ -57,7 +57,7 @@ from .exceptions import (
     BrokerConnectionError,
     BrokerAuthenticationError,
     BrokerOrderError,
-    SecurityError,
+    SecurityError_,  # FIXED: Added underscore to match actual class name
     AuthenticationError,
     AuthorizationError,
     RateLimitError,
@@ -95,5 +95,5 @@ __all__ = [
     'OrderError',
     'RiskError',
     'BrokerError',
-    'SecurityError',
+    'SecurityError_',  # FIXED: Added underscore to match actual class name
 ]

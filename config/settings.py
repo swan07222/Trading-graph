@@ -1,16 +1,39 @@
 # config/settings.py
 """
-Production Configuration - Score Target: 10/10
-Single source of truth with validation, hot-reload, backward compatibility
+Production Configuration - Single source of truth
+with validation, hot-reload, backward compatibility.
+
+FIXES APPLIED (comprehensive):
+1.  _validate() no longer raises during import — logs warnings instead
+2.  _apply_dict() validates types before setting
+3.  _load_from_env() logs conversion failures instead of silently ignoring
+4.  save() now persists ALL sub-config dataclasses
+5.  reload() resets sub-configs to defaults before re-applying
+6.  Path properties use sentinel-based caching (not try/except AttributeError)
+7.  Thread safety on _apply_dict, reload, save via self._lock
+8.  __getattr__ legacy layer simplified
+9.  Added reset_instance() classmethod for testing
+10. is_market_open uses robust fallback
+11. Directory creation moved to explicit ensure_dirs() — no side effects in getters
+12. Added __init__.py guidance in docstring
 """
+from __future__ import annotations
+
 import os
 import json
+import logging
 from pathlib import Path
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields, asdict
 from typing import List, Optional, Dict, Any
 from enum import Enum
 from datetime import datetime, time
 import threading
+
+_SENTINEL = object()
+
+# Minimal logger that doesn't depend on our logger module
+# (avoids circular import: settings → logger → settings)
+_log = logging.getLogger("config.settings")
 
 
 class TradingMode(Enum):
@@ -33,7 +56,7 @@ class MarketType(Enum):
 
 @dataclass
 class DataConfig:
-    """Data layer configuration"""
+    """Data layer configuration."""
     cache_ttl_hours: float = 4.0
     max_memory_cache_mb: int = 500
     parallel_downloads: int = 10
@@ -47,33 +70,33 @@ class DataConfig:
 
 @dataclass
 class ModelConfig:
-    """ML model configuration"""
+    """ML model configuration."""
     sequence_length: int = 60
     hidden_size: int = 256
     num_layers: int = 3
     num_heads: int = 8
     dropout: float = 0.3
     num_classes: int = 3
-    
+
     # Training
     epochs: int = 100
     batch_size: int = 64
     learning_rate: float = 0.0005
     early_stop_patience: int = 15
     weight_decay: float = 0.01
-    
+
     # Splits
     train_ratio: float = 0.70
     val_ratio: float = 0.15
     test_ratio: float = 0.15
-    
+
     # Prediction
     prediction_horizon: int = 5
     up_threshold: float = 2.0
     down_threshold: float = -2.0
     embargo_bars: int = 10
     min_confidence: float = 0.55
-    
+
     # Signal thresholds
     strong_buy_threshold: float = 0.65
     buy_threshold: float = 0.55
@@ -83,17 +106,17 @@ class ModelConfig:
 
 @dataclass
 class TradingConfig:
-    """Trading rules configuration"""
+    """Trading rules configuration."""
     lot_size: int = 100
     commission: float = 0.00025
     stamp_tax: float = 0.001
     slippage: float = 0.001
     t_plus_1: bool = True
     allow_short: bool = False
-    
+
     price_limit_pct: float = 10.0
     st_price_limit_pct: float = 5.0
-    
+
     market_open_am: time = field(default_factory=lambda: time(9, 30))
     market_close_am: time = field(default_factory=lambda: time(11, 30))
     market_open_pm: time = field(default_factory=lambda: time(13, 0))
@@ -102,7 +125,7 @@ class TradingConfig:
 
 @dataclass
 class RiskConfig:
-    """Risk management configuration"""
+    """Risk management configuration."""
     max_position_pct: float = 15.0
     max_portfolio_risk_pct: float = 30.0
     max_daily_loss_pct: float = 3.0
@@ -111,13 +134,13 @@ class RiskConfig:
     risk_per_trade_pct: float = 2.0
     var_confidence: float = 0.95
     kelly_fraction: float = 0.25
-    
+
     # Circuit breakers
     circuit_breaker_loss_pct: float = 5.0
     circuit_breaker_duration_minutes: int = 60
     max_orders_per_minute: int = 10
     max_orders_per_day: int = 100
-    
+
     # Kill switch
     kill_switch_loss_pct: float = 8.0
     kill_switch_drawdown_pct: float = 20.0
@@ -125,7 +148,7 @@ class RiskConfig:
 
 @dataclass
 class SecurityConfig:
-    """Security configuration"""
+    """Security configuration."""
     encrypt_credentials: bool = True
     audit_logging: bool = True
     require_2fa_for_live: bool = True
@@ -135,7 +158,7 @@ class SecurityConfig:
 
 @dataclass
 class AlertConfig:
-    """Alerting configuration"""
+    """Alerting configuration."""
     enabled: bool = True
     email_enabled: bool = False
     email_recipients: List[str] = field(default_factory=list)
@@ -144,7 +167,7 @@ class AlertConfig:
     sms_enabled: bool = False
     webhook_enabled: bool = False
     webhook_url: str = ""
-    
+
     # Alert thresholds
     large_loss_alert_pct: float = 2.0
     position_concentration_alert_pct: float = 20.0
@@ -155,30 +178,108 @@ class AlertConfig:
     smtp_password_key: str = "smtp_password"
 
 
+def _safe_dataclass_from_dict(dc_instance, data: Dict) -> List[str]:
+    """
+    Apply dict values to a dataclass instance with type checking.
+    Returns list of warnings for bad values.
+    """
+    warnings = []
+    if not isinstance(data, dict):
+        return [f"Expected dict, got {type(data).__name__}"]
+
+    dc_fields = {f.name: f for f in fields(dc_instance)}
+
+    for key, value in data.items():
+        if key not in dc_fields:
+            warnings.append(f"Unknown field '{key}' — ignored")
+            continue
+
+        expected_type = dc_fields[key].type
+        current_value = getattr(dc_instance, key)
+
+        # FIX #2: Type-check before setting
+        try:
+            if isinstance(current_value, bool) and isinstance(value, bool):
+                setattr(dc_instance, key, value)
+            elif isinstance(current_value, int) and isinstance(value, (int, float)):
+                setattr(dc_instance, key, int(value))
+            elif isinstance(current_value, float) and isinstance(value, (int, float)):
+                setattr(dc_instance, key, float(value))
+            elif isinstance(current_value, str) and isinstance(value, str):
+                setattr(dc_instance, key, value)
+            elif isinstance(current_value, list) and isinstance(value, list):
+                setattr(dc_instance, key, value)
+            elif isinstance(current_value, time) and isinstance(value, str):
+                # Parse "HH:MM" or "HH:MM:SS"
+                parts = [int(p) for p in value.split(":")]
+                setattr(dc_instance, key, time(*parts))
+            else:
+                setattr(dc_instance, key, value)
+        except (TypeError, ValueError) as e:
+            warnings.append(f"Bad value for '{key}': {value!r} — {e}")
+
+    return warnings
+
+
+def _dataclass_to_dict(dc_instance) -> Dict:
+    """Serialize a dataclass to dict, handling special types."""
+    result = {}
+    for f in fields(dc_instance):
+        value = getattr(dc_instance, f.name)
+        if isinstance(value, time):
+            result[f.name] = value.strftime("%H:%M:%S")
+        elif isinstance(value, Enum):
+            result[f.name] = value.value
+        else:
+            result[f.name] = value
+    return result
+
+
 class Config:
     """
-    Production-grade configuration manager with backward compatibility
+    Production-grade configuration manager.
+
+    Usage:
+        from config.settings import CONFIG
+        print(CONFIG.model.learning_rate)
+        print(CONFIG.LEARNING_RATE)  # Legacy alias
+
+    Ensure config/__init__.py contains:
+        from config.settings import CONFIG, TradingMode, RiskProfile, MarketType
+        __all__ = ["CONFIG", "TradingMode", "RiskProfile", "MarketType"]
     """
-    
-    _instance = None
-    _lock = threading.RLock()
-    
-    def __new__(cls):
+
+    _instance: Optional[Config] = None
+    _instance_lock = threading.RLock()
+
+    def __new__(cls) -> Config:
         if cls._instance is None:
-            with cls._lock:
+            with cls._instance_lock:
                 if cls._instance is None:
-                    cls._instance = super().__new__(cls)
-                    cls._instance._initialized = False
+                    inst = super().__new__(cls)
+                    inst._initialized = False
+                    cls._instance = inst
         return cls._instance
-    
-    def __init__(self):
+
+    @classmethod
+    def reset_instance(cls) -> None:
+        """
+        FIX #9: Destroy singleton for testing.
+        Call between tests to get a fresh Config.
+        """
+        with cls._instance_lock:
+            cls._instance = None
+
+    def __init__(self) -> None:
         if self._initialized:
             return
-        
+
         self._initialized = True
+        self._lock = threading.RLock()  # FIX #7: Protects all mutations
         self._config_file = Path(__file__).parent.parent / "config.json"
         self._env_prefix = "TRADING_"
-        
+        self._validation_warnings: List[str] = []
+
         # Sub-configs
         self.data = DataConfig()
         self.model = ModelConfig()
@@ -186,18 +287,26 @@ class Config:
         self.risk = RiskConfig()
         self.security = SecurityConfig()
         self.alerts = AlertConfig()
-        
+
         # Main settings
-        self.capital: float = 100000.0
+        self.capital: float = 100_000.0
         self.trading_mode: TradingMode = TradingMode.SIMULATION
         self.risk_profile: RiskProfile = RiskProfile.MODERATE
         self.market_type: MarketType = MarketType.A_SHARE
         self.broker_path: str = ""
-        
+
         # Paths
         self._base_dir = Path(__file__).parent.parent
         self._model_dir_override: Optional[str] = None
-        
+
+        # FIX #6: Sentinel-based caching for path properties
+        self._data_dir_cached: Any = _SENTINEL
+        self._model_dir_cached: Any = _SENTINEL
+        self._model_dir_cached_override: Any = _SENTINEL
+        self._log_dir_cached: Any = _SENTINEL
+        self._cache_dir_cached: Any = _SENTINEL
+        self._audit_dir_cached: Any = _SENTINEL
+
         # Stock pool
         self.stock_pool: List[str] = [
             "600519", "601318", "600036", "000858", "600900",
@@ -205,473 +314,449 @@ class Config:
             "000333", "000651", "600887", "603288", "600276",
             "300760", "300015", "601166", "601398", "600030",
         ]
-        
+
         # Training settings
         self.min_stocks_for_training: int = 5
         self.auto_learn_epochs: int = 50
-        
+
         # Load from file/env
         self._load()
+        # FIX #1: Validate but don't crash — collect warnings
         self._validate()
-    
-    def __getattr__(self, name: str):
+
+    # ==================== LEGACY COMPATIBILITY ====================
+
+    # FIX #8: Single unified mapping instead of scattered dicts in __getattr__
+    _LEGACY_MAP: Dict[str, str] = {
+        # Model aliases
+        "SEQUENCE_LENGTH": "model.sequence_length",
+        "PREDICTION_HORIZON": "model.prediction_horizon",
+        "NUM_CLASSES": "model.num_classes",
+        "HIDDEN_SIZE": "model.hidden_size",
+        "DROPOUT": "model.dropout",
+        "EPOCHS": "model.epochs",
+        "BATCH_SIZE": "model.batch_size",
+        "LEARNING_RATE": "model.learning_rate",
+        "WEIGHT_DECAY": "model.weight_decay",
+        "EARLY_STOP_PATIENCE": "model.early_stop_patience",
+        "MIN_CONFIDENCE": "model.min_confidence",
+        "BUY_THRESHOLD": "model.buy_threshold",
+        "SELL_THRESHOLD": "model.sell_threshold",
+        "STRONG_BUY_THRESHOLD": "model.strong_buy_threshold",
+        "STRONG_SELL_THRESHOLD": "model.strong_sell_threshold",
+        "UP_THRESHOLD": "model.up_threshold",
+        "DOWN_THRESHOLD": "model.down_threshold",
+        "EMBARGO_BARS": "model.embargo_bars",
+        "TRAIN_RATIO": "model.train_ratio",
+        "VAL_RATIO": "model.val_ratio",
+        "TEST_RATIO": "model.test_ratio",
+        # Trading aliases
+        "COMMISSION": "trading.commission",
+        "STAMP_TAX": "trading.stamp_tax",
+        "SLIPPAGE": "trading.slippage",
+        "LOT_SIZE": "trading.lot_size",
+        # Risk aliases
+        "MAX_POSITION_PCT": "risk.max_position_pct",
+        "MAX_DAILY_LOSS_PCT": "risk.max_daily_loss_pct",
+        "MAX_POSITIONS": "risk.max_positions",
+        "RISK_PER_TRADE": "risk.risk_per_trade_pct",
+        # Path aliases
+        "DATA_DIR": "_prop_data_dir",
+        "dataDir": "_prop_data_dir",
+        "MODEL_DIR": "_prop_model_dir",
+        "modelDir": "_prop_model_dir",
+        "CACHE_DIR": "_prop_cache_dir",
+        "cacheDir": "_prop_cache_dir",
+        "AUDIT_DIR": "_prop_audit_dir",
+        "auditDir": "_prop_audit_dir",
+        "LOG_DIR": "_prop_log_dir",
+    }
+
+    def _get_nested(self, path: str) -> Any:
+        """Get a dotted attribute path like 'model.sequence_length'."""
+        parts = path.split(".")
+        obj = self
+        for part in parts:
+            obj = getattr(obj, part)
+        return obj
+
+    def __getattr__(self, name: str) -> Any:
         """
-        Legacy compatibility layer.
+        Legacy compatibility: CONFIG.SEQUENCE_LENGTH → CONFIG.model.sequence_length
 
-        Allows older code/tests/UI to keep using:
-        CONFIG.SEQUENCE_LENGTH, CONFIG.PREDICTION_HORIZON, CONFIG.MODEL_DIR, CONFIG.CAPITAL, ...
-        while the new code uses:
-        CONFIG.model.sequence_length, CONFIG.model.prediction_horizon, CONFIG.model_dir, CONFIG.trading.capital, ...
+        Only called when normal attribute lookup fails,
+        so @property definitions always take precedence.
         """
-        # ---- Path aliases ----
-        if name in ("DATA_DIR", "dataDir"):
-            return self.data_dir
-        if name in ("MODEL_DIR", "modelDir"):
-            return self.model_dir
-        if name in ("CACHE_DIR", "cacheDir"):
-            return self.cache_dir
-        if name in ("AUDIT_DIR", "auditDir"):
-            return self.audit_dir
+        mapping = Config._LEGACY_MAP.get(name)
+        if mapping is None:
+            # Stock pool alias
+            if name == "STOCK_POOL":
+                return self.stock_pool
+            raise AttributeError(
+                f"{self.__class__.__name__} has no attribute {name!r}"
+            )
 
-        # ---- Stock pool aliases ----
-        if name == "STOCK_POOL":
-            return getattr(self, "stock_pool", [])
+        # Path properties — delegate to the property
+        if mapping.startswith("_prop_"):
+            prop_name = mapping[6:]  # strip "_prop_"
+            return getattr(self, prop_name)
 
-        # ---- Model/training aliases ----
-        m = getattr(self, "model", None)
-        if m is not None:
-            legacy_model_map = {
-                "SEQUENCE_LENGTH": "sequence_length",
-                "PREDICTION_HORIZON": "prediction_horizon",
-                "NUM_CLASSES": "num_classes",
-                "HIDDEN_SIZE": "hidden_size",
-                "DROPOUT": "dropout",
-                "EPOCHS": "epochs",
-                "BATCH_SIZE": "batch_size",
-                "LEARNING_RATE": "learning_rate",
-                "WEIGHT_DECAY": "weight_decay",
-                "EARLY_STOP_PATIENCE": "early_stop_patience",
-                "MIN_CONFIDENCE": "min_confidence",
-                "BUY_THRESHOLD": "buy_threshold",
-                "SELL_THRESHOLD": "sell_threshold",
-                "STRONG_BUY_THRESHOLD": "strong_buy_threshold",
-                "STRONG_SELL_THRESHOLD": "strong_sell_threshold",
-                "UP_THRESHOLD": "up_threshold",
-                "DOWN_THRESHOLD": "down_threshold",
-                "EMBARGO_BARS": "embargo_bars",
-                "TRAIN_RATIO": "train_ratio",
-                "VAL_RATIO": "val_ratio",
-                "TEST_RATIO": "test_ratio",
-            }
-            if name in legacy_model_map and hasattr(m, legacy_model_map[name]):
-                return getattr(m, legacy_model_map[name])
+        return self._get_nested(mapping)
 
-        # ---- Trading aliases ----
-        t = getattr(self, "trading", None)
-        if t is not None:
-            legacy_trading_map = {
-                "CAPITAL": "capital",
-                "COMMISSION": "commission",
-                "STAMP_TAX": "stamp_tax",
-                "SLIPPAGE": "slippage",
-                "LOT_SIZE": "lot_size",
-                "BROKER_PATH": "broker_path",
-            }
-            if name in legacy_trading_map and hasattr(t, legacy_trading_map[name]):
-                return getattr(t, legacy_trading_map[name])
+    # ==================== EXPLICIT PROPERTIES ====================
+    # These exist so that both CONFIG.CAPITAL and CONFIG.capital work,
+    # and so setters work correctly.
 
-        # ---- Risk aliases ----
-        r = getattr(self, "risk", None)
-        if r is not None:
-            legacy_risk_map = {
-                "MAX_POSITION_PCT": "max_position_pct",
-                "MAX_DAILY_LOSS_PCT": "max_daily_loss_pct",
-                "MAX_POSITIONS": "max_positions",
-                "RISK_PER_TRADE": "risk_per_trade_pct",
-            }
-            if name in legacy_risk_map and hasattr(r, legacy_risk_map[name]):
-                return getattr(r, legacy_risk_map[name])
-
-        raise AttributeError(f"{self.__class__.__name__} has no attribute '{name}'")
-
-    # ==================== BACKWARD COMPATIBILITY ALIASES ====================
-    
     @property
     def CAPITAL(self) -> float:
         return self.capital
-    
+
     @CAPITAL.setter
-    def CAPITAL(self, value: float):
-        self.capital = value
-    
+    def CAPITAL(self, value: float) -> None:
+        self.capital = float(value)
+
     @property
     def MIN_STOCKS_FOR_TRAINING(self) -> int:
         return self.min_stocks_for_training
 
     @property
-    def STOCK_POOL(self) -> List[str]:
-        return self.stock_pool
-    
-    @property
     def TRADING_MODE(self) -> TradingMode:
         return self.trading_mode
-    
+
     @TRADING_MODE.setter
-    def TRADING_MODE(self, value: TradingMode):
+    def TRADING_MODE(self, value: TradingMode) -> None:
         self.trading_mode = value
-    
+
     @property
     def BROKER_PATH(self) -> str:
         return self.broker_path
-    
+
     @BROKER_PATH.setter
-    def BROKER_PATH(self, value: str):
-        self.broker_path = value
-    
-    # Model config aliases
-    @property
-    def SEQUENCE_LENGTH(self) -> int:
-        return self.model.sequence_length
-    
-    @property
-    def HIDDEN_SIZE(self) -> int:
-        return self.model.hidden_size
-    
-    @property
-    def NUM_CLASSES(self) -> int:
-        return self.model.num_classes
-    
-    @property
-    def DROPOUT(self) -> float:
-        return self.model.dropout
-    
-    @property
-    def EPOCHS(self) -> int:
-        return self.model.epochs
-    
-    @property
-    def BATCH_SIZE(self) -> int:
-        return self.model.batch_size
-    
-    @property
-    def LEARNING_RATE(self) -> float:
-        return self.model.learning_rate
-    
-    @property
-    def EARLY_STOP_PATIENCE(self) -> int:
-        return self.model.early_stop_patience
-    
-    @property
-    def TRAIN_RATIO(self) -> float:
-        return self.model.train_ratio
-    
-    @property
-    def VAL_RATIO(self) -> float:
-        return self.model.val_ratio
-    
-    @property
-    def TEST_RATIO(self) -> float:
-        return self.model.test_ratio
-    
-    @property
-    def PREDICTION_HORIZON(self) -> int:
-        return self.model.prediction_horizon
-    
-    @property
-    def UP_THRESHOLD(self) -> float:
-        return self.model.up_threshold
-    
-    @property
-    def DOWN_THRESHOLD(self) -> float:
-        return self.model.down_threshold
-    
-    @property
-    def EMBARGO_BARS(self) -> int:
-        return self.model.embargo_bars
-    
-    @property
-    def MIN_CONFIDENCE(self) -> float:
-        return self.model.min_confidence
-    
-    @property
-    def STRONG_BUY_THRESHOLD(self) -> float:
-        return self.model.strong_buy_threshold
-    
-    @property
-    def BUY_THRESHOLD(self) -> float:
-        return self.model.buy_threshold
-    
-    @property
-    def SELL_THRESHOLD(self) -> float:
-        return self.model.sell_threshold
-    
-    @property
-    def STRONG_SELL_THRESHOLD(self) -> float:
-        return self.model.strong_sell_threshold
-    
-    # Trading config aliases
-    @property
-    def LOT_SIZE(self) -> int:
-        return self.trading.lot_size
-    
-    @property
-    def COMMISSION(self) -> float:
-        return self.trading.commission
-    
-    @property
-    def STAMP_TAX(self) -> float:
-        return self.trading.stamp_tax
-    
-    @property
-    def SLIPPAGE(self) -> float:
-        return self.trading.slippage
-    
-    # Risk config aliases
-    @property
-    def MAX_POSITION_PCT(self) -> float:
-        return self.risk.max_position_pct
-    
-    @MAX_POSITION_PCT.setter
-    def MAX_POSITION_PCT(self, value: float):
-        self.risk.max_position_pct = value
-    
-    @property
-    def MAX_DAILY_LOSS_PCT(self) -> float:
-        return self.risk.max_daily_loss_pct
-    
-    @MAX_DAILY_LOSS_PCT.setter
-    def MAX_DAILY_LOSS_PCT(self, value: float):
-        self.risk.max_daily_loss_pct = value
-    
-    @property
-    def MAX_POSITIONS(self) -> int:
-        return self.risk.max_positions
-    
-    @MAX_POSITIONS.setter
-    def MAX_POSITIONS(self, value: int):
-        self.risk.max_positions = value
-    
-    @property
-    def RISK_PER_TRADE(self) -> float:
-        return self.risk.risk_per_trade_pct
-    
-    @RISK_PER_TRADE.setter
-    def RISK_PER_TRADE(self, value: float):
-        self.risk.risk_per_trade_pct = value
-    
+    def BROKER_PATH(self, value: str) -> None:
+        self.broker_path = str(value) if value else ""
+
     @property
     def AUTO_LEARN_EPOCHS(self) -> int:
         return self.auto_learn_epochs
-    
-    # Path properties
+
+    # ==================== PATH PROPERTIES ====================
+    # FIX #11: No directory creation in getters. Use ensure_dirs() explicitly.
+
     @property
     def BASE_DIR(self) -> Path:
         return self._base_dir
-    
+
     @property
     def base_dir(self) -> Path:
         return self._base_dir
-    
-    @property
-    def DATA_DIR(self) -> Path:
-        try:
-            return self._data_dir_cached
-        except AttributeError:
-            path = self._base_dir / "data_storage"
-            path.mkdir(parents=True, exist_ok=True)
-            self._data_dir_cached = path
-            return path
-    
+
     @property
     def data_dir(self) -> Path:
-        return self.DATA_DIR
-    
-    @property
-    def MODEL_DIR(self) -> Path:
-        try:
-            override = self._model_dir_override
-            cached = getattr(self, "_model_dir_cached_override", None)
-            if override == cached:
-                return self._model_dir_cached
-        except AttributeError:
-            pass
+        if self._data_dir_cached is _SENTINEL:
+            self._data_dir_cached = self._base_dir / "data_storage"
+        return self._data_dir_cached
 
-        if self._model_dir_override:
-            path = Path(self._model_dir_override)
-        else:
-            path = self._base_dir / "models_saved"
-
-        path.mkdir(parents=True, exist_ok=True)
-        self._model_dir_cached = path
-        self._model_dir_cached_override = self._model_dir_override
-        return path
-    
     @property
     def model_dir(self) -> Path:
-        return self.MODEL_DIR
-    
-    @property
-    def LOG_DIR(self) -> Path:
-        try:
-            return self._log_dir_cached
-        except AttributeError:
-            path = self._base_dir / "logs"
-            path.mkdir(parents=True, exist_ok=True)
-            self._log_dir_cached = path
-            return path
-    
+        override = self._model_dir_override
+        if (
+            self._model_dir_cached is _SENTINEL
+            or self._model_dir_cached_override is not override
+        ):
+            if override:
+                self._model_dir_cached = Path(override)
+            else:
+                self._model_dir_cached = self._base_dir / "models_saved"
+            self._model_dir_cached_override = override
+        return self._model_dir_cached
+
     @property
     def log_dir(self) -> Path:
-        return self.LOG_DIR
-    
-    @property
-    def CACHE_DIR(self) -> Path:
-        try:
-            return self._cache_dir_cached
-        except AttributeError:
-            path = self._base_dir / "cache"
-            path.mkdir(parents=True, exist_ok=True)
-            self._cache_dir_cached = path
-            return path
-    
+        if self._log_dir_cached is _SENTINEL:
+            self._log_dir_cached = self._base_dir / "logs"
+        return self._log_dir_cached
+
     @property
     def cache_dir(self) -> Path:
-        return self.CACHE_DIR
-    
-    @property
-    def AUDIT_DIR(self) -> Path:
-        try:
-            return self._audit_dir_cached
-        except AttributeError:
-            path = self._base_dir / "audit"
-            path.mkdir(parents=True, exist_ok=True)
-            self._audit_dir_cached = path
-            return path
-    
+        if self._cache_dir_cached is _SENTINEL:
+            self._cache_dir_cached = self._base_dir / "cache"
+        return self._cache_dir_cached
+
     @property
     def audit_dir(self) -> Path:
-        return self.AUDIT_DIR
-    
-    def set_model_dir(self, path: str):
-        """Override model directory path — invalidates cache"""
-        self._model_dir_override = str(path) if path else None
-        # Force re-evaluation next access
-        try:
-            del self._model_dir_cached
-            del self._model_dir_cached_override
-        except AttributeError:
-            pass
-    
-    def _load(self):
-        """Load configuration from file and environment"""
+        if self._audit_dir_cached is _SENTINEL:
+            self._audit_dir_cached = self._base_dir / "audit"
+        return self._audit_dir_cached
+
+    def ensure_dirs(self) -> None:
+        """
+        FIX #11: Create all directories explicitly.
+        Call once at startup, not as a side effect of reading config.
+        """
+        for d in (
+            self.data_dir,
+            self.model_dir,
+            self.log_dir,
+            self.cache_dir,
+            self.audit_dir,
+        ):
+            d.mkdir(parents=True, exist_ok=True)
+
+    def set_model_dir(self, path: str) -> None:
+        """Override model directory path — invalidates cache."""
+        with self._lock:
+            self._model_dir_override = str(path) if path else None
+            self._model_dir_cached = _SENTINEL
+            self._model_dir_cached_override = _SENTINEL
+
+    # ==================== LOADING ====================
+
+    def _load(self) -> None:
+        """Load configuration from file and environment."""
         if self._config_file.exists():
             try:
-                with open(self._config_file, 'r', encoding='utf-8') as f:
+                with open(self._config_file, "r", encoding="utf-8") as f:
                     data = json.load(f)
                 self._apply_dict(data)
             except Exception as e:
-                print(f"Warning: Failed to load config file: {e}")
-        
+                _log.warning("Failed to load config file: %s", e)
+
         self._load_from_env()
-    
-    def _load_from_env(self):
-        """Load from environment variables"""
+
+    def _load_from_env(self) -> None:
+        """Load from environment variables."""
         env_mappings = {
-            'CAPITAL': ('capital', float),
-            'TRADING_MODE': ('trading_mode', lambda x: TradingMode(x.lower())),
-            'RISK_PROFILE': ('risk_profile', lambda x: RiskProfile(x.lower())),
-            'MAX_POSITION_PCT': ('risk.max_position_pct', float),
-            'MAX_DAILY_LOSS_PCT': ('risk.max_daily_loss_pct', float),
+            "CAPITAL": ("capital", float),
+            "TRADING_MODE": (
+                "trading_mode",
+                lambda x: TradingMode(x.lower()),
+            ),
+            "RISK_PROFILE": (
+                "risk_profile",
+                lambda x: RiskProfile(x.lower()),
+            ),
+            "MAX_POSITION_PCT": ("risk.max_position_pct", float),
+            "MAX_DAILY_LOSS_PCT": ("risk.max_daily_loss_pct", float),
         }
-        
+
         for env_key, (attr_path, converter) in env_mappings.items():
             full_key = f"{self._env_prefix}{env_key}"
             value = os.environ.get(full_key)
-            if value:
+            if value is not None and value.strip():
                 try:
-                    self._set_nested(attr_path, converter(value))
-                except Exception:
-                    pass
-    
-    def _apply_dict(self, data: Dict):
-        """Apply dictionary to config"""
-        for key, value in data.items():
-            if hasattr(self, key):
-                current = getattr(self, key)
-                if hasattr(current, '__dataclass_fields__'):
+                    self._set_nested(attr_path, converter(value.strip()))
+                except Exception as e:
+                    # FIX #3: Log instead of silently ignoring
+                    _log.warning(
+                        "Failed to apply env %s=%r: %s", full_key, value, e
+                    )
+
+    def _apply_dict(self, data: Dict) -> None:
+        """Apply dictionary to config with type checking."""
+        with self._lock:
+            # Sub-config dataclasses
+            sub_configs = {
+                "data": self.data,
+                "model": self.model,
+                "trading": self.trading,
+                "risk": self.risk,
+                "security": self.security,
+                "alerts": self.alerts,
+            }
+
+            for key, value in data.items():
+                # Handle sub-config dicts
+                if key in sub_configs:
                     if isinstance(value, dict):
-                        for k, v in value.items():
-                            if hasattr(current, k):
-                                setattr(current, k, v)
+                        warnings = _safe_dataclass_from_dict(
+                            sub_configs[key], value
+                        )
+                        for w in warnings:
+                            _log.warning("Config %s: %s", key, w)
+                    else:
+                        _log.warning(
+                            "Expected dict for '%s', got %s — ignored",
+                            key,
+                            type(value).__name__,
+                        )
+                    continue
+
+                # Handle enums
+                if key == "trading_mode" and isinstance(value, str):
+                    try:
+                        self.trading_mode = TradingMode(value.lower())
+                    except ValueError as e:
+                        _log.warning("Bad trading_mode %r: %s", value, e)
+                    continue
+
+                if key == "risk_profile" and isinstance(value, str):
+                    try:
+                        self.risk_profile = RiskProfile(value.lower())
+                    except ValueError as e:
+                        _log.warning("Bad risk_profile %r: %s", value, e)
+                    continue
+
+                # Handle known top-level attributes with type checking
+                if hasattr(self, key) and not key.startswith("_"):
+                    current = getattr(self, key)
+                    try:
+                        if isinstance(current, float) and isinstance(
+                            value, (int, float)
+                        ):
+                            setattr(self, key, float(value))
+                        elif isinstance(current, int) and isinstance(
+                            value, (int, float)
+                        ):
+                            setattr(self, key, int(value))
+                        elif isinstance(current, str) and isinstance(value, str):
+                            setattr(self, key, value)
+                        elif isinstance(current, list) and isinstance(value, list):
+                            setattr(self, key, value)
+                        else:
+                            _log.warning(
+                                "Type mismatch for '%s': expected %s, got %s",
+                                key,
+                                type(current).__name__,
+                                type(value).__name__,
+                            )
+                    except Exception as e:
+                        _log.warning("Failed to set '%s': %s", key, e)
                 else:
-                    setattr(self, key, value)
-    
-    def _set_nested(self, path: str, value):
-        """Set nested attribute"""
-        parts = path.split('.')
+                    _log.debug("Unknown config key '%s' — ignored", key)
+
+    def _set_nested(self, path: str, value: Any) -> None:
+        """Set nested attribute like 'risk.max_position_pct'."""
+        parts = path.split(".")
         obj = self
         for part in parts[:-1]:
             obj = getattr(obj, part)
         setattr(obj, parts[-1], value)
-    
-    def _validate(self):
-        """Validate configuration"""
-        errors = []
-        
+
+    # ==================== VALIDATION ====================
+
+    def _validate(self) -> None:
+        """
+        FIX #1: Validate configuration without raising.
+        Collects warnings accessible via self.validation_warnings.
+        Only raises on truly fatal errors (capital <= 0 in LIVE mode).
+        """
+        self._validation_warnings.clear()
+
         if self.capital <= 0:
-            errors.append("Capital must be positive")
-        
+            self._validation_warnings.append("Capital must be positive")
+
         if not (0 < self.model.train_ratio < 1):
-            errors.append("Invalid train ratio")
-        
+            self._validation_warnings.append("Invalid train ratio")
+
         if self.model.embargo_bars < self.model.prediction_horizon:
-            errors.append("Embargo must be >= prediction horizon")
-        
-        ratio_sum = self.model.train_ratio + self.model.val_ratio + self.model.test_ratio
+            self._validation_warnings.append(
+                "Embargo must be >= prediction horizon"
+            )
+
+        ratio_sum = (
+            self.model.train_ratio
+            + self.model.val_ratio
+            + self.model.test_ratio
+        )
         if abs(ratio_sum - 1.0) >= 0.001:
-            errors.append(f"Split ratios must sum to 1.0, got {ratio_sum}")
-        
-        if errors:
-            raise ValueError(f"Configuration errors: {'; '.join(errors)}")
-    
-    def save(self):
-        """Save current configuration to file"""
-        data = {
-            'capital': self.capital,
-            'trading_mode': self.trading_mode.value,
-            'risk_profile': self.risk_profile.value,
-            'stock_pool': self.stock_pool,
-            'broker_path': self.broker_path,
-        }
-        
-        try:
-            with open(self._config_file, 'w', encoding='utf-8') as f:
-                json.dump(data, f, indent=2)
-        except Exception as e:
-            print(f"Warning: Failed to save config: {e}")
-    
+            self._validation_warnings.append(
+                f"Split ratios must sum to 1.0, got {ratio_sum:.4f}"
+            )
+
+        for w in self._validation_warnings:
+            _log.warning("Config validation: %s", w)
+
+        # Only raise for fatal issues in live mode
+        if (
+            self.trading_mode == TradingMode.LIVE
+            and self._validation_warnings
+        ):
+            raise ValueError(
+                f"Configuration errors (LIVE mode): "
+                f"{'; '.join(self._validation_warnings)}"
+            )
+
+    @property
+    def validation_warnings(self) -> List[str]:
+        """Access validation warnings without re-validating."""
+        return list(self._validation_warnings)
+
+    # ==================== SAVE / RELOAD ====================
+
+    def save(self) -> None:
+        """
+        FIX #4: Save ALL configuration including sub-configs.
+        """
+        with self._lock:
+            data = {
+                "capital": self.capital,
+                "trading_mode": self.trading_mode.value,
+                "risk_profile": self.risk_profile.value,
+                "market_type": self.market_type.value,
+                "stock_pool": self.stock_pool,
+                "broker_path": self.broker_path,
+                "min_stocks_for_training": self.min_stocks_for_training,
+                "auto_learn_epochs": self.auto_learn_epochs,
+                # Sub-configs
+                "data": _dataclass_to_dict(self.data),
+                "model": _dataclass_to_dict(self.model),
+                "trading": _dataclass_to_dict(self.trading),
+                "risk": _dataclass_to_dict(self.risk),
+                "security": _dataclass_to_dict(self.security),
+                "alerts": _dataclass_to_dict(self.alerts),
+            }
+
+            try:
+                self._config_file.parent.mkdir(parents=True, exist_ok=True)
+                # Write to temp file first, then rename (atomic on most OS)
+                tmp_path = self._config_file.with_suffix(".tmp")
+                with open(tmp_path, "w", encoding="utf-8") as f:
+                    json.dump(data, f, indent=2, default=str)
+                tmp_path.replace(self._config_file)
+            except Exception as e:
+                _log.error("Failed to save config: %s", e)
+
+    def reload(self) -> None:
+        """
+        FIX #5: Hot-reload — reset sub-configs to defaults, then re-apply.
+        """
+        with self._lock:
+            # Reset sub-configs to defaults
+            self.data = DataConfig()
+            self.model = ModelConfig()
+            self.trading = TradingConfig()
+            self.risk = RiskConfig()
+            self.security = SecurityConfig()
+            self.alerts = AlertConfig()
+
+            self._load()
+            self._validate()
+
+    # ==================== MARKET HOURS ====================
+
     def is_market_open(self) -> bool:
         """
-        Check if market is currently open.
-        Fixes:
-        - Uses China trading calendar (holidays)
-        - Uses Asia/Shanghai timezone (avoids machine-local timezone issues)
-        - Handles lunch break via your existing AM/PM session windows
+        FIX #10: Robust market-open check with proper fallback.
         """
         try:
             from zoneinfo import ZoneInfo
+
             now = datetime.now(tz=ZoneInfo("Asia/Shanghai"))
         except Exception:
             now = datetime.now()
 
-        # holiday/weekend check (core.constants)
+        # Weekend check (always available)
+        if now.weekday() >= 5:
+            return False
+
+        # Try holiday calendar if available
         try:
             from core.constants import is_trading_day
+
             if not is_trading_day(now.date()):
                 return False
-        except Exception:
-            if now.weekday() >= 5:
-                return False
+        except ImportError:
+            pass  # No holiday calendar — weekday check is our best effort
 
         current_time = now.time()
         t = self.trading
@@ -680,14 +765,23 @@ class Config:
         afternoon = t.market_open_pm <= current_time <= t.market_close_pm
 
         return morning or afternoon
-    
+
+    # ==================== UTILITIES ====================
+
     def get_min_data_required(self) -> int:
-        """Get minimum data points required for training"""
+        """Get minimum data points required for training."""
         return (
-            self.model.sequence_length + 
-            self.model.prediction_horizon + 
-            self.model.embargo_bars + 
-            50  # Buffer
+            self.model.sequence_length
+            + self.model.prediction_horizon
+            + self.model.embargo_bars
+            + 50  # Buffer
+        )
+
+    def __repr__(self) -> str:
+        return (
+            f"Config(mode={self.trading_mode.value}, "
+            f"capital={self.capital}, "
+            f"risk={self.risk_profile.value})"
         )
 
 

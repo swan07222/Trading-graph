@@ -1,103 +1,301 @@
+# utils/metrics.py
 """
-Prometheus-style Metrics Export
+Prometheus-style Metrics Export.
+
+FIXES APPLIED:
+1.  Removed unused Metric dataclass and json import
+2.  _make_key sanitizes metric names for Prometheus validity
+3.  to_prometheus emits # TYPE and # HELP annotations
+4.  Histogram emits proper _bucket, _count, _sum lines
+5.  start_process_metrics uses lock for thread safety
+6.  cpu_percent(interval=None) first-call warmup
+7.  Added reset() and remove() methods for lifecycle management
+8.  Added configurable histogram buckets
+9.  Stale key eviction via max_keys limit
 """
+from __future__ import annotations
+
+import re
 import threading
 import time
-from typing import Dict
-from dataclasses import dataclass, field
+from typing import Dict, List, Optional, Tuple
 from datetime import datetime
-import json
 
 from utils.logger import get_logger
 
 log = get_logger(__name__)
 
+# Prometheus metric name validation
+_VALID_METRIC_NAME = re.compile(r"^[a-zA-Z_:][a-zA-Z0-9_:]*$")
+_VALID_LABEL_NAME = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
 
-@dataclass
-class Metric:
-    name: str
-    value: float
-    labels: Dict[str, str] = field(default_factory=dict)
-    timestamp: datetime = field(default_factory=datetime.now)
+# Default histogram buckets (latency-oriented)
+DEFAULT_BUCKETS: Tuple[float, ...] = (
+    0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0,
+)
+
+
+def _sanitize_name(name: str) -> str:
+    """
+    FIX #2: Sanitize metric name for Prometheus compatibility.
+    Replaces invalid characters with underscores.
+    """
+    # Replace common invalid chars
+    sanitized = re.sub(r"[^a-zA-Z0-9_:]", "_", name)
+    # Ensure doesn't start with digit
+    if sanitized and sanitized[0].isdigit():
+        sanitized = "_" + sanitized
+    if not sanitized:
+        sanitized = "_unnamed"
+    return sanitized
+
+
+def _validate_labels(labels: Optional[Dict[str, str]]) -> None:
+    """Validate label names and values."""
+    if labels is None:
+        return
+    for key, value in labels.items():
+        if not _VALID_LABEL_NAME.match(key):
+            raise ValueError(
+                f"Invalid label name {key!r} — must match {_VALID_LABEL_NAME.pattern}"
+            )
+        if not isinstance(value, str):
+            raise TypeError(f"Label value for {key!r} must be a string, got {type(value).__name__}")
 
 
 class MetricsRegistry:
-    """Simple metrics registry for observability"""
-    
-    def __init__(self):
+    """
+    Prometheus-compatible metrics registry.
+
+    Supports counters, gauges, and histograms with proper exposition format.
+    """
+
+    def __init__(self, max_keys: int = 10000) -> None:
         self._lock = threading.RLock()
         self._counters: Dict[str, float] = {}
         self._gauges: Dict[str, float] = {}
-        self._histograms: Dict[str, list] = {}
-    
-    def inc_counter(self, name: str, value: float = 1.0, labels: Dict = None):
-        """Increment a counter"""
+        self._histograms: Dict[str, List[float]] = {}
+        self._histogram_buckets: Dict[str, Tuple[float, ...]] = {}
+        self._max_keys = max_keys
+        self._max_observations = 1000
+
+        # Track metric types for TYPE annotation
+        self._metric_types: Dict[str, str] = {}
+        self._metric_help: Dict[str, str] = {}
+
+    def inc_counter(
+        self,
+        name: str,
+        value: float = 1.0,
+        labels: Optional[Dict[str, str]] = None,
+        help_text: str = "",
+    ) -> None:
+        """Increment a counter."""
+        if value < 0:
+            raise ValueError("Counter can only be incremented (value >= 0)")
+
+        _validate_labels(labels)
+        name = _sanitize_name(name)
         key = self._make_key(name, labels)
+
         with self._lock:
             self._counters[key] = self._counters.get(key, 0) + value
-    
-    def set_gauge(self, name: str, value: float, labels: Dict = None):
-        """Set a gauge value"""
+            self._metric_types[name] = "counter"
+            if help_text:
+                self._metric_help[name] = help_text
+            self._check_key_limit()
+
+    def set_gauge(
+        self,
+        name: str,
+        value: float,
+        labels: Optional[Dict[str, str]] = None,
+        help_text: str = "",
+    ) -> None:
+        """Set a gauge value."""
+        _validate_labels(labels)
+        name = _sanitize_name(name)
         key = self._make_key(name, labels)
+
         with self._lock:
             self._gauges[key] = value
-    
-    def observe_histogram(self, name: str, value: float, labels: Dict = None):
-        """Observe a value for histogram"""
+            self._metric_types[name] = "gauge"
+            if help_text:
+                self._metric_help[name] = help_text
+            self._check_key_limit()
+
+    def observe_histogram(
+        self,
+        name: str,
+        value: float,
+        labels: Optional[Dict[str, str]] = None,
+        buckets: Optional[Tuple[float, ...]] = None,
+        help_text: str = "",
+    ) -> None:
+        """Observe a value for histogram."""
+        _validate_labels(labels)
+        name = _sanitize_name(name)
         key = self._make_key(name, labels)
+
         with self._lock:
             if key not in self._histograms:
                 self._histograms[key] = []
+                self._histogram_buckets[key] = buckets or DEFAULT_BUCKETS
+
             self._histograms[key].append(value)
-            # Keep last 1000 observations
-            if len(self._histograms[key]) > 1000:
-                self._histograms[key] = self._histograms[key][-1000:]
-    
-    def _make_key(self, name: str, labels: Dict = None) -> str:
-        """
-        Prometheus label format:
-        metric_name{label="value",...}
-        """
+
+            # Keep last N observations
+            if len(self._histograms[key]) > self._max_observations:
+                self._histograms[key] = self._histograms[key][
+                    -self._max_observations:
+                ]
+
+            self._metric_types[name] = "histogram"
+            if help_text:
+                self._metric_help[name] = help_text
+            self._check_key_limit()
+
+    def _make_key(self, name: str, labels: Optional[Dict[str, str]] = None) -> str:
+        """Build Prometheus-format key: metric_name{label="value",...}"""
         if not labels:
             return name
-        label_str = ",".join(f'{k}="{v}"' for k, v in sorted(labels.items()))
+        label_str = ",".join(
+            f'{k}="{v}"' for k, v in sorted(labels.items())
+        )
         return f"{name}{{{label_str}}}"
-    
+
+    def _parse_key(self, key: str) -> Tuple[str, str]:
+        """Split key into (base_name, labels_string)."""
+        if "{" in key:
+            idx = key.index("{")
+            return key[:idx], key[idx:]
+        return key, ""
+
+    def _check_key_limit(self) -> None:
+        """FIX #9: Evict oldest keys if we exceed max_keys."""
+        total = len(self._counters) + len(self._gauges) + len(self._histograms)
+        if total <= self._max_keys:
+            return
+
+        # Evict from histograms first (they use the most memory)
+        while (
+            self._histograms
+            and len(self._counters) + len(self._gauges) + len(self._histograms)
+            > self._max_keys
+        ):
+            oldest_key = next(iter(self._histograms))
+            del self._histograms[oldest_key]
+            self._histogram_buckets.pop(oldest_key, None)
+            log.debug("Evicted histogram key: %s", oldest_key)
+
+    def reset(self) -> None:
+        """FIX #7: Clear all metrics."""
+        with self._lock:
+            self._counters.clear()
+            self._gauges.clear()
+            self._histograms.clear()
+            self._histogram_buckets.clear()
+            self._metric_types.clear()
+            self._metric_help.clear()
+
+    def remove(self, name: str, labels: Optional[Dict[str, str]] = None) -> None:
+        """FIX #7: Remove a specific metric."""
+        name = _sanitize_name(name)
+        key = self._make_key(name, labels)
+        with self._lock:
+            self._counters.pop(key, None)
+            self._gauges.pop(key, None)
+            self._histograms.pop(key, None)
+            self._histogram_buckets.pop(key, None)
+
     def get_all(self) -> Dict:
-        """Get all metrics"""
+        """Get all metrics as a dict."""
         with self._lock:
-            return {
-                'counters': dict(self._counters),
-                'gauges': dict(self._gauges),
-                'histograms': {k: {'count': len(v), 'sum': sum(v), 'avg': sum(v)/len(v) if v else 0}
-                              for k, v in self._histograms.items()}
+            result = {
+                "counters": dict(self._counters),
+                "gauges": dict(self._gauges),
+                "histograms": {},
             }
-    
+            for k, v in self._histograms.items():
+                result["histograms"][k] = {
+                    "count": len(v),
+                    "sum": sum(v),
+                    "avg": sum(v) / len(v) if v else 0,
+                }
+            return result
+
     def to_prometheus(self) -> str:
-        """Export counters, gauges, histogram count/sum in Prometheus format."""
-        lines = []
+        """
+        FIX #3, #4: Export in valid Prometheus exposition format.
+        Includes # TYPE and # HELP annotations.
+        Histograms emit proper _bucket, _count, _sum lines.
+        """
+        lines: List[str] = []
+        emitted_types: set = set()
+
         with self._lock:
-            for key, value in self._counters.items():
+            # --- Counters ---
+            for key, value in sorted(self._counters.items()):
+                base, _ = self._parse_key(key)
+                if base not in emitted_types:
+                    help_text = self._metric_help.get(base, "")
+                    if help_text:
+                        lines.append(f"# HELP {base} {help_text}")
+                    lines.append(f"# TYPE {base} counter")
+                    emitted_types.add(base)
                 lines.append(f"{key} {float(value)}")
 
-            for key, value in self._gauges.items():
+            # --- Gauges ---
+            for key, value in sorted(self._gauges.items()):
+                base, _ = self._parse_key(key)
+                if base not in emitted_types:
+                    help_text = self._metric_help.get(base, "")
+                    if help_text:
+                        lines.append(f"# HELP {base} {help_text}")
+                    lines.append(f"# TYPE {base} gauge")
+                    emitted_types.add(base)
                 lines.append(f"{key} {float(value)}")
 
-            # Histograms: export _count and _sum
-            for key, obs in self._histograms.items():
+            # --- Histograms ---
+            for key, obs in sorted(self._histograms.items()):
+                base, labels = self._parse_key(key)
+                buckets = self._histogram_buckets.get(key, DEFAULT_BUCKETS)
+
+                if base not in emitted_types:
+                    help_text = self._metric_help.get(base, "")
+                    if help_text:
+                        lines.append(f"# HELP {base} {help_text}")
+                    lines.append(f"# TYPE {base} histogram")
+                    emitted_types.add(base)
+
                 count = len(obs)
-                s = float(sum(obs)) if obs else 0.0
+                total = float(sum(obs)) if obs else 0.0
 
-                # Turn "metric{..}" into "metric_count{..}" etc.
-                if "{" in key:
-                    base = key[:key.index("{")]
-                    labels = key[key.index("{"):]
+                # FIX #4: Emit proper _bucket lines
+                # Strip existing labels for re-composition
+                existing_labels = ""
+                if labels:
+                    # Remove surrounding { }
+                    existing_labels = labels[1:-1]
+
+                for bound in sorted(buckets):
+                    bucket_count = sum(1 for o in obs if o <= bound)
+                    if existing_labels:
+                        label_str = f"{{{existing_labels},le=\"{bound}\"}}"
+                    else:
+                        label_str = f"{{le=\"{bound}\"}}"
+                    lines.append(f"{base}_bucket{label_str} {float(bucket_count)}")
+
+                # +Inf bucket
+                if existing_labels:
+                    inf_label = f"{{{existing_labels},le=\"+Inf\"}}"
                 else:
-                    base = key
-                    labels = ""
+                    inf_label = '{le="+Inf"}'
+                lines.append(f"{base}_bucket{inf_label} {float(count)}")
 
+                # _count and _sum
                 lines.append(f"{base}_count{labels} {float(count)}")
-                lines.append(f"{base}_sum{labels} {float(s)}")
+                lines.append(f"{base}_sum{labels} {float(total)}")
 
         return "\n".join(lines) + ("\n" if lines else "")
 
@@ -107,45 +305,90 @@ _metrics = MetricsRegistry()
 
 
 def get_metrics() -> MetricsRegistry:
+    """Get the global metrics registry."""
     return _metrics
 
 
 # Convenience functions
-def inc_counter(name: str, value: float = 1.0, labels: Dict = None):
+def inc_counter(
+    name: str,
+    value: float = 1.0,
+    labels: Optional[Dict[str, str]] = None,
+) -> None:
     _metrics.inc_counter(name, value, labels)
 
-def set_gauge(name: str, value: float, labels: Dict = None):
+
+def set_gauge(
+    name: str,
+    value: float,
+    labels: Optional[Dict[str, str]] = None,
+) -> None:
     _metrics.set_gauge(name, value, labels)
 
-def observe(name: str, value: float, labels: Dict = None):
+
+def observe(
+    name: str,
+    value: float,
+    labels: Optional[Dict[str, str]] = None,
+) -> None:
     _metrics.observe_histogram(name, value, labels)
 
+
+_process_metrics_lock = threading.Lock()
 _process_metrics_started = False
 
-def start_process_metrics(interval_seconds: float = 5.0):
-    """Background gauges: cpu/mem/threads. Safe to call multiple times."""
+
+def start_process_metrics(interval_seconds: float = 5.0) -> None:
+    """
+    Background gauges: cpu/mem/threads. Safe to call multiple times.
+
+    FIX #5: Thread-safe guard.
+    FIX #6: Warmup cpu_percent on first call.
+    """
     global _process_metrics_started
-    if _process_metrics_started:
-        return
-    _process_metrics_started = True
+
+    # FIX #5: Proper lock
+    with _process_metrics_lock:
+        if _process_metrics_started:
+            return
+        _process_metrics_started = True
 
     try:
         import psutil
         import os
-    except Exception:
+    except ImportError:
+        log.debug("psutil not available — process metrics disabled")
         return
 
     proc = psutil.Process(os.getpid())
 
-    def loop():
+    # FIX #6: First call always returns 0.0 — discard it
+    try:
+        proc.cpu_percent(interval=None)
+    except Exception:
+        pass
+
+    def loop() -> None:
         while True:
             try:
-                set_gauge("process_cpu_percent", float(proc.cpu_percent(interval=None)))
+                cpu = float(proc.cpu_percent(interval=None))
+                set_gauge(
+                    "process_cpu_percent", cpu,
+                    help_text="Process CPU usage percent",
+                )
                 mem = proc.memory_info()
-                set_gauge("process_memory_rss_bytes", float(mem.rss))
-                set_gauge("process_threads", float(proc.num_threads()))
-            except Exception:
-                pass
+                set_gauge(
+                    "process_memory_rss_bytes",
+                    float(mem.rss),
+                    help_text="Process resident set size in bytes",
+                )
+                set_gauge(
+                    "process_threads",
+                    float(proc.num_threads()),
+                    help_text="Number of process threads",
+                )
+            except Exception as e:
+                log.debug("Process metrics collection failed: %s", e)
             time.sleep(float(interval_seconds))
 
     t = threading.Thread(target=loop, daemon=True, name="process_metrics")

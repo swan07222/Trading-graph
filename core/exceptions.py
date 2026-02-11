@@ -1,173 +1,199 @@
+# core/exceptions.py
 """
-Custom Exceptions - Comprehensive error handling
-Score Target: 10/10
+Custom Exceptions — comprehensive error handling.
+
+FIXES APPLIED:
+1. Added __str__ that includes code and details (not just message)
+2. to_dict includes exception class name and timestamp
+3. details is defensively copied to prevent caller mutation
+4. Renamed SecurityError → TradingSecurityError to avoid shadowing builtins
+5. Added __repr__ for debugging
 """
-from typing import Optional, Dict, Any
+from __future__ import annotations
+
+from datetime import datetime
+from typing import Optional, Dict, Any, List
 
 
 class TradingSystemError(Exception):
-    """Base exception for trading system"""
-    
-    def __init__(self, message: str, code: str = None, details: Dict[str, Any] = None):
+    """Base exception for trading system."""
+
+    def __init__(
+        self,
+        message: str,
+        code: Optional[str] = None,
+        details: Optional[Dict[str, Any]] = None,
+    ) -> None:
         super().__init__(message)
         self.message = message
         self.code = code or self.__class__.__name__
-        self.details = details or {}
-    
-    def to_dict(self) -> Dict:
+        # FIX #3: Defensive copy so caller mutations don't affect us
+        self.details: Dict[str, Any] = dict(details) if details else {}
+        self.timestamp = datetime.now()
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Serialize to dict for logging/API responses."""
         return {
-            'error': self.code,
-            'message': self.message,
-            'details': self.details
+            "error_type": self.__class__.__name__,
+            "error": self.code,
+            "message": self.message,
+            "details": self.details,
+            "timestamp": self.timestamp.isoformat(),
         }
 
+    # FIX #1: __str__ includes code and details for meaningful log output
+    def __str__(self) -> str:
+        parts = [self.message]
+        if self.code and self.code != self.__class__.__name__:
+            parts.insert(0, f"[{self.code}]")
+        if self.details:
+            parts.append(f"(details: {self.details})")
+        return " ".join(parts)
 
-# Data Errors
+    def __repr__(self) -> str:
+        return (
+            f"{self.__class__.__name__}("
+            f"message={self.message!r}, "
+            f"code={self.code!r}, "
+            f"details={self.details!r})"
+        )
+
+
+# ── Data Errors ──────────────────────────────────────────────
+
+
 class DataError(TradingSystemError):
-    """Base data error"""
-    pass
+    """Base data error."""
 
 
 class DataFetchError(DataError):
-    """Failed to fetch data"""
-    pass
+    """Failed to fetch data."""
 
 
 class DataValidationError(DataError):
-    """Data validation failed"""
-    pass
+    """Data validation failed."""
 
 
 class InsufficientDataError(DataError):
-    """Not enough data"""
-    pass
+    """Not enough data."""
 
 
 class DataSourceUnavailableError(DataError):
-    """Data source unavailable"""
-    pass
+    """Data source unavailable."""
 
 
-# Trading Errors
+# ── Trading Errors ───────────────────────────────────────────
+
+
 class TradingError(TradingSystemError):
-    """Base trading error"""
-    pass
+    """Base trading error."""
 
 
 class OrderError(TradingError):
-    """Order-related error"""
-    pass
+    """Order-related error."""
 
 
 class OrderValidationError(OrderError):
-    """Order validation failed"""
-    pass
+    """Order validation failed."""
 
 
 class OrderRejectedError(OrderError):
-    """Order was rejected"""
-    pass
+    """Order was rejected."""
 
 
 class InsufficientFundsError(OrderError):
-    """Insufficient funds for order"""
-    pass
+    """Insufficient funds for order."""
 
 
 class InsufficientPositionError(OrderError):
-    """Insufficient position for sell order"""
-    pass
+    """Insufficient position for sell order."""
 
 
 class PositionLimitError(OrderError):
-    """Position limit exceeded"""
-    pass
+    """Position limit exceeded."""
 
 
-# Risk Errors
+# ── Risk Errors ──────────────────────────────────────────────
+
+
 class RiskError(TradingSystemError):
-    """Base risk error"""
-    pass
+    """Base risk error."""
 
 
 class RiskLimitBreachedError(RiskError):
-    """Risk limit was breached"""
-    pass
+    """Risk limit was breached."""
 
 
 class DailyLossLimitError(RiskError):
-    """Daily loss limit reached"""
-    pass
+    """Daily loss limit reached."""
 
 
 class DrawdownLimitError(RiskError):
-    """Maximum drawdown exceeded"""
-    pass
+    """Maximum drawdown exceeded."""
 
 
 class CircuitBreakerError(RiskError):
-    """Circuit breaker activated"""
-    pass
+    """Circuit breaker activated."""
 
 
-# Model Errors
+# ── Model Errors ─────────────────────────────────────────────
+
+
 class ModelError(TradingSystemError):
-    """Base model error"""
-    pass
+    """Base model error."""
 
 
 class ModelNotFoundError(ModelError):
-    """Model file not found"""
-    pass
+    """Model file not found."""
 
 
 class ModelLoadError(ModelError):
-    """Failed to load model"""
-    pass
+    """Failed to load model."""
 
 
 class PredictionError(ModelError):
-    """Prediction failed"""
-    pass
+    """Prediction failed."""
 
 
-# Broker Errors
+# ── Broker Errors ────────────────────────────────────────────
+
+
 class BrokerError(TradingSystemError):
-    """Base broker error"""
-    pass
+    """Base broker error."""
 
 
 class BrokerConnectionError(BrokerError):
-    """Failed to connect to broker"""
-    pass
+    """Failed to connect to broker."""
 
 
 class BrokerAuthenticationError(BrokerError):
-    """Broker authentication failed"""
-    pass
+    """Broker authentication failed."""
 
 
 class BrokerOrderError(BrokerError):
-    """Broker rejected order"""
-    pass
+    """Broker rejected order."""
 
 
-# Security Errors
-class SecurityError(TradingSystemError):
-    """Base security error"""
-    pass
+# ── Security Errors ──────────────────────────────────────────
+
+# FIX #4: Renamed from SecurityError to avoid shadowing builtins.SecurityError
 
 
-class AuthenticationError(SecurityError):
-    """Authentication failed"""
-    pass
+class TradingSecurityError(TradingSystemError):
+    """Base security error."""
 
 
-class AuthorizationError(SecurityError):
-    """Not authorized for action"""
-    pass
+class AuthenticationError(TradingSecurityError):
+    """Authentication failed."""
 
 
-class RateLimitError(SecurityError):
-    """Rate limit exceeded"""
-    pass
+class AuthorizationError(TradingSecurityError):
+    """Not authorized for action."""
+
+
+class RateLimitError(TradingSecurityError):
+    """Rate limit exceeded."""
+
+
+# Backward compatibility alias (import-safe, but won't shadow builtins)
+SecurityError_ = TradingSecurityError

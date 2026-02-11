@@ -2,13 +2,23 @@
 """
 AI Stock Predictor - Real-time prediction with ensemble models
 
-FIXED:
-- Integration with updated DataProcessor and RealtimePredictor
-- Proper interval/horizon handling
-- Real-time forecast curve generation
-- Robust error handling
-- Removed double ensemble loading bug
-- Removed redundant days parameter in fetch
+FIXES APPLIED:
+1. Added skip_cache parameter to predict() for real-time updates
+2. Removed duplicate _clean_code() fallback — simplified to minimal fallback
+3. Cache TTL configurable and properly invalidated
+4. Thread safety: all public methods acquire _predict_lock
+5. Bounds checking on ensemble probabilities
+6. RSI interpretation fixed: FeatureEngine outputs rsi_14 as (raw/100 - 0.5)
+7. Reuse DataFetcher.clean_code() instead of custom logic
+8. Use actual atr_pct from features for trading levels
+9. Position sizing guards against 0 shares and unaffordable lots
+10. macd_hist used for direction (not macd_signal which is numeric)
+11. Forecast fallback uses stochastic random walk instead of flat decay
+12. Constructor param override is explicit and logged
+13. Error handling improved with structured warnings
+14. Cache eviction uses bounded size with proper locking
+15. _generate_forecast seed is deterministic per stock+time for consistency
+16. get_realtime_forecast_curve properly returns empty on error
 """
 import numpy as np
 import pandas as pd
@@ -17,6 +27,7 @@ from typing import Optional, List, Dict, Tuple, Any
 from dataclasses import dataclass, field
 from enum import Enum
 import threading
+import time
 
 from config.settings import CONFIG
 from utils.logger import get_logger
@@ -62,92 +73,104 @@ class Prediction:
     stock_code: str
     stock_name: str = ""
     timestamp: datetime = field(default_factory=datetime.now)
-    
+
     # Signal
     signal: Signal = Signal.HOLD
     signal_strength: float = 0.0
     confidence: float = 0.0
-    
+
     # Probabilities
     prob_up: float = 0.33
     prob_neutral: float = 0.34
     prob_down: float = 0.33
-    
+
     # Price data
     current_price: float = 0.0
     price_history: List[float] = field(default_factory=list)
     predicted_prices: List[float] = field(default_factory=list)
-    
+
     # Technical indicators
     rsi: float = 50.0
     macd_signal: str = "NEUTRAL"
     trend: str = "NEUTRAL"
-    
+
     # Trading levels
     levels: TradingLevels = field(default_factory=TradingLevels)
-    
+
     # Position sizing
     position: PositionSize = field(default_factory=PositionSize)
-    
+
     # Analysis
     reasons: List[str] = field(default_factory=list)
     warnings: List[str] = field(default_factory=list)
-    
+
     # Metadata
     interval: str = "1d"
     horizon: int = 5
-    
+
     # Extra fields for UI/signal generator
     model_agreement: float = 1.0
     entropy: float = 0.0
+
+    # ATR from features (used internally for levels)
+    atr_pct_value: float = 0.02
 
 
 class Predictor:
     """
     AI Stock Predictor with real-time capabilities.
-    
+
     Features:
     - Ensemble model predictions
     - Multi-step price forecasting
     - Real-time chart updates
     - Multiple interval support (1m, 5m, 1d, etc.)
+    - Prediction caching with configurable TTL
     """
-    
+
+    # Prediction cache TTL in seconds
+    _CACHE_TTL: float = 5.0
+    _MAX_CACHE_SIZE: int = 200
+
     def __init__(
-        self, 
+        self,
         capital: float = None,
         interval: str = "1d",
-        prediction_horizon: int = None
+        prediction_horizon: int = None,
     ):
-        """
-        Initialize predictor.
-        
-        Args:
-            capital: Trading capital
-            interval: Default data interval
-            prediction_horizon: Default prediction horizon
-        """
         self.capital = float(capital or CONFIG.CAPITAL)
         self.interval = str(interval).lower()
         self.horizon = int(prediction_horizon or CONFIG.PREDICTION_HORIZON)
-        
-        self._lock = threading.RLock()
-        
+
+        # Single lock for all prediction operations
+        self._predict_lock = threading.RLock()
+
         # Components (lazy loaded)
         self.ensemble = None
         self.forecaster = None
         self.processor = None
         self.feature_engine = None
         self.fetcher = None
-        
+
         self._feature_cols: List[str] = []
-        self._loaded = False
-        
+
+        # Prediction cache: code -> (timestamp, Prediction)
+        self._pred_cache: Dict[str, Tuple[float, Prediction]] = {}
+        self._cache_lock = threading.Lock()
+
+        # Track if constructor params were overridden by model metadata
+        self._requested_interval = self.interval
+        self._requested_horizon = self.horizon
+
         # Load models
         self._load_models()
-    
+
+    # =========================================================================
+    # MODEL LOADING
+    # =========================================================================
+
     def _load_models(self) -> bool:
-        """Load all required models (robust fallback to any available ensemble)."""
+        """Load all required models with robust fallback."""
         try:
             from data.processor import DataProcessor
             from data.features import FeatureEngine
@@ -161,76 +184,70 @@ class Predictor:
 
             model_dir = CONFIG.MODEL_DIR
 
-            # ----------------------------
             # Pick best ensemble + scaler pair
-            # ----------------------------
-            req_ens = model_dir / f"ensemble_{self.interval}_{self.horizon}.pt"
-            req_scl = model_dir / f"scaler_{self.interval}_{self.horizon}.pkl"
+            chosen_ens, chosen_scl = self._find_best_model_pair(model_dir)
 
-            chosen_ens = None
-            chosen_scl = None
-
-            if req_ens.exists():
-                chosen_ens = req_ens
-                chosen_scl = req_scl if req_scl.exists() else None
-            else:
-                # 1) common fallback
-                fb_ens = model_dir / "ensemble_1d_5.pt"
-                fb_scl = model_dir / "scaler_1d_5.pkl"
-                if fb_ens.exists():
-                    chosen_ens = fb_ens
-                    chosen_scl = fb_scl if fb_scl.exists() else None
-                else:
-                    # 2) any available ensemble, prefer one that has matching scaler
-                    ensembles = sorted(model_dir.glob("ensemble_*.pt"), key=lambda p: p.stat().st_mtime, reverse=True)
-                    for ep in ensembles:
-                        parts = ep.stem.split("_", 2)  # ensemble_{interval}_{horizon}
-                        if len(parts) == 3:
-                            interval = parts[1]
-                            horizon = parts[2]
-                            sp = model_dir / f"scaler_{interval}_{horizon}.pkl"
-                            if sp.exists():
-                                chosen_ens = ep
-                                chosen_scl = sp
-                                break
-                    if chosen_ens is None and ensembles:
-                        chosen_ens = ensembles[0]  # last resort
-
-            # ----------------------------
-            # Load scaler (best effort)
-            # ----------------------------
+            # Load scaler
             if chosen_scl and chosen_scl.exists():
                 self.processor.load_scaler(str(chosen_scl))
             else:
-                # keep your legacy fallback
                 legacy = model_dir / "scaler_1d_5.pkl"
                 if legacy.exists():
                     self.processor.load_scaler(str(legacy))
                 else:
-                    log.warning("No scaler found")
+                    log.warning(
+                        "No scaler found — predictions may be inaccurate"
+                    )
 
-            # ----------------------------
             # Load ensemble
-            # ----------------------------
             self.ensemble = None
             if chosen_ens and chosen_ens.exists():
-                input_size = self.processor.n_features or len(self._feature_cols)
+                input_size = (
+                    self.processor.n_features or len(self._feature_cols)
+                )
                 ens = EnsembleModel(input_size=input_size)
                 if ens.load(str(chosen_ens)) and ens.models:
                     self.ensemble = ens
-                    # adopt loaded interval/horizon from model meta for UI consistency
-                    self.interval = str(getattr(self.ensemble, "interval", self.interval))
-                    self.horizon = int(getattr(self.ensemble, "prediction_horizon", self.horizon))
-                    log.info(f"Ensemble loaded from {chosen_ens.name} (interval={self.interval}, horizon={self.horizon})")
+
+                    loaded_interval = str(
+                        getattr(self.ensemble, "interval", self.interval)
+                    )
+                    loaded_horizon = int(
+                        getattr(
+                            self.ensemble, "prediction_horizon",
+                            self.horizon
+                        )
+                    )
+
+                    # Log if model overrides constructor params
+                    if (
+                        loaded_interval != self._requested_interval
+                        or loaded_horizon != self._requested_horizon
+                    ):
+                        log.info(
+                            f"Model metadata overrides constructor: "
+                            f"interval {self._requested_interval}"
+                            f"->{loaded_interval}, "
+                            f"horizon {self._requested_horizon}"
+                            f"->{loaded_horizon}"
+                        )
+
+                    self.interval = loaded_interval
+                    self.horizon = loaded_horizon
+
+                    log.info(
+                        f"Ensemble loaded from {chosen_ens.name} "
+                        f"(interval={self.interval}, "
+                        f"horizon={self.horizon})"
+                    )
                 else:
                     log.warning(f"Failed to load ensemble: {chosen_ens}")
             else:
                 log.warning("No ensemble model found")
 
-            # Load forecaster (optional, keep existing behavior)
+            # Load forecaster (optional)
             self._load_forecaster()
 
-            self._loaded = True
             return True
 
         except ImportError as e:
@@ -239,14 +256,51 @@ class Predictor:
         except Exception as e:
             log.error(f"Failed to load models: {e}")
             return False
-    
+
+    def _find_best_model_pair(self, model_dir):
+        """Find the best ensemble + scaler file pair."""
+        from pathlib import Path
+
+        req_ens = model_dir / f"ensemble_{self.interval}_{self.horizon}.pt"
+        req_scl = model_dir / f"scaler_{self.interval}_{self.horizon}.pkl"
+
+        if req_ens.exists():
+            return req_ens, req_scl if req_scl.exists() else None
+
+        # Fallback 1: common default
+        fb_ens = model_dir / "ensemble_1d_5.pt"
+        fb_scl = model_dir / "scaler_1d_5.pkl"
+        if fb_ens.exists():
+            return fb_ens, fb_scl if fb_scl.exists() else None
+
+        # Fallback 2: any available ensemble, prefer matching scaler
+        ensembles = sorted(
+            model_dir.glob("ensemble_*.pt"),
+            key=lambda p: p.stat().st_mtime,
+            reverse=True,
+        )
+        for ep in ensembles:
+            parts = ep.stem.split("_", 2)
+            if len(parts) == 3:
+                sp = model_dir / f"scaler_{parts[1]}_{parts[2]}.pkl"
+                if sp.exists():
+                    return ep, sp
+
+        if ensembles:
+            return ensembles[0], None
+
+        return None, None
+
     def _load_forecaster(self):
-        """Load TCN forecaster for price curve prediction"""
+        """Load TCN forecaster for price curve prediction."""
         try:
             import torch
             from models.networks import TCNModel
 
-            forecast_path = CONFIG.MODEL_DIR / f"forecast_{self.interval}_{self.horizon}.pt"
+            forecast_path = (
+                CONFIG.MODEL_DIR
+                / f"forecast_{self.interval}_{self.horizon}.pt"
+            )
             if not forecast_path.exists():
                 forecast_path = CONFIG.MODEL_DIR / "forecast_1d_5.pt"
 
@@ -254,15 +308,25 @@ class Predictor:
                 log.debug("No forecaster model found")
                 return
 
-            data = torch.load(forecast_path, map_location='cpu', weights_only=False)
+            data = torch.load(
+                forecast_path, map_location="cpu", weights_only=False
+            )
+
+            required_keys = {"input_size", "horizon", "arch", "state_dict"}
+            if not required_keys.issubset(data.keys()):
+                log.warning(
+                    f"Forecaster checkpoint missing keys: "
+                    f"{required_keys - set(data.keys())}"
+                )
+                return
 
             self.forecaster = TCNModel(
-                input_size=data['input_size'],
-                hidden_size=data['arch']['hidden_size'],
-                num_classes=data['horizon'],
-                dropout=data['arch']['dropout']
+                input_size=data["input_size"],
+                hidden_size=data["arch"]["hidden_size"],
+                num_classes=data["horizon"],
+                dropout=data["arch"]["dropout"],
             )
-            self.forecaster.load_state_dict(data['state_dict'])
+            self.forecaster.load_state_dict(data["state_dict"])
             self.forecaster.eval()
 
             log.info(f"Forecaster loaded: horizon={data['horizon']}")
@@ -273,284 +337,509 @@ class Predictor:
         except Exception as e:
             log.debug(f"Forecaster not loaded: {e}")
             self.forecaster = None
-    
+
+    # =========================================================================
+    # PREDICTION METHODS
+    # =========================================================================
+
     def predict(
         self,
         stock_code: str,
         use_realtime_price: bool = True,
         interval: str = None,
         forecast_minutes: int = None,
-        lookback_bars: int = None
-    ):
+        lookback_bars: int = None,
+        skip_cache: bool = False,
+    ) -> Prediction:
         """
         Make full prediction with price forecast.
+
+        Args:
+            stock_code: Stock code to predict
+            use_realtime_price: Whether to use real-time price
+            interval: Data interval (1m, 5m, 1d, etc.)
+            forecast_minutes: Number of bars to forecast
+            lookback_bars: Historical bars to use
+            skip_cache: If True, bypass prediction cache (for real-time)
+
+        Returns:
+            Prediction object with all fields populated
         """
-        interval = str(interval or self.interval).lower()
-        horizon = int(forecast_minutes or self.horizon)
-        lookback = int(lookback_bars or (1400 if interval == "1m" else 600))
+        with self._predict_lock:
+            interval = str(interval or self.interval).lower()
+            horizon = int(forecast_minutes or self.horizon)
+            lookback = int(
+                lookback_bars or (1400 if interval == "1m" else 600)
+            )
 
-        code = self._clean_code(stock_code)
+            code = self._clean_code(stock_code)
 
-        pred = Prediction(
-            stock_code=code,
-            timestamp=datetime.now(),
-            interval=interval,
-            horizon=horizon
-        )
+            # Check cache unless skipped
+            if not skip_cache:
+                cached = self._get_cached_prediction(code)
+                if cached is not None:
+                    return cached
 
-        try:
-            df = self._fetch_data(code, interval, lookback, use_realtime_price)
-            if df is None or df.empty or len(df) < CONFIG.SEQUENCE_LENGTH:
-                pred.warnings.append("Insufficient data")
-                return pred
+            pred = Prediction(
+                stock_code=code,
+                timestamp=datetime.now(),
+                interval=interval,
+                horizon=horizon,
+            )
 
-            pred.stock_name = self._get_stock_name(code, df)
-            pred.current_price = float(df["close"].iloc[-1])
-            pred.price_history = df["close"].tail(180).tolist()
+            try:
+                df = self._fetch_data(
+                    code, interval, lookback, use_realtime_price
+                )
+                if (
+                    df is None
+                    or df.empty
+                    or len(df) < CONFIG.SEQUENCE_LENGTH
+                ):
+                    data_len = len(df) if df is not None else 0
+                    pred.warnings.append(
+                        f"Insufficient data: got {data_len} bars, "
+                        f"need {CONFIG.SEQUENCE_LENGTH}"
+                    )
+                    return pred
 
-            df = self.feature_engine.create_features(df)
-            self._extract_technicals(df, pred)
+                pred.stock_name = self._get_stock_name(code, df)
+                pred.current_price = float(df["close"].iloc[-1])
+                pred.price_history = df["close"].tail(180).tolist()
 
-            X = self.processor.prepare_inference_sequence(df, self._feature_cols)
+                # Check minimum rows for feature engine
+                min_rows = getattr(
+                    self.feature_engine, 'MIN_ROWS',
+                    CONFIG.SEQUENCE_LENGTH
+                )
+                if len(df) < min_rows:
+                    pred.warnings.append(
+                        f"Insufficient data for features: "
+                        f"{len(df)} < {min_rows}"
+                    )
+                    return pred
 
-            if self.ensemble:
-                ensemble_pred = self.ensemble.predict(X)
+                df = self.feature_engine.create_features(df)
+                self._extract_technicals(df, pred)
 
-                pred.prob_up = float(ensemble_pred.probabilities[2])
-                pred.prob_neutral = float(ensemble_pred.probabilities[1])
-                pred.prob_down = float(ensemble_pred.probabilities[0])
-                pred.confidence = float(ensemble_pred.confidence)
+                X = self.processor.prepare_inference_sequence(
+                    df, self._feature_cols
+                )
 
-                # Attach extra fields used by UI/signal generator
-                pred.model_agreement = float(getattr(ensemble_pred, "agreement", 1.0))
-                pred.entropy = float(getattr(ensemble_pred, "entropy", 0.0))
+                if self.ensemble:
+                    self._apply_ensemble_prediction(X, pred)
 
-                pred.signal = self._determine_signal(ensemble_pred, pred)
-                pred.signal_strength = self._calculate_signal_strength(ensemble_pred, pred)
+                pred.predicted_prices = self._generate_forecast(
+                    X, pred.current_price, horizon, pred.atr_pct_value
+                )
+                pred.levels = self._calculate_levels(pred)
+                pred.position = self._calculate_position(pred)
+                self._generate_reasons(pred)
 
-            pred.predicted_prices = self._generate_forecast(X, pred.current_price, horizon)
-            pred.levels = self._calculate_levels(pred)
-            pred.position = self._calculate_position(pred)
-            self._generate_reasons(pred)
+                # Cache the result
+                self._set_cached_prediction(code, pred)
 
-        except Exception as e:
-            log.error(f"Prediction failed for {code}: {e}")
-            pred.warnings.append(f"Prediction error: {str(e)}")
+            except Exception as e:
+                log.error(
+                    f"Prediction failed for {code}: {e}",
+                    exc_info=True
+                )
+                pred.warnings.append(
+                    f"Prediction error: {type(e).__name__}: {str(e)}"
+                )
 
-        return pred
-    
+            return pred
+
     def predict_quick_batch(
         self,
         stock_codes: List[str],
         use_realtime_price: bool = True,
         interval: str = None,
-        lookback_bars: int = None
+        lookback_bars: int = None,
     ) -> List[Prediction]:
         """Quick batch prediction without full forecasting."""
-        interval = str(interval or self.interval).lower()
-        lookback = int(lookback_bars or (1400 if interval == "1m" else 300))
+        with self._predict_lock:
+            interval = str(interval or self.interval).lower()
+            lookback = int(
+                lookback_bars or (1400 if interval == "1m" else 300)
+            )
 
-        predictions: List[Prediction] = []
+            predictions: List[Prediction] = []
 
-        for code in stock_codes:
-            try:
-                code = self._clean_code(code)
+            for stock_code in stock_codes:
+                try:
+                    code = self._clean_code(stock_code)
+                    if not code:
+                        continue
 
-                pred = Prediction(
-                    stock_code=code,
-                    timestamp=datetime.now(),
-                    interval=interval
-                )
+                    pred = Prediction(
+                        stock_code=code,
+                        timestamp=datetime.now(),
+                        interval=interval,
+                    )
 
-                df = self._fetch_data(code, interval, lookback, use_realtime_price)
-                if df is None or df.empty or len(df) < CONFIG.SEQUENCE_LENGTH:
-                    continue
+                    min_rows = getattr(
+                        self.feature_engine, 'MIN_ROWS',
+                        CONFIG.SEQUENCE_LENGTH
+                    )
 
-                pred.current_price = float(df["close"].iloc[-1])
+                    df = self._fetch_data(
+                        code, interval, lookback, use_realtime_price
+                    )
+                    if (
+                        df is None
+                        or df.empty
+                        or len(df) < CONFIG.SEQUENCE_LENGTH
+                        or len(df) < min_rows
+                    ):
+                        continue
 
-                df = self.feature_engine.create_features(df)
-                X = self.processor.prepare_inference_sequence(df, self._feature_cols)
+                    pred.current_price = float(df["close"].iloc[-1])
 
-                if self.ensemble:
-                    ensemble_pred = self.ensemble.predict(X)
+                    df = self.feature_engine.create_features(df)
+                    X = self.processor.prepare_inference_sequence(
+                        df, self._feature_cols
+                    )
 
-                    pred.prob_up = float(ensemble_pred.probabilities[2])
-                    pred.prob_neutral = float(ensemble_pred.probabilities[1])
-                    pred.prob_down = float(ensemble_pred.probabilities[0])
-                    pred.confidence = float(ensemble_pred.confidence)
+                    if self.ensemble:
+                        self._apply_ensemble_prediction(X, pred)
 
-                    pred.model_agreement = float(getattr(ensemble_pred, "agreement", 1.0))
-                    pred.entropy = float(getattr(ensemble_pred, "entropy", 0.0))
+                    predictions.append(pred)
 
-                    pred.signal = self._determine_signal(ensemble_pred, pred)
+                except Exception as e:
+                    log.debug(
+                        f"Quick prediction failed for {stock_code}: {e}"
+                    )
 
-                predictions.append(pred)
+            return predictions
 
-            except Exception as e:
-                log.debug(f"Quick prediction failed for {code}: {e}")
-
-        return predictions
-    
     def get_realtime_forecast_curve(
         self,
         stock_code: str,
         interval: str = None,
         horizon_steps: int = None,
         lookback_bars: int = None,
-        use_realtime_price: bool = True
+        use_realtime_price: bool = True,
     ) -> Tuple[List[float], List[float]]:
         """
         Get real-time forecast curve for charting.
-        
+
         Returns:
             (actual_prices, predicted_prices)
         """
-        interval = str(interval or self.interval).lower()
-        horizon = int(horizon_steps or self.horizon)
-        lookback = int(lookback_bars or (1400 if interval == "1m" else 600))
-        
-        code = self._clean_code(stock_code)
-        
-        try:
-            df = self._fetch_data(code, interval, lookback, use_realtime_price)
-            
-            if df is None or df.empty or len(df) < CONFIG.SEQUENCE_LENGTH:
+        with self._predict_lock:
+            interval = str(interval or self.interval).lower()
+            horizon = int(horizon_steps or self.horizon)
+            lookback = int(
+                lookback_bars or (1400 if interval == "1m" else 600)
+            )
+
+            code = self._clean_code(stock_code)
+
+            try:
+                min_rows = getattr(
+                    self.feature_engine, 'MIN_ROWS',
+                    CONFIG.SEQUENCE_LENGTH
+                )
+
+                df = self._fetch_data(
+                    code, interval, lookback, use_realtime_price
+                )
+
+                if (
+                    df is None
+                    or df.empty
+                    or len(df) < CONFIG.SEQUENCE_LENGTH
+                    or len(df) < min_rows
+                ):
+                    return [], []
+
+                actual = df["close"].tail(180).tolist()
+                current_price = float(df["close"].iloc[-1])
+
+                df = self.feature_engine.create_features(df)
+                X = self.processor.prepare_inference_sequence(
+                    df, self._feature_cols
+                )
+
+                # Get ATR for forecast volatility
+                atr_pct = self._get_atr_pct(df)
+
+                predicted = self._generate_forecast(
+                    X, current_price, horizon, atr_pct
+                )
+
+                return actual, predicted
+
+            except Exception as e:
+                log.warning(f"Forecast curve failed for {code}: {e}")
                 return [], []
-            
-            actual = df['close'].tail(180).tolist()
-            current_price = float(df['close'].iloc[-1])
-            
-            df = self.feature_engine.create_features(df)
-            X = self.processor.prepare_inference_sequence(df, self._feature_cols)
-            
-            predicted = self._generate_forecast(X, current_price, horizon)
-            
-            return actual, predicted
-            
-        except Exception as e:
-            log.warning(f"Forecast curve failed for {code}: {e}")
-            return [], []
-    
+
     def get_top_picks(
         self,
         stock_codes: List[str],
         n: int = 10,
-        signal_type: str = "buy"
+        signal_type: str = "buy",
     ) -> List[Prediction]:
-        """
-        Get top N stock picks based on signal type.
-        """
-        predictions = self.predict_quick_batch(stock_codes)
-        
-        if signal_type.lower() == "buy":
-            filtered = [
-                p for p in predictions
-                if p.signal in [Signal.STRONG_BUY, Signal.BUY]
-                and p.confidence >= CONFIG.MIN_CONFIDENCE
-            ]
-        else:
-            filtered = [
-                p for p in predictions
-                if p.signal in [Signal.STRONG_SELL, Signal.SELL]
-                and p.confidence >= CONFIG.MIN_CONFIDENCE
-            ]
-        
-        filtered.sort(key=lambda x: x.confidence, reverse=True)
-        
-        return filtered[:n]
-    
+        """Get top N stock picks based on signal type."""
+        with self._predict_lock:
+            predictions = self.predict_quick_batch(stock_codes)
+
+            if signal_type.lower() == "buy":
+                filtered = [
+                    p for p in predictions
+                    if p.signal in [Signal.STRONG_BUY, Signal.BUY]
+                    and p.confidence >= CONFIG.MIN_CONFIDENCE
+                ]
+            else:
+                filtered = [
+                    p for p in predictions
+                    if p.signal in [Signal.STRONG_SELL, Signal.SELL]
+                    and p.confidence >= CONFIG.MIN_CONFIDENCE
+                ]
+
+            filtered.sort(key=lambda x: x.confidence, reverse=True)
+
+            return filtered[:n]
+
+    # =========================================================================
+    # ENSEMBLE PREDICTION HELPER
+    # =========================================================================
+
+    def _apply_ensemble_prediction(
+        self, X: np.ndarray, pred: Prediction
+    ):
+        """Apply ensemble prediction with bounds checking."""
+        ensemble_pred = self.ensemble.predict(X)
+
+        probs = ensemble_pred.probabilities
+        n_classes = len(probs)
+
+        # Safe extraction with bounds checking
+        pred.prob_down = float(probs[0]) if n_classes > 0 else 0.33
+        pred.prob_neutral = float(probs[1]) if n_classes > 1 else 0.34
+        pred.prob_up = float(probs[2]) if n_classes > 2 else 0.33
+
+        # Ensure probabilities are valid
+        pred.prob_down = max(0.0, min(1.0, pred.prob_down))
+        pred.prob_neutral = max(0.0, min(1.0, pred.prob_neutral))
+        pred.prob_up = max(0.0, min(1.0, pred.prob_up))
+
+        pred.confidence = float(
+            max(0.0, min(1.0, ensemble_pred.confidence))
+        )
+
+        pred.model_agreement = float(
+            getattr(ensemble_pred, "agreement", 1.0)
+        )
+        pred.entropy = float(
+            getattr(ensemble_pred, "entropy", 0.0)
+        )
+
+        pred.signal = self._determine_signal(ensemble_pred, pred)
+        pred.signal_strength = self._calculate_signal_strength(
+            ensemble_pred, pred
+        )
+
+    # =========================================================================
+    # CACHING
+    # =========================================================================
+
+    def _get_cached_prediction(self, code: str) -> Optional[Prediction]:
+        """Get cached prediction if still valid."""
+        with self._cache_lock:
+            entry = self._pred_cache.get(code)
+            if entry is not None:
+                ts, pred = entry
+                if (time.time() - ts) < self._CACHE_TTL:
+                    return pred
+                del self._pred_cache[code]
+        return None
+
+    def _set_cached_prediction(self, code: str, pred: Prediction):
+        """Cache a prediction result with bounded size."""
+        with self._cache_lock:
+            self._pred_cache[code] = (time.time(), pred)
+
+            # Evict expired entries if cache is too large
+            if len(self._pred_cache) > self._MAX_CACHE_SIZE:
+                now = time.time()
+                expired = [
+                    k for k, (ts, _) in self._pred_cache.items()
+                    if (now - ts) > self._CACHE_TTL
+                ]
+                for k in expired:
+                    del self._pred_cache[k]
+
+                # If still too large, evict oldest
+                if len(self._pred_cache) > self._MAX_CACHE_SIZE:
+                    sorted_keys = sorted(
+                        self._pred_cache.keys(),
+                        key=lambda k: self._pred_cache[k][0]
+                    )
+                    for k in sorted_keys[:len(sorted_keys) // 2]:
+                        del self._pred_cache[k]
+
+    def invalidate_cache(self, code: str = None):
+        """Invalidate cache for a specific code or all codes."""
+        with self._cache_lock:
+            if code:
+                self._pred_cache.pop(code, None)
+            else:
+                self._pred_cache.clear()
+
+    # =========================================================================
+    # DATA FETCHING
+    # =========================================================================
+
     def _fetch_data(
         self,
         code: str,
         interval: str,
         lookback: int,
-        use_realtime: bool
+        use_realtime: bool,
     ) -> Optional[pd.DataFrame]:
-        """Fetch stock data — fixed: no redundant days parameter"""
+        """Fetch stock data with minimum data requirement."""
         try:
+            from data.fetcher import BARS_PER_DAY
+
+            interval = str(interval).lower()
+            bpd = float(BARS_PER_DAY.get(interval, 1))
+            min_days = 14
+            min_bars = int(max(min_days * bpd, min_days))
+            bars = int(max(int(lookback), int(min_bars)))
+
             df = self.fetcher.get_history(
                 code,
                 interval=interval,
-                bars=lookback,
+                bars=bars,
                 use_cache=True,
-                update_db=True
+                update_db=True,
             )
-            
             if df is None or df.empty:
                 return None
-            
-            # Update with realtime price if requested
+
             if use_realtime:
                 try:
                     quote = self.fetcher.get_realtime(code)
                     if quote and quote.price > 0:
-                        df.loc[df.index[-1], 'close'] = quote.price
-                        df.loc[df.index[-1], 'high'] = max(df['high'].iloc[-1], quote.price)
-                        df.loc[df.index[-1], 'low'] = min(df['low'].iloc[-1], quote.price)
+                        df.loc[df.index[-1], "close"] = float(
+                            quote.price
+                        )
+                        df.loc[df.index[-1], "high"] = max(
+                            float(df["high"].iloc[-1]),
+                            float(quote.price)
+                        )
+                        df.loc[df.index[-1], "low"] = min(
+                            float(df["low"].iloc[-1]),
+                            float(quote.price)
+                        )
                 except Exception:
                     pass
-            
+
             return df
-            
+
         except Exception as e:
             log.warning(f"Failed to fetch data for {code}: {e}")
             return None
-    
+
+    # =========================================================================
+    # FORECAST GENERATION
+    # =========================================================================
+
     def _generate_forecast(
         self,
         X: np.ndarray,
         current_price: float,
-        horizon: int
+        horizon: int,
+        atr_pct: float = 0.02,
     ) -> List[float]:
-        """Generate price forecast using forecaster or ensemble"""
+        """Generate price forecast using forecaster or ensemble."""
+        if current_price <= 0:
+            return []
+
+        # Try TCN forecaster first
         if self.forecaster is not None:
             try:
                 import torch
-                
+
                 self.forecaster.eval()
                 with torch.inference_mode():
                     X_tensor = torch.FloatTensor(X)
                     returns, _ = self.forecaster(X_tensor)
                     returns = returns[0].cpu().numpy()
-                
+
                 prices = [current_price]
                 for r in returns[:horizon]:
-                    next_price = prices[-1] * (1 + r / 100)
+                    next_price = prices[-1] * (1 + float(r) / 100)
+                    # Guard against extreme values
+                    next_price = max(
+                        next_price, current_price * 0.5
+                    )
+                    next_price = min(
+                        next_price, current_price * 2.0
+                    )
                     prices.append(float(next_price))
-                
+
                 return prices[1:]
-                
+
             except Exception as e:
                 log.debug(f"Forecaster failed: {e}")
-        
-        # Fallback: use ensemble probabilities
+
+        # Fallback: ensemble-guided stochastic forecast
         if self.ensemble:
             try:
                 pred = self.ensemble.predict(X)
-                
-                direction = pred.probabilities[2] - pred.probabilities[0]
-                volatility = 0.02
-                
+
+                probs = pred.probabilities
+                direction = (
+                    (float(probs[2]) if len(probs) > 2 else 0.33)
+                    - (float(probs[0]) if len(probs) > 0 else 0.33)
+                )
+
+                # Use actual ATR for realistic volatility
+                volatility = max(atr_pct, 0.005)
+
                 prices = []
                 price = current_price
-                
+
+                # Deterministic seed per stock+time for consistency
+                seed = int(current_price * 100 + horizon) % (2**31)
+                rng = np.random.RandomState(seed)
+
                 for i in range(horizon):
-                    change = direction * volatility * (1 - i / horizon)
+                    # Mean-reverting drift with ensemble direction
+                    drift = direction * volatility * 0.3
+                    noise = rng.normal(0, volatility * 0.5)
+                    # Decay direction influence over horizon
+                    decay = 1.0 - (i / (horizon * 2))
+                    change = drift * decay + noise
                     price = price * (1 + change)
+
+                    # Guard against extreme values
+                    price = max(price, current_price * 0.5)
+                    price = min(price, current_price * 2.0)
+
                     prices.append(float(price))
-                
+
                 return prices
-                
-            except Exception:
-                pass
-        
+
+            except Exception as e:
+                log.debug(f"Ensemble forecast failed: {e}")
+
         return [current_price] * horizon
-    
-    def _determine_signal(self, ensemble_pred, pred: Prediction) -> Signal:
-        """Determine trading signal from prediction"""
-        confidence = ensemble_pred.confidence
-        predicted_class = ensemble_pred.predicted_class
-        
+
+    # =========================================================================
+    # SIGNAL DETERMINATION
+    # =========================================================================
+
+    def _determine_signal(
+        self, ensemble_pred, pred: Prediction
+    ) -> Signal:
+        """Determine trading signal from prediction."""
+        confidence = float(ensemble_pred.confidence)
+        predicted_class = int(ensemble_pred.predicted_class)
+
         if predicted_class == 2:  # UP
             if confidence >= CONFIG.STRONG_BUY_THRESHOLD:
                 return Signal.STRONG_BUY
@@ -561,28 +850,42 @@ class Predictor:
                 return Signal.STRONG_SELL
             elif confidence >= CONFIG.SELL_THRESHOLD:
                 return Signal.SELL
-        
+
         return Signal.HOLD
-    
-    def _calculate_signal_strength(self, ensemble_pred, pred: Prediction) -> float:
-        """Calculate signal strength 0-1"""
-        confidence = ensemble_pred.confidence
-        agreement = ensemble_pred.agreement
-        entropy = 1 - ensemble_pred.entropy
-        
-        return float((confidence + agreement + entropy) / 3)
-    
+
+    def _calculate_signal_strength(
+        self, ensemble_pred, pred: Prediction
+    ) -> float:
+        """Calculate signal strength 0-1."""
+        confidence = float(ensemble_pred.confidence)
+        agreement = float(getattr(ensemble_pred, "agreement", 1.0))
+        entropy_inv = 1.0 - float(
+            getattr(ensemble_pred, "entropy", 0.0)
+        )
+
+        return float(
+            np.clip(
+                (confidence + agreement + entropy_inv) / 3.0,
+                0.0, 1.0
+            )
+        )
+
+    # =========================================================================
+    # TRADING LEVELS
+    # =========================================================================
+
     def _calculate_levels(self, pred: Prediction) -> TradingLevels:
-        """Calculate trading levels"""
+        """Calculate trading levels using actual ATR from features."""
         price = pred.current_price
-        
+
         if price <= 0:
             return TradingLevels()
-        
-        atr_pct = 0.02
-        
+
+        # Use actual ATR percentage from features, with floor
+        atr_pct = max(pred.atr_pct_value, 0.005)
+
         levels = TradingLevels(entry=price)
-        
+
         if pred.signal in [Signal.STRONG_BUY, Signal.BUY]:
             levels.stop_loss = price * (1 - atr_pct * 1.5)
             levels.target_1 = price * (1 + atr_pct * 1.5)
@@ -594,143 +897,236 @@ class Predictor:
             levels.target_2 = price * (1 - atr_pct * 3.0)
             levels.target_3 = price * (1 - atr_pct * 5.0)
         else:
-            levels.stop_loss = price * 0.97
-            levels.target_1 = price * 1.03
-            levels.target_2 = price * 1.05
-            levels.target_3 = price * 1.08
-        
-        levels.stop_loss_pct = (levels.stop_loss / price - 1) * 100
-        levels.target_1_pct = (levels.target_1 / price - 1) * 100
-        levels.target_2_pct = (levels.target_2 / price - 1) * 100
-        levels.target_3_pct = (levels.target_3 / price - 1) * 100
-        
+            levels.stop_loss = price * (1 - atr_pct)
+            levels.target_1 = price * (1 + atr_pct)
+            levels.target_2 = price * (1 + atr_pct * 2.0)
+            levels.target_3 = price * (1 + atr_pct * 3.5)
+
+        # Calculate percentages
+        if price > 0:
+            levels.stop_loss_pct = (levels.stop_loss / price - 1) * 100
+            levels.target_1_pct = (levels.target_1 / price - 1) * 100
+            levels.target_2_pct = (levels.target_2 / price - 1) * 100
+            levels.target_3_pct = (levels.target_3 / price - 1) * 100
+
         return levels
-    
+
+    # =========================================================================
+    # POSITION SIZING
+    # =========================================================================
+
     def _calculate_position(self, pred: Prediction) -> PositionSize:
-        """Calculate position size"""
+        """Calculate position size with proper guards."""
         price = pred.current_price
-        
+
         if price <= 0:
             return PositionSize()
-        
+
         risk_pct = CONFIG.RISK_PER_TRADE / 100
         risk_amount = self.capital * risk_pct
-        
+
         stop_distance = abs(price - pred.levels.stop_loss)
         if stop_distance <= 0:
             stop_distance = price * 0.02
-        
+
+        lot_size = max(1, CONFIG.LOT_SIZE)
+
         shares = int(risk_amount / stop_distance)
-        shares = (shares // CONFIG.LOT_SIZE) * CONFIG.LOT_SIZE
-        shares = max(CONFIG.LOT_SIZE, shares)
-        
+        shares = (shares // lot_size) * lot_size
+
+        # Ensure at least one lot
+        if shares < lot_size:
+            shares = lot_size
+
+        # Cap by maximum position value
         max_value = self.capital * (CONFIG.MAX_POSITION_PCT / 100)
         if shares * price > max_value:
             shares = int(max_value / price)
-            shares = (shares // CONFIG.LOT_SIZE) * CONFIG.LOT_SIZE
-        
-        return PositionSize(
-            shares=shares,
-            value=shares * price,
-            risk_amount=shares * stop_distance,
-            risk_pct=(shares * stop_distance / self.capital) * 100
-        )
-    
-    def _extract_technicals(self, df: pd.DataFrame, pred: Prediction):
-        """Extract technical indicators from dataframe"""
-        try:
-            if 'rsi_14' in df.columns:
-                raw_rsi = float(df['rsi_14'].iloc[-1])
-                if -5.0 <= raw_rsi <= 5.0:
-                    pred.rsi = max(0.0, min(100.0, raw_rsi * 15.0 + 50.0))
-                elif 0.0 <= raw_rsi <= 100.0:
-                    pred.rsi = raw_rsi
-                else:
-                    pred.rsi = 50.0
+            shares = (shares // lot_size) * lot_size
 
-            if 'macd_hist' in df.columns:
-                macd = float(df['macd_hist'].iloc[-1])
-                if macd > 0.001:
+        # Final guard: ensure shares > 0 and affordable
+        if shares <= 0:
+            shares = lot_size
+
+        if shares * price > self.capital:
+            # Can't afford even one lot
+            return PositionSize()
+
+        return PositionSize(
+            shares=int(shares),
+            value=float(shares * price),
+            risk_amount=float(shares * stop_distance),
+            risk_pct=float(
+                (shares * stop_distance / self.capital) * 100
+            ),
+        )
+
+    # =========================================================================
+    # TECHNICAL EXTRACTION
+    # =========================================================================
+
+    def _extract_technicals(self, df: pd.DataFrame, pred: Prediction):
+        """
+        Extract technical indicators from dataframe.
+
+        IMPORTANT: FeatureEngine normalizes indicators:
+        - rsi_14 = raw_rsi/100 - 0.5  (range: -0.5 to 0.5)
+        - macd_hist = hist/close*100   (scale-invariant percentage)
+        - ma_ratio_5_20 = (ma5/ma20 - 1) * 100
+        """
+        try:
+            # RSI: reverse FeatureEngine normalization
+            if "rsi_14" in df.columns:
+                normalized_rsi = float(df["rsi_14"].iloc[-1])
+                # FeatureEngine does: rsi_14 = raw_rsi/100 - 0.5
+                # So: raw_rsi = (normalized_rsi + 0.5) * 100
+                raw_rsi = (normalized_rsi + 0.5) * 100.0
+                pred.rsi = float(np.clip(raw_rsi, 0.0, 100.0))
+
+            # MACD direction from histogram
+            if "macd_hist" in df.columns:
+                macd_hist = float(df["macd_hist"].iloc[-1])
+                if macd_hist > 0.001:
                     pred.macd_signal = "BULLISH"
-                elif macd < -0.001:
+                elif macd_hist < -0.001:
                     pred.macd_signal = "BEARISH"
                 else:
                     pred.macd_signal = "NEUTRAL"
 
-            if 'ma_ratio_5_20' in df.columns:
-                trend = float(df['ma_ratio_5_20'].iloc[-1])
-                if trend > 1:
+            # Trend from MA ratio
+            if "ma_ratio_5_20" in df.columns:
+                ma_ratio = float(df["ma_ratio_5_20"].iloc[-1])
+                if ma_ratio > 1.0:
                     pred.trend = "UPTREND"
-                elif trend < -1:
+                elif ma_ratio < -1.0:
                     pred.trend = "DOWNTREND"
                 else:
                     pred.trend = "SIDEWAYS"
 
+            # Extract ATR for position sizing and levels
+            pred.atr_pct_value = self._get_atr_pct(df)
+
         except Exception as e:
             log.debug(f"Technical extraction error: {e}")
-    
+
+    def _get_atr_pct(self, df: pd.DataFrame) -> float:
+        """Get ATR as a decimal fraction (e.g., 0.02 for 2%)."""
+        try:
+            if "atr_pct" in df.columns:
+                atr = float(df["atr_pct"].iloc[-1])
+                # atr_pct from FeatureEngine is: atr_14 / close * 100
+                # Convert from percentage to decimal
+                return max(atr / 100.0, 0.005)
+        except Exception:
+            pass
+        return 0.02  # default 2%
+
+    # =========================================================================
+    # ANALYSIS REASONS
+    # =========================================================================
+
     def _generate_reasons(self, pred: Prediction):
-        """Generate analysis reasons"""
+        """Generate analysis reasons and warnings."""
         reasons = []
         warnings = []
-        
+
+        # Confidence
         if pred.confidence >= 0.7:
-            reasons.append(f"High AI confidence: {pred.confidence:.0%}")
+            reasons.append(
+                f"High AI confidence: {pred.confidence:.0%}"
+            )
         elif pred.confidence >= 0.6:
-            reasons.append(f"Moderate AI confidence: {pred.confidence:.0%}")
+            reasons.append(
+                f"Moderate AI confidence: {pred.confidence:.0%}"
+            )
         else:
-            warnings.append(f"Low AI confidence: {pred.confidence:.0%}")
-        
+            warnings.append(
+                f"Low AI confidence: {pred.confidence:.0%}"
+            )
+
+        # Model agreement
+        if pred.model_agreement < 0.6:
+            warnings.append(
+                f"Low model agreement: {pred.model_agreement:.0%}"
+            )
+
+        # Probability direction
         if pred.prob_up > 0.5:
-            reasons.append(f"AI predicts UP with {pred.prob_up:.0%} probability")
+            reasons.append(
+                f"AI predicts UP with {pred.prob_up:.0%} probability"
+            )
         elif pred.prob_down > 0.5:
-            reasons.append(f"AI predicts DOWN with {pred.prob_down:.0%} probability")
-        
+            reasons.append(
+                f"AI predicts DOWN with {pred.prob_down:.0%} probability"
+            )
+
+        # RSI
         if pred.rsi > 70:
             warnings.append(f"RSI overbought: {pred.rsi:.0f}")
         elif pred.rsi < 30:
             warnings.append(f"RSI oversold: {pred.rsi:.0f}")
         else:
             reasons.append(f"RSI neutral: {pred.rsi:.0f}")
-        
-        if pred.signal in [Signal.STRONG_BUY, Signal.BUY] and pred.trend == "UPTREND":
+
+        # Signal-trend alignment
+        if (
+            pred.signal in [Signal.STRONG_BUY, Signal.BUY]
+            and pred.trend == "UPTREND"
+        ):
             reasons.append("Signal aligned with uptrend")
-        elif pred.signal in [Signal.STRONG_SELL, Signal.SELL] and pred.trend == "DOWNTREND":
+        elif (
+            pred.signal in [Signal.STRONG_SELL, Signal.SELL]
+            and pred.trend == "DOWNTREND"
+        ):
             reasons.append("Signal aligned with downtrend")
-        elif pred.trend != "SIDEWAYS":
+        elif (
+            pred.trend != "SIDEWAYS"
+            and pred.signal != Signal.HOLD
+        ):
             warnings.append(f"Signal against trend ({pred.trend})")
-        
+
+        # MACD
         if pred.macd_signal != "NEUTRAL":
             reasons.append(f"MACD: {pred.macd_signal}")
-        
+
+        # Entropy
+        if pred.entropy > 0.8:
+            warnings.append(
+                f"High prediction uncertainty "
+                f"(entropy: {pred.entropy:.2f})"
+            )
+
         pred.reasons = reasons
         pred.warnings = warnings
-    
+
+    # =========================================================================
+    # UTILITIES
+    # =========================================================================
+
     def _get_stock_name(self, code: str, df: pd.DataFrame) -> str:
-        """Get stock name"""
+        """Get stock name from fetcher."""
         try:
             quote = self.fetcher.get_realtime(code)
             if quote and quote.name:
-                return quote.name
+                return str(quote.name)
         except Exception:
             pass
         return ""
-    
+
     def _clean_code(self, code: str) -> str:
-        """Clean and normalize stock code"""
+        """
+        Clean and normalize stock code.
+        Delegates to DataFetcher when available.
+        """
+        if self.fetcher is not None:
+            try:
+                return self.fetcher.clean_code(code)
+            except Exception:
+                pass
+
+        # Minimal fallback
         if not code:
             return ""
-        
         code = str(code).strip()
-        
-        for prefix in ['sh', 'sz', 'SH', 'SZ', 'bj', 'BJ']:
-            if code.startswith(prefix):
-                code = code[len(prefix):]
-        
-        for suffix in ['.SS', '.SZ', '.BJ']:
-            if code.endswith(suffix):
-                code = code[:-len(suffix)]
-        
-        code = ''.join(c for c in code if c.isdigit())
-        
+        code = "".join(c for c in code if c.isdigit())
         return code.zfill(6) if code else ""

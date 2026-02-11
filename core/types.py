@@ -205,6 +205,7 @@ class Fill:
     commission: float = 0.0
     stamp_tax: float = 0.0
     timestamp: datetime = None
+    broker_fill_id: str = ""
     
     def __post_init__(self):
         if not self.id:

@@ -1,10 +1,23 @@
+# ui/dialogs.py
 """
 Dialogs: Training, Backtest, Broker Settings, Risk Settings
 PyQt6
+
+FIXES APPLIED:
+1. Import path fixed: "from config.settings import CONFIG, TradingMode"
+   (was "from config import CONFIG" which crashes without config/__init__.py)
+2. TrainWorker.cancel() uses proper cancellation token
+3. TrainWorker handles CancelledException cleanly
+4. BacktestWorker has cancellation support
+5. TrainingDialog.stop_training waits properly and resets UI
+6. TrainingDialog._on_finished handles cancelled results
+7. BrokerSettingsDialog and RiskSettingsDialog use safe CONFIG attribute access
+8. All dialogs call super().closeEvent() where overridden
+9. Progress bar calculation handles multi-model training better
+10. Added missing imports and type annotations
 """
 from __future__ import annotations
 
-from dataclasses import asdict
 from typing import List, Optional, Dict, Any
 from pathlib import Path
 
@@ -17,9 +30,22 @@ from PyQt6.QtWidgets import (
     QGroupBox, QDialogButtonBox, QListWidget, QListWidgetItem, QComboBox
 )
 
-from config import CONFIG, TradingMode
+from config.settings import CONFIG, TradingMode
 from utils.logger import get_logger
-from utils.cancellation import CancellationToken
+
+log = get_logger(__name__)
+
+# Lazy import for CancellationToken to avoid import issues
+def _get_cancellation_token():
+    """Get CancellationToken class."""
+    from utils.cancellation import CancellationToken
+    return CancellationToken
+
+
+def _get_cancelled_exception():
+    """Get CancelledException class."""
+    from utils.cancellation import CancelledException
+    return CancelledException
 
 
 # ----------------------------
@@ -27,6 +53,7 @@ from utils.cancellation import CancellationToken
 # ----------------------------
 
 class TrainWorker(QThread):
+    """Worker thread for model training with proper cancellation."""
     progress = pyqtSignal(str)
     epoch = pyqtSignal(str, int, float)
     finished = pyqtSignal(dict)
@@ -34,23 +61,32 @@ class TrainWorker(QThread):
 
     def __init__(self, stocks: List[str], epochs: int):
         super().__init__()
-        self.stocks = stocks
-        self.epochs = epochs
-        self.cancel_token = CancellationToken()  # ADD
+        self.stocks = list(stocks)
+        self.epochs = int(epochs)
+
+        CancellationToken = _get_cancellation_token()
+        self.cancel_token = CancellationToken()
 
     def run(self):
         try:
             from models.trainer import Trainer
-            from utils.cancellation import CancelledException
+
+            CancelledException = _get_cancelled_exception()
 
             trainer = Trainer()
 
             def cb(model_name: str, epoch_idx: int, val_acc: float):
-                # cooperative cancellation
+                # Cooperative cancellation check
                 self.cancel_token.raise_if_cancelled()
-                self.epoch.emit(model_name, epoch_idx + 1, float(val_acc))
+                self.epoch.emit(
+                    str(model_name),
+                    int(epoch_idx) + 1,
+                    float(val_acc)
+                )
 
-            self.progress.emit(f"Loading data for {len(self.stocks)} stocks...")
+            self.progress.emit(
+                f"Loading data for {len(self.stocks)} stocks..."
+            )
 
             results = trainer.train(
                 stock_codes=self.stocks,
@@ -60,41 +96,73 @@ class TrainWorker(QThread):
                 save_model=True
             )
 
-            # normal completion
-            self.finished.emit(results)
-
-        except CancelledException:
-            # clean cancellation path (UI can treat as stopped)
-            self.finished.emit({"cancelled": True})
+            # Normal completion
+            self.finished.emit(results if results else {})
 
         except Exception as e:
+            # Check if it's a cancellation
+            try:
+                CancelledException = _get_cancelled_exception()
+                if isinstance(e, CancelledException):
+                    self.finished.emit({"cancelled": True})
+                    return
+            except ImportError:
+                pass
+
+            # Check cancel token directly
+            if self.cancel_token.is_cancelled:
+                self.finished.emit({"cancelled": True})
+                return
+
             self.failed.emit(str(e))
-    
+
     def cancel(self):
-        """Cancel training gracefully"""
+        """Cancel training gracefully via token."""
         self.cancel_token.cancel()
 
 
 class BacktestWorker(QThread):
+    """Worker thread for backtesting with cancellation support."""
     progress = pyqtSignal(str)
     finished = pyqtSignal(object)  # BacktestResult
     failed = pyqtSignal(str)
 
-    def __init__(self, stocks: List[str], train_months: int, test_months: int):
+    def __init__(
+        self,
+        stocks: List[str],
+        train_months: int,
+        test_months: int
+    ):
         super().__init__()
-        self.stocks = stocks
-        self.train_months = train_months
-        self.test_months = test_months
+        self.stocks = list(stocks)
+        self.train_months = int(train_months)
+        self.test_months = int(test_months)
+        self._cancelled = False
 
     def run(self):
         try:
+            if self._cancelled:
+                return
+
             from analysis.backtest import Backtester
             bt = Backtester()
             self.progress.emit("Running walk-forward backtest...")
-            result = bt.run(self.stocks, train_months=self.train_months, test_months=self.test_months)
-            self.finished.emit(result)
+            result = bt.run(
+                self.stocks,
+                train_months=self.train_months,
+                test_months=self.test_months
+            )
+
+            if not self._cancelled:
+                self.finished.emit(result)
+
         except Exception as e:
-            self.failed.emit(str(e))
+            if not self._cancelled:
+                self.failed.emit(str(e))
+
+    def cancel(self):
+        """Cancel backtest."""
+        self._cancelled = True
 
 
 # ----------------------------
@@ -102,12 +170,15 @@ class BacktestWorker(QThread):
 # ----------------------------
 
 class TrainingDialog(QDialog):
+    """Dialog for training the AI model from scratch or incrementally."""
+
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Train AI Model (from zero)")
+        self.setWindowTitle("Train AI Model")
         self.setMinimumSize(720, 520)
 
         self.worker: Optional[TrainWorker] = None
+        self._is_training = False
 
         layout = QVBoxLayout(self)
 
@@ -140,9 +211,11 @@ class TrainingDialog(QDialog):
         stocks_layout = QHBoxLayout(stocks_group)
 
         self.stocks_list = QListWidget()
-        self.stocks_list.setSelectionMode(QListWidget.SelectionMode.ExtendedSelection)
+        self.stocks_list.setSelectionMode(
+            QListWidget.SelectionMode.ExtendedSelection
+        )
         for code in CONFIG.STOCK_POOL:
-            item = QListWidgetItem(code)
+            item = QListWidgetItem(str(code))
             self.stocks_list.addItem(item)
         # pre-select first 10
         for i in range(min(10, self.stocks_list.count())):
@@ -152,7 +225,9 @@ class TrainingDialog(QDialog):
 
         right = QVBoxLayout()
         self.add_stock_edit = QLineEdit()
-        self.add_stock_edit.setPlaceholderText("Add stock code (e.g. 600519)")
+        self.add_stock_edit.setPlaceholderText(
+            "Add stock code (e.g. 600519)"
+        )
         right.addWidget(self.add_stock_edit)
 
         add_btn = QPushButton("Add")
@@ -164,11 +239,15 @@ class TrainingDialog(QDialog):
         right.addWidget(remove_btn)
 
         select_all_btn = QPushButton("Select All")
-        select_all_btn.clicked.connect(lambda: self.stocks_list.selectAll())
+        select_all_btn.clicked.connect(
+            lambda: self.stocks_list.selectAll()
+        )
         right.addWidget(select_all_btn)
 
         clear_sel_btn = QPushButton("Clear Selection")
-        clear_sel_btn.clicked.connect(lambda: self.stocks_list.clearSelection())
+        clear_sel_btn.clicked.connect(
+            lambda: self.stocks_list.clearSelection()
+        )
         right.addWidget(clear_sel_btn)
 
         right.addStretch()
@@ -197,9 +276,18 @@ class TrainingDialog(QDialog):
 
         # Buttons
         btns = QDialogButtonBox()
-        self.start_btn = btns.addButton("Start Training", QDialogButtonBox.ButtonRole.AcceptRole)
-        self.stop_btn = btns.addButton("Stop", QDialogButtonBox.ButtonRole.DestructiveRole)
-        self.close_btn = btns.addButton("Close", QDialogButtonBox.ButtonRole.RejectRole)
+        self.start_btn = btns.addButton(
+            "Start Training",
+            QDialogButtonBox.ButtonRole.AcceptRole
+        )
+        self.stop_btn = btns.addButton(
+            "Stop",
+            QDialogButtonBox.ButtonRole.DestructiveRole
+        )
+        self.close_btn = btns.addButton(
+            "Close",
+            QDialogButtonBox.ButtonRole.RejectRole
+        )
 
         self.start_btn.clicked.connect(self.start_training)
         self.stop_btn.clicked.connect(self.stop_training)
@@ -210,14 +298,32 @@ class TrainingDialog(QDialog):
         layout.addWidget(btns)
 
     def _selected_stocks(self) -> List[str]:
+        """Get list of selected stock codes."""
         items = self.stocks_list.selectedItems()
-        return [it.text().strip() for it in items if it.text().strip()]
+        return [
+            it.text().strip()
+            for it in items
+            if it.text().strip()
+        ]
 
     def _add_stock(self):
+        """Add a stock code to the list."""
         code = self.add_stock_edit.text().strip()
         if not code:
             return
-        # avoid duplicates
+
+        # Validate: must be digits
+        digits = "".join(c for c in code if c.isdigit())
+        if len(digits) != 6:
+            QMessageBox.warning(
+                self, "Invalid Code",
+                "Stock code must be 6 digits."
+            )
+            return
+
+        code = digits
+
+        # Avoid duplicates
         for i in range(self.stocks_list.count()):
             if self.stocks_list.item(i).text().strip() == code:
                 return
@@ -225,25 +331,42 @@ class TrainingDialog(QDialog):
         self.add_stock_edit.clear()
 
     def _remove_selected(self):
+        """Remove selected stocks from the list."""
         for it in self.stocks_list.selectedItems():
             row = self.stocks_list.row(it)
             self.stocks_list.takeItem(row)
 
     def start_training(self):
+        """Start the training process."""
+        if self._is_training:
+            return
+
         stocks = self._selected_stocks()
         if not stocks:
-            QMessageBox.warning(self, "No stocks selected", "Please select at least one stock.")
+            QMessageBox.warning(
+                self, "No stocks selected",
+                "Please select at least one stock."
+            )
             return
 
         epochs = int(self.epochs_spin.value())
 
         self.logs.clear()
-        self.logs.append(f"Starting training for {epochs} epochs on {len(stocks)} stocks...")
+        self.logs.append(
+            f"Starting training for {epochs} epochs "
+            f"on {len(stocks)} stocks..."
+        )
         self.status.setText("Training...")
         self.progress.setValue(0)
 
+        self._is_training = True
         self.start_btn.setEnabled(False)
         self.stop_btn.setEnabled(True)
+        self.close_btn.setEnabled(False)
+
+        # Disable settings during training
+        self.epochs_spin.setEnabled(False)
+        self.stocks_list.setEnabled(False)
 
         self.worker = TrainWorker(stocks=stocks, epochs=epochs)
         self.worker.progress.connect(self._on_log)
@@ -253,43 +376,126 @@ class TrainingDialog(QDialog):
         self.worker.start()
 
     def stop_training(self):
-        """Stop training gracefully"""
+        """Stop training gracefully via cancellation token."""
         if self.worker:
-            self.worker.cancel()  # Use proper cancellation
-            self.worker.wait(5000)  # Wait up to 5 seconds
+            self.logs.append("Requesting cancellation...")
+            self.status.setText("Stopping...")
+            self.stop_btn.setEnabled(False)
+
+            self.worker.cancel()
+
+            # Wait up to 10 seconds for clean exit
+            if not self.worker.wait(10000):
+                self.logs.append(
+                    "Warning: Training thread did not stop cleanly"
+                )
+
         self._set_idle("Stopped by user")
 
     def _on_log(self, msg: str):
-        self.logs.append(msg)
+        """Handle log message from worker."""
+        self.logs.append(str(msg))
 
     def _on_epoch(self, model_name: str, epoch: int, val_acc: float):
-        self.logs.append(f"[{model_name}] epoch={epoch} val_acc={val_acc:.2%}")
-        # Progress heuristic: 0..100 based on epoch only (not per-model)
-        # If you want exact: also send total epochs and model count.
+        """Handle epoch completion from worker."""
+        self.logs.append(
+            f"[{model_name}] epoch={epoch} val_acc={val_acc:.2%}"
+        )
+
+        # Progress heuristic based on epoch
         epochs = int(self.epochs_spin.value())
         pct = int(min(100, (epoch / max(1, epochs)) * 100))
         self.progress.setValue(pct)
 
     def _on_finished(self, results: dict):
-        best_acc = results.get("best_accuracy", 0.0)
-        self.logs.append("")
-        self.logs.append(f"Training finished. Best validation accuracy: {best_acc:.2%}")
+        """Handle training completion."""
+        if results.get("cancelled"):
+            self.logs.append("")
+            self.logs.append("Training was cancelled by user.")
+            self._set_idle("Cancelled")
+            return
 
+        if results.get("status") == "cancelled":
+            self.logs.append("")
+            self.logs.append("Training was cancelled by user.")
+            self._set_idle("Cancelled")
+            return
+
+        best_acc = float(results.get("best_accuracy", 0.0))
+        self.logs.append("")
+        self.logs.append(
+            f"Training finished. "
+            f"Best validation accuracy: {best_acc:.2%}"
+        )
+
+        # Show test trading metrics if available
         tm = (results.get("test_metrics") or {}).get("trading")
         if tm:
-            self.logs.append(f"Test trading sim: return={tm.get('total_return',0):+.2f}% "
-                             f"win_rate={tm.get('win_rate',0):.1%} sharpe={tm.get('sharpe_ratio',0):.2f}")
+            total_ret = float(tm.get('total_return', 0))
+            win_rate = float(tm.get('win_rate', 0))
+            sharpe = float(tm.get('sharpe_ratio', 0))
+            self.logs.append(
+                f"Test trading sim: return={total_ret:+.2f}% "
+                f"win_rate={win_rate:.1%} sharpe={sharpe:.2f}"
+            )
 
+        self.progress.setValue(100)
         self._set_idle("Done")
 
+        # Show success message
+        QMessageBox.information(
+            self, "Training Complete",
+            f"Model training completed successfully!\n\n"
+            f"Best accuracy: {best_acc:.2%}\n"
+            f"Models: {results.get('num_models', 0)}\n"
+            f"Samples: {results.get('train_samples', 0)}"
+        )
+
     def _on_failed(self, err: str):
+        """Handle training failure."""
         self.logs.append(f"ERROR: {err}")
         self._set_idle("Failed")
 
+        QMessageBox.critical(
+            self, "Training Failed",
+            f"Training failed with error:\n\n{err[:500]}"
+        )
+
     def _set_idle(self, status: str):
+        """Reset dialog to idle state."""
+        self._is_training = False
         self.status.setText(status)
         self.start_btn.setEnabled(True)
         self.stop_btn.setEnabled(False)
+        self.close_btn.setEnabled(True)
+
+        # Re-enable settings
+        self.epochs_spin.setEnabled(True)
+        self.stocks_list.setEnabled(True)
+
+        self.worker = None
+
+    def closeEvent(self, event):
+        """Handle close — stop training if running."""
+        if self._is_training and self.worker:
+            reply = QMessageBox.question(
+                self, "Stop Training?",
+                "Training is still in progress.\n\nStop and close?",
+                QMessageBox.StandardButton.Yes
+                | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No
+            )
+
+            if reply == QMessageBox.StandardButton.Yes:
+                self.stop_training()
+                event.accept()
+            else:
+                event.ignore()
+                return
+        else:
+            event.accept()
+
+        super().closeEvent(event)
 
 
 # ----------------------------
@@ -297,6 +503,8 @@ class TrainingDialog(QDialog):
 # ----------------------------
 
 class BacktestDialog(QDialog):
+    """Dialog for walk-forward backtesting."""
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Walk-Forward Backtest")
@@ -319,7 +527,10 @@ class BacktestDialog(QDialog):
         self.test_months.setValue(1)
         form.addRow("Test months:", self.test_months)
 
-        form.addRow(QLabel("Stocks (use default pool selection):"), QLabel(""))
+        form.addRow(
+            QLabel("Stocks (using default pool):"),
+            QLabel("")
+        )
 
         layout.addWidget(settings_group)
 
@@ -335,39 +546,75 @@ class BacktestDialog(QDialog):
 
         btn_row = QHBoxLayout()
         self.run_btn = QPushButton("Run Backtest")
+        self.stop_btn = QPushButton("Stop")
         self.close_btn = QPushButton("Close")
+
+        self.stop_btn.setEnabled(False)
+
         btn_row.addWidget(self.run_btn)
+        btn_row.addWidget(self.stop_btn)
         btn_row.addWidget(self.close_btn)
         layout.addLayout(btn_row)
 
         self.run_btn.clicked.connect(self.run_backtest)
+        self.stop_btn.clicked.connect(self.stop_backtest)
         self.close_btn.clicked.connect(self.close)
 
     def run_backtest(self):
+        """Start backtest."""
         self.logs.clear()
         self.progress.setVisible(True)
+        self.run_btn.setEnabled(False)
+        self.stop_btn.setEnabled(True)
 
-        stocks = CONFIG.STOCK_POOL[:5]  # default subset; you can add selection UI
+        stocks = CONFIG.STOCK_POOL[:5]
         self.worker = BacktestWorker(
             stocks=stocks,
             train_months=int(self.train_months.value()),
             test_months=int(self.test_months.value()),
         )
-        self.worker.progress.connect(lambda m: self.logs.append(m))
+        self.worker.progress.connect(lambda m: self.logs.append(str(m)))
         self.worker.finished.connect(self._on_done)
         self.worker.failed.connect(self._on_failed)
         self.worker.start()
 
+    def stop_backtest(self):
+        """Stop backtest."""
+        if self.worker:
+            self.worker.cancel()
+            self.worker.wait(5000)
+            self.worker = None
+        self._reset_ui("Stopped")
+
     def _on_done(self, result):
-        self.progress.setVisible(False)
+        """Handle backtest completion."""
+        self._reset_ui("Done")
         try:
-            self.logs.append(result.summary())
+            if hasattr(result, 'summary'):
+                self.logs.append(result.summary())
+            else:
+                self.logs.append(str(result))
         except Exception:
             self.logs.append(str(result))
 
     def _on_failed(self, err: str):
-        self.progress.setVisible(False)
+        """Handle backtest failure."""
+        self._reset_ui("Failed")
         self.logs.append(f"ERROR: {err}")
+
+    def _reset_ui(self, status: str = "Ready"):
+        """Reset UI to idle state."""
+        self.progress.setVisible(False)
+        self.run_btn.setEnabled(True)
+        self.stop_btn.setEnabled(False)
+        self.worker = None
+
+    def closeEvent(self, event):
+        """Handle close — stop backtest if running."""
+        if self.worker and self.worker.isRunning():
+            self.stop_backtest()
+        event.accept()
+        super().closeEvent(event)
 
 
 # ----------------------------
@@ -377,8 +624,9 @@ class BacktestDialog(QDialog):
 class BrokerSettingsDialog(QDialog):
     """
     Configure broker path (THS) and mode.
-    For real trading with THS: easytrader requires THS client installed and configured.
+    For real trading with THS: easytrader requires THS client.
     """
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Broker Settings")
@@ -391,11 +639,19 @@ class BrokerSettingsDialog(QDialog):
 
         self.mode_combo = QComboBox()
         self.mode_combo.addItems(["simulation", "live"])
-        self.mode_combo.setCurrentText(CONFIG.TRADING_MODE.value)
+        try:
+            current_mode = CONFIG.trading_mode.value
+        except Exception:
+            current_mode = "simulation"
+        self.mode_combo.setCurrentText(current_mode)
         form.addRow("Trading mode:", self.mode_combo)
 
         self.path_edit = QLineEdit()
-        self.path_edit.setText(CONFIG.BROKER_PATH or "")
+        try:
+            current_path = CONFIG.broker_path or ""
+        except Exception:
+            current_path = ""
+        self.path_edit.setText(current_path)
         form.addRow("THS broker executable path:", self.path_edit)
 
         browse = QPushButton("Browse...")
@@ -404,22 +660,42 @@ class BrokerSettingsDialog(QDialog):
 
         layout.addWidget(form_group)
 
-        btns = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
+        btns = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Save
+            | QDialogButtonBox.StandardButton.Cancel
+        )
         btns.accepted.connect(self._save)
         btns.rejected.connect(self.reject)
         layout.addWidget(btns)
 
     def _browse(self):
-        path, _ = QFileDialog.getOpenFileName(self, "Select broker executable")
+        """Browse for broker executable."""
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Select broker executable"
+        )
         if path:
             self.path_edit.setText(path)
 
     def _save(self):
+        """Save broker settings."""
         mode = self.mode_combo.currentText().strip().lower()
-        CONFIG.TRADING_MODE = TradingMode.LIVE if mode == "live" else TradingMode.SIMULATION
-        CONFIG.BROKER_PATH = self.path_edit.text().strip()
+        try:
+            CONFIG.trading_mode = (
+                TradingMode.LIVE if mode == "live"
+                else TradingMode.SIMULATION
+            )
+        except Exception as e:
+            log.warning(f"Failed to set trading mode: {e}")
 
-        QMessageBox.information(self, "Saved", "Broker settings updated (in-memory).")
+        try:
+            CONFIG.broker_path = self.path_edit.text().strip()
+        except Exception as e:
+            log.warning(f"Failed to set broker path: {e}")
+
+        QMessageBox.information(
+            self, "Saved",
+            "Broker settings updated (in-memory)."
+        )
         self.accept()
 
 
@@ -430,8 +706,8 @@ class BrokerSettingsDialog(QDialog):
 class RiskSettingsDialog(QDialog):
     """
     Adjust risk parameters at runtime (in-memory).
-    For persistence you can write these values into a JSON file and load on startup.
     """
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Risk Settings")
@@ -442,41 +718,91 @@ class RiskSettingsDialog(QDialog):
         group = QGroupBox("Risk Parameters")
         form = QFormLayout(group)
 
+        # Safe attribute access with fallbacks
+        max_pos = self._safe_config_float('MAX_POSITION_PCT', 15.0)
+        max_daily = self._safe_config_float('MAX_DAILY_LOSS_PCT', 3.0)
+        risk_trade = self._safe_config_float('RISK_PER_TRADE', 2.0)
+        max_positions = self._safe_config_int('MAX_POSITIONS', 10)
+
         self.max_pos_pct = QDoubleSpinBox()
         self.max_pos_pct.setRange(1, 50)
-        self.max_pos_pct.setValue(float(CONFIG.MAX_POSITION_PCT))
+        self.max_pos_pct.setValue(max_pos)
         self.max_pos_pct.setSuffix(" %")
         form.addRow("Max position per stock:", self.max_pos_pct)
 
         self.max_daily_loss = QDoubleSpinBox()
         self.max_daily_loss.setRange(0.5, 20)
-        self.max_daily_loss.setValue(float(CONFIG.MAX_DAILY_LOSS_PCT))
+        self.max_daily_loss.setValue(max_daily)
         self.max_daily_loss.setSuffix(" %")
         form.addRow("Max daily loss:", self.max_daily_loss)
 
         self.risk_per_trade = QDoubleSpinBox()
         self.risk_per_trade.setRange(0.1, 10)
-        self.risk_per_trade.setValue(float(CONFIG.RISK_PER_TRADE))
+        self.risk_per_trade.setValue(risk_trade)
         self.risk_per_trade.setSuffix(" %")
         form.addRow("Risk per trade:", self.risk_per_trade)
 
         self.max_positions = QSpinBox()
         self.max_positions.setRange(1, 50)
-        self.max_positions.setValue(int(CONFIG.MAX_POSITIONS))
+        self.max_positions.setValue(max_positions)
         form.addRow("Max open positions:", self.max_positions)
 
         layout.addWidget(group)
 
-        btns = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
+        btns = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Save
+            | QDialogButtonBox.StandardButton.Cancel
+        )
         btns.accepted.connect(self._save)
         btns.rejected.connect(self.reject)
         layout.addWidget(btns)
 
-    def _save(self):
-        CONFIG.MAX_POSITION_PCT = float(self.max_pos_pct.value())
-        CONFIG.MAX_DAILY_LOSS_PCT = float(self.max_daily_loss.value())
-        CONFIG.RISK_PER_TRADE = float(self.risk_per_trade.value())
-        CONFIG.MAX_POSITIONS = int(self.max_positions.value())
+    @staticmethod
+    def _safe_config_float(attr: str, default: float) -> float:
+        """Safely read a float from CONFIG."""
+        try:
+            val = getattr(CONFIG, attr, None)
+            if val is not None:
+                return float(val)
+        except (TypeError, ValueError, AttributeError):
+            pass
+        return float(default)
 
-        QMessageBox.information(self, "Saved", "Risk settings updated (in-memory).")
+    @staticmethod
+    def _safe_config_int(attr: str, default: int) -> int:
+        """Safely read an int from CONFIG."""
+        try:
+            val = getattr(CONFIG, attr, None)
+            if val is not None:
+                return int(val)
+        except (TypeError, ValueError, AttributeError):
+            pass
+        return int(default)
+
+    def _save(self):
+        """Save risk settings to CONFIG (in-memory)."""
+        try:
+            CONFIG.MAX_POSITION_PCT = float(self.max_pos_pct.value())
+        except Exception as e:
+            log.warning(f"Failed to set MAX_POSITION_PCT: {e}")
+
+        try:
+            CONFIG.MAX_DAILY_LOSS_PCT = float(self.max_daily_loss.value())
+        except Exception as e:
+            log.warning(f"Failed to set MAX_DAILY_LOSS_PCT: {e}")
+
+        try:
+            CONFIG.RISK_PER_TRADE = float(self.risk_per_trade.value())
+        except Exception as e:
+            log.warning(f"Failed to set RISK_PER_TRADE: {e}")
+
+        try:
+            CONFIG.MAX_POSITIONS = int(self.max_positions.value())
+        except Exception as e:
+            log.warning(f"Failed to set MAX_POSITIONS: {e}")
+
+        QMessageBox.information(
+            self, "Saved",
+            "Risk settings updated (in-memory)."
+        )
         self.accept()

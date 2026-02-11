@@ -1,8 +1,13 @@
 # ui/__init__.py
-
 """
 UI Module
 Professional trading application interface
+
+FIXES APPLIED:
+1. All imports wrapped in try/except to prevent crash when dependencies missing
+2. StockChart import guarded (requires pyqtgraph)
+3. AutoLearnDialog import guarded (requires utils.cancellation)
+4. Consistent None fallback for all optional components
 """
 
 try:
@@ -11,8 +16,16 @@ except ImportError:
     MainApp = None
     run_app = None
 
-from .charts import StockChart
-from .auto_learn_dialog import AutoLearnDialog, show_auto_learn_dialog
+try:
+    from .charts import StockChart
+except ImportError:
+    StockChart = None
+
+try:
+    from .auto_learn_dialog import AutoLearnDialog, show_auto_learn_dialog
+except ImportError:
+    AutoLearnDialog = None
+    show_auto_learn_dialog = None
 
 try:
     from .widgets import SignalPanel, PositionTable, LogWidget
@@ -27,6 +40,11 @@ except ImportError:
     TrainingDialog = None
     BacktestDialog = None
 
+try:
+    from .news_widget import NewsPanel
+except ImportError:
+    NewsPanel = None
+
 __all__ = [
     "MainApp",
     "run_app",
@@ -38,4 +56,5 @@ __all__ = [
     "BacktestDialog",
     "AutoLearnDialog",
     "show_auto_learn_dialog",
+    "NewsPanel",
 ]

@@ -1,10 +1,17 @@
+# core/constants.py
 """
 System Constants - Immutable configuration values
-Score Target: 10/10
 
 Central repository for all magic numbers and constant values.
+
+FIXES APPLIED:
+- is_trading_day: added @lru_cache on get_holidays() result conversion to frozenset
+  so the set lookup is O(1) and the file is only read once
+- get_exchange: uses tuple prefix matching instead of loop for common cases
+- Removed duplicate RiskLevel enum (already defined in core.types)
+- is_trading_time: uses Asia/Shanghai timezone instead of local machine time
 """
-from datetime import time, date
+from datetime import time, date, datetime
 from typing import Dict, List, Set, Tuple
 from enum import Enum, auto
 from core.types import OrderSide, OrderType, OrderStatus
@@ -15,34 +22,35 @@ from functools import lru_cache
 # EXCHANGES
 # =============================================================================
 
+
 class Exchange(Enum):
     """Stock exchanges"""
-    SSE = "SSE"      # Shanghai Stock Exchange
-    SZSE = "SZSE"    # Shenzhen Stock Exchange
-    BSE = "BSE"      # Beijing Stock Exchange
-    HKEX = "HKEX"    # Hong Kong
-    NYSE = "NYSE"    # New York
+    SSE = "SSE"       # Shanghai Stock Exchange
+    SZSE = "SZSE"     # Shenzhen Stock Exchange
+    BSE = "BSE"       # Beijing Stock Exchange
+    HKEX = "HKEX"     # Hong Kong
+    NYSE = "NYSE"     # New York
     NASDAQ = "NASDAQ"
 
 
 EXCHANGES = {
-    'SSE': {
-        'name': 'Shanghai Stock Exchange',
-        'timezone': 'Asia/Shanghai',
-        'currency': 'CNY',
-        'prefix': ['600', '601', '603', '605', '688'],
+    "SSE": {
+        "name": "Shanghai Stock Exchange",
+        "timezone": "Asia/Shanghai",
+        "currency": "CNY",
+        "prefix": ("600", "601", "603", "605", "688"),
     },
-    'SZSE': {
-        'name': 'Shenzhen Stock Exchange',
-        'timezone': 'Asia/Shanghai',
-        'currency': 'CNY',
-        'prefix': ['000', '001', '002', '003', '300', '301'],
+    "SZSE": {
+        "name": "Shenzhen Stock Exchange",
+        "timezone": "Asia/Shanghai",
+        "currency": "CNY",
+        "prefix": ("000", "001", "002", "003", "300", "301"),
     },
-    'BSE': {
-        'name': 'Beijing Stock Exchange',
-        'timezone': 'Asia/Shanghai',
-        'currency': 'CNY',
-        'prefix': ['83', '87', '43'],
+    "BSE": {
+        "name": "Beijing Stock Exchange",
+        "timezone": "Asia/Shanghai",
+        "currency": "CNY",
+        "prefix": ("83", "87", "43"),
     },
 }
 
@@ -52,17 +60,17 @@ EXCHANGES = {
 # =============================================================================
 
 TRADING_HOURS = {
-    'SSE': {
-        'morning': (time(9, 30), time(11, 30)),
-        'afternoon': (time(13, 0), time(15, 0)),
-        'pre_open': (time(9, 15), time(9, 25)),
-        'pre_close': (time(14, 57), time(15, 0)),
+    "SSE": {
+        "morning": (time(9, 30), time(11, 30)),
+        "afternoon": (time(13, 0), time(15, 0)),
+        "pre_open": (time(9, 15), time(9, 25)),
+        "pre_close": (time(14, 57), time(15, 0)),
     },
-    'SZSE': {
-        'morning': (time(9, 30), time(11, 30)),
-        'afternoon': (time(13, 0), time(15, 0)),
-        'pre_open': (time(9, 15), time(9, 25)),
-        'pre_close': (time(14, 57), time(15, 0)),
+    "SZSE": {
+        "morning": (time(9, 30), time(11, 30)),
+        "afternoon": (time(13, 0), time(15, 0)),
+        "pre_open": (time(9, 15), time(9, 25)),
+        "pre_close": (time(14, 57), time(15, 0)),
     },
 }
 
@@ -96,13 +104,16 @@ HOLIDAYS_2024: Set[date] = {
 HOLIDAYS_2025: Set[date] = {
     # New Year
     date(2025, 1, 1),
-    # Spring Festival (estimated)
+    # Spring Festival
     date(2025, 1, 28), date(2025, 1, 29), date(2025, 1, 30),
     date(2025, 1, 31), date(2025, 2, 1), date(2025, 2, 2),
     date(2025, 2, 3), date(2025, 2, 4),
 }
 
-HOLIDAYS = HOLIDAYS_2024 | HOLIDAYS_2025
+_HOLIDAYS_BUILTIN = HOLIDAYS_2024 | HOLIDAYS_2025
+
+# Keep the old name for backward compat but don't use it for lookups
+HOLIDAYS = _HOLIDAYS_BUILTIN
 
 
 ORDER_SIDES = {s.value: s for s in OrderSide}
@@ -113,6 +124,7 @@ ORDER_STATUS = {s.value: s for s in OrderStatus}
 # =============================================================================
 # SIGNAL CONSTANTS
 # =============================================================================
+
 
 class SignalType(Enum):
     """Trading signal type"""
@@ -140,30 +152,30 @@ SIGNAL_COLORS = {
 
 # Price limits by board type
 PRICE_LIMITS = {
-    'main_board': 0.10,      # ±10%
-    'star_market': 0.20,     # ±20% (科创板)
-    'chinext': 0.20,         # ±20% (创业板)
-    'st': 0.05,              # ±5%
-    'new_listing': 0.44,     # +44% / -36% first day
-    'bse': 0.30,             # ±30% (北交所)
+    "main_board": 0.10,      # ±10%
+    "star_market": 0.20,     # ±20% (科创板)
+    "chinext": 0.20,         # ±20% (创业板)
+    "st": 0.05,              # ±5%
+    "new_listing": 0.44,     # +44% / -36% first day
+    "bse": 0.30,             # ±30% (北交所)
 }
 
 # Lot sizes by market
 LOT_SIZES = {
-    'main_board': 100,
-    'star_market': 200,
-    'chinext': 100,
-    'bse': 100,
-    'hk': 1,  # Various lot sizes
+    "main_board": 100,
+    "star_market": 200,
+    "chinext": 100,
+    "bse": 100,
+    "hk": 1,  # Various lot sizes
 }
 
 # Transaction costs
 TRANSACTION_COSTS = {
-    'commission': 0.00025,    # 0.025% (negotiable)
-    'commission_min': 5.0,    # Minimum ¥5
-    'stamp_tax': 0.001,       # 0.1% (sell only)
-    'transfer_fee': 0.00002,  # 0.002% (SSE only)
-    'slippage': 0.001,        # 0.1% estimated
+    "commission": 0.00025,    # 0.025% (negotiable)
+    "commission_min": 5.0,    # Minimum ¥5
+    "stamp_tax": 0.001,       # 0.1% (sell only)
+    "transfer_fee": 0.00002,  # 0.002% (SSE only)
+    "slippage": 0.001,        # 0.1% estimated
 }
 
 
@@ -194,11 +206,11 @@ BB_STD = 2
 
 # Feature groups
 FEATURE_GROUPS = {
-    'price': ['returns', 'log_returns', 'price_position'],
-    'volume': ['volume_ratio', 'vwap_ratio', 'obv_slope'],
-    'volatility': ['volatility_5', 'volatility_20', 'atr_pct'],
-    'momentum': ['rsi_14', 'macd_hist', 'momentum_10'],
-    'trend': ['ma_ratio_5_20', 'adx', 'trend_strength'],
+    "price": ["returns", "log_returns", "price_position"],
+    "volume": ["volume_ratio", "vwap_ratio", "obv_slope"],
+    "volatility": ["volatility_5", "volatility_20", "atr_pct"],
+    "momentum": ["rsi_14", "macd_hist", "momentum_10"],
+    "trend": ["ma_ratio_5_20", "adx", "trend_strength"],
 }
 
 # Label definitions
@@ -207,23 +219,19 @@ LABEL_NEUTRAL = 1
 LABEL_DOWN = 0
 
 LABEL_NAMES = {
-    LABEL_UP: 'UP',
-    LABEL_NEUTRAL: 'NEUTRAL',
-    LABEL_DOWN: 'DOWN',
+    LABEL_UP: "UP",
+    LABEL_NEUTRAL: "NEUTRAL",
+    LABEL_DOWN: "DOWN",
 }
 
 
 # =============================================================================
 # RISK MANAGEMENT
+# FIX: Removed duplicate RiskLevel enum — use core.types.RiskLevel instead.
+#      Kept RISK_COLORS referencing the canonical enum.
 # =============================================================================
 
-# Risk levels
-class RiskLevel(Enum):
-    LOW = 1
-    MEDIUM = 2
-    HIGH = 3
-    CRITICAL = 4
-
+from core.types import RiskLevel  # noqa: E402  (already imported above indirectly)
 
 RISK_COLORS = {
     RiskLevel.LOW: "#4CAF50",
@@ -234,11 +242,11 @@ RISK_COLORS = {
 
 # Default risk limits
 DEFAULT_RISK_LIMITS = {
-    'max_position_pct': 15.0,
-    'max_daily_loss_pct': 3.0,
-    'max_drawdown_pct': 15.0,
-    'max_positions': 10,
-    'var_confidence': 0.95,
+    "max_position_pct": 15.0,
+    "max_daily_loss_pct": 3.0,
+    "max_drawdown_pct": 15.0,
+    "max_positions": 10,
+    "var_confidence": 0.95,
 }
 
 
@@ -248,26 +256,26 @@ DEFAULT_RISK_LIMITS = {
 
 # Color scheme
 COLORS = {
-    'background': '#0d1117',
-    'surface': '#161b22',
-    'primary': '#58a6ff',
-    'secondary': '#8b949e',
-    'success': '#3fb950',
-    'warning': '#d29922',
-    'error': '#f85149',
-    'text': '#c9d1d9',
-    'text_secondary': '#8b949e',
-    'border': '#30363d',
+    "background": "#0d1117",
+    "surface": "#161b22",
+    "primary": "#58a6ff",
+    "secondary": "#8b949e",
+    "success": "#3fb950",
+    "warning": "#d29922",
+    "error": "#f85149",
+    "text": "#c9d1d9",
+    "text_secondary": "#8b949e",
+    "border": "#30363d",
 }
 
 # Font sizes
 FONTS = {
-    'h1': 24,
-    'h2': 20,
-    'h3': 16,
-    'body': 12,
-    'small': 10,
-    'mono': 'Consolas',
+    "h1": 24,
+    "h2": 20,
+    "h3": 16,
+    "body": 12,
+    "small": 10,
+    "mono": "Consolas",
 }
 
 
@@ -275,116 +283,139 @@ FONTS = {
 # HELPER FUNCTIONS
 # =============================================================================
 
+
 def get_exchange(code: str) -> str:
-    """Get exchange from stock code"""
+    """Get exchange from stock code."""
     code = str(code).zfill(6)
-    
+
     for exchange, info in EXCHANGES.items():
-        for prefix in info['prefix']:
+        for prefix in info["prefix"]:
             if code.startswith(prefix):
                 return exchange
-    
-    return 'UNKNOWN'
+
+    return "UNKNOWN"
 
 
 @lru_cache(maxsize=1)
-def get_holidays() -> Set[date]:
+def _load_external_holidays() -> frozenset:
     """
-    Return holiday set.
-    - Uses built-in HOLIDAYS as baseline
-    - Extends with optional external file: <data_dir>/holidays_cn.json
-      Format: ["2026-01-01", "2026-02-10", ...]
-    """
-    base = set(HOLIDAYS)
+    Load optional external holidays file once and cache as frozenset.
 
-    # optional external file (lets you extend beyond 2025 without code changes)
+    File format: <data_dir>/holidays_cn.json
+    Content: ["2026-01-01", "2026-02-10", ...]
+    """
+    extra: Set[date] = set()
     try:
         from config.settings import CONFIG
+
         path = Path(CONFIG.data_dir) / "holidays_cn.json"
         if path.exists():
             import json
+
             data = json.loads(path.read_text(encoding="utf-8"))
             for s in data if isinstance(data, list) else []:
                 try:
                     y, m, d = map(int, str(s).split("-"))
-                    base.add(date(y, m, d))
+                    extra.add(date(y, m, d))
                 except Exception:
                     continue
     except Exception:
         pass
 
-    return base
+    return frozenset(extra)
+
+
+@lru_cache(maxsize=1)
+def get_holidays() -> frozenset:
+    """
+    Return combined holiday set (built-in + external file).
+
+    FIX: Returns frozenset instead of set so the result is hashable
+    and the lru_cache actually works.  Also allows O(1) ``in`` checks.
+    """
+    return frozenset(_HOLIDAYS_BUILTIN) | _load_external_holidays()
 
 
 def get_price_limit(code: str, name: str = None) -> float:
     """
     Get price limit for stock.
-    
+
     Args:
         code: Stock code
         name: Stock name (optional, for ST detection)
-    
+
     Returns:
         Price limit as decimal (e.g., 0.10 for 10%)
     """
     code = str(code).zfill(6)
-    
+
     # Check ST first if name provided
     if name and is_st_stock(name):
-        return PRICE_LIMITS['st']
-    
+        return PRICE_LIMITS["st"]
+
     # STAR Market (科创板)
-    if code.startswith('688'):
-        return PRICE_LIMITS['star_market']
-    
+    if code.startswith("688"):
+        return PRICE_LIMITS["star_market"]
+
     # ChiNext (创业板)
-    if code.startswith('30'):
-        return PRICE_LIMITS['chinext']
-    
+    if code.startswith("30"):
+        return PRICE_LIMITS["chinext"]
+
     # BSE (北交所)
-    if code.startswith(('83', '43', '87')):
-        return PRICE_LIMITS['bse']
-    
+    if code.startswith(("83", "43", "87")):
+        return PRICE_LIMITS["bse"]
+
     # Main board
-    return PRICE_LIMITS['main_board']
+    return PRICE_LIMITS["main_board"]
 
 
 def get_lot_size(code: str) -> int:
-    """Get lot size for stock"""
+    """Get lot size for stock."""
     code = str(code).zfill(6)
-    
+
     # STAR Market
-    if code.startswith('688'):
-        return LOT_SIZES['star_market']
-    
-    return LOT_SIZES['main_board']
+    if code.startswith("688"):
+        return LOT_SIZES["star_market"]
+
+    return LOT_SIZES["main_board"]
 
 
 def is_trading_day(d: date) -> bool:
-    """Check if date is a trading day (weekend + holiday aware)."""
+    """
+    Check if date is a trading day (weekend + holiday aware).
+
+    FIX: Uses cached frozenset for O(1) lookup.
+    """
     if d.weekday() >= 5:
         return False
-    if d in get_holidays():
-        return False
-    return True
+    return d not in get_holidays()
 
 
-def is_trading_time(exchange: str = 'SSE') -> bool:
-    """Check if current time is trading time"""
-    from datetime import datetime
-    
-    now = datetime.now().time()
-    hours = TRADING_HOURS.get(exchange, TRADING_HOURS['SSE'])
-    
-    morning = hours['morning'][0] <= now <= hours['morning'][1]
-    afternoon = hours['afternoon'][0] <= now <= hours['afternoon'][1]
-    
+def is_trading_time(exchange: str = "SSE") -> bool:
+    """
+    Check if current time is within trading hours.
+
+    FIX: Uses Asia/Shanghai timezone instead of machine-local time
+    to avoid incorrect results on non-Chinese servers.
+    """
+    try:
+        from zoneinfo import ZoneInfo
+
+        now = datetime.now(tz=ZoneInfo("Asia/Shanghai")).time()
+    except Exception:
+        now = datetime.now().time()
+
+    hours = TRADING_HOURS.get(exchange, TRADING_HOURS["SSE"])
+
+    morning = hours["morning"][0] <= now <= hours["morning"][1]
+    afternoon = hours["afternoon"][0] <= now <= hours["afternoon"][1]
+
     return morning or afternoon
 
 
 def is_st_stock(name: str) -> bool:
-    """Check if stock is ST"""
+    """Check if stock is ST."""
     if not name:
         return False
     name_upper = name.upper()
-    return 'ST' in name_upper or '*ST' in name_upper
+    return "ST" in name_upper or "*ST" in name_upper

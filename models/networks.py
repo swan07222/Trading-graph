@@ -1,5 +1,12 @@
+# models/networks.py
 """
-Neural Network Architectures for Stock Prediction
+Neural Network Architectures for Time-Series Stock Prediction.
+
+Design principles:
+    - All architectures are CAUSAL — no future information leakage.
+    - Every model returns (logits, confidence) for a unified interface.
+    - Head dimensions are validated at init time to prevent runtime crashes.
+    - Xavier / Kaiming init applied for stable training.
 """
 import torch
 import torch.nn as nn
@@ -8,7 +15,6 @@ from typing import Tuple
 
 from .layers import (
     PositionalEncoding,
-    MultiHeadAttention,
     TransformerBlock,
     LSTMBlock,
     TemporalConvBlock,
@@ -16,240 +22,278 @@ from .layers import (
 )
 
 
-class LSTMModel(nn.Module):
-    """LSTM with Multi-Head Attention"""
-    
-    def __init__(self, input_size: int, hidden_size: int = 256, 
-                 num_classes: int = 3, dropout: float = 0.3):
+# ---------------------------------------------------------------------------
+# Shared helpers
+# ---------------------------------------------------------------------------
+
+def _safe_num_heads(dim: int, preferred: int = 8) -> int:
+    """Return the largest num_heads <= preferred that divides dim."""
+    for h in range(preferred, 0, -1):
+        if dim % h == 0:
+            return h
+    return 1
+
+
+def _init_weights(module: nn.Module):
+    """Apply sensible weight initialization."""
+    if isinstance(module, nn.Linear):
+        nn.init.xavier_uniform_(module.weight)
+        if module.bias is not None:
+            nn.init.zeros_(module.bias)
+    elif isinstance(module, nn.Conv1d):
+        nn.init.kaiming_normal_(module.weight, nonlinearity="linear")
+        if module.bias is not None:
+            nn.init.zeros_(module.bias)
+    elif isinstance(module, (nn.LayerNorm, nn.GroupNorm, nn.BatchNorm1d)):
+        nn.init.ones_(module.weight)
+        nn.init.zeros_(module.bias)
+
+
+def _count_parameters(model: nn.Module) -> int:
+    return sum(p.numel() for p in model.parameters() if p.requires_grad)
+
+
+class _ClassifierHead(nn.Module):
+    """Shared classification + confidence head."""
+
+    def __init__(self, in_features: int, hidden: int, num_classes: int, dropout: float):
         super().__init__()
-        
-        self.input_proj = nn.Linear(input_size, hidden_size)
-        
-        self.lstm = LSTMBlock(hidden_size, hidden_size, num_layers=2, dropout=dropout)
-        
-        self.attention = MultiHeadAttention(hidden_size * 2, num_heads=8, dropout=dropout)
-        
-        self.pool = AttentionPooling(hidden_size * 2)
-        
         self.classifier = nn.Sequential(
-            nn.Linear(hidden_size * 2, hidden_size),
+            nn.Linear(in_features, hidden),
             nn.GELU(),
             nn.Dropout(dropout),
-            nn.Linear(hidden_size, num_classes)
+            nn.Linear(hidden, num_classes),
         )
-        
         self.confidence = nn.Sequential(
-            nn.Linear(hidden_size * 2, hidden_size // 2),
+            nn.Linear(in_features, max(1, hidden // 4)),
             nn.GELU(),
-            nn.Linear(hidden_size // 2, 1),
-            nn.Sigmoid()
+            nn.Linear(max(1, hidden // 4), 1),
+            nn.Sigmoid(),
         )
-    
+
+    def forward(self, pooled: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        return self.classifier(pooled), self.confidence(pooled)
+
+
+# ---------------------------------------------------------------------------
+# Models
+# ---------------------------------------------------------------------------
+
+
+class LSTMModel(nn.Module):
+    """Bidirectional LSTM with self-attention pooling."""
+
+    def __init__(
+        self,
+        input_size: int,
+        hidden_size: int = 256,
+        num_classes: int = 3,
+        dropout: float = 0.3,
+    ):
+        super().__init__()
+        self.input_proj = nn.Linear(input_size, hidden_size)
+
+        self.lstm = LSTMBlock(
+            hidden_size, hidden_size, num_layers=2,
+            dropout=dropout, bidirectional=True,
+        )
+
+        lstm_out = hidden_size * 2  # bidirectional
+        self.pool = AttentionPooling(lstm_out)
+        self.head = _ClassifierHead(lstm_out, hidden_size, num_classes, dropout)
+
+        self.apply(_init_weights)
+
     def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         x = self.input_proj(x)
         x = self.lstm(x)
-        x, _ = self.attention(x)
         pooled = self.pool(x)
-        logits = self.classifier(pooled)
-        conf = self.confidence(pooled)
-        return logits, conf
+        return self.head(pooled)
 
 
 class TransformerModel(nn.Module):
-    """Transformer Encoder for sequence classification"""
-    
-    def __init__(self, input_size: int, hidden_size: int = 256,
-                 num_classes: int = 3, dropout: float = 0.3,
-                 num_layers: int = 4, num_heads: int = 8):
+    """Causal Transformer encoder for sequence classification."""
+
+    def __init__(
+        self,
+        input_size: int,
+        hidden_size: int = 256,
+        num_classes: int = 3,
+        dropout: float = 0.3,
+        num_layers: int = 4,
+        num_heads: int = 8,
+    ):
         super().__init__()
-        
+        # Ensure head count is valid
+        num_heads = _safe_num_heads(hidden_size, num_heads)
+
         self.input_proj = nn.Linear(input_size, hidden_size)
         self.pos_encoding = PositionalEncoding(hidden_size, dropout=dropout)
-        
-        self.layers = nn.ModuleList([
-            TransformerBlock(hidden_size, num_heads, dropout)
-            for _ in range(num_layers)
-        ])
-        
+
+        self.layers = nn.ModuleList(
+            [
+                TransformerBlock(hidden_size, num_heads, dropout, causal=True)
+                for _ in range(num_layers)
+            ]
+        )
+
         self.norm = nn.LayerNorm(hidden_size)
         self.pool = AttentionPooling(hidden_size)
-        
-        self.classifier = nn.Sequential(
-            nn.Linear(hidden_size, hidden_size // 2),
-            nn.GELU(),
-            nn.Dropout(dropout),
-            nn.Linear(hidden_size // 2, num_classes)
-        )
-        
-        self.confidence = nn.Sequential(
-            nn.Linear(hidden_size, hidden_size // 4),
-            nn.GELU(),
-            nn.Linear(hidden_size // 4, 1),
-            nn.Sigmoid()
-        )
-    
+        self.head = _ClassifierHead(hidden_size, hidden_size // 2, num_classes, dropout)
+
+        self.apply(_init_weights)
+
     def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         x = self.input_proj(x)
         x = self.pos_encoding(x)
-        
+
         for layer in self.layers:
             x = layer(x)
-        
+
         x = self.norm(x)
         pooled = self.pool(x)
-        logits = self.classifier(pooled)
-        conf = self.confidence(pooled)
-        return logits, conf
+        return self.head(pooled)
 
 
 class GRUModel(nn.Module):
-    """GRU with attention"""
-    
-    def __init__(self, input_size: int, hidden_size: int = 256,
-                 num_classes: int = 3, dropout: float = 0.3):
+    """Bidirectional GRU with attention pooling."""
+
+    def __init__(
+        self,
+        input_size: int,
+        hidden_size: int = 256,
+        num_classes: int = 3,
+        dropout: float = 0.3,
+    ):
         super().__init__()
-        
         self.input_proj = nn.Linear(input_size, hidden_size)
-        
+
         self.gru = nn.GRU(
             input_size=hidden_size,
             hidden_size=hidden_size,
             num_layers=2,
             batch_first=True,
             dropout=dropout,
-            bidirectional=True
+            bidirectional=True,
         )
-        
-        self.norm = nn.LayerNorm(hidden_size * 2)
-        self.pool = AttentionPooling(hidden_size * 2)
-        
-        self.classifier = nn.Sequential(
-            nn.Linear(hidden_size * 2, hidden_size),
-            nn.GELU(),
-            nn.Dropout(dropout),
-            nn.Linear(hidden_size, num_classes)
-        )
-        
-        self.confidence = nn.Sequential(
-            nn.Linear(hidden_size * 2, hidden_size // 2),
-            nn.GELU(),
-            nn.Linear(hidden_size // 2, 1),
-            nn.Sigmoid()
-        )
-    
+
+        gru_out = hidden_size * 2
+        self.norm = nn.LayerNorm(gru_out)
+        self.pool = AttentionPooling(gru_out)
+        self.head = _ClassifierHead(gru_out, hidden_size, num_classes, dropout)
+
+        self.apply(_init_weights)
+
     def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         x = self.input_proj(x)
         x, _ = self.gru(x)
         x = self.norm(x)
         pooled = self.pool(x)
-        logits = self.classifier(pooled)
-        conf = self.confidence(pooled)
-        return logits, conf
+        return self.head(pooled)
 
 
 class TCNModel(nn.Module):
-    """Temporal Convolutional Network"""
-    
-    def __init__(self, input_size: int, hidden_size: int = 256,
-                 num_classes: int = 3, dropout: float = 0.3):
+    """Temporal Convolutional Network (strictly causal).
+
+    Uses the LAST timestep output (not global average pool) to preserve
+    the causal property of the dilated convolutions.
+    """
+
+    def __init__(
+        self,
+        input_size: int,
+        hidden_size: int = 256,
+        num_classes: int = 3,
+        dropout: float = 0.3,
+    ):
         super().__init__()
-        
         self.input_proj = nn.Linear(input_size, hidden_size)
-        
-        self.tcn_blocks = nn.ModuleList([
-            TemporalConvBlock(hidden_size, hidden_size, dilation=1, dropout=dropout),
-            TemporalConvBlock(hidden_size, hidden_size, dilation=2, dropout=dropout),
-            TemporalConvBlock(hidden_size, hidden_size, dilation=4, dropout=dropout),
-            TemporalConvBlock(hidden_size, hidden_size, dilation=8, dropout=dropout),
-        ])
-        
-        self.pool = nn.AdaptiveAvgPool1d(1)
-        
-        self.classifier = nn.Sequential(
-            nn.Linear(hidden_size, hidden_size // 2),
-            nn.GELU(),
-            nn.Dropout(dropout),
-            nn.Linear(hidden_size // 2, num_classes)
+
+        self.tcn_blocks = nn.ModuleList(
+            [
+                TemporalConvBlock(hidden_size, hidden_size, dilation=2**i, dropout=dropout)
+                for i in range(4)  # dilations: 1, 2, 4, 8
+            ]
         )
-        
-        self.confidence = nn.Sequential(
-            nn.Linear(hidden_size, hidden_size // 4),
-            nn.GELU(),
-            nn.Linear(hidden_size // 4, 1),
-            nn.Sigmoid()
-        )
-    
+
+        self.head = _ClassifierHead(hidden_size, hidden_size // 2, num_classes, dropout)
+
+        self.apply(_init_weights)
+
     def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         x = self.input_proj(x)
         x = x.transpose(1, 2)  # (batch, hidden, seq)
-        
+
         for block in self.tcn_blocks:
             x = block(x)
-        
-        x = self.pool(x).squeeze(-1)  # (batch, hidden)
-        logits = self.classifier(x)
-        conf = self.confidence(x)
-        return logits, conf
+
+        # Take LAST timestep to preserve causality
+        pooled = x[:, :, -1]  # (batch, hidden)
+        return self.head(pooled)
 
 
 class HybridModel(nn.Module):
-    """CNN-LSTM Hybrid Model"""
-    
-    def __init__(self, input_size: int, hidden_size: int = 256,
-                 num_classes: int = 3, dropout: float = 0.3):
+    """Causal CNN + LSTM hybrid model.
+
+    CNN uses causal (left-only) padding to prevent future leakage.
+    """
+
+    def __init__(
+        self,
+        input_size: int,
+        hidden_size: int = 256,
+        num_classes: int = 3,
+        dropout: float = 0.3,
+    ):
         super().__init__()
-        
         self.input_proj = nn.Linear(input_size, hidden_size)
-        
-        # CNN for local patterns
-        self.conv1 = nn.Conv1d(hidden_size, hidden_size, kernel_size=3, padding=1)
-        self.conv2 = nn.Conv1d(hidden_size, hidden_size, kernel_size=5, padding=2)
-        self.conv_norm = nn.BatchNorm1d(hidden_size)
-        
-        # LSTM for sequential patterns
+
+        # Causal convolutions (left-padding only)
+        self.conv1_pad = 2  # kernel_size - 1 for k=3
+        self.conv1 = nn.Conv1d(hidden_size, hidden_size, kernel_size=3, padding=0)
+        self.conv2_pad = 4  # kernel_size - 1 for k=5
+        self.conv2 = nn.Conv1d(hidden_size, hidden_size, kernel_size=5, padding=0)
+
+        self.conv_norm = nn.GroupNorm(_pick_num_groups(hidden_size), hidden_size)
+
         self.lstm = nn.LSTM(
             input_size=hidden_size,
             hidden_size=hidden_size // 2,
             num_layers=2,
             batch_first=True,
             dropout=dropout,
-            bidirectional=True
+            bidirectional=True,
         )
-        
+
         self.norm = nn.LayerNorm(hidden_size)
         self.pool = AttentionPooling(hidden_size)
-        
-        self.classifier = nn.Sequential(
-            nn.Linear(hidden_size, hidden_size // 2),
-            nn.GELU(),
-            nn.Dropout(dropout),
-            nn.Linear(hidden_size // 2, num_classes)
-        )
-        
-        self.confidence = nn.Sequential(
-            nn.Linear(hidden_size, hidden_size // 4),
-            nn.GELU(),
-            nn.Linear(hidden_size // 4, 1),
-            nn.Sigmoid()
-        )
-    
+        self.head = _ClassifierHead(hidden_size, hidden_size // 2, num_classes, dropout)
+
+        self.apply(_init_weights)
+
     def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         x = self.input_proj(x)
-        
-        # CNN path
-        x_t = x.transpose(1, 2)
-        conv_out = F.gelu(self.conv1(x_t)) + F.gelu(self.conv2(x_t))
-        conv_out = self.conv_norm(conv_out)
-        conv_out = conv_out.transpose(1, 2)
-        
-        # Residual
+
+        # Causal CNN path
+        x_t = x.transpose(1, 2)  # (batch, hidden, seq)
+        c1 = F.gelu(self.conv1(F.pad(x_t, (self.conv1_pad, 0))))
+        c2 = F.gelu(self.conv2(F.pad(x_t, (self.conv2_pad, 0))))
+        conv_out = self.conv_norm(c1 + c2).transpose(1, 2)
+
+        # Residual connection
         x = x + conv_out
-        
+
         # LSTM path
         x, _ = self.lstm(x)
         x = self.norm(x)
-        
+
         pooled = self.pool(x)
-        logits = self.classifier(pooled)
-        conf = self.confidence(pooled)
-        return logits, conf
+        return self.head(pooled)
+
+
+# Re-export helper used by HybridModel
+def _pick_num_groups(channels: int, preferred: int = 8) -> int:
+    for g in (preferred, 4, 2, 1):
+        if channels % g == 0:
+            return g
+    return 1

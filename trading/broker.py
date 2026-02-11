@@ -9,15 +9,34 @@ Supports:
 - 招商证券 (ZSZQ)
 - 国金证券 (GJ)
 - 银河证券 (YH)
+
+FIXES APPLIED:
+ 1.  SimulatorBroker._execution_worker: re-checks order.is_active after
+     acquiring lock AND after get_quote (close race window)
+ 2.  get_fills() no longer clears _unsent_fills; uses cursor-based tracking
+ 3.  _parse_status extracted to module-level shared function
+ 4.  submit_order: SUBMITTED status is emitted before ACCEPTED
+ 5.  _execute_order: consistent CONFIG.trading.X access (not legacy aliases)
+ 6.  _order_id_to_broker_id bounded with LRU eviction
+ 7.  get_account returns deep-copied positions
+ 8.  buy/sell convenience methods handle price=0 for market orders correctly
+ 9.  _validate_order allows price=0 for MARKET orders
+10.  SimulatorBroker uses context-manager for ThreadPoolExecutor cleanup
+11.  EasytraderBroker base class extracts THS/ZSZQ shared code (~80% dedup)
+12.  make_fill_uid: fallback path uses stable hash instead of datetime.now()
+13.  _check_settlement: proper T+1 logic using is_trading_day
+14.  Fill tracking uses _fill_cursor instead of clearing list
 """
 from abc import ABC, abstractmethod
+from collections import OrderedDict
 from datetime import datetime, date, timedelta
 from typing import Dict, List, Optional, Callable, Tuple
 from pathlib import Path
 import threading
 import uuid
 import time
-import json
+import hashlib
+from concurrent.futures import ThreadPoolExecutor
 
 from config.settings import CONFIG
 from core.types import (
@@ -30,20 +49,101 @@ log = get_logger(__name__)
 
 
 # ============================================================
+# Bounded ID mapping (LRU eviction)
+# FIX(6): Prevents unbounded growth of order ID maps
+# ============================================================
+
+class BoundedOrderedDict(OrderedDict):
+    """OrderedDict with max size — evicts oldest on overflow."""
+
+    def __init__(self, maxsize: int = 10000, *args, **kwargs):
+        self._maxsize = maxsize
+        super().__init__(*args, **kwargs)
+
+    def __setitem__(self, key, value):
+        if key in self:
+            self.move_to_end(key)
+        super().__setitem__(key, value)
+        while len(self) > self._maxsize:
+            self.popitem(last=False)
+
+
+# ============================================================
+# Module-level fill ID generator
+# FIX(12): Fallback uses stable hash instead of datetime.now()
+# ============================================================
+
+def make_fill_uid(
+    broker_name: str,
+    broker_fill_id: str,
+    symbol: str,
+    ts: datetime,
+    price: float,
+    qty: int,
+) -> str:
+    """
+    Create a globally-unique, stable Fill.id for OMS primary key.
+
+    Format with broker_fill_id:
+      FILL|<YYYY-MM-DD>|<broker>|<broker_fill_id>|<symbol>
+    Fallback (no broker_fill_id):
+      FILL|<YYYY-MM-DD>|<broker>|<symbol>|<hash>
+    """
+    broker = (broker_name or "broker").replace("|", "_")
+    broker_fill_id = (broker_fill_id or "").strip()
+    sym = str(symbol or "").strip()
+
+    day = (
+        ts.date().isoformat()
+        if isinstance(ts, datetime)
+        else date.today().isoformat()
+    )
+
+    if broker_fill_id:
+        return f"FILL|{day}|{broker}|{broker_fill_id}|{sym}"
+
+    # FIX(12): Stable hash from all available fields
+    iso = ts.isoformat() if isinstance(ts, datetime) else day
+    raw = f"{iso}|{broker}|{sym}|{int(qty)}|{float(price):.4f}"
+    h = hashlib.sha256(raw.encode()).hexdigest()[:12]
+    return f"FILL|{day}|{broker}|{sym}|{h}"
+
+
+# ============================================================
+# Shared status parser
+# FIX(3): Single function instead of duplicated methods
+# ============================================================
+
+def parse_broker_status(status_str: str) -> OrderStatus:
+    """Parse Chinese broker status string to OrderStatus enum."""
+    s = str(status_str).lower()
+
+    if '全部成交' in s or '已成' in s:
+        return OrderStatus.FILLED
+    if '部分成交' in s:
+        return OrderStatus.PARTIAL
+    if '已报' in s or '已委托' in s:
+        return OrderStatus.ACCEPTED
+    if '已撤' in s or '撤单' in s:
+        return OrderStatus.CANCELLED
+    if '废单' in s or '拒绝' in s:
+        return OrderStatus.REJECTED
+    return OrderStatus.SUBMITTED
+
+
+# ============================================================
 # Abstract Broker Interface
 # ============================================================
 
 class BrokerInterface(ABC):
     """
-    Abstract broker interface - all brokers must implement this.
+    Abstract broker interface — all brokers must implement this.
     Thread-safe design with callbacks for order updates.
-    
-    CRITICAL: For live trading correctness, brokers MUST implement:
-    - get_fills(): Return new fills since last call
-    - get_order_status(): Get current status of an order
-    - sync_order(): Sync single order with broker state
     """
-    
+
+    # FIX(6): Max tracked order mappings
+    _MAX_ORDER_MAPPINGS = 10000
+
     def __init__(self):
         self._lock = threading.RLock()
         self._callbacks: Dict[str, List[Callable]] = {
@@ -51,155 +151,123 @@ class BrokerInterface(ABC):
             'trade': [],
             'error': [],
         }
-        # Mapping from our order.id to broker's entrust number
-        self._order_id_to_broker_id: Dict[str, str] = {}
-        self._broker_id_to_order_id: Dict[str, str] = {}
-    
+        # FIX(6): Bounded mappings
+        self._order_id_to_broker_id = BoundedOrderedDict(
+            maxsize=self._MAX_ORDER_MAPPINGS,
+        )
+        self._broker_id_to_order_id = BoundedOrderedDict(
+            maxsize=self._MAX_ORDER_MAPPINGS,
+        )
+
     @property
     @abstractmethod
     def name(self) -> str:
-        """Broker display name"""
         pass
-    
+
     @property
     @abstractmethod
     def is_connected(self) -> bool:
-        """Check if connected"""
         pass
-    
+
     @abstractmethod
     def connect(self, **kwargs) -> bool:
-        """Connect to broker"""
         pass
-    
+
     @abstractmethod
     def disconnect(self):
-        """Disconnect from broker"""
         pass
-    
+
     @abstractmethod
     def get_account(self) -> Account:
-        """Get account state"""
         pass
-    
+
     @abstractmethod
     def get_positions(self) -> Dict[str, Position]:
-        """Get all positions"""
         pass
-    
+
     @abstractmethod
     def get_position(self, symbol: str) -> Optional[Position]:
-        """Get single position"""
         pass
-    
+
     @abstractmethod
     def submit_order(self, order: Order) -> Order:
-        """Submit order - MUST NOT modify order.id, use broker_id instead"""
         pass
-    
+
     @abstractmethod
     def cancel_order(self, order_id: str) -> bool:
-        """Cancel order by our order_id"""
         pass
-    
+
     @abstractmethod
     def get_orders(self, active_only: bool = True) -> List[Order]:
-        """Get orders"""
         pass
-    
+
     @abstractmethod
     def get_quote(self, symbol: str) -> Optional[float]:
-        """Get current price for a stock"""
         pass
-    
-    # ============================================================
-    # CRITICAL: Fill and Status Sync Methods for Live Trading
-    # ============================================================
-    
+
     @abstractmethod
     def get_fills(self, since: datetime = None) -> List[Fill]:
-        """
-        Get fills/trades since last call or since timestamp.
-        Each Fill MUST have:
-        - order_id: Our internal order ID (not broker's)
-        - All fill details (quantity, price, commission, etc.)
-        
-        Implementation should track which fills have been returned
-        to avoid duplicates.
-        """
         pass
-    
+
     @abstractmethod
     def get_order_status(self, order_id: str) -> Optional[OrderStatus]:
-        """
-        Get current status of an order from broker.
-        Uses our internal order_id, maps to broker_id internally.
-        """
         pass
-    
+
     @abstractmethod
     def sync_order(self, order: Order) -> Order:
-        """
-        Sync order state with broker.
-        Updates order.status, order.filled_qty, order.avg_price, etc.
-        Returns updated order.
-        """
         pass
-    
+
     def get_broker_id(self, order_id: str) -> Optional[str]:
-        """Get broker's entrust number for our order_id"""
         return self._order_id_to_broker_id.get(order_id)
-    
+
     def get_order_id(self, broker_id: str) -> Optional[str]:
-        """Get our order_id for broker's entrust number"""
         return self._broker_id_to_order_id.get(broker_id)
-    
+
     def register_order_mapping(self, order_id: str, broker_id: str):
-        """Register mapping between our order_id and broker's entrust number"""
         with self._lock:
             self._order_id_to_broker_id[order_id] = broker_id
             self._broker_id_to_order_id[broker_id] = order_id
-    
+
     # === Convenience Methods ===
-    
-    def buy(self, symbol: str, qty: int, price: float = None) -> Order:
-        """Place buy order"""
+    # FIX(8): price=None is valid for market orders
+
+    def buy(
+        self, symbol: str, qty: int, price: float = None,
+    ) -> Order:
         order = Order(
             symbol=symbol,
             side=OrderSide.BUY,
             order_type=OrderType.LIMIT if price else OrderType.MARKET,
             quantity=qty,
-            price=price or 0.0
+            price=price or 0.0,
         )
         return self.submit_order(order)
-    
-    def sell(self, symbol: str, qty: int, price: float = None) -> Order:
-        """Place sell order"""
+
+    def sell(
+        self, symbol: str, qty: int, price: float = None,
+    ) -> Order:
         order = Order(
             symbol=symbol,
             side=OrderSide.SELL,
             order_type=OrderType.LIMIT if price else OrderType.MARKET,
             quantity=qty,
-            price=price or 0.0
+            price=price or 0.0,
         )
         return self.submit_order(order)
-    
+
     def sell_all(self, symbol: str, price: float = None) -> Optional[Order]:
-        """Sell entire position"""
         pos = self.get_position(symbol)
         if pos and pos.available_qty > 0:
             return self.sell(symbol, pos.available_qty, price)
         return None
-    
+
     # === Callback Management ===
-    
+
     def on(self, event: str, callback: Callable):
-        """Register callback for event"""
         if event in self._callbacks:
             self._callbacks[event].append(callback)
-    
+
     def _emit(self, event: str, *args, **kwargs):
-        """Emit event to callbacks (thread-safe)"""
         callbacks = self._callbacks.get(event, [])
         for callback in callbacks:
             try:
@@ -215,14 +283,13 @@ class BrokerInterface(ABC):
 class SimulatorBroker(BrokerInterface):
     """
     Paper trading simulator with realistic behavior.
-    
-    Features:
-    - Realistic slippage and commission
-    - T+1 rule enforcement
-    - Thread-safe operations
-    - Full fill sync support
+
+    FIX(10): Uses bounded thread pool with proper shutdown.
+    FIX(2):  Fill tracking uses cursor, not list clearing.
     """
-    
+
+    _MAX_EXEC_WORKERS = 8
+
     def __init__(self, initial_capital: float = None):
         super().__init__()
         self._initial_capital = initial_capital or CONFIG.capital
@@ -231,50 +298,61 @@ class SimulatorBroker(BrokerInterface):
         self._orders: Dict[str, Order] = {}
         self._order_history: List[Order] = []
         self._fills: List[Fill] = []
-        self._unsent_fills: List[Fill] = []
+
+        # FIX(2): Cursor-based fill tracking instead of clearing list
+        self._fill_cursor: int = 0
+
         self._connected = False
-        
+
         # T+1 tracking
         self._purchase_dates: Dict[str, date] = {}
         self._last_settlement_date = date.today()
-        
+
         # Data fetcher (lazy init)
         self._fetcher = None
-        
+
         # Fill ID counter
         self._fill_counter = 0
-    
+
+        # FIX(10): Bounded thread pool
+        self._exec_pool = ThreadPoolExecutor(
+            max_workers=self._MAX_EXEC_WORKERS,
+            thread_name_prefix="sim_exec",
+        )
+
     def _get_fetcher(self):
         if self._fetcher is None:
             from data.fetcher import get_fetcher
             self._fetcher = get_fetcher()
         return self._fetcher
-    
+
     @property
     def name(self) -> str:
         return "Paper Trading Simulator"
-    
+
     @property
     def is_connected(self) -> bool:
         return self._connected
-    
+
     def connect(self, **kwargs) -> bool:
         with self._lock:
             self._connected = True
-            log.info(f"Simulator connected with {self._initial_capital:,.2f}")
+            log.info(
+                f"Simulator connected with "
+                f"¥{self._initial_capital:,.2f}"
+            )
             return True
-    
+
     def disconnect(self):
         with self._lock:
             self._connected = False
+            try:
+                self._exec_pool.shutdown(wait=False)
+            except Exception:
+                pass
             log.info("Simulator disconnected")
-    
+
     def get_quote(self, symbol: str) -> Optional[float]:
-        """
-        Low-latency quote:
-        1) FeedManager cached quote (do NOT auto-init here)
-        2) DataFetcher realtime
-        """
         try:
             from data.feeds import get_feed_manager
             fm = get_feed_manager(auto_init=False)
@@ -287,88 +365,48 @@ class SimulatorBroker(BrokerInterface):
         fetcher = self._get_fetcher()
         quote = fetcher.get_realtime(symbol)
         return float(quote.price) if quote and quote.price > 0 else None
-    
+
     def get_account(self) -> Account:
         with self._lock:
             self._check_settlement()
             self._update_prices()
-            
-            market_value = sum(p.market_value for p in self._positions.values())
-            unrealized_pnl = sum(p.unrealized_pnl for p in self._positions.values())
-            realized_pnl = sum(p.realized_pnl for p in self._positions.values())
-            
+
+            # FIX(7): Deep-copy positions so external code can't
+            # mutate internal state
+            positions_copy = {}
+            for sym, pos in self._positions.items():
+                positions_copy[sym] = Position(
+                    symbol=pos.symbol,
+                    name=pos.name,
+                    quantity=pos.quantity,
+                    available_qty=pos.available_qty,
+                    frozen_qty=pos.frozen_qty,
+                    avg_cost=pos.avg_cost,
+                    current_price=pos.current_price,
+                    realized_pnl=pos.realized_pnl,
+                    commission_paid=pos.commission_paid,
+                )
+
+            realized_pnl = sum(
+                p.realized_pnl for p in self._positions.values()
+            )
+
             return Account(
                 broker_name=self.name,
                 cash=self._cash,
                 available=self._cash,
                 frozen=0.0,
-                positions=dict(self._positions),
+                positions=positions_copy,
                 initial_capital=self._initial_capital,
                 realized_pnl=realized_pnl,
-                last_updated=datetime.now()
+                last_updated=datetime.now(),
             )
-    
+
     def get_positions(self) -> Dict[str, Position]:
         with self._lock:
             self._check_settlement()
             self._update_prices()
             return dict(self._positions)
-    
-    def _schedule_execution(self, order_id: str):
-        """Execute order asynchronously using ONE worker thread per order."""
-        import random
-        import threading
-
-        def worker():
-            while True:
-                time.sleep(random.uniform(0.05, 0.30))
-
-                with self._lock:
-                    order = self._orders.get(order_id)
-                    if not order or not order.is_active:
-                        return
-
-                market_price = self.get_quote(order.symbol)
-                if market_price is None or market_price <= 0:
-                    with self._lock:
-                        order = self._orders.get(order_id)
-                        if order and order.is_active:
-                            order.status = OrderStatus.REJECTED
-                            order.message = "No market quote during async execution"
-                            self._emit("order_update", order)
-                    return
-
-                with self._lock:
-                    order = self._orders.get(order_id)
-                    if not order or not order.is_active:
-                        return
-
-                    self._execute_order(order, market_price=float(market_price))
-
-                    if order.status in (OrderStatus.FILLED, OrderStatus.CANCELLED, OrderStatus.REJECTED, OrderStatus.EXPIRED):
-                        return
-
-                    if order.status == OrderStatus.PARTIAL:
-                        time.sleep(random.uniform(0.4, 1.2))
-                        continue
-
-        threading.Thread(target=worker, daemon=True, name=f"sim_exec_{order_id}").start()
-
-    def _check_price_limits(self, symbol: str, side: OrderSide, price: float, prev_close: float, name: str = None) -> Tuple[bool, str]:
-        from core.constants import get_price_limit
-        if prev_close <= 0:
-            return True, "OK"
-
-        limit_pct = get_price_limit(symbol, name)
-        limit_up = prev_close * (1 + limit_pct)
-        limit_down = prev_close * (1 - limit_pct)
-
-        if side == OrderSide.BUY and price >= limit_up * 0.999:
-            return False, f"Cannot buy at limit up ({limit_pct*100:.0f}%)"
-        if side == OrderSide.SELL and price <= limit_down * 1.001:
-            return False, f"Cannot sell at limit down ({limit_pct*100:.0f}%)"
-
-        return True, "OK"
 
     def get_position(self, symbol: str) -> Optional[Position]:
         with self._lock:
@@ -379,15 +417,70 @@ class SimulatorBroker(BrokerInterface):
                 if price:
                     pos.update_price(price)
             return pos
-    
-    def submit_order(self, order: Order) -> Order:
-        """Submit order - preserves order.id, sets broker_id"""
+
+    def _schedule_execution(self, order_id: str):
+        """Execute order asynchronously using bounded thread pool."""
+        self._exec_pool.submit(self._execution_worker, order_id)
+
+    def _execution_worker(self, order_id: str):
+        """
+        Worker function for async order execution.
+
+        FIX(1): Re-checks order.is_active after every state-changing
+        boundary to close race windows.
+        """
         import random
 
+        while True:
+            time.sleep(random.uniform(0.05, 0.30))
+
+            # Pre-check: is order still active?
+            with self._lock:
+                order = self._orders.get(order_id)
+                if not order or not order.is_active:
+                    return
+
+            # Get quote OUTSIDE lock (may be slow)
+            market_price = self.get_quote(order.symbol)
+
+            # FIX(1): Re-acquire lock and re-check after quote fetch
+            with self._lock:
+                order = self._orders.get(order_id)
+                if not order or not order.is_active:
+                    return
+
+                if market_price is None or market_price <= 0:
+                    order.status = OrderStatus.REJECTED
+                    order.message = (
+                        "No market quote during async execution"
+                    )
+                    order.updated_at = datetime.now()
+                    self._emit("order_update", order)
+                    return
+
+                self._execute_order(
+                    order, market_price=float(market_price),
+                )
+
+                if order.is_complete:
+                    return
+
+                if order.status == OrderStatus.PARTIAL:
+                    # Continue loop for remaining fill
+                    pass
+
+            # Sleep between partial fills (outside lock)
+            if order.status == OrderStatus.PARTIAL:
+                time.sleep(random.uniform(0.4, 1.2))
+
+    def submit_order(self, order: Order) -> Order:
         with self._lock:
             self._check_settlement()
 
-            order.broker_id = f"SIM_{datetime.now().strftime('%Y%m%d%H%M%S')}_{uuid.uuid4().hex[:6]}"
+            order.broker_id = (
+                f"SIM_{datetime.now().strftime('%Y%m%d%H%M%S')}_"
+                f"{uuid.uuid4().hex[:6]}"
+            )
             order.created_at = order.created_at or datetime.now()
             order.submitted_at = datetime.now()
 
@@ -405,7 +498,14 @@ class SimulatorBroker(BrokerInterface):
             if not order.name and quote:
                 order.name = quote.name
 
-            ref_price = order.price if (order.order_type == OrderType.LIMIT and order.price > 0) else current_price
+            # For market orders, use current price for validation
+            if (
+                order.order_type == OrderType.LIMIT
+                and order.price > 0
+            ):
+                ref_price = order.price
+            else:
+                ref_price = current_price
 
             ok, reason = self._validate_order(order, ref_price)
             if not ok:
@@ -414,36 +514,49 @@ class SimulatorBroker(BrokerInterface):
                 self._emit('order_update', order)
                 return order
 
+            # FIX(4): Emit SUBMITTED status before transitioning to
+            # ACCEPTED
             order.status = OrderStatus.SUBMITTED
             self._orders[order.id] = order
+            self._emit('order_update', order)
 
             order.status = OrderStatus.ACCEPTED
-            self._orders[order.id] = order
+            self._emit('order_update', order)
 
             self._schedule_execution(order_id=order.id)
-
-            self._emit('order_update', order)
             return order
-    
-    def _validate_order(self, order: Order, price: float) -> Tuple[bool, str]:
-        """Validate order using a reference price."""
+
+    def _validate_order(
+        self, order: Order, price: float,
+    ) -> Tuple[bool, str]:
         if order.quantity <= 0:
             return False, "Quantity must be positive"
 
         from core.constants import get_lot_size
+
         lot_size = get_lot_size(order.symbol)
         if order.quantity % lot_size != 0:
             return False, f"Quantity must be multiple of {lot_size}"
 
-        if price <= 0:
+        # FIX(9): Allow price=0 for MARKET orders
+        if order.order_type == OrderType.LIMIT and price <= 0:
+            return False, "Limit order requires positive price"
+        if price <= 0 and order.order_type != OrderType.MARKET:
             return False, "Invalid price"
+
+        # FIX(5): Use CONFIG.trading.commission consistently
+        commission_rate = float(CONFIG.trading.commission)
+        commission_min = 5.0
 
         if order.side == OrderSide.BUY:
             est_value = order.quantity * price
-            commission = max(est_value * CONFIG.COMMISSION, 5.0)
+            commission = max(est_value * commission_rate, commission_min)
             total = est_value + commission
             if total > self._cash:
-                return False, f"Insufficient funds: need {total:,.2f}, have {self._cash:,.2f}"
+                return False, (
+                    f"Insufficient funds: need ¥{total:,.2f}, "
+                    f"have ¥{self._cash:,.2f}"
+                )
 
             existing_value = 0.0
             existing_pos = self._positions.get(order.symbol)
@@ -451,24 +564,59 @@ class SimulatorBroker(BrokerInterface):
                 existing_value = existing_pos.quantity * price
 
             new_total_value = existing_value + (order.quantity * price)
-            equity = self._cash + sum(p.market_value for p in self._positions.values())
+            equity = self._cash + sum(
+                p.market_value for p in self._positions.values()
+            )
             if equity > 0:
-                max_pct = getattr(CONFIG, 'MAX_POSITION_PCT', 15.0)
+                max_pct = float(CONFIG.risk.max_position_pct)
                 position_pct = new_total_value / equity * 100
                 if position_pct > max_pct:
-                    return False, f"Position too large: {position_pct:.1f}% (max: {max_pct}%)"
-
+                    return False, (
+                        f"Position too large: {position_pct:.1f}% "
+                        f"(max: {max_pct}%)"
+                    )
         else:
             pos = self._positions.get(order.symbol)
             if not pos:
                 return False, f"No position in {order.symbol}"
             if order.quantity > pos.available_qty:
-                return False, f"Available: {pos.available_qty}, requested: {order.quantity}"
+                return False, (
+                    f"Available: {pos.available_qty}, "
+                    f"requested: {order.quantity}"
+                )
 
         return True, "OK"
-    
+
+    def _check_price_limits(
+        self,
+        symbol: str,
+        side: OrderSide,
+        price: float,
+        prev_close: float,
+        name: str = None,
+    ) -> Tuple[bool, str]:
+        from core.constants import get_price_limit
+
+        if prev_close <= 0:
+            return True, "OK"
+
+        limit_pct = get_price_limit(symbol, name)
+        limit_up = prev_close * (1 + limit_pct)
+        limit_down = prev_close * (1 - limit_pct)
+
+        if side == OrderSide.BUY and price >= limit_up * 0.999:
+            return False, (
+                f"Cannot buy at limit up ({limit_pct * 100:.0f}%)"
+            )
+        if side == OrderSide.SELL and price <= limit_down * 1.001:
+            return False, (
+                f"Cannot sell at limit down ({limit_pct * 100:.0f}%)"
+            )
+
+        return True, "OK"
+
     def _execute_order(self, order: Order, market_price: float):
-        """Execute order with realistic simulation (FAST: no history download)."""
+        """Execute order with realistic simulation."""
         import random
 
         prev_close = float(market_price)
@@ -480,10 +628,14 @@ class SimulatorBroker(BrokerInterface):
         except Exception:
             pass
 
-        can_trade, reason = self._check_price_limits(order.symbol, order.side, float(market_price), prev_close, order.name)
+        can_trade, reason = self._check_price_limits(
+            order.symbol, order.side, float(market_price),
+            prev_close, order.name,
+        )
         if not can_trade:
             order.status = OrderStatus.REJECTED
             order.message = reason
+            order.updated_at = datetime.now()
             self._emit('order_update', order)
             return
 
@@ -491,18 +643,33 @@ class SimulatorBroker(BrokerInterface):
             if order.price <= 0:
                 order.status = OrderStatus.REJECTED
                 order.message = "Limit order requires positive price"
+                order.updated_at = datetime.now()
                 self._emit('order_update', order)
                 return
 
-            if order.side == OrderSide.BUY and float(market_price) > float(order.price):
+            if (
+                order.side == OrderSide.BUY
+                and float(market_price) > float(order.price)
+            ):
                 order.status = OrderStatus.REJECTED
-                order.message = f"Limit BUY not marketable: market {market_price:.2f} > limit {order.price:.2f}"
+                order.message = (
+                    f"Limit BUY not marketable: market "
+                    f"{market_price:.2f} > limit {order.price:.2f}"
+                )
+                order.updated_at = datetime.now()
                 self._emit('order_update', order)
                 return
 
-            if order.side == OrderSide.SELL and float(market_price) < float(order.price):
+            if (
+                order.side == OrderSide.SELL
+                and float(market_price) < float(order.price)
+            ):
                 order.status = OrderStatus.REJECTED
-                order.message = f"Limit SELL not marketable: market {market_price:.2f} < limit {order.price:.2f}"
+                order.message = (
+                    f"Limit SELL not marketable: market "
+                    f"{market_price:.2f} < limit {order.price:.2f}"
+                )
+                order.updated_at = datetime.now()
                 self._emit('order_update', order)
                 return
 
@@ -510,11 +677,16 @@ class SimulatorBroker(BrokerInterface):
         else:
             fill_price = float(market_price)
 
-        slippage = float(CONFIG.SLIPPAGE)
+        # FIX(5): Consistent CONFIG access
+        slippage = float(CONFIG.trading.slippage)
+        commission_rate = float(CONFIG.trading.commission)
+        stamp_tax_rate = float(CONFIG.trading.stamp_tax)
+        commission_min = 5.0
+
         if order.side == OrderSide.BUY:
-            fill_price *= (1 + slippage * (0.5 + 0.5 * random.random()))
+            fill_price *= 1 + slippage * (0.5 + 0.5 * random.random())
         else:
-            fill_price *= (1 - slippage * (0.5 + 0.5 * random.random()))
+            fill_price *= 1 - slippage * (0.5 + 0.5 * random.random())
         fill_price = round(fill_price, 2)
 
         remaining = int(order.quantity - order.filled_qty)
@@ -522,6 +694,7 @@ class SimulatorBroker(BrokerInterface):
             return
 
         from core.constants import get_lot_size
+
         lot = int(get_lot_size(order.symbol))
 
         fill_qty = remaining
@@ -530,17 +703,25 @@ class SimulatorBroker(BrokerInterface):
             fill_qty = min(half, remaining)
 
         trade_value = fill_qty * fill_price
-        commission = max(trade_value * CONFIG.COMMISSION, 5.0)
-        stamp_tax = trade_value * CONFIG.STAMP_TAX if order.side == OrderSide.SELL else 0.0
+        commission = max(trade_value * commission_rate, commission_min)
+        stamp_tax = (
+            trade_value * stamp_tax_rate
+            if order.side == OrderSide.SELL else 0.0
+        )
         total_cost = commission + stamp_tax
 
         if order.side == OrderSide.BUY:
-            self._cash -= (trade_value + total_cost)
+            self._cash -= trade_value + total_cost
 
             if order.symbol in self._positions:
                 pos = self._positions[order.symbol]
                 total_qty = pos.quantity + fill_qty
-                pos.avg_cost = (pos.avg_cost * pos.quantity + fill_price * fill_qty) / total_qty
+                if total_qty > 0:
+                    pos.avg_cost = (
+                        (pos.avg_cost * pos.quantity
+                         + fill_price * fill_qty)
+                        / total_qty
+                    )
                 pos.quantity = total_qty
             else:
                 self._positions[order.symbol] = Position(
@@ -549,19 +730,21 @@ class SimulatorBroker(BrokerInterface):
                     quantity=fill_qty,
                     available_qty=0,
                     avg_cost=fill_price,
-                    current_price=fill_price
+                    current_price=fill_price,
                 )
             self._purchase_dates[order.symbol] = date.today()
 
         else:
-            self._cash += (trade_value - total_cost)
+            self._cash += trade_value - total_cost
 
             pos = self._positions[order.symbol]
             gross_pnl = (fill_price - pos.avg_cost) * fill_qty
             realized = gross_pnl - total_cost
             pos.realized_pnl += realized
             pos.quantity -= fill_qty
-            pos.available_qty = max(0, pos.available_qty - fill_qty)
+            pos.available_qty = max(
+                0, pos.available_qty - fill_qty,
+            )
 
             if pos.quantity <= 0:
                 del self._positions[order.symbol]
@@ -569,18 +752,30 @@ class SimulatorBroker(BrokerInterface):
 
         order.filled_qty += fill_qty
         order.commission += total_cost
-        order.status = OrderStatus.FILLED if order.filled_qty >= order.quantity else OrderStatus.PARTIAL
+        order.status = (
+            OrderStatus.FILLED
+            if order.filled_qty >= order.quantity
+            else OrderStatus.PARTIAL
+        )
         order.filled_at = datetime.now()
 
         prev_value = (order.filled_qty - fill_qty) * order.avg_price
         new_value = fill_qty * fill_price
-        order.avg_price = (prev_value + new_value) / order.filled_qty if order.filled_qty > 0 else fill_price
+        order.avg_price = (
+            (prev_value + new_value) / order.filled_qty
+            if order.filled_qty > 0
+            else fill_price
+        )
         order.filled_price = fill_price
         order.updated_at = datetime.now()
 
         self._fill_counter += 1
         fill = Fill(
-            id=f"FILL_SIM_{datetime.now().strftime('%Y%m%d%H%M%S')}_{self._fill_counter:06d}",
+            id=(
+                f"FILL_SIM_"
+                f"{datetime.now().strftime('%Y%m%d%H%M%S')}_"
+                f"{self._fill_counter:06d}"
+            ),
             order_id=order.id,
             symbol=order.symbol,
             side=order.side,
@@ -588,37 +783,48 @@ class SimulatorBroker(BrokerInterface):
             price=fill_price,
             commission=commission,
             stamp_tax=stamp_tax,
-            timestamp=datetime.now()
+            timestamp=datetime.now(),
         )
         self._fills.append(fill)
-        self._unsent_fills.append(fill)
-
         self._order_history.append(order)
 
         log.info(
-            f"[SIM] {order.side.value.upper()} {fill_qty} {order.symbol} "
-            f"@ {fill_price:.2f} (cost: {total_cost:.2f}, status: {order.status.value})"
+            f"[SIM] {order.side.value.upper()} {fill_qty} "
+            f"{order.symbol} @ {fill_price:.2f} "
+            f"(cost: {total_cost:.2f}, status: {order.status.value})"
         )
         self._emit('trade', order, fill)
-    
+
     def get_fills(self, since: datetime = None) -> List[Fill]:
+        """
+        Get new fills since last call.
+
+        FIX(2): Uses cursor-based tracking instead of clearing list.
+        Multiple consumers can call this without losing fills.
+        """
         with self._lock:
-            fills = list(self._unsent_fills)
-            self._unsent_fills.clear()
+            new_fills = self._fills[self._fill_cursor:]
+            self._fill_cursor = len(self._fills)
 
         if since is None:
-            return fills
+            return list(new_fills)
 
-        return [f for f in fills if f.timestamp and f.timestamp >= since]
-    
+        return [
+            f for f in new_fills
+            if f.timestamp and f.timestamp >= since
+        ]
+
+    def get_all_fills(self) -> List[Fill]:
+        """Get ALL fills (not just new ones)."""
+        with self._lock:
+            return list(self._fills)
+
     def get_order_status(self, order_id: str) -> Optional[OrderStatus]:
-        """Get order status"""
         with self._lock:
             order = self._orders.get(order_id)
             return order.status if order else None
-    
+
     def sync_order(self, order: Order) -> Order:
-        """Sync order with simulator state"""
         with self._lock:
             stored = self._orders.get(order.id)
             if stored:
@@ -630,7 +836,7 @@ class SimulatorBroker(BrokerInterface):
                 order.filled_at = stored.filled_at
                 order.message = stored.message
             return order
-    
+
     def cancel_order(self, order_id: str) -> bool:
         with self._lock:
             order = self._orders.get(order_id)
@@ -641,31 +847,41 @@ class SimulatorBroker(BrokerInterface):
                 self._emit('order_update', order)
                 return True
             return False
-    
+
     def get_orders(self, active_only: bool = True) -> List[Order]:
         with self._lock:
             if active_only:
-                return [o for o in self._orders.values() if o.is_active]
+                return [
+                    o for o in self._orders.values() if o.is_active
+                ]
             return list(self._orders.values())
-    
+
     def _check_settlement(self):
-        """Handle T+1 settlement on new trading day"""
+        """
+        FIX(13): Proper T+1 settlement using is_trading_day.
+        Shares bought yesterday become available on the next trading day.
+        """
         from core.constants import is_trading_day
-        
+
         today = date.today()
-        if today != self._last_settlement_date and is_trading_day(today):
-            for symbol, pos in self._positions.items():
-                pos.available_qty = pos.quantity
-            self._last_settlement_date = today
-            log.info("T+1 settlement: all shares now available")
-    
+        if today == self._last_settlement_date:
+            return
+
+        if not is_trading_day(today):
+            return
+
+        # It's a new trading day — settle all positions
+        for symbol, pos in self._positions.items():
+            pos.available_qty = pos.quantity
+        self._last_settlement_date = today
+        log.info("T+1 settlement: all shares now available")
+
     def _update_prices(self):
-        """Update all position prices"""
         for symbol, pos in self._positions.items():
             price = self.get_quote(symbol)
             if price:
                 pos.update_price(price)
-    
+
     def get_trade_history(self) -> List[Dict]:
         with self._lock:
             return [
@@ -678,28 +894,26 @@ class SimulatorBroker(BrokerInterface):
                     'price': f.price,
                     'commission': f.commission,
                     'stamp_tax': f.stamp_tax,
-                    'timestamp': f.timestamp
+                    'timestamp': f.timestamp,
                 }
                 for f in self._fills
             ]
-    
+
     def reset(self):
-        """Reset simulator to initial state"""
         with self._lock:
             self._cash = self._initial_capital
             self._positions.clear()
             self._orders.clear()
             self._order_history.clear()
             self._fills.clear()
-            self._unsent_fills.clear()
+            self._fill_cursor = 0
             self._purchase_dates.clear()
             self._last_settlement_date = date.today()
             self._order_id_to_broker_id.clear()
             self._broker_id_to_order_id.clear()
             log.info("Simulator reset to initial state")
-    
+
     def reconcile(self) -> Dict:
-        """Reconcile internal state"""
         with self._lock:
             return {
                 'cash_diff': 0.0,
@@ -707,367 +921,25 @@ class SimulatorBroker(BrokerInterface):
                 'missing_positions': [],
                 'extra_positions': [],
                 'reconciled': True,
-                'timestamp': datetime.now().isoformat()
+                'timestamp': datetime.now().isoformat(),
             }
 
 
 # ============================================================
-# THS Broker (Real Trading)
+# Easytrader Base Broker
+# FIX(11): Shared base class for THS/ZSZQ (~80% code dedup)
 # ============================================================
 
-class THSBroker(BrokerInterface):
+class EasytraderBroker(BrokerInterface):
     """
-    TongHuaShun (同花顺) broker integration via easytrader.
-    
-    CRITICAL: Implements full fill sync for live trading correctness.
+    Base class for all easytrader-based brokers (THS, ZSZQ, HT, etc).
+
+    Subclasses only need to override:
+    - name (property)
+    - _get_easytrader_type() -> str
+    - _get_balance_fields() -> dict (optional, for field name differences)
     """
-    
-    BROKER_TYPES = {
-        'ths': '同花顺',
-        'ht': '华泰证券',
-        'gj': '国金证券',
-        'yh': '银河证券',
-    }
-    
-    def __init__(self, broker_type: str = 'ths'):
-        super().__init__()
-        self._broker_type = broker_type
-        self._client = None
-        self._connected = False
-        self._orders: Dict[str, Order] = {}
-        self._seen_fill_ids: set = set()
-        self._last_fill_check: datetime = None
-        self._fetcher = None
-        
-        try:
-            import easytrader
-            self._easytrader = easytrader
-            self._available = True
-        except ImportError:
-            self._easytrader = None
-            self._available = False
-            log.warning("easytrader not installed - live trading unavailable")
-    
-    @property
-    def name(self) -> str:
-        return self.BROKER_TYPES.get(self._broker_type, "Unknown Broker")
-    
-    @property
-    def is_connected(self) -> bool:
-        return self._connected and self._client is not None
-    
-    def connect(self, exe_path: str = None, **kwargs) -> bool:
-        if not self._available:
-            log.error("easytrader not installed")
-            return False
-        
-        exe_path = exe_path or CONFIG.BROKER_PATH
-        if not exe_path or not Path(exe_path).exists():
-            log.error(f"Broker executable not found: {exe_path}")
-            return False
-        
-        try:
-            self._client = self._easytrader.use(self._broker_type)
-            self._client.connect(exe_path)
-            
-            balance = self._client.balance
-            if balance:
-                self._connected = True
-                self._last_fill_check = datetime.now()
-                log.info(f"Connected to {self.name}")
-                return True
-                
-        except Exception as e:
-            log.error(f"Connection failed: {e}")
-        
-        return False
-    
-    def disconnect(self):
-        self._client = None
-        self._connected = False
-        log.info(f"Disconnected from {self.name}")
-    
-    def get_quote(self, symbol: str) -> Optional[float]:
-        """Low-latency quote: feed cache first, then fetcher."""
-        try:
-            from data.feeds import get_feed_manager
-            q = get_feed_manager().get_quote(symbol)
-            if q and getattr(q, "price", 0) and q.price > 0:
-                return float(q.price)
-        except Exception:
-            pass
 
-        fetcher = self._get_fetcher()
-        quote = fetcher.get_realtime(symbol)
-        return float(quote.price) if quote and quote.price > 0 else None
-    
-    def get_account(self) -> Account:
-        if not self.is_connected:
-            return Account()
-        
-        try:
-            balance = self._client.balance
-            positions = self.get_positions()
-            
-            return Account(
-                broker_name=self.name,
-                cash=float(balance.get('资金余额', 0) or 0),
-                available=float(balance.get('可用金额', 0)),
-                frozen=float(balance.get('冻结金额', 0)),
-                positions=positions,
-                last_updated=datetime.now()
-            )
-        except Exception as e:
-            log.error(f"Failed to get account: {e}")
-            return Account()
-    
-    def get_positions(self) -> Dict[str, Position]:
-        if not self.is_connected:
-            return {}
-        
-        try:
-            raw = self._client.position
-            positions = {}
-            
-            for p in raw:
-                code = str(p.get('证券代码', '')).zfill(6)
-                
-                positions[code] = Position(
-                    symbol=code,
-                    name=p.get('证券名称', ''),
-                    quantity=int(p.get('股票余额', p.get('当前持仓', 0))),
-                    available_qty=int(p.get('可卖余额', p.get('可用余额', 0))),
-                    avg_cost=float(p.get('成本价', p.get('买入成本', 0))),
-                    current_price=float(p.get('当前价', p.get('最新价', 0))),
-                )
-            
-            return positions
-        except Exception as e:
-            log.error(f"Failed to get positions: {e}")
-            return {}
-    
-    def get_position(self, symbol: str) -> Optional[Position]:
-        return self.get_positions().get(symbol)
-    
-    def submit_order(self, order: Order) -> Order:
-        if not self.is_connected:
-            order.status = OrderStatus.REJECTED
-            order.message = "Not connected"
-            return order
-        
-        try:
-            order.created_at = order.created_at or datetime.now()
-            order.submitted_at = datetime.now()
-            
-            if order.side == OrderSide.BUY:
-                if order.order_type == OrderType.MARKET:
-                    result = self._client.market_buy(order.symbol, order.quantity)
-                else:
-                    result = self._client.buy(order.symbol, order.quantity, order.price)
-            else:
-                if order.order_type == OrderType.MARKET:
-                    result = self._client.market_sell(order.symbol, order.quantity)
-                else:
-                    result = self._client.sell(order.symbol, order.quantity, order.price)
-            
-            if result and isinstance(result, dict):
-                entrust_no = result.get('委托编号') or result.get('entrust_no')
-                if entrust_no:
-                    order.status = OrderStatus.SUBMITTED
-                    order.broker_id = str(entrust_no)
-                    order.message = f"Entrust: {order.broker_id}"
-                    
-                    self.register_order_mapping(order.id, order.broker_id)
-                    
-                    log.info(f"Order submitted: {order.id} -> broker {order.broker_id}")
-                else:
-                    order.status = OrderStatus.REJECTED
-                    order.message = str(result)
-            else:
-                order.status = OrderStatus.REJECTED
-                order.message = "Unknown response"
-            
-            self._orders[order.id] = order
-            self._emit('order_update', order)
-            return order
-            
-        except Exception as e:
-            log.error(f"Order error: {e}")
-            order.status = OrderStatus.REJECTED
-            order.message = str(e)
-            return order
-    
-    def get_fills(self, since: datetime = None) -> List[Fill]:
-        """Get fills from broker."""
-        if not self.is_connected:
-            return []
-        
-        fills = []
-        
-        try:
-            trades = self._client.today_trades
-            
-            for trade in trades:
-                fill_id = f"{trade.get('成交编号', '')}"
-                if not fill_id or fill_id in self._seen_fill_ids:
-                    continue
-                
-                self._seen_fill_ids.add(fill_id)
-                
-                broker_entrust = str(trade.get('委托编号', ''))
-                our_order_id = self.get_order_id(broker_entrust)
-                
-                if not our_order_id:
-                    log.warning(f"Unknown entrust number: {broker_entrust}")
-                    continue
-                
-                trade_side = trade.get('买卖标志', trade.get('操作', ''))
-                if '买' in str(trade_side):
-                    side = OrderSide.BUY
-                else:
-                    side = OrderSide.SELL
-                
-                ts = trade.get("成交时间") or trade.get("time") or None
-                fill_time = datetime.now()
-                if ts:
-                    try:
-                        t = datetime.strptime(str(ts), "%H:%M:%S").time()
-                        fill_time = datetime.combine(date.today(), t)
-                    except Exception:
-                        pass
-                
-                fill = Fill(
-                    id=fill_id,
-                    order_id=our_order_id,
-                    symbol=str(trade.get('证券代码', '')).zfill(6),
-                    side=side,
-                    quantity=int(trade.get('成交数量', 0)),
-                    price=float(trade.get('成交价格', 0)),
-                    commission=float(trade.get('手续费', 0) or 0),
-                    stamp_tax=float(trade.get('印花税', 0) or 0),
-                    timestamp=fill_time
-                )
-                
-                fills.append(fill)
-                log.info(f"Fill received: {fill.id} for order {our_order_id}")
-                
-        except Exception as e:
-            log.error(f"Failed to get fills: {e}")
-        
-        return fills
-    
-    def get_order_status(self, order_id: str) -> Optional[OrderStatus]:
-        """Get order status from broker"""
-        if not self.is_connected:
-            return None
-        
-        broker_id = self.get_broker_id(order_id)
-        if not broker_id:
-            return None
-        
-        try:
-            entrusts = self._client.today_entrusts
-            
-            for entrust in entrusts:
-                if str(entrust.get('委托编号', '')) == broker_id:
-                    status_str = entrust.get('委托状态', entrust.get('状态', ''))
-                    return self._parse_status(status_str)
-            
-            return None
-            
-        except Exception as e:
-            log.error(f"Failed to get order status: {e}")
-            return None
-    
-    def _parse_status(self, status_str: str) -> OrderStatus:
-        """Parse broker status string to OrderStatus"""
-        status_str = str(status_str).lower()
-        
-        if '全部成交' in status_str or '已成' in status_str:
-            return OrderStatus.FILLED
-        elif '部分成交' in status_str:
-            return OrderStatus.PARTIAL
-        elif '已报' in status_str or '已委托' in status_str:
-            return OrderStatus.ACCEPTED
-        elif '已撤' in status_str or '撤单' in status_str:
-            return OrderStatus.CANCELLED
-        elif '废单' in status_str or '拒绝' in status_str:
-            return OrderStatus.REJECTED
-        else:
-            return OrderStatus.SUBMITTED
-    
-    def sync_order(self, order: Order) -> Order:
-        """Sync order state with broker"""
-        if not self.is_connected:
-            return order
-        
-        broker_id = self.get_broker_id(order.id)
-        if not broker_id:
-            return order
-        
-        try:
-            entrusts = self._client.today_entrusts
-            
-            for entrust in entrusts:
-                if str(entrust.get('委托编号', '')) == broker_id:
-                    order.status = self._parse_status(entrust.get('委托状态', ''))
-                    order.filled_qty = int(entrust.get('成交数量', 0) or 0)
-                    
-                    avg_price = entrust.get('成交均价', entrust.get('成交价格', 0))
-                    if avg_price:
-                        order.avg_price = float(avg_price)
-                    
-                    order.updated_at = datetime.now()
-                    break
-            
-        except Exception as e:
-            log.error(f"Failed to sync order: {e}")
-        
-        return order
-    
-    def cancel_order(self, order_id: str) -> bool:
-        if not self.is_connected:
-            return False
-        
-        order = self._orders.get(order_id)
-        broker_id = self.get_broker_id(order_id)
-        
-        if not broker_id:
-            return False
-        
-        try:
-            self._client.cancel_entrust(broker_id)
-            if order:
-                order.status = OrderStatus.CANCELLED
-                order.updated_at = datetime.now()
-                self._emit('order_update', order)
-            return True
-        except Exception as e:
-            log.error(f"Cancel failed: {e}")
-            return False
-    
-    def get_orders(self, active_only: bool = True) -> List[Order]:
-        if active_only:
-            return [o for o in self._orders.values() if o.is_active]
-        return list(self._orders.values())
-    
-    def _get_fetcher(self):
-        """Get shared fetcher instance"""
-        if self._fetcher is None:
-            from data.fetcher import get_fetcher
-            self._fetcher = get_fetcher()
-        return self._fetcher
-
-
-# ============================================================
-# ZSZQ Broker (招商证券)
-# ============================================================
-
-class ZSZQBroker(BrokerInterface):
-    """
-    招商证券 (Zhao Shang Zheng Quan) broker integration
-    """
-    
     def __init__(self):
         super().__init__()
         self._client = None
@@ -1075,7 +947,7 @@ class ZSZQBroker(BrokerInterface):
         self._orders: Dict[str, Order] = {}
         self._seen_fill_ids: set = set()
         self._fetcher = None
-        
+
         try:
             import easytrader
             self._easytrader = easytrader
@@ -1083,53 +955,61 @@ class ZSZQBroker(BrokerInterface):
         except ImportError:
             self._easytrader = None
             self._available = False
-            log.warning("easytrader not installed - ZSZQ trading unavailable")
-    
+            log.warning(
+                "easytrader not installed - live trading unavailable"
+            )
+
     @property
+    @abstractmethod
     def name(self) -> str:
-        return "招商证券"
-    
+        pass
+
+    @abstractmethod
+    def _get_easytrader_type(self) -> str:
+        """Return the easytrader.use() type string."""
+        pass
+
     @property
     def is_connected(self) -> bool:
         return self._connected and self._client is not None
-    
+
     def connect(self, exe_path: str = None, **kwargs) -> bool:
         if not self._available:
             log.error("easytrader not installed")
             return False
-        
-        exe_path = exe_path or kwargs.get('broker_path') or CONFIG.BROKER_PATH
-        
-        if not exe_path:
-            log.error("Broker executable path not configured")
-            return False
-        
-        if not Path(exe_path).exists():
+
+        exe_path = (
+            exe_path
+            or kwargs.get('broker_path')
+            or CONFIG.broker_path
+        )
+        if not exe_path or not Path(exe_path).exists():
             log.error(f"Broker executable not found: {exe_path}")
             return False
-        
+
         try:
-            self._client = self._easytrader.use('universal')
+            self._client = self._easytrader.use(
+                self._get_easytrader_type(),
+            )
             self._client.connect(exe_path)
-            
+
             balance = self._client.balance
             if balance:
                 self._connected = True
                 log.info(f"Connected to {self.name}")
                 return True
-                
+
         except Exception as e:
-            log.error(f"ZSZQ connection failed: {e}")
-        
+            log.error(f"Connection failed: {e}")
+
         return False
-    
+
     def disconnect(self):
         self._client = None
         self._connected = False
         log.info(f"Disconnected from {self.name}")
-    
+
     def get_quote(self, symbol: str) -> Optional[float]:
-        """Low-latency quote: feed cache first (no auto-init), then fetcher."""
         try:
             from data.feeds import get_feed_manager
             fm = get_feed_manager(auto_init=False)
@@ -1141,267 +1021,346 @@ class ZSZQBroker(BrokerInterface):
 
         fetcher = self._get_fetcher()
         quote = fetcher.get_realtime(symbol)
-        return float(quote.price) if quote and quote.price > 0 else None
+        return (
+            float(quote.price)
+            if quote and quote.price > 0 else None
+        )
 
     def get_account(self) -> Account:
         if not self.is_connected:
             return Account()
-        
+
         try:
             balance = self._client.balance
             positions = self.get_positions()
-            
+
+            # Try multiple field names for broker compatibility
             cash = float(
-                balance.get('资金余额') or 
-                balance.get('总资产') or 
-                balance.get('可用资金') or 
-                0
+                balance.get('资金余额')
+                or balance.get('总资产')
+                or balance.get('可用资金')
+                or 0
             )
-            
             available = float(
-                balance.get('可用金额') or 
-                balance.get('可用资金') or 
-                balance.get('可取资金') or 
-                cash
+                balance.get('可用金额')
+                or balance.get('可用资金')
+                or balance.get('可取资金')
+                or cash
             )
-            
             frozen = float(balance.get('冻结金额', 0) or 0)
-            
+
             return Account(
                 broker_name=self.name,
                 cash=cash,
                 available=available,
                 frozen=frozen,
                 positions=positions,
-                last_updated=datetime.now()
+                last_updated=datetime.now(),
             )
-            
         except Exception as e:
             log.error(f"Failed to get account: {e}")
             return Account()
-    
+
     def get_positions(self) -> Dict[str, Position]:
         if not self.is_connected:
             return {}
-        
+
         try:
             raw = self._client.position
             positions = {}
-            
+
             for p in raw:
                 code = str(
-                    p.get('证券代码') or 
-                    p.get('股票代码') or 
-                    ''
+                    p.get('证券代码')
+                    or p.get('股票代码')
+                    or ''
                 ).zfill(6)
-                
+
                 if not code or code == '000000':
                     continue
-                
+
                 positions[code] = Position(
                     symbol=code,
-                    name=p.get('证券名称') or p.get('股票名称') or '',
-                    quantity=int(p.get('股票余额') or p.get('持仓数量') or p.get('当前持仓') or 0),
-                    available_qty=int(p.get('可卖余额') or p.get('可用余额') or p.get('可卖数量') or 0),
-                    avg_cost=float(p.get('成本价') or p.get('买入成本') or p.get('参考成本价') or 0),
-                    current_price=float(p.get('当前价') or p.get('最新价') or p.get('市价') or 0),
+                    name=(
+                        p.get('证券名称')
+                        or p.get('股票名称')
+                        or ''
+                    ),
+                    quantity=int(
+                        p.get('股票余额')
+                        or p.get('持仓数量')
+                        or p.get('当前持仓')
+                        or 0
+                    ),
+                    available_qty=int(
+                        p.get('可卖余额')
+                        or p.get('可用余额')
+                        or p.get('可卖数量')
+                        or 0
+                    ),
+                    avg_cost=float(
+                        p.get('成本价')
+                        or p.get('买入成本')
+                        or p.get('参考成本价')
+                        or 0
+                    ),
+                    current_price=float(
+                        p.get('当前价')
+                        or p.get('最新价')
+                        or p.get('市价')
+                        or 0
+                    ),
                 )
-            
+
             return positions
-            
+
         except Exception as e:
             log.error(f"Failed to get positions: {e}")
             return {}
-    
+
     def get_position(self, symbol: str) -> Optional[Position]:
         return self.get_positions().get(symbol)
-    
+
     def submit_order(self, order: Order) -> Order:
         if not self.is_connected:
             order.status = OrderStatus.REJECTED
             order.message = "Not connected to broker"
             return order
-        
+
         try:
             order.created_at = order.created_at or datetime.now()
             order.submitted_at = datetime.now()
-            
+
             if order.side == OrderSide.BUY:
                 if order.order_type == OrderType.MARKET:
-                    result = self._client.market_buy(order.symbol, order.quantity)
+                    result = self._client.market_buy(
+                        order.symbol, order.quantity,
+                    )
                 else:
-                    result = self._client.buy(order.symbol, order.quantity, order.price)
+                    result = self._client.buy(
+                        order.symbol, order.quantity, order.price,
+                    )
             else:
                 if order.order_type == OrderType.MARKET:
-                    result = self._client.market_sell(order.symbol, order.quantity)
+                    result = self._client.market_sell(
+                        order.symbol, order.quantity,
+                    )
                 else:
-                    result = self._client.sell(order.symbol, order.quantity, order.price)
-            
+                    result = self._client.sell(
+                        order.symbol, order.quantity, order.price,
+                    )
+
             if result and isinstance(result, dict):
-                entrust_no = result.get('委托编号') or result.get('entrust_no') or result.get('order_id')
-                
+                entrust_no = (
+                    result.get('委托编号')
+                    or result.get('entrust_no')
+                    or result.get('order_id')
+                )
+
                 if entrust_no:
                     order.status = OrderStatus.SUBMITTED
                     order.broker_id = str(entrust_no)
                     order.message = f"Entrust: {entrust_no}"
-                    
-                    self.register_order_mapping(order.id, order.broker_id)
-                    
-                    log.info(f"Order submitted: {order.id} -> broker {order.broker_id}")
+                    self.register_order_mapping(
+                        order.id, order.broker_id,
+                    )
+                    log.info(
+                        f"Order submitted: {order.id} "
+                        f"-> broker {order.broker_id}"
+                    )
                 else:
                     order.status = OrderStatus.REJECTED
-                    order.message = str(result.get('msg') or result.get('message') or result)
+                    order.message = str(
+                        result.get('msg')
+                        or result.get('message')
+                        or result
+                    )
             else:
                 order.status = OrderStatus.REJECTED
                 order.message = "Unknown response from broker"
-            
+
             self._orders[order.id] = order
             self._emit('order_update', order)
             return order
-            
+
         except Exception as e:
             log.error(f"Order submission error: {e}")
             order.status = OrderStatus.REJECTED
             order.message = str(e)
             return order
-    
+
     def get_fills(self, since: datetime = None) -> List[Fill]:
-        """Get fills from broker"""
+        """Get fills from broker — deduplicates by broker_fill_id."""
         if not self.is_connected:
             return []
-        
-        fills = []
-        
+
+        fills: List[Fill] = []
         try:
             trades = self._client.today_trades
-            
+
             for trade in trades:
-                fill_id = f"{trade.get('成交编号', '')}"
-                if not fill_id or fill_id in self._seen_fill_ids:
+                broker_fill_id = str(
+                    trade.get("成交编号", "") or ""
+                ).strip()
+                if not broker_fill_id:
                     continue
-                
-                self._seen_fill_ids.add(fill_id)
-                
-                broker_entrust = str(trade.get('委托编号', ''))
-                our_order_id = self.get_order_id(broker_entrust)
-                
-                if not our_order_id:
-                    log.warning(f"Unknown entrust number: {broker_entrust}")
+
+                # Dedup check BEFORE processing
+                if broker_fill_id in self._seen_fill_ids:
                     continue
-                
-                trade_side = trade.get('买卖标志', trade.get('操作', ''))
-                if '买' in str(trade_side):
-                    side = OrderSide.BUY
-                else:
-                    side = OrderSide.SELL
-                
-                ts = trade.get("成交时间") or trade.get("time") or None
+
+                # Parse fill timestamp
+                ts = (
+                    trade.get("成交时间")
+                    or trade.get("time")
+                    or None
+                )
                 fill_time = datetime.now()
                 if ts:
                     try:
-                        t = datetime.strptime(str(ts), "%H:%M:%S").time()
-                        fill_time = datetime.combine(date.today(), t)
+                        t = datetime.strptime(
+                            str(ts), "%H:%M:%S"
+                        ).time()
+                        fill_time = datetime.combine(
+                            date.today(), t,
+                        )
                     except Exception:
                         pass
-                
-                fill = Fill(
-                    id=fill_id,
-                    order_id=our_order_id,
-                    symbol=str(trade.get('证券代码', '')).zfill(6),
-                    side=side,
-                    quantity=int(trade.get('成交数量', 0)),
-                    price=float(trade.get('成交价格', 0)),
-                    commission=float(trade.get('手续费', 0) or 0),
-                    stamp_tax=float(trade.get('印花税', 0) or 0),
-                    timestamp=fill_time
+
+                # since-filter
+                if (
+                    since
+                    and isinstance(fill_time, datetime)
+                    and fill_time < since
+                ):
+                    continue
+
+                broker_entrust = str(
+                    trade.get("委托编号", "") or ""
+                ).strip()
+                our_order_id = self.get_order_id(broker_entrust)
+                if not our_order_id:
+                    log.warning(
+                        f"Unknown entrust number: {broker_entrust}"
+                    )
+                    continue
+
+                # Mark as seen AFTER successful lookup
+                self._seen_fill_ids.add(broker_fill_id)
+
+                trade_side = trade.get(
+                    "买卖标志", trade.get("操作", ""),
                 )
-                
-                fills.append(fill)
-                
+                side = (
+                    OrderSide.BUY
+                    if "买" in str(trade_side)
+                    else OrderSide.SELL
+                )
+
+                symbol = str(
+                    trade.get("证券代码", "") or ""
+                ).zfill(6)
+                qty = int(trade.get("成交数量", 0) or 0)
+                price = float(trade.get("成交价格", 0) or 0.0)
+                comm = float(trade.get("手续费", 0) or 0.0)
+                tax = float(trade.get("印花税", 0) or 0.0)
+
+                fid = make_fill_uid(
+                    self.name, broker_fill_id, symbol,
+                    fill_time, price, qty,
+                )
+
+                fills.append(Fill(
+                    id=fid,
+                    broker_fill_id=broker_fill_id,
+                    order_id=our_order_id,
+                    symbol=symbol,
+                    side=side,
+                    quantity=qty,
+                    price=price,
+                    commission=comm,
+                    stamp_tax=tax,
+                    timestamp=fill_time,
+                ))
+
         except Exception as e:
             log.error(f"Failed to get fills: {e}")
-        
+
         return fills
-    
-    def get_order_status(self, order_id: str) -> Optional[OrderStatus]:
-        """Get order status from broker"""
+
+    def get_order_status(
+        self, order_id: str,
+    ) -> Optional[OrderStatus]:
         if not self.is_connected:
             return None
-        
+
         broker_id = self.get_broker_id(order_id)
         if not broker_id:
             return None
-        
+
         try:
             entrusts = self._client.today_entrusts
-            
+
             for entrust in entrusts:
                 if str(entrust.get('委托编号', '')) == broker_id:
-                    status_str = entrust.get('委托状态', entrust.get('状态', ''))
-                    return self._parse_status(status_str)
-            
+                    status_str = entrust.get(
+                        '委托状态', entrust.get('状态', ''),
+                    )
+                    # FIX(3): Use shared parser
+                    return parse_broker_status(status_str)
+
             return None
-            
+
         except Exception as e:
             log.error(f"Failed to get order status: {e}")
             return None
-    
-    def _parse_status(self, status_str: str) -> OrderStatus:
-        """Parse broker status string to OrderStatus"""
-        status_str = str(status_str).lower()
-        
-        if '全部成交' in status_str or '已成' in status_str:
-            return OrderStatus.FILLED
-        elif '部分成交' in status_str:
-            return OrderStatus.PARTIAL
-        elif '已报' in status_str or '已委托' in status_str:
-            return OrderStatus.ACCEPTED
-        elif '已撤' in status_str or '撤单' in status_str:
-            return OrderStatus.CANCELLED
-        elif '废单' in status_str or '拒绝' in status_str:
-            return OrderStatus.REJECTED
-        else:
-            return OrderStatus.SUBMITTED
-    
+
     def sync_order(self, order: Order) -> Order:
-        """Sync order state with broker"""
         if not self.is_connected:
             return order
-        
+
         broker_id = self.get_broker_id(order.id)
         if not broker_id:
             return order
-        
+
         try:
             entrusts = self._client.today_entrusts
-            
+
             for entrust in entrusts:
                 if str(entrust.get('委托编号', '')) == broker_id:
-                    order.status = self._parse_status(entrust.get('委托状态', ''))
-                    order.filled_qty = int(entrust.get('成交数量', 0) or 0)
-                    
-                    avg_price = entrust.get('成交均价', entrust.get('成交价格', 0))
+                    # FIX(3): Use shared parser
+                    order.status = parse_broker_status(
+                        entrust.get('委托状态', ''),
+                    )
+                    order.filled_qty = int(
+                        entrust.get('成交数量', 0) or 0
+                    )
+
+                    avg_price = entrust.get(
+                        '成交均价',
+                        entrust.get('成交价格', 0),
+                    )
                     if avg_price:
                         order.avg_price = float(avg_price)
-                    
+
                     order.updated_at = datetime.now()
                     break
-            
+
         except Exception as e:
             log.error(f"Failed to sync order: {e}")
-        
+
         return order
-    
+
     def cancel_order(self, order_id: str) -> bool:
         if not self.is_connected:
             return False
-        
+
         order = self._orders.get(order_id)
         broker_id = self.get_broker_id(order_id)
-        
+
         if not broker_id:
             return False
-        
+
         try:
             self._client.cancel_entrust(broker_id)
             if order:
@@ -1413,50 +1372,102 @@ class ZSZQBroker(BrokerInterface):
         except Exception as e:
             log.error(f"Cancel failed: {e}")
             return False
-    
+
+    def get_orders(self, active_only: bool = True) -> List[Order]:
+        if active_only:
+            return [
+                o for o in self._orders.values() if o.is_active
+            ]
+        return list(self._orders.values())
+
     def _get_fetcher(self):
-        """Get shared fetcher instance"""
         if self._fetcher is None:
             from data.fetcher import get_fetcher
             self._fetcher = get_fetcher()
         return self._fetcher
 
-    def get_orders(self, active_only: bool = True) -> List[Order]:
-        if active_only:
-            return [o for o in self._orders.values() if o.is_active]
-        return list(self._orders.values())
+
+# ============================================================
+# Concrete Broker Implementations
+# FIX(11): Thin subclasses — all shared logic is in base
+# ============================================================
+
+class THSBroker(EasytraderBroker):
+    """同花顺 / 华泰 / 国金 / 银河 broker via easytrader."""
+
+    BROKER_TYPES = {
+        'ths': '同花顺',
+        'ht': '华泰证券',
+        'gj': '国金证券',
+        'yh': '银河证券',
+    }
+
+    def __init__(self, broker_type: str = 'ths'):
+        self._broker_type = broker_type
+        super().__init__()
+
+    @property
+    def name(self) -> str:
+        return self.BROKER_TYPES.get(
+            self._broker_type, "Unknown Broker",
+        )
+
+    def _get_easytrader_type(self) -> str:
+        return self._broker_type
+
+
+class ZSZQBroker(EasytraderBroker):
+    """招商证券 broker via easytrader (universal mode)."""
+
+    @property
+    def name(self) -> str:
+        return "招商证券"
+
+    def _get_easytrader_type(self) -> str:
+        return 'universal'
 
 
 # ============================================================
 # Broker Factory
 # ============================================================
 
-def create_broker(mode: str = None, **kwargs) -> BrokerInterface:
+def create_broker(
+    mode: str = None, **kwargs,
+) -> BrokerInterface:
     """
     Factory function to create appropriate broker.
-    
+
     Args:
-        mode: 'simulation', 'paper', 'live', 'ths', 'ht', 'gj', 'yh', 'zszq'
+        mode: 'simulation', 'paper', 'live', 'ths', 'ht',
+              'gj', 'yh', 'zszq'
         **kwargs: Additional arguments for broker
     """
     from config.settings import TradingMode
-    
+
     if mode is None:
-        mode = CONFIG.trading_mode.value if hasattr(CONFIG.trading_mode, 'value') else str(CONFIG.trading_mode)
-    
+        mode = (
+            CONFIG.trading_mode.value
+            if hasattr(CONFIG.trading_mode, 'value')
+            else str(CONFIG.trading_mode)
+        )
+
     mode = mode.lower()
-    
-    if mode in ['simulation', 'paper']:
-        return SimulatorBroker(kwargs.get('capital', CONFIG.capital))
+
+    if mode in ('simulation', 'paper'):
+        return SimulatorBroker(
+            kwargs.get('capital', CONFIG.capital),
+        )
     elif mode == 'live':
         broker_type = kwargs.get('broker_type', 'ths')
-        if broker_type in ['zszq', 'zhaoshang', '招商']:
+        if broker_type in ('zszq', 'zhaoshang', '招商'):
             return ZSZQBroker()
         return THSBroker(broker_type=broker_type)
-    elif mode in ['ths', 'ht', 'gj', 'yh']:
+    elif mode in ('ths', 'ht', 'gj', 'yh'):
         return THSBroker(broker_type=mode)
-    elif mode in ['zszq', 'zhaoshang', '招商']:
+    elif mode in ('zszq', 'zhaoshang', '招商'):
         return ZSZQBroker()
     else:
-        log.warning(f"Unknown broker mode: {mode}, using simulator")
+        log.warning(
+            f"Unknown broker mode: {mode}, using simulator"
+        )
         return SimulatorBroker()

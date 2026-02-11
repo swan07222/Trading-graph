@@ -132,7 +132,7 @@ class BacktestResult:
 """
 
 
-class Backtester:s Backtester:
+class Backtester:
     """Walk-Forward Backtesting with proper methodology."""
     
     def __init__(self):

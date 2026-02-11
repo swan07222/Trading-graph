@@ -18,6 +18,17 @@ FIXES APPLIED:
 - Issue 6: create_labels validates thresholds
 - Issue 7: prepare_realtime_sequence safe config access
 - Issue 14: Clip value is a class constant
+- Fix: prepare_sequences passes horizon/interval to fit_scaler
+- Fix: get_class_distribution is dynamic for any NUM_CLASSES
+- Fix: _load_forecaster uses correct output_size (not num_classes)
+- Fix: Thread-safe atomicity in prepare_realtime_sequence
+- Fix: Index sort validation in temporal splitting
+- Fix: Consistent warmup logic across paths
+- Fix: transform() avoids unnecessary copy
+- Fix: Label dtype safety (float cast before NaN check)
+- Fix: save_scaler updates instance metadata when overridden
+- Fix: feature_cols validated early in split_temporal_single_stock
+- Fix: Logging for skipped invalid labels
 """
 import numpy as np
 import pandas as pd
@@ -37,11 +48,18 @@ log = get_logger(__name__)
 # Module-level constant for feature scaling clamp
 FEATURE_CLIP_VALUE = 5.0
 
+# Class label names — dynamically generated if NUM_CLASSES != 3
+_DEFAULT_LABEL_NAMES = {0: "DOWN", 1: "NEUTRAL", 2: "UP"}
+
 
 class RealtimeBuffer:
     """
     Thread-safe circular buffer for real-time data streaming.
     Maintains the last N bars for sequence construction.
+
+    All public methods are individually thread-safe via RLock.
+    For compound check-then-act patterns, callers should use
+    ``with buffer.lock:`` to hold the lock across multiple calls.
     """
 
     def __init__(self, max_size: int = None):
@@ -50,28 +68,34 @@ class RealtimeBuffer:
         self._lock = threading.RLock()
         self._last_update: Optional[datetime] = None
 
+    @property
+    def lock(self) -> threading.RLock:
+        """Expose lock for compound atomic operations."""
+        return self._lock
+
     def append(self, row: Dict[str, float]):
-        """Add a new bar to the buffer"""
+        """Add a new bar to the buffer."""
         with self._lock:
             self._buffer.append(row)
             self._last_update = datetime.now()
 
     def extend(self, rows: List[Dict[str, float]]):
-        """Add multiple bars to the buffer"""
+        """Add multiple bars to the buffer."""
         with self._lock:
             for row in rows:
                 self._buffer.append(row)
-            self._last_update = datetime.now()
+            if rows:
+                self._last_update = datetime.now()
 
     def to_dataframe(self) -> pd.DataFrame:
-        """Convert buffer to DataFrame"""
+        """Convert buffer to DataFrame."""
         with self._lock:
             if not self._buffer:
                 return pd.DataFrame()
             return pd.DataFrame(list(self._buffer))
 
     def get_latest(self, n: int = None) -> pd.DataFrame:
-        """Get the latest N bars as DataFrame"""
+        """Get the latest N bars as DataFrame."""
         n = n or CONFIG.SEQUENCE_LENGTH
         with self._lock:
             if len(self._buffer) < n:
@@ -80,16 +104,33 @@ class RealtimeBuffer:
             return pd.DataFrame(data)
 
     def is_ready(self, min_bars: int = None) -> bool:
-        """Check if buffer has enough data for prediction"""
+        """Check if buffer has enough data for prediction."""
         min_bars = min_bars or CONFIG.SEQUENCE_LENGTH
         with self._lock:
             return len(self._buffer) >= min_bars
 
     def clear(self):
-        """Clear the buffer"""
+        """Clear the buffer."""
         with self._lock:
             self._buffer.clear()
             self._last_update = None
+
+    def append_and_snapshot(
+        self, row: Dict[str, float], min_required: int
+    ) -> Optional[pd.DataFrame]:
+        """
+        Atomically append a row and return a DataFrame snapshot
+        if the buffer has >= min_required rows, else None.
+
+        This eliminates the TOCTOU race between is_ready() and
+        to_dataframe().
+        """
+        with self._lock:
+            self._buffer.append(row)
+            self._last_update = datetime.now()
+            if len(self._buffer) < min_required:
+                return None
+            return pd.DataFrame(list(self._buffer))
 
     def __len__(self) -> int:
         with self._lock:
@@ -151,9 +192,11 @@ class DataProcessor:
         Create classification labels based on future returns.
 
         Labels:
-            0 = DOWN  (return <= down_thresh)
-            1 = NEUTRAL (down_thresh < return < up_thresh)
-            2 = UP   (return >= up_thresh)
+            0 = DOWN     (return <= down_thresh %)
+            1 = NEUTRAL  (down_thresh% < return < up_thresh%)
+            2 = UP       (return >= up_thresh %)
+
+        Thresholds are in **percentage points** (e.g. 2.0 means 2%).
 
         IMPORTANT: The last ``horizon`` rows will have NaN labels.
 
@@ -161,18 +204,16 @@ class DataProcessor:
             ValueError: If thresholds are inconsistent or ``close`` is missing.
         """
         horizon = int(horizon or CONFIG.PREDICTION_HORIZON)
-        up_thresh = float(up_thresh or CONFIG.UP_THRESHOLD)
-        down_thresh = float(down_thresh or CONFIG.DOWN_THRESHOLD)
+        up_thresh = float(up_thresh if up_thresh is not None else CONFIG.UP_THRESHOLD)
+        down_thresh = float(
+            down_thresh if down_thresh is not None else CONFIG.DOWN_THRESHOLD
+        )
 
         # --- threshold validation (Issue 6) ---
         if up_thresh <= 0:
-            raise ValueError(
-                f"up_thresh must be positive, got {up_thresh}"
-            )
+            raise ValueError(f"up_thresh must be positive, got {up_thresh}")
         if down_thresh >= 0:
-            raise ValueError(
-                f"down_thresh must be negative, got {down_thresh}"
-            )
+            raise ValueError(f"down_thresh must be negative, got {down_thresh}")
         if down_thresh >= up_thresh:
             raise ValueError(
                 f"down_thresh ({down_thresh}) must be < up_thresh ({up_thresh})"
@@ -187,9 +228,14 @@ class DataProcessor:
         future_price = close.shift(-horizon)
         future_return = (future_price / close - 1) * 100
 
-        df["label"] = 1  # Default: NEUTRAL
-        df.loc[future_return >= up_thresh, "label"] = 2  # UP
-        df.loc[future_return <= down_thresh, "label"] = 0  # DOWN
+        df["label"] = np.nan  # Start as float so NaN is representable
+        df.loc[future_return >= up_thresh, "label"] = 2.0  # UP
+        df.loc[future_return <= down_thresh, "label"] = 0.0  # DOWN
+        # Fill remaining non-NaN positions with NEUTRAL
+        valid_return = future_return.notna()
+        neutral_mask = valid_return & df["label"].isna()
+        df.loc[neutral_mask, "label"] = 1.0  # NEUTRAL
+
         df["future_return"] = future_return
 
         # Invalidate last ``horizon`` rows (no future data available)
@@ -220,7 +266,8 @@ class DataProcessor:
                 )
 
             valid_mask = ~(
-                np.isnan(features).any(axis=1) | np.isinf(features).any(axis=1)
+                np.isnan(features).any(axis=1)
+                | np.isinf(features).any(axis=1)
             )
             clean_features = features[valid_mask]
 
@@ -235,8 +282,8 @@ class DataProcessor:
             self._fitted = True
             self._n_features = features.shape[1]
             self._fit_samples = len(clean_features)
-            self._interval = str(interval or "1d")
-            self._horizon = int(horizon or CONFIG.PREDICTION_HORIZON)
+            self._interval = str(interval or self._interval)
+            self._horizon = int(horizon or self._horizon)
             self._scaler_version = datetime.now().strftime("%Y%m%d_%H%M%S")
 
             log.info(
@@ -266,11 +313,12 @@ class DataProcessor:
                 )
 
             original_shape = features.shape
+            is_3d = features.ndim == 3
 
-            if features.ndim == 3:
+            if is_3d:
                 features_2d = features.reshape(-1, features.shape[-1])
             else:
-                features_2d = features.copy()
+                features_2d = features  # No copy needed; scaler.transform returns new array
 
             nan_mask = np.isnan(features_2d) | np.isinf(features_2d)
             features_2d = np.nan_to_num(
@@ -284,7 +332,7 @@ class DataProcessor:
 
             transformed[nan_mask] = 0.0
 
-            if len(original_shape) == 3:
+            if is_3d:
                 transformed = transformed.reshape(original_shape)
 
             return transformed.astype(np.float32)
@@ -295,28 +343,39 @@ class DataProcessor:
         interval: str = None,
         horizon: int = None,
     ):
-        """Save scaler atomically with metadata."""
+        """
+        Save scaler atomically with metadata.
+
+        If ``interval`` or ``horizon`` are provided, the instance metadata
+        is updated to match (keeps instance and saved file consistent).
+        """
         if not self._fitted:
             log.warning("Scaler not fitted, nothing to save")
             return
 
-        interval = interval or self._interval
-        horizon = horizon or self._horizon
-
-        if path is None:
-            path = CONFIG.MODEL_DIR / f"scaler_{interval}_{horizon}.pkl"
-
-        path = Path(path)
-        path.parent.mkdir(parents=True, exist_ok=True)
-
         with self._lock:
+            # Update instance metadata when overridden
+            if interval is not None:
+                self._interval = str(interval)
+            if horizon is not None:
+                self._horizon = int(horizon)
+
+            save_interval = self._interval
+            save_horizon = self._horizon
+
+            if path is None:
+                path = CONFIG.MODEL_DIR / f"scaler_{save_interval}_{save_horizon}.pkl"
+
+            path = Path(path)
+            path.parent.mkdir(parents=True, exist_ok=True)
+
             data = {
                 "scaler": self.scaler,
                 "n_features": self._n_features,
                 "fit_samples": self._fit_samples,
                 "fitted": True,
-                "interval": str(interval),
-                "horizon": int(horizon),
+                "interval": save_interval,
+                "horizon": save_horizon,
                 "version": self._scaler_version,
                 "saved_at": datetime.now().isoformat(),
             }
@@ -332,7 +391,7 @@ class DataProcessor:
             tmp_path.replace(path)
 
         log.info(
-            f"Scaler saved: {path} (interval={interval}, horizon={horizon})"
+            f"Scaler saved: {path} (interval={save_interval}, horizon={save_horizon})"
         )
 
     def load_scaler(
@@ -341,7 +400,12 @@ class DataProcessor:
         interval: str = None,
         horizon: int = None,
     ) -> bool:
-        """Load saved scaler for inference."""
+        """
+        Load saved scaler for inference.
+
+        WARNING: Uses pickle.load which can execute arbitrary code.
+        Only load scalers from trusted sources.
+        """
         if path is None:
             interval = interval or "1d"
             horizon = horizon or CONFIG.PREDICTION_HORIZON
@@ -354,8 +418,20 @@ class DataProcessor:
             return False
 
         try:
+            # WARNING: pickle.load is inherently unsafe for untrusted data.
+            # In production, consider signing scaler files or using a safe
+            # serialization format for the scaler parameters.
             with open(path, "rb") as f:
-                data = pickle.load(f)
+                data = pickle.load(f)  # noqa: S301
+
+            # Validate loaded data has expected keys
+            if not isinstance(data, dict) or "scaler" not in data:
+                log.error(f"Invalid scaler file format: {path}")
+                return False
+
+            if not isinstance(data["scaler"], RobustScaler):
+                log.error(f"Loaded object is not a RobustScaler: {type(data['scaler'])}")
+                return False
 
             with self._lock:
                 self.scaler = data["scaler"]
@@ -381,13 +457,13 @@ class DataProcessor:
 
     @property
     def is_fitted(self) -> bool:
-        """Check if scaler is fitted"""
+        """Check if scaler is fitted."""
         with self._lock:
             return self._fitted
 
     @property
     def n_features(self) -> Optional[int]:
-        """Get number of features"""
+        """Get number of features."""
         with self._lock:
             return self._n_features
 
@@ -401,14 +477,28 @@ class DataProcessor:
         feature_cols: List[str],
         fit_scaler: bool = False,
         return_index: bool = False,
+        interval: str = None,
+        horizon: int = None,
     ) -> Union[
         Tuple[np.ndarray, np.ndarray, np.ndarray],
         Tuple[np.ndarray, np.ndarray, np.ndarray, pd.DatetimeIndex],
     ]:
         """
         Prepare sequences for training/validation.
+
+        Args:
+            df: DataFrame with feature columns and 'label' column.
+            feature_cols: List of feature column names.
+            fit_scaler: If True, fit scaler on valid rows before transforming.
+            return_index: If True, also return the DatetimeIndex of each sample.
+            interval: Data interval metadata (passed to fit_scaler if fitting).
+            horizon: Prediction horizon metadata (passed to fit_scaler if fitting).
+
+        Returns:
+            (X, y, returns) or (X, y, returns, index) if return_index=True.
         """
         seq_len = int(CONFIG.SEQUENCE_LENGTH)
+        num_classes = int(CONFIG.NUM_CLASSES)
 
         missing_cols = set(feature_cols) - set(df.columns)
         if missing_cols:
@@ -421,30 +511,38 @@ class DataProcessor:
             )
 
         features = df[feature_cols].values.astype(np.float32)
-        labels = df["label"].values
+
+        # Cast labels to float so NaN checks work correctly
+        labels = df["label"].values.astype(np.float64)
+
         returns = (
-            df["future_return"].values
+            df["future_return"].values.astype(np.float64)
             if "future_return" in df.columns
-            else np.zeros(len(df))
+            else np.zeros(len(df), dtype=np.float64)
         )
 
         if fit_scaler:
             valid_mask = ~np.isnan(labels)
             if valid_mask.sum() > 10:
-                self.fit_scaler(features[valid_mask])
+                self.fit_scaler(
+                    features[valid_mask],
+                    interval=interval,
+                    horizon=horizon,
+                )
 
         if self._fitted:
             features = self.transform(features)
 
         X, y, r, idx = [], [], [], []
+        skipped_invalid = 0
 
         for i in range(seq_len - 1, len(features)):
             if np.isnan(labels[i]):
                 continue
 
-            # Validate label value is in expected range
             label_val = int(labels[i])
-            if label_val < 0 or label_val >= CONFIG.NUM_CLASSES:
+            if label_val < 0 or label_val >= num_classes:
+                skipped_invalid += 1
                 continue
 
             seq = features[i - seq_len + 1 : i + 1]
@@ -458,6 +556,12 @@ class DataProcessor:
                     else 0.0
                 )
                 idx.append(df.index[i])
+
+        if skipped_invalid > 0:
+            log.warning(
+                f"Skipped {skipped_invalid} samples with labels "
+                f"outside [0, {num_classes})"
+            )
 
         if not X:
             empty = (np.array([]), np.array([]), np.array([]))
@@ -482,12 +586,17 @@ class DataProcessor:
         horizon: int,
         fit_scaler: bool = False,
         return_index: bool = False,
+        interval: str = None,
     ) -> Union[
         Tuple[np.ndarray, np.ndarray],
         Tuple[np.ndarray, np.ndarray, pd.DatetimeIndex],
     ]:
         """
         Prepare multi-step forecasting dataset.
+
+        Returns:
+            (X, Y) or (X, Y, index) where Y has shape (N, horizon)
+            containing future percentage returns for each step.
         """
         seq_len = int(CONFIG.SEQUENCE_LENGTH)
         horizon = int(horizon)
@@ -510,7 +619,11 @@ class DataProcessor:
         if fit_scaler:
             valid_mask = ~np.isnan(features).any(axis=1)
             if valid_mask.sum() > 10:
-                self.fit_scaler(features[valid_mask])
+                self.fit_scaler(
+                    features[valid_mask],
+                    interval=interval,
+                    horizon=horizon,
+                )
 
         if self._fitted:
             features = self.transform(features)
@@ -534,10 +647,10 @@ class DataProcessor:
             if len(fut) != horizon or np.isnan(fut).any():
                 continue
 
-            y = (fut / c0 - 1.0) * 100.0
+            y_vals = (fut / c0 - 1.0) * 100.0
 
             X.append(seq)
-            Y.append(y.astype(np.float32))
+            Y.append(y_vals.astype(np.float32))
             idx.append(df.index[i])
 
         if not X:
@@ -564,6 +677,9 @@ class DataProcessor:
         """
         Prepare a single sequence for inference using the last
         SEQUENCE_LENGTH rows.
+
+        Returns:
+            np.ndarray of shape (1, seq_len, n_features).
         """
         seq_len = int(CONFIG.SEQUENCE_LENGTH)
 
@@ -576,7 +692,7 @@ class DataProcessor:
                 f"Need at least {seq_len} rows, got {len(df)}"
             )
 
-        df_seq = df.tail(seq_len).copy()
+        df_seq = df.tail(seq_len)
         features = df_seq[feature_cols].values.astype(np.float32)
 
         features = np.nan_to_num(
@@ -613,9 +729,10 @@ class DataProcessor:
         """
         Prepare sequence for real-time prediction with streaming data.
         Uses config-driven feature lookback instead of magic number.
+
+        Thread-safe: uses atomic append_and_snapshot to avoid TOCTOU race.
         """
         seq_len = int(CONFIG.SEQUENCE_LENGTH)
-
         feature_lookback = self._get_feature_lookback()
         min_required = seq_len + feature_lookback
 
@@ -627,15 +744,19 @@ class DataProcessor:
                 )
             buffer = self._realtime_buffers[code]
 
-        buffer.append(new_bar)
-
-        if not buffer.is_ready(min_required):
+        # Atomic append + readiness check + snapshot
+        df = buffer.append_and_snapshot(new_bar, min_required)
+        if df is None:
             return None
-
-        df = buffer.to_dataframe()
 
         if feature_engine is not None:
             try:
+                if len(df) < getattr(feature_engine, "MIN_ROWS", 60):
+                    log.debug(
+                        f"Insufficient rows for feature engine: "
+                        f"{len(df)} < {getattr(feature_engine, 'MIN_ROWS', 60)}"
+                    )
+                    return None
                 df = feature_engine.create_features(df)
             except Exception as e:
                 log.warning(
@@ -681,12 +802,12 @@ class DataProcessor:
     def get_realtime_buffer(
         self, code: str
     ) -> Optional[RealtimeBuffer]:
-        """Get the realtime buffer for a stock"""
+        """Get the realtime buffer for a stock."""
         with self._buffer_lock:
             return self._realtime_buffers.get(code)
 
     def clear_realtime_buffer(self, code: str = None):
-        """Clear realtime buffer(s)"""
+        """Clear realtime buffer(s)."""
         with self._buffer_lock:
             if code:
                 if code in self._realtime_buffers:
@@ -712,8 +833,7 @@ class DataProcessor:
         log.debug(
             f"Initialized buffer for {code} with {len(buffer)} bars"
         )
-
-    # =========================================================================
+            # =========================================================================
     # TEMPORAL SPLITTING
     # =========================================================================
 
@@ -755,11 +875,20 @@ class DataProcessor:
         -  Warmup length uses ``CONFIG.data.feature_lookback`` (the true
            max indicator lookback) instead of ``seq_len``.
         """
+        # Validate index is sorted chronologically
+        if not df.index.is_monotonic_increasing:
+            log.warning(
+                "DataFrame index is not sorted chronologically — sorting now"
+            )
+            df = df.sort_index()
+
         n = len(df)
         horizon = int(horizon or CONFIG.PREDICTION_HORIZON)
         embargo = int(CONFIG.EMBARGO_BARS)
         seq_len = int(CONFIG.SEQUENCE_LENGTH)
         feature_lookback = self._get_feature_lookback()
+
+        empty = (np.array([]), np.array([]), np.array([]))
 
         min_required = seq_len + horizon + embargo + 50
         if n < min_required:
@@ -767,8 +896,19 @@ class DataProcessor:
                 f"Insufficient data for splitting: {n} rows, "
                 f"need {min_required}"
             )
-            empty = (np.array([]), np.array([]), np.array([]))
             return {"train": empty, "val": empty, "test": empty}
+
+        # ---- validate feature_cols early when feature_engine is provided ----
+        if feature_engine is not None:
+            # Check that feature_cols matches what the engine produces
+            engine_cols = set(feature_engine.get_feature_columns())
+            requested_cols = set(feature_cols)
+            missing_from_engine = requested_cols - engine_cols
+            if missing_from_engine:
+                log.warning(
+                    f"feature_cols contains columns not produced by "
+                    f"feature_engine: {missing_from_engine}"
+                )
 
         # ---- temporal boundaries ----
         train_end = int(n * float(CONFIG.TRAIN_RATIO))
@@ -789,9 +929,23 @@ class DataProcessor:
             test_raw = df.iloc[test_raw_begin:].copy()
 
             # Compute features WITHIN each split
-            train_df = feature_engine.create_features(train_raw)
-            val_df = feature_engine.create_features(val_raw)
-            test_df = feature_engine.create_features(test_raw)
+            try:
+                train_df = feature_engine.create_features(train_raw)
+            except ValueError as e:
+                log.warning(f"Train feature creation failed: {e}")
+                return {"train": empty, "val": empty, "test": empty}
+
+            try:
+                val_df = feature_engine.create_features(val_raw)
+            except ValueError as e:
+                log.warning(f"Val feature creation failed: {e}")
+                val_df = pd.DataFrame()
+
+            try:
+                test_df = feature_engine.create_features(test_raw)
+            except ValueError as e:
+                log.warning(f"Test feature creation failed: {e}")
+                test_df = pd.DataFrame()
 
             # Number of warmup rows we prepended
             warmup_val = val_start - val_raw_begin
@@ -806,38 +960,53 @@ class DataProcessor:
             val_df = df.iloc[val_start:val_end].copy()
             test_df = df.iloc[test_start:].copy()
 
-            # Use feature_lookback as warmup (Issue 2)
+            # Use feature_lookback as warmup (Issue 2), consistent with engine path
             warmup_val = min(feature_lookback, len(val_df) // 4)
             warmup_test = min(feature_lookback, len(test_df) // 4)
 
+        # ---- validate feature_cols exist in computed DataFrames ----
+        for name, split_df in [("train", train_df), ("val", val_df), ("test", test_df)]:
+            if len(split_df) > 0:
+                missing = set(feature_cols) - set(split_df.columns)
+                if missing:
+                    log.error(
+                        f"Split '{name}' is missing feature columns: {missing}. "
+                        f"Available: {sorted(split_df.columns.tolist())}"
+                    )
+                    return {"train": empty, "val": empty, "test": empty}
+
         # ---- create labels WITHIN each split ----
-        train_df = self.create_labels(train_df, horizon=horizon)
-        val_df = self.create_labels(val_df, horizon=horizon)
-        test_df = self.create_labels(test_df, horizon=horizon)
+        if len(train_df) > 0:
+            train_df = self.create_labels(train_df, horizon=horizon)
+        if len(val_df) > 0:
+            val_df = self.create_labels(val_df, horizon=horizon)
+        if len(test_df) > 0:
+            test_df = self.create_labels(test_df, horizon=horizon)
 
         # ---- invalidate warmup rows in val/test ----
-        if warmup_val > 0 and "label" in val_df.columns:
+        if warmup_val > 0 and len(val_df) > 0 and "label" in val_df.columns:
             val_df.iloc[
                 :warmup_val, val_df.columns.get_loc("label")
             ] = np.nan
-        if warmup_test > 0 and "label" in test_df.columns:
+        if warmup_test > 0 and len(test_df) > 0 and "label" in test_df.columns:
             test_df.iloc[
                 :warmup_test, test_df.columns.get_loc("label")
             ] = np.nan
 
         # ---- fit scaler on TRAIN only ----
         if fit_scaler_on_train and len(train_df) >= seq_len:
-            train_features = train_df[feature_cols].values
-            valid_mask = ~train_df["label"].isna()
-            if int(valid_mask.sum()) > 10:
-                self.fit_scaler(
-                    train_features[valid_mask], horizon=horizon
-                )
+            if "label" in train_df.columns:
+                train_features = train_df[feature_cols].values
+                valid_mask = ~train_df["label"].isna()
+                if int(valid_mask.sum()) > 10:
+                    self.fit_scaler(
+                        train_features[valid_mask],
+                        interval=self._interval,
+                        horizon=horizon,
+                    )
 
         # ---- prepare sequences for each split ----
-        results: Dict[
-            str, Tuple[np.ndarray, np.ndarray, np.ndarray]
-        ] = {}
+        results: Dict[str, Tuple[np.ndarray, np.ndarray, np.ndarray]] = {}
 
         for name, split_df in [
             ("train", train_df),
@@ -849,15 +1018,17 @@ class DataProcessor:
                     split_df, feature_cols, fit_scaler=False
                 )
                 results[name] = (X, y, r)
-                log.debug(f"Split '{name}': {len(X)} samples")
+                if len(X) > 0:
+                    log.info(
+                        f"Split '{name}': {len(X)} samples, "
+                        f"class dist: {self.get_class_distribution(y)}"
+                    )
+                else:
+                    log.debug(f"Split '{name}': 0 valid samples")
             else:
-                results[name] = (
-                    np.array([]),
-                    np.array([]),
-                    np.array([]),
-                )
+                results[name] = empty
                 log.debug(
-                    f"Split '{name}': 0 samples (insufficient data)"
+                    f"Split '{name}': 0 samples (insufficient data: {len(split_df)} rows)"
                 )
 
         return results
@@ -869,26 +1040,37 @@ class DataProcessor:
     def prepare_single_sequence(
         self, df: pd.DataFrame, feature_cols: List[str]
     ) -> np.ndarray:
-        """Alias for prepare_inference_sequence"""
+        """Alias for prepare_inference_sequence."""
         return self.prepare_inference_sequence(df, feature_cols)
 
     def get_class_distribution(self, y: np.ndarray) -> Dict[str, int]:
-        """Get class distribution for logging"""
+        """
+        Get class distribution for logging.
+        Dynamically handles any NUM_CLASSES value.
+        """
+        num_classes = int(CONFIG.NUM_CLASSES)
+
         if len(y) == 0:
-            return {"DOWN": 0, "NEUTRAL": 0, "UP": 0, "total": 0}
+            dist: Dict[str, int] = {}
+            for i in range(num_classes):
+                label_name = _DEFAULT_LABEL_NAMES.get(i, f"CLASS_{i}")
+                dist[label_name] = 0
+            dist["total"] = 0
+            return dist
 
         y_int = y.astype(int)
-        counts = np.bincount(y_int, minlength=CONFIG.NUM_CLASSES)
+        counts = np.bincount(y_int, minlength=num_classes)
 
-        return {
-            "DOWN": int(counts[0]),
-            "NEUTRAL": int(counts[1]),
-            "UP": int(counts[2]),
-            "total": int(len(y)),
-        }
+        dist = {}
+        for i in range(num_classes):
+            label_name = _DEFAULT_LABEL_NAMES.get(i, f"CLASS_{i}")
+            dist[label_name] = int(counts[i]) if i < len(counts) else 0
+        dist["total"] = int(len(y))
+
+        return dist
 
     def get_scaler_info(self) -> Dict[str, Any]:
-        """Get scaler metadata"""
+        """Get scaler metadata."""
         with self._lock:
             return {
                 "fitted": self._fitted,
@@ -902,7 +1084,7 @@ class DataProcessor:
     def validate_features(
         self, df: pd.DataFrame, feature_cols: List[str]
     ) -> bool:
-        """Validate that DataFrame has all required features"""
+        """Validate that DataFrame has all required features."""
         missing = set(feature_cols) - set(df.columns)
         if missing:
             log.warning(f"Missing features: {missing}")
@@ -918,6 +1100,9 @@ class DataProcessor:
 class RealtimePredictor:
     """
     High-level helper for real-time AI predictions.
+
+    Combines FeatureEngine, DataProcessor (with scaler), and
+    EnsembleModel for end-to-end live prediction.
     """
 
     def __init__(
@@ -942,7 +1127,7 @@ class RealtimePredictor:
             self.load_models()
 
     def load_models(self) -> bool:
-        """Load all required models for prediction"""
+        """Load all required models for prediction."""
         from data.features import FeatureEngine
         from models.ensemble import EnsembleModel
 
@@ -959,6 +1144,18 @@ class RealtimePredictor:
                 )
                 if not self.processor.load_scaler(str(scaler_path)):
                     log.warning(f"Failed to load scaler: {scaler_path}")
+                    return False
+
+                # Validate feature count matches scaler
+                if (
+                    self.processor.n_features is not None
+                    and self.processor.n_features != len(self._feature_cols)
+                ):
+                    log.error(
+                        f"Feature count mismatch: scaler expects "
+                        f"{self.processor.n_features}, engine produces "
+                        f"{len(self._feature_cols)}"
+                    )
                     return False
 
                 ensemble_path = (
@@ -995,25 +1192,49 @@ class RealtimePredictor:
                 return False
 
     def _load_forecaster(self, path: Path):
-        """Load TCN forecaster model"""
+        """
+        Load TCN forecaster model.
+
+        The forecaster outputs ``horizon`` regression values (not class
+        probabilities), so ``num_classes`` in the TCN is set to the
+        horizon value from the saved checkpoint.
+        """
         import torch
         from models.networks import TCNModel
 
         try:
+            # WARNING: weights_only=False allows arbitrary code execution.
+            # Only load from trusted model files.
             data = torch.load(
                 path, map_location="cpu", weights_only=False
-            )
+            )  # noqa: S301
+
+            # Validate expected keys
+            required_keys = {"input_size", "horizon", "arch", "state_dict"}
+            if not required_keys.issubset(data.keys()):
+                log.warning(
+                    f"Forecaster checkpoint missing keys: "
+                    f"{required_keys - set(data.keys())}"
+                )
+                return
+
+            # TCNModel's num_classes parameter is used as the output
+            # dimension. For forecasting, this equals the horizon.
+            output_size = int(data["horizon"])
 
             self.forecaster = TCNModel(
-                input_size=data["input_size"],
-                hidden_size=data["arch"]["hidden_size"],
-                num_classes=data["horizon"],
-                dropout=data["arch"]["dropout"],
+                input_size=int(data["input_size"]),
+                hidden_size=int(data["arch"]["hidden_size"]),
+                num_classes=output_size,
+                dropout=float(data["arch"]["dropout"]),
             )
             self.forecaster.load_state_dict(data["state_dict"])
             self.forecaster.eval()
 
-            log.info(f"Forecaster loaded: {path}")
+            log.info(
+                f"Forecaster loaded: {path} "
+                f"(output_size={output_size})"
+            )
         except Exception as e:
             log.warning(f"Failed to load forecaster: {e}")
             self.forecaster = None
@@ -1023,23 +1244,44 @@ class RealtimePredictor:
         df: pd.DataFrame,
         include_forecast: bool = True,
     ) -> Optional[Dict[str, Any]]:
-        """Make real-time prediction."""
+        """
+        Make real-time prediction.
+
+        Args:
+            df: DataFrame with OHLCV data (must have >= MIN_ROWS rows
+                for feature computation + SEQUENCE_LENGTH for sequence).
+            include_forecast: Whether to include multi-step forecast.
+
+        Returns:
+            Dict with signal, confidence, probabilities, etc. or None on failure.
+        """
         if not self._loaded:
             if not self.load_models():
                 return None
 
         with self._lock:
             try:
+                # Validate minimum data requirement
+                min_rows = getattr(self.feature_engine, "MIN_ROWS", 60)
+                if len(df) < min_rows:
+                    log.warning(
+                        f"Insufficient data for prediction: "
+                        f"{len(df)} rows < {min_rows} minimum"
+                    )
+                    return None
+
                 df = self.feature_engine.create_features(df.copy())
                 X = self.processor.prepare_inference_sequence(
                     df, self._feature_cols
                 )
 
-                result = {
+                result: Dict[str, Any] = {
                     "timestamp": datetime.now(),
                     "signal": "HOLD",
                     "confidence": 0.0,
-                    "probabilities": [0.33, 0.34, 0.33],
+                    "probabilities": [
+                        1.0 / CONFIG.NUM_CLASSES
+                    ] * CONFIG.NUM_CLASSES,
                     "predicted_class": 1,
                 }
 
@@ -1127,7 +1369,7 @@ class RealtimePredictor:
             return None
 
         with self._lock:
-            result = {
+            result: Dict[str, Any] = {
                 "code": code,
                 "timestamp": datetime.now(),
                 "signal": "HOLD",

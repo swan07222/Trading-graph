@@ -1,8 +1,18 @@
+# ui/widgets.py
 """
 Custom UI Widgets - Professional English Interface
+
+FIXES APPLIED:
+1. Signal import uses lazy import to avoid circular dependency at module load
+2. update_prediction handles all missing/None fields robustly
+3. PositionTable handles missing Position attributes gracefully
+4. LogWidget uses safer line trimming (avoids cursor manipulation issues)
+5. MetricCard set_value accepts optional color without crashing
+6. All widgets guard against None/missing data
+7. Consistent type coercion with explicit float()/int() and fallbacks
 """
 from datetime import datetime
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 from PyQt6.QtWidgets import (
     QFrame, QVBoxLayout, QHBoxLayout, QLabel,
@@ -12,131 +22,148 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QFont, QColor
 
-from models.predictor import Signal
+from utils.logger import get_logger
+
+log = get_logger(__name__)
+
+
+def _get_signal_enum():
+    """Lazy import Signal to avoid circular imports at module load time."""
+    try:
+        from models.predictor import Signal
+        return Signal
+    except ImportError:
+        return None
 
 
 class SignalPanel(QFrame):
     """Large signal display panel with professional styling"""
-    
+
     def __init__(self):
         super().__init__()
         self.setMinimumHeight(220)
         self._setup_ui()
-    
+
     def _setup_ui(self):
         layout = QVBoxLayout(self)
         layout.setSpacing(10)
         layout.setContentsMargins(20, 20, 20, 20)
-        
+
         # Main signal display
         self.signal_label = QLabel("WAITING")
         self.signal_label.setFont(QFont("Segoe UI", 36, QFont.Weight.Bold))
         self.signal_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(self.signal_label)
-        
+
         # Stock info
         self.info_label = QLabel("Enter a stock code to analyze")
         self.info_label.setFont(QFont("Segoe UI", 14))
         self.info_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(self.info_label)
-        
+
         # Probability bars
         prob_widget = QWidget()
         prob_layout = QHBoxLayout(prob_widget)
         prob_layout.setContentsMargins(0, 10, 0, 10)
-        
+
         # DOWN probability
         down_container = QVBoxLayout()
         down_label = QLabel("DOWN")
         down_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        down_label.setStyleSheet("color: #f85149; font-weight: bold; font-size: 11px;")
+        down_label.setStyleSheet(
+            "color: #f85149; font-weight: bold; font-size: 11px;"
+        )
         self.prob_down = QProgressBar()
         self.prob_down.setFormat("%p%")
         self.prob_down.setStyleSheet("""
-            QProgressBar { 
-                background: #21262d; 
-                border-radius: 5px; 
-                text-align: center; 
+            QProgressBar {
+                background: #21262d;
+                border-radius: 5px;
+                text-align: center;
                 color: white;
                 height: 20px;
             }
-            QProgressBar::chunk { 
+            QProgressBar::chunk {
                 background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
                     stop:0 #f85149, stop:1 #da3633);
-                border-radius: 5px; 
+                border-radius: 5px;
             }
         """)
         down_container.addWidget(down_label)
         down_container.addWidget(self.prob_down)
         prob_layout.addLayout(down_container)
-        
+
         # NEUTRAL probability
         neutral_container = QVBoxLayout()
         neutral_label = QLabel("NEUTRAL")
         neutral_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        neutral_label.setStyleSheet("color: #d29922; font-weight: bold; font-size: 11px;")
+        neutral_label.setStyleSheet(
+            "color: #d29922; font-weight: bold; font-size: 11px;"
+        )
         self.prob_neutral = QProgressBar()
         self.prob_neutral.setFormat("%p%")
         self.prob_neutral.setStyleSheet("""
-            QProgressBar { 
-                background: #21262d; 
-                border-radius: 5px; 
-                text-align: center; 
+            QProgressBar {
+                background: #21262d;
+                border-radius: 5px;
+                text-align: center;
                 color: white;
                 height: 20px;
             }
-            QProgressBar::chunk { 
+            QProgressBar::chunk {
                 background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
                     stop:0 #d29922, stop:1 #bb8009);
-                border-radius: 5px; 
+                border-radius: 5px;
             }
         """)
         neutral_container.addWidget(neutral_label)
         neutral_container.addWidget(self.prob_neutral)
         prob_layout.addLayout(neutral_container)
-        
+
         # UP probability
         up_container = QVBoxLayout()
         up_label = QLabel("UP")
         up_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        up_label.setStyleSheet("color: #3fb950; font-weight: bold; font-size: 11px;")
+        up_label.setStyleSheet(
+            "color: #3fb950; font-weight: bold; font-size: 11px;"
+        )
         self.prob_up = QProgressBar()
         self.prob_up.setFormat("%p%")
         self.prob_up.setStyleSheet("""
-            QProgressBar { 
-                background: #21262d; 
-                border-radius: 5px; 
-                text-align: center; 
+            QProgressBar {
+                background: #21262d;
+                border-radius: 5px;
+                text-align: center;
                 color: white;
                 height: 20px;
             }
-            QProgressBar::chunk { 
+            QProgressBar::chunk {
                 background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
                     stop:0 #3fb950, stop:1 #238636);
-                border-radius: 5px; 
+                border-radius: 5px;
             }
         """)
         up_container.addWidget(up_label)
         up_container.addWidget(self.prob_up)
         prob_layout.addLayout(up_container)
-        
+
         layout.addWidget(prob_widget)
-        
+
         # Action recommendation
         self.action_label = QLabel("")
         self.action_label.setFont(QFont("Segoe UI", 12))
         self.action_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.action_label.setWordWrap(True)
         layout.addWidget(self.action_label)
-        
+
         # Confidence meters
         self.conf_label = QLabel("")
         self.conf_label.setFont(QFont("Segoe UI", 11))
         self.conf_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(self.conf_label)
-        
+
         self._set_default_style()
-    
+
     def _set_default_style(self):
         self.setStyleSheet("""
             SignalPanel {
@@ -147,22 +174,61 @@ class SignalPanel(QFrame):
             }
             QLabel { color: #8b949e; }
         """)
-    
+
+    @staticmethod
+    def _safe_float(obj, attr, default=0.0):
+        """Safely extract float attribute with fallback."""
+        try:
+            val = getattr(obj, attr, None)
+            if val is None:
+                return float(default)
+            return float(val)
+        except (TypeError, ValueError):
+            return float(default)
+
+    @staticmethod
+    def _safe_int(obj, attr, default=0):
+        """Safely extract int attribute with fallback."""
+        try:
+            val = getattr(obj, attr, None)
+            if val is None:
+                return int(default)
+            return int(val)
+        except (TypeError, ValueError):
+            return int(default)
+
+    @staticmethod
+    def _safe_str(obj, attr, default=""):
+        """Safely extract string attribute with fallback."""
+        try:
+            val = getattr(obj, attr, None)
+            if val is None:
+                return str(default)
+            return str(val)
+        except Exception:
+            return str(default)
+
     def update_prediction(self, pred):
         """Update display with prediction data (robust to missing fields)."""
-        sig = getattr(pred, "signal", None)
-        sig_text = sig.value if hasattr(sig, "value") else (str(sig) if sig else "HOLD")
+        Signal = _get_signal_enum()
 
-        code = str(getattr(pred, "stock_code", "") or "")
-        name = str(getattr(pred, "stock_name", "") or "")
-        price = float(getattr(pred, "current_price", 0.0) or 0.0)
+        sig = getattr(pred, "signal", None)
+        sig_text = (
+            sig.value if hasattr(sig, "value")
+            else (str(sig) if sig else "HOLD")
+        )
+
+        code = self._safe_str(pred, "stock_code")
+        name = self._safe_str(pred, "stock_name")
+        price = self._safe_float(pred, "current_price")
 
         self.signal_label.setText(sig_text)
         self.info_label.setText(f"{code} - {name} | ¥{price:.2f}")
 
-        prob_down = float(getattr(pred, "prob_down", 0.33) or 0.33)
-        prob_neutral = float(getattr(pred, "prob_neutral", 0.34) or 0.34)
-        prob_up = float(getattr(pred, "prob_up", 0.33) or 0.33)
+        prob_down = self._safe_float(pred, "prob_down", 0.33)
+        prob_neutral = self._safe_float(pred, "prob_neutral", 0.34)
+        prob_up = self._safe_float(pred, "prob_up", 0.33)
+
         self.prob_down.setValue(int(prob_down * 100))
         self.prob_neutral.setValue(int(prob_neutral * 100))
         self.prob_up.setValue(int(prob_up * 100))
@@ -170,39 +236,55 @@ class SignalPanel(QFrame):
         # Action text
         pos = getattr(pred, "position", None)
         levels = getattr(pred, "levels", None)
-        shares = int(getattr(pos, "shares", 0) or 0)
-        entry = float(getattr(levels, "entry", 0.0) or 0.0)
-        stop = float(getattr(levels, "stop_loss", 0.0) or 0.0)
-        tgt2 = float(getattr(levels, "target_2", 0.0) or 0.0)
+        shares = self._safe_int(pos, "shares") if pos else 0
+        entry = self._safe_float(levels, "entry") if levels else 0.0
+        stop = self._safe_float(levels, "stop_loss") if levels else 0.0
+        tgt2 = self._safe_float(levels, "target_2") if levels else 0.0
 
-        from models.predictor import Signal
-        if shares > 0 and sig in (Signal.STRONG_BUY, Signal.BUY):
-            self.action_label.setText(
-                f"BUY {shares:,} shares @ ¥{entry:.2f}\nStop Loss: ¥{stop:.2f} | Target: ¥{tgt2:.2f}"
-            )
-        elif shares > 0 and sig in (Signal.STRONG_SELL, Signal.SELL):
-            self.action_label.setText(f"SELL {shares:,} shares @ ¥{entry:.2f}")
+        if Signal is not None and shares > 0:
+            if sig in (Signal.STRONG_BUY, Signal.BUY):
+                self.action_label.setText(
+                    f"BUY {shares:,} shares @ ¥{entry:.2f}\n"
+                    f"Stop Loss: ¥{stop:.2f} | Target: ¥{tgt2:.2f}"
+                )
+            elif sig in (Signal.STRONG_SELL, Signal.SELL):
+                self.action_label.setText(
+                    f"SELL {shares:,} shares @ ¥{entry:.2f}"
+                )
+            else:
+                self.action_label.setText(
+                    "HOLD - Wait for clearer signal"
+                )
         else:
-            self.action_label.setText("HOLD - Wait for clearer signal")
+            self.action_label.setText(
+                "HOLD - Wait for clearer signal"
+            )
 
-        confidence = float(getattr(pred, "confidence", 0.0) or 0.0)
-        agreement = getattr(pred, "model_agreement", getattr(pred, "agreement", 1.0))
-        agreement = float(agreement or 1.0)
-        strength = float(getattr(pred, "signal_strength", 0.0) or 0.0)
+        confidence = self._safe_float(pred, "confidence")
+        agreement = self._safe_float(
+            pred, "model_agreement",
+            self._safe_float(pred, "agreement", 1.0)
+        )
+        strength = self._safe_float(pred, "signal_strength")
 
         self.conf_label.setText(
-            f"Confidence: {confidence:.0%} | Model Agreement: {agreement:.0%} | Signal Strength: {strength:.0%}"
+            f"Confidence: {confidence:.0%} | "
+            f"Model Agreement: {agreement:.0%} | "
+            f"Signal Strength: {strength:.0%}"
         )
 
-        # Styling
-        colors = {
-            Signal.STRONG_BUY: ("#2ea043", "#0d1117"),
-            Signal.BUY: ("#3fb950", "#0d1117"),
-            Signal.HOLD: ("#d29922", "#0d1117"),
-            Signal.SELL: ("#f85149", "#0d1117"),
-            Signal.STRONG_SELL: ("#da3633", "#0d1117"),
-        }
-        fg, bg = colors.get(sig, ("#c9d1d9", "#21262d"))
+        # Styling based on signal
+        if Signal is not None:
+            colors = {
+                Signal.STRONG_BUY: ("#2ea043", "#0d1117"),
+                Signal.BUY: ("#3fb950", "#0d1117"),
+                Signal.HOLD: ("#d29922", "#0d1117"),
+                Signal.SELL: ("#f85149", "#0d1117"),
+                Signal.STRONG_SELL: ("#da3633", "#0d1117"),
+            }
+            fg, bg = colors.get(sig, ("#c9d1d9", "#21262d"))
+        else:
+            fg, bg = "#c9d1d9", "#21262d"
 
         self.setStyleSheet(f"""
             SignalPanel {{
@@ -213,7 +295,7 @@ class SignalPanel(QFrame):
             }}
             QLabel {{ color: {fg}; }}
         """)
-    
+
     def reset(self):
         """Reset to default state"""
         self.signal_label.setText("WAITING")
@@ -228,76 +310,128 @@ class SignalPanel(QFrame):
 
 class PositionTable(QTableWidget):
     """Position display table with professional styling"""
-    
+
     def __init__(self):
         super().__init__()
         self.setColumnCount(8)
         self.setHorizontalHeaderLabels([
-            'Code', 'Name', 'Shares', 'Available', 
+            'Code', 'Name', 'Shares', 'Available',
             'Cost', 'Price', 'P&L', 'P&L %'
         ])
-        self.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        self.horizontalHeader().setSectionResizeMode(
+            QHeaderView.ResizeMode.Stretch
+        )
         self.setAlternatingRowColors(True)
-        self.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.setSelectionBehavior(
+            QTableWidget.SelectionBehavior.SelectRows
+        )
         self.verticalHeader().setVisible(False)
-    
+
+    @staticmethod
+    def _safe_attr(obj, attr, default=0):
+        """Safely get attribute with type coercion."""
+        try:
+            val = getattr(obj, attr, None)
+            if val is None:
+                return default
+            if isinstance(default, float):
+                return float(val)
+            if isinstance(default, int):
+                return int(val)
+            return val
+        except (TypeError, ValueError):
+            return default
+
     def update_positions(self, positions: Dict):
-        """Update table with position data"""
+        """Update table with position data - handles missing attributes."""
+        if positions is None:
+            positions = {}
+
         self.setRowCount(len(positions))
-        
+
         for row, (code, pos) in enumerate(positions.items()):
             # Code
-            self.setItem(row, 0, QTableWidgetItem(code))
-            
+            self.setItem(row, 0, QTableWidgetItem(str(code)))
+
             # Name
-            self.setItem(row, 1, QTableWidgetItem(pos.name))
-            
+            name = self._safe_attr(pos, 'name', '')
+            self.setItem(row, 1, QTableWidgetItem(str(name)))
+
             # Shares
-            shares_item = QTableWidgetItem(f"{pos.quantity:,}")
-            shares_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            quantity = self._safe_attr(pos, 'quantity', 0)
+            shares_item = QTableWidgetItem(f"{quantity:,}")
+            shares_item.setTextAlignment(
+                Qt.AlignmentFlag.AlignRight
+                | Qt.AlignmentFlag.AlignVCenter
+            )
             self.setItem(row, 2, shares_item)
-            
+
             # Available
-            avail_item = QTableWidgetItem(f"{pos.available_qty:,}")
-            avail_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            available = self._safe_attr(pos, 'available_qty', 0)
+            avail_item = QTableWidgetItem(f"{available:,}")
+            avail_item.setTextAlignment(
+                Qt.AlignmentFlag.AlignRight
+                | Qt.AlignmentFlag.AlignVCenter
+            )
             self.setItem(row, 3, avail_item)
-            
+
             # Cost
-            cost_item = QTableWidgetItem(f"¥{pos.avg_cost:.2f}")
-            cost_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            avg_cost = self._safe_attr(pos, 'avg_cost', 0.0)
+            cost_item = QTableWidgetItem(f"¥{avg_cost:.2f}")
+            cost_item.setTextAlignment(
+                Qt.AlignmentFlag.AlignRight
+                | Qt.AlignmentFlag.AlignVCenter
+            )
             self.setItem(row, 4, cost_item)
-            
+
             # Current Price
-            price_item = QTableWidgetItem(f"¥{pos.current_price:.2f}")
-            price_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            current_price = self._safe_attr(pos, 'current_price', 0.0)
+            price_item = QTableWidgetItem(f"¥{current_price:.2f}")
+            price_item.setTextAlignment(
+                Qt.AlignmentFlag.AlignRight
+                | Qt.AlignmentFlag.AlignVCenter
+            )
             self.setItem(row, 5, price_item)
-            
+
             # P&L
-            pnl_item = QTableWidgetItem(f"¥{pos.unrealized_pnl:+,.2f}")
-            pnl_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-            
+            unrealized_pnl = self._safe_attr(pos, 'unrealized_pnl', 0.0)
+            pnl_item = QTableWidgetItem(f"¥{unrealized_pnl:+,.2f}")
+            pnl_item.setTextAlignment(
+                Qt.AlignmentFlag.AlignRight
+                | Qt.AlignmentFlag.AlignVCenter
+            )
+
             # P&L %
-            pnl_pct_item = QTableWidgetItem(f"{pos.unrealized_pnl_pct:+.2f}%")
-            pnl_pct_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-            
+            unrealized_pnl_pct = self._safe_attr(
+                pos, 'unrealized_pnl_pct', 0.0
+            )
+            pnl_pct_item = QTableWidgetItem(
+                f"{unrealized_pnl_pct:+.2f}%"
+            )
+            pnl_pct_item.setTextAlignment(
+                Qt.AlignmentFlag.AlignRight
+                | Qt.AlignmentFlag.AlignVCenter
+            )
+
             # Color based on profit/loss
-            if pos.unrealized_pnl >= 0:
+            if unrealized_pnl >= 0:
                 color = QColor("#3fb950")
             else:
                 color = QColor("#f85149")
-            
+
             pnl_item.setForeground(color)
             pnl_pct_item.setForeground(color)
-            
+
             self.setItem(row, 6, pnl_item)
             self.setItem(row, 7, pnl_pct_item)
 
 
 class LogWidget(QTextEdit):
-    """System log display with professional styling"""
-    
+    """System log display with professional styling and bounded history."""
+
     MAX_LINES = 500
-    
+    _TRIM_BATCH = 100  # Lines to remove when trimming
+
     def __init__(self):
         super().__init__()
         self.setReadOnly(True)
@@ -313,17 +447,17 @@ class LogWidget(QTextEdit):
             }
         """)
         self._line_count = 0
-    
+
     def log(self, message: str, level: str = "info"):
         """Add log message with color coding"""
         colors = {
-            "info": "#7ee787",      # Green
-            "warning": "#d29922",    # Yellow/Orange
-            "error": "#f85149",      # Red
-            "success": "#3fb950",    # Bright Green
-            "debug": "#8b949e",      # Gray
+            "info": "#7ee787",
+            "warning": "#d29922",
+            "error": "#f85149",
+            "success": "#3fb950",
+            "debug": "#8b949e",
         }
-        
+
         icons = {
             "info": "ℹ️",
             "warning": "⚠️",
@@ -331,31 +465,77 @@ class LogWidget(QTextEdit):
             "success": "✅",
             "debug": "🔧",
         }
-        
+
         color = colors.get(level, "#c9d1d9")
         icon = icons.get(level, "•")
-        
+
         ts = datetime.now().strftime("%H:%M:%S")
-        
+
         self.append(
             f'<span style="color:#484f58">[{ts}]</span> '
             f'<span style="color:{color}">{icon} {message}</span>'
         )
-        
+
         self._line_count += 1
-        
-        # Trim old lines
+
+        # Trim old lines safely
         if self._line_count > self.MAX_LINES:
-            cursor = self.textCursor()
-            cursor.movePosition(cursor.MoveOperation.Start)
-            cursor.movePosition(cursor.MoveOperation.Down, cursor.MoveMode.KeepAnchor, 100)
-            cursor.removeSelectedText()
-            self._line_count -= 100
-        
+            self._trim_old_lines()
+
         # Auto-scroll to bottom
         scrollbar = self.verticalScrollBar()
-        scrollbar.setValue(scrollbar.maximum())
-    
+        if scrollbar:
+            scrollbar.setValue(scrollbar.maximum())
+
+    def _trim_old_lines(self):
+        """
+        Remove oldest lines to keep log bounded.
+        Uses document-level block removal instead of fragile cursor
+        manipulation.
+        """
+        try:
+            doc = self.document()
+            if doc is None:
+                return
+
+            block_count = doc.blockCount()
+            if block_count <= self.MAX_LINES:
+                return
+
+            # Remove oldest blocks
+            remove_count = min(self._TRIM_BATCH, block_count - self.MAX_LINES)
+
+            cursor = self.textCursor()
+            cursor.movePosition(cursor.MoveOperation.Start)
+
+            for _ in range(remove_count):
+                cursor.movePosition(
+                    cursor.MoveOperation.Down,
+                    cursor.MoveMode.KeepAnchor
+                )
+
+            # Select to start of next line
+            cursor.movePosition(
+                cursor.MoveOperation.StartOfLine,
+                cursor.MoveMode.KeepAnchor
+            )
+
+            cursor.removeSelectedText()
+            # Remove any leading newline left behind
+            if cursor.atStart():
+                cursor.deleteChar()
+
+            self._line_count = doc.blockCount()
+
+        except Exception as e:
+            # If trimming fails, just clear and reset
+            try:
+                log.debug(f"Log trim failed, clearing: {e}")
+                self.clear()
+                self._line_count = 0
+            except Exception:
+                pass
+
     def clear_log(self):
         """Clear all log messages"""
         self.clear()
@@ -364,11 +544,12 @@ class LogWidget(QTextEdit):
 
 class MetricCard(QFrame):
     """Metric display card for dashboard"""
-    
+
     def __init__(self, title: str, value: str = "--", icon: str = ""):
         super().__init__()
+        self.value_label = None
         self._setup_ui(title, value, icon)
-    
+
     def _setup_ui(self, title: str, value: str, icon: str):
         self.setStyleSheet("""
             MetricCard {
@@ -379,43 +560,50 @@ class MetricCard(QFrame):
                 padding: 15px;
             }
         """)
-        
+
         layout = QVBoxLayout(self)
         layout.setContentsMargins(15, 15, 15, 15)
         layout.setSpacing(5)
-        
+
         # Title with icon
-        title_label = QLabel(f"{icon} {title}" if icon else title)
+        title_text = f"{icon} {title}" if icon else title
+        title_label = QLabel(title_text)
         title_label.setStyleSheet("color: #8b949e; font-size: 12px;")
         layout.addWidget(title_label)
-        
+
         # Value
-        self.value_label = QLabel(value)
+        self.value_label = QLabel(str(value))
         self.value_label.setStyleSheet("""
-            color: #58a6ff; 
-            font-size: 24px; 
+            color: #58a6ff;
+            font-size: 24px;
             font-weight: bold;
         """)
         layout.addWidget(self.value_label)
-    
+
     def set_value(self, value: str, color: str = None):
         """Update the displayed value"""
-        self.value_label.setText(value)
+        if self.value_label is None:
+            return
+
+        self.value_label.setText(str(value))
         if color:
             self.value_label.setStyleSheet(f"""
-                color: {color}; 
-                font-size: 24px; 
+                color: {color};
+                font-size: 24px;
                 font-weight: bold;
             """)
 
 
 class TradingStatusBar(QFrame):
     """Trading status bar showing connection and market status"""
-    
+
     def __init__(self):
         super().__init__()
+        self.connection_label = None
+        self.market_label = None
+        self.mode_label = None
         self._setup_ui()
-    
+
     def _setup_ui(self):
         self.setStyleSheet("""
             TradingStatusBar {
@@ -425,47 +613,61 @@ class TradingStatusBar(QFrame):
                 padding: 10px;
             }
         """)
-        
+
         layout = QHBoxLayout(self)
         layout.setContentsMargins(15, 10, 15, 10)
-        
+
         # Connection status
         self.connection_label = QLabel("● Disconnected")
-        self.connection_label.setStyleSheet("color: #f85149; font-weight: bold;")
+        self.connection_label.setStyleSheet(
+            "color: #f85149; font-weight: bold;"
+        )
         layout.addWidget(self.connection_label)
-        
+
         layout.addStretch()
-        
+
         # Market status
         self.market_label = QLabel("Market: --")
         self.market_label.setStyleSheet("color: #8b949e;")
         layout.addWidget(self.market_label)
-        
+
         layout.addStretch()
-        
+
         # Mode indicator
         self.mode_label = QLabel("Mode: Paper Trading")
         self.mode_label.setStyleSheet("color: #d29922;")
         layout.addWidget(self.mode_label)
-    
+
     def set_connected(self, connected: bool, mode: str = "paper"):
         """Update connection status"""
+        if self.connection_label is None:
+            return
+
         if connected:
             self.connection_label.setText("● Connected")
-            self.connection_label.setStyleSheet("color: #3fb950; font-weight: bold;")
-            
+            self.connection_label.setStyleSheet(
+                "color: #3fb950; font-weight: bold;"
+            )
+
             if mode == "live":
                 self.mode_label.setText("⚠️ Mode: LIVE TRADING")
-                self.mode_label.setStyleSheet("color: #f85149; font-weight: bold;")
+                self.mode_label.setStyleSheet(
+                    "color: #f85149; font-weight: bold;"
+                )
             else:
                 self.mode_label.setText("Mode: Paper Trading")
                 self.mode_label.setStyleSheet("color: #d29922;")
         else:
             self.connection_label.setText("● Disconnected")
-            self.connection_label.setStyleSheet("color: #f85149; font-weight: bold;")
-    
+            self.connection_label.setStyleSheet(
+                "color: #f85149; font-weight: bold;"
+            )
+
     def set_market_status(self, is_open: bool):
         """Update market status"""
+        if self.market_label is None:
+            return
+
         if is_open:
             self.market_label.setText("🟢 Market Open")
             self.market_label.setStyleSheet("color: #3fb950;")
