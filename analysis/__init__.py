@@ -5,6 +5,7 @@ from .technical import TechnicalAnalyzer
 from .sentiment import SentimentAnalyzer, NewsScraper
 from .backtest import Backtester, BacktestResult
 from .replay import MarketReplay, ReplayBar
+from .strategy_engine import StrategyScriptEngine, StrategySignal
 
 __all__ = [
     'TechnicalAnalyzer',
@@ -14,4 +15,6 @@ __all__ = [
     'BacktestResult',
     'MarketReplay',
     'ReplayBar',
+    'StrategyScriptEngine',
+    'StrategySignal',
 ]

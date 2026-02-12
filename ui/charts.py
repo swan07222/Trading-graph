@@ -2,8 +2,8 @@
 from typing import List, Dict, Optional
 import numpy as np
 
-from PyQt6.QtWidgets import QWidget, QVBoxLayout, QLabel
-from PyQt6.QtCore import Qt
+from PyQt6.QtWidgets import QWidget, QVBoxLayout, QLabel, QMenu
+from PyQt6.QtCore import Qt, pyqtSignal
 
 from utils.logger import get_logger
 
@@ -125,6 +125,7 @@ class StockChart(QWidget):
 
     Plus: Trading level lines (stop loss, targets)
     """
+    trade_requested = pyqtSignal(str, float)  # side, price
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -139,6 +140,7 @@ class StockChart(QWidget):
         self.actual_line = None       # Layer 2: Price line (middle)
         self.predicted_line = None    # Layer 1: Prediction (bottom)
         self.level_lines: Dict[str, object] = {}
+        self.overlay_lines: Dict[str, object] = {}
 
         self._setup_ui()
 
@@ -165,6 +167,12 @@ class StockChart(QWidget):
         self.plot_widget.setLabel('bottom', 'Time', units='bars')
         self.plot_widget.showGrid(x=True, y=True, alpha=0.3)
         self.plot_widget.setBackground('#0d1117')
+        self.plot_widget.setContextMenuPolicy(
+            Qt.ContextMenuPolicy.CustomContextMenu
+        )
+        self.plot_widget.customContextMenuRequested.connect(
+            self._on_context_menu
+        )
 
         # === Layer 1 (BOTTOM): Prediction line - dashed green ===
         self.predicted_line = self.plot_widget.plot(
@@ -187,6 +195,20 @@ class StockChart(QWidget):
         self.plot_widget.addItem(self.candles)
 
         self.level_lines = {}
+        self.overlay_lines = {
+            "sma20": self.plot_widget.plot(
+                pen=pg.mkPen(color="#e3b341", width=1),
+                name="SMA20",
+            ),
+            "sma50": self.plot_widget.plot(
+                pen=pg.mkPen(color="#d2a8ff", width=1, style=Qt.PenStyle.DashLine),
+                name="SMA50",
+            ),
+            "ema21": self.plot_widget.plot(
+                pen=pg.mkPen(color="#ffa657", width=1.2, style=Qt.PenStyle.DotLine),
+                name="EMA21",
+            ),
+        }
 
         self.plot_widget.addLegend()
 
@@ -306,6 +328,7 @@ class StockChart(QWidget):
 
             self._actual_prices = closes
 
+            self._update_overlay_lines(closes)
             self._update_level_lines()
 
             # Auto-range to fit all data
@@ -373,9 +396,79 @@ class StockChart(QWidget):
                 self.actual_line.clear()
             if self.predicted_line is not None:
                 self.predicted_line.clear()
+            for line in self.overlay_lines.values():
+                try:
+                    line.clear()
+                except Exception:
+                    pass
             self._update_level_lines()
         except Exception as e:
             log.debug(f"Chart clear failed: {e}")
+
+    def _rolling_mean(self, values: np.ndarray, window: int) -> np.ndarray:
+        if len(values) < window or window <= 1:
+            return np.full(len(values), np.nan)
+        out = np.full(len(values), np.nan)
+        c = np.cumsum(np.insert(values, 0, 0.0))
+        out[window - 1:] = (c[window:] - c[:-window]) / float(window)
+        return out
+
+    def _ema(self, values: np.ndarray, span: int) -> np.ndarray:
+        if len(values) == 0:
+            return np.array([])
+        alpha = 2.0 / (span + 1.0)
+        out = np.empty(len(values), dtype=float)
+        out[0] = values[0]
+        for i in range(1, len(values)):
+            out[i] = alpha * values[i] + (1.0 - alpha) * out[i - 1]
+        return out
+
+    def _plot_series(self, key: str, y: np.ndarray):
+        line = self.overlay_lines.get(key)
+        if line is None:
+            return
+        if y.size == 0:
+            line.clear()
+            return
+        x = np.arange(len(y))
+        mask = ~np.isnan(y)
+        if not np.any(mask):
+            line.clear()
+            return
+        line.setData(x[mask], y[mask])
+
+    def _update_overlay_lines(self, closes: List[float]):
+        if not HAS_PYQTGRAPH or not self.overlay_lines:
+            return
+        arr = np.array(closes, dtype=float)
+        self._plot_series("sma20", self._rolling_mean(arr, 20))
+        self._plot_series("sma50", self._rolling_mean(arr, 50))
+        self._plot_series("ema21", self._ema(arr, 21))
+
+    def _on_context_menu(self, pos):
+        if not HAS_PYQTGRAPH or self.plot_widget is None:
+            return
+        if not self._actual_prices:
+            return
+
+        try:
+            scene_pos = self.plot_widget.mapToScene(pos)
+            view_pos = self.plot_widget.plotItem.vb.mapSceneToView(scene_pos)
+            price = float(view_pos.y())
+        except Exception:
+            price = float(self._actual_prices[-1])
+
+        if not np.isfinite(price) or price <= 0:
+            price = float(self._actual_prices[-1])
+
+        menu = QMenu(self)
+        buy_action = menu.addAction(f"Buy @ {price:.2f}")
+        sell_action = menu.addAction(f"Sell @ {price:.2f}")
+        chosen = menu.exec(self.plot_widget.mapToGlobal(pos))
+        if chosen == buy_action:
+            self.trade_requested.emit("buy", float(price))
+        elif chosen == sell_action:
+            self.trade_requested.emit("sell", float(price))
 
     def _update_level_lines(self):
         """Update horizontal lines for trading levels."""

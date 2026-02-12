@@ -13,13 +13,16 @@ from PyQt6.QtWidgets import (
     QTabWidget, QStatusBar, QTextEdit, QDoubleSpinBox, QSpinBox,
     QSplitter, QComboBox, QMessageBox, QListWidget, QGridLayout,
     QFrame, QTableWidget, QTableWidgetItem, QHeaderView, QToolBar,
-    QDockWidget, QSystemTrayIcon, QMenu, QSizePolicy, QCheckBox
+    QDockWidget, QSystemTrayIcon, QMenu, QSizePolicy, QCheckBox,
+    QInputDialog,
 )
 from PyQt6.QtCore import Qt, QTimer, QThread, pyqtSignal, QSize
-from PyQt6.QtGui import QFont, QColor, QIcon, QAction, QPalette
+from PyQt6.QtGui import QFont, QColor, QIcon, QAction, QPalette, QActionGroup
 
 from config.settings import CONFIG, TradingMode
-from core.types import AutoTradeMode, AutoTradeState, AutoTradeAction
+from core.types import (
+    AutoTradeMode, AutoTradeState, AutoTradeAction, TradeSignal, OrderSide,
+)
 from utils.logger import get_logger
 
 log = get_logger(__name__)
@@ -317,6 +320,7 @@ class MainApp(QMainWindow):
         self._price_series_lock = threading.Lock()
 
         self._bars_by_symbol: Dict[str, List[dict]] = {}
+        self._syncing_mode_ui = False
 
         # Auto-trade state
         self._auto_trade_mode: AutoTradeMode = AutoTradeMode.MANUAL
@@ -324,6 +328,12 @@ class MainApp(QMainWindow):
         self._setup_menubar()
         self._setup_toolbar()
         self._setup_ui()
+        init_mode = (
+            TradingMode.LIVE
+            if getattr(CONFIG.trading_mode, "value", "simulation") == "live"
+            else TradingMode.SIMULATION
+        )
+        self._set_trading_mode(init_mode, prompt_reconnect=False)
         self._setup_statusbar()
         self._setup_timers()
         self._apply_professional_style()
@@ -373,14 +383,24 @@ class MainApp(QMainWindow):
 
         trading_menu.addSeparator()
 
-        paper_action = QAction("&Paper Trading Mode", self)
-        paper_action.setCheckable(True)
-        paper_action.setChecked(True)
-        trading_menu.addAction(paper_action)
+        self.paper_action = QAction("&Paper Trading Mode", self)
+        self.paper_action.setCheckable(True)
+        self.live_action = QAction("&Live Trading Mode", self)
+        self.live_action.setCheckable(True)
 
-        live_action = QAction("&Live Trading Mode", self)
-        live_action.setCheckable(True)
-        trading_menu.addAction(live_action)
+        mode_group = QActionGroup(self)
+        mode_group.setExclusive(True)
+        mode_group.addAction(self.paper_action)
+        mode_group.addAction(self.live_action)
+
+        self.paper_action.triggered.connect(
+            lambda checked: checked and self._set_trading_mode(TradingMode.SIMULATION)
+        )
+        self.live_action.triggered.connect(
+            lambda checked: checked and self._set_trading_mode(TradingMode.LIVE)
+        )
+        trading_menu.addAction(self.paper_action)
+        trading_menu.addAction(self.live_action)
 
         ai_menu = menubar.addMenu("&AI Model")
 
@@ -648,6 +668,7 @@ class MainApp(QMainWindow):
 
         self.mode_combo = QComboBox()
         self.mode_combo.addItems(["Paper Trading", "Live Trading"])
+        self.mode_combo.currentIndexChanged.connect(self._on_mode_combo_changed)
         self._add_labeled(settings_layout, 0, "Mode:", self.mode_combo)
 
         self.capital_spin = QDoubleSpinBox()
@@ -804,6 +825,8 @@ class MainApp(QMainWindow):
             from .charts import StockChart
             self.chart = StockChart()
             self.chart.setMinimumHeight(400)
+            if hasattr(self.chart, "trade_requested"):
+                self.chart.trade_requested.connect(self._on_chart_trade_requested)
         except ImportError:
             self.chart = QLabel("Chart (charts module not found)")
             self.chart.setMinimumHeight(400)
@@ -2137,6 +2160,53 @@ class MainApp(QMainWindow):
         else:
             self._disconnect_trading()
 
+    def _on_mode_combo_changed(self, index: int):
+        if self._syncing_mode_ui:
+            return
+        mode = TradingMode.SIMULATION if int(index) == 0 else TradingMode.LIVE
+        self._set_trading_mode(mode, prompt_reconnect=True)
+
+    def _set_trading_mode(
+        self,
+        mode: TradingMode,
+        prompt_reconnect: bool = False,
+    ) -> None:
+        mode = TradingMode.LIVE if mode == TradingMode.LIVE else TradingMode.SIMULATION
+        try:
+            CONFIG.trading_mode = mode
+        except Exception as e:
+            log.warning(f"Failed to set trading mode config: {e}")
+
+        self._syncing_mode_ui = True
+        try:
+            self.mode_combo.setCurrentIndex(0 if mode != TradingMode.LIVE else 1)
+            if hasattr(self, "paper_action"):
+                self.paper_action.setChecked(mode != TradingMode.LIVE)
+            if hasattr(self, "live_action"):
+                self.live_action.setChecked(mode == TradingMode.LIVE)
+        finally:
+            self._syncing_mode_ui = False
+
+        self.log(f"Trading mode set: {mode.value}", "info")
+
+        if not prompt_reconnect or self.executor is None:
+            return
+
+        current = getattr(self.executor, "mode", TradingMode.SIMULATION)
+        if current == mode:
+            return
+
+        reply = QMessageBox.question(
+            self,
+            "Reconnect Required",
+            "Trading mode changed. Reconnect now to apply new mode?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes,
+        )
+        if reply == QMessageBox.StandardButton.Yes:
+            self._disconnect_trading()
+            self._connect_trading()
+
     def _connect_trading(self):
         """Connect to trading system"""
         mode = (
@@ -2245,6 +2315,68 @@ class MainApp(QMainWindow):
         """)
 
         self.log("Disconnected from broker", "info")
+
+    def _on_chart_trade_requested(self, side: str, price: float) -> None:
+        """Handle right-click chart quick trade request."""
+        if self.executor is None:
+            self.log("Connect broker before trading from chart", "warning")
+            return
+        symbol = _normalize_stock_code(self.stock_input.text())
+        if not symbol and self.current_prediction is not None:
+            symbol = _normalize_stock_code(
+                getattr(self.current_prediction, "stock_code", "")
+            )
+        if not symbol:
+            self.log("No active symbol for chart trade", "warning")
+            return
+        if price <= 0:
+            self.log("Invalid chart price", "warning")
+            return
+
+        qty, ok = QInputDialog.getInt(
+            self,
+            "Chart Quick Trade",
+            f"{side.upper()} {symbol} @ {price:.2f}\nQuantity:",
+            100,
+            1,
+            5_000_000,
+            1,
+        )
+        if not ok:
+            return
+
+        order_side = OrderSide.BUY if str(side).lower() == "buy" else OrderSide.SELL
+        self._submit_chart_order(symbol=symbol, side=order_side, qty=int(qty), price=float(price))
+
+    def _submit_chart_order(
+        self,
+        symbol: str,
+        side: OrderSide,
+        qty: int,
+        price: float,
+    ) -> None:
+        if self.executor is None:
+            return
+        signal = TradeSignal(
+            symbol=symbol,
+            side=side,
+            quantity=max(1, int(qty)),
+            price=max(0.0, float(price)),
+            strategy="chart_manual",
+            reasons=["Manual chart quick-trade"],
+            confidence=1.0,
+        )
+        try:
+            ok = self.executor.submit(signal)
+            if ok:
+                self.log(
+                    f"Chart trade submitted: {side.value.upper()} {qty} {symbol} @ {price:.2f}",
+                    "success",
+                )
+            else:
+                self.log("Chart trade rejected by risk/permissions", "warning")
+        except Exception as e:
+            self.log(f"Chart trade failed: {e}", "error")
 
     def _execute_buy(self):
         """Execute buy order"""

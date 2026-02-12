@@ -218,6 +218,30 @@ Key config groups:
 
 ## 10) Testing
 
+```bash
+python -m pytest -q
+```
+
+## 11) Strategy Scripting (Extensibility)
+
+Custom script strategies are auto-loaded from `strategies/*.py`.
+
+Required contract:
+- `generate_signal(df, indicators, context) -> dict`
+- Return dict fields: `action` (`buy`/`sell`/`hold`), `score` (`0..1`), `reason` (optional)
+
+Example script:
+- `strategies/momentum_breakout.py`
+
+These script outputs are blended into final signal scoring with bounded impact.
+
+## 12) Chart Quick Trade UX
+
+In the desktop chart:
+- Right-click chart to open quick-trade menu
+- Choose `Buy @ price` or `Sell @ price`
+- Enter quantity and submit through the same risk/permission checks as normal execution
+
 Run full tests:
 ```bash
 pytest

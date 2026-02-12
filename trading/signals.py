@@ -174,6 +174,7 @@ class SignalGenerator:
         self.tech_analyzer = None
         self.sentiment_analyzer = None
         self.news_scraper = None
+        self.strategy_engine = None
         self._init_analyzers()
 
     def _init_analyzers(self) -> None:
@@ -196,6 +197,13 @@ class SignalGenerator:
             log.warning(f"Could not import sentiment analyzer: {e}")
         except Exception as e:
             log.warning(f"Could not init sentiment analyzer: {e}")
+
+        try:
+            from analysis.strategy_engine import StrategyScriptEngine
+            self.strategy_engine = StrategyScriptEngine()
+            log.debug("Strategy script engine initialized")
+        except Exception as e:
+            log.warning(f"Could not init strategy script engine: {e}")
 
     @staticmethod
     def _safe_get(obj: object, attr: str, default=None):
@@ -276,7 +284,7 @@ class SignalGenerator:
         )
 
         # === Technical Score ===
-        tech_score, tech_signal, trend = self._analyze_technical(
+        tech_score, tech_signal, trend, indicators = self._analyze_technical(
             df, reasons, warnings
         )
 
@@ -291,6 +299,19 @@ class SignalGenerator:
             tech_score * self.WEIGHT_TECHNICAL +
             sentiment_score * self.WEIGHT_SENTIMENT
         )
+
+        # Optional external strategy scripts can bias the score slightly.
+        if self.strategy_engine is not None:
+            try:
+                script_bias, script_reasons = self.strategy_engine.evaluate(
+                    df=df, indicators=indicators, symbol=stock_code
+                )
+                if script_bias:
+                    combined_score += float(script_bias)
+                reasons.extend(script_reasons[:3])
+            except Exception as e:
+                log.warning(f"Strategy script evaluation failed: {e}")
+
         combined_score = float(np.clip(combined_score, -100.0, 100.0))
 
         # === Final Signal ===
@@ -392,7 +413,7 @@ class SignalGenerator:
         df: Optional[pd.DataFrame], 
         reasons: List[str], 
         warnings: List[str]
-    ) -> Tuple[float, str, str]:
+    ) -> Tuple[float, str, str, Dict[str, float]]:
         """
         Perform technical analysis on price data.
 
@@ -408,8 +429,9 @@ class SignalGenerator:
         tech_signal = "neutral"
         trend = "sideways"
 
+        indicators: Dict[str, float] = {}
         if df is None or len(df) < 60 or self.tech_analyzer is None:
-            return tech_score, tech_signal, trend
+            return tech_score, tech_signal, trend, indicators
 
         try:
             tech_summary = self.tech_analyzer.analyze(df)
@@ -420,6 +442,7 @@ class SignalGenerator:
 
             raw_signal = self._safe_get(tech_summary, "overall_signal", "neutral")
             tech_signal = str(raw_signal) if raw_signal else "neutral"
+            indicators = dict(self._safe_get(tech_summary, "indicators", {}) or {})
 
             # Extract trend (handle enum)
             raw_trend = self._safe_get(tech_summary, "trend", None)
@@ -446,7 +469,7 @@ class SignalGenerator:
             log.warning(f"Technical analysis failed: {e}")
             warnings.append("Technical analysis unavailable")
 
-        return tech_score, tech_signal, trend
+        return tech_score, tech_signal, trend, indicators
 
     def _analyze_sentiment(
         self, 

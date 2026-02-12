@@ -9,6 +9,9 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 @pytest.fixture(autouse=True)
 def reset_cache():
     """Reset cache before each test"""
+    if os.environ.get("TRADING_SKIP_TEST_CACHE_CLEAR", "0") == "1":
+        yield
+        return
     from data.cache import get_cache
     cache = get_cache()
     cache.clear()
