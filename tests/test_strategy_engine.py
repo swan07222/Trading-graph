@@ -1,4 +1,5 @@
 from pathlib import Path
+import json
 
 import pandas as pd
 
@@ -40,3 +41,40 @@ def test_strategy_engine_discovers_and_evaluates(tmp_path: Path):
     )
     assert bias > 0
     assert any("RSI oversold" in r for r in reasons)
+
+
+def test_strategy_engine_respects_marketplace_disable(tmp_path: Path):
+    strategy = tmp_path / "rule.py"
+    strategy.write_text(
+        "\n".join(
+            [
+                "def generate_signal(df, indicators, context):",
+                "    return {'action': 'buy', 'score': 1.0, 'reason': 'always'}",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / "marketplace.json").write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "strategies": [
+                    {
+                        "id": "rule",
+                        "name": "Rule",
+                        "version": "1.0",
+                        "file": "rule.py",
+                        "enabled_by_default": False,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / "enabled.json").write_text(
+        json.dumps({"enabled": []}),
+        encoding="utf-8",
+    )
+
+    engine = StrategyScriptEngine(strategies_dir=tmp_path)
+    assert engine.list_strategy_files() == []

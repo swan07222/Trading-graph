@@ -1139,6 +1139,7 @@ class ContinuousLearner:
         min_market_cap=10, include_all_markets=True, continuous=True,
         learning_while_trading=True, interval="1m", prediction_horizon=30,
         lookback_bars=None, cycle_interval_seconds=900, incremental=True,
+        priority_stock_codes: Optional[List[str]] = None,
     ):
         if self._thread and self._thread.is_alive():
             if self.progress.is_paused:
@@ -1172,6 +1173,7 @@ class ContinuousLearner:
                 bool(continuous), str(interval).lower(),
                 int(prediction_horizon), int(lookback_bars),
                 int(cycle_interval_seconds), bool(incremental),
+                list(priority_stock_codes or []),
             ),
             daemon=True,
         )
@@ -1356,6 +1358,7 @@ class ContinuousLearner:
     def _main_loop(
         self, mode, max_stocks, epochs, min_market_cap, include_all,
         continuous, interval, horizon, lookback, cycle_seconds, incremental,
+        priority_stock_codes,
     ):
         cycle = 0
         current_epochs = epochs
@@ -1387,6 +1390,7 @@ class ContinuousLearner:
                     min_market_cap=min_market_cap, interval=interval,
                     horizon=horizon, lookback=lookback,
                     incremental=incremental, cycle_number=cycle,
+                    priority_stock_codes=priority_stock_codes,
                 )
 
                 if success:
@@ -1530,6 +1534,7 @@ class ContinuousLearner:
     def _run_cycle(
         self, max_stocks, epochs, min_market_cap, interval,
         horizon, lookback, incremental, cycle_number,
+        priority_stock_codes: Optional[List[str]] = None,
     ) -> bool:
         start_time = datetime.now()
 
@@ -1552,6 +1557,22 @@ class ContinuousLearner:
 
             holdout_set = self._get_holdout_set()
             new_codes = [c for c in new_codes if c not in holdout_set]
+
+            if priority_stock_codes:
+                prioritized = []
+                seen = set(new_codes)
+                for code in priority_stock_codes:
+                    c = str(code).strip()
+                    if not c or c in holdout_set or c in seen:
+                        continue
+                    prioritized.append(c)
+                    seen.add(c)
+                if prioritized:
+                    self._update(
+                        message=f"Injecting {len(prioritized)} priority session stocks",
+                        progress=4.0,
+                    )
+                    new_codes = prioritized + new_codes
 
             # Recovery: if holdout filters everything and replay is empty,
             # reset rotation/holdout once and re-discover.

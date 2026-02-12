@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "updated_at": "2026-02-12T00:00:00Z",
+  "strategies": [
+    {
+      "id": "momentum_breakout",
+      "name": "Momentum Breakout",
+      "version": "1.0.0",
+      "author": "Trading-graph Core",
+      "category": "Momentum",
+      "risk_level": "medium",
+      "intervals": [
+        "1m",
+        "5m",
+        "15m",
+        "1d"
+      ],
+      "min_bars": 80,
+      "description": "EMA/MACD momentum strategy with RSI guardrails.",
+      "tags": [
+        "momentum",
+        "breakout",
+        "trend"
+      ],
+      "file": "momentum_breakout.py",
+      "sha256": "f1c72459442f43bc62a2773a6df626261f4c17e6041af39e071feefcfef00897",
+      "enabled_by_default": true
+    }
+  ]
+}

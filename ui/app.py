@@ -321,6 +321,12 @@ class MainApp(QMainWindow):
 
         self._bars_by_symbol: Dict[str, List[dict]] = {}
         self._syncing_mode_ui = False
+        self._session_bar_cache = None
+        try:
+            from data.session_cache import get_session_bar_cache
+            self._session_bar_cache = get_session_bar_cache()
+        except Exception:
+            self._session_bar_cache = None
 
         # Auto-trade state
         self._auto_trade_mode: AutoTradeMode = AutoTradeMode.MANUAL
@@ -412,6 +418,10 @@ class MainApp(QMainWindow):
         auto_learn_action = QAction("&Auto Learn", self)
         auto_learn_action.triggered.connect(self._show_auto_learn)
         ai_menu.addAction(auto_learn_action)
+
+        strategy_market_action = QAction("&Strategy Marketplace", self)
+        strategy_market_action.triggered.connect(self._show_strategy_marketplace)
+        ai_menu.addAction(strategy_market_action)
 
         ai_menu.addSeparator()
 
@@ -564,6 +574,12 @@ class MainApp(QMainWindow):
             arr.append(bar)
             if len(arr) > 400:
                 del arr[:-400]
+            try:
+                if self._session_bar_cache is not None:
+                    interval = str(bar.get("interval") or self.interval_combo.currentText()).strip().lower()
+                    self._session_bar_cache.append_bar(symbol, interval, bar)
+            except Exception as e:
+                log.debug(f"Session cache write failed: {e}")
         else:
             # Partial bar - update the last bar in place
             if arr:
@@ -2613,12 +2629,30 @@ class MainApp(QMainWindow):
         """Show auto-learning dialog"""
         try:
             from .auto_learn_dialog import show_auto_learn_dialog
-            show_auto_learn_dialog(self)
+            seed_codes: List[str] = []
+            try:
+                if self._session_bar_cache is not None:
+                    interval = self.interval_combo.currentText().strip().lower()
+                    seed_codes = self._session_bar_cache.get_recent_symbols(
+                        interval=interval, min_rows=10
+                    )
+            except Exception:
+                seed_codes = []
+            show_auto_learn_dialog(self, seed_stock_codes=seed_codes)
         except ImportError:
             self.log("Auto-learn dialog not available", "error")
             return
 
         self._init_components()
+
+    def _show_strategy_marketplace(self):
+        """Show strategy marketplace manager."""
+        try:
+            from .strategy_marketplace_dialog import StrategyMarketplaceDialog
+            dialog = StrategyMarketplaceDialog(self)
+            dialog.exec()
+        except Exception as e:
+            self.log(f"Strategy marketplace unavailable: {e}", "error")
 
     def _show_backtest(self):
         """Show backtest dialog"""

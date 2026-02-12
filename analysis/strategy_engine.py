@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from config.settings import CONFIG
+from analysis.strategy_marketplace import StrategyMarketplace
 from utils.logger import get_logger
 
 log = get_logger(__name__)
@@ -33,10 +34,19 @@ class StrategyScriptEngine:
     def __init__(self, strategies_dir: Optional[Path] = None) -> None:
         base = Path(getattr(CONFIG, "base_dir", Path(".")))
         self._dir = Path(strategies_dir) if strategies_dir else (base / "strategies")
+        self._marketplace = StrategyMarketplace(self._dir)
 
     def list_strategy_files(self) -> List[Path]:
+        files = self._marketplace.get_enabled_files()
+        if files:
+            return files
+        # If marketplace metadata exists, treat enabled set as authoritative.
+        # This avoids executing disabled scripts via legacy fallback.
+        if self._marketplace.manifest_path.exists():
+            return []
         if not self._dir.exists():
             return []
+        # Fallback for repos without marketplace metadata.
         return sorted(
             p for p in self._dir.glob("*.py")
             if p.is_file() and not p.name.startswith("_")

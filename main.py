@@ -46,7 +46,6 @@ def main():
     """Main entry point"""
     import argparse
     import os
-    import threading
 
     parser = argparse.ArgumentParser(description='AI Stock Trading System')
 
@@ -86,14 +85,19 @@ def main():
     from utils.metrics import start_process_metrics
     start_process_metrics()
 
-    # ---- NEW: optional Prometheus endpoint ----
+    metrics_server = None
+    # Optional metrics + local API endpoint
     port = os.environ.get("TRADING_METRICS_PORT")
     if port:
         try:
             from utils.metrics_http import serve
-            t = threading.Thread(target=serve, args=(int(port),), daemon=True, name="metrics_http")
-            t.start()
-            log.info(f"Metrics server started on :{port} (/metrics, /healthz)")
+            host = os.environ.get("TRADING_METRICS_HOST", "127.0.0.1")
+            metrics_server = serve(port=int(port), host=host)
+            log.info(
+                "Metrics/API server started at %s "
+                "(/metrics, /healthz, /api/v1/dashboard)",
+                metrics_server.url,
+            )
         except Exception as e:
             log.warning(f"Metrics server failed: {e}")
 
@@ -164,6 +168,11 @@ def main():
         log.exception(f"Error: {e}")
         sys.exit(1)
     finally:
+        if metrics_server is not None:
+            try:
+                metrics_server.stop()
+            except Exception:
+                pass
         EVENT_BUS.stop()
         from utils.security import get_audit_log
         get_audit_log().close()

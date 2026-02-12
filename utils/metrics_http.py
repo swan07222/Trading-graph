@@ -1,54 +1,229 @@
-# utils/metrics_http.py
 from __future__ import annotations
 
-import threading
+import json
 import logging
+import os
+import threading
+from datetime import UTC, date, datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import Optional
+from typing import Any, Callable, Dict, Optional
+from urllib.parse import parse_qs, urlparse
 
 from utils.metrics import get_metrics
 
 log = logging.getLogger(__name__)
 
-class MetricsHandler(BaseHTTPRequestHandler):
-    """HTTP handler for /metrics and /healthz endpoints."""
+_SNAPSHOT_LOCK = threading.RLock()
+_SNAPSHOT_PROVIDERS: Dict[str, Callable[[], Any]] = {}
 
-    # FIX #4: Limit request processing time
+
+def register_snapshot_provider(name: str, provider: Callable[[], Any]) -> None:
+    """Register a callable that returns JSON-serializable snapshot data."""
+    normalized = (name or "").strip()
+    if not normalized:
+        raise ValueError("Snapshot provider name cannot be empty")
+    if not callable(provider):
+        raise TypeError("Snapshot provider must be callable")
+
+    with _SNAPSHOT_LOCK:
+        _SNAPSHOT_PROVIDERS[normalized] = provider
+
+
+def unregister_snapshot_provider(name: str) -> bool:
+    with _SNAPSHOT_LOCK:
+        return _SNAPSHOT_PROVIDERS.pop(name, None) is not None
+
+
+def list_snapshot_providers() -> list[str]:
+    with _SNAPSHOT_LOCK:
+        return sorted(_SNAPSHOT_PROVIDERS.keys())
+
+
+def _normalize_json(value: Any) -> Any:
+    """Convert project types into plain JSON values."""
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+
+    if isinstance(value, (datetime, date)):
+        return value.isoformat()
+
+    if hasattr(value, "value") and isinstance(getattr(value, "value"), str):
+        return getattr(value, "value")
+
+    if hasattr(value, "to_dict") and callable(getattr(value, "to_dict")):
+        return _normalize_json(value.to_dict())
+
+    if isinstance(value, dict):
+        return {str(k): _normalize_json(v) for k, v in value.items()}
+
+    if isinstance(value, (list, tuple, set)):
+        return [_normalize_json(v) for v in value]
+
+    return str(value)
+
+
+def _build_runtime_snapshot(limit: int = 20) -> Dict[str, Any]:
+    """Best-effort runtime snapshot from OMS for lightweight dashboards."""
+    try:
+        from trading.oms import get_oms
+
+        oms = get_oms()
+        account = oms.get_account()
+        positions = oms.get_positions()
+        orders = oms.get_orders()
+        fills = oms.get_fills()
+    except Exception as exc:
+        return {"status": "unavailable", "reason": str(exc)}
+
+    trimmed_limit = max(1, min(int(limit), 200))
+    latest_orders = sorted(
+        orders,
+        key=lambda o: o.updated_at or o.created_at,
+        reverse=True,
+    )[:trimmed_limit]
+    latest_fills = sorted(
+        fills,
+        key=lambda f: f.timestamp,
+        reverse=True,
+    )[:trimmed_limit]
+
+    return {
+        "status": "ok",
+        "account": _normalize_json(account),
+        "positions": _normalize_json(list(positions.values())),
+        "active_orders": _normalize_json(latest_orders),
+        "recent_fills": _normalize_json(latest_fills),
+        "limits": {"records": trimmed_limit},
+    }
+
+
+class MetricsHandler(BaseHTTPRequestHandler):
+    """HTTP handler for metrics, health, and lightweight JSON snapshots."""
+
     timeout = 10
 
-    def log_message(self, format, *args) -> None:
-        """Silence default stdout logging — use our logger instead."""
-        log.debug(format, *args)
+    def log_message(self, fmt, *args) -> None:
+        log.debug(fmt, *args)
 
-    def _send_text(self, code: int, body: str, content_type: str = "text/plain") -> None:
-        """Helper to send a text response with security headers."""
+    def _api_key(self) -> str:
+        return os.environ.get("TRADING_HTTP_API_KEY", "").strip()
+
+    def _is_api_authorized(self, query: Dict[str, list[str]]) -> bool:
+        expected = self._api_key()
+        if not expected:
+            return True
+
+        from_header = self.headers.get("X-API-Key", "").strip()
+        if from_header and from_header == expected:
+            return True
+
+        from_query = (query.get("api_key", [""])[0] or "").strip()
+        return bool(from_query and from_query == expected)
+
+    def _send_text(
+        self,
+        code: int,
+        body: str,
+        content_type: str = "text/plain",
+    ) -> None:
         encoded = body.encode("utf-8")
         self.send_response(code)
         self.send_header("Content-Type", f"{content_type}; charset=utf-8")
         self.send_header("Content-Length", str(len(encoded)))
-        # FIX #3: Security headers
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
         self.end_headers()
         self.wfile.write(encoded)
 
+    def _send_json(self, code: int, payload: Dict[str, Any]) -> None:
+        body = json.dumps(payload, ensure_ascii=True, separators=(",", ":"))
+        self._send_text(code, body + "\n", content_type="application/json")
+
     def do_GET(self) -> None:  # noqa: N802
-        """Handle GET requests."""
-        if self.path == "/healthz":
+        parsed = urlparse(self.path)
+        path = parsed.path
+        query = parse_qs(parsed.query)
+
+        if path == "/healthz":
             self._send_text(200, "ok\n")
             return
 
-        if self.path == "/metrics":
+        if path == "/metrics":
             body = get_metrics().to_prometheus()
             self._send_text(
-                200, body,
+                200,
+                body,
                 content_type="text/plain; version=0.0.4",
             )
             return
 
+        if path.startswith("/api/v1/"):
+            if not self._is_api_authorized(query):
+                self._send_json(
+                    401,
+                    {"error": "unauthorized", "message": "Invalid or missing API key"},
+                )
+                return
+            self._handle_api(path, query)
+            return
+
         self._send_text(404, "Not Found\n")
 
-    # FIX #5: Explicitly reject other HTTP methods
+    def _handle_api(self, path: str, query: Dict[str, list[str]]) -> None:
+        if path == "/api/v1/providers":
+            self._send_json(
+                200,
+                {
+                    "providers": list_snapshot_providers(),
+                    "generated_at": datetime.now(UTC).isoformat(),
+                },
+            )
+            return
+
+        if path.startswith("/api/v1/snapshot/"):
+            name = path.rsplit("/", 1)[-1].strip()
+            with _SNAPSHOT_LOCK:
+                provider = _SNAPSHOT_PROVIDERS.get(name)
+            if provider is None:
+                self._send_json(
+                    404,
+                    {"error": "not_found", "message": f"Provider '{name}' not found"},
+                )
+                return
+
+            try:
+                payload = _normalize_json(provider())
+                self._send_json(
+                    200,
+                    {
+                        "provider": name,
+                        "snapshot": payload,
+                        "generated_at": datetime.now(UTC).isoformat(),
+                    },
+                )
+            except Exception as exc:
+                self._send_json(
+                    500,
+                    {"error": "provider_error", "message": str(exc), "provider": name},
+                )
+            return
+
+        if path == "/api/v1/dashboard":
+            try:
+                limit = int((query.get("limit", ["20"])[0] or "20"))
+            except ValueError:
+                limit = 20
+            self._send_json(
+                200,
+                {
+                    "snapshot": _build_runtime_snapshot(limit=limit),
+                    "generated_at": datetime.now(UTC).isoformat(),
+                },
+            )
+            return
+
+        self._send_json(404, {"error": "not_found", "message": "Unknown endpoint"})
+
     def do_POST(self) -> None:  # noqa: N802
         self._method_not_allowed()
 
@@ -64,26 +239,11 @@ class MetricsHandler(BaseHTTPRequestHandler):
     def _method_not_allowed(self) -> None:
         self._send_text(405, "Method Not Allowed\n")
 
+
 class MetricsServer:
-    """
-    FIX #1, #6: Managed metrics HTTP server with start/stop lifecycle.
+    """Managed metrics/API HTTP server with start/stop lifecycle."""
 
-    Usage:
-        server = MetricsServer(port=9090)
-        server.start()
-        # ... application runs ...
-        server.stop()
-
-    Or as context manager:
-        with MetricsServer(port=9090) as server:
-            # ... application runs ...
-    """
-
-    def __init__(
-        self,
-        port: int = 8000,
-        host: str = "127.0.0.1",  # FIX #2: Bind to localhost by default
-    ) -> None:
+    def __init__(self, port: int = 8000, host: str = "127.0.0.1") -> None:
         self._host = host
         self._port = port
         self._server: Optional[ThreadingHTTPServer] = None
@@ -91,15 +251,12 @@ class MetricsServer:
         self._started = False
 
     def start(self) -> None:
-        """Start the metrics server in a background thread."""
         if self._started:
             log.warning("MetricsServer already started")
             return
 
-        self._server = ThreadingHTTPServer(
-            (self._host, self._port), MetricsHandler
-        )
-        # FIX #4: Set socket timeout to prevent slowloris
+        self._server = ThreadingHTTPServer((self._host, self._port), MetricsHandler)
+        self._port = int(self._server.server_port)
         self._server.timeout = 10
 
         self._thread = threading.Thread(
@@ -112,7 +269,6 @@ class MetricsServer:
         log.info("Metrics server started on %s:%d", self._host, self._port)
 
     def stop(self) -> None:
-        """Stop the metrics server gracefully."""
         if not self._started:
             return
 
@@ -147,20 +303,9 @@ class MetricsServer:
         state = "running" if self._started else "stopped"
         return f"MetricsServer({self._host}:{self._port}, {state})"
 
-# Convenience function — backward compatible but improved
+
 def serve(port: int = 8000, host: str = "127.0.0.1") -> MetricsServer:
-    """
-    Start metrics server and return the server object.
-
-    FIX #1: No longer blocks the caller. Returns server for lifecycle management.
-
-    Args:
-        port: Port to bind to (default: 8000)
-        host: Host to bind to (default: 127.0.0.1)
-
-    Returns:
-        MetricsServer instance (already started)
-    """
+    """Start metrics server and return a running server instance."""
     server = MetricsServer(port=port, host=host)
     server.start()
     return server

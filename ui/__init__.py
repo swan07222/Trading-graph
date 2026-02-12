@@ -35,6 +35,11 @@ try:
 except ImportError:
     NewsPanel = None
 
+try:
+    from .strategy_marketplace_dialog import StrategyMarketplaceDialog
+except ImportError:
+    StrategyMarketplaceDialog = None
+
 __all__ = [
     "MainApp",
     "run_app",
@@ -47,4 +52,5 @@ __all__ = [
     "AutoLearnDialog",
     "show_auto_learn_dialog",
     "NewsPanel",
+    "StrategyMarketplaceDialog",
 ]

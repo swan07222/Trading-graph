@@ -139,6 +139,9 @@ class AutoLearnWorker(QThread):
                 "lookback_bars": lookback_bars,
                 "cycle_interval_seconds": cycle_interval_seconds,
                 "incremental": incremental,
+                "priority_stock_codes": list(
+                    self.config.get("priority_stock_codes", []) or []
+                ),
             }
 
             self._learner_thread = threading.Thread(
@@ -440,7 +443,7 @@ class AutoLearnDialog(QDialog):
     - Train by Search: user-selected stocks (new)
     """
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, seed_stock_codes: Optional[List[str]] = None):
         super().__init__(parent)
         self.setWindowTitle("🤖 Auto Learning")
         self.setMinimumSize(700, 540)
@@ -454,6 +457,9 @@ class AutoLearnDialog(QDialog):
         self._is_running = False
         self._active_mode = ""  # "auto" or "targeted"
         self._targeted_stock_codes: List[str] = []
+        self._seed_stock_codes: List[str] = [
+            str(c).strip() for c in (seed_stock_codes or []) if str(c).strip()
+        ]
         self._validation_request_id = 0
 
         # Last validated stock (for Add button)
@@ -462,6 +468,7 @@ class AutoLearnDialog(QDialog):
         self._last_validated_bars = 0
 
         self._setup_ui()
+        self._load_seed_stocks()
         self._apply_style()
 
     # =========================================================================
@@ -619,6 +626,16 @@ class AutoLearnDialog(QDialog):
         )
         self.incremental_check.setChecked(False)
         settings_layout.addWidget(self.incremental_check, 4, 0, 1, 2)
+
+        self.use_session_cache_check = QCheckBox(
+            "Include stocks captured from real-time UI session"
+        )
+        self.use_session_cache_check.setChecked(True)
+        settings_layout.addWidget(self.use_session_cache_check, 5, 0, 1, 2)
+
+        self.session_seed_label = QLabel("")
+        self.session_seed_label.setStyleSheet("color: #8b949e; font-size: 11px;")
+        settings_layout.addWidget(self.session_seed_label, 6, 0, 1, 2)
 
         settings_group.setLayout(settings_layout)
         layout.addWidget(settings_group)
@@ -1068,6 +1085,51 @@ class AutoLearnDialog(QDialog):
                 "color: #3fb950; font-size: 12px;"
             )
 
+    def _load_seed_stocks(self):
+        """Preload targeted list from session-captured symbols."""
+        if not self._seed_stock_codes:
+            self.session_seed_label.setText("Session seed stocks: 0")
+            return
+
+        added = 0
+        for code in self._seed_stock_codes:
+            if code in self._targeted_stock_codes:
+                continue
+            self._targeted_stock_codes.append(code)
+            self._add_stock_to_list_widget(code, "Session cache", 0)
+            added += 1
+
+        self._update_stock_count()
+        self.session_seed_label.setText(
+            f"Session seed stocks: {len(self._seed_stock_codes)} (added {added})"
+        )
+
+    def _collect_priority_codes(self, mode: str = "auto") -> List[str]:
+        codes = list(self._seed_stock_codes)
+        try:
+            from data.session_cache import get_session_bar_cache
+            cache = get_session_bar_cache()
+            interval = "1m"
+            if str(mode).lower() == "targeted":
+                try:
+                    interval = self.target_interval_combo.currentText().strip().lower()
+                except Exception:
+                    interval = "1m"
+            live_codes = cache.get_recent_symbols(interval=interval, min_rows=10)
+            codes.extend(live_codes)
+        except Exception:
+            pass
+
+        dedup = []
+        seen = set()
+        for code in codes:
+            c = str(code).strip()
+            if not c or c in seen:
+                continue
+            seen.add(c)
+            dedup.append(c)
+        return dedup
+
     # =========================================================================
     # AUTO LEARN START/STOP
     # =========================================================================
@@ -1096,6 +1158,15 @@ class AutoLearnDialog(QDialog):
             "epochs": self.epochs_spin.value(),
             "incremental": self.incremental_check.isChecked(),
         }
+
+        if self.use_session_cache_check.isChecked():
+            priority_codes = self._collect_priority_codes(mode="auto")
+            if priority_codes:
+                config["priority_stock_codes"] = priority_codes
+                self._log(
+                    f"Session cache boost: {len(priority_codes)} priority stocks",
+                    "info",
+                )
 
         # VPN mode is more fragile for large Yahoo-heavy batches.
         try:
@@ -1269,6 +1340,7 @@ class AutoLearnDialog(QDialog):
                 self.epochs_spin.setEnabled(False)
                 self.discover_check.setEnabled(False)
                 self.incremental_check.setEnabled(False)
+                self.use_session_cache_check.setEnabled(False)
 
             elif mode == "targeted":
                 self.auto_stop_btn.setEnabled(False)
@@ -1296,6 +1368,7 @@ class AutoLearnDialog(QDialog):
             self.epochs_spin.setEnabled(True)
             self.discover_check.setEnabled(True)
             self.incremental_check.setEnabled(True)
+            self.use_session_cache_check.setEnabled(True)
 
             self.search_input.setEnabled(True)
             self.search_btn.setEnabled(True)
@@ -1628,8 +1701,8 @@ class AutoLearnDialog(QDialog):
 
         super().closeEvent(event)
 
-def show_auto_learn_dialog(parent=None):
+def show_auto_learn_dialog(parent=None, seed_stock_codes: Optional[List[str]] = None):
     """Show the auto-learn dialog — convenience function."""
-    dialog = AutoLearnDialog(parent)
+    dialog = AutoLearnDialog(parent, seed_stock_codes=seed_stock_codes)
     dialog.exec()
     return dialog

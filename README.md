@@ -235,12 +235,57 @@ Example script:
 
 These script outputs are blended into final signal scoring with bounded impact.
 
-## 12) Chart Quick Trade UX
+## 12) Strategy Marketplace (Professional)
+
+Marketplace files:
+- `strategies/marketplace.json`: strategy catalog metadata
+- `strategies/enabled.json`: enabled strategy IDs
+
+UI:
+- Open `AI Model -> Strategy Marketplace`
+- Review integrity status (`ok/mismatch/missing`)
+- Enable/disable and save active strategy set
+
+## 13) Chart Quick Trade UX
 
 In the desktop chart:
 - Right-click chart to open quick-trade menu
 - Choose `Buy @ price` or `Sell @ price`
 - Enter quantity and submit through the same risk/permission checks as normal execution
+
+## 14) Real-Time Session Cache For Auto-Learn
+
+During real-time feed updates, finalized bars are persisted to:
+- `data_storage/session_bars/*.csv`
+
+Auto-learn dialog can inject these session symbols as priority training targets,
+so pressing `Start Auto Learning` can immediately train with data captured during trading.
+
+## 15) Local Web API Bridge (Dashboard/Mobile Companion)
+
+The metrics server now also exposes lightweight JSON endpoints for local integrations.
+
+Start with:
+```bash
+set TRADING_METRICS_PORT=9090
+set TRADING_HTTP_API_KEY=your-secret-key
+python main.py
+```
+
+Endpoints:
+- `GET /healthz`
+- `GET /metrics`
+- `GET /api/v1/providers`
+- `GET /api/v1/snapshot/<provider>`
+- `GET /api/v1/dashboard?limit=20`
+
+Authentication:
+- If `TRADING_HTTP_API_KEY` is set, `/api/v1/*` requires header `X-API-Key: <key>`
+  or query parameter `api_key=<key>`.
+
+Extensibility:
+- Register custom snapshot providers via:
+  `utils.metrics_http.register_snapshot_provider(name, callable)`
 
 Run full tests:
 ```bash

@@ -1,0 +1,126 @@
+from __future__ import annotations
+
+import hashlib
+import json
+from pathlib import Path
+from typing import Dict, List, Optional
+
+from config.settings import CONFIG
+from utils.logger import get_logger
+
+log = get_logger(__name__)
+
+
+class StrategyMarketplace:
+    """Local strategy catalog with enable/disable state and integrity checks."""
+
+    def __init__(self, strategies_dir: Optional[Path] = None) -> None:
+        base = Path(getattr(CONFIG, "base_dir", Path(".")))
+        self._dir = Path(strategies_dir) if strategies_dir else (base / "strategies")
+        self._manifest_path = self._dir / "marketplace.json"
+        self._enabled_path = self._dir / "enabled.json"
+        self._dir.mkdir(parents=True, exist_ok=True)
+
+    @property
+    def manifest_path(self) -> Path:
+        return self._manifest_path
+
+    @property
+    def enabled_path(self) -> Path:
+        return self._enabled_path
+
+    def _read_json(self, path: Path, default):
+        try:
+            if not path.exists():
+                return default
+            return json.loads(path.read_text(encoding="utf-8"))
+        except Exception as e:
+            log.warning("Failed reading %s: %s", path.name, e)
+            return default
+
+    def _write_json(self, path: Path, data: dict) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps(data, indent=2, ensure_ascii=False, sort_keys=True),
+            encoding="utf-8",
+        )
+
+    def _file_hash(self, path: Path) -> str:
+        h = hashlib.sha256()
+        with path.open("rb") as f:
+            for chunk in iter(lambda: f.read(8192), b""):
+                h.update(chunk)
+        return h.hexdigest()
+
+    def list_entries(self) -> List[Dict]:
+        raw = self._read_json(self._manifest_path, {"strategies": []})
+        items = list(raw.get("strategies", []) or [])
+        enabled_set = set(self.get_enabled_ids())
+
+        out: List[Dict] = []
+        for entry in items:
+            sid = str(entry.get("id", "")).strip()
+            file_name = str(entry.get("file", "")).strip()
+            if not sid or not file_name:
+                continue
+            file_path = self._dir / file_name
+            installed = file_path.exists()
+            expected_hash = str(entry.get("sha256", "")).strip().lower()
+            integrity = "unknown"
+            if installed:
+                if expected_hash:
+                    try:
+                        integrity = "ok" if self._file_hash(file_path) == expected_hash else "mismatch"
+                    except Exception:
+                        integrity = "error"
+                else:
+                    integrity = "unverified"
+            else:
+                integrity = "missing"
+
+            item = dict(entry)
+            item["id"] = sid
+            item["file"] = file_name
+            item["installed"] = installed
+            item["integrity"] = integrity
+            item["enabled"] = sid in enabled_set
+            out.append(item)
+        return out
+
+    def get_enabled_ids(self) -> List[str]:
+        data = self._read_json(self._enabled_path, {})
+        enabled = data.get("enabled")
+        if isinstance(enabled, list):
+            return [str(x).strip() for x in enabled if str(x).strip()]
+
+        # Fallback to defaults from manifest
+        defaults: List[str] = []
+        for item in self._read_json(self._manifest_path, {"strategies": []}).get("strategies", []):
+            sid = str(item.get("id", "")).strip()
+            if sid and bool(item.get("enabled_by_default", False)):
+                defaults.append(sid)
+        return defaults
+
+    def save_enabled_ids(self, strategy_ids: List[str]) -> None:
+        clean = []
+        seen = set()
+        for sid in strategy_ids:
+            s = str(sid).strip()
+            if not s or s in seen:
+                continue
+            seen.add(s)
+            clean.append(s)
+        self._write_json(self._enabled_path, {"enabled": clean})
+
+    def get_enabled_files(self) -> List[Path]:
+        enabled = set(self.get_enabled_ids())
+        files: List[Path] = []
+        for item in self.list_entries():
+            if item["id"] not in enabled:
+                continue
+            if not item.get("installed", False):
+                continue
+            if item.get("integrity") == "mismatch":
+                continue
+            files.append(self._dir / str(item["file"]))
+        return files

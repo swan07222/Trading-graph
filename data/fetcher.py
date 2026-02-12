@@ -17,6 +17,7 @@ import requests
 from config.settings import CONFIG
 from data.cache import get_cache
 from data.database import get_database
+from data.session_cache import get_session_bar_cache
 from core.exceptions import DataFetchError, DataSourceUnavailableError
 from utils.logger import get_logger
 from utils.helpers import to_float, to_int
@@ -1355,18 +1356,26 @@ class DataFetcher:
                 if len(cached_df) >= min(count, 100):
                     return cached_df.tail(count)
 
+        session_df = self._get_session_history(
+            symbol=str(inst.get("symbol", code)),
+            interval=interval,
+            bars=count,
+        )
+        if not session_df.empty and len(session_df) >= min(count, 60):
+            return self._cache_tail(cache_key, session_df, count)
+
         is_cn_equity = (
             inst.get("market") == "CN" and inst.get("asset") == "EQUITY"
         )
 
         if is_cn_equity and interval != "1d":
             return self._get_history_cn_intraday(
-                inst, count, fetch_days, interval, cache_key, offline
+                inst, count, fetch_days, interval, cache_key, offline, session_df
             )
 
         if is_cn_equity and interval == "1d":
             return self._get_history_cn_daily(
-                inst, count, fetch_days, cache_key, offline, update_db
+                inst, count, fetch_days, cache_key, offline, update_db, session_df
             )
 
         # Non-CN instrument
@@ -1379,7 +1388,7 @@ class DataFetcher:
         )
         if df.empty:
             return pd.DataFrame()
-        out = df.tail(count)
+        out = self._merge_parts(df, session_df).tail(count)
         self._cache.set(cache_key, out)
         return out
 
@@ -1391,6 +1400,7 @@ class DataFetcher:
         interval: str,
         cache_key: str,
         offline: bool,
+        session_df: Optional[pd.DataFrame] = None,
     ) -> pd.DataFrame:
         """Handle CN equity intraday intervals."""
         code6 = str(inst["symbol"]).zfill(6)
@@ -1410,7 +1420,10 @@ class DataFetcher:
                 )
             )
 
-        merged = self._merge_parts(db_df, online_df) if not offline else db_df
+        if offline:
+            merged = self._merge_parts(db_df, session_df)
+        else:
+            merged = self._merge_parts(db_df, session_df, online_df)
 
         if merged.empty:
             return pd.DataFrame()
@@ -1430,6 +1443,7 @@ class DataFetcher:
         cache_key: str,
         offline: bool,
         update_db: bool,
+        session_df: Optional[pd.DataFrame] = None,
     ) -> pd.DataFrame:
         """Handle CN equity daily interval."""
         code6 = str(inst["symbol"]).zfill(6)
@@ -1441,17 +1455,20 @@ class DataFetcher:
             len(db_df) >= count
             and self._db_is_fresh_enough(code6, max_lag_days=3)
         ):
-            return self._cache_tail(cache_key, db_df, count)
+            return self._cache_tail(
+                cache_key, self._merge_parts(db_df, session_df), count
+            )
 
         if offline:
-            return db_df.tail(count) if not db_df.empty else pd.DataFrame()
+            merged_offline = self._merge_parts(db_df, session_df)
+            return merged_offline.tail(count) if not merged_offline.empty else pd.DataFrame()
 
         online_df = self._clean_dataframe(
             self._fetch_from_sources_instrument(
                 inst, days=fetch_days, interval="1d"
             )
         )
-        merged = self._merge_parts(db_df, online_df)
+        merged = self._merge_parts(db_df, session_df, online_df)
         if merged.empty:
             return pd.DataFrame()
 
@@ -1474,6 +1491,18 @@ class DataFetcher:
         out = df.tail(count)
         self._cache.set(cache_key, out)
         return out
+
+    def _get_session_history(
+        self, symbol: str, interval: str, bars: int,
+    ) -> pd.DataFrame:
+        try:
+            cache = get_session_bar_cache()
+            return self._clean_dataframe(
+                cache.read_history(symbol=symbol, interval=interval, bars=bars)
+            )
+        except Exception as e:
+            log.debug("Session cache lookup failed: %s", e)
+            return pd.DataFrame()
 
     def get_realtime(
         self, code: str, instrument: Optional[dict] = None

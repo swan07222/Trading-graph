@@ -13,6 +13,7 @@ def __getattr__(name: str):
         'DataFeed', 'PollingFeed', 'AggregatedFeed',
         'FeedManager', 'get_feed_manager',
     }
+    _SESSION = {'SessionBarCache', 'get_session_bar_cache'}
     _VALIDATORS = {
         'ValidationResult', 'StockCodeValidator', 'OHLCVValidator',
         'FeatureValidator', 'OrderValidator',
@@ -50,6 +51,10 @@ def __getattr__(name: str):
         )
         return locals()[name]
 
+    if name in _SESSION:
+        from .session_cache import SessionBarCache, get_session_bar_cache
+        return locals()[name]
+
     if name in _VALIDATORS:
         from .validators import (
             ValidationResult, StockCodeValidator, OHLCVValidator,
@@ -79,6 +84,8 @@ __all__ = [
     'AggregatedFeed',
     'FeedManager',
     'get_feed_manager',
+    'SessionBarCache',
+    'get_session_bar_cache',
     'ValidationResult',
     'StockCodeValidator',
     'OHLCVValidator',
