@@ -1,0 +1,11 @@
+{
+  "version": "20260212_042357",
+  "saved_at": "2026-02-12T04:23:57.013855",
+  "ensemble_path": "ensemble_1m_30.pt",
+  "scaler_path": "scaler_1m_30.pkl",
+  "input_size": 47,
+  "num_models": 5,
+  "temperature": 2.5,
+  "interval": "1m",
+  "prediction_horizon": 30
+}

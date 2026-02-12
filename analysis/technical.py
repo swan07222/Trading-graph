@@ -59,6 +59,21 @@ class TechnicalAnalyzer:
 
     def __init__(self):
         self.min_data_points = 60
+        self._indicator_names = (
+            "sma_5", "sma_10", "sma_20", "sma_50", "sma_200",
+            "ema_9", "ema_21", "ema_55",
+            "macd", "macd_signal", "macd_hist", "macd_hist_prev",
+            "rsi_14", "rsi_7", "stoch_k", "stoch_d",
+            "bb_upper", "bb_middle", "bb_lower", "bb_pct", "bb_width",
+            "adx", "di_plus", "di_minus",
+            "atr_14", "mfi", "cci", "williams_r",
+            "roc_10", "obv", "vwap",
+            "volume_ratio", "close", "prev_close", "change_pct",
+        )
+
+    def list_supported_indicators(self) -> List[str]:
+        """Return a stable list of supported indicator names."""
+        return list(self._indicator_names)
 
     def analyze(self, df: pd.DataFrame) -> TechnicalSummary:
         """Perform complete technical analysis"""
@@ -96,6 +111,9 @@ class TechnicalAnalyzer:
         indicators['sma_10'] = close.rolling(10).mean().iloc[-1]
         indicators['sma_20'] = close.rolling(20).mean().iloc[-1]
         indicators['sma_50'] = close.rolling(50).mean().iloc[-1]
+        indicators['ema_9'] = close.ewm(span=9, adjust=False).mean().iloc[-1]
+        indicators['ema_21'] = close.ewm(span=21, adjust=False).mean().iloc[-1]
+        indicators['ema_55'] = close.ewm(span=55, adjust=False).mean().iloc[-1]
 
         if len(df) >= 200:
             indicators['sma_200'] = close.rolling(200).mean().iloc[-1]
@@ -120,10 +138,14 @@ class TechnicalAnalyzer:
         indicators['bb_middle'] = bb.bollinger_mavg().iloc[-1]
         indicators['bb_lower'] = bb.bollinger_lband().iloc[-1]
         indicators['bb_pct'] = bb.bollinger_pband().iloc[-1]
+        indicators['bb_width'] = bb.bollinger_wband().iloc[-1]
 
         indicators['adx'] = ta.trend.adx(high, low, close).iloc[-1]
         indicators['di_plus'] = ta.trend.adx_pos(high, low, close).iloc[-1]
         indicators['di_minus'] = ta.trend.adx_neg(high, low, close).iloc[-1]
+        indicators['atr_14'] = ta.volatility.average_true_range(
+            high, low, close, window=14
+        ).iloc[-1]
 
         vol_ma20 = volume.rolling(20).mean().iloc[-1]
         indicators['volume_ratio'] = volume.iloc[-1] / vol_ma20 if vol_ma20 > 0 else 1
@@ -131,6 +153,14 @@ class TechnicalAnalyzer:
         indicators['mfi'] = ta.volume.money_flow_index(high, low, close, volume).iloc[-1]
 
         indicators['cci'] = ta.trend.cci(high, low, close).iloc[-1]
+        indicators['williams_r'] = ta.momentum.williams_r(
+            high, low, close, lbp=14
+        ).iloc[-1]
+        indicators['roc_10'] = ta.momentum.roc(close, window=10).iloc[-1]
+        indicators['obv'] = ta.volume.on_balance_volume(close, volume).iloc[-1]
+        indicators['vwap'] = ta.volume.volume_weighted_average_price(
+            high, low, close, volume, window=20
+        ).iloc[-1]
 
         indicators['close'] = close.iloc[-1]
         indicators['prev_close'] = close.iloc[-2] if len(df) > 1 else close.iloc[-1]
