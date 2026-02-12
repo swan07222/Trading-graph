@@ -2,7 +2,7 @@
 def __getattr__(name: str):
     """
     Lazy import dispatcher.
-    
+
     Allows `from trading import SimulatorBroker` etc. to work
     without eagerly importing every submodule at package load time.
     This prevents a broken dependency in one submodule (e.g., executor
@@ -73,38 +73,30 @@ def __getattr__(name: str):
 
     raise AttributeError(f"module 'trading' has no attribute {name!r}")
 
-
 __all__ = [
-    # Broker
     'BrokerInterface',
     'SimulatorBroker',
     'THSBroker',
     'create_broker',
-    # OMS
     'Order',
     'Fill',
     'Position',
     'Account',
     'OrderManagementSystem',
     'get_oms',
-    # Risk
     'RiskManager',
     'get_risk_manager',
-    # Kill Switch
     'KillSwitch',
     'CircuitBreakerType',
     'get_kill_switch',
-    # Health
     'HealthMonitor',
     'HealthStatus',
     'get_health_monitor',
-    # Alerts
     'AlertManager',
     'Alert',
     'AlertPriority',
     'AlertCategory',
     'get_alert_manager',
-    # Other
     'Portfolio',
     'SignalGenerator',
     'ExecutionEngine',

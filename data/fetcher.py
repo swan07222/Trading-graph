@@ -19,13 +19,9 @@ from data.cache import get_cache
 from data.database import get_database
 from core.exceptions import DataFetchError, DataSourceUnavailableError
 from utils.logger import get_logger
+from utils.helpers import to_float, to_int
 
 log = get_logger(__name__)
-
-
-# ---------------------------------------------------------------------------
-# Constants
-# ---------------------------------------------------------------------------
 
 # Maximum calendar days each interval can fetch (API limits)
 INTERVAL_MAX_DAYS: Dict[str, int] = {
@@ -41,7 +37,6 @@ INTERVAL_MAX_DAYS: Dict[str, int] = {
     "1mo": 10_000,
 }
 
-# Approximate bars per trading day for each interval
 BARS_PER_DAY: Dict[str, float] = {
     "1m": 240,
     "2m": 120,
@@ -64,7 +59,6 @@ _MICRO_CACHE_TTL: float = 0.25
 # Maximum staleness (seconds) for last-good quote fallback
 _LAST_GOOD_MAX_AGE: float = 3.0
 
-# Tencent batch chunk size
 _TENCENT_CHUNK_SIZE: int = 120
 
 # Default socket timeout for AkShare calls (seconds)
@@ -73,39 +67,9 @@ _AKSHARE_SOCKET_TIMEOUT: int = 15
 # SpotCache default TTL (seconds)
 _SPOT_CACHE_TTL: float = 30.0
 
-
-# ---------------------------------------------------------------------------
-# Utility helpers (module-level, not nested)
-# ---------------------------------------------------------------------------
-
-def _to_float(x, default: float = 0.0) -> float:
-    """Safely convert a value to float."""
-    try:
-        if x is None or (isinstance(x, float) and math.isnan(x)):
-            return float(default)
-        if pd.isna(x):
-            return float(default)
-        return float(x)
-    except (ValueError, TypeError):
-        return float(default)
-
-
-def _to_int(x, default: int = 0) -> int:
-    """Safely convert a value to int."""
-    try:
-        if x is None or (isinstance(x, float) and math.isnan(x)):
-            return int(default)
-        if pd.isna(x):
-            return int(default)
-        return int(float(x))
-    except (ValueError, TypeError):
-        return int(default)
-
-
 def _is_offline() -> bool:
     """Check TRADING_OFFLINE environment variable."""
     return str(os.environ.get("TRADING_OFFLINE", "0")).lower() in ("1", "true", "yes")
-
 
 def bars_to_days(bars: int, interval: str) -> int:
     """Convert bar count to calendar days needed, respecting API limits."""
@@ -113,16 +77,11 @@ def bars_to_days(bars: int, interval: str) -> int:
     bpd = BARS_PER_DAY.get(interval, 1.0)
     if bpd <= 0:
         bpd = 1.0
-    trading_days = max(1, int(bars / bpd))
+    trading_days = max(1, int(math.ceil(bars / bpd)))
     # ~1.5x multiplier converts trading days → calendar days, +2 for safety
     calendar_days = int(trading_days * 1.5) + 2
     max_days = INTERVAL_MAX_DAYS.get(interval, 10_000)
     return min(calendar_days, max_days)
-
-
-# ---------------------------------------------------------------------------
-# Retry decorator
-# ---------------------------------------------------------------------------
 
 def retry(max_attempts: int = 3, delay: float = 1.0, backoff: float = 2.0):
     """Retry decorator with exponential backoff."""
@@ -146,11 +105,6 @@ def retry(max_attempts: int = 3, delay: float = 1.0, backoff: float = 2.0):
             raise last_error  # type: ignore[misc]
         return wrapper
     return decorator
-
-
-# ---------------------------------------------------------------------------
-# Data classes
-# ---------------------------------------------------------------------------
 
 @dataclass
 class Quote:
@@ -179,7 +133,6 @@ class Quote:
         if self.timestamp is None:
             self.timestamp = datetime.now()
 
-
 @dataclass
 class DataSourceStatus:
     """Health / telemetry for a single data source."""
@@ -192,11 +145,6 @@ class DataSourceStatus:
     consecutive_errors: int = 0
     avg_latency_ms: float = 0.0
     disabled_until: Optional[datetime] = None
-
-
-# ---------------------------------------------------------------------------
-# Abstract data source
-# ---------------------------------------------------------------------------
 
 class DataSource:
     """Abstract data source with error tracking and circuit-breaker."""
@@ -224,8 +172,6 @@ class DataSource:
         self._latencies: List[float] = []
         self._lock = threading.Lock()
 
-    # -- availability --------------------------------------------------------
-
     def is_available(self) -> bool:
         with self._lock:
             if not self.status.available:
@@ -249,8 +195,6 @@ class DataSource:
         if self.needs_vpn and not env.is_vpn_active:
             return False
         return True
-
-    # -- telemetry -----------------------------------------------------------
 
     def _record_success(self, latency_ms: float = 0.0) -> None:
         with self._lock:
@@ -284,8 +228,6 @@ class DataSource:
                     f"({self.status.consecutive_errors} consecutive errors)"
                 )
 
-    # -- interface (override in subclasses) ----------------------------------
-
     def get_history(self, code: str, days: int) -> pd.DataFrame:
         raise NotImplementedError
 
@@ -296,11 +238,6 @@ class DataSource:
 
     def get_realtime(self, code: str) -> Optional[Quote]:
         return None
-
-
-# ---------------------------------------------------------------------------
-# SpotCache (EastMoney snapshot via AkShare)
-# ---------------------------------------------------------------------------
 
 class SpotCache:
     """Thread-safe cached A-share spot data with TTL."""
@@ -339,7 +276,6 @@ class SpotCache:
         if not env.eastmoney_ok:
             return stale
 
-        # Serialize external calls to avoid hammering EastMoney
         with self._rate_lock:
             # Re-check after acquiring rate lock (another thread may have refreshed)
             with self._lock:
@@ -398,21 +334,19 @@ class SpotCache:
         return {
             "code": symbol,
             "name": str(r.get("名称", "") or ""),
-            "price": _to_float(r.get("最新价", 0)),
-            "open": _to_float(r.get("今开", 0)),
-            "high": _to_float(r.get("最高", 0)),
-            "low": _to_float(r.get("最低", 0)),
-            "close": _to_float(r.get("昨收", 0)),
-            "volume": _to_int(r.get("成交量", 0)),
-            "amount": _to_float(r.get("成交额", 0)),
-            "change": _to_float(r.get("涨跌额", 0)),
-            "change_pct": _to_float(r.get("涨跌幅", 0)),
+            "price": to_float(r.get("最新价", 0)),
+            "open": to_float(r.get("今开", 0)),
+            "high": to_float(r.get("最高", 0)),
+            "low": to_float(r.get("最低", 0)),
+            "close": to_float(r.get("昨收", 0)),
+            "volume": to_int(r.get("成交量", 0)),
+            "amount": to_float(r.get("成交额", 0)),
+            "change": to_float(r.get("涨跌额", 0)),
+            "change_pct": to_float(r.get("涨跌幅", 0)),
         }
-
 
 _spot_cache: Optional[SpotCache] = None
 _spot_cache_lock = threading.Lock()
-
 
 def get_spot_cache() -> SpotCache:
     """Module-level singleton for SpotCache."""
@@ -423,17 +357,12 @@ def get_spot_cache() -> SpotCache:
                 _spot_cache = SpotCache()
     return _spot_cache
 
-
-# ---------------------------------------------------------------------------
-# AkShare source
-# ---------------------------------------------------------------------------
-
 class AkShareSource(DataSource):
     """AkShare data source — works ONLY on China direct IP."""
 
     name = "akshare"
     priority = 1
-    needs_china_direct = False
+    needs_china_direct = True
 
     _AKSHARE_PERIOD_MAP = {"1d": "daily", "1wk": "weekly", "1mo": "monthly"}
     _AKSHARE_MIN_MAP = {"1m": "1", "5m": "5", "15m": "15", "30m": "30", "60m": "60"}
@@ -547,7 +476,6 @@ class AkShareSource(DataSource):
         old_timeout = socket.getdefaulttimeout()
         socket.setdefaulttimeout(self._get_effective_timeout())  # ← CHANGED
         try:
-            # --- intraday ---
             if interval in self._AKSHARE_MIN_MAP:
                 time.sleep(0.5)
                 df = self._ak.stock_zh_a_hist_min_em(
@@ -562,7 +490,6 @@ class AkShareSource(DataSource):
                 self._record_success(latency)
                 return df
 
-            # --- daily / weekly / monthly ---
             period = self._AKSHARE_PERIOD_MAP.get(interval, "daily")
             end_date = datetime.now().strftime("%Y%m%d")
             max_cal_days = INTERVAL_MAX_DAYS.get(interval, 10_000)
@@ -594,8 +521,6 @@ class AkShareSource(DataSource):
         except Exception:
             return pd.DataFrame()
 
-    # -- private helpers -----------------------------------------------------
-
     def _normalize_daily(self, df: pd.DataFrame) -> pd.DataFrame:
         df = df.rename(columns=self._COLUMN_MAP)
         df["date"] = pd.to_datetime(df["date"])
@@ -626,19 +551,18 @@ class AkShareSource(DataSource):
             df = df[df["volume"].fillna(0) >= 0]
         return df
 
-
-# ---------------------------------------------------------------------------
-# Yahoo Finance source
-# ---------------------------------------------------------------------------
-
 class YahooSource(DataSource):
     """Yahoo Finance — works ONLY through VPN (foreign IP)."""
 
     name = "yahoo"
     priority = 1
-    needs_vpn = False
+    needs_vpn = True
+    _CB_ERROR_THRESHOLD = 20
+    _CB_MIN_COOLDOWN = 20
+    _CB_MAX_COOLDOWN = 90
 
     _SUFFIX_MAP = {"6": ".SS", "0": ".SZ", "3": ".SZ"}
+    _SUPPORTED_PREFIXES = ("0", "3", "6")
 
     def __init__(self):
         super().__init__()
@@ -662,12 +586,25 @@ class YahooSource(DataSource):
         """Yahoo should be tried if it's reachable."""
         from core.network import get_network_env
         env = get_network_env()
-        # Try Yahoo if it was reachable, OR if we're not on China direct
-        # (where it's usually blocked)
-        return bool(getattr(env, "yahoo_ok", False)) or not env.is_china_direct
+        # Prefer Yahoo only when VPN/foreign routing is active.
+        return bool(env.is_vpn_active) or (
+            bool(getattr(env, "yahoo_ok", False)) and not env.is_china_direct
+        )
+
+    def _record_error(self, error: str) -> None:
+        # Avoid tripping circuit-breaker too fast on expected Yahoo no-data cases.
+        msg = str(error).lower()
+        if "no data" in msg or "returned empty" in msg:
+            with self._lock:
+                self.status.last_error = str(error)
+                self.status.error_count += 1
+            return
+        super()._record_error(error)
 
     def _to_yahoo_symbol(self, code: str) -> str:
         code = str(code).zfill(6)
+        if not code or code[0] not in self._SUPPORTED_PREFIXES:
+            return ""
         suffix = self._SUFFIX_MAP.get(code[0], ".SS")
         return f"{code}{suffix}"
 
@@ -731,7 +668,10 @@ class YahooSource(DataSource):
             latency = (time.time() - start_t) * 1000
             self._record_success(latency)
             log.debug(f"Yahoo OK: {yahoo_symbol} ({interval}): {len(df)} bars")
-            return df.tail(days)
+            # For intraday, `days` is calendar days, not bar count.
+            # Trimming by days here can collapse data to a handful of rows
+            # and make downstream min-bar checks fail.
+            return df
 
         except Exception as exc:
             self._record_error(str(exc))
@@ -764,11 +704,11 @@ class YahooSource(DataSource):
             self._record_error(str(exc))
             return None
 
-    # -- private helpers -----------------------------------------------------
-
     def _resolve_symbol(self, inst: dict) -> Optional[str]:
         if inst.get("market") == "CN" and inst.get("asset") == "EQUITY":
             code6 = str(inst.get("symbol", "")).zfill(6)
+            if not code6 or code6[0] not in self._SUPPORTED_PREFIXES:
+                return None
             return self._to_yahoo_symbol(code6)
         return inst.get("yahoo") or inst.get("symbol") or None
 
@@ -788,11 +728,6 @@ class YahooSource(DataSource):
         if "volume" in df.columns:
             df = df[df["volume"] > 0]
         return df
-
-
-# ---------------------------------------------------------------------------
-# Tencent real-time quotes
-# ---------------------------------------------------------------------------
 
 class TencentQuoteSource(DataSource):
     """Tencent quotes — works from ANY IP (China or foreign)."""
@@ -890,11 +825,6 @@ class TencentQuoteSource(DataSource):
     ) -> pd.DataFrame:
         return pd.DataFrame()
 
-
-# ---------------------------------------------------------------------------
-# Main DataFetcher
-# ---------------------------------------------------------------------------
-
 class DataFetcher:
     """
     High-performance data fetcher with automatic network-aware source
@@ -921,9 +851,8 @@ class DataFetcher:
         self._rt_single_microcache: Dict[str, Dict[str, object]] = {}
 
         self._rate_lock = threading.Lock()
+        self._last_network_mode: Optional[bool] = None
         self._init_sources()
-
-    # -- source initialization -----------------------------------------------
 
     def _init_sources(self) -> None:
         self._all_sources = []
@@ -984,66 +913,111 @@ class DataFetcher:
         except Exception as exc:
             log.warning(f"Failed to init localdb source: {exc}")
 
-    # -- backward compat property --------------------------------------------
-
     @property
     def _sources(self) -> List[DataSource]:
         """Backward-compatible alias — always reflects current _all_sources."""
         return self._all_sources
 
-    # -- active source selection ---------------------------------------------
-
     def _get_active_sources(self) -> List[DataSource]:
         """
         Get sources prioritized by current network environment.
-        
+
         FIX: Network-suitable sources first, others as fallback.
         """
         from core.network import get_network_env
         env = get_network_env()
-        
-        active = [s for s in self._all_sources if s.is_available()]
-        
-        def priority_key(s):
-            # On VPN: Yahoo first, AkShare last (it will timeout)
-            # On China direct: AkShare first, Yahoo last (it's blocked)
-            if env.is_china_direct:
-                if s.name == "akshare":
-                    return (0, s.priority)
-                elif s.name == "localdb":
-                    return (1, s.priority)
-                else:
-                    return (2, s.priority)
-            else:
-                # VPN/foreign: Yahoo first
-                if s.name == "yahoo":
-                    return (0, s.priority)
-                elif s.name == "localdb":
-                    return (1, s.priority)
-                elif s.name == "tencent":
-                    return (2, s.priority)
-                else:
-                    return (3, s.priority)  # AkShare last on VPN
-        
-        return sorted(active, key=priority_key)
 
-    # -- rate limiting -------------------------------------------------------
+        # If user toggles VPN/China-direct, clear source cooldowns and pacing state.
+        if self._last_network_mode is None:
+            self._last_network_mode = bool(env.is_china_direct)
+        elif bool(env.is_china_direct) != self._last_network_mode:
+            self._last_network_mode = bool(env.is_china_direct)
+            for s in self._all_sources:
+                with s._lock:
+                    s.status.consecutive_errors = 0
+                    s.status.disabled_until = None
+                    s.status.available = True
+            with self._rate_lock:
+                self._request_times.clear()
+            log.info(
+                "Network mode changed; data source cooldowns reset "
+                f"({'CHINA_DIRECT' if env.is_china_direct else 'VPN_FOREIGN'})"
+            )
+
+        active = [s for s in self._all_sources if s.is_available()]
+        ranked = sorted(
+            active,
+            key=lambda s: (-self._source_health_score(s, env), s.priority),
+        )
+        return ranked
+
+    def _source_health_score(self, source: DataSource, env) -> float:
+        """
+        Score a source by network suitability + recent health.
+        Higher score means earlier selection.
+        """
+        score = 0.0
+
+        # Static preference by network mode
+        if source.name == "localdb":
+            score += 120.0
+        elif env.is_china_direct:
+            if source.name == "akshare":
+                score += 90.0
+            elif source.name == "tencent":
+                score += 55.0
+            elif source.name == "yahoo":
+                score += 10.0
+        else:
+            if source.name == "yahoo":
+                score += 90.0
+            elif source.name == "tencent":
+                score += 60.0
+            elif source.name == "akshare":
+                score += 8.0
+
+        # Network suitability
+        try:
+            if source.is_suitable_for_network():
+                score += 15.0
+            else:
+                score -= 40.0
+        except Exception:
+            score -= 5.0
+
+        # Runtime health telemetry
+        st = source.status
+        attempts = max(1, int(st.success_count + st.error_count))
+        success_rate = float(st.success_count) / attempts
+        score += 30.0 * success_rate
+
+        if st.avg_latency_ms > 0:
+            # Penalize slower sources (cap to avoid over-penalizing).
+            score -= min(25.0, st.avg_latency_ms / 200.0)
+
+        # Penalize frequent failures and cooldown state.
+        score -= min(20.0, float(st.consecutive_errors) * 1.5)
+        if st.disabled_until and datetime.now() < st.disabled_until:
+            score -= 50.0
+
+        return score
 
     def _rate_limit(self, source: str, interval: str = "1d") -> None:
         with self._rate_lock:
             now = time.time()
             last = self._request_times.get(source, 0.0)
-            min_wait = (
-                self._intraday_interval
-                if interval in _INTRADAY_INTERVALS
-                else self._min_interval
-            )
+            if source == "yahoo":
+                min_wait = 2.2 if interval in _INTRADAY_INTERVALS else 1.4
+            else:
+                min_wait = (
+                    self._intraday_interval
+                    if interval in _INTRADAY_INTERVALS
+                    else self._min_interval
+                )
             wait = min_wait - (now - last)
             if wait > 0:
                 time.sleep(wait)
             self._request_times[source] = time.time()
-
-    # -- DB freshness check (proper method, not nested) ----------------------
 
     def _db_is_fresh_enough(
         self, code6: str, max_lag_days: int = 3
@@ -1066,11 +1040,11 @@ class DataFetcher:
         except Exception:
             return False
 
-    # -- real-time batch -----------------------------------------------------
-
     def get_realtime_batch(self, codes: List[str]) -> Dict[str, Quote]:
         """Fetch real-time quotes for multiple codes in one batch."""
-        cleaned = [c for c in (self.clean_code(c) for c in codes) if c]
+        cleaned = list(dict.fromkeys(
+            c for c in (self.clean_code(c) for c in codes) if c
+        ))
         if not cleaned:
             return {}
         if _is_offline():
@@ -1088,7 +1062,7 @@ class DataFetcher:
             ):
                 data = mc["data"]
                 if isinstance(data, dict) and data:
-                    return data
+                    return dict(data)
 
         result: Dict[str, Quote] = {}
 
@@ -1104,7 +1078,6 @@ class DataFetcher:
                 except Exception:
                     continue
 
-        # Fill missing from spot cache
         missing = [c for c in cleaned if c not in result]
         if missing:
             self._fill_from_spot_cache(missing, result)
@@ -1124,7 +1097,7 @@ class DataFetcher:
         with self._rt_cache_lock:
             self._rt_batch_microcache["ts"] = now
             self._rt_batch_microcache["key"] = key
-            self._rt_batch_microcache["data"] = result
+            self._rt_batch_microcache["data"] = dict(result)
 
         return result
 
@@ -1170,14 +1143,12 @@ class DataFetcher:
                         result[c] = q
         return result
 
-    # -- instrument history fetch from sources -------------------------------
-
     def _fetch_from_sources_instrument(
         self, inst: dict, days: int, interval: str = "1d"
     ) -> pd.DataFrame:
         """
         Fetch from active sources with smart fallback.
-        
+
         FIX: Tries ALL available sources, not just network-preferred ones.
         """
         sources = self._get_active_sources()
@@ -1199,7 +1170,6 @@ class DataFetcher:
             f"{[s.name for s in sources]}"
         )
 
-        # Prioritize based on network environment
         if inst.get("market") == "CN" and inst.get("asset") == "EQUITY":
             from core.network import get_network_env
             env = get_network_env()
@@ -1272,8 +1242,6 @@ class DataFetcher:
             return source.get_history(inst["symbol"], days)
         return pd.DataFrame()
 
-    # -- code cleaning -------------------------------------------------------
-
     @staticmethod
     def clean_code(code: str) -> str:
         """Normalize a stock code to bare 6-digit form."""
@@ -1302,8 +1270,6 @@ class DataFetcher:
         digits = "".join(ch for ch in s if ch.isdigit())
         return digits.zfill(6) if digits else ""
 
-    # -- dataframe cleaning --------------------------------------------------
-
     @staticmethod
     def _clean_dataframe(df: pd.DataFrame) -> pd.DataFrame:
         """Standardize and validate an OHLCV dataframe."""
@@ -1312,31 +1278,25 @@ class DataFetcher:
 
         out = df.copy()
 
-        # Ensure DatetimeIndex
         if not isinstance(out.index, pd.DatetimeIndex):
             out.index = pd.to_datetime(out.index, errors="coerce")
         out = out[~out.index.isna()]
         out = out[~out.index.duplicated(keep="last")].sort_index()
 
-        # Coerce numeric columns
         for c in ("open", "high", "low", "close", "volume", "amount"):
             if c in out.columns:
                 out[c] = pd.to_numeric(out[c], errors="coerce")
 
-        # Drop rows without valid close
         if "close" in out.columns:
             out = out.dropna(subset=["close"])
             out = out[out["close"] > 0]
 
-        # Volume must be non-negative (allow 0 for halted days)
         if "volume" in out.columns:
             out = out[out["volume"].fillna(0) >= 0]
 
-        # High >= Low sanity
         if "high" in out.columns and "low" in out.columns:
             out = out[out["high"].fillna(0) >= out["low"].fillna(0)]
 
-        # Compute amount if missing
         if (
             "amount" not in out.columns
             and "close" in out.columns
@@ -1344,8 +1304,6 @@ class DataFetcher:
         ):
             out["amount"] = out["close"] * out["volume"]
 
-        # Replace inf, then forward-fill only OHLC (not volume),
-        # then fill remaining NaN with 0
         out = out.replace([np.inf, -np.inf], np.nan)
         ohlc_cols = [c for c in ("open", "high", "low", "close") if c in out.columns]
         if ohlc_cols:
@@ -1353,8 +1311,6 @@ class DataFetcher:
         out = out.fillna(0)
 
         return out
-
-    # -- main get_history entry point ----------------------------------------
 
     def get_history(
         self,
@@ -1379,16 +1335,10 @@ class DataFetcher:
         interval = str(interval).lower()
         offline = _is_offline()
 
-        # Determine bar count and calendar days to fetch
-        if bars is not None:
-            count = max(1, int(bars))
-            fetch_days = bars_to_days(count, interval)
-        else:
-            count = max(1, int(days))
-            max_days = INTERVAL_MAX_DAYS.get(interval, 10_000)
-            fetch_days = min(bars_to_days(count, interval), max_days)
+        count = max(1, int(bars if bars is not None else days))
+        max_days = INTERVAL_MAX_DAYS.get(interval, 10_000)
+        fetch_days = min(bars_to_days(count, interval), max_days)
 
-        # Cache TTL
         if max_age_hours is not None:
             ttl = float(max_age_hours)
         elif interval == "1d":
@@ -1398,7 +1348,6 @@ class DataFetcher:
 
         cache_key = f"history:{key}:{interval}:{count}"
 
-        # --- memory cache check ---
         if use_cache:
             cached_df = self._cache.get(cache_key, ttl)
             if isinstance(cached_df, pd.DataFrame) and not cached_df.empty:
@@ -1406,7 +1355,6 @@ class DataFetcher:
                 if len(cached_df) >= min(count, 100):
                     return cached_df.tail(count)
 
-        # --- dispatch by market / interval ---
         is_cn_equity = (
             inst.get("market") == "CN" and inst.get("asset") == "EQUITY"
         )
@@ -1449,32 +1397,25 @@ class DataFetcher:
         db_df = pd.DataFrame()
         try:
             db_df = self._clean_dataframe(
-                self._db.get_intraday_bars(
-                    code6, interval=interval, limit=count
-                )
+                self._db.get_intraday_bars(code6, interval=interval, limit=count)
             )
         except Exception:
             pass
 
+        online_df = pd.DataFrame()
         if not offline:
             online_df = self._clean_dataframe(
                 self._fetch_from_sources_instrument(
                     inst, days=fetch_days, interval=interval
                 )
             )
-            parts = [p for p in (db_df, online_df) if not p.empty]
-            merged = (
-                self._clean_dataframe(pd.concat(parts, axis=0))
-                if parts else pd.DataFrame()
-            )
-        else:
-            merged = db_df
+
+        merged = self._merge_parts(db_df, online_df) if not offline else db_df
 
         if merged.empty:
             return pd.DataFrame()
 
-        out = merged.tail(count)
-        self._cache.set(cache_key, out)
+        out = self._cache_tail(cache_key, merged, count)
         try:
             self._db.upsert_intraday_bars(code6, interval, out)
         except Exception:
@@ -1500,9 +1441,7 @@ class DataFetcher:
             len(db_df) >= count
             and self._db_is_fresh_enough(code6, max_lag_days=3)
         ):
-            out = db_df.tail(count)
-            self._cache.set(cache_key, out)
-            return out
+            return self._cache_tail(cache_key, db_df, count)
 
         if offline:
             return db_df.tail(count) if not db_df.empty else pd.DataFrame()
@@ -1512,16 +1451,11 @@ class DataFetcher:
                 inst, days=fetch_days, interval="1d"
             )
         )
-        parts = [p for p in (db_df, online_df) if not p.empty]
-        merged = (
-            self._clean_dataframe(pd.concat(parts, axis=0))
-            if parts else pd.DataFrame()
-        )
+        merged = self._merge_parts(db_df, online_df)
         if merged.empty:
             return pd.DataFrame()
 
-        out = merged.tail(count)
-        self._cache.set(cache_key, out)
+        out = self._cache_tail(cache_key, merged, count)
         if update_db:
             try:
                 self._db.upsert_bars(inst["symbol"], out)
@@ -1529,23 +1463,17 @@ class DataFetcher:
                 pass
         return out
 
-    # -- legacy single-source fetch ------------------------------------------
+    def _merge_parts(self, *dfs: pd.DataFrame) -> pd.DataFrame:
+        """Merge and clean non-empty dataframes."""
+        parts = [p for p in dfs if isinstance(p, pd.DataFrame) and not p.empty]
+        if not parts:
+            return pd.DataFrame()
+        return self._clean_dataframe(pd.concat(parts, axis=0))
 
-    def _fetch_from_sources(self, code: str, days: int) -> pd.DataFrame:
-        """Fetch from active sources (legacy, code-based)."""
-        with self._rate_limiter:
-            for source in self._get_active_sources():
-                try:
-                    self._rate_limit(source.name)
-                    df = source.get_history(code, days)
-                    if not df.empty and len(df) >= min(days // 2, 50):
-                        return df
-                except Exception as exc:
-                    log.warning(f"{source.name} failed for {code}: {exc}")
-        log.error(f"All sources failed for {code}")
-        return pd.DataFrame()
-
-    # -- single real-time quote ----------------------------------------------
+    def _cache_tail(self, cache_key: str, df: pd.DataFrame, count: int) -> pd.DataFrame:
+        out = df.tail(count)
+        self._cache.set(cache_key, out)
+        return out
 
     def get_realtime(
         self, code: str, instrument: Optional[dict] = None
@@ -1576,7 +1504,6 @@ class DataFetcher:
             if rec and (now - float(rec["ts"])) < _MICRO_CACHE_TTL:
                 return rec["q"]
 
-        # Batch fetch
         try:
             out = self.get_realtime_batch([code6])
             q = out.get(code6)
@@ -1636,8 +1563,6 @@ class DataFetcher:
 
         return best
 
-    # -- parallel multi-stock fetch ------------------------------------------
-
     def get_multiple_parallel(
         self,
         codes: List[str],
@@ -1692,8 +1617,6 @@ class DataFetcher:
         log.info(f"Parallel fetch: {len(results)}/{total} successful")
         return results
 
-    # -- stock list ----------------------------------------------------------
-
     def get_all_stocks(self) -> pd.DataFrame:
         for source in self._get_active_sources():
             if source.name == "akshare":
@@ -1704,8 +1627,6 @@ class DataFetcher:
                 except Exception as exc:
                     log.warning(f"Failed to get stock list: {exc}")
         return pd.DataFrame()
-
-    # -- diagnostics ---------------------------------------------------------
 
     def get_source_status(self) -> List[DataSourceStatus]:
         return [s.status for s in self._all_sources]
@@ -1721,14 +1642,8 @@ class DataFetcher:
                 source.status.available = True
         log.info("All data sources reset, network cache invalidated")
 
-
-# ===========================================================================
-# Thread-safe singleton
-# ===========================================================================
-
 _fetcher: Optional[DataFetcher] = None
 _fetcher_lock = threading.Lock()
-
 
 def get_fetcher() -> DataFetcher:
     """Double-checked locking singleton for DataFetcher."""

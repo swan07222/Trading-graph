@@ -22,13 +22,11 @@ import os
 
 log = get_logger(__name__)
 
-
 class HealthStatus(Enum):
     HEALTHY = "healthy"
     DEGRADED = "degraded"
     UNHEALTHY = "unhealthy"
     CRITICAL = "critical"
-
 
 class ComponentType(Enum):
     DATABASE = "database"
@@ -38,7 +36,6 @@ class ComponentType(Enum):
     RISK_MANAGER = "risk_manager"
     OMS = "oms"
     NETWORK = "network"
-
 
 @dataclass
 class ComponentHealth:
@@ -56,32 +53,28 @@ class ComponentHealth:
         if not self.last_check:
             self.last_check = datetime.now()
 
-
 @dataclass
 class SystemHealth:
     """Overall system health"""
     status: HealthStatus = HealthStatus.HEALTHY
     components: Dict[str, ComponentHealth] = field(default_factory=dict)
 
-    # System metrics
     cpu_percent: float = 0.0
     memory_percent: float = 0.0
     disk_percent: float = 0.0
 
-    # Trading metrics
     can_trade: bool = True
     degraded_mode: bool = False
 
-    # Data freshness
     last_quote_time: datetime = None
     quote_delay_seconds: float = 0.0
 
-    # Uptime
     start_time: datetime = None
     uptime_seconds: float = 0.0
 
-    # Errors
     recent_errors: List[str] = field(default_factory=list)
+    slo_pass: bool = True
+    slo_violations: List[str] = field(default_factory=list)
 
     timestamp: datetime = None
 
@@ -105,11 +98,12 @@ class SystemHealth:
                 for name, comp in self.components.items()
             },
             'recent_errors': self.recent_errors[-10:],
+            'slo_pass': self.slo_pass,
+            'slo_violations': self.slo_violations[-20:],
             'timestamp': (
                 self.timestamp.isoformat() if self.timestamp else None
             ),
         }
-
 
 def _get_disk_percent() -> float:
     """Get disk usage percent, cross-platform safe."""
@@ -125,7 +119,6 @@ def _get_disk_percent() -> float:
         except Exception:
             return 0.0
 
-
 class HealthMonitor:
     """
     Comprehensive health monitoring system.
@@ -136,7 +129,6 @@ class HealthMonitor:
         self._running = False
         self._thread: Optional[threading.Thread] = None
 
-        # State
         self._start_time = datetime.now()
         self._components: Dict[ComponentType, ComponentHealth] = {}
         self._last_quote_time: Optional[datetime] = None
@@ -145,7 +137,6 @@ class HealthMonitor:
         self._broker = None
         self._prev_degraded = False
 
-        # Thresholds
         self._thresholds = {
             'cpu_warning': 80,
             'cpu_critical': 95,
@@ -158,15 +149,19 @@ class HealthMonitor:
             'error_count_warning': 5,
             'error_count_critical': 10,
         }
+        self._slo = {
+            "max_quote_delay_seconds": 20.0,
+            "max_cpu_percent": 90.0,
+            "max_memory_percent": 92.0,
+            "max_component_unhealthy": 0,
+        }
 
-        # Callbacks
         self._on_status_change: List[Callable] = []
         self._on_degraded: List[Callable] = []
+        self._last_status: Optional[HealthStatus] = None
 
-        # Initialize components
         self._init_components()
 
-        # Subscribe to events
         EVENT_BUS.subscribe(EventType.ERROR, self._on_error_event)
         EVENT_BUS.subscribe(EventType.TICK, self._on_tick_event)
 
@@ -236,7 +231,6 @@ class HealthMonitor:
             from data.database import get_database
 
             db = get_database()
-            # Simple query to check connectivity
             _ = db.get_data_stats()
 
             comp.status = HealthStatus.HEALTHY
@@ -415,9 +409,52 @@ class HealthMonitor:
                 health.status = HealthStatus.DEGRADED
                 health.degraded_mode = True
 
+        health.slo_pass, health.slo_violations = self._evaluate_slos(health)
         return health
 
+    def _evaluate_slos(self, health: SystemHealth):
+        """Evaluate lightweight operational SLOs for runbook-style monitoring."""
+        violations: List[str] = []
+
+        if health.quote_delay_seconds > float(self._slo["max_quote_delay_seconds"]):
+            violations.append(
+                f"quote_delay>{self._slo['max_quote_delay_seconds']}s "
+                f"({health.quote_delay_seconds:.1f}s)"
+            )
+
+        if health.cpu_percent > float(self._slo["max_cpu_percent"]):
+            violations.append(
+                f"cpu>{self._slo['max_cpu_percent']}% "
+                f"({health.cpu_percent:.1f}%)"
+            )
+
+        if health.memory_percent > float(self._slo["max_memory_percent"]):
+            violations.append(
+                f"memory>{self._slo['max_memory_percent']}% "
+                f"({health.memory_percent:.1f}%)"
+            )
+
+        unhealthy = sum(
+            1 for c in health.components.values()
+            if c.status in (HealthStatus.UNHEALTHY, HealthStatus.CRITICAL)
+        )
+        if unhealthy > int(self._slo["max_component_unhealthy"]):
+            violations.append(
+                f"unhealthy_components>{self._slo['max_component_unhealthy']} "
+                f"({unhealthy})"
+            )
+
+        return len(violations) == 0, violations
+
     def _check_status_change(self, health: SystemHealth):
+        if self._last_status is None or self._last_status != health.status:
+            self._last_status = health.status
+            for callback in self._on_status_change:
+                try:
+                    callback(health)
+                except Exception as e:
+                    log.error(f"Status change callback error: {e}")
+
         if health.degraded_mode and not self._prev_degraded:
             log.warning("System entering degraded mode")
             for callback in self._on_degraded:
@@ -481,11 +518,12 @@ class HealthMonitor:
     def on_degraded(self, callback: Callable):
         self._on_degraded.append(callback)
 
+    def on_status_change(self, callback: Callable):
+        self._on_status_change.append(callback)
 
 # FIX: Module-level lock instead of globals() pattern
 _health_monitor: Optional[HealthMonitor] = None
 _health_lock = threading.Lock()
-
 
 def get_health_monitor() -> HealthMonitor:
     global _health_monitor

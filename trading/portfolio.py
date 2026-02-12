@@ -18,17 +18,9 @@ from utils.logger import get_logger
 
 log = get_logger(__name__)
 
-# ---------------------------------------------------------------------------
-# Constants
-# ---------------------------------------------------------------------------
 _MAX_EQUITY_HISTORY: int = 10_000
 _TRADING_DAYS_PER_YEAR: int = 252
 _SAVE_SLICE: int = _MAX_EQUITY_HISTORY  # save everything we keep in memory
-
-
-# ============================================================
-# Data Classes
-# ============================================================
 
 @dataclass
 class Trade:
@@ -63,7 +55,6 @@ class Trade:
         if self.price < 0:
             raise ValueError(f"Trade.price must be >= 0, got {self.price}")
 
-
 @dataclass
 class DailyPerformance:
     """Single-day performance snapshot."""
@@ -76,11 +67,9 @@ class DailyPerformance:
     wins: int
     losses: int
 
-
 @dataclass
 class PortfolioStats:
     """Comprehensive portfolio statistics returned by `get_stats()`."""
-    # Value
     total_value: float
     cash: float
     positions_value: float
@@ -91,7 +80,6 @@ class PortfolioStats:
     realized_pnl: float
     unrealized_pnl: float
 
-    # Trade statistics
     total_trades: int
     winning_trades: int
     losing_trades: int
@@ -102,7 +90,6 @@ class PortfolioStats:
     largest_win: float
     largest_loss: float
 
-    # Risk metrics
     max_drawdown: float
     max_drawdown_pct: float
     sharpe_ratio: float
@@ -116,11 +103,6 @@ class PortfolioStats:
     weekly_pnl_pct: float
     monthly_pnl: float
     monthly_pnl_pct: float
-
-
-# ============================================================
-# Portfolio
-# ============================================================
 
 class Portfolio:
     """
@@ -181,7 +163,6 @@ class Portfolio:
         return (self.equity / self.initial_capital - 1.0) * 100.0
 
     # ------------------------------------------------------------------
-    # Public API
     # ------------------------------------------------------------------
 
     def update_from_account(self, account: Account) -> None:
@@ -272,7 +253,6 @@ class Portfolio:
 
         self.equity_history.append((datetime.now(), current_equity))
 
-        # Trim to bounded size
         if len(self.equity_history) > _MAX_EQUITY_HISTORY:
             self.equity_history = self.equity_history[-_MAX_EQUITY_HISTORY:]
 
@@ -411,7 +391,6 @@ class Portfolio:
                 if down_std > 0:
                     sortino_ratio = mean_ret / down_std * np.sqrt(_TRADING_DAYS_PER_YEAR)
 
-        # Annualized return for Calmar
         calmar_ratio = 0.0
         if self._max_drawdown > 0 and len(self.equity_history) >= 2:
             first_ts = self.equity_history[0][0]
@@ -433,14 +412,12 @@ class Portfolio:
         )
 
     def _compute_period_pnl(self, current_equity: float) -> Dict:
-        # Daily
         daily_pnl = current_equity - self._daily_start_equity
         daily_pnl_pct = (
             (daily_pnl / self._daily_start_equity * 100.0)
             if self._daily_start_equity > 0 else 0.0
         )
 
-        # Weekly
         week_ago = date.today() - timedelta(days=7)
         week_eq = self._get_equity_at_date(week_ago)
         weekly_pnl = current_equity - week_eq
@@ -448,7 +425,6 @@ class Portfolio:
             (weekly_pnl / week_eq * 100.0) if week_eq > 0 else 0.0
         )
 
-        # Monthly
         month_ago = date.today() - timedelta(days=30)
         month_eq = self._get_equity_at_date(month_ago)
         monthly_pnl = current_equity - month_eq
@@ -507,7 +483,6 @@ class Portfolio:
         return self.initial_capital
 
     # ------------------------------------------------------------------
-    # Persistence
     # ------------------------------------------------------------------
 
     @staticmethod
@@ -588,13 +563,11 @@ class Portfolio:
             if raw_date:
                 self._daily_start_date = date.fromisoformat(raw_date)
 
-            # Trades
             self.trades = []
             for raw in data.get("trades", []):
                 raw["timestamp"] = datetime.fromisoformat(raw["timestamp"])
                 self.trades.append(Trade(**raw))
 
-            # Equity history
             self.equity_history = [
                 (datetime.fromisoformat(ts), float(eq))
                 for ts, eq in data.get("equity_history", [])
@@ -602,7 +575,6 @@ class Portfolio:
             if not self.equity_history:
                 self.equity_history = [(datetime.now(), self.initial_capital)]
 
-            # Daily performance
             self.daily_performance = []
             for raw in data.get("daily_performance", []):
                 self.daily_performance.append(DailyPerformance(

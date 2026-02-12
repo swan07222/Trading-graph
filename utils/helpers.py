@@ -7,11 +7,21 @@ from typing import List, Optional, Sequence, Union
 
 import numpy as np
 
+def to_float(x, default: float = 0.0) -> float:
+    """Safely convert to float with NaN/Inf handling."""
+    try:
+        if x is None:
+            return float(default)
+        val = float(x)
+        if math.isnan(val) or math.isinf(val):
+            return float(default)
+        return val
+    except (ValueError, TypeError):
+        return float(default)
 
-# =====================================================================
-# Formatting
-# =====================================================================
-
+def to_int(x, default: int = 0) -> int:
+    """Safely convert to int with NaN/Inf handling."""
+    return int(to_float(x, default))
 
 def format_number(n: float, decimals: int = 2) -> str:
     """
@@ -45,7 +55,6 @@ def format_number(n: float, decimals: int = 2) -> str:
     else:
         return f"{n:,.{decimals}f}"
 
-
 def format_pct(n: float, decimals: int = 2) -> str:
     """
     Format a number as a percentage with sign.
@@ -75,7 +84,6 @@ def format_pct(n: float, decimals: int = 2) -> str:
     sign = "+" if n > 0 else ""
     return f"{sign}{n:.{decimals}f}%"
 
-
 def format_price(n: float, currency: str = "¥") -> str:
     """
     Format a price with currency symbol.
@@ -99,12 +107,6 @@ def format_price(n: float, currency: str = "¥") -> str:
         return f"{currency}∞" if n > 0 else f"-{currency}∞"
 
     return f"{currency}{n:,.2f}"
-
-
-# =====================================================================
-# Date Utilities
-# =====================================================================
-
 
 def get_trading_dates(
     start: datetime,
@@ -138,12 +140,6 @@ def get_trading_dates(
         current += timedelta(days=1)
     return dates
 
-
-# =====================================================================
-# Performance Metrics
-# =====================================================================
-
-
 def calculate_sharpe(
     returns: Union[np.ndarray, Sequence[float]],
     risk_free_annual: float = 0.03,
@@ -166,7 +162,6 @@ def calculate_sharpe(
     """
     returns = np.asarray(returns, dtype=np.float64)
 
-    # Filter out NaN values
     returns = returns[~np.isnan(returns)]
 
     if len(returns) < 2:
@@ -183,7 +178,6 @@ def calculate_sharpe(
         return 0.0
 
     return float(np.mean(excess) / std * np.sqrt(periods_per_year))
-
 
 def calculate_max_drawdown(
     equity: Union[np.ndarray, Sequence[float]],
@@ -204,13 +198,11 @@ def calculate_max_drawdown(
     """
     equity = np.asarray(equity, dtype=np.float64)
 
-    # Filter NaN
     equity = equity[~np.isnan(equity)]
 
     if len(equity) == 0:
         return 0.0
 
-    # Equity must be positive for drawdown to be meaningful
     if np.any(equity <= 0):
         return 0.0
 

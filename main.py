@@ -5,7 +5,6 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-
 def check_dependencies(require_gui: bool = False) -> bool:
     """Check required dependencies. Only require GUI libs if launching GUI."""
     required = [
@@ -55,6 +54,8 @@ def main():
     parser.add_argument('--auto-learn', action='store_true', help='Auto-discover and train')
     parser.add_argument('--predict', type=str, help='Predict stock')
     parser.add_argument('--backtest', action='store_true', help='Run backtest')
+    parser.add_argument('--replay-file', type=str, help='Replay market data file (csv/jsonl)')
+    parser.add_argument('--replay-speed', type=float, default=20.0, help='Replay speed multiplier')
     parser.add_argument('--health', action='store_true', help='Show system health')
     parser.add_argument('--epochs', type=int, default=100, help='Training epochs')
     parser.add_argument('--max-stocks', type=int, default=200, help='Max stocks for training')
@@ -65,7 +66,8 @@ def main():
     args = parser.parse_args()
 
     require_gui = not any([
-        args.train, args.auto_learn, args.predict, args.backtest, args.health, args.cli
+        args.train, args.auto_learn, args.predict, args.backtest, args.replay_file,
+        args.health, args.cli, args.recovery_drill,
     ])
 
     if not check_dependencies(require_gui=require_gui):
@@ -136,6 +138,22 @@ def main():
             result = bt.run()
             print(result.summary())
 
+        elif args.replay_file:
+            from analysis.replay import MarketReplay
+            replay = MarketReplay.from_file(Path(args.replay_file))
+            print(f"[REPLAY] Loaded {len(replay)} bars from {args.replay_file}")
+            seen = 0
+            symbols = set()
+            for bar in replay.play(speed=max(0.1, float(args.replay_speed))):
+                seen += 1
+                symbols.add(bar.symbol)
+                if seen % 500 == 0:
+                    print(
+                        f"[REPLAY] {seen} bars | symbols={len(symbols)} "
+                        f"| last={bar.symbol} {bar.ts.isoformat()} close={bar.close:.2f}"
+                    )
+            print(f"[REPLAY] Done. bars={seen}, symbols={len(symbols)}")
+
         else:
             from ui.app import run_app
             run_app()
@@ -171,11 +189,9 @@ def run_recovery_drill():
     reset_oms()
     oms = get_oms(initial_capital=100000, db_path=db_path)
 
-    # submit synthetic order
     order = Order(symbol="600519", side=OrderSide.BUY, order_type=OrderType.LIMIT, quantity=100, price=100.0)
     oms.submit_order(order)
 
-    # process synthetic fill
     fill = Fill(order_id=order.id, symbol=order.symbol, side=OrderSide.BUY, quantity=100, price=100.0, commission=5.0)
     oms.process_fill(order, fill)
 

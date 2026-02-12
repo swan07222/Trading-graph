@@ -17,11 +17,8 @@ from utils.logger import get_logger
 
 log = get_logger(__name__)
 
-
-# =============================================================================
 # Audit log — safe import with fallback stub
 # FIX(7): utils.security may not exist; provide no-op fallback
-# =============================================================================
 
 class _NoOpAuditLog:
     """Stub audit log when utils.security is unavailable."""
@@ -35,7 +32,6 @@ class _NoOpAuditLog:
     def __getattr__(self, name: str):
         return lambda *a, **kw: None
 
-
 def _get_audit_log():
     """Import real audit log or return stub."""
     try:
@@ -44,11 +40,8 @@ def _get_audit_log():
     except Exception:
         return _NoOpAuditLog()
 
-
-# =============================================================================
 # Cost estimation helper (single source of truth)
 # FIX(6,14): Validates inputs; always uses CONFIG.trading.X consistently
-# =============================================================================
 
 def _estimate_order_cost(
     quantity: int,
@@ -101,16 +94,10 @@ def _estimate_order_cost(
 
     return est_price, notional, total_cost
 
-
-# =============================================================================
-# Cached deferred imports
-# =============================================================================
-
 _oms_module = None
 _kill_switch_module = None
 _constants_module = None
 _feeds_module = None
-
 
 def _get_oms():
     """Cached deferred import for OMS."""
@@ -120,7 +107,6 @@ def _get_oms():
         _oms_module = _m
     return _oms_module.get_oms()
 
-
 def _get_kill_switch():
     """Cached deferred import for kill switch."""
     global _kill_switch_module
@@ -129,7 +115,6 @@ def _get_kill_switch():
         _kill_switch_module = _m
     return _kill_switch_module.get_kill_switch()
 
-
 def _get_lot_size(symbol: str) -> int:
     """Cached deferred import for lot size."""
     global _constants_module
@@ -137,7 +122,6 @@ def _get_lot_size(symbol: str) -> int:
         from core import constants as _m
         _constants_module = _m
     return _constants_module.get_lot_size(symbol)
-
 
 def _get_feed_quote(symbol: str):
     """Cached deferred import for feed manager quote."""
@@ -152,11 +136,6 @@ def _get_feed_quote(symbol: str):
         return _feeds_module.get_feed_manager().get_quote(symbol)
     except Exception:
         return None
-
-
-# =============================================================================
-# RiskManager
-# =============================================================================
 
 class RiskManager:
     """
@@ -192,7 +171,6 @@ class RiskManager:
         self._lock = threading.RLock()
         self._audit = _get_audit_log()  # FIX(7): safe import
 
-        # Account state
         self._account: Optional[Account] = None
         self._initial_equity: float = 0.0
         self._daily_start_equity: float = 0.0
@@ -203,7 +181,6 @@ class RiskManager:
         # FIX(2): deque with maxlen for O(1) append and auto-prune
         self._returns_history: deque = deque(maxlen=self.MAX_RETURNS_HISTORY)
 
-        # Trade tracking
         self._trades_today: int = 0
         self._orders_submitted_today: int = 0
 
@@ -236,7 +213,6 @@ class RiskManager:
                 pass
 
     # =========================================================================
-    # Initialization and account updates
     # =========================================================================
 
     def initialize(self, account: Account):
@@ -288,7 +264,6 @@ class RiskManager:
             self._trades_today += 1
 
     # =========================================================================
-    # Unified account view
     # =========================================================================
 
     def _get_unified_account_view(self) -> Account:
@@ -304,7 +279,6 @@ class RiskManager:
 
         MUST be called with self._lock held.
         """
-        # Try OMS as primary source
         try:
             oms = _get_oms()
             acc = oms.get_account()
@@ -399,7 +373,6 @@ class RiskManager:
                     )
 
     # =========================================================================
-    # Day rollover
     # =========================================================================
 
     def _new_day(self, last_equity: float):
@@ -428,7 +401,6 @@ class RiskManager:
         }
 
     # =========================================================================
-    # Event handlers
     # =========================================================================
 
     def _on_error(self, event: Event):
@@ -446,7 +418,6 @@ class RiskManager:
 
                 # FIX(9): Bound quote timestamps dict
                 if len(self._quote_timestamps) > self.MAX_TRACKED_SYMBOLS:
-                    # Remove oldest entries
                     sorted_syms = sorted(
                         self._quote_timestamps,
                         key=self._quote_timestamps.get,
@@ -468,7 +439,6 @@ class RiskManager:
             dq.popleft()
 
     # =========================================================================
-    # Risk metrics
     # =========================================================================
 
     def get_metrics(self, _account: Account = None) -> RiskMetrics:
@@ -490,7 +460,6 @@ class RiskManager:
             metrics = RiskMetrics()
             warnings: List[str] = []
 
-            # Portfolio values
             metrics.equity = equity
             metrics.cash = account.cash
             metrics.positions_value = account.positions_value
@@ -503,7 +472,6 @@ class RiskManager:
                     metrics.daily_pnl / self._daily_start_equity * 100.0
                 )
 
-            # Drawdown
             if self._peak_equity > 0:
                 metrics.current_drawdown_pct = (
                     (self._peak_equity - equity) / self._peak_equity * 100.0
@@ -513,14 +481,12 @@ class RiskManager:
                 self._max_drawdown_pct = metrics.current_drawdown_pct
             metrics.max_drawdown_pct = self._max_drawdown_pct
 
-            # VaR and Expected Shortfall
             metrics.var_1d_95 = self._calculate_var(0.95, equity)
             metrics.var_1d_99 = self._calculate_var(0.99, equity)
             metrics.expected_shortfall = (
                 self._calculate_expected_shortfall(0.95, equity)
             )
 
-            # Positions
             positions = list(account.positions.values())
             metrics.position_count = sum(
                 1 for p in positions if p.quantity != 0
@@ -533,7 +499,6 @@ class RiskManager:
                 (largest / equity * 100.0) if equity > 0 else 0.0
             )
 
-            # Exposure
             metrics.long_exposure = sum(
                 max(0.0, p.market_value) for p in positions
             )
@@ -545,7 +510,6 @@ class RiskManager:
                 if equity > 0 else 0.0
             )
 
-            # Remaining limits
             metrics.daily_loss_remaining_pct = (
                 CONFIG.risk.max_daily_loss_pct + metrics.daily_pnl_pct
             )
@@ -553,10 +517,8 @@ class RiskManager:
                 0, CONFIG.risk.max_positions - metrics.position_count
             )
 
-            # Risk level
             metrics.risk_level = self._assess_risk_level(metrics)
 
-            # Trading permission
             metrics.can_trade = True
             if metrics.daily_pnl_pct <= -CONFIG.risk.max_daily_loss_pct:
                 metrics.can_trade = False
@@ -605,7 +567,6 @@ class RiskManager:
         return RiskLevel.LOW
 
     # =========================================================================
-    # VaR calculations
     # =========================================================================
 
     def _calculate_var(self, confidence: float, equity: float) -> float:
@@ -658,7 +619,6 @@ class RiskManager:
         self._last_var_day = today
 
     # =========================================================================
-    # Risk breach detection
     # =========================================================================
 
     def _check_risk_breaches(self):
@@ -749,7 +709,6 @@ class RiskManager:
         return limits.get(risk_type, 0.0)
 
     # =========================================================================
-    # Rate and error limiting
     # =========================================================================
 
     def _check_rate_limit(self) -> bool:
@@ -793,7 +752,6 @@ class RiskManager:
         self._orders_submitted_today += 1
 
     # =========================================================================
-    # Quote staleness
     # =========================================================================
 
     def _check_quote_staleness(self, symbol: str) -> Tuple[bool, str]:
@@ -817,7 +775,6 @@ class RiskManager:
         return True, "OK"
 
     # =========================================================================
-    # Order validation
     # =========================================================================
 
     def check_order(
@@ -835,13 +792,11 @@ class RiskManager:
             on failure.
         """
         with self._lock:
-            # Basic validation
             if price <= 0:
                 return False, "Invalid price"
             if quantity <= 0:
                 return False, "Invalid quantity"
 
-            # Account readiness
             if self._account is None:
                 try:
                     if not _get_oms().get_account():
@@ -863,28 +818,23 @@ class RiskManager:
                     "Trading halted - cannot verify kill switch status"
                 )
 
-            # Single unified snapshot for entire validation
             account = self._get_unified_account_view()
             metrics = self.get_metrics(_account=account)
 
-            # Trading permission
             if not metrics.can_trade:
                 reasons = "; ".join(metrics.warnings) if metrics.warnings else (
                     f"daily loss: {metrics.daily_pnl_pct:.1f}%"
                 )
                 return False, f"Trading disabled - {reasons}"
 
-            # Rate limiting
             if not self._check_rate_limit():
                 return False, "Order rate limit exceeded - please wait"
 
-            # Error rate
             if not self._check_error_rate():
                 return False, (
                     "High error rate detected - trading paused for safety"
                 )
 
-            # Quote staleness
             staleness_ok, staleness_msg = self._check_quote_staleness(symbol)
             if not staleness_ok:
                 return False, staleness_msg
@@ -914,12 +864,10 @@ class RiskManager:
         account: Account,
     ) -> Tuple[bool, str]:
         """Validate buy order against all risk limits."""
-        # Lot size
         lot_size = _get_lot_size(symbol)
         if quantity % lot_size != 0:
             return False, f"Quantity must be multiple of {lot_size}"
 
-        # Affordability
         try:
             _, _, total_cost = _estimate_order_cost(
                 quantity, price, OrderSide.BUY,
@@ -936,7 +884,6 @@ class RiskManager:
         equity = account.equity
         new_notional = quantity * price
 
-        # Position concentration
         existing_value = (
             account.positions[symbol].market_value
             if symbol in account.positions else 0.0
@@ -952,7 +899,6 @@ class RiskManager:
                     f"(max: {max_pct}%)"
                 )
 
-        # Max positions
         if symbol not in account.positions:
             if metrics.position_count >= CONFIG.risk.max_positions:
                 return False, (
@@ -960,7 +906,6 @@ class RiskManager:
                     f"{CONFIG.risk.max_positions}"
                 )
 
-        # Portfolio exposure
         max_exposure_pct = CONFIG.risk.max_portfolio_risk_pct
         new_exposure = metrics.gross_exposure + new_notional
         if equity > 0:
@@ -1042,7 +987,6 @@ class RiskManager:
         return True, "OK"
 
     # =========================================================================
-    # Position sizing
     # =========================================================================
 
     def calculate_position_size(
@@ -1076,7 +1020,6 @@ class RiskManager:
         if risk_per_share <= 0 or entry_price <= 0:
             return 0
 
-        # Risk budget
         base_risk_pct = CONFIG.risk.risk_per_trade_pct / 100.0
         adjusted_risk = (
             base_risk_pct
@@ -1088,18 +1031,15 @@ class RiskManager:
 
         shares = int(risk_amount / risk_per_share)
 
-        # Lot size rounding
         lot_size = _get_lot_size(symbol)
         shares = (shares // lot_size) * lot_size
 
-        # Cap by max position value
         max_position_value = equity * (CONFIG.risk.max_position_pct / 100.0)
         max_shares_by_position = (
             int(max_position_value / entry_price / lot_size) * lot_size
         )
         shares = min(shares, max_shares_by_position)
 
-        # Cap by affordable cash
         max_affordable = int(
             available * self.MAX_AFFORDABLE_FACTOR
             / entry_price / lot_size
@@ -1157,7 +1097,6 @@ class RiskManager:
         }
 
     # =========================================================================
-    # Accessors
     # =========================================================================
 
     def get_account(self) -> Optional[Account]:
@@ -1184,7 +1123,6 @@ class RiskManager:
             return pnl, pnl_pct
 
     # =========================================================================
-    # Configuration
     # =========================================================================
 
     def set_staleness_threshold(self, seconds: float):
@@ -1210,14 +1148,10 @@ class RiskManager:
             self._errors_this_minute.clear()
             self._last_date = date.today()
 
-
-# =============================================================================
 # Module-level singleton
-# =============================================================================
 
 _risk_manager: Optional[RiskManager] = None
 _risk_manager_lock = threading.Lock()
-
 
 def get_risk_manager() -> RiskManager:
     """Get global risk manager instance (thread-safe)."""
@@ -1227,7 +1161,6 @@ def get_risk_manager() -> RiskManager:
             if _risk_manager is None:
                 _risk_manager = RiskManager()
     return _risk_manager
-
 
 def reset_risk_manager():
     """

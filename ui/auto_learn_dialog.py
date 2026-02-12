@@ -4,10 +4,11 @@ from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QProgressBar, QTextEdit, QGroupBox, QSpinBox, QComboBox,
     QCheckBox, QMessageBox, QGridLayout, QTabWidget, QWidget,
-    QLineEdit, QListWidget, QListWidgetItem, QAbstractItemView,
+    QLineEdit, QListWidget, QListWidgetItem, QAbstractItemView, QScrollArea,
 )
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
 from datetime import datetime
+import time
 from typing import Optional, List
 import threading
 import traceback
@@ -16,12 +17,10 @@ from utils.logger import get_logger
 
 log = get_logger(__name__)
 
-
 def _get_cancellation_token():
     """Lazy import CancellationToken."""
     from utils.cancellation import CancellationToken
     return CancellationToken()
-
 
 def _get_auto_learner():
     """
@@ -42,10 +41,7 @@ def _get_auto_learner():
 
     return None
 
-
-# =============================================================================
 # WORKER: Auto Learn (random rotation)
-# =============================================================================
 
 class AutoLearnWorker(QThread):
     """
@@ -66,6 +62,8 @@ class AutoLearnWorker(QThread):
         self.token = _get_cancellation_token()
         self._learner = None
         self._learner_thread: Optional[threading.Thread] = None
+        self._error_flag = False
+        self._error_message = ""
 
     def run(self):
         self.running = True
@@ -105,6 +103,9 @@ class AutoLearnWorker(QThread):
                         getattr(p, 'message', '') or getattr(p, 'stage', '')
                     )
                     stage = str(getattr(p, 'stage', ''))
+                    if stage == "error":
+                        self._error_flag = True
+                        self._error_message = message or "Auto-learning failed"
                     self.progress.emit(percent, message)
                     self.log_message.emit(
                         f"{stage}: {message}" if stage else message,
@@ -158,6 +159,13 @@ class AutoLearnWorker(QThread):
                 self.msleep(200)
 
             self._stop_learner()
+            if self._error_flag:
+                results["status"] = "error"
+                results["error"] = self._error_message or "Auto-learning failed"
+                if self.running:
+                    self.error_occurred.emit(results["error"])
+            else:
+                results["status"] = "ok"
             self.finished_result.emit(results)
 
         except Exception as e:
@@ -171,6 +179,21 @@ class AutoLearnWorker(QThread):
         try:
             if self._learner is not None:
                 self._learner.start(**kwargs)
+                # AutoLearner.start() spawns its own thread and returns immediately.
+                # Join that internal thread so this worker doesn't finish early.
+                t = getattr(self._learner, "_thread", None)
+                if t is not None:
+                    try:
+                        t.join()
+                        return
+                    except Exception:
+                        pass
+
+                # Fallback: wait on progress flag if internal thread not exposed.
+                while self.running and not self.token.is_cancelled:
+                    if not getattr(self._learner.progress, "is_running", False):
+                        break
+                    time.sleep(0.2)
         except Exception as e:
             log.error(f"Learner thread error: {e}")
             log.debug(traceback.format_exc())
@@ -203,10 +226,7 @@ class AutoLearnWorker(QThread):
         self.running = False
         self.token.cancel()
 
-
-# =============================================================================
 # WORKER: Targeted Training (NEW)
-# =============================================================================
 
 class TargetedLearnWorker(QThread):
     """
@@ -366,10 +386,7 @@ class TargetedLearnWorker(QThread):
         self.running = False
         self.token.cancel()
 
-
-# =============================================================================
 # STOCK VALIDATOR WORKER (for search)
-# =============================================================================
 
 class StockValidatorWorker(QThread):
     """
@@ -381,10 +398,11 @@ class StockValidatorWorker(QThread):
     """
     validation_result = pyqtSignal(dict)
 
-    def __init__(self, code: str, interval: str = "1d"):
+    def __init__(self, code: str, interval: str = "1d", request_id: int = 0):
         super().__init__()
         self.code = code
         self.interval = interval
+        self.request_id = int(request_id)
 
     def run(self):
         try:
@@ -395,12 +413,14 @@ class StockValidatorWorker(QThread):
                     'code': self.code,
                     'name': '',
                     'bars': 0,
+                    'request_id': self.request_id,
                     'message': 'Learner module not available',
                 })
                 return
 
             learner = LearnerClass()
             result = learner.validate_stock_code(self.code, self.interval)
+            result["request_id"] = self.request_id
             self.validation_result.emit(result)
 
         except Exception as e:
@@ -409,13 +429,9 @@ class StockValidatorWorker(QThread):
                 'code': self.code,
                 'name': '',
                 'bars': 0,
+                'request_id': self.request_id,
                 'message': f'Validation error: {str(e)[:200]}',
             })
-
-
-# =============================================================================
-# MAIN DIALOG
-# =============================================================================
 
 class AutoLearnDialog(QDialog):
     """
@@ -427,17 +443,18 @@ class AutoLearnDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("🤖 Auto Learning")
-        self.setMinimumSize(800, 750)
+        self.setMinimumSize(700, 540)
+        self.resize(920, 660)
+        self.setSizeGripEnabled(True)
 
-        # Worker references
         self.worker: Optional[AutoLearnWorker] = None
         self.targeted_worker: Optional[TargetedLearnWorker] = None
         self._validator: Optional[StockValidatorWorker] = None
 
-        # State
         self._is_running = False
         self._active_mode = ""  # "auto" or "targeted"
         self._targeted_stock_codes: List[str] = []
+        self._validation_request_id = 0
 
         # Last validated stock (for Add button)
         self._last_validated_code = ""
@@ -448,22 +465,30 @@ class AutoLearnDialog(QDialog):
         self._apply_style()
 
     # =========================================================================
-    # UI SETUP
     # =========================================================================
 
     def _setup_ui(self):
-        layout = QVBoxLayout(self)
-        layout.setSpacing(10)
-        layout.setContentsMargins(15, 15, 15, 15)
+        root_layout = QVBoxLayout(self)
+        root_layout.setSpacing(8)
+        root_layout.setContentsMargins(10, 10, 10, 10)
 
-        # Header
         header = QLabel("🧠 Automatic Stock Discovery & Learning")
         header.setStyleSheet(
             "font-size: 20px; font-weight: bold; color: #58a6ff;"
         )
-        layout.addWidget(header)
+        root_layout.addWidget(header)
 
-        # Tab widget
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setStyleSheet("QScrollArea { border: none; }")
+        root_layout.addWidget(scroll)
+
+        content = QWidget()
+        layout = QVBoxLayout(content)
+        layout.setSpacing(10)
+        layout.setContentsMargins(4, 4, 4, 4)
+        scroll.setWidget(content)
+
         self.tabs = QTabWidget()
         self.tabs.setStyleSheet("""
             QTabWidget::pane {
@@ -502,7 +527,6 @@ class AutoLearnDialog(QDialog):
 
         layout.addWidget(self.tabs)
 
-        # Shared progress area
         progress_group = QGroupBox("📊 Progress")
         progress_layout = QVBoxLayout()
 
@@ -520,24 +544,22 @@ class AutoLearnDialog(QDialog):
         progress_group.setLayout(progress_layout)
         layout.addWidget(progress_group)
 
-        # Shared log area
         log_group = QGroupBox("📋 Activity Log")
         log_layout = QVBoxLayout()
 
         self.log_text = QTextEdit()
         self.log_text.setReadOnly(True)
-        self.log_text.setMinimumHeight(180)
+        self.log_text.setMinimumHeight(120)
         log_layout.addWidget(self.log_text)
 
         log_group.setLayout(log_layout)
         layout.addWidget(log_group)
 
-        # Bottom buttons
         btn_layout = QHBoxLayout()
         btn_layout.addStretch()
 
         self.close_btn = QPushButton("Close")
-        self.close_btn.setMinimumHeight(40)
+        self.close_btn.setMinimumHeight(34)
         self.close_btn.clicked.connect(self.close)
         btn_layout.addWidget(self.close_btn)
 
@@ -560,7 +582,6 @@ class AutoLearnDialog(QDialog):
         desc.setStyleSheet("color: #8b949e; font-size: 12px;")
         layout.addWidget(desc)
 
-        # Settings
         settings_group = QGroupBox("⚙️ Settings")
         settings_layout = QGridLayout()
         settings_layout.setSpacing(10)
@@ -602,7 +623,6 @@ class AutoLearnDialog(QDialog):
         settings_group.setLayout(settings_layout)
         layout.addWidget(settings_group)
 
-        # Buttons
         btn_layout = QHBoxLayout()
 
         self.auto_start_btn = QPushButton("🚀 Start Auto Learning")
@@ -644,7 +664,6 @@ class AutoLearnDialog(QDialog):
         search_group = QGroupBox("🔍 Search & Add Stocks")
         search_layout = QVBoxLayout()
 
-        # Search bar row
         search_row = QHBoxLayout()
 
         self.search_input = QLineEdit()
@@ -670,7 +689,6 @@ class AutoLearnDialog(QDialog):
 
         search_layout.addLayout(search_row)
 
-        # Search result label
         self.search_result_label = QLabel("")
         self.search_result_label.setStyleSheet(
             "font-size: 12px; padding: 4px;"
@@ -684,7 +702,6 @@ class AutoLearnDialog(QDialog):
         list_group = QGroupBox("📋 Training Stock List")
         list_layout = QVBoxLayout()
 
-        # Quick add row
         quick_row = QHBoxLayout()
         quick_label = QLabel("Quick add:")
         quick_label.setStyleSheet("color: #8b949e; font-size: 11px;")
@@ -727,7 +744,6 @@ class AutoLearnDialog(QDialog):
         quick_row.addStretch()
         list_layout.addLayout(quick_row)
 
-        # Stock list widget
         self.stock_list = QListWidget()
         self.stock_list.setMinimumHeight(120)
         self.stock_list.setSelectionMode(
@@ -755,7 +771,6 @@ class AutoLearnDialog(QDialog):
         """)
         list_layout.addWidget(self.stock_list)
 
-        # List action buttons
         list_btn_row = QHBoxLayout()
 
         self.remove_btn = QPushButton("🗑️ Remove Selected")
@@ -833,7 +848,6 @@ class AutoLearnDialog(QDialog):
         return tab
 
     # =========================================================================
-    # SEARCH FUNCTIONS
     # =========================================================================
 
     def _normalize_code(self, code: str) -> str:
@@ -848,7 +862,6 @@ class AutoLearnDialog(QDialog):
         """
         code = code.strip()
 
-        # Remove common separators
         for ch in (" ", ".", "-", "_"):
             code = code.replace(ch, "")
 
@@ -883,7 +896,6 @@ class AutoLearnDialog(QDialog):
 
         code = self._normalize_code(raw)
 
-        # Check if already in list
         if code in self._targeted_stock_codes:
             self.search_result_label.setText(
                 f'<span style="color: #d29922;">'
@@ -892,7 +904,6 @@ class AutoLearnDialog(QDialog):
             )
             return
 
-        # Disable search button while validating
         self.search_btn.setEnabled(False)
         self.search_btn.setText("🔄 Searching...")
         self.add_btn.setEnabled(False)
@@ -902,14 +913,21 @@ class AutoLearnDialog(QDialog):
             f"</span>"
         )
 
-        # Run validation in background thread
         interval = self.target_interval_combo.currentText()
-        self._validator = StockValidatorWorker(code, interval)
+        self._validation_request_id += 1
+        self._validator = StockValidatorWorker(
+            code, interval, request_id=self._validation_request_id
+        )
         self._validator.validation_result.connect(self._on_validation_result)
         self._validator.start()
 
     def _on_validation_result(self, result: dict):
         """Handle stock validation result from background thread."""
+        request_id = int(result.get("request_id", 0) or 0)
+        if request_id != self._validation_request_id:
+            # Ignore stale async result from an older search action.
+            return
+
         # Re-enable search button
         self.search_btn.setEnabled(True)
         self.search_btn.setText("🔍 Search")
@@ -931,7 +949,6 @@ class AutoLearnDialog(QDialog):
             )
             self.add_btn.setEnabled(True)
 
-            # Store validated info for Add button
             self._last_validated_code = code
             self._last_validated_name = name
             self._last_validated_bars = bars
@@ -941,6 +958,8 @@ class AutoLearnDialog(QDialog):
             )
             self.add_btn.setEnabled(False)
             self._last_validated_code = ""
+
+        self._validator = None
 
     def _add_searched_stock(self):
         """Add the last validated stock to the training list."""
@@ -961,7 +980,6 @@ class AutoLearnDialog(QDialog):
             code, self._last_validated_name, self._last_validated_bars
         )
 
-        # Clear search
         self.search_input.clear()
         self.search_result_label.setText(
             f'<span style="color: #3fb950;">'
@@ -1079,6 +1097,20 @@ class AutoLearnDialog(QDialog):
             "incremental": self.incremental_check.isChecked(),
         }
 
+        # VPN mode is more fragile for large Yahoo-heavy batches.
+        try:
+            from core.network import get_network_env
+            env = get_network_env()
+            if env.is_vpn_active and config["max_stocks"] > 30:
+                config["max_stocks"] = 30
+                self.max_stocks_spin.setValue(30)
+                self._log(
+                    "VPN detected: Max stocks auto-capped to 30 for stability",
+                    "warning",
+                )
+        except Exception:
+            pass
+
         self._log("Starting auto-learning...", "info")
         self._log(
             f"Mode: {config['mode']}, "
@@ -1107,7 +1139,7 @@ class AutoLearnDialog(QDialog):
 
         if self.worker:
             self.worker.stop()
-            if not self.worker.wait(10000):
+            if not self.worker.wait(20000):
                 self._log("Worker did not stop cleanly", "warning")
             self.worker = None
 
@@ -1161,7 +1193,6 @@ class AutoLearnDialog(QDialog):
             "continuous": False,
         }
 
-        # Display stock list in log
         stock_display = ", ".join(self._targeted_stock_codes[:5])
         if len(self._targeted_stock_codes) > 5:
             stock_display += (
@@ -1201,7 +1232,7 @@ class AutoLearnDialog(QDialog):
 
         if self.targeted_worker:
             self.targeted_worker.stop()
-            if not self.targeted_worker.wait(10000):
+            if not self.targeted_worker.wait(20000):
                 self._log(
                     "Targeted worker did not stop cleanly", "warning"
                 )
@@ -1211,7 +1242,6 @@ class AutoLearnDialog(QDialog):
         self._set_running(False)
 
     # =========================================================================
-    # UI STATE MANAGEMENT
     # =========================================================================
 
     def _set_running(self, running: bool, mode: str = ""):
@@ -1234,7 +1264,6 @@ class AutoLearnDialog(QDialog):
             if mode == "auto":
                 self.auto_stop_btn.setEnabled(True)
                 self.target_stop_btn.setEnabled(False)
-                # Disable auto settings
                 self.mode_combo.setEnabled(False)
                 self.max_stocks_spin.setEnabled(False)
                 self.epochs_spin.setEnabled(False)
@@ -1244,7 +1273,6 @@ class AutoLearnDialog(QDialog):
             elif mode == "targeted":
                 self.auto_stop_btn.setEnabled(False)
                 self.target_stop_btn.setEnabled(True)
-                # Disable targeted settings
                 self.search_input.setEnabled(False)
                 self.search_btn.setEnabled(False)
                 self.add_btn.setEnabled(False)
@@ -1263,14 +1291,12 @@ class AutoLearnDialog(QDialog):
             self.auto_stop_btn.setEnabled(False)
             self.target_stop_btn.setEnabled(False)
 
-            # Auto tab settings
             self.mode_combo.setEnabled(True)
             self.max_stocks_spin.setEnabled(True)
             self.epochs_spin.setEnabled(True)
             self.discover_check.setEnabled(True)
             self.incremental_check.setEnabled(True)
 
-            # Targeted tab settings
             self.search_input.setEnabled(True)
             self.search_btn.setEnabled(True)
             # add_btn stays disabled until next search
@@ -1285,7 +1311,6 @@ class AutoLearnDialog(QDialog):
             self.targeted_worker = None
 
     # =========================================================================
-    # CALLBACKS
     # =========================================================================
 
     def _on_progress(self, percent: int, message: str):
@@ -1296,6 +1321,21 @@ class AutoLearnDialog(QDialog):
     def _on_auto_finished(self, results: dict):
         """Handle auto-learning completion."""
         self._log("=" * 50, "info")
+        status = results.get("status", "ok")
+        if status == "error":
+            err = str(results.get("error") or "Auto-learning failed")
+            self._log(f"Auto-learning failed: {err}", "error")
+            self._log_results(results)
+            self._set_running(False)
+            self.status_label.setText("Auto-learning failed")
+            self.progress_bar.setValue(100)
+            QMessageBox.critical(
+                self,
+                "Learning Failed",
+                f"Auto-learning failed:\n\n{err}",
+            )
+            return
+
         self._log("🎉 Auto-learning completed!", "success")
         self._log_results(results)
 
@@ -1366,7 +1406,6 @@ class AutoLearnDialog(QDialog):
             self._log(f"🎯 Model accuracy: {accuracy:.1%}", "success")
 
     # =========================================================================
-    # LOGGING
     # =========================================================================
 
     def _log(self, message: str, level: str = "info"):
@@ -1400,7 +1439,6 @@ class AutoLearnDialog(QDialog):
             scrollbar.setValue(scrollbar.maximum())
 
     # =========================================================================
-    # BUTTON STYLES
     # =========================================================================
 
     @staticmethod
@@ -1450,7 +1488,6 @@ class AutoLearnDialog(QDialog):
         """
 
     # =========================================================================
-    # GLOBAL STYLE
     # =========================================================================
 
     def _apply_style(self):
@@ -1555,7 +1592,6 @@ class AutoLearnDialog(QDialog):
         """)
 
     # =========================================================================
-    # CLOSE EVENT
     # =========================================================================
 
     def closeEvent(self, event):
@@ -1571,22 +1607,26 @@ class AutoLearnDialog(QDialog):
             )
 
             if reply == QMessageBox.StandardButton.Yes:
-                # Stop whichever worker is active
                 if self.worker:
                     self.worker.stop()
                     self.worker.wait(5000)
                 if self.targeted_worker:
                     self.targeted_worker.stop()
                     self.targeted_worker.wait(5000)
+                if self._validator:
+                    self._validator.wait(2000)
+                    self._validator = None
                 event.accept()
             else:
                 event.ignore()
                 return
         else:
+            if self._validator:
+                self._validator.wait(2000)
+                self._validator = None
             event.accept()
 
         super().closeEvent(event)
-
 
 def show_auto_learn_dialog(parent=None):
     """Show the auto-learn dialog — convenience function."""

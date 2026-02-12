@@ -10,7 +10,6 @@ from utils.metrics import get_metrics
 
 log = logging.getLogger(__name__)
 
-
 class MetricsHandler(BaseHTTPRequestHandler):
     """HTTP handler for /metrics and /healthz endpoints."""
 
@@ -64,7 +63,6 @@ class MetricsHandler(BaseHTTPRequestHandler):
 
     def _method_not_allowed(self) -> None:
         self._send_text(405, "Method Not Allowed\n")
-
 
 class MetricsServer:
     """
@@ -148,7 +146,6 @@ class MetricsServer:
     def __repr__(self) -> str:
         state = "running" if self._started else "stopped"
         return f"MetricsServer({self._host}:{self._port}, {state})"
-
 
 # Convenience function — backward compatible but improved
 def serve(port: int = 8000, host: str = "127.0.0.1") -> MetricsServer:

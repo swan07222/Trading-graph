@@ -18,59 +18,42 @@ from utils.logger import get_logger
 
 log = get_logger(__name__)
 
-
-# ---------------------------------------------------------------------------
-# Constants
-# ---------------------------------------------------------------------------
-
 _NEWS_CACHE_TTL: int = 300          # 5 minutes
 _NEWS_BUFFER_SIZE: int = 200        # Rolling buffer max items
 _DEDUP_PREFIX_LEN: int = 40         # Title prefix length for dedup
 _FETCH_TIMEOUT: int = 5             # HTTP timeout for news fetchers
 _SENTIMENT_NEUTRAL_BAND: float = 0.2  # |score| < this → neutral
 
-
-# ---------------------------------------------------------------------------
-# Sentiment dictionaries
-# ---------------------------------------------------------------------------
-
 # Positive keywords (Chinese financial)
 POSITIVE_WORDS: Dict[str, float] = {
-    # Strong positive
     "涨停": 2.0, "大涨": 1.8, "暴涨": 1.8, "创新高": 1.5, "突破": 1.3,
     "利好": 1.5, "重大利好": 2.0, "超预期": 1.5, "业绩大增": 1.8,
     "净利润增长": 1.3, "营收增长": 1.2, "盈利": 1.0, "扭亏": 1.5,
     "分红": 1.0, "回购": 1.2, "增持": 1.3, "大股东增持": 1.5,
     "机构买入": 1.3, "北向资金流入": 1.2, "外资增持": 1.2,
-    # Moderate positive
     "上涨": 0.8, "走高": 0.8, "反弹": 0.7, "回升": 0.7,
     "利率下调": 0.8, "降准": 1.0, "降息": 1.0, "宽松": 0.8,
     "刺激": 0.7, "支持": 0.6, "鼓励": 0.6, "扶持": 0.7,
     "中标": 1.0, "签约": 0.8, "合作": 0.6, "战略合作": 0.8,
     "新产品": 0.7, "技术突破": 1.0, "专利": 0.7, "创新": 0.6,
     "产能扩张": 0.8, "订单增长": 1.0, "市场份额提升": 0.9,
-    # Policy positive
     "减税": 1.0, "补贴": 0.8, "政策支持": 1.0, "国家战略": 0.9,
     "改革": 0.5, "开放": 0.5, "自贸区": 0.7, "新基建": 0.8,
     "数字经济": 0.7, "碳中和": 0.6, "新能源": 0.6,
 }
 
-# Negative keywords
 NEGATIVE_WORDS: Dict[str, float] = {
-    # Strong negative
     "跌停": -2.0, "大跌": -1.8, "暴跌": -1.8, "崩盘": -2.0,
     "利空": -1.5, "重大利空": -2.0, "爆雷": -2.0, "违规": -1.5,
     "处罚": -1.5, "罚款": -1.3, "退市": -2.0, "ST": -1.5,
     "亏损": -1.3, "业绩下滑": -1.5, "净利润下降": -1.3,
     "减持": -1.3, "大股东减持": -1.5, "高管减持": -1.2,
     "质押": -0.8, "爆仓": -1.8, "违约": -1.5,
-    # Moderate negative
     "下跌": -0.8, "走低": -0.8, "回调": -0.5, "下探": -0.7,
     "加息": -0.8, "收紧": -0.8, "监管": -0.6, "审查": -0.7,
     "限制": -0.6, "禁止": -0.8, "制裁": -1.0, "贸易战": -1.0,
     "疫情": -0.7, "停产": -1.0, "停工": -0.8, "召回": -0.8,
     "诉讼": -0.7, "仲裁": -0.6, "调查": -0.7,
-    # Risk keywords
     "风险": -0.5, "警告": -0.6, "预警": -0.6, "泡沫": -0.8,
     "过热": -0.6, "通胀": -0.5, "滞涨": -0.7,
     "北向资金流出": -1.0, "外资减持": -1.0,
@@ -78,11 +61,6 @@ NEGATIVE_WORDS: Dict[str, float] = {
 
 # Max times a single keyword is counted (prevents spam amplification)
 _MAX_KEYWORD_COUNT: int = 3
-
-
-# ---------------------------------------------------------------------------
-# Sentiment analysis
-# ---------------------------------------------------------------------------
 
 def analyze_sentiment(text: str) -> Tuple[float, str]:
     """
@@ -126,11 +104,6 @@ def analyze_sentiment(text: str) -> Tuple[float, str]:
 
     return round(float(normalized), 3), label
 
-
-# ---------------------------------------------------------------------------
-# Data classes
-# ---------------------------------------------------------------------------
-
 @dataclass
 class NewsItem:
     """Single news article with auto-computed sentiment."""
@@ -173,11 +146,6 @@ class NewsItem:
             "codes": self.stock_codes,
         }
 
-
-# ---------------------------------------------------------------------------
-# News fetcher base
-# ---------------------------------------------------------------------------
-
 class _BaseNewsFetcher:
     """Shared session setup for news fetchers."""
 
@@ -192,11 +160,6 @@ class _BaseNewsFetcher:
         if referer:
             headers["Referer"] = referer
         self._session.headers.update(headers)
-
-
-# ---------------------------------------------------------------------------
-# Sina Finance
-# ---------------------------------------------------------------------------
 
 class SinaNewsFetcher(_BaseNewsFetcher):
     """Fetch news from Sina Finance (works on China IP)."""
@@ -286,11 +249,6 @@ class SinaNewsFetcher(_BaseNewsFetcher):
             log.debug(f"Sina stock news failed for {stock_code}: {exc}")
             return []
 
-
-# ---------------------------------------------------------------------------
-# Eastmoney
-# ---------------------------------------------------------------------------
-
 class EastmoneyNewsFetcher(_BaseNewsFetcher):
     """Fetch news from Eastmoney (works on China IP only)."""
 
@@ -327,7 +285,6 @@ class EastmoneyNewsFetcher(_BaseNewsFetcher):
             r = self._session.get(url, params=params, timeout=_FETCH_TIMEOUT)
             text = r.text
 
-            # Extract JSON from JSONP wrapper
             lparen = text.index("(")
             rparen = text.rindex(")")
             json_str = text[lparen + 1 : rparen]
@@ -413,11 +370,6 @@ class EastmoneyNewsFetcher(_BaseNewsFetcher):
             log.debug(f"Eastmoney policy news failed: {exc}")
             return []
 
-
-# ---------------------------------------------------------------------------
-# Tencent Finance
-# ---------------------------------------------------------------------------
-
 class TencentNewsFetcher(_BaseNewsFetcher):
     """Fetch news from Tencent Finance (works from ANY IP)."""
 
@@ -465,20 +417,10 @@ class TencentNewsFetcher(_BaseNewsFetcher):
             log.warning(f"Tencent market news failed: {exc}")
             return []
 
-
-# ---------------------------------------------------------------------------
-# Policy keywords for filtering
-# ---------------------------------------------------------------------------
-
 _POLICY_KEYWORDS: Tuple[str, ...] = (
     "央行", "证监会", "财政部", "国务院",
     "政策", "监管", "改革", "法规",
 )
-
-
-# ---------------------------------------------------------------------------
-# News aggregator
-# ---------------------------------------------------------------------------
 
 class NewsAggregator:
     """
@@ -594,7 +536,6 @@ class NewsAggregator:
                 except Exception:
                     pass
 
-        # Also search rolling buffer for this stock
         with self._lock:
             for item in self._all_news:
                 if code6 in item.title or code6 in str(item.stock_codes):
@@ -604,7 +545,6 @@ class NewsAggregator:
         unique.sort(key=lambda x: x.publish_time, reverse=True)
         unique = unique[:count]
 
-        # Ensure all items are tagged with this stock code
         for item in unique:
             if code6 not in item.stock_codes:
                 item.stock_codes.append(code6)
@@ -777,14 +717,10 @@ class NewsAggregator:
             self._cache.clear()
             self._cache_time.clear()
 
-
-# ===========================================================================
 # Thread-safe singleton
-# ===========================================================================
 
 _aggregator: Optional[NewsAggregator] = None
 _aggregator_lock = threading.Lock()
-
 
 def get_news_aggregator() -> NewsAggregator:
     """Double-checked locking singleton for NewsAggregator."""

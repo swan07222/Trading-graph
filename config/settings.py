@@ -17,24 +17,20 @@ _SENTINEL = object()
 # (avoids circular import: settings → logger → settings)
 _log = logging.getLogger("config.settings")
 
-
 class TradingMode(Enum):
     SIMULATION = "simulation"
     PAPER = "paper"
     LIVE = "live"
-
 
 class RiskProfile(Enum):
     CONSERVATIVE = "conservative"
     MODERATE = "moderate"
     AGGRESSIVE = "aggressive"
 
-
 class MarketType(Enum):
     A_SHARE = "a_share"
     HK = "hk"
     US = "us"
-
 
 @dataclass
 class DataConfig:
@@ -47,8 +43,7 @@ class DataConfig:
     retry_delay: float = 1.0
     min_history_days: int = 200
     feature_lookback: int = 60
-    poll_interval_seconds: float = 3.0
-
+    poll_interval_seconds: float = 1.0
 
 @dataclass
 class ModelConfig:
@@ -60,31 +55,26 @@ class ModelConfig:
     dropout: float = 0.3
     num_classes: int = 3
 
-    # Training
     epochs: int = 100
     batch_size: int = 64
     learning_rate: float = 0.0005
     early_stop_patience: int = 15
     weight_decay: float = 0.01
 
-    # Splits
     train_ratio: float = 0.70
     val_ratio: float = 0.15
     test_ratio: float = 0.15
 
-    # Prediction
     prediction_horizon: int = 5
     up_threshold: float = 2.0
     down_threshold: float = -2.0
     embargo_bars: int = 10
     min_confidence: float = 0.55
 
-    # Signal thresholds
     strong_buy_threshold: float = 0.65
     buy_threshold: float = 0.55
     sell_threshold: float = 0.55
     strong_sell_threshold: float = 0.65
-
 
 @dataclass
 class TradingConfig:
@@ -104,7 +94,6 @@ class TradingConfig:
     market_open_pm: time = field(default_factory=lambda: time(13, 0))
     market_close_pm: time = field(default_factory=lambda: time(15, 0))
 
-
 @dataclass
 class RiskConfig:
     """Risk management configuration."""
@@ -116,27 +105,31 @@ class RiskConfig:
     risk_per_trade_pct: float = 2.0
     var_confidence: float = 0.95
     kelly_fraction: float = 0.25
+    quote_staleness_seconds: float = 5.0
 
-    # Circuit breakers
     circuit_breaker_loss_pct: float = 5.0
     circuit_breaker_duration_minutes: int = 60
     max_orders_per_minute: int = 10
     max_orders_per_day: int = 100
 
-    # Kill switch
     kill_switch_loss_pct: float = 8.0
     kill_switch_drawdown_pct: float = 20.0
-
 
 @dataclass
 class SecurityConfig:
     """Security configuration."""
     encrypt_credentials: bool = True
     audit_logging: bool = True
+    audit_hash_chain: bool = True
     require_2fa_for_live: bool = True
+    require_live_trade_permission: bool = True
+    strict_live_governance: bool = False
+    min_live_approvals: int = 2
+    block_trading_when_unhealthy: bool = True
+    block_trading_when_degraded: bool = False
+    auto_pause_auto_trader_on_degraded: bool = True
     max_session_hours: int = 8
     ip_whitelist: List[str] = field(default_factory=list)
-
 
 @dataclass
 class AlertConfig:
@@ -150,7 +143,6 @@ class AlertConfig:
     webhook_enabled: bool = False
     webhook_url: str = ""
 
-    # Alert thresholds
     large_loss_alert_pct: float = 2.0
     position_concentration_alert_pct: float = 20.0
     connection_loss_alert_seconds: int = 30
@@ -158,7 +150,6 @@ class AlertConfig:
     from_email: str = ""
     smtp_username: str = ""
     smtp_password_key: str = "smtp_password"
-
 
 @dataclass
 class AutoTradeConfig:
@@ -188,13 +179,11 @@ class AutoTradeConfig:
     max_auto_position_pct: float = 10.0
     max_auto_order_value: float = 50000.0
 
-    # Timing
     scan_interval_seconds: int = 60
     cooldown_after_trade_seconds: int = 300
     max_trades_per_day: int = 10
     max_trades_per_stock_per_day: int = 2
 
-    # Safety
     require_market_open: bool = True
     require_broker_connected: bool = True
     pause_on_high_volatility: bool = True
@@ -205,13 +194,11 @@ class AutoTradeConfig:
     trailing_stop_enabled: bool = False
     trailing_stop_pct: float = 3.0
 
-    # Notification
     notify_on_trade: bool = True
     notify_on_skip: bool = False
 
     # Paper trading safety — require explicit confirmation for live
     confirm_live_auto_trade: bool = True
-
 
 def _safe_dataclass_from_dict(dc_instance, data: Dict) -> List[str]:
     """
@@ -265,7 +252,6 @@ def _safe_dataclass_from_dict(dc_instance, data: Dict) -> List[str]:
 
     return warnings_list
 
-
 def _dataclass_to_dict(dc_instance) -> Dict:
     """Serialize a dataclass to dict, handling special types."""
     result = {}
@@ -278,7 +264,6 @@ def _dataclass_to_dict(dc_instance) -> Dict:
         else:
             result[f.name] = value
     return result
-
 
 class Config:
     """
@@ -334,14 +319,12 @@ class Config:
         self.alerts = AlertConfig()
         self.auto_trade = AutoTradeConfig()
 
-        # Main settings
         self.capital: float = 100_000.0
         self.trading_mode: TradingMode = TradingMode.SIMULATION
         self.risk_profile: RiskProfile = RiskProfile.MODERATE
         self.market_type: MarketType = MarketType.A_SHARE
         self.broker_path: str = ""
 
-        # Paths
         self._base_dir = Path(__file__).parent.parent
         self._model_dir_override: Optional[str] = None
 
@@ -353,7 +336,6 @@ class Config:
         self._cache_dir_cached: Any = _SENTINEL
         self._audit_dir_cached: Any = _SENTINEL
 
-        # Stock pool
         self.stock_pool: List[str] = [
             "600519", "601318", "600036", "000858", "600900",
             "002594", "300750", "002475", "300059", "002230",
@@ -361,7 +343,6 @@ class Config:
             "300760", "300015", "601166", "601398", "600030",
         ]
 
-        # Training settings
         self.min_stocks_for_training: int = 5
         self.auto_learn_epochs: int = 50
 
@@ -378,7 +359,6 @@ class Config:
 
     # FIX #8: Single unified mapping
     _LEGACY_MAP: Dict[str, str] = {
-        # Model aliases
         "SEQUENCE_LENGTH": "model.sequence_length",
         "PREDICTION_HORIZON": "model.prediction_horizon",
         "NUM_CLASSES": "model.num_classes",
@@ -400,17 +380,16 @@ class Config:
         "TRAIN_RATIO": "model.train_ratio",
         "VAL_RATIO": "model.val_ratio",
         "TEST_RATIO": "model.test_ratio",
-        # Trading aliases
         "COMMISSION": "trading.commission",
         "STAMP_TAX": "trading.stamp_tax",
         "SLIPPAGE": "trading.slippage",
         "LOT_SIZE": "trading.lot_size",
-        # Risk aliases
         "MAX_POSITION_PCT": "risk.max_position_pct",
         "MAX_DAILY_LOSS_PCT": "risk.max_daily_loss_pct",
         "MAX_POSITIONS": "risk.max_positions",
         "RISK_PER_TRADE": "risk.risk_per_trade_pct",
-        # Path aliases
+        "QUOTE_STALENESS_SECONDS": "risk.quote_staleness_seconds",
+        "POLL_INTERVAL_SECONDS": "data.poll_interval_seconds",
         "DATA_DIR": "_prop_data_dir",
         "dataDir": "_prop_data_dir",
         "MODEL_DIR": "_prop_model_dir",
@@ -459,7 +438,6 @@ class Config:
 
         mapping = Config._LEGACY_MAP.get(name)
         if mapping is None:
-            # Stock pool alias
             if name == "STOCK_POOL":
                 return self.stock_pool
             raise AttributeError(
@@ -682,7 +660,6 @@ class Config:
                     )
                 continue
 
-            # Handle enums
             if key == "trading_mode" and isinstance(value, str):
                 try:
                     self.trading_mode = TradingMode(value.lower())
@@ -823,7 +800,6 @@ class Config:
         for w in self._validation_warnings:
             _log.warning("Config validation: %s", w)
 
-        # Only raise for fatal issues in live mode
         if (
             self.trading_mode == TradingMode.LIVE
             and self._validation_warnings
@@ -940,7 +916,6 @@ class Config:
         if now.weekday() >= 5:
             return False
 
-        # Try holiday calendar if available
         try:
             from core.constants import is_trading_day
 
@@ -976,6 +951,4 @@ class Config:
             f"auto_trade={'ON' if self.auto_trade.enabled else 'OFF'})"
         )
 
-
-# Global config instance
 CONFIG = Config()

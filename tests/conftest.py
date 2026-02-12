@@ -4,9 +4,7 @@ import sys
 import os
 from pathlib import Path
 
-# Ensure project root is in path
 sys.path.insert(0, str(Path(__file__).parent.parent))
-
 
 @pytest.fixture(autouse=True)
 def reset_cache():
@@ -16,7 +14,6 @@ def reset_cache():
     cache.clear()
     yield
     cache.clear()
-
 
 @pytest.fixture
 def temp_model_dir(tmp_path):

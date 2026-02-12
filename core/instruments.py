@@ -10,7 +10,6 @@ try:
 except Exception:
     get_exchange = None
 
-
 CN_PREFIXES = (
     "sh.", "sz.", "bj.", "SH.", "SZ.", "BJ.",
     "sh", "sz", "bj", "SH", "SZ", "BJ",
@@ -23,13 +22,11 @@ CN_SUFFIXES = (".SS", ".SZ", ".BJ", ".ss", ".sz", ".bj")
 HK_SUFFIXES = (".HK", ".hk")
 US_SUFFIXES = ()  # keep empty; US tickers rarely have suffix in user input
 
-
 def _strip_prefixes(s: str, prefixes) -> str:
     for p in prefixes:
         if s.startswith(p):
             return s[len(p):]
     return s
-
 
 def _strip_suffixes(s: str, suffixes) -> str:
     for suf in suffixes:
@@ -37,20 +34,16 @@ def _strip_suffixes(s: str, suffixes) -> str:
             return s[:-len(suf)]
     return s
 
-
 def _digits_only(s: str) -> str:
     return "".join(ch for ch in s if ch.isdigit())
 
-
 def _letters_numbers(s: str) -> str:
     return "".join(ch for ch in s if ch.isalnum())
-
 
 def _is_us_ticker(s: str) -> bool:
     # Basic ticker check: 1-6 letters/numbers/dot (e.g., BRK.B)
     # Keep it permissive; broker may accept more.
     return bool(re.fullmatch(r"[A-Z0-9]{1,6}(\.[A-Z])?", s))
-
 
 def _cn_yahoo_suffix(code6: str) -> str:
     """
@@ -66,7 +59,6 @@ def _cn_yahoo_suffix(code6: str) -> str:
         if ex == "BSE":
             return ".BJ"
 
-    # Heuristic fallback
     if code6.startswith(("600", "601", "603", "605", "688")):
         return ".SS"
     if code6.startswith(("000", "001", "002", "003", "300", "301")):
@@ -75,14 +67,12 @@ def _cn_yahoo_suffix(code6: str) -> str:
         return ".BJ"
     return ""
 
-
 def instrument_key(inst: Dict[str, Any]) -> str:
     """Stable unique key for caching/storage."""
     market = str(inst.get("market") or "UNKNOWN").upper()
     asset = str(inst.get("asset") or "UNKNOWN").upper()
     sym = str(inst.get("symbol") or "")
     return f"{market}:{asset}:{sym}"
-
 
 def parse_instrument(code: str) -> Dict[str, Any]:
     """
@@ -115,7 +105,6 @@ def parse_instrument(code: str) -> Dict[str, Any]:
     s_upper = s.upper()
 
     # -------------------------
-    # Explicit market hints
     # -------------------------
     is_explicit_hk = s_upper.startswith(tuple(p.upper() for p in HK_PREFIXES)) or s_upper.endswith(".HK")
     is_explicit_us = s_upper.startswith(tuple(p.upper() for p in US_PREFIXES))
@@ -208,7 +197,6 @@ def parse_instrument(code: str) -> Dict[str, Any]:
                 "vendor": {},
             }
 
-    # Generic ticker fallback
     sym = raw.upper().strip()
     if _is_us_ticker(sym):
         return {
@@ -221,7 +209,6 @@ def parse_instrument(code: str) -> Dict[str, Any]:
             "vendor": {},
         }
 
-    # Unknown fallback
     return {
         "market": "UNKNOWN",
         "asset": "EQUITY",

@@ -17,7 +17,6 @@ from core.constants import get_price_limit, get_lot_size, get_exchange
 
 log = get_logger(__name__)
 
-
 @dataclass
 class BacktestTrade:
     """Single trade record"""
@@ -33,26 +32,24 @@ class BacktestTrade:
     holding_days: int = 0
     signal_confidence: float = 0.0
 
-
 @dataclass
 class SlippageModel:
     """Realistic slippage based on order size and liquidity"""
     base_slippage: float = 0.001
     volume_impact: float = 0.1
-    
+
     def calculate(self, order_value: float, daily_volume: float, daily_avg_price: float) -> float:
         if daily_volume <= 0 or daily_avg_price <= 0 or np.isnan(daily_volume) or np.isnan(daily_avg_price):
             return self.base_slippage
-        
+
         daily_value = daily_volume * daily_avg_price
         if daily_value <= 0:
             return self.base_slippage
-            
+
         order_pct = order_value / daily_value
         slippage = self.base_slippage + self.volume_impact * order_pct
-        
-        return min(slippage, 0.05)
 
+        return min(slippage, 0.05)
 
 @dataclass
 class BacktestResult:
@@ -122,14 +119,13 @@ class BacktestResult:
 {'=' * 70}
 """
 
-
 class Backtester:
     """Walk-Forward Backtesting with proper methodology."""
-    
+
     def __init__(self):
         self.fetcher = DataFetcher()
         self.feature_engine = FeatureEngine()
-    
+
     def run(
         self,
         stock_codes: List[str] = None,
@@ -139,34 +135,29 @@ class Backtester:
         initial_capital: float = None
     ) -> BacktestResult:
         """Run walk-forward backtest."""
-        # Get stock list with fallback
         stocks = self._get_stock_list(stock_codes)
         capital = initial_capital or getattr(CONFIG, 'capital', 1000000)
-        
+
         log.info(f"Starting walk-forward backtest:")
         log.info(f"  Stocks to test: {stocks}")
         log.info(f"  Train: {train_months} months, Test: {test_months} months")
         log.info(f"  Capital: ¥{capital:,.2f}")
-        
-        # Collect and validate data with better error reporting
+
         all_data = self._collect_data(stocks, min_data_days)
-        
+
         if not all_data:
-            # Provide detailed error message
             error_msg = self._diagnose_data_issue(stocks)
             raise ValueError(error_msg)
-        
+
         log.info(f"  Successfully loaded {len(all_data)} stocks")
-        
-        # Find common date range
+
         min_date = max(df.index.min() for df in all_data.values())
         max_date = min(df.index.max() for df in all_data.values())
-        
+
         log.info(f"  Date range: {min_date.date()} to {max_date.date()}")
-        
-        # Generate folds
+
         folds = self._generate_folds(min_date, max_date, train_months, test_months)
-        
+
         if not folds:
             raise ValueError(
                 f"Insufficient data for walk-forward testing.\n"
@@ -174,39 +165,38 @@ class Backtester:
                 f"  Required: {train_months + test_months} months minimum\n"
                 f"  Try reducing train_months or test_months, or use more historical data."
             )
-        
+
         log.info(f"  Folds: {len(folds)}")
-        
-        # Run backtest
+
         all_trades = []
         daily_returns_by_date: Dict[datetime, List[float]] = defaultdict(list)
         benchmark_returns_by_date: Dict[datetime, List[float]] = defaultdict(list)
         fold_accuracies = []
         fold_results = []
-        
+
         for fold_idx, fold in enumerate(folds):
             train_start, train_end, test_start, test_end = fold
-            
+
             log.info(f"\nFold {fold_idx + 1}/{len(folds)}:")
             log.info(f"  Train: {train_start.date()} to {train_end.date()}")
             log.info(f"  Test:  {test_start.date()} to {test_end.date()}")
-            
+
             result = self._run_fold(
                 all_data, train_start, train_end, test_start, test_end, capital
             )
-            
+
             if result is not None:
                 trades, returns_dict, benchmark_dict, accuracy = result
                 all_trades.extend(trades)
-                
+
                 for dt, ret in returns_dict.items():
                     daily_returns_by_date[dt].append(float(ret))
 
                 for dt, ret in benchmark_dict.items():
                     benchmark_returns_by_date[dt].append(float(ret))
-                
+
                 fold_accuracies.append(accuracy)
-                
+
                 fold_results.append({
                     'fold': fold_idx + 1,
                     'train_start': train_start,
@@ -217,21 +207,20 @@ class Backtester:
                     'trades': len(trades),
                     'return': sum(t.pnl_pct for t in trades) if trades else 0
                 })
-        
+
         if not daily_returns_by_date:
             raise ValueError("No predictions generated during backtest. Check model and data.")
-        
+
         # Calculate properly time-aligned returns
         sorted_dates = sorted(daily_returns_by_date.keys())
-        
+
         daily_returns = np.array([
             np.mean(daily_returns_by_date[dt]) for dt in sorted_dates
         ])
         benchmark_daily = np.array([
             np.mean(benchmark_returns_by_date.get(dt, [0])) for dt in sorted_dates
         ])
-        
-        # Calculate metrics
+
         result = self._calculate_metrics(
             trades=all_trades,
             daily_returns=daily_returns,
@@ -242,22 +231,22 @@ class Backtester:
             fold_accuracies=fold_accuracies,
             fold_results=fold_results
         )
-        
+
         return result
-    
+
     def _get_stock_list(self, stock_codes: Optional[List[str]]) -> List[str]:
         """Get stock list with fallbacks"""
         if stock_codes:
             return stock_codes
-        
+
         # Try CONFIG.stock_pool
         if hasattr(CONFIG, 'stock_pool') and CONFIG.stock_pool:
             return CONFIG.stock_pool[:5]
-        
+
         # Try CONFIG.STOCK_POOL
         if hasattr(CONFIG, 'STOCK_POOL') and CONFIG.STOCK_POOL:
             return CONFIG.STOCK_POOL[:5]
-        
+
         # Default test stocks (major Chinese stocks)
         default_stocks = [
             "600519",  # 贵州茅台
@@ -268,7 +257,7 @@ class Backtester:
         ]
         log.warning(f"No stock pool configured, using default stocks: {default_stocks}")
         return default_stocks
-    
+
     def _collect_data(self, stocks: List[str], min_days: int) -> Dict[str, pd.DataFrame]:
         """Collect RAW OHLCV only (NO features here to avoid fold leakage)."""
         all_data: Dict[str, pd.DataFrame] = {}
@@ -310,15 +299,14 @@ class Backtester:
                 log.warning(f"  - {err}")
 
         return all_data
-    
+
     def _diagnose_data_issue(self, stocks: List[str]) -> str:
         """Provide detailed diagnosis of data issues"""
         issues = []
-        
-        # Check if fetcher is working
+
         issues.append("No valid data available for backtesting.\n")
         issues.append("Diagnosis:\n")
-        
+
         for code in stocks[:3]:  # Check first 3 stocks
             try:
                 df = self.fetcher.get_history(code, days=100)
@@ -330,15 +318,15 @@ class Backtester:
                     issues.append(f"  - {code}: Got {len(df)} rows")
             except Exception as e:
                 issues.append(f"  - {code}: Error - {e}")
-        
+
         issues.append("\nPossible solutions:")
         issues.append("  1. Check internet connection")
         issues.append("  2. Verify stock codes are valid (e.g., 600519, 000858)")
         issues.append("  3. Check if data source (akshare/tushare) is working")
         issues.append("  4. Try running with --predict 600519 first to test data fetch")
-        
+
         return "\n".join(issues)
-    
+
     def _generate_folds(
         self,
         min_date: pd.Timestamp,
@@ -348,27 +336,26 @@ class Backtester:
     ) -> List[Tuple]:
         """Generate walk-forward folds with proper separation"""
         folds = []
-        
-        # Get embargo days safely
+
         embargo_days = 5  # default
         if hasattr(CONFIG, 'model') and hasattr(CONFIG.model, 'embargo_bars'):
             embargo_days = CONFIG.model.embargo_bars
-        
+
         train_start = min_date
-        
+
         while True:
             train_end = train_start + pd.DateOffset(months=train_months)
             test_start = train_end + pd.Timedelta(days=embargo_days)
             test_end = test_start + pd.DateOffset(months=test_months)
-            
+
             if test_end > max_date:
                 break
-            
+
             folds.append((train_start, train_end, test_start, test_end))
             train_start = train_start + pd.DateOffset(months=test_months)
-        
+
         return folds
-        
+
     def _run_fold(
         self,
         all_data: Dict[str, pd.DataFrame],   # RAW OHLCV now
@@ -546,7 +533,7 @@ class Backtester:
             bench_by_date[dt] = ((bv1 / bv0) - 1.0) * 100.0 if bv0 > 0 else 0.0
 
         return trades, returns_by_date, bench_by_date, accuracy
-    
+
     def _simulate_trading(
         self,
         model: EnsembleModel,
@@ -576,18 +563,17 @@ class Backtester:
         daily_portfolio_values: Dict[pd.Timestamp, float] = {}
         daily_benchmark_values: Dict[pd.Timestamp, float] = {}
 
-        # Get config values safely
         horizon = 5
         min_confidence = 0.6
         commission_rate = 0.0003
         stamp_tax_rate = 0.001
-        
+
         if hasattr(CONFIG, 'model'):
             if hasattr(CONFIG.model, 'prediction_horizon'):
                 horizon = CONFIG.model.prediction_horizon
             if hasattr(CONFIG.model, 'min_confidence'):
                 min_confidence = CONFIG.model.min_confidence
-        
+
         if hasattr(CONFIG, 'trading'):
             if hasattr(CONFIG.trading, 'commission'):
                 commission_rate = CONFIG.trading.commission
@@ -615,7 +601,6 @@ class Backtester:
                 return False
             return px <= prev_close * (1.0 - limit_pct + 1e-4)
 
-        # Benchmark
         first_open = float(open_prices[0]) if len(open_prices) > 0 else 0.0
         benchmark_shares = (capital / first_open) if first_open > 0 else 0.0
 
@@ -635,7 +620,6 @@ class Backtester:
             if np.isnan(open_t) or np.isnan(close_t) or open_t <= 0 or close_t <= 0:
                 continue
 
-            # Execute pending
             if pending_signal is not None:
                 action, signal_conf, signal_dt = pending_signal
                 pending_signal = None
@@ -713,7 +697,6 @@ class Backtester:
             daily_portfolio_values[dt] = float(cash + shares * close_t)
             daily_benchmark_values[dt] = float(benchmark_shares * close_t)
 
-            # Signal for next bar
             if t < n - 1:
                 pred = preds[t]
                 if shares == 0 and pred.predicted_class == 2 and pred.confidence >= min_confidence:
@@ -727,7 +710,6 @@ class Backtester:
                     if should_exit:
                         pending_signal = ("SELL", float(pred.confidence), dt)
 
-        # Force close
         if shares > 0 and trades:
             dt = dates[n - 1]
             close_t = float(close_prices[n - 1])
@@ -760,7 +742,7 @@ class Backtester:
                 daily_portfolio_values[dt] = float(cash)
 
         return trades, daily_portfolio_values, daily_benchmark_values
-        
+
     def _calculate_metrics(
         self,
         trades: List[BacktestTrade],
@@ -773,28 +755,24 @@ class Backtester:
         fold_results: List[Dict]
     ) -> BacktestResult:
         """Calculate comprehensive backtest metrics"""
-        
-        # Build equity curve
+
         equity = [capital]
         for ret in daily_returns:
             equity.append(equity[-1] * (1 + ret / 100))
         equity = np.array(equity[1:])
-        
+
         total_return = (equity[-1] / capital - 1) * 100 if len(equity) > 0 else 0
-        
-        # Benchmark
+
         benchmark_equity = [capital]
         for ret in benchmark_daily:
             benchmark_equity.append(benchmark_equity[-1] * (1 + ret / 100))
         benchmark_return = (benchmark_equity[-1] / capital - 1) * 100 if len(benchmark_equity) > 1 else 0
-        
-        # Sharpe ratio
+
         if len(daily_returns) > 1 and np.std(daily_returns) > 0:
             sharpe = np.mean(daily_returns) / np.std(daily_returns) * np.sqrt(252)
         else:
             sharpe = 0
-        
-        # Max drawdown
+
         if len(equity) > 0:
             running_max = np.maximum.accumulate(equity)
             drawdown = (equity - running_max) / running_max
@@ -802,41 +780,38 @@ class Backtester:
             max_dd = abs(np.min(equity - running_max))
         else:
             max_dd = max_dd_pct = 0
-        
-        # Volatility
+
         volatility = np.std(daily_returns) * np.sqrt(252) if len(daily_returns) > 0 else 0
-        
-        # Calmar ratio
+
         if max_dd_pct > 0.01:
             calmar = total_return / max_dd_pct
         else:
             calmar = 0
-        
-        # Trade statistics
+
         total_trades = len(trades)
-        
+
         if total_trades > 0:
             pnls = [t.pnl_pct for t in trades]
             wins = [p for p in pnls if p > 0]
             losses = [p for p in pnls if p < 0]
-            
+
             winning_trades = len(wins)
             losing_trades = len(losses)
             win_rate = winning_trades / total_trades
-            
+
             avg_win = np.mean(wins) if wins else 0
             avg_loss = np.mean(losses) if losses else 0
-            
+
             gross_profit = sum(wins) if wins else 0
             gross_loss = abs(sum(losses)) if losses else 1
             profit_factor = gross_profit / gross_loss if gross_loss > 0 else 0
-            
+
             avg_holding = np.mean([t.holding_days for t in trades])
         else:
             winning_trades = losing_trades = 0
             win_rate = profit_factor = avg_win = avg_holding = 0
             avg_loss = 0
-        
+
         return BacktestResult(
             total_return=total_return,
             benchmark_return=benchmark_return,

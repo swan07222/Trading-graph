@@ -31,11 +31,8 @@ from utils.logger import get_logger
 
 log = get_logger(__name__)
 
-
-# ============================================================
 # Bounded ID mapping (LRU eviction)
 # FIX(6): Prevents unbounded growth of order ID maps
-# ============================================================
 
 class BoundedOrderedDict(OrderedDict):
     """OrderedDict with max size — evicts oldest on overflow."""
@@ -51,11 +48,8 @@ class BoundedOrderedDict(OrderedDict):
         while len(self) > self._maxsize:
             self.popitem(last=False)
 
-
-# ============================================================
 # Module-level fill ID generator
 # FIX(12): Fallback uses stable hash instead of datetime.now()
-# ============================================================
 
 def make_fill_uid(
     broker_name: str,
@@ -92,11 +86,7 @@ def make_fill_uid(
     h = hashlib.sha256(raw.encode()).hexdigest()[:12]
     return f"FILL|{day}|{broker}|{sym}|{h}"
 
-
-# ============================================================
-# Shared status parser
 # FIX(3): Single function instead of duplicated methods
-# ============================================================
 
 def parse_broker_status(status_str: str) -> OrderStatus:
     """Parse Chinese broker status string to OrderStatus enum."""
@@ -113,11 +103,6 @@ def parse_broker_status(status_str: str) -> OrderStatus:
     if '废单' in s or '拒绝' in s:
         return OrderStatus.REJECTED
     return OrderStatus.SUBMITTED
-
-
-# ============================================================
-# Abstract Broker Interface
-# ============================================================
 
 class BrokerInterface(ABC):
     """
@@ -259,11 +244,6 @@ class BrokerInterface(ABC):
             except Exception as e:
                 log.error(f"Callback error for {event}: {e}")
 
-
-# ============================================================
-# Simulator Broker
-# ============================================================
-
 class SimulatorBroker(BrokerInterface):
     """
     Paper trading simulator with realistic behavior.
@@ -295,7 +275,6 @@ class SimulatorBroker(BrokerInterface):
         # Data fetcher (lazy init)
         self._fetcher = None
 
-        # Fill ID counter
         self._fill_counter = 0
 
         # FIX(10): Bounded thread pool
@@ -356,7 +335,6 @@ class SimulatorBroker(BrokerInterface):
             self._update_prices()
 
             # FIX(7): Deep-copy positions so external code can't
-            # mutate internal state
             positions_copy = {}
             for sym, pos in self._positions.items():
                 positions_copy[sym] = Position(
@@ -450,7 +428,6 @@ class SimulatorBroker(BrokerInterface):
                     return
 
                 if order.status == OrderStatus.PARTIAL:
-                    # Continue loop for remaining fill
                     pass
 
             # Sleep between partial fills (outside lock)
@@ -499,7 +476,6 @@ class SimulatorBroker(BrokerInterface):
                 return order
 
             # FIX(4): Emit SUBMITTED status before transitioning to
-            # ACCEPTED
             order.status = OrderStatus.SUBMITTED
             self._orders[order.id] = order
             self._emit('order_update', order)
@@ -908,11 +884,7 @@ class SimulatorBroker(BrokerInterface):
                 'timestamp': datetime.now().isoformat(),
             }
 
-
-# ============================================================
-# Easytrader Base Broker
 # FIX(11): Shared base class for THS/ZSZQ (~80% code dedup)
-# ============================================================
 
 class EasytraderBroker(BrokerInterface):
     """
@@ -1018,7 +990,6 @@ class EasytraderBroker(BrokerInterface):
             balance = self._client.balance
             positions = self.get_positions()
 
-            # Try multiple field names for broker compatibility
             cash = float(
                 balance.get('资金余额')
                 or balance.get('总资产')
@@ -1189,11 +1160,9 @@ class EasytraderBroker(BrokerInterface):
                 if not broker_fill_id:
                     continue
 
-                # Dedup check BEFORE processing
                 if broker_fill_id in self._seen_fill_ids:
                     continue
 
-                # Parse fill timestamp
                 ts = (
                     trade.get("成交时间")
                     or trade.get("time")
@@ -1229,7 +1198,6 @@ class EasytraderBroker(BrokerInterface):
                     )
                     continue
 
-                # Mark as seen AFTER successful lookup
                 self._seen_fill_ids.add(broker_fill_id)
 
                 trade_side = trade.get(
@@ -1370,11 +1338,7 @@ class EasytraderBroker(BrokerInterface):
             self._fetcher = get_fetcher()
         return self._fetcher
 
-
-# ============================================================
-# Concrete Broker Implementations
 # FIX(11): Thin subclasses — all shared logic is in base
-# ============================================================
 
 class THSBroker(EasytraderBroker):
     """同花顺 / 华泰 / 国金 / 银河 broker via easytrader."""
@@ -1399,7 +1363,6 @@ class THSBroker(EasytraderBroker):
     def _get_easytrader_type(self) -> str:
         return self._broker_type
 
-
 class ZSZQBroker(EasytraderBroker):
     """招商证券 broker via easytrader (universal mode)."""
 
@@ -1409,11 +1372,6 @@ class ZSZQBroker(EasytraderBroker):
 
     def _get_easytrader_type(self) -> str:
         return 'universal'
-
-
-# ============================================================
-# Broker Factory
-# ============================================================
 
 def create_broker(
     mode: str = None, **kwargs,

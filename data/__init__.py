@@ -1,6 +1,5 @@
 # data/__init__.py
 
-
 def __getattr__(name: str):
     """Lazy import dispatcher for the data package."""
 
@@ -61,34 +60,25 @@ def __getattr__(name: str):
 
     raise AttributeError(f"module 'data' has no attribute {name!r}")
 
-
 __all__ = [
-    # Cache
     'TieredCache',
     'get_cache',
     'cached',
     'CacheStats',
-    # Database
     'MarketDatabase',
     'get_database',
-    # Fetcher
     'DataFetcher',
     'Quote',
     'get_fetcher',
-    # Features
     'FeatureEngine',
-    # Processor
     'DataProcessor',
-    # Discovery
     'UniversalStockDiscovery',
     'DiscoveredStock',
-    # Feeds
     'DataFeed',
     'PollingFeed',
     'AggregatedFeed',
     'FeedManager',
     'get_feed_manager',
-    # Validators
     'ValidationResult',
     'StockCodeValidator',
     'OHLCVValidator',

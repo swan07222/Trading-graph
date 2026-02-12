@@ -13,7 +13,6 @@ from utils.logger import get_logger
 
 log = get_logger(__name__)
 
-
 class Signal(Enum):
     """Trading signal types"""
     STRONG_BUY = "STRONG_BUY"
@@ -21,7 +20,6 @@ class Signal(Enum):
     HOLD = "HOLD"
     SELL = "SELL"
     STRONG_SELL = "STRONG_SELL"
-
 
 @dataclass
 class TradingLevels:
@@ -36,7 +34,6 @@ class TradingLevels:
     target_3: float = 0.0
     target_3_pct: float = 0.0
 
-
 @dataclass
 class PositionSize:
     """Position sizing information"""
@@ -45,7 +42,6 @@ class PositionSize:
     risk_amount: float = 0.0
     risk_pct: float = 0.0
 
-
 @dataclass
 class Prediction:
     """Complete prediction result"""
@@ -53,37 +49,29 @@ class Prediction:
     stock_name: str = ""
     timestamp: datetime = field(default_factory=datetime.now)
 
-    # Signal
     signal: Signal = Signal.HOLD
     signal_strength: float = 0.0
     confidence: float = 0.0
 
-    # Probabilities
     prob_up: float = 0.33
     prob_neutral: float = 0.34
     prob_down: float = 0.33
 
-    # Price data
     current_price: float = 0.0
     price_history: List[float] = field(default_factory=list)
     predicted_prices: List[float] = field(default_factory=list)
 
-    # Technical indicators
     rsi: float = 50.0
     macd_signal: str = "NEUTRAL"
     trend: str = "NEUTRAL"
 
-    # Trading levels
     levels: TradingLevels = field(default_factory=TradingLevels)
 
-    # Position sizing
     position: PositionSize = field(default_factory=PositionSize)
 
-    # Analysis
     reasons: List[str] = field(default_factory=list)
     warnings: List[str] = field(default_factory=list)
 
-    # Metadata
     interval: str = "1d"
     horizon: int = 5
 
@@ -93,7 +81,6 @@ class Prediction:
 
     # ATR from features (used internally for levels)
     atr_pct_value: float = 0.02
-
 
 class Predictor:
     """
@@ -107,7 +94,6 @@ class Predictor:
     - Prediction caching with configurable TTL
     """
 
-    # Prediction cache TTL in seconds
     _CACHE_TTL: float = 5.0
     _MAX_CACHE_SIZE: int = 200
 
@@ -121,7 +107,6 @@ class Predictor:
         self.interval = str(interval).lower()
         self.horizon = int(prediction_horizon or CONFIG.PREDICTION_HORIZON)
 
-        # Single lock for all prediction operations
         self._predict_lock = threading.RLock()
 
         # Components (lazy loaded)
@@ -141,11 +126,9 @@ class Predictor:
         self._requested_interval = self.interval
         self._requested_horizon = self.horizon
 
-        # Load models
         self._load_models()
 
     # =========================================================================
-    # MODEL LOADING
     # =========================================================================
 
     def _load_models(self) -> bool:
@@ -166,7 +149,6 @@ class Predictor:
             # Pick best ensemble + scaler pair
             chosen_ens, chosen_scl = self._find_best_model_pair(model_dir)
 
-            # Load scaler
             if chosen_scl and chosen_scl.exists():
                 self.processor.load_scaler(str(chosen_scl))
             else:
@@ -178,7 +160,6 @@ class Predictor:
                         "No scaler found — predictions may be inaccurate"
                     )
 
-            # Load ensemble
             self.ensemble = None
             if chosen_ens and chosen_ens.exists():
                 input_size = (
@@ -198,7 +179,6 @@ class Predictor:
                         )
                     )
 
-                    # Log if model overrides constructor params
                     if (
                         loaded_interval != self._requested_interval
                         or loaded_horizon != self._requested_horizon
@@ -318,7 +298,6 @@ class Predictor:
             self.forecaster = None
 
     # =========================================================================
-    # PREDICTION METHODS
     # =========================================================================
 
     def predict(
@@ -353,7 +332,6 @@ class Predictor:
 
             code = self._clean_code(stock_code)
 
-            # Check cache unless skipped
             if not skip_cache:
                 cached = self._get_cached_prediction(code)
                 if cached is not None:
@@ -386,7 +364,6 @@ class Predictor:
                 pred.current_price = float(df["close"].iloc[-1])
                 pred.price_history = df["close"].tail(180).tolist()
 
-                # Check minimum rows for feature engine
                 min_rows = getattr(
                     self.feature_engine, 'MIN_ROWS',
                     CONFIG.SEQUENCE_LENGTH
@@ -415,7 +392,6 @@ class Predictor:
                 pred.position = self._calculate_position(pred)
                 self._generate_reasons(pred)
 
-                # Cache the result
                 self._set_cached_prediction(code, pred)
 
             except Exception as e:
@@ -541,7 +517,6 @@ class Predictor:
                     df, self._feature_cols
                 )
 
-                # Get ATR for forecast volatility
                 atr_pct = self._get_atr_pct(df)
 
                 predicted = self._generate_forecast(
@@ -582,7 +557,6 @@ class Predictor:
             return filtered[:n]
 
     # =========================================================================
-    # ENSEMBLE PREDICTION HELPER
     # =========================================================================
 
     def _apply_ensemble_prediction(
@@ -594,12 +568,10 @@ class Predictor:
         probs = ensemble_pred.probabilities
         n_classes = len(probs)
 
-        # Safe extraction with bounds checking
         pred.prob_down = float(probs[0]) if n_classes > 0 else 0.33
         pred.prob_neutral = float(probs[1]) if n_classes > 1 else 0.34
         pred.prob_up = float(probs[2]) if n_classes > 2 else 0.33
 
-        # Ensure probabilities are valid
         pred.prob_down = max(0.0, min(1.0, pred.prob_down))
         pred.prob_neutral = max(0.0, min(1.0, pred.prob_neutral))
         pred.prob_up = max(0.0, min(1.0, pred.prob_up))
@@ -621,7 +593,6 @@ class Predictor:
         )
 
     # =========================================================================
-    # CACHING
     # =========================================================================
 
     def _get_cached_prediction(self, code: str) -> Optional[Prediction]:
@@ -640,7 +611,6 @@ class Predictor:
         with self._cache_lock:
             self._pred_cache[code] = (time.time(), pred)
 
-            # Evict expired entries if cache is too large
             if len(self._pred_cache) > self._MAX_CACHE_SIZE:
                 now = time.time()
                 expired = [
@@ -668,7 +638,6 @@ class Predictor:
                 self._pred_cache.clear()
 
     # =========================================================================
-    # DATA FETCHING
     # =========================================================================
 
     def _fetch_data(
@@ -723,7 +692,6 @@ class Predictor:
             return None
 
     # =========================================================================
-    # FORECAST GENERATION
     # =========================================================================
 
     def _generate_forecast(
@@ -737,7 +705,6 @@ class Predictor:
         if current_price <= 0:
             return []
 
-        # Try TCN forecaster first
         if self.forecaster is not None:
             try:
                 import torch
@@ -751,7 +718,6 @@ class Predictor:
                 prices = [current_price]
                 for r in returns[:horizon]:
                     next_price = prices[-1] * (1 + float(r) / 100)
-                    # Guard against extreme values
                     next_price = max(
                         next_price, current_price * 0.5
                     )
@@ -776,7 +742,6 @@ class Predictor:
                     - (float(probs[0]) if len(probs) > 0 else 0.33)
                 )
 
-                # Use actual ATR for realistic volatility
                 volatility = max(atr_pct, 0.005)
 
                 prices = []
@@ -790,12 +755,10 @@ class Predictor:
                     # Mean-reverting drift with ensemble direction
                     drift = direction * volatility * 0.3
                     noise = rng.normal(0, volatility * 0.5)
-                    # Decay direction influence over horizon
                     decay = 1.0 - (i / (horizon * 2))
                     change = drift * decay + noise
                     price = price * (1 + change)
 
-                    # Guard against extreme values
                     price = max(price, current_price * 0.5)
                     price = min(price, current_price * 2.0)
 
@@ -809,7 +772,6 @@ class Predictor:
         return [current_price] * horizon
 
     # =========================================================================
-    # SIGNAL DETERMINATION
     # =========================================================================
 
     def _determine_signal(
@@ -850,7 +812,6 @@ class Predictor:
         )
 
     # =========================================================================
-    # TRADING LEVELS
     # =========================================================================
 
     def _calculate_levels(self, pred: Prediction) -> TradingLevels:
@@ -881,7 +842,6 @@ class Predictor:
             levels.target_2 = price * (1 + atr_pct * 2.0)
             levels.target_3 = price * (1 + atr_pct * 3.5)
 
-        # Calculate percentages
         if price > 0:
             levels.stop_loss_pct = (levels.stop_loss / price - 1) * 100
             levels.target_1_pct = (levels.target_1 / price - 1) * 100
@@ -891,7 +851,6 @@ class Predictor:
         return levels
 
     # =========================================================================
-    # POSITION SIZING
     # =========================================================================
 
     def _calculate_position(self, pred: Prediction) -> PositionSize:
@@ -913,11 +872,9 @@ class Predictor:
         shares = int(risk_amount / stop_distance)
         shares = (shares // lot_size) * lot_size
 
-        # Ensure at least one lot
         if shares < lot_size:
             shares = lot_size
 
-        # Cap by maximum position value
         max_value = self.capital * (CONFIG.MAX_POSITION_PCT / 100)
         if shares * price > max_value:
             shares = int(max_value / price)
@@ -941,7 +898,6 @@ class Predictor:
         )
 
     # =========================================================================
-    # TECHNICAL EXTRACTION
     # =========================================================================
 
     def _extract_technicals(self, df: pd.DataFrame, pred: Prediction):
@@ -962,7 +918,6 @@ class Predictor:
                 raw_rsi = (normalized_rsi + 0.5) * 100.0
                 pred.rsi = float(np.clip(raw_rsi, 0.0, 100.0))
 
-            # MACD direction from histogram
             if "macd_hist" in df.columns:
                 macd_hist = float(df["macd_hist"].iloc[-1])
                 if macd_hist > 0.001:
@@ -972,7 +927,6 @@ class Predictor:
                 else:
                     pred.macd_signal = "NEUTRAL"
 
-            # Trend from MA ratio
             if "ma_ratio_5_20" in df.columns:
                 ma_ratio = float(df["ma_ratio_5_20"].iloc[-1])
                 if ma_ratio > 1.0:
@@ -982,7 +936,6 @@ class Predictor:
                 else:
                     pred.trend = "SIDEWAYS"
 
-            # Extract ATR for position sizing and levels
             pred.atr_pct_value = self._get_atr_pct(df)
 
         except Exception as e:
@@ -994,14 +947,12 @@ class Predictor:
             if "atr_pct" in df.columns:
                 atr = float(df["atr_pct"].iloc[-1])
                 # atr_pct from FeatureEngine is: atr_14 / close * 100
-                # Convert from percentage to decimal
                 return max(atr / 100.0, 0.005)
         except Exception:
             pass
         return 0.02  # default 2%
 
     # =========================================================================
-    # ANALYSIS REASONS
     # =========================================================================
 
     def _generate_reasons(self, pred: Prediction):
@@ -1009,7 +960,6 @@ class Predictor:
         reasons = []
         warnings = []
 
-        # Confidence
         if pred.confidence >= 0.7:
             reasons.append(
                 f"High AI confidence: {pred.confidence:.0%}"
@@ -1023,13 +973,11 @@ class Predictor:
                 f"Low AI confidence: {pred.confidence:.0%}"
             )
 
-        # Model agreement
         if pred.model_agreement < 0.6:
             warnings.append(
                 f"Low model agreement: {pred.model_agreement:.0%}"
             )
 
-        # Probability direction
         if pred.prob_up > 0.5:
             reasons.append(
                 f"AI predicts UP with {pred.prob_up:.0%} probability"
@@ -1039,7 +987,6 @@ class Predictor:
                 f"AI predicts DOWN with {pred.prob_down:.0%} probability"
             )
 
-        # RSI
         if pred.rsi > 70:
             warnings.append(f"RSI overbought: {pred.rsi:.0f}")
         elif pred.rsi < 30:
@@ -1064,11 +1011,9 @@ class Predictor:
         ):
             warnings.append(f"Signal against trend ({pred.trend})")
 
-        # MACD
         if pred.macd_signal != "NEUTRAL":
             reasons.append(f"MACD: {pred.macd_signal}")
 
-        # Entropy
         if pred.entropy > 0.8:
             warnings.append(
                 f"High prediction uncertainty "
@@ -1079,7 +1024,6 @@ class Predictor:
         pred.warnings = warnings
 
     # =========================================================================
-    # UTILITIES
     # =========================================================================
 
     def _get_stock_name(self, code: str, df: pd.DataFrame) -> str:
@@ -1103,7 +1047,6 @@ class Predictor:
             except Exception:
                 pass
 
-        # Minimal fallback
         if not code:
             return ""
         code = str(code).strip()

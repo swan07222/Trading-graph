@@ -1,10 +1,11 @@
 # ui/app.py
 import sys
 import os
-from datetime import datetime
-from typing import Optional, Dict, List, Any
 import threading
 import time
+from datetime import datetime
+from importlib import import_module
+from typing import Optional, Dict, List, Any
 
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
@@ -23,55 +24,8 @@ from utils.logger import get_logger
 
 log = get_logger(__name__)
 
-# =============================================================================
-# LAZY IMPORTS - Avoid circular imports and improve startup time
-# =============================================================================
-
-def get_predictor_class():
-    """Lazy import Predictor"""
-    from models.predictor import Predictor
-    return Predictor
-
-
-def get_prediction_class():
-    """Lazy import Prediction"""
-    from models.predictor import Prediction
-    return Prediction
-
-
-def get_signal_class():
-    """Lazy import Signal"""
-    from models.predictor import Signal
-    return Signal
-
-
-def get_trainer_class():
-    """Lazy import Trainer"""
-    from models.trainer import Trainer
-    return Trainer
-
-
-def get_execution_engine():
-    """Lazy import ExecutionEngine"""
-    from trading.executor import ExecutionEngine
-    return ExecutionEngine
-
-
-def get_news_panel():
-    """Lazy import NewsPanel"""
-    from ui.news_widget import NewsPanel
-    return NewsPanel
-
-
-def get_auto_trader_class():
-    """Lazy import AutoTrader"""
-    from trading.executor import AutoTrader
-    return AutoTrader
-
-
-# =============================================================================
-# STOCK CODE VALIDATION
-# =============================================================================
+def _lazy_get(module: str, name: str):
+    return getattr(import_module(module), name)
 
 def _validate_stock_code(code: str) -> bool:
     """Validate that a stock code is a valid 6-digit Chinese stock code."""
@@ -90,7 +44,6 @@ def _validate_stock_code(code: str) -> bool:
     )
     return digits.startswith(valid_prefixes)
 
-
 def _normalize_stock_code(text: str) -> str:
     """Normalize stock code: strip prefixes/suffixes, keep digits, zero-pad."""
     if not text:
@@ -105,10 +58,7 @@ def _normalize_stock_code(text: str) -> str:
     text = "".join(c for c in text if c.isdigit())
     return text.zfill(6) if text else ""
 
-
-# =============================================================================
 # REAL-TIME MONITORING THREAD
-# =============================================================================
 
 class RealTimeMonitor(QThread):
     """
@@ -149,13 +99,11 @@ class RealTimeMonitor(QThread):
                 f"to {self.MAX_WATCHLIST_SIZE}"
             )
 
-        # Configuration
         self.scan_interval = 30  # seconds between scan cycles
         self.data_interval = str(interval).lower()
         self.forecast_minutes = int(forecast_minutes)
         self.lookback_bars = int(lookback_bars)
 
-        # Backoff settings
         self._backoff = 1
         self._max_backoff = 60
 
@@ -176,7 +124,6 @@ class RealTimeMonitor(QThread):
             loop_start = time.time()
 
             try:
-                # Quick batch prediction for all watchlist
                 preds = self.predictor.predict_quick_batch(
                     self.watch_list,
                     use_realtime_price=True,
@@ -184,15 +131,12 @@ class RealTimeMonitor(QThread):
                     lookback_bars=self.lookback_bars
                 )
 
-                # Emit price updates
                 for p in preds:
                     if hasattr(p, 'current_price') and p.current_price > 0:
                         self.price_updated.emit(p.stock_code, p.current_price)
 
-                # Get Signal class
-                Signal = get_signal_class()
+                Signal = _lazy_get("models.predictor", "Signal")
 
-                # Filter for strong signals
                 strong = [
                     p for p in preds
                     if hasattr(p, 'signal') and p.signal in [
@@ -227,7 +171,6 @@ class RealTimeMonitor(QThread):
                             f"Full prediction failed for {p.stock_code}: {e}"
                         )
 
-                # Reset backoff on success
                 self._backoff = 1
                 self.status_changed.emit(
                     f"Scanned {len(preds)} stocks, {len(strong)} signals"
@@ -238,7 +181,6 @@ class RealTimeMonitor(QThread):
                 self.error_occurred.emit(error_msg)
                 log.warning(f"Monitor error: {error_msg}")
 
-                # Exponential backoff on error
                 sleep_s = min(self._max_backoff, self._backoff)
                 self._backoff = min(self._max_backoff, self._backoff * 2)
 
@@ -250,7 +192,6 @@ class RealTimeMonitor(QThread):
                     time.sleep(1)
                 continue
 
-            # Wait for next scan cycle
             elapsed = time.time() - loop_start
             remaining = max(0.0, self.scan_interval - elapsed)
 
@@ -279,7 +220,6 @@ class RealTimeMonitor(QThread):
             self.forecast_minutes = int(forecast_minutes)
         if lookback_bars:
             self.lookback_bars = int(lookback_bars)
-
 
 class WorkerThread(QThread):
     """Generic worker thread for background tasks with timeout support"""
@@ -316,7 +256,6 @@ class WorkerThread(QThread):
             worker = threading.Thread(target=target, daemon=True)
             worker.start()
 
-            # Wait with timeout
             done_event.wait(timeout=self._timeout)
 
             if not done_event.is_set():
@@ -343,11 +282,6 @@ class WorkerThread(QThread):
         """Cancel the worker"""
         self._cancelled = True
 
-
-# =============================================================================
-# MAIN APPLICATION
-# =============================================================================
-
 class MainApp(QMainWindow):
     """
     Professional AI Stock Trading Application
@@ -370,7 +304,6 @@ class MainApp(QMainWindow):
         self.setWindowTitle("AI Stock Trading System v2.0")
         self.setGeometry(50, 50, 1800, 1000)
 
-        # State
         self.predictor = None
         self.executor = None
         self.current_prediction = None
@@ -383,13 +316,11 @@ class MainApp(QMainWindow):
         self._live_price_series: Dict[str, List[float]] = {}
         self._price_series_lock = threading.Lock()
 
-        # Bar data
         self._bars_by_symbol: Dict[str, List[dict]] = {}
 
         # Auto-trade state
         self._auto_trade_mode: AutoTradeMode = AutoTradeMode.MANUAL
 
-        # Setup UI
         self._setup_menubar()
         self._setup_toolbar()
         self._setup_ui()
@@ -398,14 +329,12 @@ class MainApp(QMainWindow):
         self._apply_professional_style()
         self.bar_received.connect(self._on_bar_ui)
 
-        # Load state BEFORE initializing model
         try:
             self._load_state()
             self._update_watchlist()
         except Exception:
             pass
 
-        # Initialize components AFTER state load
         QTimer.singleShot(0, self._init_components)
 
     # =========================================================================
@@ -417,14 +346,12 @@ class MainApp(QMainWindow):
         return _normalize_stock_code(text)
 
     # =========================================================================
-    # MENU BAR
     # =========================================================================
 
     def _setup_menubar(self):
         """Setup professional menu bar"""
         menubar = self.menuBar()
 
-        # File Menu
         file_menu = menubar.addMenu("&File")
 
         new_action = QAction("&New Workspace", self)
@@ -438,7 +365,6 @@ class MainApp(QMainWindow):
         exit_action.triggered.connect(self.close)
         file_menu.addAction(exit_action)
 
-        # Trading Menu
         trading_menu = menubar.addMenu("&Trading")
 
         connect_action = QAction("&Connect Broker", self)
@@ -456,7 +382,6 @@ class MainApp(QMainWindow):
         live_action.setCheckable(True)
         trading_menu.addAction(live_action)
 
-        # AI Menu
         ai_menu = menubar.addMenu("&AI Model")
 
         train_action = QAction("&Train Model", self)
@@ -474,7 +399,6 @@ class MainApp(QMainWindow):
         backtest_action.triggered.connect(self._show_backtest)
         ai_menu.addAction(backtest_action)
 
-        # View Menu
         view_menu = menubar.addMenu("&View")
 
         refresh_action = QAction("&Refresh", self)
@@ -482,7 +406,6 @@ class MainApp(QMainWindow):
         refresh_action.triggered.connect(self._refresh_all)
         view_menu.addAction(refresh_action)
 
-        # Help Menu
         help_menu = menubar.addMenu("&Help")
 
         about_action = QAction("&About", self)
@@ -490,7 +413,6 @@ class MainApp(QMainWindow):
         help_menu.addAction(about_action)
 
     # =========================================================================
-    # TOOLBAR
     # =========================================================================
 
     def _setup_toolbar(self):
@@ -500,7 +422,6 @@ class MainApp(QMainWindow):
         toolbar.setMovable(False)
         self.addToolBar(toolbar)
 
-        # Analyze button
         self.analyze_action = QAction("🔍 Analyze", self)
         self.analyze_action.triggered.connect(self._analyze_stock)
         toolbar.addAction(self.analyze_action)
@@ -515,7 +436,6 @@ class MainApp(QMainWindow):
 
         toolbar.addSeparator()
 
-        # Quick scan
         scan_action = QAction("🔎 Scan All", self)
         scan_action.triggered.connect(self._scan_stocks)
         toolbar.addAction(scan_action)
@@ -552,14 +472,12 @@ class MainApp(QMainWindow):
 
         toolbar.addSeparator()
 
-        # Spacer
         spacer = QWidget()
         spacer.setSizePolicy(
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred
         )
         toolbar.addWidget(spacer)
 
-        # Stock input in toolbar
         toolbar.addWidget(QLabel("  Stock: "))
         self.stock_input = QLineEdit()
         self.stock_input.setPlaceholderText("Enter code (e.g., 600519)")
@@ -568,7 +486,6 @@ class MainApp(QMainWindow):
         toolbar.addWidget(self.stock_input)
 
         # =========================================================================
-        # FEED SUBSCRIPTION
     # =========================================================================
 
     def _ensure_feed_subscription(self, code: str):
@@ -577,7 +494,6 @@ class MainApp(QMainWindow):
             from data.feeds import get_feed_manager
             fm = get_feed_manager(auto_init=True, async_init=True)
 
-            # set bar interval from UI interval
             interval = self.interval_combo.currentText().strip().lower()
             bar_seconds_map = {
                 "1m": 60, "5m": 300, "15m": 900,
@@ -588,7 +504,6 @@ class MainApp(QMainWindow):
             fm.set_bar_interval_seconds(bar_seconds)
             fm.subscribe(code)
 
-            # attach bar callback ONCE
             if not getattr(self, "_bar_callback_attached", False):
                 self._bar_callback_attached = True
                 fm.add_bar_callback(self._on_bar_from_feed)
@@ -609,14 +524,13 @@ class MainApp(QMainWindow):
     def _on_bar_ui(self, symbol: str, bar: dict):
         """
         Handle bar data on UI thread.
-        
+
         FIXED: Now properly updates chart with all three layers.
         """
         symbol = self._ui_norm(symbol)
         if not symbol:
             return
 
-        # Get or create bar array for this symbol
         arr = self._bars_by_symbol.get(symbol)
         if arr is None:
             arr = []
@@ -633,18 +547,15 @@ class MainApp(QMainWindow):
         else:
             # Partial bar - update the last bar in place
             if arr:
-                # Update existing last bar
                 arr[-1] = bar
             else:
                 # First bar - just append
                 arr.append(bar)
 
-        # Only update chart if this is the currently displayed stock
         current_code = self._ui_norm(self.stock_input.text())
         if current_code != symbol:
             return
 
-        # Get prediction if available
         predicted = []
         if (
             self.current_prediction
@@ -673,7 +584,6 @@ class MainApp(QMainWindow):
             log.debug(f"Chart update failed: {e}")
 
     # =========================================================================
-    # MAIN UI LAYOUT
     # =========================================================================
 
     def _setup_ui(self):
@@ -685,7 +595,6 @@ class MainApp(QMainWindow):
         layout.setSpacing(10)
         layout.setContentsMargins(10, 10, 10, 10)
 
-        # Main splitter
         main_splitter = QSplitter(Qt.Orientation.Horizontal)
 
         # Left Panel - Control & Watchlist
@@ -711,19 +620,12 @@ class MainApp(QMainWindow):
         layout = QVBoxLayout(panel)
         layout.setSpacing(10)
 
-        # Watchlist
         watchlist_group = QGroupBox("📋 Watchlist")
         watchlist_layout = QVBoxLayout()
 
-        self.watchlist = QTableWidget()
-        self.watchlist.setColumnCount(4)
-        self.watchlist.setHorizontalHeaderLabels(
-            ["Code", "Price", "Change", "Signal"]
+        self.watchlist = self._make_table(
+            ["Code", "Price", "Change", "Signal"], max_height=250
         )
-        self.watchlist.horizontalHeader().setSectionResizeMode(
-            QHeaderView.ResizeMode.Stretch
-        )
-        self.watchlist.setMaximumHeight(250)
         self.watchlist.cellDoubleClicked.connect(self._on_watchlist_click)
 
         self._update_watchlist()
@@ -741,61 +643,50 @@ class MainApp(QMainWindow):
         watchlist_group.setLayout(watchlist_layout)
         layout.addWidget(watchlist_group)
 
-        # Trading Settings
         settings_group = QGroupBox("⚙️ Trading Settings")
         settings_layout = QGridLayout()
 
-        settings_layout.addWidget(QLabel("Mode:"), 0, 0)
         self.mode_combo = QComboBox()
         self.mode_combo.addItems(["Paper Trading", "Live Trading"])
-        settings_layout.addWidget(self.mode_combo, 0, 1)
+        self._add_labeled(settings_layout, 0, "Mode:", self.mode_combo)
 
-        settings_layout.addWidget(QLabel("Capital:"), 1, 0)
         self.capital_spin = QDoubleSpinBox()
         self.capital_spin.setRange(10000, 100000000)
         self.capital_spin.setValue(CONFIG.CAPITAL)
         self.capital_spin.setPrefix("¥ ")
-        settings_layout.addWidget(self.capital_spin, 1, 1)
+        self._add_labeled(settings_layout, 1, "Capital:", self.capital_spin)
 
-        settings_layout.addWidget(QLabel("Risk/Trade:"), 2, 0)
         self.risk_spin = QDoubleSpinBox()
         self.risk_spin.setRange(0.5, 5.0)
         self.risk_spin.setValue(CONFIG.RISK_PER_TRADE)
         self.risk_spin.setSuffix(" %")
-        settings_layout.addWidget(self.risk_spin, 2, 1)
+        self._add_labeled(settings_layout, 2, "Risk/Trade:", self.risk_spin)
 
-        # Interval selector
-        settings_layout.addWidget(QLabel("Interval:"), 3, 0)
         self.interval_combo = QComboBox()
         self.interval_combo.addItems(["1m", "5m", "15m", "30m", "60m", "1d"])
         self.interval_combo.setCurrentText("1m")
         self.interval_combo.currentTextChanged.connect(
             self._on_interval_changed
         )
-        settings_layout.addWidget(self.interval_combo, 3, 1)
+        self._add_labeled(settings_layout, 3, "Interval:", self.interval_combo)
 
-        # Forecast horizon
-        settings_layout.addWidget(QLabel("Forecast:"), 4, 0)
         self.forecast_spin = QSpinBox()
         self.forecast_spin.setRange(5, 120)
         self.forecast_spin.setValue(30)
-        self.forecast_spin.setSuffix(" bars")
-        self.forecast_spin.setToolTip("Number of bars to forecast ahead")
-        settings_layout.addWidget(self.forecast_spin, 4, 1)
+        self.forecast_spin.setSuffix(" min")
+        self.forecast_spin.setToolTip("Minutes to forecast ahead")
+        self._add_labeled(settings_layout, 4, "Forecast:", self.forecast_spin)
 
-        # Lookback bars
-        settings_layout.addWidget(QLabel("Lookback:"), 5, 0)
         self.lookback_spin = QSpinBox()
         self.lookback_spin.setRange(100, 5000)
         self.lookback_spin.setValue(1400)
         self.lookback_spin.setSuffix(" bars")
         self.lookback_spin.setToolTip("Historical bars to use for analysis")
-        settings_layout.addWidget(self.lookback_spin, 5, 1)
+        self._add_labeled(settings_layout, 5, "Lookback:", self.lookback_spin)
 
         settings_group.setLayout(settings_layout)
         layout.addWidget(settings_group)
 
-        # Connection Status
         connection_group = QGroupBox("🔌 Connection")
         connection_layout = QVBoxLayout()
 
@@ -823,7 +714,6 @@ class MainApp(QMainWindow):
         connection_group.setLayout(connection_layout)
         layout.addWidget(connection_group)
 
-        # AI Model Status
         ai_group = QGroupBox("🧠 AI Model")
         ai_layout = QVBoxLayout()
 
@@ -852,6 +742,46 @@ class MainApp(QMainWindow):
         layout.addStretch()
         return panel
 
+    def _make_table(self, headers: List[str], max_height: Optional[int] = None):
+        table = QTableWidget()
+        table.setColumnCount(len(headers))
+        table.setHorizontalHeaderLabels(headers)
+        table.horizontalHeader().setSectionResizeMode(
+            QHeaderView.ResizeMode.Stretch
+        )
+        if max_height is not None:
+            table.setMaximumHeight(int(max_height))
+        return table
+
+    def _add_labeled(self, layout: QGridLayout, row: int, text: str, widget: QWidget):
+        layout.addWidget(QLabel(text), row, 0)
+        layout.addWidget(widget, row, 1)
+
+    def _build_stat_frame(self, labels, value_style: str, padding: int = 15):
+        frame = QFrame()
+        frame.setStyleSheet(
+            "QFrame {"
+            "background: qlineargradient(x1:0, y1:0, x2:1, y2:1,"
+            "stop:0 #1a1a3e, stop:1 #2a2a5a);"
+            f"border-radius: 10px; padding: {int(padding)}px;"
+            "}"
+        )
+        grid = QGridLayout(frame)
+        out = {}
+        for key, text, row, col in labels:
+            container = QWidget()
+            cont_layout = QVBoxLayout(container)
+            cont_layout.setContentsMargins(5, 5, 5, 5)
+            title = QLabel(text)
+            title.setStyleSheet("color: #888; font-size: 11px;")
+            value = QLabel("--")
+            value.setStyleSheet(value_style)
+            cont_layout.addWidget(title)
+            cont_layout.addWidget(value)
+            grid.addWidget(container, row, col)
+            out[key] = value
+        return frame, out
+
     def _create_center_panel(self) -> QWidget:
         """Create center panel with charts and signals"""
         panel = QWidget()
@@ -867,7 +797,6 @@ class MainApp(QMainWindow):
             self.signal_panel.setMinimumHeight(100)
         layout.addWidget(self.signal_panel)
 
-        # Chart
         chart_group = QGroupBox("📈 Price Chart & AI Prediction")
         chart_layout = QVBoxLayout()
 
@@ -884,7 +813,6 @@ class MainApp(QMainWindow):
         chart_group.setLayout(chart_layout)
         layout.addWidget(chart_group)
 
-        # Analysis Details
         details_group = QGroupBox("📊 Analysis Details")
         details_layout = QVBoxLayout()
 
@@ -907,19 +835,8 @@ class MainApp(QMainWindow):
 
         tabs = QTabWidget()
 
-        # Portfolio Tab
         portfolio_tab = QWidget()
         portfolio_layout = QVBoxLayout(portfolio_tab)
-
-        account_frame = QFrame()
-        account_frame.setStyleSheet("""
-            QFrame {
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
-                    stop:0 #1a1a3e, stop:1 #2a2a5a);
-                border-radius: 10px; padding: 15px;
-            }
-        """)
-        account_layout = QGridLayout(account_frame)
 
         self.account_labels = {}
         labels = [
@@ -928,21 +845,9 @@ class MainApp(QMainWindow):
             ('positions', 'Positions Value', 1, 0),
             ('pnl', 'Total P&L', 1, 1),
         ]
-
-        for key, text, row, col in labels:
-            container = QWidget()
-            cont_layout = QVBoxLayout(container)
-            cont_layout.setContentsMargins(5, 5, 5, 5)
-            title = QLabel(text)
-            title.setStyleSheet("color: #888; font-size: 11px;")
-            value = QLabel("--")
-            value.setStyleSheet(
-                "color: #00E5FF; font-size: 18px; font-weight: bold;"
-            )
-            cont_layout.addWidget(title)
-            cont_layout.addWidget(value)
-            account_layout.addWidget(container, row, col)
-            self.account_labels[key] = value
+        account_frame, self.account_labels = self._build_stat_frame(
+            labels, "color: #00E5FF; font-size: 18px; font-weight: bold;", 15
+        )
 
         portfolio_layout.addWidget(account_frame)
 
@@ -950,20 +855,17 @@ class MainApp(QMainWindow):
             from .widgets import PositionTable
             self.positions_table = PositionTable()
         except ImportError:
-            self.positions_table = QTableWidget()
-            self.positions_table.setColumnCount(5)
-            self.positions_table.setHorizontalHeaderLabels(
+            self.positions_table = self._make_table(
                 ["Code", "Qty", "Price", "Value", "P&L"]
             )
         portfolio_layout.addWidget(self.positions_table)
 
         tabs.addTab(portfolio_tab, "💼 Portfolio")
 
-        # News Tab
         news_tab = QWidget()
         news_layout = QVBoxLayout(news_tab)
         try:
-            NewsPanel = get_news_panel()
+            NewsPanel = _lazy_get("ui.news_widget", "NewsPanel")
             self.news_panel = NewsPanel()
             news_layout.addWidget(self.news_panel)
         except Exception as e:
@@ -972,31 +874,19 @@ class MainApp(QMainWindow):
             news_layout.addWidget(self.news_panel)
         tabs.addTab(news_tab, "📰 News & Policy")
 
-        # Live Signals Tab
         signals_tab = QWidget()
         signals_layout = QVBoxLayout(signals_tab)
-        self.signals_table = QTableWidget()
-        self.signals_table.setColumnCount(6)
-        self.signals_table.setHorizontalHeaderLabels([
+        self.signals_table = self._make_table([
             "Time", "Code", "Signal", "Confidence", "Price", "Action"
         ])
-        self.signals_table.horizontalHeader().setSectionResizeMode(
-            QHeaderView.ResizeMode.Stretch
-        )
         signals_layout.addWidget(self.signals_table)
         tabs.addTab(signals_tab, "📡 Live Signals")
 
-        # History Tab
         history_tab = QWidget()
         history_layout = QVBoxLayout(history_tab)
-        self.history_table = QTableWidget()
-        self.history_table.setColumnCount(6)
-        self.history_table.setHorizontalHeaderLabels([
+        self.history_table = self._make_table([
             "Time", "Code", "Signal", "Prob UP", "Confidence", "Result"
         ])
-        self.history_table.horizontalHeader().setSectionResizeMode(
-            QHeaderView.ResizeMode.Stretch
-        )
         history_layout.addWidget(self.history_table)
         tabs.addTab(history_tab, "📜 History")
 
@@ -1005,16 +895,6 @@ class MainApp(QMainWindow):
         auto_trade_layout = QVBoxLayout(auto_trade_tab)
 
         # Auto-trade status frame
-        auto_status_frame = QFrame()
-        auto_status_frame.setStyleSheet("""
-            QFrame {
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
-                    stop:0 #1a1a3e, stop:1 #2a2a5a);
-                border-radius: 10px; padding: 10px;
-            }
-        """)
-        auto_status_layout = QGridLayout(auto_status_frame)
-
         self.auto_trade_labels = {}
         auto_labels = [
             ('mode', 'Mode', 0, 0),
@@ -1022,36 +902,18 @@ class MainApp(QMainWindow):
             ('pnl', 'Auto P&L', 1, 0),
             ('status', 'Status', 1, 1),
         ]
-
-        for key, text, row, col in auto_labels:
-            container = QWidget()
-            cont_layout = QVBoxLayout(container)
-            cont_layout.setContentsMargins(5, 5, 5, 5)
-            title = QLabel(text)
-            title.setStyleSheet("color: #888; font-size: 11px;")
-            value = QLabel("--")
-            value.setStyleSheet(
-                "color: #00E5FF; font-size: 16px; font-weight: bold;"
-            )
-            cont_layout.addWidget(title)
-            cont_layout.addWidget(value)
-            auto_status_layout.addWidget(container, row, col)
-            self.auto_trade_labels[key] = value
+        auto_status_frame, self.auto_trade_labels = self._build_stat_frame(
+            auto_labels, "color: #00E5FF; font-size: 16px; font-weight: bold;", 10
+        )
 
         auto_trade_layout.addWidget(auto_status_frame)
 
         # Pending approvals section (for semi-auto)
         pending_group = QGroupBox("⏳ Pending Approvals")
         pending_layout = QVBoxLayout()
-        self.pending_table = QTableWidget()
-        self.pending_table.setColumnCount(6)
-        self.pending_table.setHorizontalHeaderLabels([
+        self.pending_table = self._make_table([
             "Time", "Code", "Signal", "Confidence", "Price", "Action"
-        ])
-        self.pending_table.horizontalHeader().setSectionResizeMode(
-            QHeaderView.ResizeMode.Stretch
-        )
-        self.pending_table.setMaximumHeight(150)
+        ], max_height=150)
         pending_layout.addWidget(self.pending_table)
         pending_group.setLayout(pending_layout)
         auto_trade_layout.addWidget(pending_group)
@@ -1059,15 +921,10 @@ class MainApp(QMainWindow):
         # Auto-trade action history
         actions_group = QGroupBox("📋 Auto-Trade Actions")
         actions_layout = QVBoxLayout()
-        self.auto_actions_table = QTableWidget()
-        self.auto_actions_table.setColumnCount(7)
-        self.auto_actions_table.setHorizontalHeaderLabels([
+        self.auto_actions_table = self._make_table([
             "Time", "Code", "Signal", "Confidence",
             "Decision", "Qty", "Reason"
         ])
-        self.auto_actions_table.horizontalHeader().setSectionResizeMode(
-            QHeaderView.ResizeMode.Stretch
-        )
         actions_layout.addWidget(self.auto_actions_table)
         actions_group.setLayout(actions_layout)
         auto_trade_layout.addWidget(actions_group)
@@ -1097,7 +954,6 @@ class MainApp(QMainWindow):
 
         layout.addWidget(tabs)
 
-        # Log
         log_group = QGroupBox("📋 System Log")
         log_layout = QVBoxLayout()
         try:
@@ -1111,7 +967,6 @@ class MainApp(QMainWindow):
         log_group.setLayout(log_layout)
         layout.addWidget(log_group)
 
-        # Action Buttons
         action_frame = QFrame()
         action_frame.setStyleSheet("""
             QFrame {
@@ -1163,48 +1018,39 @@ class MainApp(QMainWindow):
         self._status_bar = QStatusBar()
         self.setStatusBar(self._status_bar)
 
-        # Progress bar
         self.progress = QProgressBar()
         self.progress.setMaximumWidth(200)
         self.progress.setMaximumHeight(15)
         self.progress.hide()
         self._status_bar.addWidget(self.progress)
 
-        # Status
         self.status_label = QLabel("Ready")
         self._status_bar.addWidget(self.status_label)
 
-        # Market status
         self.market_label = QLabel("")
         self._status_bar.addPermanentWidget(self.market_label)
 
-        # Monitoring status
         self.monitor_label = QLabel("Monitoring: OFF")
         self.monitor_label.setStyleSheet("color: #888;")
         self._status_bar.addWidget(self.monitor_label)
 
-        # Clock
         self.time_label = QLabel("")
         self._status_bar.addWidget(self.time_label)
 
     def _setup_timers(self):
         """Setup update timers"""
-        # Clock
         self.clock_timer = QTimer()
         self.clock_timer.timeout.connect(self._update_clock)
         self.clock_timer.start(1000)
 
-        # Market status
         self.market_timer = QTimer()
         self.market_timer.timeout.connect(self._update_market_status)
         self.market_timer.start(60000)
 
-        # Portfolio refresh
         self.portfolio_timer = QTimer()
         self.portfolio_timer.timeout.connect(self._refresh_portfolio)
         self.portfolio_timer.start(5000)
 
-        # Watchlist refresh
         self.watchlist_timer = QTimer()
         self.watchlist_timer.timeout.connect(self._update_watchlist)
         self.watchlist_timer.start(30000)
@@ -1217,179 +1063,196 @@ class MainApp(QMainWindow):
         self._update_market_status()
 
         # =========================================================================
-        # PROFESSIONAL DARK THEME
     # =========================================================================
 
     def _apply_professional_style(self):
-        """Apply professional dark theme"""
+        """Apply a cleaner, more professional trading desk theme."""
         self.setStyleSheet("""
-            QMainWindow {
-                background: #0d1117;
-            }
+            QMainWindow { background: #0b1220; }
 
             QMenuBar {
-                background: #161b22;
-                color: #c9d1d9;
-                border-bottom: 1px solid #30363d;
+                background: #10192d;
+                color: #d7e0f2;
+                border-bottom: 1px solid #1f2b45;
+                padding: 2px 4px;
             }
-            QMenuBar::item:selected {
-                background: #21262d;
-            }
+            QMenuBar::item { padding: 6px 10px; border-radius: 6px; }
+            QMenuBar::item:selected { background: #1b2742; }
             QMenu {
-                background: #161b22;
-                color: #c9d1d9;
-                border: 1px solid #30363d;
+                background: #10192d;
+                color: #d7e0f2;
+                border: 1px solid #283555;
+                padding: 6px;
             }
-            QMenu::item:selected {
-                background: #21262d;
-            }
+            QMenu::item { padding: 7px 16px; border-radius: 6px; }
+            QMenu::item:selected { background: #1b2742; }
 
             QToolBar {
-                background: #161b22;
-                border-bottom: 1px solid #30363d;
-                spacing: 10px;
-                padding: 5px;
+                background: #10192d;
+                border: none;
+                border-bottom: 1px solid #1f2b45;
+                spacing: 8px;
+                padding: 6px 8px;
             }
+            QToolButton {
+                background: #17233d;
+                color: #d7e0f2;
+                border: 1px solid #283555;
+                border-radius: 7px;
+                padding: 6px 10px;
+                font-weight: 600;
+            }
+            QToolButton:hover { border-color: #4c78ff; background: #1d2b4a; }
+            QToolButton:pressed { background: #223257; }
 
             QGroupBox {
-                font-weight: bold;
+                font-weight: 700;
                 font-size: 12px;
-                border: 1px solid #30363d;
-                border-radius: 8px;
+                border: 1px solid #243454;
+                border-radius: 10px;
                 margin-top: 12px;
                 padding-top: 12px;
-                color: #58a6ff;
-                background: #0d1117;
+                color: #8fb3ff;
+                background: #0f1728;
             }
             QGroupBox::title {
                 subcontrol-origin: margin;
                 left: 12px;
-                padding: 0 5px;
+                padding: 0 6px;
             }
 
-            QLabel {
-                color: #c9d1d9;
-                font-size: 12px;
-            }
+            QLabel { color: #d7e0f2; font-size: 12px; }
 
             QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox {
-                padding: 8px;
-                border: 1px solid #30363d;
-                border-radius: 6px;
-                background: #21262d;
-                color: #c9d1d9;
-                font-size: 12px;
+                min-height: 30px;
+                padding: 4px 8px;
+                border: 1px solid #2b3a5b;
+                border-radius: 7px;
+                background: #131d33;
+                color: #d7e0f2;
+                selection-background-color: #3558c8;
             }
-            QLineEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus {
-                border-color: #58a6ff;
+            QLineEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus, QComboBox:focus {
+                border-color: #4c78ff;
+                background: #18243d;
             }
 
             QTableWidget {
-                background: #0d1117;
-                color: #c9d1d9;
-                border: none;
-                gridline-color: #30363d;
-                selection-background-color: #21262d;
+                background: #0e1628;
+                color: #d7e0f2;
+                border: 1px solid #243454;
+                border-radius: 8px;
+                gridline-color: #23314f;
+                selection-background-color: #223860;
+                selection-color: #f3f7ff;
+                alternate-background-color: #101b2f;
             }
-            QTableWidget::item {
-                padding: 8px;
-            }
+            QTableWidget::item { padding: 6px; }
             QHeaderView::section {
-                background: #21262d;
-                color: #58a6ff;
-                padding: 10px;
+                background: #16233d;
+                color: #a6c1ff;
+                padding: 8px 10px;
                 border: none;
-                font-weight: bold;
+                border-right: 1px solid #243454;
+                border-bottom: 1px solid #243454;
+                font-weight: 700;
             }
 
             QTabWidget::pane {
-                border: 1px solid #30363d;
-                background: #0d1117;
+                border: 1px solid #243454;
+                background: #0e1628;
                 border-radius: 8px;
+                top: -1px;
             }
             QTabBar::tab {
-                background: #161b22;
-                color: #8b949e;
-                padding: 10px 20px;
-                border-top-left-radius: 6px;
-                border-top-right-radius: 6px;
-                margin-right: 2px;
+                background: #131f36;
+                color: #96a9d0;
+                padding: 9px 16px;
+                border-top-left-radius: 7px;
+                border-top-right-radius: 7px;
+                margin-right: 3px;
             }
             QTabBar::tab:selected {
-                background: #21262d;
-                color: #58a6ff;
+                background: #1a2a49;
+                color: #dfe8ff;
+                border: 1px solid #314873;
+                border-bottom: 1px solid #1a2a49;
             }
+            QTabBar::tab:hover:!selected { color: #c7d7ff; }
 
             QPushButton {
-                background: #21262d;
-                color: #c9d1d9;
-                border: 1px solid #30363d;
-                padding: 8px 16px;
-                border-radius: 6px;
-                font-weight: bold;
+                background: #1a2a49;
+                color: #e6eeff;
+                border: 1px solid #335084;
+                border-radius: 7px;
+                padding: 8px 14px;
+                font-weight: 700;
             }
-            QPushButton:hover {
-                background: #30363d;
-                border-color: #58a6ff;
-            }
+            QPushButton:hover { background: #22365f; border-color: #4c78ff; }
+            QPushButton:pressed { background: #27406f; }
             QPushButton:disabled {
-                background: #161b22;
-                color: #484f58;
-                border-color: #21262d;
+                background: #121d33;
+                color: #5f6d89;
+                border-color: #243454;
             }
 
             QProgressBar {
-                border: none;
-                background: #21262d;
-                border-radius: 4px;
+                border: 1px solid #2c3f63;
+                background: #101b2f;
+                border-radius: 6px;
                 text-align: center;
-                color: #c9d1d9;
+                color: #dbe5ff;
+                min-height: 18px;
             }
             QProgressBar::chunk {
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                    stop:0 #238636, stop:1 #2ea043);
-                border-radius: 4px;
+                border-radius: 5px;
+                background: qlineargradient(
+                    x1:0, y1:0, x2:1, y2:0,
+                    stop:0 #2c7be5, stop:1 #32c48d
+                );
             }
 
             QStatusBar {
-                background: #161b22;
-                color: #8b949e;
-                border-top: 1px solid #30363d;
+                background: #10192d;
+                color: #9eb0d3;
+                border-top: 1px solid #1f2b45;
             }
 
             QTextEdit {
-                background: #0d1117;
-                color: #7ee787;
-                border: 1px solid #30363d;
-                border-radius: 6px;
-                font-family: 'Consolas', monospace;
+                background: #0b1324;
+                color: #c8f0d7;
+                border: 1px solid #243454;
+                border-radius: 8px;
+                font-family: 'Consolas', 'Cascadia Mono', monospace;
+                padding: 6px;
             }
 
             QScrollBar:vertical {
-                background: #161b22;
+                background: #0f1728;
                 width: 10px;
-                border-radius: 5px;
+                margin: 2px;
             }
             QScrollBar::handle:vertical {
-                background: #30363d;
+                background: #2c3f63;
                 border-radius: 5px;
-                min-height: 30px;
+                min-height: 24px;
             }
-            QScrollBar::handle:vertical:hover {
-                background: #484f58;
+            QScrollBar::handle:vertical:hover { background: #3d5688; }
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+                border: none;
+                background: none;
+                height: 0;
             }
         """)
 
     # =========================================================================
-    # COMPONENT INITIALIZATION
     # =========================================================================
 
     def _init_components(self):
         """Initialize trading components"""
         try:
-            Predictor = get_predictor_class()
+            Predictor = _lazy_get("models.predictor", "Predictor")
 
-            # Get current interval and horizon from UI
             interval = self.interval_combo.currentText().strip()
             horizon = self.forecast_spin.value()
 
@@ -1439,7 +1302,6 @@ class MainApp(QMainWindow):
                     self.predictor, self.watch_list
                 )
 
-                # Wire up callbacks for UI updates
                 if self.executor.auto_trader:
                     self.executor.auto_trader.on_action = (
                         self._on_auto_trade_action_safe
@@ -1460,7 +1322,6 @@ class MainApp(QMainWindow):
         horizon = self.forecast_spin.value()
         self.model_info.setText(f"Interval: {interval}, Horizon: {horizon}")
 
-        # suggest lookback
         lookback_map = {"1m": 1400, "5m": 600, "15m": 600}
         self.lookback_spin.setValue(lookback_map.get(interval, 300))
 
@@ -1468,10 +1329,9 @@ class MainApp(QMainWindow):
         if was_monitoring:
             self._stop_monitoring()
 
-        # reload predictor
         if self.predictor:
             try:
-                Predictor = get_predictor_class()
+                Predictor = _lazy_get("models.predictor", "Predictor")
                 self.predictor = Predictor(
                     capital=self.capital_spin.value(),
                     interval=interval,
@@ -1584,9 +1444,8 @@ class MainApp(QMainWindow):
 
     def _on_signal_detected(self, pred):
         """Handle detected trading signal"""
-        Signal = get_signal_class()
+        Signal = _lazy_get("models.predictor", "Signal")
 
-        # Add to signals table
         row = 0
         self.signals_table.insertRow(row)
 
@@ -1625,7 +1484,6 @@ class MainApp(QMainWindow):
             row, 4, QTableWidgetItem(f"¥{price:.2f}")
         )
 
-        # Action button
         action_btn = QPushButton("Trade")
         action_btn.clicked.connect(lambda: self._quick_trade(pred))
         self.signals_table.setCellWidget(row, 5, action_btn)
@@ -1636,19 +1494,17 @@ class MainApp(QMainWindow):
                 self.signals_table.rowCount() - 1
             )
 
-        # Notification
         self.log(
             f"🔔 SIGNAL: {signal_text} - {pred.stock_code} @ ¥{price:.2f}",
             "success"
         )
 
-        # Flash the window if minimized
         QApplication.alert(self)
 
     def _on_price_updated(self, code: str, price: float):
         """
         Handle price update from monitor.
-        
+
         FIXED: No longer calls update_data() which was overwriting candles.
         Instead, updates the current bar's close price so the candle
         reflects the live price.
@@ -1657,7 +1513,6 @@ class MainApp(QMainWindow):
         if not code:
             return
 
-        # Update watchlist table
         for row in range(self.watchlist.rowCount()):
             item = self.watchlist.item(row, 0)
             if item and self._ui_norm(item.text()) == code:
@@ -1666,7 +1521,6 @@ class MainApp(QMainWindow):
                 )
                 break
 
-        # Only process further if this is the current stock
         current_code = self._ui_norm(self.stock_input.text())
         if current_code != code:
             return
@@ -1674,12 +1528,10 @@ class MainApp(QMainWindow):
         # Update the last bar's close price for live candle display
         arr = self._bars_by_symbol.get(code)
         if arr and len(arr) > 0:
-            # Update OHLC of current bar
             arr[-1]["close"] = price
             arr[-1]["high"] = max(arr[-1].get("high", price), price)
             arr[-1]["low"] = min(arr[-1].get("low", price), price)
 
-            # Get prediction
             predicted = []
             if (
                 self.current_prediction
@@ -1690,7 +1542,6 @@ class MainApp(QMainWindow):
                     or []
                 )
 
-            # Update chart with modified bar data
             try:
                 if hasattr(self.chart, 'update_chart'):
                     self.chart.update_chart(
@@ -1704,7 +1555,7 @@ class MainApp(QMainWindow):
         # =====================================================================
         # THROTTLED FORECAST REFRESH (keep existing logic but simplified)
         # =====================================================================
-        
+
         if not self.predictor:
             return
 
@@ -1728,7 +1579,6 @@ class MainApp(QMainWindow):
                 )
             return None
 
-        # Avoid piling up forecast workers
         w_old = self.workers.get("forecast_refresh")
         if w_old and w_old.isRunning():
             return
@@ -1741,15 +1591,14 @@ class MainApp(QMainWindow):
                 if not res:
                     return
                 actual_prices, predicted_prices = res
-                
+
                 # Update current_prediction with new forecast
                 if (
                     self.current_prediction
                     and self.current_prediction.stock_code == code
                 ):
                     self.current_prediction.predicted_prices = predicted_prices
-                
-                # Refresh chart with new prediction
+
                 arr = self._bars_by_symbol.get(code)
                 if arr and hasattr(self.chart, 'update_chart'):
                     self.chart.update_chart(
@@ -1788,7 +1637,6 @@ class MainApp(QMainWindow):
         self._analyze_stock()
 
     # =========================================================================
-    # WATCHLIST
     # =========================================================================
 
     def _update_watchlist(self):
@@ -1867,7 +1715,6 @@ class MainApp(QMainWindow):
                         )
 
     # =========================================================================
-    # ANALYSIS
     # =========================================================================
 
     def _analyze_stock(self):
@@ -1925,11 +1772,9 @@ class MainApp(QMainWindow):
 
         self.current_prediction = pred
 
-        # Update signal panel
         if hasattr(self.signal_panel, 'update_prediction'):
             self.signal_panel.update_prediction(pred)
 
-        # Update chart
         if hasattr(self.chart, 'update_data'):
             levels = self._get_levels_dict()
             price_history = getattr(pred, 'price_history', [])
@@ -1944,7 +1789,6 @@ class MainApp(QMainWindow):
         # Update details (with news sentiment)
         self._update_details(pred)
 
-        # Fetch news for this stock
         if (
             hasattr(self, 'news_panel')
             and hasattr(self.news_panel, 'set_stock')
@@ -1954,7 +1798,6 @@ class MainApp(QMainWindow):
             except Exception as e:
                 log.debug(f"News fetch for {pred.stock_code}: {e}")
 
-        # Add to history
         self._add_to_history(pred)
 
         try:
@@ -1962,8 +1805,7 @@ class MainApp(QMainWindow):
         except Exception:
             pass
 
-        # Enable buttons ONLY in manual mode
-        Signal = get_signal_class()
+        Signal = _lazy_get("models.predictor", "Signal")
         if hasattr(pred, 'signal'):
             is_manual = (self._auto_trade_mode == AutoTradeMode.MANUAL)
             self.buy_btn.setEnabled(
@@ -2002,7 +1844,7 @@ class MainApp(QMainWindow):
 
     def _update_details(self, pred):
         """Update analysis details with news sentiment"""
-        Signal = get_signal_class()
+        Signal = _lazy_get("models.predictor", "Signal")
 
         signal_colors = {
             Signal.STRONG_BUY: "#2ea043",
@@ -2036,7 +1878,6 @@ class MainApp(QMainWindow):
         reasons = getattr(pred, 'reasons', [])
         warnings = getattr(pred, 'warnings', [])
 
-        # Get news sentiment
         news_html = ""
         try:
             from data.news import get_news_aggregator
@@ -2075,7 +1916,6 @@ class MainApp(QMainWindow):
                     </div>
                     """
 
-                    # Show top headlines
                     top_pos = sentiment.get('top_positive', [])
                     top_neg = sentiment.get('top_negative', [])
 
@@ -2275,7 +2115,6 @@ class MainApp(QMainWindow):
                 "info"
             )
 
-        # Analyze top pick
         if picks:
             self.stock_input.setText(picks[0].stock_code)
             self._analyze_stock()
@@ -2289,7 +2128,6 @@ class MainApp(QMainWindow):
         self.log("Refreshed all data", "info")
 
     # =========================================================================
-    # TRADING
     # =========================================================================
 
     def _toggle_trading(self):
@@ -2308,6 +2146,25 @@ class MainApp(QMainWindow):
         )
 
         if mode == TradingMode.LIVE:
+            try:
+                from core.network import get_network_env
+                env = get_network_env()
+                if not env.is_vpn_active:
+                    reply = QMessageBox.warning(
+                        self, "VPN Not Detected",
+                        "LIVE trading in China typically requires VPN routing.\n\n"
+                        "No VPN was detected by the network probe.\n"
+                        "If you are on VPN, set TRADING_VPN=1 and retry.\n\n"
+                        "Continue anyway?",
+                        QMessageBox.StandardButton.Yes
+                        | QMessageBox.StandardButton.No,
+                        QMessageBox.StandardButton.No
+                    )
+                    if reply != QMessageBox.StandardButton.Yes:
+                        self.mode_combo.setCurrentIndex(0)
+                        return
+            except Exception:
+                pass
             reply = QMessageBox.warning(
                 self, "⚠️ Live Trading Warning",
                 "You are switching to LIVE TRADING mode!\n\n"
@@ -2322,7 +2179,7 @@ class MainApp(QMainWindow):
                 return
 
         try:
-            ExecutionEngine = get_execution_engine()
+            ExecutionEngine = _lazy_get("trading.executor", "ExecutionEngine")
             self.executor = ExecutionEngine(mode)
             self.executor.on_fill = self._on_order_filled
             self.executor.on_reject = self._on_order_rejected
@@ -2410,6 +2267,29 @@ class MainApp(QMainWindow):
         target_2 = getattr(levels, 'target_2', 0)
         stock_name = getattr(pred, 'stock_name', '')
 
+        try:
+            if not CONFIG.is_market_open():
+                QMessageBox.warning(
+                    self, "Market Closed",
+                    "Market is currently closed. Live orders are blocked."
+                )
+                return
+        except Exception:
+            pass
+
+        try:
+            ok, msg, fresh_px = self.executor.check_quote_freshness(pred.stock_code)
+            if not ok:
+                QMessageBox.warning(
+                    self, "Stale Quote",
+                    f"Order blocked: {msg}"
+                )
+                return
+            if fresh_px > 0:
+                entry = float(fresh_px)
+        except Exception:
+            pass
+
         reply = QMessageBox.question(
             self, "Confirm Buy Order",
             f"<b>Buy {pred.stock_code} - {stock_name}</b><br><br>"
@@ -2447,6 +2327,27 @@ class MainApp(QMainWindow):
         pred = self.current_prediction
 
         try:
+            if not CONFIG.is_market_open():
+                QMessageBox.warning(
+                    self, "Market Closed",
+                    "Market is currently closed. Live orders are blocked."
+                )
+                return
+        except Exception:
+            pass
+
+        try:
+            ok, msg, fresh_px = self.executor.check_quote_freshness(pred.stock_code)
+            if not ok:
+                QMessageBox.warning(
+                    self, "Stale Quote",
+                    f"Order blocked: {msg}"
+                )
+                return
+        except Exception:
+            fresh_px = 0.0
+
+        try:
             positions = self.executor.get_positions()
             position = positions.get(pred.stock_code)
 
@@ -2455,7 +2356,7 @@ class MainApp(QMainWindow):
                 return
 
             available_qty = getattr(position, 'available_qty', 0)
-            current_price = getattr(position, 'current_price', 0)
+            current_price = getattr(position, 'current_price', 0) or fresh_px
             stock_name = getattr(pred, 'stock_name', '')
 
             reply = QMessageBox.question(
@@ -2546,7 +2447,6 @@ class MainApp(QMainWindow):
             self.log(f"Portfolio refresh failed: {e}", "warning")
 
     # =========================================================================
-    # TRAINING
     # =========================================================================
 
     def _start_training(self):
@@ -2575,7 +2475,6 @@ class MainApp(QMainWindow):
             self.log(f"Training dialog failed: {e}", "error")
             return
 
-        # Reload model after training
         self._init_components()
 
     def _show_auto_learn(self):
@@ -2587,7 +2486,6 @@ class MainApp(QMainWindow):
             self.log("Auto-learn dialog not available", "error")
             return
 
-        # Reload model after learning
         self._init_components()
 
     def _show_backtest(self):
@@ -2634,7 +2532,6 @@ class MainApp(QMainWindow):
         }
         new_mode = mode_map.get(index, AutoTradeMode.MANUAL)
 
-        # Safety check for AUTO mode
         if new_mode == AutoTradeMode.AUTO:
             if self.predictor is None or (
                 self.predictor and self.predictor.ensemble is None
@@ -2654,7 +2551,6 @@ class MainApp(QMainWindow):
                 self.trade_mode_combo.setCurrentIndex(0)
                 return
 
-            # Live trading confirmation
             if (
                 self.executor
                 and self.executor.mode == TradingMode.LIVE
@@ -2674,7 +2570,6 @@ class MainApp(QMainWindow):
                     self.trade_mode_combo.setCurrentIndex(0)
                     return
 
-            # Standard confirmation for auto mode
             reply = QMessageBox.question(
                 self, "Enable Auto-Trading",
                 "Enable fully automatic trading?\n\n"
@@ -2696,7 +2591,6 @@ class MainApp(QMainWindow):
 
     def _apply_auto_trade_mode(self, mode: AutoTradeMode):
         """Apply the auto-trade mode to the system."""
-        # Update CONFIG
         CONFIG.auto_trade.enabled = (mode != AutoTradeMode.MANUAL)
 
         # Update executor auto-trader
@@ -2706,7 +2600,6 @@ class MainApp(QMainWindow):
             # Update watchlist on auto-trader
             self.executor.auto_trader.update_watchlist(self.watch_list)
 
-            # Update predictor reference
             if self.predictor:
                 self.executor.auto_trader.update_predictor(self.predictor)
         elif mode != AutoTradeMode.MANUAL:
@@ -2715,7 +2608,6 @@ class MainApp(QMainWindow):
             if self.executor and self.executor.auto_trader:
                 self.executor.set_auto_mode(mode)
 
-        # Update UI
         self._update_auto_trade_status_label(mode)
 
         # Enable/disable manual trade buttons based on mode
@@ -2822,7 +2714,6 @@ class MainApp(QMainWindow):
 
         layout = QVBoxLayout(dialog)
 
-        # Settings group
         group = QGroupBox("Auto-Trade Parameters")
         form = QFormLayout(group)
 
@@ -2897,7 +2788,6 @@ class MainApp(QMainWindow):
 
         layout.addWidget(group)
 
-        # Signal type checkboxes
         signals_group = QGroupBox("Allowed Signals")
         signals_layout = QGridLayout(signals_group)
 
@@ -2919,7 +2809,6 @@ class MainApp(QMainWindow):
 
         layout.addWidget(signals_group)
 
-        # Buttons
         btns = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Save
             | QDialogButtonBox.StandardButton.Cancel
@@ -2959,12 +2848,10 @@ class MainApp(QMainWindow):
 
     def _on_auto_trade_action_safe(self, action: AutoTradeAction):
         """Thread-safe callback from auto-trader action."""
-        # Use QTimer to marshal to UI thread
         QTimer.singleShot(0, lambda: self._on_auto_trade_action(action))
 
     def _on_auto_trade_action(self, action: AutoTradeAction):
         """Handle auto-trade action on UI thread."""
-        # Add to actions table
         row = 0
         self.auto_actions_table.insertRow(row)
 
@@ -3010,13 +2897,11 @@ class MainApp(QMainWindow):
             )
         )
 
-        # Cap table rows
         while self.auto_actions_table.rowCount() > 100:
             self.auto_actions_table.removeRow(
                 self.auto_actions_table.rowCount() - 1
             )
 
-        # Log it
         if action.decision == "EXECUTED":
             self.log(
                 f"🤖 AUTO-TRADE: {action.side.upper()} "
@@ -3030,7 +2915,6 @@ class MainApp(QMainWindow):
                 "info"
             )
 
-        # Flash window for executed trades
         if action.decision == "EXECUTED":
             QApplication.alert(self)
 
@@ -3118,7 +3002,6 @@ class MainApp(QMainWindow):
     def _refresh_auto_trade_ui(self):
         """Periodic refresh of auto-trade status display."""
         if not self.executor or not self.executor.auto_trader:
-            # Show defaults
             self.auto_trade_labels.get('mode', QLabel()).setText(
                 self._auto_trade_mode.value.upper()
             )
@@ -3129,7 +3012,6 @@ class MainApp(QMainWindow):
 
         state = self.executor.auto_trader.get_state()
 
-        # Mode
         mode_label = self.auto_trade_labels.get('mode')
         if mode_label:
             mode_text = state.mode.value.upper()
@@ -3147,7 +3029,6 @@ class MainApp(QMainWindow):
                 f"color: {color}; font-size: 16px; font-weight: bold;"
             )
 
-        # Trades
         trades_label = self.auto_trade_labels.get('trades')
         if trades_label:
             trades_label.setText(
@@ -3165,7 +3046,6 @@ class MainApp(QMainWindow):
                 f"color: {pnl_color}; font-size: 16px; font-weight: bold;"
             )
 
-        # Status
         status_label = self.auto_trade_labels.get('status')
         if status_label:
             if state.is_safety_paused:
@@ -3190,13 +3070,11 @@ class MainApp(QMainWindow):
                     "color: #8b949e; font-size: 14px;"
                 )
 
-        # Update pause button text
         if state.is_safety_paused or state.is_paused:
             self.auto_pause_btn.setText("▶ Resume Auto")
         else:
             self.auto_pause_btn.setText("⏸ Pause Auto")
 
-        # Pending approvals count
         pending_count = len(state.pending_approvals)
         if pending_count > 0:
             self.auto_approve_all_btn.setText(
@@ -3211,7 +3089,6 @@ class MainApp(QMainWindow):
                 self.auto_reject_all_btn.setEnabled(False)
 
     # =========================================================================
-    # UTILITIES
     # =========================================================================
 
     def _update_clock(self):
@@ -3255,7 +3132,6 @@ class MainApp(QMainWindow):
         elif hasattr(self.log_widget, 'append'):
             self.log_widget.append(formatted)
 
-        # Also log to file
         log.info(message)
 
     # =========================================================================
@@ -3264,7 +3140,6 @@ class MainApp(QMainWindow):
 
     def closeEvent(self, event):
         """Handle window close safely."""
-        # Stop monitoring
         if self.monitor:
             try:
                 self.monitor.stop()
@@ -3280,7 +3155,6 @@ class MainApp(QMainWindow):
             except Exception:
                 pass
 
-        # Stop workers
         for name, worker in list(self.workers.items()):
             try:
                 worker.cancel()
@@ -3290,7 +3164,6 @@ class MainApp(QMainWindow):
                 pass
         self.workers.clear()
 
-        # Disconnect trading
         if self.executor:
             try:
                 self.executor.stop()
@@ -3298,7 +3171,6 @@ class MainApp(QMainWindow):
                 pass
             self.executor = None
 
-        # Stop timers
         for timer_name in (
             "clock_timer", "market_timer",
             "portfolio_timer", "watchlist_timer",
@@ -3311,7 +3183,6 @@ class MainApp(QMainWindow):
             except Exception:
                 pass
 
-        # Save state
         try:
             self._save_state()
         except Exception:
@@ -3321,7 +3192,6 @@ class MainApp(QMainWindow):
         super().closeEvent(event)
 
     # =========================================================================
-    # STATE PERSISTENCE
     # =========================================================================
 
     def _save_state(self):
@@ -3358,7 +3228,6 @@ class MainApp(QMainWindow):
 
                 if 'watch_list' in state:
                     loaded = state['watch_list']
-                    # Validate and cap watchlist
                     validated = [
                         c for c in loaded
                         if _validate_stock_code(c)
@@ -3391,11 +3260,6 @@ class MainApp(QMainWindow):
         except Exception as e:
             log.debug(f"Failed to load state: {e}")
 
-
-# =============================================================================
-# APPLICATION ENTRY POINT
-# =============================================================================
-
 def run_app():
     """Run the application"""
     os.environ.setdefault('QT_AUTO_SCREEN_SCALE_FACTOR', '1')
@@ -3414,7 +3278,6 @@ def run_app():
     window.show()
 
     sys.exit(app.exec())
-
 
 if __name__ == "__main__":
     run_app()

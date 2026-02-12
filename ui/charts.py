@@ -9,7 +9,6 @@ from utils.logger import get_logger
 
 log = get_logger(__name__)
 
-# Try to import plotting libraries
 try:
     import pyqtgraph as pg
     HAS_PYQTGRAPH = True
@@ -18,16 +17,11 @@ except ImportError:
     pg = None
     log.warning("pyqtgraph not available - using fallback chart")
 
-
-# =============================================================================
-# CANDLESTICK ITEM
-# =============================================================================
-
 if HAS_PYQTGRAPH:
     class CandlestickItem(pg.GraphicsObject):
         """
         Custom candlestick chart item for pyqtgraph.
-        
+
         Data format: list of (x, open, close, low, high) tuples.
         """
 
@@ -71,13 +65,11 @@ if HAS_PYQTGRAPH:
                 p.setPen(pg.mkPen(color=color, width=1))
                 p.setBrush(pg.mkBrush(color=color))
 
-                # Wick
                 p.drawLine(
                     pg.QtCore.QPointF(t, low),
                     pg.QtCore.QPointF(t, high)
                 )
 
-                # Body
                 top = max(o, c)
                 bot = min(o, c)
                 body_height = max(1e-8, top - bot)
@@ -121,32 +113,27 @@ if HAS_PYQTGRAPH:
 else:
     CandlestickItem = None
 
-
-# =============================================================================
 # MAIN STOCK CHART - FIXED VERSION
-# =============================================================================
 
 class StockChart(QWidget):
     """
     Interactive stock chart with THREE layers:
-    
+
     Layer 1 (BOTTOM): Prediction line (dashed green) - AI forecast
     Layer 2 (MIDDLE): Price line (solid blue) - connects close prices  
     Layer 3 (TOP): Candlesticks (red/green) - OHLCV bars
-    
+
     Plus: Trading level lines (stop loss, targets)
     """
 
     def __init__(self, parent=None):
         super().__init__(parent)
 
-        # Data storage
         self._bars: List[dict] = []
         self._actual_prices: List[float] = []
         self._predicted_prices: List[float] = []
         self._levels: Dict[str, float] = {}
 
-        # Plot references
         self.plot_widget = None
         self.candles = None           # Layer 3: Candlesticks (top)
         self.actual_line = None       # Layer 2: Price line (middle)
@@ -199,10 +186,8 @@ class StockChart(QWidget):
         self.candles = CandlestickItem()
         self.plot_widget.addItem(self.candles)
 
-        # Level lines dict
         self.level_lines = {}
 
-        # Legend
         self.plot_widget.addLegend()
 
         self.layout().addWidget(self.plot_widget)
@@ -237,10 +222,10 @@ class StockChart(QWidget):
     ):
         """
         UNIFIED update method - draws all three layers together.
-        
+
         This is the PRIMARY method that should be called for updates.
         Both update_candles() and update_data() now delegate to this.
-        
+
         Args:
             bars: List of OHLCV dicts with keys: open, high, low, close
             predicted_prices: AI forecast prices (the "guessed graph")
@@ -311,7 +296,6 @@ class StockChart(QWidget):
                         start_x,
                         start_x + len(self._predicted_prices) + 1
                     )
-                    # Connect from last actual price to predictions
                     y_pred = np.array(
                         [closes[-1]] + list(self._predicted_prices),
                         dtype=float
@@ -320,10 +304,8 @@ class StockChart(QWidget):
                 else:
                     self.predicted_line.clear()
 
-            # Store for level line calculations
             self._actual_prices = closes
 
-            # Update trading level lines
             self._update_level_lines()
 
             # Auto-range to fit all data
@@ -345,7 +327,7 @@ class StockChart(QWidget):
     ):
         """
         Update chart with candlestick bar data.
-        
+
         BACKWARD COMPATIBLE: This now delegates to update_chart()
         so all three layers are drawn together.
         """
@@ -359,11 +341,10 @@ class StockChart(QWidget):
     ):
         """
         Update chart with line data.
-        
+
         BACKWARD COMPATIBLE: Converts price list to bar format,
         then delegates to update_chart() so all three layers work.
         """
-        # Convert simple price list to minimal bar format
         bars = []
         for p in actual_prices:
             try:
@@ -381,7 +362,6 @@ class StockChart(QWidget):
         self.update_chart(bars, predicted_prices, levels)
 
     # =========================================================================
-    # HELPER METHODS
     # =========================================================================
 
     def _clear_all(self):
@@ -402,7 +382,6 @@ class StockChart(QWidget):
         if not HAS_PYQTGRAPH or self.plot_widget is None:
             return
 
-        # Remove old lines
         for line in self.level_lines.values():
             try:
                 self.plot_widget.removeItem(line)
@@ -466,10 +445,7 @@ class StockChart(QWidget):
         """Get current number of bars."""
         return len(self._bars)
 
-
-# =============================================================================
 # MINI CHART (for watchlist) - unchanged
-# =============================================================================
 
 class MiniChart(QWidget):
     """Compact mini chart for watchlist items."""
@@ -513,7 +489,6 @@ class MiniChart(QWidget):
             x = np.arange(len(self._prices))
             y = np.array(self._prices, dtype=float)
 
-            # Determine color based on trend
             if len(y) > 1:
                 if y[-1] > y[0]:
                     color = '#3fb950'

@@ -25,21 +25,16 @@ from .atomic_io import (
 )
 
 __all__ = [
-    # Logger
     "log",
     "get_logger",
     "setup_logging",
     "teardown_logging",
-    # Formatters
     "format_number",
     "format_pct",
     "format_price",
-    # Date utilities
     "get_trading_dates",
-    # Metrics
     "calculate_sharpe",
     "calculate_max_drawdown",
-    # Cancellation
     "CancellationToken",
     "CancelledException",
     "cancellable_operation",

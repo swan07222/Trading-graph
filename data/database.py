@@ -11,12 +11,12 @@ import numpy as np
 
 from config.settings import CONFIG
 from utils.logger import get_logger
+from utils.helpers import to_float, to_int
 
 log = get_logger(__name__)
 
 # Current schema version — bump when adding/altering tables
 _SCHEMA_VERSION = 2
-
 
 class MarketDatabase:
     """
@@ -29,7 +29,7 @@ class MarketDatabase:
     - intraday_bars: Intraday OHLCV data
     - features: Computed features
     - predictions: Model predictions
-    
+
     FIX: Replaced weakref.WeakSet with regular set for connection tracking.
     sqlite3.Connection does not support weak references.
     """
@@ -45,11 +45,9 @@ class MarketDatabase:
         self._schema_lock = threading.Lock()
         self._schema_ready = threading.Event()
         self._init_db()
-        # Register cleanup on interpreter exit
         atexit.register(self.close_all)
 
     # ------------------------------------------------------------------
-    # Connection management
     # ------------------------------------------------------------------
 
     @property
@@ -85,7 +83,6 @@ class MarketDatabase:
             raise
 
     # ------------------------------------------------------------------
-    # Schema management
     # ------------------------------------------------------------------
 
     def _init_db(self):
@@ -211,7 +208,6 @@ class MarketDatabase:
         conn.commit()
 
     # ------------------------------------------------------------------
-    # Column validation helpers
     # ------------------------------------------------------------------
 
     _REQUIRED_BAR_COLUMNS = {"open", "high", "low", "close"}
@@ -236,30 +232,13 @@ class MarketDatabase:
 
     @staticmethod
     def _to_float(x, default: float = 0.0) -> float:
-        try:
-            if x is None:
-                return default
-            val = float(x)
-            if np.isnan(val) or np.isinf(val):
-                return default
-            return val
-        except (ValueError, TypeError):
-            return default
+        return to_float(x, default)
 
     @staticmethod
     def _to_int(x, default: int = 0) -> int:
-        try:
-            if x is None:
-                return default
-            val = float(x)
-            if np.isnan(val) or np.isinf(val):
-                return default
-            return int(val)
-        except (ValueError, TypeError):
-            return default
+        return to_int(x, default)
 
     # ------------------------------------------------------------------
-    # Intraday bars
     # ------------------------------------------------------------------
 
     def get_intraday_bars(
@@ -362,7 +341,6 @@ class MarketDatabase:
         return rows
 
     # ------------------------------------------------------------------
-    # Stock metadata
     # ------------------------------------------------------------------
 
     def upsert_stock(
@@ -401,7 +379,6 @@ class MarketDatabase:
             )
 
     # ------------------------------------------------------------------
-    # Daily bars
     # ------------------------------------------------------------------
 
     def upsert_bars(self, code: str, df: pd.DataFrame):
@@ -462,7 +439,6 @@ class MarketDatabase:
         return rows
 
     # ------------------------------------------------------------------
-    # Queries
     # ------------------------------------------------------------------
 
     def get_bars(
@@ -573,7 +549,6 @@ class MarketDatabase:
             return []
 
     # ------------------------------------------------------------------
-    # Predictions
     # ------------------------------------------------------------------
 
     def save_prediction(
@@ -661,7 +636,6 @@ class MarketDatabase:
                 conn.close()
             except Exception:
                 pass
-            # Remove from tracked connections
             with self._connections_lock:
                 self._connections.discard(conn)
             self._local.conn = None
@@ -683,14 +657,10 @@ class MarketDatabase:
                 pass
             self._local.conn = None
 
-
-# ------------------------------------------------------------------
 # Global database instance (thread-safe)
-# ------------------------------------------------------------------
 
 _db: Optional[MarketDatabase] = None
 _db_lock = threading.Lock()
-
 
 def get_database() -> MarketDatabase:
     """Get global database instance (thread-safe)."""

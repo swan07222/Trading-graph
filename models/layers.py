@@ -5,7 +5,6 @@ import torch.nn.functional as F
 import math
 from typing import Optional, Tuple
 
-
 class PositionalEncoding(nn.Module):
     """Sinusoidal positional encoding for transformer models."""
 
@@ -35,7 +34,6 @@ class PositionalEncoding(nn.Module):
         """x: (batch, seq_len, d_model)"""
         x = x + self.pe[:, : x.size(1)]
         return self.dropout(x)
-
 
 class MultiHeadAttention(nn.Module):
     """
@@ -120,7 +118,6 @@ class MultiHeadAttention(nn.Module):
         output = self.resid_dropout(self.out_proj(context))
         return output, attn_weights
 
-
 class FeedForward(nn.Module):
     """Position-wise Feed-Forward Network with SwiGLU option."""
 
@@ -153,7 +150,6 @@ class FeedForward(nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.net(x)
 
-
 class _SwiGLU(nn.Module):
     """SwiGLU activation: SiLU(xW1) * xW2"""
 
@@ -164,7 +160,6 @@ class _SwiGLU(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return F.silu(self.w1(x)) * self.w2(x)
-
 
 class TransformerBlock(nn.Module):
     """Pre-norm Transformer encoder block with optional causal masking."""
@@ -195,7 +190,6 @@ class TransformerBlock(nn.Module):
         x = x + ff_out
 
         return x
-
 
 class LSTMBlock(nn.Module):
     """LSTM block with layer normalization.
@@ -233,7 +227,6 @@ class LSTMBlock(nn.Module):
         output = self.norm(output)
         output = self.dropout(output)
         return output
-
 
 class TemporalConvBlock(nn.Module):
     """Strictly causal temporal convolution block with dilated convolutions.
@@ -290,7 +283,6 @@ class TemporalConvBlock(nn.Module):
 
         return self.activation(out + residual)
 
-
 class AttentionPooling(nn.Module):
     """Attention-based pooling to aggregate a sequence into a single vector."""
 
@@ -308,11 +300,6 @@ class AttentionPooling(nn.Module):
         weights = self.attention(x)  # (batch, seq, 1)
         weights = F.softmax(weights, dim=1)
         return torch.sum(weights * x, dim=1)
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
 
 def _pick_num_groups(channels: int, preferred: int = 8) -> int:
     """Pick a valid num_groups for GroupNorm (must divide channels)."""

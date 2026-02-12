@@ -23,12 +23,6 @@ log = get_logger(__name__)
 
 T = TypeVar("T")
 
-
-# ------------------------------------------------------------------
-# Statistics
-# ------------------------------------------------------------------
-
-
 @dataclass
 class CacheStats:
     """Thread-safe cache statistics."""
@@ -63,12 +57,6 @@ class CacheStats:
         total = self.total_hits + self.total_misses
         return self.total_hits / max(total, 1)
 
-
-# ------------------------------------------------------------------
-# Cache entry
-# ------------------------------------------------------------------
-
-
 @dataclass
 class CacheEntry:
     """Cache entry with metadata."""
@@ -79,13 +67,9 @@ class CacheEntry:
     access_count: int = 0
     last_access: datetime = field(default_factory=datetime.now)
 
-
-# ------------------------------------------------------------------
 # L1: In-memory LRU with TTL
-# ------------------------------------------------------------------
 
 _SENTINEL = object()
-
 
 class LRUCache:
     """Thread-safe LRU cache with TTL enforcement."""
@@ -112,7 +96,6 @@ class LRUCache:
 
             entry = self._cache[key]
 
-            # TTL check
             if max_age_hours is not None:
                 age_hours = (
                     datetime.now() - entry.created_at
@@ -129,7 +112,6 @@ class LRUCache:
 
     def set(self, key: str, value: Any, size_bytes: int = 0):
         with self._lock:
-            # Remove if exists
             if key in self._cache:
                 self._evict_key(key)
 
@@ -187,7 +169,6 @@ class LRUCache:
         if isinstance(value, (str, bytes)):
             return len(value)
         if isinstance(value, dict):
-            # Rough estimate for dicts
             try:
                 return sys.getsizeof(value) + sum(
                     sys.getsizeof(k) + LRUCache._estimate_size(v)
@@ -215,18 +196,14 @@ class LRUCache:
     def size_mb(self) -> float:
         return self._current_size / (1024 * 1024)
 
-
-# ------------------------------------------------------------------
 # Disk cache (L2 / L3)
-# ------------------------------------------------------------------
-
 
 class DiskCache:
     """
     Disk-based cache with atomic writes.
 
     Uses write-to-temp-then-rename to prevent corruption on crash.
-    
+
     FIX C4: Closes file descriptor immediately after mkstemp to prevent
     fd leak and avoid Windows PermissionError when renaming.
     """
@@ -256,7 +233,6 @@ class DiskCache:
         if not path.exists():
             return _SENTINEL
 
-        # Check age
         if max_age_hours is not None:
             try:
                 mtime = datetime.fromtimestamp(path.stat().st_mtime)
@@ -278,7 +254,6 @@ class DiskCache:
                         return pickle.load(f)
         except Exception as e:
             log.warning(f"Cache read error for key hash {path.stem}: {e}")
-            # Remove corrupt file so next write succeeds
             try:
                 path.unlink(missing_ok=True)
             except OSError:
@@ -288,7 +263,7 @@ class DiskCache:
     def set(self, key: str, value: Any):
         """
         Atomic write: temp file → rename.
-        
+
         FIX C4: Close the file descriptor from mkstemp IMMEDIATELY
         before opening the file with gzip.open or open(). This prevents:
         1. File descriptor leak (the fd stays open until finally block)
@@ -303,13 +278,13 @@ class DiskCache:
                 fd, tmp_path_str = tempfile.mkstemp(
                     dir=str(self._dir), suffix=".tmp"
                 )
-                
+
                 # FIX C4: Close fd IMMEDIATELY - we'll reopen with gzip/open
                 try:
                     os.close(fd)
                 except OSError:
                     pass
-                
+
                 tmp_path = Path(tmp_path_str)
 
                 # Now write to the file (no fd leak)
@@ -319,11 +294,10 @@ class DiskCache:
                 else:
                     with open(tmp_path, "wb") as f:
                         pickle.dump(value, f, protocol=pickle.HIGHEST_PROTOCOL)
-                
-                # Atomic rename
+
                 tmp_path.replace(path)
                 tmp_path = None  # Successfully moved, don't delete in finally
-                
+
         except Exception as e:
             log.warning(f"Cache write error: {e}")
         finally:
@@ -347,7 +321,6 @@ class DiskCache:
     def clear(self, older_than_hours: float = None):
         """Clear cache, optionally only old files."""
         now = datetime.now()
-        # Explicit patterns to avoid matching unrelated files
         patterns = ["*.pkl", "*.pkl.gz"]
         for pattern in patterns:
             for path in self._dir.glob(pattern):
@@ -360,12 +333,6 @@ class DiskCache:
                     path.unlink()
                 except OSError:
                     pass
-
-
-# ------------------------------------------------------------------
-# Tiered cache
-# ------------------------------------------------------------------
-
 
 class TieredCache:
     """
@@ -482,7 +449,6 @@ class TieredCache:
         if value is not None:
             return value
 
-        # Compute outside lock
         value = compute_fn()
 
         with self._lock:
@@ -506,14 +472,8 @@ class TieredCache:
             # Python < 3.9 doesn't have cancel_futures
             self._l3_executor.shutdown(wait=True)
 
-
-# ------------------------------------------------------------------
-# Global instance
-# ------------------------------------------------------------------
-
 _cache: Optional[TieredCache] = None
 _cache_lock = threading.Lock()
-
 
 def get_cache() -> TieredCache:
     """Get global cache instance."""
@@ -523,12 +483,6 @@ def get_cache() -> TieredCache:
             if _cache is None:
                 _cache = TieredCache()
     return _cache
-
-
-# ------------------------------------------------------------------
-# Decorator
-# ------------------------------------------------------------------
-
 
 def cached(
     key_fn: Callable[..., str] = None,

@@ -20,10 +20,7 @@ from utils.logger import get_logger
 
 log = get_logger(__name__)
 
-
-# =============================================================================
 # SCORING CONSTANTS (no more magic numbers)
-# =============================================================================
 
 # Market cap thresholds (in raw yuan)
 _MCAP_LARGE: float = 100e8       # 100亿 (10B CNY)
@@ -49,11 +46,9 @@ _CHANGE_ACTIVE_MAX: float = 8.0
 _CHANGE_ACTIVE_SCORE: float = 0.10
 _CHANGE_EXTREME_SCORE: float = 0.05
 
-# Index constituent bonus
 _INDEX_SOURCES = frozenset({"CSI300", "CSI500", "CSI1000"})
 _INDEX_SCORE: float = 0.10
 
-# Base score for all stocks
 _BASE_SCORE: float = 0.50
 
 # Valid A-share prefixes (aligned with core/constants.py EXCHANGES)
@@ -71,7 +66,6 @@ _SSE_PREFIXES = ("600", "601", "603", "605", "688")
 _SZSE_PREFIXES = ("000", "001", "002", "003", "300", "301")
 _BSE_PREFIXES = ("83", "87", "43")
 
-# Code cleaning regex
 _PREFIX_RE = re.compile(r'^(sh|sz|bj)\.?', re.IGNORECASE)
 _SUFFIX_RE = re.compile(r'\.(sh|sz|bj|ss)$', re.IGNORECASE)
 
@@ -81,11 +75,6 @@ _DEFAULT_TIMEOUT: int = 10
 _MAX_RETRIES: int = 2
 _TENCENT_CHUNK_SIZE: int = 80
 _SPOT_DF_LIMIT: int = 500  # cap for "all" filter to avoid scoring 5000 stocks
-
-
-# =============================================================================
-# DATA CLASS
-# =============================================================================
 
 @dataclass
 class DiscoveredStock:
@@ -105,7 +94,6 @@ class DiscoveredStock:
         self.code = self._clean_code(self.code)
 
     # ------------------------------------------------------------------ #
-    # Code normalisation
     # ------------------------------------------------------------------ #
     @staticmethod
     def _clean_code(code: str) -> str:
@@ -139,11 +127,6 @@ class DiscoveredStock:
         if any(self.code.startswith(p) for p in _BSE_PREFIXES):
             return "BSE"
         return "UNKNOWN"
-
-
-# =============================================================================
-# DISCOVERY ENGINE
-# =============================================================================
 
 class UniversalStockDiscovery:
     """
@@ -196,7 +179,6 @@ class UniversalStockDiscovery:
         return self._net_env
 
     # ================================================================== #
-    # Rate limiting
     # ================================================================== #
     def _wait(self) -> None:
         with self._lock:
@@ -228,7 +210,6 @@ class UniversalStockDiscovery:
         return None
 
     # ================================================================== #
-    # PUBLIC API
     # ================================================================== #
     def discover_all(
         self,
@@ -367,7 +348,6 @@ class UniversalStockDiscovery:
         """
         score = _BASE_SCORE
 
-        # Market cap
         if stock.market_cap > _MCAP_LARGE:
             score += _MCAP_LARGE_SCORE
         elif stock.market_cap > _MCAP_MEDIUM:
@@ -375,7 +355,6 @@ class UniversalStockDiscovery:
         elif stock.market_cap > _MCAP_SMALL:
             score += _MCAP_SMALL_SCORE
 
-        # Volume
         if stock.volume > _VOL_HIGH:
             score += _VOL_HIGH_SCORE
         elif stock.volume > _VOL_MEDIUM:
@@ -383,14 +362,12 @@ class UniversalStockDiscovery:
         elif stock.volume > _VOL_LOW:
             score += _VOL_LOW_SCORE
 
-        # Change activity
         abs_change = abs(stock.change_pct)
         if _CHANGE_ACTIVE_MIN < abs_change < _CHANGE_ACTIVE_MAX:
             score += _CHANGE_ACTIVE_SCORE
         elif abs_change >= _CHANGE_ACTIVE_MAX:
             score += _CHANGE_EXTREME_SCORE
 
-        # Index bonus
         if stock.source in _INDEX_SOURCES:
             score += _INDEX_SCORE
 
@@ -462,7 +439,6 @@ class UniversalStockDiscovery:
             existing.name = new.name
 
     # ================================================================== #
-    # Tencent verification
     # ================================================================== #
     def _discover_via_tencent(self) -> List[DiscoveredStock]:
         """
@@ -599,7 +575,6 @@ class UniversalStockDiscovery:
         elif filter_type == "large_cap":
             work = work.sort_values("总市值", ascending=False).head(200)
         elif filter_type == "all":
-            # Cap to avoid creating thousands of objects
             work = work.sort_values("成交额", ascending=False).head(
                 _SPOT_DF_LIMIT
             )
@@ -689,17 +664,13 @@ class UniversalStockDiscovery:
         log.info(f"Fallback list: {len(stocks)} stocks")
         return stocks
 
-
-# =============================================================================
 # MODULE-LEVEL HELPERS
-# =============================================================================
 
 def _is_st(name: Optional[str]) -> bool:
     """Check if a stock name indicates ST status."""
     if not name:
         return False
     return "ST" in name.upper()
-
 
 def _find_column(
     df: pd.DataFrame, candidates: List[str]

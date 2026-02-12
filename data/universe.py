@@ -12,6 +12,7 @@ from typing import Dict, List, Optional
 
 from config.settings import CONFIG
 from core.constants import get_exchange
+from core.network import get_network_env
 from utils.logger import get_logger
 
 log = get_logger(__name__)
@@ -25,10 +26,8 @@ except ImportError:
 
 _universe_lock = threading.Lock()
 
-
 def _universe_path() -> Path:
     return Path(CONFIG.data_dir) / "stock_universe.json"
-
 
 def load_universe() -> Dict:
     """Load universe from disk."""
@@ -44,7 +43,6 @@ def load_universe() -> Dict:
     except (json.JSONDecodeError, OSError) as exc:
         log.warning(f"Failed to load universe file: {exc}")
         return {}
-
 
 def save_universe(data: Dict) -> None:
     """Atomically save universe to disk."""
@@ -66,7 +64,6 @@ def save_universe(data: Dict) -> None:
         except OSError as exc:
             log.warning(f"Failed to save universe: {exc}")
 
-
 def _parse_updated_ts(data: Dict) -> float:
     raw = data.get("updated_ts")
     if raw is None:
@@ -75,7 +72,6 @@ def _parse_updated_ts(data: Dict) -> float:
         return float(raw)
     except (ValueError, TypeError):
         return 0.0
-
 
 def _validate_codes(codes: List) -> List[str]:
     """Validate stock codes."""
@@ -90,11 +86,49 @@ def _validate_codes(codes: List) -> List[str]:
         validated.append(code6)
     return sorted(set(validated))
 
+def _fallback_codes() -> List[str]:
+    """Build robust offline fallback universe."""
+    base = _validate_codes(getattr(CONFIG, "stock_pool", []))
+
+    # Reuse curated discovery fallback list when available.
+    try:
+        from data.discovery import UniversalStockDiscovery
+
+        extra = [
+            s.code
+            for s in UniversalStockDiscovery._get_fallback_stocks()  # static helper
+            if getattr(s, "code", None)
+        ]
+        base.extend(extra)
+    except Exception:
+        pass
+
+    return _validate_codes(base)
+
+def _can_use_akshare() -> bool:
+    """
+    Decide if AkShare/Eastmoney is worth trying.
+
+    In VPN-foreign mode with Eastmoney blocked, skip to avoid repeated timeouts.
+    """
+    try:
+        env = get_network_env()
+    except Exception:
+        return True
+
+    if env.eastmoney_ok:
+        return True
+
+    if env.is_vpn_active and not env.eastmoney_ok:
+        log.info("Skipping AkShare universe fetch: VPN mode with Eastmoney blocked")
+        return False
+
+    return bool(env.is_china_direct)
 
 def _try_akshare_fetch(timeout: int = 20) -> Optional[List[str]]:
     """
     Try to fetch stock universe from AkShare.
-    
+
     FIX: Always tries regardless of network detection.
     Returns None on failure, valid codes on success.
     """
@@ -115,7 +149,6 @@ def _try_akshare_fetch(timeout: int = 20) -> Optional[List[str]]:
             log.warning("AkShare returned empty DataFrame")
             return None
 
-        # Find code column
         code_col = None
         for c in ("代码", "code", "证券代码"):
             if c in df.columns:
@@ -126,7 +159,6 @@ def _try_akshare_fetch(timeout: int = 20) -> Optional[List[str]]:
             log.warning(f"No code column found. Columns: {list(df.columns)[:10]}")
             return None
 
-        # Extract codes
         raw_codes = df[code_col].astype(str).str.extract(r"(\d+)")[0].dropna().tolist()
         codes = _validate_codes(raw_codes)
 
@@ -143,14 +175,13 @@ def _try_akshare_fetch(timeout: int = 20) -> Optional[List[str]]:
     finally:
         socket.setdefaulttimeout(old_timeout)
 
-
 def get_universe_codes(
     force_refresh: bool = False,
     max_age_hours: float = 12.0,
 ) -> List[str]:
     """
     Return all known A-share stock codes.
-    
+
     FIX: Always tries AkShare first, regardless of network detection.
     Falls back to cache, then CONFIG.stock_pool.
     """
@@ -160,13 +191,12 @@ def get_universe_codes(
     cached_codes = _validate_codes(data.get("codes") or [])
     stale = (now - last_ts) > max_age_hours * 3600.0
 
-    # Use fresh cache if available
     if not force_refresh and cached_codes and not stale:
         log.debug(f"Using cached universe: {len(cached_codes)} codes")
         return cached_codes
 
-    # Always TRY AkShare - don't check network first
-    fresh_codes = _try_akshare_fetch()
+    # Network-aware source choice: avoid AkShare timeouts when Eastmoney is blocked.
+    fresh_codes = _try_akshare_fetch() if _can_use_akshare() else None
 
     if fresh_codes:
         out = {
@@ -187,26 +217,25 @@ def get_universe_codes(
         )
         return cached_codes
 
-    # Last resort: CONFIG.stock_pool
-    fallback = _validate_codes(getattr(CONFIG, "stock_pool", []))
+    # Last resort: robust static fallback universe
+    fallback = _fallback_codes()
     if fallback:
-        log.warning(f"Using CONFIG.stock_pool fallback ({len(fallback)} codes)")
+        log.warning(f"Using fallback universe ({len(fallback)} codes)")
         return fallback
 
     log.error("No stock codes available from any source!")
     return []
 
-
 def refresh_universe() -> Dict:
     """
     Refresh universe from AkShare.
-    
+
     FIX: Removed network detection check - just try to fetch.
     """
     existing = load_universe()
     existing_codes = existing.get("codes") or []
 
-    fresh_codes = _try_akshare_fetch()
+    fresh_codes = _try_akshare_fetch() if _can_use_akshare() else None
 
     if fresh_codes:
         out = {
@@ -223,8 +252,18 @@ def refresh_universe() -> Dict:
         log.info(f"Refresh failed, keeping existing {len(existing_codes)} codes")
         return existing
 
-    return {"codes": [], "updated_ts": time.time(), "source": "empty"}
+    fallback = _fallback_codes()
+    if fallback:
+        out = {
+            "codes": fallback,
+            "updated_ts": time.time(),
+            "updated_at": datetime.now().isoformat(),
+            "source": "fallback",
+        }
+        save_universe(out)
+        return out
 
+    return {"codes": [], "updated_ts": time.time(), "source": "empty"}
 
 def get_new_listings(days: int = 60, force_refresh: bool = False) -> List[str]:
     """Return codes of stocks listed within the last N days."""
@@ -254,7 +293,6 @@ def get_new_listings(days: int = 60, force_refresh: bool = False) -> List[str]:
             if df is None or df.empty:
                 continue
 
-            # Find code column
             code_col = None
             for c in ("代码", "证券代码", "stock_code", "code"):
                 if c in df.columns:
@@ -263,7 +301,6 @@ def get_new_listings(days: int = 60, force_refresh: bool = False) -> List[str]:
             if code_col is None:
                 continue
 
-            # Find date column
             date_col = None
             for c in ("上市日期", "listing_date", "list_date"):
                 if c in df.columns:

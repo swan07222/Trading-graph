@@ -20,22 +20,15 @@ from utils.logger import get_logger
 
 log = get_logger(__name__)
 
-
-# ---------------------------------------------------------------------------
 # CancelledException import (FIX CANCEL)
-# ---------------------------------------------------------------------------
 
 try:
     from utils.cancellation import CancelledException
 except ImportError:
-    # Fallback if cancellation module is not available
     class CancelledException(Exception):  # type: ignore[no-redef]
         pass
 
-
-# ---------------------------------------------------------------------------
 # Thread-local LR support (FIX C1)
-# ---------------------------------------------------------------------------
 
 def _get_effective_learning_rate() -> float:
     """
@@ -51,11 +44,6 @@ def _get_effective_learning_rate() -> float:
         pass
 
     return CONFIG.model.learning_rate
-
-
-# ---------------------------------------------------------------------------
-# Prediction result
-# ---------------------------------------------------------------------------
 
 @dataclass
 class EnsemblePrediction:
@@ -84,11 +72,6 @@ class EnsemblePrediction:
     def is_confident(self) -> bool:
         return self.confidence >= CONFIG.model.min_confidence
 
-
-# ---------------------------------------------------------------------------
-# AMP helpers
-# ---------------------------------------------------------------------------
-
 def _build_amp_context(device: str):
     """Return (context_factory, GradScaler_or_None) compatible with torch >= 1.9."""
     use_amp = device == "cuda"
@@ -110,11 +93,6 @@ def _build_amp_context(device: str):
         pass
 
     return (lambda: nullcontext()), None
-
-
-# ---------------------------------------------------------------------------
-# Ensemble
-# ---------------------------------------------------------------------------
 
 class EnsembleModel:
     """
@@ -182,7 +160,6 @@ class EnsembleModel:
         )
 
     # ------------------------------------------------------------------
-    # Model registry
     # ------------------------------------------------------------------
 
     @classmethod
@@ -236,7 +213,6 @@ class EnsembleModel:
                 self.weights = {k: 1.0 / n for k in self.weights}
 
     # ------------------------------------------------------------------
-    # Stopping helper
     # ------------------------------------------------------------------
 
     @staticmethod
@@ -253,7 +229,6 @@ class EnsembleModel:
             except Exception:
                 return False
 
-        # Plain callable
         if callable(stop_flag):
             try:
                 return bool(stop_flag())
@@ -263,7 +238,6 @@ class EnsembleModel:
         return False
 
     # ------------------------------------------------------------------
-    # Calibration
     # ------------------------------------------------------------------
 
     def calibrate(
@@ -316,7 +290,6 @@ class EnsembleModel:
         best_nll = float("inf")
 
         # FIX CALIB: Finer temperature grid with more granularity
-        # at low temperatures where calibration is more sensitive
         temp_grid = [
             0.1, 0.15, 0.2, 0.25, 0.3, 0.4, 0.5, 0.6, 0.7, 0.75,
             0.8, 0.9, 1.0, 1.1, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0, 4.0, 5.0,
@@ -334,7 +307,6 @@ class EnsembleModel:
         log.info(f"Calibration: temperature={best_temp:.2f}, NLL={best_nll:.4f}")
 
     # ------------------------------------------------------------------
-    # Training
     # ------------------------------------------------------------------
 
     def train(
@@ -388,7 +360,6 @@ class EnsembleModel:
         else:
             effective_lr = _get_effective_learning_rate()
 
-        # Validate shapes
         if X_train.shape[-1] != self.input_size:
             raise ValueError(
                 f"X_train feature dim {X_train.shape[-1]} != input_size {self.input_size}"
@@ -447,7 +418,6 @@ class EnsembleModel:
         if len(X_val) > 0:
             self.calibrate(X_val, y_val)
 
-        # Cleanup
         if self.device == "cuda":
             torch.cuda.empty_cache()
 
@@ -641,7 +611,6 @@ class EnsembleModel:
         log.info(f"Ensemble weights: {self.weights}")
 
     # ------------------------------------------------------------------
-    # Prediction
     # ------------------------------------------------------------------
 
     def predict(self, X: np.ndarray) -> EnsemblePrediction:
@@ -742,7 +711,6 @@ class EnsembleModel:
                 pred_cls = int(np.argmax(probs))
                 conf = float(np.max(probs))
 
-                # Entropy with numerical stability
                 probs_safe = np.clip(probs, 1e-8, 1.0)
                 ent = float(-np.sum(probs_safe * np.log(probs_safe)))
                 ent_norm = ent / max_entropy if max_entropy > 0 else 0.0
@@ -772,7 +740,6 @@ class EnsembleModel:
         return results
 
     # ------------------------------------------------------------------
-    # Persistence
     # ------------------------------------------------------------------
 
     def save(self, path: Optional[str] = None):
@@ -805,7 +772,6 @@ class EnsembleModel:
             path.parent.mkdir(parents=True, exist_ok=True)
 
             # FIX SAVE: Copy state dicts under lock to prevent mutation
-            # during serialization
             model_states = {}
             for n, m in self.models.items():
                 model_states[n] = {
@@ -946,7 +912,6 @@ class EnsembleModel:
             return False
 
     # ------------------------------------------------------------------
-    # Utilities
     # ------------------------------------------------------------------
 
     def get_model_info(self) -> Dict[str, Any]:

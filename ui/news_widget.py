@@ -14,11 +14,10 @@ from utils.logger import get_logger
 
 log = get_logger(__name__)
 
-
 class NewsFetchThread(QThread):
     """
     Background thread to fetch news.
-    
+
     Uses custom signals for data delivery. Does NOT redefine 'finished'
     to avoid collision with QThread.finished.
     """
@@ -46,7 +45,6 @@ class NewsFetchThread(QThread):
                 news = agg.get_market_news(count=30)
                 sentiment = agg.get_sentiment_summary()
 
-            # Emit results
             if news is None:
                 news = []
             if sentiment is None:
@@ -66,7 +64,6 @@ class NewsFetchThread(QThread):
             try:
                 self.fetch_complete.emit()
             except RuntimeError:
-                # Qt object already deleted
                 pass
 
     @property
@@ -76,7 +73,6 @@ class NewsFetchThread(QThread):
             return self._is_running or self.isRunning()
         except RuntimeError:
             return False
-
 
 class SentimentGauge(QFrame):
     """Visual sentiment gauge with robust data handling."""
@@ -212,7 +208,6 @@ class SentimentGauge(QFrame):
         self.bar.setValue(50)
         self.counts_label.setText("")
 
-
 class NewsPanel(QWidget):
     """
     Complete news panel with:
@@ -239,11 +234,9 @@ class NewsPanel(QWidget):
         layout.setSpacing(5)
         layout.setContentsMargins(0, 0, 0, 0)
 
-        # Sentiment gauge
         self.sentiment_gauge = SentimentGauge()
         layout.addWidget(self.sentiment_gauge)
 
-        # News table
         self.table = QTableWidget()
         self.table.setColumnCount(4)
         self.table.setHorizontalHeaderLabels(
@@ -273,7 +266,6 @@ class NewsPanel(QWidget):
         self.table.verticalHeader().setVisible(False)
         layout.addWidget(self.table)
 
-        # Controls
         btn_layout = QHBoxLayout()
         self.refresh_btn = QPushButton("🔄 Refresh")
         self.refresh_btn.clicked.connect(lambda: self.refresh(force=True))
@@ -311,13 +303,12 @@ class NewsPanel(QWidget):
     def refresh(self, force: bool = False):
         """
         Fetch news in background safely.
-        
+
         Guards:
         - Won't start if already fetching
         - Handles deleted thread references
         - Checks network availability
         """
-        # Guard against concurrent fetches
         if self._is_fetching:
             return
 
@@ -328,7 +319,6 @@ class NewsPanel(QWidget):
                     return
             except (RuntimeError, AttributeError):
                 pass
-            # Clean up old reference
             self._cleanup_thread()
 
         # Check network availability (non-blocking)
@@ -343,15 +333,12 @@ class NewsPanel(QWidget):
         except Exception:
             pass
 
-        # Create and start fetch thread
         fetch_type = "stock" if self._current_stock else "market"
         thread = NewsFetchThread(self._current_stock, fetch_type)
 
-        # Keep reference to prevent GC
         self._fetch_thread = thread
         self._is_fetching = True
 
-        # Connect data signals
         thread.news_ready.connect(self._on_news_received)
         thread.sentiment_updated.connect(
             self.sentiment_gauge.update_sentiment
@@ -420,7 +407,6 @@ class NewsPanel(QWidget):
         self.table.setRowCount(len(news_items))
 
         for row, item in enumerate(news_items):
-            # Time
             time_str = "--"
             publish_time = self._safe_item_attr(
                 item, 'publish_time', None
@@ -438,7 +424,6 @@ class NewsPanel(QWidget):
             time_item.setForeground(QColor("#8b949e"))
             self.table.setItem(row, 0, time_item)
 
-            # Sentiment
             score = self._safe_float_attr(item, "sentiment_score", 0.0)
 
             if score > 0.2:
@@ -456,7 +441,6 @@ class NewsPanel(QWidget):
             sent_item.setFont(QFont("Consolas", 9))
             self.table.setItem(row, 1, sent_item)
 
-            # Title
             title = str(self._safe_item_attr(item, "title", ""))
             title_item = QTableWidgetItem(title)
 
@@ -468,7 +452,6 @@ class NewsPanel(QWidget):
                 title_item.setForeground(QColor("#c9d1d9"))
             self.table.setItem(row, 2, title_item)
 
-            # Source
             source = str(self._safe_item_attr(item, "source", ""))
             source_item = QTableWidgetItem(source)
             source_item.setForeground(QColor("#8b949e"))
@@ -476,14 +459,12 @@ class NewsPanel(QWidget):
 
     def stop(self):
         """Stop all background activity."""
-        # Stop timer
         if hasattr(self, '_timer') and self._timer:
             try:
                 self._timer.stop()
             except Exception:
                 pass
 
-        # Stop fetch thread
         self._cleanup_thread()
 
     def __del__(self):

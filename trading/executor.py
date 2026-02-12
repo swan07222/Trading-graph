@@ -17,15 +17,13 @@ from trading.risk import RiskManager, get_risk_manager
 from trading.kill_switch import get_kill_switch
 from trading.health import get_health_monitor, ComponentType, HealthStatus
 from trading.alerts import get_alert_manager, AlertPriority
+from utils.security import get_access_control, get_audit_log
 from utils.logger import get_logger
 from utils.metrics import inc_counter, set_gauge, observe
 
 log = get_logger(__name__)
 
-
-# =============================================================================
 # AUTO-TRADER
-# =============================================================================
 
 class AutoTrader:
     """
@@ -73,13 +71,11 @@ class AutoTrader:
 
         self.state = AutoTradeState()
 
-        # Callbacks for UI notifications
         self.on_action: Optional[Callable[[AutoTradeAction], None]] = None
         self.on_state_changed: Optional[Callable[[AutoTradeState], None]] = None
         self.on_pending_approval: Optional[Callable[[AutoTradeAction], None]] = None
 
     # -----------------------------------------------------------------
-    # Public API
     # -----------------------------------------------------------------
 
     def set_mode(self, mode: AutoTradeMode):
@@ -162,7 +158,6 @@ class AutoTrader:
                 log.warning(f"Pending approval not found: {action_id}")
                 return False
 
-            # Execute the trade
             success = self._execute_action(action)
             if success:
                 action.decision = "EXECUTED"
@@ -267,20 +262,17 @@ class AutoTrader:
 
             try:
                 with self._lock:
-                    # Day rollover
                     today = date.today()
                     if self.state.session_date != today:
                         self.state.reset_daily()
                         log.info("Auto-trader: new trading day, counters reset")
 
-                    # Check if we should scan
                     if not self._should_scan():
                         self._sleep_interruptible(5)
                         continue
 
                     self.state.last_scan_time = datetime.now()
 
-                # Run scan OUTSIDE the lock to avoid blocking UI
                 self._run_scan_cycle()
 
             except Exception as e:
@@ -304,7 +296,6 @@ class AutoTrader:
                         )
                         self._notify_state_changed()
 
-            # Sleep until next cycle
             elapsed = time.time() - cycle_start
             interval = CONFIG.auto_trade.scan_interval_seconds
             remaining = max(1.0, interval - elapsed)
@@ -319,38 +310,30 @@ class AutoTrader:
         """
         cfg = CONFIG.auto_trade
 
-        # Mode check
         if self.state.mode == AutoTradeMode.MANUAL:
             return False
 
-        # Enabled check
         if not cfg.enabled:
             return False
 
-        # Safety pause
         if self.state.is_safety_paused:
             return False
 
-        # Market hours
         if cfg.require_market_open and not CONFIG.is_market_open():
             return False
 
-        # Broker connected
         if cfg.require_broker_connected:
             if not self._engine or not self._engine._running:
                 return False
             if not self._engine.broker.is_connected:
                 return False
 
-        # Daily trade limit
         if self.state.trades_today >= cfg.max_trades_per_day:
             return False
 
-        # Predictor available
         if self._predictor is None or self._predictor.ensemble is None:
             return False
 
-        # Watchlist not empty
         if not self._watch_list:
             return False
 
@@ -361,7 +344,6 @@ class AutoTrader:
         Execute one scan cycle: predict → filter → execute/queue.
         Called WITHOUT lock held (acquires as needed).
         """
-        # Get snapshot of watchlist and config under lock
         with self._lock:
             watch_list = list(self._watch_list)
             predictor = self._predictor
@@ -413,15 +395,12 @@ class AutoTrader:
             if not signal_allow_map.get(sig, False):
                 continue
 
-            # Confidence threshold
             if conf < cfg.min_confidence:
                 continue
 
-            # Signal strength threshold
             if strength < cfg.min_signal_strength:
                 continue
 
-            # Model agreement threshold
             if agreement < cfg.min_model_agreement:
                 continue
 
@@ -430,7 +409,6 @@ class AutoTrader:
         if not candidates:
             return
 
-        # Sort by confidence descending
         candidates.sort(
             key=lambda x: getattr(x, 'confidence', 0),
             reverse=True,
@@ -457,7 +435,6 @@ class AutoTrader:
                     )
                     continue
 
-                # Cooldown check
                 if self.state.is_on_cooldown(code):
                     self._record_skip(pred, Signal, "On cooldown")
                     continue
@@ -488,14 +465,12 @@ class AutoTrader:
             if full_conf < cfg.min_confidence:
                 continue
 
-            # Check position value limit
             price = getattr(full_pred, 'current_price', 0.0)
             position = getattr(full_pred, 'position', None)
             shares = getattr(position, 'shares', 0) if position else 0
             order_value = shares * price if (shares > 0 and price > 0) else 0
 
             if order_value > cfg.max_auto_order_value:
-                # Cap shares
                 if price > 0:
                     lot_size = max(1, CONFIG.LOT_SIZE)
                     shares = int(cfg.max_auto_order_value / price)
@@ -514,7 +489,6 @@ class AutoTrader:
                     self._record_skip(full_pred, Signal, "No valid position size")
                 continue
 
-            # Volatility pause check
             if cfg.pause_on_high_volatility:
                 atr_pct = getattr(full_pred, 'atr_pct_value', 0.02)
                 if atr_pct * 100 > cfg.volatility_pause_threshold:
@@ -525,7 +499,6 @@ class AutoTrader:
                         )
                     continue
 
-            # Determine side
             if full_sig in (Signal.STRONG_BUY, Signal.BUY):
                 side = OrderSide.BUY
             elif full_sig in (Signal.STRONG_SELL, Signal.SELL):
@@ -569,7 +542,6 @@ class AutoTrader:
                 except Exception as e:
                     log.debug(f"Account check failed: {e}")
 
-            # Build the action record
             action = AutoTradeAction(
                 stock_code=code,
                 stock_name=getattr(full_pred, 'stock_name', ''),
@@ -589,7 +561,6 @@ class AutoTrader:
             # --- Step 5: Execute or queue ---
             with self._lock:
                 if self.state.mode == AutoTradeMode.AUTO:
-                    # Direct execution
                     success = self._execute_action(action)
                     if success:
                         action.decision = "EXECUTED"
@@ -606,7 +577,6 @@ class AutoTrader:
                     self._notify_state_changed()
 
                 elif self.state.mode == AutoTradeMode.SEMI_AUTO:
-                    # Queue for approval
                     action.decision = "PENDING"
                     self.state.add_pending_approval(action)
                     self._notify_pending(action)
@@ -631,13 +601,11 @@ class AutoTrader:
 
         cfg = CONFIG.auto_trade
 
-        # Build TradeSignal
         side = OrderSide(action.side)
         levels_entry = action.price
         levels_stop = 0.0
         levels_target = 0.0
 
-        # Try to get levels from a fresh prediction
         try:
             pred = self._predictor.predict(
                 action.stock_code,
@@ -648,7 +616,6 @@ class AutoTrader:
                 levels_entry = pred.levels.entry or action.price
                 levels_stop = pred.levels.stop_loss or 0.0
                 levels_target = pred.levels.target_2 or 0.0
-                # Update price to latest
                 if pred.current_price > 0:
                     action.price = pred.current_price
                     levels_entry = pred.current_price
@@ -747,11 +714,6 @@ class AutoTrader:
         while time.time() < end and not self._stop_event.is_set():
             time.sleep(min(1.0, end - time.time()))
 
-
-# =============================================================================
-# EXECUTION ENGINE
-# =============================================================================
-
 class ExecutionEngine:
     """
     Production execution engine with correct broker synchronization.
@@ -795,13 +757,13 @@ class ExecutionEngine:
 
         self._processed_fill_ids: Set[str] = set()
 
-        # Fill polling watermark
         self._last_fill_sync: Optional[datetime] = None
 
         self.on_fill: Optional[Callable[[Order, Fill], None]] = None
         self.on_reject: Optional[Callable[[Order, str], None]] = None
 
         self._kill_switch.on_activate(self._on_kill_switch)
+        self._health_monitor.on_degraded(self._on_health_degraded)
         self._processed_fill_ids = self._load_processed_fills()
 
         # Auto-trader (created but not started until explicitly requested)
@@ -844,7 +806,6 @@ class ExecutionEngine:
                 "CONFIG.auto_trade.confirm_live_auto_trade is True. "
                 "UI must confirm before proceeding."
             )
-            # The UI layer handles the confirmation dialog
             # and calls set_auto_mode() directly after user confirms.
 
         self.auto_trader.set_mode(mode)
@@ -868,7 +829,6 @@ class ExecutionEngine:
         return None
 
     # -----------------------------------------------------------------
-    # Engine lifecycle
     # -----------------------------------------------------------------
 
     def start(self) -> bool:
@@ -890,10 +850,8 @@ class ExecutionEngine:
         # Rebuild broker ID mappings from persisted orders (crash recovery)
         self._rebuild_broker_mappings(oms)
 
-        # Get account from OMS
         account = oms.get_account()
 
-        # Initialize and update risk manager
         if self.risk_manager:
             self.risk_manager.initialize(account)
             self.risk_manager.update(account)
@@ -981,7 +939,6 @@ class ExecutionEngine:
         except Exception:
             pass
 
-        # Feed cache without blocking init
         try:
             from data.feeds import get_feed_manager
 
@@ -992,7 +949,6 @@ class ExecutionEngine:
         except Exception:
             pass
 
-        # Broker quote
         try:
             px = self.broker.get_quote(symbol)
             if px and float(px) > 0:
@@ -1000,7 +956,6 @@ class ExecutionEngine:
         except Exception:
             pass
 
-        # Fetcher realtime
         try:
             from data.fetcher import get_fetcher
 
@@ -1134,13 +1089,96 @@ class ExecutionEngine:
 
         return True, "OK", px
 
+    def check_quote_freshness(
+        self, symbol: str
+    ) -> Tuple[bool, str, float]:
+        """Public wrapper for quote freshness gating."""
+        max_age = 15.0
+        if hasattr(CONFIG, "risk") and hasattr(CONFIG.risk, "quote_staleness_seconds"):
+            max_age = float(CONFIG.risk.quote_staleness_seconds)
+        return self._require_fresh_quote(symbol, max_age_seconds=max_age)
+
     def submit(self, signal: TradeSignal) -> bool:
         """Submit a trading signal for execution with strict quote freshness."""
         if not self._running:
             log.warning("Execution engine not running")
             return False
 
-        # Market hours guard
+        # Operational guardrails: block/allow trading based on health status.
+        try:
+            sec_cfg = getattr(CONFIG, "security", None)
+            block_unhealthy = bool(
+                getattr(sec_cfg, "block_trading_when_unhealthy", True)
+            )
+            block_degraded = bool(
+                getattr(sec_cfg, "block_trading_when_degraded", False)
+            )
+            h = self._health_monitor.get_health()
+            if block_unhealthy and h.status in (HealthStatus.UNHEALTHY, HealthStatus.CRITICAL):
+                self._reject_signal(signal, f"System unhealthy: {h.status.value}")
+                return False
+            if block_degraded and h.status == HealthStatus.DEGRADED:
+                self._reject_signal(signal, "System degraded: trading paused by policy")
+                return False
+        except Exception:
+            pass
+
+        # Institutional controls: permission gating + optional dual-control.
+        try:
+            sec_cfg = getattr(CONFIG, "security", None)
+            access = get_access_control()
+            audit = get_audit_log()
+            mode_is_live = str(getattr(self.mode, "value", "")).lower() == "live"
+
+            require_perm = bool(
+                getattr(sec_cfg, "require_live_trade_permission", True)
+            )
+            strict_live = bool(
+                getattr(sec_cfg, "strict_live_governance", False)
+            )
+            min_approvals = int(getattr(sec_cfg, "min_live_approvals", 2))
+
+            if mode_is_live and require_perm:
+                if not access.check("trade_live"):
+                    self._reject_signal(
+                        signal, "Access denied: trade_live permission required"
+                    )
+                    audit.log_risk_event(
+                        "access_denied_live_trade",
+                        {"symbol": signal.symbol, "signal_id": signal.id},
+                    )
+                    return False
+            elif not mode_is_live:
+                if not access.check("trade_paper"):
+                    self._reject_signal(
+                        signal, "Access denied: trade_paper permission required"
+                    )
+                    audit.log_risk_event(
+                        "access_denied_paper_trade",
+                        {"symbol": signal.symbol, "signal_id": signal.id},
+                    )
+                    return False
+
+            if mode_is_live and strict_live and not signal.auto_generated:
+                approvals = int(getattr(signal, "approvals_count", 0) or 0)
+                required = max(1, min_approvals)
+                if approvals < required:
+                    self._reject_signal(
+                        signal, f"Insufficient live approvals ({approvals}/{required})"
+                    )
+                    audit.log_risk_event(
+                        "live_trade_blocked_dual_control",
+                        {
+                            "symbol": signal.symbol,
+                            "signal_id": signal.id,
+                            "approvals": approvals,
+                            "required": required,
+                        },
+                    )
+                    return False
+        except Exception as e:
+            log.debug(f"Security governance check skipped due to error: {e}")
+
         try:
             if not CONFIG.is_market_open():
                 self._reject_signal(signal, "Market closed")
@@ -1156,7 +1194,6 @@ class ExecutionEngine:
             self._reject_signal(signal, "Risk manager not initialized")
             return False
 
-        # Normalize CN symbol
         try:
             from data.fetcher import DataFetcher
 
@@ -1164,7 +1201,6 @@ class ExecutionEngine:
         except Exception:
             pass
 
-        # STRICT quote freshness
         max_age = 15.0
         if hasattr(CONFIG, "risk") and hasattr(CONFIG.risk, "quote_staleness_seconds"):
             max_age = float(CONFIG.risk.quote_staleness_seconds)
@@ -1176,7 +1212,6 @@ class ExecutionEngine:
             self._reject_signal(signal, msg)
             return False
 
-        # Use ONE authoritative price
         signal.price = float(fresh_px)
 
         # CN limit up/down sanity
@@ -1206,7 +1241,6 @@ class ExecutionEngine:
         except Exception:
             pass
 
-        # Risk check
         passed, rmsg = self.risk_manager.check_order(
             signal.symbol, signal.side, int(signal.quantity), float(signal.price)
         )
@@ -1225,6 +1259,22 @@ class ExecutionEngine:
             f"{' [AUTO]' if signal.auto_generated else ''}"
         )
         return True
+
+    def _on_health_degraded(self, health):
+        """Runbook automation: pause autonomous trading on degraded health."""
+        try:
+            sec_cfg = getattr(CONFIG, "security", None)
+            if not bool(getattr(sec_cfg, "auto_pause_auto_trader_on_degraded", True)):
+                return
+            if self.auto_trader and self.auto_trader.get_mode() != AutoTradeMode.MANUAL:
+                self.auto_trader.set_mode(AutoTradeMode.MANUAL)
+                log.warning("Auto-trader paused due to degraded system health")
+                self._alert_manager.risk_alert(
+                    "Auto-trader paused",
+                    f"System degraded (status={health.status.value})",
+                )
+        except Exception as e:
+            log.debug(f"Degraded health handler failed: {e}")
 
     def submit_from_prediction(self, pred) -> bool:
         """Submit order from AI prediction."""
@@ -1272,7 +1322,6 @@ class ExecutionEngine:
                     "Execution Loop Error", str(e), AlertPriority.HIGH
                 )
 
-            # Periodic risk update
             now = time.time()
             if (
                 self.risk_manager
@@ -1330,10 +1379,8 @@ class ExecutionEngine:
                 order.tags["auto_trade_action_id"] = signal.auto_trade_action_id
                 order.strategy = order.strategy or "auto_trade"
 
-            # OMS reserves resources
             order = oms.submit_order(order)
 
-            # Submit to broker with retry
             result = self._submit_with_retry(order, attempts=3)
 
             inc_counter(
@@ -1388,13 +1435,10 @@ class ExecutionEngine:
 
         oms = get_oms()
 
-        # Rebuild mappings
         self._rebuild_broker_mappings(oms)
 
-        # Process any fills immediately
         self._process_pending_fills()
 
-        # Sync active orders
         for order in oms.get_active_orders():
             try:
                 synced = self.broker.sync_order(order)
@@ -1420,7 +1464,6 @@ class ExecutionEngine:
 
                 fills = self.broker.get_fills(since=self._last_fill_sync)
 
-                # Update watermark with overlap
                 newest_ts = None
                 for f in fills:
                     ts = getattr(f, "timestamp", None)
@@ -1437,7 +1480,6 @@ class ExecutionEngine:
                     self._last_fill_sync = query_start
 
                 for fill in fills:
-                    # Robust fill id
                     fill_id = str(getattr(fill, "id", "") or "").strip()
                     if not fill_id:
                         fill_id = (
@@ -1501,7 +1543,6 @@ class ExecutionEngine:
             except Exception as e:
                 log.error(f"Fill processing error: {e}")
 
-            # Prune inside the same lock acquisition
             self._prune_processed_fills_unlocked(max_size=50000)
 
     def _update_auto_trade_fill(self, order: Order, fill: Fill):
@@ -1633,7 +1674,6 @@ class ExecutionEngine:
                         first_seen.pop(order.id, None)
                         continue
 
-                    # Normal status changes
                     if broker_status and broker_status != order.status:
                         oms.update_order_status(
                             order.id,
@@ -1649,7 +1689,6 @@ class ExecutionEngine:
                             first_seen.pop(order.id, None)
                         continue
 
-                    # Stuck order watchdog
                     if age >= stuck_seconds and order.status in (
                         OrderStatus.SUBMITTED,
                         OrderStatus.ACCEPTED,

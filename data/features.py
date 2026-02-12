@@ -13,7 +13,6 @@ log = get_logger(__name__)
 # Consistent epsilon for division-by-zero protection
 _EPS = 1e-8
 
-
 class FeatureEngine:
     """
     Creates technical analysis features from OHLCV data.
@@ -60,7 +59,6 @@ class FeatureEngine:
     # Features that are centered around 0 — fill NaN with 0.0
     # (all features not in _BOUNDED_FEATURES)
 
-    # Minimum rows needed to produce meaningful features
     # Must be >= max lookback window (ma60 needs 60 rows)
     MIN_ROWS = 60
 
@@ -76,7 +74,6 @@ class FeatureEngine:
             log.warning("'ta' library not available — using built-in indicators")
 
     # ------------------------------------------------------------------
-    # Public API
     # ------------------------------------------------------------------
 
     def create_features(self, df: pd.DataFrame) -> pd.DataFrame:
@@ -115,13 +112,11 @@ class FeatureEngine:
         return self.FEATURE_NAMES.copy()
 
     # ------------------------------------------------------------------
-    # Internal
     # ------------------------------------------------------------------
 
     def _build(self, df: pd.DataFrame) -> pd.DataFrame:
         out = df.copy()
 
-        # Ensure numeric
         for col in ("open", "high", "low", "close", "volume"):
             out[col] = pd.to_numeric(out[col], errors="coerce")
 
@@ -243,7 +238,6 @@ class FeatureEngine:
         return k, d
 
     # ------------------------------------------------------------------
-    # Momentum features
     # ------------------------------------------------------------------
 
     def _add_momentum(
@@ -272,7 +266,6 @@ class FeatureEngine:
         df["momentum_10"] = (close / (shifted_10 + _EPS) - 1) * 100
         df["momentum_20"] = (close / (shifted_20 + _EPS) - 1) * 100
 
-        # Rate of change
         df["roc_10"] = (close / (shifted_10 + _EPS) - 1) * 100
 
         # Ultimate Oscillator — always compute manually for consistency
@@ -317,7 +310,6 @@ class FeatureEngine:
         return uo
 
     # ------------------------------------------------------------------
-    # MACD
     # ------------------------------------------------------------------
 
     @staticmethod
@@ -335,7 +327,6 @@ class FeatureEngine:
         df["macd_hist"] = hist / (close + _EPS) * 100
 
     # ------------------------------------------------------------------
-    # Bollinger Bands
     # ------------------------------------------------------------------
 
     @staticmethod
@@ -351,7 +342,6 @@ class FeatureEngine:
         df["bb_pct"] = ((close - lower) / band_range).clip(0, 1)
 
     # ------------------------------------------------------------------
-    # Volume features
     # ------------------------------------------------------------------
 
     @staticmethod
@@ -387,7 +377,6 @@ class FeatureEngine:
         mfi = 100 - 100 / (1 + pos_mf / (neg_mf + _EPS))
         df["mfi"] = mfi / 100 - 0.5
 
-        # VWAP ratio
         typical_price = (high + low + close) / 3
         cum_tp_vol = (typical_price * volume).rolling(20, min_periods=20).sum()
         cum_vol = volume.rolling(20, min_periods=20).sum()
@@ -395,7 +384,6 @@ class FeatureEngine:
         df["vwap_ratio"] = (close / (vwap + _EPS) - 1) * 100
 
     # ------------------------------------------------------------------
-    # Trend features
     # ------------------------------------------------------------------
 
     def _add_trend(
@@ -406,7 +394,6 @@ class FeatureEngine:
         df["adx"] = adx_val / 100
         df["di_diff"] = (di_plus - di_minus) / 100
 
-        # CCI
         typical = (high + low + close) / 3
         ma_tp = typical.rolling(20, min_periods=20).mean()
         mad = typical.rolling(20, min_periods=20).apply(
@@ -414,7 +401,6 @@ class FeatureEngine:
         )
         df["cci"] = (typical - ma_tp) / (0.015 * mad + _EPS) / 200
 
-        # Trend strength
         ma5 = close.rolling(5, min_periods=5).mean()
         ma20 = close.rolling(20, min_periods=20).mean()
         ma_ratio = (ma5 / (ma20 + _EPS) - 1) * 100
@@ -459,7 +445,6 @@ class FeatureEngine:
         return adx, di_plus, di_minus
 
     # ------------------------------------------------------------------
-    # Price position
     # ------------------------------------------------------------------
 
     @staticmethod
@@ -486,7 +471,6 @@ class FeatureEngine:
         df["distance_from_low"] = (close - low_20) / (close + _EPS) * 100
 
     # ------------------------------------------------------------------
-    # Candlestick
     # ------------------------------------------------------------------
 
     @staticmethod
@@ -510,7 +494,6 @@ class FeatureEngine:
         df["lower_shadow"] = (body_bottom - low_vals) / denom * 100
 
     # ------------------------------------------------------------------
-    # ATR
     # ------------------------------------------------------------------
 
     @staticmethod
@@ -532,7 +515,6 @@ class FeatureEngine:
         df["atr_ratio"] = atr_14 / (atr_50 + _EPS)
 
     # ------------------------------------------------------------------
-    # Additional
     # ------------------------------------------------------------------
 
     @staticmethod
@@ -547,7 +529,6 @@ class FeatureEngine:
         prev_close = close.shift(1)
         df["gap"] = (open_price / (prev_close + _EPS) - 1) * 100
         # Zero out gap where prev_close is NaN (first row) to avoid
-        # spurious large values from dividing by epsilon
         df.loc[prev_close.isna(), "gap"] = 0.0
 
         df["range_pct"] = (high - low) / (close + _EPS) * 100

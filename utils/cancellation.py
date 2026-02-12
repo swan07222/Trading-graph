@@ -5,11 +5,9 @@ import threading
 from typing import Callable, Optional
 from contextlib import contextmanager
 
-
 class CancelledException(Exception):
     """Raised when a cancellable operation is cancelled."""
     pass
-
 
 class CancellationToken:
     """
@@ -157,7 +155,6 @@ class CancellationToken:
         if clear_callbacks:
             with self._lock:
                 self._callbacks.clear()
-
 
 @contextmanager
 def cancellable_operation(token: Optional[CancellationToken] = None):

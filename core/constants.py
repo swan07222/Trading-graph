@@ -6,11 +6,6 @@ from core.types import OrderSide, OrderType, OrderStatus
 from pathlib import Path
 from functools import lru_cache
 
-# =============================================================================
-# EXCHANGES
-# =============================================================================
-
-
 class Exchange(Enum):
     """Stock exchanges"""
     SSE = "SSE"       # Shanghai Stock Exchange
@@ -19,7 +14,6 @@ class Exchange(Enum):
     HKEX = "HKEX"     # Hong Kong
     NYSE = "NYSE"     # New York
     NASDAQ = "NASDAQ"
-
 
 EXCHANGES = {
     "SSE": {
@@ -42,11 +36,6 @@ EXCHANGES = {
     },
 }
 
-
-# =============================================================================
-# TRADING HOURS
-# =============================================================================
-
 TRADING_HOURS = {
     "SSE": {
         "morning": (time(9, 30), time(11, 30)),
@@ -62,37 +51,26 @@ TRADING_HOURS = {
     },
 }
 
-
-# =============================================================================
 # HOLIDAYS (2024-2025 China)
-# =============================================================================
 
 HOLIDAYS_2024: Set[date] = {
-    # New Year
     date(2024, 1, 1),
-    # Spring Festival
     date(2024, 2, 9), date(2024, 2, 10), date(2024, 2, 11),
     date(2024, 2, 12), date(2024, 2, 13), date(2024, 2, 14),
     date(2024, 2, 15), date(2024, 2, 16), date(2024, 2, 17),
-    # Qingming
     date(2024, 4, 4), date(2024, 4, 5), date(2024, 4, 6),
-    # Labor Day
     date(2024, 5, 1), date(2024, 5, 2), date(2024, 5, 3),
     date(2024, 5, 4), date(2024, 5, 5),
-    # Dragon Boat
     date(2024, 6, 8), date(2024, 6, 9), date(2024, 6, 10),
     # Mid-Autumn
     date(2024, 9, 15), date(2024, 9, 16), date(2024, 9, 17),
-    # National Day
     date(2024, 10, 1), date(2024, 10, 2), date(2024, 10, 3),
     date(2024, 10, 4), date(2024, 10, 5), date(2024, 10, 6),
     date(2024, 10, 7),
 }
 
 HOLIDAYS_2025: Set[date] = {
-    # New Year
     date(2025, 1, 1),
-    # Spring Festival
     date(2025, 1, 28), date(2025, 1, 29), date(2025, 1, 30),
     date(2025, 1, 31), date(2025, 2, 1), date(2025, 2, 2),
     date(2025, 2, 3), date(2025, 2, 4),
@@ -103,16 +81,9 @@ _HOLIDAYS_BUILTIN = HOLIDAYS_2024 | HOLIDAYS_2025
 # Keep the old name for backward compat but don't use it for lookups
 HOLIDAYS = _HOLIDAYS_BUILTIN
 
-
 ORDER_SIDES = {s.value: s for s in OrderSide}
 ORDER_TYPES = {t.value: t for t in OrderType}
 ORDER_STATUS = {s.value: s for s in OrderStatus}
-
-
-# =============================================================================
-# SIGNAL CONSTANTS
-# =============================================================================
-
 
 class SignalType(Enum):
     """Trading signal type"""
@@ -121,7 +92,6 @@ class SignalType(Enum):
     HOLD = "HOLD"
     SELL = "SELL"
     STRONG_SELL = "STRONG_SELL"
-
 
 SIGNAL_TYPES = {s.value: s for s in SignalType}
 
@@ -133,12 +103,6 @@ SIGNAL_COLORS = {
     SignalType.STRONG_SELL: "#D50000",
 }
 
-
-# =============================================================================
-# TRADING RULES
-# =============================================================================
-
-# Price limits by board type
 PRICE_LIMITS = {
     "main_board": 0.10,      # ±10%
     "star_market": 0.20,     # ±20% (科创板)
@@ -148,7 +112,6 @@ PRICE_LIMITS = {
     "bse": 0.30,             # ±30% (北交所)
 }
 
-# Lot sizes by market
 LOT_SIZES = {
     "main_board": 100,
     "star_market": 200,
@@ -157,7 +120,6 @@ LOT_SIZES = {
     "hk": 1,  # Various lot sizes
 }
 
-# Transaction costs
 TRANSACTION_COSTS = {
     "commission": 0.00025,    # 0.025% (negotiable)
     "commission_min": 5.0,    # Minimum ¥5
@@ -166,33 +128,18 @@ TRANSACTION_COSTS = {
     "slippage": 0.001,        # 0.1% estimated
 }
 
-
-# =============================================================================
-# TECHNICAL ANALYSIS
-# =============================================================================
-
-# Common MA periods
 MA_PERIODS = [5, 10, 20, 30, 60, 120, 250]
 
-# RSI thresholds
 RSI_OVERSOLD = 30
 RSI_OVERBOUGHT = 70
 
-# MACD parameters
 MACD_FAST = 12
 MACD_SLOW = 26
 MACD_SIGNAL = 9
 
-# Bollinger Bands
 BB_PERIOD = 20
 BB_STD = 2
 
-
-# =============================================================================
-# MACHINE LEARNING
-# =============================================================================
-
-# Feature groups
 FEATURE_GROUPS = {
     "price": ["returns", "log_returns", "price_position"],
     "volume": ["volume_ratio", "vwap_ratio", "obv_slope"],
@@ -201,7 +148,6 @@ FEATURE_GROUPS = {
     "trend": ["ma_ratio_5_20", "adx", "trend_strength"],
 }
 
-# Label definitions
 LABEL_UP = 2
 LABEL_NEUTRAL = 1
 LABEL_DOWN = 0
@@ -212,12 +158,8 @@ LABEL_NAMES = {
     LABEL_DOWN: "DOWN",
 }
 
-
-# =============================================================================
-# RISK MANAGEMENT
 # FIX: Removed duplicate RiskLevel enum — use core.types.RiskLevel instead.
 #      Kept RISK_COLORS referencing the canonical enum.
-# =============================================================================
 
 from core.types import RiskLevel  # noqa: E402  (already imported above indirectly)
 
@@ -228,7 +170,6 @@ RISK_COLORS = {
     RiskLevel.CRITICAL: "#F44336",
 }
 
-# Default risk limits
 DEFAULT_RISK_LIMITS = {
     "max_position_pct": 15.0,
     "max_daily_loss_pct": 3.0,
@@ -237,12 +178,6 @@ DEFAULT_RISK_LIMITS = {
     "var_confidence": 0.95,
 }
 
-
-# =============================================================================
-# UI CONSTANTS
-# =============================================================================
-
-# Color scheme
 COLORS = {
     "background": "#0d1117",
     "surface": "#161b22",
@@ -256,7 +191,6 @@ COLORS = {
     "border": "#30363d",
 }
 
-# Font sizes
 FONTS = {
     "h1": 24,
     "h2": 20,
@@ -265,12 +199,6 @@ FONTS = {
     "small": 10,
     "mono": "Consolas",
 }
-
-
-# =============================================================================
-# HELPER FUNCTIONS
-# =============================================================================
-
 
 def get_exchange(code: str) -> str:
     """Get exchange from stock code."""
@@ -282,7 +210,6 @@ def get_exchange(code: str) -> str:
                 return exchange
 
     return "UNKNOWN"
-
 
 @lru_cache(maxsize=1)
 def _load_external_holidays() -> frozenset:
@@ -312,7 +239,6 @@ def _load_external_holidays() -> frozenset:
 
     return frozenset(extra)
 
-
 @lru_cache(maxsize=1)
 def get_holidays() -> frozenset:
     """
@@ -322,7 +248,6 @@ def get_holidays() -> frozenset:
     and the lru_cache actually works.  Also allows O(1) ``in`` checks.
     """
     return frozenset(_HOLIDAYS_BUILTIN) | _load_external_holidays()
-
 
 def get_price_limit(code: str, name: str = None) -> float:
     """
@@ -337,7 +262,6 @@ def get_price_limit(code: str, name: str = None) -> float:
     """
     code = str(code).zfill(6)
 
-    # Check ST first if name provided
     if name and is_st_stock(name):
         return PRICE_LIMITS["st"]
 
@@ -353,20 +277,16 @@ def get_price_limit(code: str, name: str = None) -> float:
     if code.startswith(("83", "43", "87")):
         return PRICE_LIMITS["bse"]
 
-    # Main board
     return PRICE_LIMITS["main_board"]
-
 
 def get_lot_size(code: str) -> int:
     """Get lot size for stock."""
     code = str(code).zfill(6)
 
-    # STAR Market
     if code.startswith("688"):
         return LOT_SIZES["star_market"]
 
     return LOT_SIZES["main_board"]
-
 
 def is_trading_day(d: date) -> bool:
     """
@@ -377,7 +297,6 @@ def is_trading_day(d: date) -> bool:
     if d.weekday() >= 5:
         return False
     return d not in get_holidays()
-
 
 def is_trading_time(exchange: str = "SSE") -> bool:
     """
@@ -399,7 +318,6 @@ def is_trading_time(exchange: str = "SSE") -> bool:
     afternoon = hours["afternoon"][0] <= now <= hours["afternoon"][1]
 
     return morning or afternoon
-
 
 def is_st_stock(name: str) -> bool:
     """Check if stock is ST."""

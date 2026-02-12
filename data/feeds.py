@@ -15,11 +15,7 @@ from utils.logger import get_logger
 
 log = get_logger(__name__)
 
-
-# ------------------------------------------------------------------
 # Enums / dataclasses
-# ------------------------------------------------------------------
-
 
 class FeedStatus(Enum):
     DISCONNECTED = "disconnected"
@@ -28,7 +24,6 @@ class FeedStatus(Enum):
     RECONNECTING = "reconnecting"
     ERROR = "error"
 
-
 @dataclass
 class Subscription:
     symbol: str
@@ -36,12 +31,6 @@ class Subscription:
     interval: int = 0
     callback: Optional[Callable] = None
     created_at: datetime = field(default_factory=datetime.now)
-
-
-# ------------------------------------------------------------------
-# Abstract base
-# ------------------------------------------------------------------
-
 
 class DataFeed(ABC):
     """Abstract base class for data feeds."""
@@ -90,12 +79,6 @@ class DataFeed(ABC):
                 cb(data)
             except Exception as e:
                 log.warning(f"Feed callback error: {e}")
-
-
-# ------------------------------------------------------------------
-# Polling feed
-# ------------------------------------------------------------------
-
 
 class PollingFeed(DataFeed):
     """Polling-based data feed with drift-resistant loop."""
@@ -264,12 +247,6 @@ class PollingFeed(DataFeed):
     def get_all_quotes(self) -> Dict[str, object]:
         with self._quotes_lock:
             return self._last_quotes.copy()
-
-
-# ------------------------------------------------------------------
-# WebSocket feed
-# ------------------------------------------------------------------
-
 
 class WebSocketFeed(DataFeed):
     """WebSocket-based real-time data feed with bounded reconnection."""
@@ -512,12 +489,6 @@ class WebSocketFeed(DataFeed):
             return float("inf")
         return (datetime.now() - last).total_seconds()
 
-
-# ------------------------------------------------------------------
-# Aggregated feed
-# ------------------------------------------------------------------
-
-
 class AggregatedFeed(DataFeed):
     """Aggregated data feed combining multiple sources."""
 
@@ -585,27 +556,17 @@ class AggregatedFeed(DataFeed):
     def _on_feed_data(self, data):
         self._notify(data)
 
-
-# ------------------------------------------------------------------
-# Volume mode enum
-# ------------------------------------------------------------------
-
-
 class VolumeMode(Enum):
     """Volume interpretation mode."""
     CUMULATIVE = "cumulative"
     DELTA = "delta"
 
-
-# ------------------------------------------------------------------
 # Bar aggregator - FIXED to emit partial bars
-# ------------------------------------------------------------------
-
 
 class BarAggregator:
     """
     Aggregates ticks into OHLCV bars with configurable interval.
-    
+
     FIXED: Now emits PARTIAL bars on every tick so the chart
     updates in real-time, not just on bar boundaries.
     """
@@ -639,7 +600,7 @@ class BarAggregator:
     def on_tick(self, quote):
         """
         Process incoming tick/quote.
-        
+
         FIXED: Now emits partial bar on EVERY tick for real-time updates.
         """
         symbol = getattr(quote, "code", None)
@@ -666,17 +627,14 @@ class BarAggregator:
                 self._current_bars[symbol] = self._new_bar(quote)
                 bar = self._current_bars[symbol]
 
-            # Update OHLC
             bar["high"] = max(float(bar["high"]), px)
             bar["low"] = min(float(bar["low"]), px)
             bar["close"] = px
 
-            # Volume handling based on mode
             self._update_volume(bar, quote)
 
-            # Bar boundary check
             bar_end = bar["timestamp"] + timedelta(seconds=self._interval)
-            
+
             if ts >= bar_end:
                 # Bar complete - emit as final and start new bar
                 self._emit_bar(symbol, bar, final=True)
@@ -749,13 +707,12 @@ class BarAggregator:
     def _emit_bar(self, symbol: str, bar: Dict, final: bool = True):
         """
         Emit bar to callbacks.
-        
+
         Args:
             symbol: Stock symbol
             bar: Bar data dict
             final: If True, this is a completed bar. If False, partial/live bar.
         """
-        # Add final flag to bar data
         bar_copy = dict(bar)
         bar_copy["final"] = final
 
@@ -773,7 +730,6 @@ class BarAggregator:
                 )
             )
 
-            # Persist final bars to DB
             try:
                 import pandas as pd
                 from data.database import get_database
@@ -806,7 +762,6 @@ class BarAggregator:
             except Exception as e:
                 log.debug(f"Bar DB persist failed for {symbol}: {e}")
 
-        # Notify callbacks for BOTH partial and final bars
         with self._lock:
             callbacks = self._callbacks.copy()
 
@@ -816,11 +771,7 @@ class BarAggregator:
             except Exception as e:
                 log.warning(f"Bar callback error: {e}")
 
-
-# ------------------------------------------------------------------
 # Feed manager (singleton)
-# ------------------------------------------------------------------
-
 
 class FeedManager:
     """Central manager for all data feeds."""
@@ -900,7 +851,6 @@ class FeedManager:
         for cb in old_callbacks:
             self._bar_aggregator.add_callback(cb)
 
-        # Attach feed callbacks
         try:
             self._active_feed.add_callback(self._cache_quote)
         except Exception:
@@ -1023,14 +973,10 @@ class FeedManager:
         self._initialized_runtime = False
         log.info("Feed manager shutdown")
 
-
-# ------------------------------------------------------------------
 # Module-level singleton accessor
-# ------------------------------------------------------------------
 
 _feed_manager: Optional[FeedManager] = None
 _feed_lock = threading.Lock()
-
 
 def get_feed_manager(
     auto_init: bool = True, async_init: bool = True

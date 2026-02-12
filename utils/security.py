@@ -8,6 +8,7 @@ import secrets
 import threading
 import gzip
 import weakref
+import hashlib
 from pathlib import Path
 from datetime import datetime, timedelta, date
 from typing import Dict, List, Optional, Any
@@ -31,12 +32,6 @@ except ImportError:
         "SecureStorage will use base64 encoding (NOT encryption). "
         "Install with: pip install cryptography"
     )
-
-
-# =========================================================================
-# SecureStorage
-# =========================================================================
-
 
 class SecureStorage:
     """
@@ -66,11 +61,9 @@ class SecureStorage:
                     key = f.read()
             else:
                 key = Fernet.generate_key()
-                # Ensure parent dir exists
                 self._key_path.parent.mkdir(parents=True, exist_ok=True)
                 with open(self._key_path, "wb") as f:
                     f.write(key)
-                # Restrict permissions
                 try:
                     os.chmod(self._key_path, 0o600)
                 except OSError as e:
@@ -127,7 +120,6 @@ class SecureStorage:
         try:
             data = json.dumps(self._cache)
             encrypted = self._encrypt(data)
-            # Atomic write via temp file
             tmp_path = self._storage_path.with_suffix(".tmp")
             with open(tmp_path, "wb") as f:
                 f.write(encrypted)
@@ -196,12 +188,6 @@ class SecureStorage:
         encrypted = "encrypted" if self._cipher else "base64"
         return f"SecureStorage(keys={len(self._cache)}, mode={encrypted})"
 
-
-# =========================================================================
-# AuditLog
-# =========================================================================
-
-
 @dataclass
 class AuditRecord:
     """Single audit record."""
@@ -213,6 +199,8 @@ class AuditRecord:
     details: Dict[str, Any]
     ip_address: str = ""
     session_id: str = ""
+    prev_hash: str = ""
+    record_hash: str = ""
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -223,8 +211,9 @@ class AuditRecord:
             "details": self.details,
             "ip_address": self.ip_address,
             "session_id": self.session_id,
+            "prev_hash": self.prev_hash,
+            "record_hash": self.record_hash,
         }
-
 
 def _atexit_close_audit(ref: weakref.ref) -> None:
     """
@@ -234,7 +223,6 @@ def _atexit_close_audit(ref: weakref.ref) -> None:
     obj = ref()
     if obj is not None:
         obj.close()
-
 
 class AuditLog:
     """
@@ -259,6 +247,7 @@ class AuditLog:
         self._user = "system"
         self._session_id = secrets.token_hex(16)
         self._closed = False
+        self._prev_hash = ""
 
         # FIX #4: Use weakref so GC can collect this if all references drop
         self._atexit_ref = weakref.ref(self)
@@ -269,7 +258,6 @@ class AuditLog:
         today = date.today()
 
         if self._current_date != today:
-            # Close previous file safely
             if self._current_file:
                 try:
                     self._current_file.close()
@@ -294,9 +282,32 @@ class AuditLog:
             return
 
         with self._lock:
+            record.prev_hash = self._prev_hash
+            record.record_hash = self._compute_record_hash(record)
+            self._prev_hash = record.record_hash
             self._buffer.append(record)
             if len(self._buffer) >= self._buffer_size:
                 self._flush()
+
+    @staticmethod
+    def _canonical_details(details: Dict[str, Any]) -> str:
+        try:
+            return json.dumps(details, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+        except Exception:
+            return "{}"
+
+    def _compute_record_hash(self, record: AuditRecord) -> str:
+        payload = "|".join([
+            record.timestamp.isoformat(),
+            record.event_type,
+            record.user,
+            record.action,
+            self._canonical_details(record.details),
+            record.ip_address or "",
+            record.session_id or "",
+            record.prev_hash or "",
+        ])
+        return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
     def _flush(self) -> None:
         """
@@ -318,11 +329,9 @@ class AuditLog:
             for record in self._buffer:
                 f.write(json.dumps(record.to_dict()) + "\n")
             f.flush()
-            # Only clear on success
             self._buffer.clear()
         except Exception as e:
             log.error("Audit log flush failed: %s", e)
-            # Buffer retained for retry on next flush
 
     def log(
         self, event_type: str, action: str, details: Optional[Dict] = None
@@ -500,11 +509,47 @@ class AuditLog:
 
         return results
 
-
-# =========================================================================
-# RateLimiter
-# =========================================================================
-
+    def verify_integrity(
+        self,
+        start_date: Optional[datetime] = None,
+        end_date: Optional[datetime] = None,
+        limit: int = 100000,
+    ) -> Dict[str, Any]:
+        """
+        Verify tamper-evident hash chain across queried audit records.
+        """
+        records = self.query(start_date=start_date, end_date=end_date, limit=limit)
+        checked = 0
+        prev_hash = ""
+        for rec in records:
+            checked += 1
+            expected_payload = "|".join([
+                rec.get("timestamp", ""),
+                rec.get("event_type", ""),
+                rec.get("user", ""),
+                rec.get("action", ""),
+                self._canonical_details(rec.get("details") or {}),
+                rec.get("ip_address", "") or "",
+                rec.get("session_id", "") or "",
+                rec.get("prev_hash", "") or "",
+            ])
+            expected_hash = hashlib.sha256(expected_payload.encode("utf-8")).hexdigest()
+            if rec.get("record_hash", "") != expected_hash:
+                return {
+                    "ok": False,
+                    "checked": checked,
+                    "reason": "record_hash_mismatch",
+                    "record": rec,
+                }
+            if rec.get("prev_hash", "") != prev_hash:
+                return {
+                    "ok": False,
+                    "checked": checked,
+                    "reason": "chain_break",
+                    "record": rec,
+                }
+            prev_hash = rec.get("record_hash", "")
+        return {"ok": True, "checked": checked, "last_hash": prev_hash}
 
 class RateLimiter:
     """
@@ -552,7 +597,6 @@ class RateLimiter:
             if limit_type not in self._windows:
                 self._windows[limit_type] = []
 
-            # Prune expired entries
             entries = self._windows[limit_type]
             self._windows[limit_type] = [t for t in entries if t > cutoff]
 
@@ -581,9 +625,7 @@ class RateLimiter:
         start = _time.monotonic()
 
         while True:
-            # Peek without consuming
             if self.check(limit_type, consume=False):
-                # Now actually consume
                 if self.check(limit_type, consume=True):
                     return True
                 # Race: another thread consumed between peek and consume — retry
@@ -622,12 +664,6 @@ class RateLimiter:
                 "remaining": max(0, limit - current),
                 "window_seconds": window.total_seconds(),
             }
-
-
-# =========================================================================
-# AccessControl
-# =========================================================================
-
 
 class AccessControl:
     """
@@ -731,10 +767,7 @@ class AccessControl:
         """List of available roles."""
         return list(self._permissions.keys())
 
-
-# =========================================================================
 # Module-level singletons with proper locks
-# =========================================================================
 
 _secure_storage: Optional[SecureStorage] = None
 _secure_storage_lock = threading.Lock()
@@ -748,7 +781,6 @@ _rate_limiter_lock = threading.Lock()
 _access_control: Optional[AccessControl] = None
 _access_control_lock = threading.Lock()
 
-
 def get_secure_storage() -> SecureStorage:
     """Get or create the global SecureStorage instance."""
     global _secure_storage
@@ -757,7 +789,6 @@ def get_secure_storage() -> SecureStorage:
             if _secure_storage is None:
                 _secure_storage = SecureStorage()
     return _secure_storage
-
 
 def get_audit_log() -> AuditLog:
     """Get or create the global AuditLog instance."""
@@ -768,7 +799,6 @@ def get_audit_log() -> AuditLog:
                 _audit_log = AuditLog()
     return _audit_log
 
-
 def get_rate_limiter() -> RateLimiter:
     """Get or create the global RateLimiter instance."""
     global _rate_limiter
@@ -778,7 +808,6 @@ def get_rate_limiter() -> RateLimiter:
                 _rate_limiter = RateLimiter()
     return _rate_limiter
 
-
 def get_access_control() -> AccessControl:
     """Get or create the global AccessControl instance."""
     global _access_control
@@ -787,7 +816,6 @@ def get_access_control() -> AccessControl:
             if _access_control is None:
                 _access_control = AccessControl()
     return _access_control
-
 
 def reset_security_singletons() -> None:
     """

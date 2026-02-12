@@ -10,11 +10,9 @@ from datetime import datetime
 from typing import Optional, Dict
 import threading
 
-
 _colorama_lock = threading.Lock()
 _colorama_initialized = False
 _colorama_available = False
-
 
 def _ensure_colorama() -> bool:
     """
@@ -39,7 +37,6 @@ def _ensure_colorama() -> bool:
         _colorama_initialized = True
         return _colorama_available
 
-
 class ColorFormatter(logging.Formatter):
     """
     Custom formatter with ANSI colors for terminal output.
@@ -63,7 +60,6 @@ class ColorFormatter(logging.Formatter):
         if color:
             record_copy.levelname = f"{color}{record_copy.levelname}{self.RESET}"
         return super().format(record_copy)
-
 
 class LoggerManager:
     """
@@ -119,7 +115,6 @@ class LoggerManager:
         with self._logger_lock:
             self._log_level = level
 
-            # Close previous file handler to prevent handle leak
             self._close_file_handler()
 
             if log_dir is not None:
@@ -196,7 +191,6 @@ class LoggerManager:
         self._close_file_handler()
 
     # -----------------------------------------------------------------
-    # Private helpers
     # -----------------------------------------------------------------
 
     def _create_console_handler(self) -> logging.StreamHandler:
@@ -248,18 +242,13 @@ class LoggerManager:
         if not any(h is self._file_handler for h in logger.handlers):
             logger.addHandler(self._file_handler)
 
-
-# =====================================================================
 # Module-level convenience API
-# =====================================================================
 
 _manager = LoggerManager()
-
 
 def get_logger(name: str = "trading") -> logging.Logger:
     """Get a logger instance."""
     return _manager.get_logger(name)
-
 
 def setup_logging(
     log_dir: Optional[Path] = None,
@@ -268,11 +257,9 @@ def setup_logging(
     """Setup global logging configuration."""
     _manager.setup(log_dir, level)
 
-
 def teardown_logging() -> None:
     """Tear down logging — close handlers, clear caches."""
     _manager.teardown()
-
 
 # This logger is created before setup_logging() runs.
 # It will be updated when setup_logging() is called later.

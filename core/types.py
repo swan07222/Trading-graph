@@ -5,10 +5,6 @@ from enum import Enum
 from typing import Dict, List, Optional, Any
 import uuid
 
-# ============================================================
-# Enums
-# ============================================================
-
 class OrderSide(Enum):
     BUY = "buy"
     SELL = "sell"
@@ -34,13 +30,11 @@ class PositionSide(Enum):
     SHORT = "short"
     FLAT = "flat"
 
-
 class RiskLevel(Enum):
     LOW = "low"
     MEDIUM = "medium"
     HIGH = "high"
     CRITICAL = "critical"
-
 
 class SystemStatus(Enum):
     RUNNING = "running"
@@ -48,7 +42,6 @@ class SystemStatus(Enum):
     STOPPED = "stopped"
     ERROR = "error"
     KILL_SWITCH = "kill_switch"
-
 
 class AutoTradeMode(Enum):
     """
@@ -64,11 +57,6 @@ class AutoTradeMode(Enum):
     AUTO = "auto"
     SEMI_AUTO = "semi_auto"
 
-
-# ============================================================
-# Order
-# ============================================================
-
 @dataclass
 class Order:
     """Canonical Order representation"""
@@ -76,18 +64,15 @@ class Order:
     client_id: str = ""
     broker_id: str = ""
 
-    # Instrument
     symbol: str = ""
     name: str = ""
 
-    # Order details
     side: OrderSide = OrderSide.BUY
     order_type: OrderType = OrderType.LIMIT
     quantity: int = 0
     price: float = 0.0
     stop_price: float = 0.0
 
-    # Execution
     status: OrderStatus = OrderStatus.PENDING
     filled_qty: int = 0
     filled_price: float = 0.0
@@ -95,21 +80,18 @@ class Order:
     commission: float = 0.0
     slippage: float = 0.0
 
-    # Timestamps
     created_at: datetime = None
     submitted_at: datetime = None
     filled_at: datetime = None
     cancelled_at: datetime = None
     updated_at: datetime = None
 
-    # Metadata
     message: str = ""
     strategy: str = ""
     signal_id: str = ""
     parent_id: str = ""
     tags: Dict[str, Any] = field(default_factory=dict)
 
-    # Risk
     stop_loss: float = 0.0
     take_profit: float = 0.0
 
@@ -200,11 +182,6 @@ class Order:
 
         return order
 
-
-# ============================================================
-# Fill
-# ============================================================
-
 @dataclass
 class Fill:
     """Trade execution/fill"""
@@ -253,25 +230,18 @@ class Fill:
             'timestamp': self.timestamp.isoformat() if self.timestamp else None,
         }
 
-
-# ============================================================
-# Position
-# ============================================================
-
 @dataclass
 class Position:
     """Position in a security"""
     symbol: str = ""
     name: str = ""
 
-    # Quantities
     quantity: int = 0
     available_qty: int = 0
     frozen_qty: int = 0
     pending_buy: int = 0
     pending_sell: int = 0
 
-    # Costs and prices
     avg_cost: float = 0.0
     current_price: float = 0.0
 
@@ -279,7 +249,6 @@ class Position:
     realized_pnl: float = 0.0
     commission_paid: float = 0.0
 
-    # Metadata
     opened_at: datetime = None
     last_updated: datetime = None
 
@@ -339,23 +308,16 @@ class Position:
             'realized_pnl': self.realized_pnl,
         }
 
-
-# ============================================================
-# Account
-# ============================================================
-
 @dataclass
 class Account:
     """Trading account state"""
     broker_name: str = ""
     account_id: str = ""
 
-    # Cash
     cash: float = 0.0
     available: float = 0.0
     frozen: float = 0.0
 
-    # Positions
     positions: Dict[str, Position] = field(default_factory=dict)
 
     # P&L tracking
@@ -363,14 +325,11 @@ class Account:
     realized_pnl: float = 0.0
     commission_paid: float = 0.0
 
-    # Daily tracking
     daily_start_equity: float = 0.0
     daily_start_date: date = None
 
-    # Peak tracking
     peak_equity: float = 0.0
 
-    # Metadata
     last_updated: datetime = None
 
     def __post_init__(self):
@@ -448,15 +407,9 @@ class Account:
             'position_count': len(self.positions),
         }
 
-
-# ============================================================
-# Risk Metrics
-# ============================================================
-
 @dataclass
 class RiskMetrics:
     """Comprehensive risk metrics"""
-    # Portfolio
     equity: float = 0.0
     cash: float = 0.0
     positions_value: float = 0.0
@@ -466,46 +419,35 @@ class RiskMetrics:
     daily_pnl_pct: float = 0.0
     total_pnl: float = 0.0
 
-    # Risk measures
     var_1d_95: float = 0.0
     var_1d_99: float = 0.0
     expected_shortfall: float = 0.0
     max_drawdown_pct: float = 0.0
     current_drawdown_pct: float = 0.0
 
-    # Exposure
     long_exposure: float = 0.0
     short_exposure: float = 0.0
     net_exposure: float = 0.0
     gross_exposure: float = 0.0
     exposure_pct: float = 0.0
 
-    # Concentration
     largest_position_pct: float = 0.0
     position_count: int = 0
 
-    # Limits
     daily_loss_remaining_pct: float = 100.0
     position_limit_remaining: int = 10
 
-    # Status
     risk_level: RiskLevel = RiskLevel.LOW
     can_trade: bool = True
     circuit_breaker_active: bool = False
     kill_switch_active: bool = False
     warnings: List[str] = field(default_factory=list)
 
-    # Timestamps
     timestamp: datetime = None
 
     def __post_init__(self):
         if not self.timestamp:
             self.timestamp = datetime.now()
-
-
-# ============================================================
-# Trade Signal
-# ============================================================
 
 @dataclass
 class TradeSignal:
@@ -517,22 +459,21 @@ class TradeSignal:
     quantity: int = 0
     price: float = 0.0
 
-    # Risk levels
     stop_loss: float = 0.0
     take_profit: float = 0.0
 
-    # Signal metadata
     confidence: float = 0.0
     strategy: str = ""
     reasons: List[str] = field(default_factory=list)
 
-    # Timestamps
     generated_at: datetime = None
     expires_at: datetime = None
 
     # Auto-trade metadata
     auto_generated: bool = False
     auto_trade_action_id: str = ""
+    approvals_count: int = 0
+    approved_by: List[str] = field(default_factory=list)
 
     def __post_init__(self):
         if not self.id:
@@ -540,10 +481,7 @@ class TradeSignal:
         if not self.generated_at:
             self.generated_at = datetime.now()
 
-
-# ============================================================
 # Auto-Trade Types
-# ============================================================
 
 @dataclass
 class AutoTradeAction:
@@ -558,7 +496,6 @@ class AutoTradeAction:
     id: str = ""
     timestamp: datetime = None
 
-    # What triggered this action
     stock_code: str = ""
     stock_name: str = ""
     signal_type: str = ""       # e.g. "STRONG_BUY", "SELL"
@@ -566,15 +503,12 @@ class AutoTradeAction:
     signal_strength: float = 0.0
     model_agreement: float = 0.0
 
-    # Price at decision time
     price: float = 0.0
     predicted_direction: str = ""  # "UP", "DOWN", "NEUTRAL"
 
-    # Decision
     decision: str = ""  # "EXECUTED", "SKIPPED", "PENDING", "REJECTED", "EXPIRED"
     skip_reason: str = ""
 
-    # If executed
     side: str = ""          # "buy" or "sell"
     quantity: int = 0
     order_id: str = ""
@@ -611,7 +545,6 @@ class AutoTradeAction:
             'outcome': self.outcome,
         }
 
-
 @dataclass
 class AutoTradeState:
     """
@@ -625,7 +558,6 @@ class AutoTradeState:
     - Cooldown timers per stock
     - Safety pause state
     """
-    # Mode
     mode: AutoTradeMode = AutoTradeMode.MANUAL
     is_running: bool = False
 
@@ -644,7 +576,6 @@ class AutoTradeState:
     # Cooldowns: stock_code -> datetime when cooldown expires
     cooldowns: Dict[str, datetime] = field(default_factory=dict)
 
-    # Safety
     is_paused: bool = False
     pause_reason: str = ""
     pause_until: datetime = None
@@ -655,15 +586,12 @@ class AutoTradeState:
     # Pending approvals (for SEMI_AUTO mode)
     pending_approvals: List[AutoTradeAction] = field(default_factory=list)
 
-    # Last scan timestamp
     last_scan_time: datetime = None
     last_trade_time: datetime = None
 
-    # Session start
     session_start: datetime = None
     session_date: date = None
 
-    # Errors
     consecutive_errors: int = 0
     last_error: str = ""
     last_error_time: datetime = None
@@ -706,7 +634,6 @@ class AutoTradeState:
         """Add a pending approval for SEMI_AUTO mode."""
         self.pending_approvals.insert(0, action)
         if len(self.pending_approvals) > self.MAX_PENDING_APPROVALS:
-            # Expire oldest
             expired = self.pending_approvals[self.MAX_PENDING_APPROVALS:]
             for a in expired:
                 a.decision = "EXPIRED"

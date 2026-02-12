@@ -4,7 +4,6 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Optional, Dict, Any, List
 
-
 class TradingSystemError(Exception):
     """Base exception for trading system."""
 
@@ -48,142 +47,106 @@ class TradingSystemError(Exception):
             f"details={self.details!r})"
         )
 
-
 # ── Data Errors ──────────────────────────────────────────────
-
 
 class DataError(TradingSystemError):
     """Base data error."""
 
-
 class DataFetchError(DataError):
     """Failed to fetch data."""
-
 
 class DataValidationError(DataError):
     """Data validation failed."""
 
-
 class InsufficientDataError(DataError):
     """Not enough data."""
-
 
 class DataSourceUnavailableError(DataError):
     """Data source unavailable."""
 
-
 # ── Trading Errors ───────────────────────────────────────────
-
 
 class TradingError(TradingSystemError):
     """Base trading error."""
 
-
 class OrderError(TradingError):
     """Order-related error."""
-
 
 class OrderValidationError(OrderError):
     """Order validation failed."""
 
-
 class OrderRejectedError(OrderError):
     """Order was rejected."""
-
 
 class InsufficientFundsError(OrderError):
     """Insufficient funds for order."""
 
-
 class InsufficientPositionError(OrderError):
     """Insufficient position for sell order."""
-
 
 class PositionLimitError(OrderError):
     """Position limit exceeded."""
 
-
 # ── Risk Errors ──────────────────────────────────────────────
-
 
 class RiskError(TradingSystemError):
     """Base risk error."""
 
-
 class RiskLimitBreachedError(RiskError):
     """Risk limit was breached."""
-
 
 class DailyLossLimitError(RiskError):
     """Daily loss limit reached."""
 
-
 class DrawdownLimitError(RiskError):
     """Maximum drawdown exceeded."""
-
 
 class CircuitBreakerError(RiskError):
     """Circuit breaker activated."""
 
-
 # ── Model Errors ─────────────────────────────────────────────
-
 
 class ModelError(TradingSystemError):
     """Base model error."""
 
-
 class ModelNotFoundError(ModelError):
     """Model file not found."""
-
 
 class ModelLoadError(ModelError):
     """Failed to load model."""
 
-
 class PredictionError(ModelError):
     """Prediction failed."""
 
-
 # ── Broker Errors ────────────────────────────────────────────
-
 
 class BrokerError(TradingSystemError):
     """Base broker error."""
 
-
 class BrokerConnectionError(BrokerError):
     """Failed to connect to broker."""
-
 
 class BrokerAuthenticationError(BrokerError):
     """Broker authentication failed."""
 
-
 class BrokerOrderError(BrokerError):
     """Broker rejected order."""
-
 
 # ── Security Errors ──────────────────────────────────────────
 
 # FIX #4: Renamed from SecurityError to avoid shadowing builtins.SecurityError
 
-
 class TradingSecurityError(TradingSystemError):
     """Base security error."""
-
 
 class AuthenticationError(TradingSecurityError):
     """Authentication failed."""
 
-
 class AuthorizationError(TradingSecurityError):
     """Not authorized for action."""
 
-
 class RateLimitError(TradingSecurityError):
     """Rate limit exceeded."""
-
 
 # Backward compatibility alias (import-safe, but won't shadow builtins)
 SecurityError_ = TradingSecurityError

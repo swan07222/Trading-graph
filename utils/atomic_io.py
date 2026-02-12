@@ -11,7 +11,6 @@ from collections import OrderedDict
 from pathlib import Path
 from typing import Any, Optional, Union
 
-# Optional torch import
 try:
     import torch
 
@@ -21,32 +20,25 @@ except ImportError:
     _HAS_TORCH = False
 
 __all__ = [
-    # Writers
     "atomic_write_bytes",
     "atomic_write_text",
     "atomic_write_json",
     "atomic_pickle_dump",
     "atomic_torch_save",
-    # Readers
     "read_bytes",
     "read_text",
     "read_json",
     "pickle_load",
     "torch_load",
-    # Utilities
     "safe_remove",
     "ensure_parent_dir",
 ]
 
-
-# =====================================================================
 # Bounded lock cache — prevents memory leak in long-running apps
-# =====================================================================
 
 _MAX_LOCKS = 256
 _lock_cache: OrderedDict[str, threading.Lock] = OrderedDict()
 _cache_lock = threading.Lock()
-
 
 def _get_lock(path: Path) -> threading.Lock:
     """
@@ -63,20 +55,15 @@ def _get_lock(path: Path) -> threading.Lock:
         lock = threading.Lock()
         _lock_cache[key] = lock
 
-        # Evict oldest if over capacity
         while len(_lock_cache) > _MAX_LOCKS:
             _lock_cache.popitem(last=False)
 
         return lock
 
-
-# =====================================================================
 # Directory-level lock cache
-# =====================================================================
 
 _dir_lock_cache: OrderedDict[str, threading.Lock] = OrderedDict()
 _dir_cache_lock = threading.Lock()
-
 
 def _get_dir_lock(path: Path) -> threading.Lock:
     """
@@ -100,7 +87,6 @@ def _get_dir_lock(path: Path) -> threading.Lock:
 
         return lock
 
-
 def _make_tmp_path(path: Path) -> Path:
     """
     Create a unique temp file path in the same directory as target.
@@ -111,7 +97,6 @@ def _make_tmp_path(path: Path) -> Path:
     tid = threading.get_ident()
     suffix = f".{pid}.{tid}.tmp"
     return path.with_suffix(path.suffix + suffix)
-
 
 def _fsync_file(f) -> None:
     """
@@ -131,7 +116,6 @@ def _fsync_file(f) -> None:
         # AttributeError if f doesn't support fileno (StringIO, etc.)
         pass
 
-
 def _cleanup_tmp(tmp: Path) -> None:
     """Remove temp file if it exists. Never raises."""
     try:
@@ -139,7 +123,6 @@ def _cleanup_tmp(tmp: Path) -> None:
             tmp.unlink()
     except OSError:
         pass
-
 
 def _safe_replace(src: Path, dst: Path, max_retries: int = 3) -> None:
     """
@@ -158,12 +141,6 @@ def _safe_replace(src: Path, dst: Path, max_retries: int = 3) -> None:
                 time.sleep(0.05 * (attempt + 1))
             else:
                 raise
-
-
-# =====================================================================
-# ATOMIC WRITE FUNCTIONS
-# =====================================================================
-
 
 def atomic_write_bytes(
     path: Union[str, Path],
@@ -208,7 +185,6 @@ def atomic_write_bytes(
         if lock:
             lock.release()
 
-
 def atomic_write_text(
     path: Union[str, Path],
     text: str,
@@ -227,7 +203,6 @@ def atomic_write_text(
     if not isinstance(text, str):
         raise TypeError(f"text must be str, got {type(text).__name__}")
     atomic_write_bytes(path, text.encode(encoding), use_lock=use_lock)
-
 
 def atomic_write_json(
     path: Union[str, Path],
@@ -252,7 +227,6 @@ def atomic_write_json(
     json_str = json.dumps(obj, ensure_ascii=ensure_ascii, indent=indent)
     atomic_write_bytes(path, json_str.encode("utf-8"), use_lock=use_lock)
 
-
 def atomic_pickle_dump(
     path: Union[str, Path],
     obj: Any,
@@ -275,7 +249,6 @@ def atomic_pickle_dump(
         protocol = pickle.HIGHEST_PROTOCOL
     data = pickle.dumps(obj, protocol=protocol)
     atomic_write_bytes(path, data, use_lock=use_lock)
-
 
 def atomic_torch_save(
     path: Union[str, Path],
@@ -323,13 +296,7 @@ def atomic_torch_save(
         if lock:
             lock.release()
 
-
-# =====================================================================
-# READ FUNCTIONS
-# =====================================================================
-
 _DEFAULT_MAX_PICKLE_BYTES = 500 * 1024 * 1024  # 500 MB
-
 
 def read_bytes(path: Union[str, Path]) -> bytes:
     """
@@ -351,7 +318,6 @@ def read_bytes(path: Union[str, Path]) -> bytes:
     with open(Path(path), "rb") as f:
         return f.read()
 
-
 def read_text(
     path: Union[str, Path],
     encoding: str = "utf-8",
@@ -368,7 +334,6 @@ def read_text(
     """
     return read_bytes(path).decode(encoding)
 
-
 def read_json(path: Union[str, Path]) -> Any:
     """
     Read and parse a JSON file.
@@ -383,7 +348,6 @@ def read_json(path: Union[str, Path]) -> Any:
         json.JSONDecodeError: If file is not valid JSON
     """
     return json.loads(read_text(path))
-
 
 def pickle_load(
     path: Union[str, Path],
@@ -418,7 +382,6 @@ def pickle_load(
 
     return pickle.loads(read_bytes(path))
 
-
 def torch_load(
     path: Union[str, Path],
     map_location: Optional[str] = None,
@@ -449,12 +412,6 @@ def torch_load(
         weights_only=weights_only,
     )
 
-
-# =====================================================================
-# UTILITY FUNCTIONS
-# =====================================================================
-
-
 def safe_remove(path: Union[str, Path]) -> bool:
     """
     Remove a file, returning False instead of raising if it fails.
@@ -470,7 +427,6 @@ def safe_remove(path: Union[str, Path]) -> bool:
         return True
     except OSError:
         return False
-
 
 def ensure_parent_dir(path: Union[str, Path]) -> Path:
     """

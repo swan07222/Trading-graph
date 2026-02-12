@@ -11,7 +11,6 @@ from utils.logger import get_logger
 
 log = get_logger(__name__)
 
-# Prometheus metric name validation
 _VALID_METRIC_NAME = re.compile(r"^[a-zA-Z_:][a-zA-Z0-9_:]*$")
 _VALID_LABEL_NAME = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
 
@@ -20,13 +19,11 @@ DEFAULT_BUCKETS: Tuple[float, ...] = (
     0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0,
 )
 
-
 def _sanitize_name(name: str) -> str:
     """
     FIX #2: Sanitize metric name for Prometheus compatibility.
     Replaces invalid characters with underscores.
     """
-    # Replace common invalid chars
     sanitized = re.sub(r"[^a-zA-Z0-9_:]", "_", name)
     # Ensure doesn't start with digit
     if sanitized and sanitized[0].isdigit():
@@ -34,7 +31,6 @@ def _sanitize_name(name: str) -> str:
     if not sanitized:
         sanitized = "_unnamed"
     return sanitized
-
 
 def _validate_labels(labels: Optional[Dict[str, str]]) -> None:
     """Validate label names and values."""
@@ -47,7 +43,6 @@ def _validate_labels(labels: Optional[Dict[str, str]]) -> None:
             )
         if not isinstance(value, str):
             raise TypeError(f"Label value for {key!r} must be a string, got {type(value).__name__}")
-
 
 class MetricsRegistry:
     """
@@ -65,7 +60,6 @@ class MetricsRegistry:
         self._max_keys = max_keys
         self._max_observations = 1000
 
-        # Track metric types for TYPE annotation
         self._metric_types: Dict[str, str] = {}
         self._metric_help: Dict[str, str] = {}
 
@@ -130,7 +124,6 @@ class MetricsRegistry:
 
             self._histograms[key].append(value)
 
-            # Keep last N observations
             if len(self._histograms[key]) > self._max_observations:
                 self._histograms[key] = self._histograms[key][
                     -self._max_observations:
@@ -285,24 +278,18 @@ class MetricsRegistry:
 
         return "\n".join(lines) + ("\n" if lines else "")
 
-
-# Global registry
 _metrics = MetricsRegistry()
-
 
 def get_metrics() -> MetricsRegistry:
     """Get the global metrics registry."""
     return _metrics
 
-
-# Convenience functions
 def inc_counter(
     name: str,
     value: float = 1.0,
     labels: Optional[Dict[str, str]] = None,
 ) -> None:
     _metrics.inc_counter(name, value, labels)
-
 
 def set_gauge(
     name: str,
@@ -311,7 +298,6 @@ def set_gauge(
 ) -> None:
     _metrics.set_gauge(name, value, labels)
 
-
 def observe(
     name: str,
     value: float,
@@ -319,10 +305,8 @@ def observe(
 ) -> None:
     _metrics.observe_histogram(name, value, labels)
 
-
 _process_metrics_lock = threading.Lock()
 _process_metrics_started = False
-
 
 def start_process_metrics(interval_seconds: float = 5.0) -> None:
     """

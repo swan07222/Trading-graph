@@ -18,22 +18,66 @@ from utils.logger import get_logger
 
 log = get_logger(__name__)
 
-# Lazy import for CancellationToken to avoid import issues
+def _apply_dialog_theme(dialog: QDialog) -> None:
+    """Apply consistent professional styling for modal dialogs."""
+    dialog.setStyleSheet("""
+        QDialog { background: #0f1728; color: #d7e0f2; }
+        QGroupBox {
+            border: 1px solid #243454;
+            border-radius: 10px;
+            margin-top: 12px;
+            padding-top: 12px;
+            font-weight: 700;
+            color: #9eb9ff;
+            background: #101b30;
+        }
+        QGroupBox::title { left: 12px; padding: 0 6px; }
+        QLabel { color: #d7e0f2; }
+        QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox, QListWidget, QTextEdit {
+            background: #131f36;
+            color: #d7e0f2;
+            border: 1px solid #2b3a5b;
+            border-radius: 7px;
+            padding: 6px 8px;
+            selection-background-color: #3558c8;
+        }
+        QLineEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus, QComboBox:focus, QTextEdit:focus {
+            border-color: #4c78ff;
+            background: #18243d;
+        }
+        QPushButton {
+            background: #1a2a49;
+            color: #e6eeff;
+            border: 1px solid #335084;
+            border-radius: 7px;
+            padding: 7px 12px;
+            font-weight: 700;
+        }
+        QPushButton:hover { background: #22365f; border-color: #4c78ff; }
+        QPushButton:disabled { background: #121d33; color: #5f6d89; border-color: #243454; }
+        QProgressBar {
+            border: 1px solid #2c3f63;
+            border-radius: 6px;
+            background: #101b2f;
+            color: #dbe5ff;
+            text-align: center;
+            min-height: 18px;
+        }
+        QProgressBar::chunk {
+            border-radius: 5px;
+            background: qlineargradient(x1:0,y1:0,x2:1,y2:0,stop:0 #2c7be5, stop:1 #32c48d);
+        }
+    """)
+
 def _get_cancellation_token():
     """Get CancellationToken class."""
     from utils.cancellation import CancellationToken
     return CancellationToken
 
-
 def _get_cancelled_exception():
     """Get CancelledException class."""
     from utils.cancellation import CancelledException
     return CancelledException
-
-
-# ----------------------------
-# Worker Threads
-# ----------------------------
 
 class TrainWorker(QThread):
     """Worker thread for model training with proper cancellation."""
@@ -59,7 +103,6 @@ class TrainWorker(QThread):
             trainer = Trainer()
 
             def cb(model_name: str, epoch_idx: int, val_acc: float):
-                # Cooperative cancellation check
                 self.cancel_token.raise_if_cancelled()
                 self.epoch.emit(
                     str(model_name),
@@ -79,7 +122,6 @@ class TrainWorker(QThread):
                 save_model=True
             )
 
-            # Normal completion
             self.finished.emit(results if results else {})
 
         except Exception as e:
@@ -92,7 +134,6 @@ class TrainWorker(QThread):
             except ImportError:
                 pass
 
-            # Check cancel token directly
             if self.cancel_token.is_cancelled:
                 self.finished.emit({"cancelled": True})
                 return
@@ -102,7 +143,6 @@ class TrainWorker(QThread):
     def cancel(self):
         """Cancel training gracefully via token."""
         self.cancel_token.cancel()
-
 
 class BacktestWorker(QThread):
     """Worker thread for backtesting with cancellation support."""
@@ -147,11 +187,6 @@ class BacktestWorker(QThread):
         """Cancel backtest."""
         self._cancelled = True
 
-
-# ----------------------------
-# Training Dialog
-# ----------------------------
-
 class TrainingDialog(QDialog):
     """Dialog for training the AI model from scratch or incrementally."""
 
@@ -159,13 +194,13 @@ class TrainingDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("Train AI Model")
         self.setMinimumSize(720, 520)
+        _apply_dialog_theme(self)
 
         self.worker: Optional[TrainWorker] = None
         self._is_training = False
 
         layout = QVBoxLayout(self)
 
-        # Settings
         settings_group = QGroupBox("Training Settings")
         settings_layout = QGridLayout(settings_group)
 
@@ -189,7 +224,6 @@ class TrainingDialog(QDialog):
 
         layout.addWidget(settings_group)
 
-        # Stock list
         stocks_group = QGroupBox("Training Stocks")
         stocks_layout = QHBoxLayout(stocks_group)
 
@@ -257,7 +291,6 @@ class TrainingDialog(QDialog):
 
         layout.addWidget(prog_group)
 
-        # Buttons
         btns = QDialogButtonBox()
         self.start_btn = btns.addButton(
             "Start Training",
@@ -306,7 +339,6 @@ class TrainingDialog(QDialog):
 
         code = digits
 
-        # Avoid duplicates
         for i in range(self.stocks_list.count()):
             if self.stocks_list.item(i).text().strip() == code:
                 return
@@ -347,7 +379,6 @@ class TrainingDialog(QDialog):
         self.stop_btn.setEnabled(True)
         self.close_btn.setEnabled(False)
 
-        # Disable settings during training
         self.epochs_spin.setEnabled(False)
         self.stocks_list.setEnabled(False)
 
@@ -385,7 +416,6 @@ class TrainingDialog(QDialog):
             f"[{model_name}] epoch={epoch} val_acc={val_acc:.2%}"
         )
 
-        # Progress heuristic based on epoch
         epochs = int(self.epochs_spin.value())
         pct = int(min(100, (epoch / max(1, epochs)) * 100))
         self.progress.setValue(pct)
@@ -411,7 +441,6 @@ class TrainingDialog(QDialog):
             f"Best validation accuracy: {best_acc:.2%}"
         )
 
-        # Show test trading metrics if available
         tm = (results.get("test_metrics") or {}).get("trading")
         if tm:
             total_ret = float(tm.get('total_return', 0))
@@ -425,7 +454,6 @@ class TrainingDialog(QDialog):
         self.progress.setValue(100)
         self._set_idle("Done")
 
-        # Show success message
         QMessageBox.information(
             self, "Training Complete",
             f"Model training completed successfully!\n\n"
@@ -480,11 +508,6 @@ class TrainingDialog(QDialog):
 
         super().closeEvent(event)
 
-
-# ----------------------------
-# Backtest Dialog
-# ----------------------------
-
 class BacktestDialog(QDialog):
     """Dialog for walk-forward backtesting."""
 
@@ -492,6 +515,7 @@ class BacktestDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("Walk-Forward Backtest")
         self.setMinimumSize(720, 520)
+        _apply_dialog_theme(self)
 
         self.worker: Optional[BacktestWorker] = None
 
@@ -599,11 +623,6 @@ class BacktestDialog(QDialog):
         event.accept()
         super().closeEvent(event)
 
-
-# ----------------------------
-# Broker Settings Dialog
-# ----------------------------
-
 class BrokerSettingsDialog(QDialog):
     """
     Configure broker path (THS) and mode.
@@ -614,6 +633,7 @@ class BrokerSettingsDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("Broker Settings")
         self.setMinimumWidth(520)
+        _apply_dialog_theme(self)
 
         layout = QVBoxLayout(self)
 
@@ -681,11 +701,6 @@ class BrokerSettingsDialog(QDialog):
         )
         self.accept()
 
-
-# ----------------------------
-# Risk Settings Dialog
-# ----------------------------
-
 class RiskSettingsDialog(QDialog):
     """
     Adjust risk parameters at runtime (in-memory).
@@ -695,13 +710,13 @@ class RiskSettingsDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("Risk Settings")
         self.setMinimumWidth(520)
+        _apply_dialog_theme(self)
 
         layout = QVBoxLayout(self)
 
         group = QGroupBox("Risk Parameters")
         form = QFormLayout(group)
 
-        # Safe attribute access with fallbacks
         max_pos = self._safe_config_float('MAX_POSITION_PCT', 15.0)
         max_daily = self._safe_config_float('MAX_DAILY_LOSS_PCT', 3.0)
         risk_trade = self._safe_config_float('RISK_PER_TRADE', 2.0)

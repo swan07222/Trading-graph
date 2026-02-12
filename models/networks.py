@@ -5,18 +5,12 @@ import torch.nn as nn
 import torch.nn.functional as F
 from typing import Tuple, Optional
 
-
-# ---------------------------------------------------------------------------
-# Shared helpers
-# ---------------------------------------------------------------------------
-
 def _safe_num_heads(dim: int, preferred: int = 8) -> int:
     """Return the largest num_heads <= preferred that divides dim."""
     for h in range(preferred, 0, -1):
         if dim % h == 0:
             return h
     return 1
-
 
 def _pick_num_groups(channels: int, preferred: int = 8) -> int:
     """Pick valid num_groups for GroupNorm."""
@@ -27,7 +21,6 @@ def _pick_num_groups(channels: int, preferred: int = 8) -> int:
         if channels % g == 0:
             return g
     return 1
-
 
 def _init_weights(module: nn.Module):
     """
@@ -51,14 +44,10 @@ def _init_weights(module: nn.Module):
             nn.init.zeros_(module.bias)
     # Skip LSTM, GRU — PyTorch default orthogonal init is preferred
 
-
 def _count_parameters(model: nn.Module) -> int:
     return sum(p.numel() for p in model.parameters() if p.requires_grad)
 
-
-# ---------------------------------------------------------------------------
 # Building blocks (previously in layers.py)
-# ---------------------------------------------------------------------------
 
 class PositionalEncoding(nn.Module):
     """
@@ -93,7 +82,6 @@ class PositionalEncoding(nn.Module):
         seq_len = x.size(1)
         x = x + self.pe[:, :seq_len, :]
         return self.dropout(x)
-
 
 class TransformerBlock(nn.Module):
     """
@@ -180,7 +168,6 @@ class TransformerBlock(nn.Module):
 
         return x
 
-
 class LSTMBlock(nn.Module):
     """
     LSTM block with proper dropout handling.
@@ -221,7 +208,6 @@ class LSTMBlock(nn.Module):
         """
         output, _ = self.lstm(x)
         return self.dropout(output)
-
 
 class TemporalConvBlock(nn.Module):
     """
@@ -288,13 +274,11 @@ class TemporalConvBlock(nn.Module):
         out = F.gelu(out)
         out = self.dropout(out)
 
-        # Residual connection
         # Ensure sequence lengths match (should be same due to causal padding)
         min_len = min(out.size(2), residual.size(2))
         out = out[:, :, :min_len] + residual[:, :, :min_len]
 
         return out
-
 
 class AttentionPooling(nn.Module):
     """
@@ -319,18 +303,11 @@ class AttentionPooling(nn.Module):
         Returns:
             (batch, hidden_size) — weighted average over time
         """
-        # Compute attention weights
         scores = self.attention(x)  # (batch, seq_len, 1)
         weights = F.softmax(scores, dim=1)  # (batch, seq_len, 1)
 
-        # Weighted sum
         pooled = (x * weights).sum(dim=1)  # (batch, hidden_size)
         return pooled
-
-
-# ---------------------------------------------------------------------------
-# Classifier head
-# ---------------------------------------------------------------------------
 
 class _ClassifierHead(nn.Module):
     """Shared classification + confidence head."""
@@ -357,12 +334,6 @@ class _ClassifierHead(nn.Module):
 
     def forward(self, pooled: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         return self.classifier(pooled), self.confidence(pooled)
-
-
-# ---------------------------------------------------------------------------
-# Models
-# ---------------------------------------------------------------------------
-
 
 class LSTMModel(nn.Module):
     """Bidirectional LSTM with self-attention pooling."""
@@ -401,7 +372,6 @@ class LSTMModel(nn.Module):
         pooled = self.pool(x)
         return self.head(pooled)
 
-
 class TransformerModel(nn.Module):
     """Causal Transformer encoder for sequence classification."""
 
@@ -415,7 +385,6 @@ class TransformerModel(nn.Module):
         num_heads: int = 8,
     ):
         super().__init__()
-        # Ensure head count is valid
         num_heads = _safe_num_heads(hidden_size, num_heads)
 
         self.input_proj = nn.Linear(input_size, hidden_size)
@@ -452,7 +421,6 @@ class TransformerModel(nn.Module):
         x = self.norm(x)
         pooled = self.pool(x)
         return self.head(pooled)
-
 
 class GRUModel(nn.Module):
     """Bidirectional GRU with attention pooling."""
@@ -499,7 +467,6 @@ class GRUModel(nn.Module):
         x = self.norm(x)
         pooled = self.pool(x)
         return self.head(pooled)
-
 
 class TCNModel(nn.Module):
     """Temporal Convolutional Network (strictly causal).
@@ -548,10 +515,8 @@ class TCNModel(nn.Module):
         for block in self.tcn_blocks:
             x = block(x)
 
-        # Take LAST timestep to preserve causality
         pooled = x[:, :, -1]  # (batch, hidden)
         return self.head(pooled)
-
 
 class HybridModel(nn.Module):
     """Causal CNN + LSTM hybrid model.
@@ -609,7 +574,6 @@ class HybridModel(nn.Module):
         """
         x = self.input_proj(x)
 
-        # Causal CNN path
         x_t = x.transpose(1, 2)  # (batch, hidden, seq)
         c1 = F.gelu(self.conv1(F.pad(x_t, (self.conv1_pad, 0))))
         c2 = F.gelu(self.conv2(F.pad(x_t, (self.conv2_pad, 0))))
@@ -623,7 +587,6 @@ class HybridModel(nn.Module):
         min_len = min(x.size(1), conv_out.size(1))
         x = x[:, :min_len, :] + conv_out[:, :min_len, :]
 
-        # LSTM path
         x, _ = self.lstm(x)
         x = self.norm(x)
 

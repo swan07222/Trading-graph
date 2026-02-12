@@ -3,14 +3,12 @@
 Core Package - Foundation components for the trading system
 """
 from .types import (
-    # Enums
     OrderSide,
     OrderType,
     OrderStatus,
     PositionSide,
     RiskLevel,
     SystemStatus,
-    # Dataclasses
     Order,
     Fill,
     Position,
@@ -64,7 +62,6 @@ from .exceptions import (
 )
 
 __all__ = [
-    # Types
     'OrderSide',
     'OrderType',
     'OrderStatus',
@@ -77,7 +74,6 @@ __all__ = [
     'Account',
     'RiskMetrics',
     'TradeSignal',
-    # Events
     'Event',
     'EventType',
     'EventBus',

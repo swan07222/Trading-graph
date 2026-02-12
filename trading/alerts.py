@@ -19,13 +19,11 @@ from utils.security import get_secure_storage, get_audit_log
 
 log = get_logger(__name__)
 
-
 class AlertPriority(Enum):
     LOW = 1
     MEDIUM = 2
     HIGH = 3
     CRITICAL = 4
-
 
 class AlertChannel(Enum):
     LOG = "log"
@@ -34,7 +32,6 @@ class AlertChannel(Enum):
     SMS = "sms"
     WEBHOOK = "webhook"
 
-
 class AlertCategory(Enum):
     RISK = "risk"
     TRADING = "trading"
@@ -42,7 +39,6 @@ class AlertCategory(Enum):
     CONNECTION = "connection"
     DATA = "data"
     PERFORMANCE = "performance"
-
 
 @dataclass
 class Alert:
@@ -54,16 +50,13 @@ class Alert:
     message: str = ""
     details: Dict = field(default_factory=dict)
 
-    # Routing
     channels: List[AlertChannel] = field(default_factory=list)
 
-    # Status
     created_at: datetime = None
     sent_at: datetime = None
     acknowledged_at: datetime = None
     acknowledged_by: str = ""
 
-    # Throttling
     throttle_key: str = ""
 
     def __post_init__(self):
@@ -88,7 +81,6 @@ class Alert:
             ),
             'acknowledged': self.acknowledged_at is not None,
         }
-
 
 class AlertThrottler:
     """Prevent alert spam by throttling similar alerts."""
@@ -135,7 +127,6 @@ class AlertThrottler:
                     del self._last_sent[k]
             else:
                 self._last_sent.clear()
-
 
 class AlertManager:
     """Central alert management system."""
@@ -421,8 +412,6 @@ Details:
         except Exception as e:
             log.error(f"Failed to load alert history: {e}")
 
-    # Convenience methods
-
     def risk_alert(self, title: str, message: str, details: Dict = None):
         self.send(Alert(
             category=AlertCategory.RISK,
@@ -478,11 +467,9 @@ Details:
             throttle_key="",  # Never throttle critical
         ))
 
-
 # FIX: Module-level lock instead of fragile globals() pattern
 _alert_manager: Optional[AlertManager] = None
 _alert_lock = threading.Lock()
-
 
 def get_alert_manager() -> AlertManager:
     global _alert_manager

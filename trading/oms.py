@@ -23,7 +23,6 @@ from utils.security import get_audit_log
 
 log = get_logger(__name__)
 
-
 class OrderStateMachine:
     """
     Valid order state transitions.
@@ -61,7 +60,6 @@ class OrderStateMachine:
             raise OrderError(
                 f"Invalid state transition: {order.status.value} -> {new_status.value}"
             )
-
 
 class OrderDatabase:
     """
@@ -236,7 +234,6 @@ class OrderDatabase:
                 )
 
     # ------------------------------------------------------------------
-    # Orders
     # ------------------------------------------------------------------
 
     def save_order(self, order: Order, conn: sqlite3.Connection = None):
@@ -385,7 +382,6 @@ class OrderDatabase:
         return order
 
     # ------------------------------------------------------------------
-    # Fills
     # ------------------------------------------------------------------
 
     def save_fill(self, fill: Fill, conn: sqlite3.Connection = None) -> bool:
@@ -481,7 +477,6 @@ class OrderDatabase:
         return fills
 
     # ------------------------------------------------------------------
-    # Positions
     # ------------------------------------------------------------------
 
     def save_position(self, pos: Position, conn: sqlite3.Connection = None):
@@ -558,7 +553,6 @@ class OrderDatabase:
             raise
 
     # ------------------------------------------------------------------
-    # Account state
     # ------------------------------------------------------------------
 
     def save_account_state(
@@ -711,7 +705,6 @@ class OrderDatabase:
                 purchase_date = date.fromisoformat(row['purchase_date'])
                 quantity = row['quantity']
 
-                # Check if at least one trading day has passed
                 trading_days_passed = 0
                 check_date = purchase_date + timedelta(days=1)
                 while check_date <= today:
@@ -735,7 +728,6 @@ class OrderDatabase:
                     settled.append(symbol)
 
         return settled
-
 
 class OrderManagementSystem:
     """
@@ -815,13 +807,11 @@ class OrderManagementSystem:
                         frozen_by_symbol.get(symbol, 0) + unfilled
                     )
 
-        # Reconstruct available cash
         self._account.available = max(
             0.0, self._account.cash - total_cash_reserved
         )
         self._account.frozen = total_cash_reserved
 
-        # Reconstruct frozen shares
         for symbol, frozen_qty in frozen_by_symbol.items():
             pos = self._account.positions.get(symbol)
             if pos:
@@ -896,7 +886,6 @@ class OrderManagementSystem:
             log.info("New trading day initialized")
 
     # ------------------------------------------------------------------
-    # Order submission
     # ------------------------------------------------------------------
 
     def get_active_orders(self) -> List[Order]:
@@ -979,12 +968,14 @@ class OrderManagementSystem:
         reserved_total = est_value + est_commission
 
         order.tags = order.tags or {}
-        order.tags["reserved_price"] = float(order.price)
-        order.tags["reserved_slip"] = slip
-        order.tags["reserved_commission_rate"] = comm_rate
-        order.tags["reserved_commission_min"] = comm_min
-        order.tags["reserved_cash_total"] = float(reserved_total)
-        order.tags["reserved_cash_remaining"] = float(reserved_total)
+        order.tags.update({
+            "reserved_price": float(order.price),
+            "reserved_slip": slip,
+            "reserved_commission_rate": comm_rate,
+            "reserved_commission_min": comm_min,
+            "reserved_cash_total": float(reserved_total),
+            "reserved_cash_remaining": float(reserved_total),
+        })
 
         if reserved_total > float(self._account.available):
             raise InsufficientFundsError(
@@ -992,28 +983,8 @@ class OrderManagementSystem:
                 f"have ¥{self._account.available:,.2f}"
             )
 
-        max_position_pct = float(
-            getattr(CONFIG.risk, "max_position_pct", 15.0)
-        )
-
-        existing_value = 0.0
-        if order.symbol in self._account.positions:
-            existing_value = float(
-                self._account.positions[order.symbol].market_value
-            )
-
-        new_position_value = (
-            existing_value + float(order.quantity) * float(order.price)
-        )
-        equity = float(self._account.equity)
-
-        if equity > 0:
-            position_pct = new_position_value / equity * 100.0
-            if position_pct > max_position_pct:
-                raise OrderValidationError(
-                    f"Position too large: {position_pct:.1f}% "
-                    f"(max {max_position_pct}%)"
-                )
+        # Concentration limits are enforced in the risk manager/broker layer.
+        # OMS validation only handles reservation and accounting consistency.
 
         self._account.available -= float(reserved_total)
         self._account.frozen += float(reserved_total)
@@ -1038,7 +1009,6 @@ class OrderManagementSystem:
         position.frozen_qty += order.quantity
 
     # ------------------------------------------------------------------
-    # Order status updates
     # ------------------------------------------------------------------
 
     def update_order_status(
@@ -1097,7 +1067,6 @@ class OrderManagementSystem:
             if avg_price is not None:
                 order.avg_price = avg_price
 
-            # Handle terminal states
             if new_status in (
                 OrderStatus.CANCELLED,
                 OrderStatus.REJECTED,
@@ -1109,12 +1078,10 @@ class OrderManagementSystem:
             elif new_status == OrderStatus.FILLED:
                 order.filled_at = datetime.now()
 
-            # Persist atomically
             with self._db.transaction() as conn:
                 self._db.save_order(order, conn)
                 self._db.save_account_state(self._account, conn)
 
-                # Persist position if sell released frozen shares
                 if order.side == OrderSide.SELL and new_status in (
                     OrderStatus.CANCELLED, OrderStatus.REJECTED,
                     OrderStatus.EXPIRED
@@ -1191,7 +1158,6 @@ class OrderManagementSystem:
             self._enforce_invariants()
 
     # ------------------------------------------------------------------
-    # Fill processing
     # ------------------------------------------------------------------
 
     def process_fill(self, order: Order, fill: Fill):
@@ -1210,7 +1176,6 @@ class OrderManagementSystem:
                 fill.timestamp.date() if fill.timestamp else date.today()
             )
 
-            # Compute new values BEFORE mutating order
             new_filled_qty = order.filled_qty + int(fill.quantity)
             new_commission = (
                 order.commission
@@ -1231,7 +1196,6 @@ class OrderManagementSystem:
             else:
                 new_avg_price = 0.0
 
-            # Determine new status
             if new_filled_qty >= order.quantity:
                 new_status = OrderStatus.FILLED
             else:
@@ -1245,7 +1209,6 @@ class OrderManagementSystem:
                     )
                     return
 
-                # Now mutate order
                 order.filled_qty = new_filled_qty
                 order.commission = new_commission
                 order.avg_price = new_avg_price
@@ -1255,7 +1218,6 @@ class OrderManagementSystem:
                 if new_status == OrderStatus.FILLED:
                     order.filled_at = datetime.now()
 
-                # Decrement reserved cash on BUY fills
                 if fill.side == OrderSide.BUY:
                     tags = order.tags or {}
                     reserved_rem = float(
@@ -1290,12 +1252,10 @@ class OrderManagementSystem:
 
                     order.tags = tags
 
-                # Update account and positions
                 self._update_account_on_fill(
                     order, fill, fill_date, conn
                 )
 
-                # Release leftover reservation on full fill
                 if (
                     order.status == OrderStatus.FILLED
                     and order.side == OrderSide.BUY
@@ -1314,7 +1274,6 @@ class OrderManagementSystem:
 
                 self._enforce_invariants()
 
-                # Persist everything in one transaction
                 self._db.save_order(order, conn)
                 self._db.save_account_state(self._account, conn)
 
@@ -1378,7 +1337,6 @@ class OrderManagementSystem:
         trade_value = qty * px
         total_cost = trade_value + fees
 
-        # Cash decreases on fill
         self._account.cash -= total_cost
         if self._account.cash < -0.01:
             log.warning(
@@ -1388,7 +1346,6 @@ class OrderManagementSystem:
             )
         self._account.commission_paid += fees
 
-        # Get or create position
         pos = self._account.positions.get(order.symbol)
         if pos is None:
             pos = Position(
@@ -1405,7 +1362,6 @@ class OrderManagementSystem:
             )
             self._account.positions[order.symbol] = pos
 
-        # Update average cost
         old_qty = int(pos.quantity)
         new_qty = old_qty + qty
         if new_qty > 0:
@@ -1445,7 +1401,6 @@ class OrderManagementSystem:
         self._account.cash += proceeds
         self._account.commission_paid += fees
 
-        # Reduce frozen first
         pos.frozen_qty = max(0, int(pos.frozen_qty) - qty)
         pos.quantity = max(0, int(pos.quantity) - qty)
         pos.current_price = px
@@ -1467,7 +1422,6 @@ class OrderManagementSystem:
             self._db.save_position(pos, conn)
 
     # ------------------------------------------------------------------
-    # Convenience methods
     # ------------------------------------------------------------------
 
     def cancel_order(self, order_id: str) -> bool:
@@ -1519,7 +1473,6 @@ class OrderManagementSystem:
                     self._db.save_account_state(self._account, conn)
 
     # ------------------------------------------------------------------
-    # Callbacks
     # ------------------------------------------------------------------
 
     def on_order_update(self, callback: Callable):
@@ -1543,7 +1496,6 @@ class OrderManagementSystem:
                 log.warning(f"Fill callback error: {e}")
 
     # ------------------------------------------------------------------
-    # Reconciliation
     # ------------------------------------------------------------------
 
     def reconcile(
@@ -1664,14 +1616,8 @@ class OrderManagementSystem:
         except Exception as e:
             log.warning(f"Error closing OMS: {e}")
 
-
-# ------------------------------------------------------------------
-# Global OMS instance
-# ------------------------------------------------------------------
-
 _oms: Optional[OrderManagementSystem] = None
 _oms_lock = threading.Lock()
-
 
 def get_oms(
     initial_capital: float = None,
@@ -1687,7 +1633,6 @@ def get_oms(
                     db_path=db_path
                 )
     return _oms
-
 
 def reset_oms():
     """Reset global OMS instance (for testing)."""

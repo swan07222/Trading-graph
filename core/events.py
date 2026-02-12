@@ -12,15 +12,12 @@ from utils.logger import get_logger
 
 log = get_logger(__name__)
 
-
 class EventType(Enum):
     """All event types in the system"""
-    # Market Data
     TICK = auto()
     BAR = auto()
     QUOTE = auto()
 
-    # Trading
     ORDER_SUBMITTED = auto()
     ORDER_ACCEPTED = auto()
     ORDER_REJECTED = auto()
@@ -28,26 +25,21 @@ class EventType(Enum):
     ORDER_PARTIALLY_FILLED = auto()
     ORDER_CANCELLED = auto()
 
-    # Portfolio
     POSITION_OPENED = auto()
     POSITION_CLOSED = auto()
     POSITION_UPDATED = auto()
 
-    # Risk
     RISK_BREACH = auto()
     CIRCUIT_BREAKER = auto()
     MARGIN_CALL = auto()
 
-    # Signals
     SIGNAL_GENERATED = auto()
     PREDICTION_READY = auto()
 
-    # System
     SYSTEM_START = auto()
     SYSTEM_STOP = auto()
     ERROR = auto()
     WARNING = auto()
-
 
 @dataclass
 class Event:
@@ -56,7 +48,6 @@ class Event:
     timestamp: datetime = field(default_factory=datetime.now)
     source: str = ""
     data: Dict[str, Any] = field(default_factory=dict)
-
 
 @dataclass
 class TickEvent(Event):
@@ -68,7 +59,6 @@ class TickEvent(Event):
     bid: float = 0.0
     ask: float = 0.0
 
-
 @dataclass
 class BarEvent(Event):
     """OHLCV bar event"""
@@ -79,7 +69,6 @@ class BarEvent(Event):
     low: float = 0.0
     close: float = 0.0
     volume: int = 0
-
 
 @dataclass
 class OrderEvent(Event):
@@ -94,7 +83,6 @@ class OrderEvent(Event):
     filled_price: float = 0.0
     message: str = ""
 
-
 @dataclass
 class SignalEvent(Event):
     """Trading signal event"""
@@ -108,7 +96,6 @@ class SignalEvent(Event):
     take_profit: float = 0.0
     reasons: List[str] = field(default_factory=list)
 
-
 @dataclass
 class RiskEvent(Event):
     """Risk management event"""
@@ -118,14 +105,12 @@ class RiskEvent(Event):
     limit_value: float = 0.0
     action_taken: str = ""
 
-
 class EventHandler(ABC):
     """Abstract event handler"""
 
     @abstractmethod
     def handle(self, event: Event):
         pass
-
 
 class EventBus:
     """
@@ -232,7 +217,6 @@ class EventBus:
                     )
                     self._dispatch_error(error_event)
                 else:
-                    # Log directly to avoid infinite recursion
                     log.error(
                         f"Error in ERROR handler: {e}"
                     )
@@ -271,14 +255,12 @@ class EventBus:
 
         self._running = False
 
-        # Signal worker to exit
         self._queue.put(None)
 
         if self._worker_thread:
             self._worker_thread.join(timeout=5)
             self._worker_thread = None
 
-        # Drain remaining events
         while not self._queue.empty():
             try:
                 event = self._queue.get_nowait()
@@ -314,14 +296,12 @@ class EventBus:
         Thread-safe because deque iteration is safe.
         """
         if event_type:
-            # Filter and limit
             filtered = [
                 e for e in self._history
                 if e.type == event_type
             ]
             return filtered[-limit:]
         else:
-            # Convert deque slice to list
             history_list = list(self._history)
             return history_list[-limit:]
 
@@ -339,6 +319,4 @@ class EventBus:
         """Whether async processing is active."""
         return self._running
 
-
-# Global event bus instance
 EVENT_BUS = EventBus()

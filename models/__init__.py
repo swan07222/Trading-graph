@@ -19,8 +19,6 @@ from .networks import (
 from .ensemble import EnsembleModel, EnsemblePrediction
 from .trainer import Trainer
 
-
-# Optional imports
 try:
     from .predictor import Predictor
 except ImportError:

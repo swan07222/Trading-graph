@@ -7,15 +7,15 @@ from dataclasses import dataclass, field
 from typing import Optional
 from datetime import datetime, timedelta
 
+import os
+
 from utils.logger import get_logger
 
 log = get_logger(__name__)
 
-
 @dataclass
 class NetworkEnv:
     """Current network environment snapshot"""
-    # Core detection
     is_china_direct: bool = True          # True = China IP, no VPN
     is_vpn_active: bool = False           # True = foreign IP (Astrill ON)
 
@@ -25,11 +25,9 @@ class NetworkEnv:
     yahoo_ok: bool = False                # Yahoo Finance
     csindex_ok: bool = False              # CSIndex constituents
 
-    # Metadata
     detected_at: Optional[datetime] = None
     detection_method: str = ""
     latency_ms: float = 0.0
-
 
 class NetworkDetector:
     """
@@ -88,6 +86,15 @@ class NetworkDetector:
         env = NetworkEnv(detected_at=datetime.now())
         start = time.time()
 
+        def _env_bool(key: str) -> Optional[bool]:
+            val = os.environ.get(key)
+            if val is None:
+                return None
+            return str(val).strip().lower() in ("1", "true", "yes", "on")
+
+        force_vpn = _env_bool("TRADING_VPN")
+        force_china_direct = _env_bool("TRADING_CHINA_DIRECT")
+
         probes = {
             "tencent_ok": ("https://qt.gtimg.cn/q=sh600519", 3),
             "eastmoney_ok": ("https://82.push2.eastmoney.com/api/qt/clist/get?pn=1&pz=1&fields=f2&fid=f3&fs=m:0+t:6", 3),
@@ -125,7 +132,6 @@ class NetworkDetector:
         finally:
             session.close()
 
-        # Determine environment
         if env.eastmoney_ok and not env.yahoo_ok:
             env.is_china_direct = True
             env.is_vpn_active = False
@@ -139,13 +145,31 @@ class NetworkDetector:
             env.is_vpn_active = False
             env.detection_method = "both_ok_prefer_domestic"
         else:
-            # FIX FALLBACK: Both failed — use tencent as secondary indicator
-            env.is_china_direct = bool(env.tencent_ok)
+            # Both major probes failed (often transient/rate-limit).
+            # Keep previous mode if available to avoid flip-flopping.
+            prev = self._env
+            if prev is not None:
+                env.is_china_direct = bool(prev.is_china_direct)
+                env.is_vpn_active = bool(prev.is_vpn_active)
+                env.detection_method = "both_failed_keep_previous"
+            else:
+                # First detection fallback: Tencent is a weak China hint.
+                env.is_china_direct = bool(env.tencent_ok)
+                env.is_vpn_active = False
+                env.detection_method = (
+                    "both_failed_tencent_ok" if env.tencent_ok
+                    else "both_failed_all_down"
+                )
+
+        # Environment overrides (useful for China + VPN)
+        if force_vpn is True:
+            env.is_vpn_active = True
+            env.is_china_direct = False
+            env.detection_method = "env_force_vpn"
+        elif force_china_direct is True:
+            env.is_china_direct = True
             env.is_vpn_active = False
-            env.detection_method = (
-                "both_failed_tencent_ok" if env.tencent_ok
-                else "both_failed_all_down"
-            )
+            env.detection_method = "env_force_china_direct"
 
         env.latency_ms = (time.time() - start) * 1000
         log.info(
@@ -158,26 +182,21 @@ class NetworkDetector:
         )
         return env
 
-
 # Module-level convenience functions
 
 _detector = NetworkDetector()
-
 
 def get_network_env(force_refresh: bool = False) -> NetworkEnv:
     """Get current network environment."""
     return _detector.get_env(force_refresh=force_refresh)
 
-
 def invalidate_network_cache():
     """Force re-detection on next call."""
     _detector.invalidate()
 
-
 def is_china_direct() -> bool:
     """Quick check: are we on a direct China connection?"""
     return get_network_env().is_china_direct
-
 
 def is_vpn_active() -> bool:
     """Quick check: is VPN routing traffic abroad?"""

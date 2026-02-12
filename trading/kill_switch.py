@@ -15,14 +15,12 @@ from utils.security import get_audit_log
 
 log = get_logger(__name__)
 
-
 class CircuitBreakerType(Enum):
     DAILY_LOSS = "daily_loss"
     DRAWDOWN = "drawdown"
     RAPID_LOSS = "rapid_loss"
     ERROR_RATE = "error_rate"
     MANUAL = "manual"
-
 
 @dataclass
 class CircuitBreakerState:
@@ -34,7 +32,6 @@ class CircuitBreakerState:
     trigger_value: float = 0.0
     threshold: float = 0.0
     message: str = ""
-
 
 class KillSwitch:
     """Emergency kill switch for trading."""
@@ -260,7 +257,6 @@ class KillSwitch:
         risk_type = getattr(event, "risk_type", "") or ""
         current_value = float(getattr(event, "current_value", 0.0) or 0.0)
 
-        # Backward compatibility
         if not risk_type:
             data = getattr(event, "data", {}) or {}
             risk_type = str(data.get("risk_type", "") or "")
@@ -429,11 +425,9 @@ class KillSwitch:
     def on_deactivate(self, callback: Callable):
         self._on_deactivate.append(callback)
 
-
 # FIX: Module-level lock instead of globals() pattern
 _kill_switch: Optional[KillSwitch] = None
 _kill_switch_lock = threading.Lock()
-
 
 def get_kill_switch() -> KillSwitch:
     global _kill_switch

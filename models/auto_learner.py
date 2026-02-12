@@ -23,13 +23,9 @@ from data.fetcher import get_fetcher
 
 log = get_logger(__name__)
 
-
-# =============================================================================
 # THREAD-LOCAL LR OVERRIDE (FIX C1)
-# =============================================================================
 
 _thread_local = threading.local()
-
 
 def get_effective_learning_rate() -> float:
     """
@@ -41,24 +37,16 @@ def get_effective_learning_rate() -> float:
     """
     return getattr(_thread_local, 'learning_rate', CONFIG.model.learning_rate)
 
-
 def set_thread_local_lr(lr: float):
     """Set thread-local learning rate override."""
     _thread_local.learning_rate = lr
-
 
 def clear_thread_local_lr():
     """Clear thread-local learning rate override."""
     if hasattr(_thread_local, 'learning_rate'):
         delattr(_thread_local, 'learning_rate')
 
-
-# =============================================================================
-# PROGRESS TRACKING
-# =============================================================================
-
 _MAX_MESSAGES = 100  # Bound for error/warning lists (Issue 11)
-
 
 @dataclass
 class LearningProgress:
@@ -79,7 +67,6 @@ class LearningProgress:
     warnings: List[str] = field(default_factory=list)
     last_update: datetime = field(default_factory=datetime.now)
 
-    # Lifetime stats
     total_training_sessions: int = 0
     total_stocks_learned: int = 0
     total_training_hours: float = 0.0
@@ -87,20 +74,16 @@ class LearningProgress:
     current_interval: str = "1d"
     current_horizon: int = 5
 
-    # Rotation stats
     processed_count: int = 0
     pool_size: int = 0
 
-    # Validation stats
     old_stock_accuracy: float = 0.0
     old_stock_confidence: float = 0.0
     model_was_rejected: bool = False
 
-    # Trend
     accuracy_trend: str = "stable"  # improving, stable, degrading
     plateau_count: int = 0
 
-    # Training mode
     training_mode: str = "auto"  # "auto" or "targeted"
     targeted_stocks: List[str] = field(default_factory=list)
 
@@ -163,11 +146,6 @@ class LearningProgress:
             'errors': self.errors[-10:],  # Last 10 for UI
             'warnings': self.warnings[-10:],
         }
-
-
-# =============================================================================
-# METRIC TRACKER
-# =============================================================================
 
 class MetricTracker:
     """
@@ -300,11 +278,6 @@ class MetricTracker:
             self._plateau_count = data.get('plateau_count', 0)
             self._best_ema = data.get('best_ema', 0.0)
 
-
-# =============================================================================
-# EXPERIENCE REPLAY BUFFER
-# =============================================================================
-
 class ExperienceReplayBuffer:
     """
     Stores trained stock codes with cached sequences.
@@ -387,7 +360,6 @@ class ExperienceReplayBuffer:
                 + safe_sample(low, n_low)
             )
 
-            # Fill remaining from any stratum
             remaining = n - len(selected)
             if remaining > 0:
                 selected_set = set(selected)
@@ -496,11 +468,6 @@ class ExperienceReplayBuffer:
         except Exception:
             pass
 
-
-# =============================================================================
-# MODEL GUARDIAN
-# =============================================================================
-
 class ModelGuardian:
     """
     Protects best model from degradation.
@@ -576,7 +543,6 @@ class ModelGuardian:
                     self.model_dir / f"best_metrics_{interval}_{horizon}.json"
                 )
 
-                # Use atomic write if available
                 try:
                     from utils.atomic_io import atomic_write_json
                     atomic_write_json(metrics_path, metrics, use_lock=True)
@@ -667,7 +633,6 @@ class ModelGuardian:
 
                     df = feature_engine.create_features(df)
 
-                    # Validate feature columns exist
                     missing = set(feature_cols) - set(df.columns)
                     if missing:
                         log.debug(f"Validation: {code} missing features: {missing}")
@@ -750,11 +715,6 @@ class ModelGuardian:
         except Exception:
             pass
 
-
-# =============================================================================
-# STOCK ROTATOR
-# =============================================================================
-
 class StockRotator:
     """
     Manages stock discovery and rotation.
@@ -804,7 +764,6 @@ class StockRotator:
     def clear_old_failures(self):
         self._failed.clear()
 
-    # Public methods for plateau handler and state migration
     def reset_processed(self):
         """Clear processed set — used by plateau handler."""
         self._processed.clear()
@@ -879,6 +838,9 @@ class StockRotator:
     def pool_size(self) -> int:
         return len(self._pool)
 
+    def get_pool_snapshot(self) -> List[str]:
+        return list(self._pool)
+
     def to_dict(self) -> Dict:
         return {
             'processed': list(self._processed),
@@ -896,11 +858,6 @@ class StockRotator:
             self._failed = {k: int(v) for k, v in failed.items()}
         self._pool = data.get('pool', [])
         self._last_discovery = data.get('last_discovery', 0.0)
-
-
-# =============================================================================
-# LEARNING RATE SCHEDULER
-# =============================================================================
 
 class LRScheduler:
     """Learning rate with warmup + decay + plateau boost."""
@@ -937,11 +894,6 @@ class LRScheduler:
     def apply_boost(self, factor: float):
         self._boost = float(factor)
         log.info(f"LR boost applied: {factor}x")
-
-
-# =============================================================================
-# PARALLEL DATA FETCHER
-# =============================================================================
 
 class ParallelFetcher:
     """
@@ -986,6 +938,16 @@ class ParallelFetcher:
         else:
             delay = 0.2
             max_concurrent = 5
+
+        # VPN + Yahoo mode is sensitive to burst traffic; use gentler fetch pacing.
+        try:
+            from core.network import get_network_env
+            env = get_network_env()
+            if interval not in ("1m", "2m", "5m", "15m", "30m", "60m", "1h") and env.is_vpn_active:
+                delay = max(delay, 0.9)
+                max_concurrent = min(max_concurrent, 2)
+        except Exception:
+            pass
 
         semaphore = threading.Semaphore(max_concurrent)
 
@@ -1051,10 +1013,7 @@ class ParallelFetcher:
 
         return ok_codes, failed_codes
 
-
-# =============================================================================
 # CONTINUOUS LEARNER (Main Class)
-# =============================================================================
 
 class ContinuousLearner:
     """
@@ -1117,7 +1076,6 @@ class ContinuousLearner:
         self._load_state()
 
     # =========================================================================
-    # CALLBACKS
     # =========================================================================
 
     def add_callback(self, callback: Callable[[LearningProgress], None]):
@@ -1292,7 +1250,6 @@ class ContinuousLearner:
         if lookback_bars is None:
             lookback_bars = self._compute_lookback_bars(interval)
 
-        # Deduplicate and clean codes
         clean_codes = []
         seen = set()
         for code in stock_codes:
@@ -1596,6 +1553,26 @@ class ContinuousLearner:
             holdout_set = self._get_holdout_set()
             new_codes = [c for c in new_codes if c not in holdout_set]
 
+            # Recovery: if holdout filters everything and replay is empty,
+            # reset rotation/holdout once and re-discover.
+            if not new_codes and len(self._replay) == 0:
+                self._update(
+                    message="No candidates after holdout; resetting rotation/holdout",
+                    progress=3.0,
+                )
+                self._rotator.reset_processed()
+                self._rotator.reset_discovery()
+                self._set_holdout_codes([])
+                new_codes = self._rotator.discover_new(
+                    max_stocks=max_stocks, min_market_cap=min_market_cap,
+                    stop_check=self._should_stop,
+                    progress_cb=lambda msg, cnt: self._update(
+                        message=msg, stocks_found=cnt,
+                    ),
+                )
+                holdout_set = self._get_holdout_set()
+                new_codes = [c for c in new_codes if c not in holdout_set]
+
             # === 4. Mix with replay ===
             total_learned = len(self._replay)
             if total_learned < 20:
@@ -1617,6 +1594,18 @@ class ContinuousLearner:
                 if c not in new_batch and c not in holdout_set
             ]
             codes = new_batch + replay_batch
+
+            # In VPN mode, large batches can overwhelm upstream providers.
+            try:
+                from core.network import get_network_env
+                env = get_network_env()
+                if env.is_vpn_active and len(codes) > 30:
+                    codes = codes[:30]
+                    self.progress.add_warning(
+                        "VPN mode: batch capped to 30 stocks for fetch stability"
+                    )
+            except Exception:
+                pass
 
             if not codes:
                 self._update(stage="error", message="No stocks available")
@@ -1647,10 +1636,45 @@ class ContinuousLearner:
                 ),
             )
 
+            min_ok = max(3, int(len(codes) * 0.05))
+            try:
+                from core.network import get_network_env
+                if get_network_env().is_vpn_active:
+                    min_ok = max(2, int(len(codes) * 0.03))
+            except Exception:
+                pass
+            if len(ok_codes) < min_ok and failed_codes and not self._should_stop():
+                relaxed_min_bars = max(CONFIG.SEQUENCE_LENGTH + 20, int(min_bars * 0.7))
+                retry_codes = failed_codes[: min(len(failed_codes), max(8, min_ok * 2))]
+                self._update(
+                    message=(
+                        f"Retrying {len(retry_codes)} failed stocks "
+                        f"(relaxed min bars {relaxed_min_bars})"
+                    ),
+                    progress=36.0,
+                )
+                retry_ok, retry_failed = self._fetcher.fetch_batch(
+                    retry_codes, eff_interval, eff_lookback, relaxed_min_bars,
+                    stop_check=self._should_stop,
+                    progress_cb=lambda msg, cnt: self._update(
+                        message=f"Retry pass: {msg}",
+                        stocks_processed=cnt,
+                        progress=36.0 + 4.0 * (cnt / max(len(retry_codes), 1)),
+                    ),
+                )
+                ok_set = set(ok_codes)
+                for code in retry_ok:
+                    if code not in ok_set:
+                        ok_codes.append(code)
+                        ok_set.add(code)
+                failed_codes = [
+                    c for c in failed_codes
+                    if c not in set(retry_ok) and c in set(retry_failed)
+                ] + [c for c in failed_codes if c not in retry_codes]
+
             for code in failed_codes:
                 self._rotator.mark_failed(code)
 
-            min_ok = max(3, int(len(codes) * 0.05))
             if len(ok_codes) < min_ok:
                 for code in new_batch:
                     self._rotator.mark_processed([code])
@@ -1785,6 +1809,28 @@ class ContinuousLearner:
                     progress=10.0 + 30.0 * (cnt / max(len(train_codes), 1)),
                 ),
             )
+
+            if not ok_codes and failed_codes and not self._should_stop():
+                relaxed_min_bars = max(CONFIG.SEQUENCE_LENGTH + 20, int(min_bars * 0.7))
+                retry_codes = failed_codes[: min(len(failed_codes), 12)]
+                self._update(
+                    message=(
+                        f"Retrying targeted fetch for {len(retry_codes)} stocks "
+                        f"(min bars {relaxed_min_bars})"
+                    ),
+                    progress=36.0,
+                )
+                retry_ok, retry_failed = self._fetcher.fetch_batch(
+                    retry_codes, eff_interval, eff_lookback, relaxed_min_bars,
+                    stop_check=self._should_stop,
+                    progress_cb=lambda msg, cnt: self._update(
+                        message=f"Retry pass: {msg}",
+                        stocks_processed=cnt,
+                        progress=36.0 + 4.0 * (cnt / max(len(retry_codes), 1)),
+                    ),
+                )
+                ok_codes = retry_ok or ok_codes
+                failed_codes = retry_failed + [c for c in failed_codes if c not in retry_codes]
 
             if failed_codes:
                 failed_display = ', '.join(failed_codes[:10])
@@ -1942,7 +1988,6 @@ class ContinuousLearner:
         )
 
     # =========================================================================
-    # HELPERS
     # =========================================================================
 
     def _resolve_interval(self, interval, horizon, lookback):
@@ -1987,8 +2032,9 @@ class ContinuousLearner:
                 return
             old_holdout_set = set(self._holdout_codes)
 
-        # Build candidate list
-        candidates = list(CONFIG.STOCK_POOL)
+        candidates = self._rotator.get_pool_snapshot()
+        if not candidates:
+            candidates = list(CONFIG.STOCK_POOL)
         replay_all = set(self._replay.get_all())
         extra = [c for c in replay_all if c not in candidates]
         random.shuffle(extra)
@@ -1999,10 +2045,9 @@ class ContinuousLearner:
         pool_size = len(candidates)
         max_holdout = max(3, int(pool_size * 0.30))  # 30% max
         target_holdout = min(self._holdout_size, max_holdout)
-        
+
         log.debug(f"Holdout: pool={pool_size}, target={target_holdout}")
 
-        # Fetch data for candidates
         new_holdout = []
         fetcher = get_fetcher()
 
@@ -2232,7 +2277,6 @@ class ContinuousLearner:
             log.debug(f"Cycle logging failed: {e}")
 
     # =========================================================================
-    # STATE PERSISTENCE
     # =========================================================================
 
     def _save_state(self):
@@ -2357,7 +2401,6 @@ class ContinuousLearner:
             log.warning(f"State load failed: {e}")
 
     # =========================================================================
-    # PUBLIC UTILITIES
     # =========================================================================
 
     def reset_rotation(self):
@@ -2408,6 +2451,4 @@ class ContinuousLearner:
             'warnings': self.progress.warnings[-10:],
         }
 
-
-# Backward compatibility
 AutoLearner = ContinuousLearner

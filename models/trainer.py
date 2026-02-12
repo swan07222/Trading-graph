@@ -28,7 +28,6 @@ try:
 except ImportError:
     atomic_torch_save = None
 
-# Set seeds for reproducibility
 _SEED = 42
 random.seed(_SEED)
 np.random.seed(_SEED)
@@ -41,7 +40,6 @@ _EPS = 1e-8
 
 # Stop check interval for batch loops (check every N batches)
 _STOP_CHECK_INTERVAL = 10
-
 
 def _resolve_learning_rate(explicit_lr: Optional[float] = None) -> float:
     """
@@ -63,7 +61,6 @@ def _resolve_learning_rate(explicit_lr: Optional[float] = None) -> float:
         pass
 
     return CONFIG.model.learning_rate
-
 
 class Trainer:
     """
@@ -89,7 +86,6 @@ class Trainer:
         self._skip_scaler_fit: bool = False
 
     # =========================================================================
-    # STOPPING HELPER
     # =========================================================================
 
     @staticmethod
@@ -116,7 +112,6 @@ class Trainer:
         return False
 
     # =========================================================================
-    # CORE SPLIT LOGIC
     # =========================================================================
 
     def _split_single_stock(
@@ -617,7 +612,6 @@ class Trainer:
         self.ensemble.interval = str(interval)
         self.ensemble.prediction_horizon = int(horizon)
 
-        # Ensure we have validation data
         if X_val is None or len(X_val) == 0:
             split_idx = int(len(X_train) * 0.85)
             X_val = X_train[split_idx:]
@@ -713,7 +707,6 @@ class Trainer:
         }
 
     # =========================================================================
-    # FORECASTER TRAINING
     # =========================================================================
 
     def _train_forecaster(
@@ -938,7 +931,6 @@ class Trainer:
         return False
 
     # =========================================================================
-    # EVALUATION
     # =========================================================================
 
     def _evaluate(
@@ -1054,7 +1046,6 @@ class Trainer:
         horizon = self.prediction_horizon
 
         # FIX COST: Commission on both sides, stamp tax only on sell,
-        # slippage on both sides
         entry_costs = CONFIG.COMMISSION + CONFIG.SLIPPAGE
         exit_costs = CONFIG.COMMISSION + CONFIG.SLIPPAGE + CONFIG.STAMP_TAX
 
@@ -1165,7 +1156,6 @@ class Trainer:
         }
 
     # =========================================================================
-    # UTILITIES
     # =========================================================================
 
     def get_ensemble(self) -> Optional[EnsembleModel]:

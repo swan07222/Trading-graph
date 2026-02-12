@@ -17,12 +17,6 @@ from utils.logger import get_logger
 
 log = get_logger(__name__)
 
-
-# =============================================================================
-# VALIDATION RESULT
-# =============================================================================
-
-
 @dataclass
 class ValidationResult:
     """Result of validation."""
@@ -42,12 +36,6 @@ class ValidationResult:
                 message="; ".join(self.errors),
                 details={"errors": self.errors, "warnings": self.warnings},
             )
-
-
-# =============================================================================
-# STOCK CODE VALIDATOR
-# =============================================================================
-
 
 class StockCodeValidator:
     """Validate stock codes for A-share, HK, and US markets."""
@@ -158,7 +146,6 @@ class StockCodeValidator:
             errors.append("No valid stock codes found")
             return ValidationResult(False, errors, warnings)
 
-        # Deduplicate while preserving order
         seen: set = set()
         deduped: List[str] = []
         for c in valid_codes:
@@ -167,12 +154,6 @@ class StockCodeValidator:
                 deduped.append(c)
 
         return ValidationResult(True, errors, warnings, deduped)
-
-
-# =============================================================================
-# DATE RANGE VALIDATOR
-# =============================================================================
-
 
 class DateRangeValidator:
     """Validate date ranges for data queries."""
@@ -216,7 +197,6 @@ class DateRangeValidator:
             errors.append("start_date is required")
             return ValidationResult(False, errors, warnings)
 
-        # Logical checks
         if start > end:
             errors.append(
                 f"start_date ({start}) is after end_date ({end})"
@@ -263,12 +243,6 @@ class DateRangeValidator:
         )
         return None
 
-
-# =============================================================================
-# OHLCV VALIDATOR
-# =============================================================================
-
-
 class OHLCVValidator:
     """Validate OHLCV DataFrames."""
 
@@ -312,7 +286,6 @@ class OHLCVValidator:
 
         df = df.copy()
 
-        # Normalise column names to lowercase
         df.columns = [c.lower().strip() for c in df.columns]
 
         # ---- Required columns ----------------------------------------
@@ -457,12 +430,6 @@ class OHLCVValidator:
 
         return df, warnings
 
-
-# =============================================================================
-# FEATURE VALIDATOR
-# =============================================================================
-
-
 class FeatureValidator:
     """Validate feature DataFrames for ML pipeline."""
 
@@ -537,7 +504,6 @@ class FeatureValidator:
 
         # ---- Fix errors ---------------------------------------------
         if fix_errors:
-            # Replace inf with NaN
             for col in feature_cols:
                 df[col] = df[col].replace([np.inf, -np.inf], np.nan)
 
@@ -564,12 +530,6 @@ class FeatureValidator:
             return ValidationResult(False, errors, warnings)
 
         return ValidationResult(True, errors, warnings, df)
-
-
-# =============================================================================
-# ORDER VALIDATOR
-# =============================================================================
-
 
 class OrderValidator:
     """Validate trading order parameters."""
@@ -670,12 +630,6 @@ class OrderValidator:
                 "order_type": order_type,
             },
         )
-
-
-# =============================================================================
-# CONFIG VALIDATOR
-# =============================================================================
-
 
 class ConfigValidator:
     """Validate configuration parameters."""
@@ -807,12 +761,6 @@ class ConfigValidator:
 
         return ValidationResult(len(errors) == 0, errors, warnings, config)
 
-
-# =============================================================================
-# TRADING DAY VALIDATOR
-# =============================================================================
-
-
 class TradingDayValidator:
     """Validate that a date is a trading day."""
 
@@ -852,18 +800,11 @@ class TradingDayValidator:
 
         return ValidationResult(True, errors, warnings, parsed)
 
-
-# =============================================================================
-# CONVENIENCE FUNCTIONS
-# =============================================================================
-
-
 def validate_stock_code(code: str, market: str = "a_share") -> str:
     """Validate and return cleaned stock code. Raises on failure."""
     result = StockCodeValidator.validate(code, market=market)
     result.raise_if_invalid()
     return result.data
-
 
 def validate_ohlcv(
     df: pd.DataFrame, min_rows: int = 10
@@ -873,7 +814,6 @@ def validate_ohlcv(
     result.raise_if_invalid()
     return result.data
 
-
 def validate_features(
     df: pd.DataFrame, feature_cols: List[str]
 ) -> pd.DataFrame:
@@ -881,7 +821,6 @@ def validate_features(
     result = FeatureValidator.validate(df, feature_cols)
     result.raise_if_invalid()
     return result.data
-
 
 def validate_date_range(
     start_date: Any,

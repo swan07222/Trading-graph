@@ -23,7 +23,6 @@ FEATURE_CLIP_VALUE = 5.0
 # Class label names — dynamically generated if NUM_CLASSES != 3
 _DEFAULT_LABEL_NAMES = {0: "DOWN", 1: "NEUTRAL", 2: "UP"}
 
-
 class FeatureEngineProtocol(Protocol):
     """Protocol for type-checking feature engine compatibility."""
 
@@ -31,7 +30,6 @@ class FeatureEngineProtocol(Protocol):
 
     def create_features(self, df: pd.DataFrame) -> pd.DataFrame: ...
     def get_feature_columns(self) -> List[str]: ...
-
 
 class RealtimeBuffer:
     """
@@ -141,7 +139,6 @@ class RealtimeBuffer:
         with self._lock:
             return self._last_update
 
-
 class DataProcessor:
     """
     Thread-safe data processor with proper leakage prevention
@@ -168,7 +165,6 @@ class DataProcessor:
         self._n_features: Optional[int] = None
         self._fit_samples: int = 0
 
-        # Metadata for model compatibility
         self._interval: str = "1d"
         self._horizon: int = CONFIG.PREDICTION_HORIZON
         self._scaler_version: str = ""
@@ -178,7 +174,6 @@ class DataProcessor:
         self._buffer_lock = threading.RLock()
 
     # =========================================================================
-    # LABEL CREATION
     # =========================================================================
 
     def create_labels(
@@ -246,7 +241,6 @@ class DataProcessor:
         return df
 
     # =========================================================================
-    # SCALER OPERATIONS
     # =========================================================================
 
     def fit_scaler(
@@ -372,7 +366,6 @@ class DataProcessor:
             return
 
         with self._lock:
-            # Update instance metadata when overridden
             if interval is not None:
                 self._interval = str(interval)
             if horizon is not None:
@@ -449,7 +442,6 @@ class DataProcessor:
             with open(path, "rb") as f:
                 data = pickle.load(f)  # noqa: S301
 
-            # Validate loaded data has expected keys
             if not isinstance(data, dict) or "scaler" not in data:
                 log.error(f"Invalid scaler file format: {path}")
                 return False
@@ -493,7 +485,6 @@ class DataProcessor:
             return self._n_features
 
     # =========================================================================
-    # TRAINING SEQUENCE PREPARATION
     # =========================================================================
 
     def prepare_sequences(
@@ -555,7 +546,6 @@ class DataProcessor:
 
         features = df[feature_cols].values.astype(np.float32)
 
-        # Cast labels to float so NaN checks work correctly
         labels = df["label"].values.astype(np.float64)
 
         returns = (
@@ -739,7 +729,6 @@ class DataProcessor:
             if len(fut) != horizon:
                 continue
 
-            # Check for NaN in future prices
             if np.isnan(fut).any():
                 continue
 
@@ -832,7 +821,6 @@ class DataProcessor:
         feature_lookback = self._get_feature_lookback()
         min_required = seq_len + feature_lookback
 
-        # Get or create buffer for this stock
         with self._buffer_lock:
             if code not in self._realtime_buffers:
                 self._realtime_buffers[code] = RealtimeBuffer(
@@ -934,7 +922,6 @@ class DataProcessor:
         )
 
     # =========================================================================
-    # TEMPORAL SPLITTING
     # =========================================================================
 
     def split_temporal(
@@ -985,12 +972,10 @@ class DataProcessor:
             np.zeros((0,), dtype=np.float32),
         )
 
-        # Early validation
         if not feature_cols:
             log.error("feature_cols cannot be empty")
             return {"train": empty, "val": empty, "test": empty}
 
-        # Validate index is sorted chronologically
         if not df.index.is_monotonic_increasing:
             log.warning(
                 "DataFrame index is not sorted chronologically — sorting now"
@@ -1025,11 +1010,44 @@ class DataProcessor:
                 log.warning(f"Could not validate feature_cols against engine: {e}")
 
         # ---- temporal boundaries ----
-        train_end = int(n * float(CONFIG.TRAIN_RATIO))
-        val_end = int(n * float(CONFIG.TRAIN_RATIO + CONFIG.VAL_RATIO))
+        # Ensure each split can produce at least one sequence:
+        # len(split) >= seq_len + horizon.
+        min_split_rows = seq_len + horizon
+        min_train_rows = min_split_rows + 1
 
-        val_start = min(n, train_end + embargo)
-        test_start = min(n, val_end + embargo)
+        requested_train_end = int(n * float(CONFIG.TRAIN_RATIO))
+        requested_val_end = int(n * float(CONFIG.TRAIN_RATIO + CONFIG.VAL_RATIO))
+
+        effective_embargo = embargo
+        max_train_end = n - 2 * (effective_embargo + min_split_rows)
+        if max_train_end < min_train_rows:
+            # If configured embargo is too strict for data length, shrink it.
+            effective_embargo = max(
+                0, (n - min_train_rows - 2 * min_split_rows) // 2
+            )
+            max_train_end = n - 2 * (effective_embargo + min_split_rows)
+
+        if max_train_end < min_train_rows:
+            log.warning(
+                f"Insufficient data for temporal split: n={n}, "
+                f"need >= {min_train_rows + 2 * min_split_rows}"
+            )
+            return {"train": empty, "val": empty, "test": empty}
+
+        train_end = max(min(requested_train_end, max_train_end), min_train_rows)
+        val_start = train_end + effective_embargo
+
+        min_val_end = val_start + min_split_rows
+        max_val_end = n - (effective_embargo + min_split_rows)
+        if max_val_end < min_val_end:
+            log.warning(
+                f"Could not allocate val/test splits: "
+                f"min_val_end={min_val_end}, max_val_end={max_val_end}"
+            )
+            return {"train": empty, "val": empty, "test": empty}
+
+        val_end = min(max(requested_val_end, min_val_end), max_val_end)
+        test_start = val_end + effective_embargo
 
         # ---- decide whether to recompute features per split ----
         if feature_engine is not None:
@@ -1042,7 +1060,6 @@ class DataProcessor:
             test_raw_begin = max(0, test_start - feature_lookback)
             test_raw = df.iloc[test_raw_begin:].copy()
 
-            # Compute features WITHIN each split
             min_rows = getattr(feature_engine, "MIN_ROWS", 60)
 
             try:
@@ -1075,7 +1092,6 @@ class DataProcessor:
                 log.warning(f"Test feature creation failed: {e}")
                 test_df = pd.DataFrame()
 
-            # Number of warmup rows we prepended
             warmup_val = val_start - val_raw_begin
             warmup_test = test_start - test_raw_begin
         else:
@@ -1149,7 +1165,7 @@ class DataProcessor:
             ("val", val_df),
             ("test", test_df),
         ]:
-            if len(split_df) >= seq_len + 5:
+            if len(split_df) >= min_split_rows:
                 try:
                     X, y, r = self.prepare_sequences(
                         split_df, feature_cols, fit_scaler=False
@@ -1171,7 +1187,6 @@ class DataProcessor:
                     f"Split '{name}': 0 samples (insufficient data: {len(split_df)} rows)"
                 )
 
-        # Ensure all splits present
         for name in ("train", "val", "test"):
             if name not in results:
                 results[name] = empty
@@ -1179,7 +1194,6 @@ class DataProcessor:
         return results
 
     # =========================================================================
-    # UTILITY METHODS
     # =========================================================================
 
     def prepare_single_sequence(
@@ -1257,11 +1271,7 @@ class DataProcessor:
             return False
         return True
 
-
-# =============================================================================
 # REAL-TIME PREDICTION HELPER
-# =============================================================================
-
 
 class RealtimePredictor:
     """
@@ -1310,14 +1320,12 @@ class RealtimePredictor:
             if self._loaded:
                 return True
 
-            # Prevent concurrent loading
             if self._loading:
                 log.debug("load_models() already in progress, waiting...")
                 return self._loaded
 
             self._loading = True
 
-        # Do the actual loading
         try:
             return self._do_load_models()
         finally:
@@ -1343,7 +1351,6 @@ class RealtimePredictor:
                 log.warning(f"Failed to load scaler: {scaler_path}")
                 return False
 
-            # Validate feature count matches scaler
             if (
                 self.processor.n_features is not None
                 and self.processor.n_features != len(self._feature_cols)
@@ -1411,7 +1418,6 @@ class RealtimePredictor:
                 path, map_location="cpu", weights_only=False
             )
 
-            # Validate expected keys
             required_keys = {"input_size", "horizon", "arch", "state_dict"}
             if not required_keys.issubset(data.keys()):
                 log.warning(
@@ -1487,7 +1493,6 @@ class RealtimePredictor:
         read-only (eval mode).
         """
         try:
-            # Validate minimum data requirement
             min_rows = getattr(self.feature_engine, "MIN_ROWS", 60)
             if len(df) < min_rows:
                 log.warning(
@@ -1576,7 +1581,6 @@ class RealtimePredictor:
         new_bar: Dict[str, float],
     ) -> Optional[Dict[str, Any]]:
         """Update buffer with new bar and make prediction."""
-        # Check loaded state
         with self._lock:
             is_loaded = self._loaded
 
