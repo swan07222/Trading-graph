@@ -573,6 +573,7 @@ class ModelGuardian:
     def validate_model(
         self, interval: str, horizon: int,
         validation_codes: List[str], lookback_bars: int,
+        collect_samples: bool = False,
     ) -> Dict[str, float]:
         """
         Validate model on holdout stocks.
@@ -622,6 +623,7 @@ class ModelGuardian:
             total = 0
             confidences = []
             errors = 0
+            samples: List[Dict[str, Any]] = []
 
             for code in validation_codes:
                 try:
@@ -670,6 +672,23 @@ class ModelGuardian:
                         correct += 1
                     total += 1
                     confidences.append(float(ensemble_pred.confidence))
+                    if collect_samples:
+                        probs = getattr(ensemble_pred, "probabilities", np.array([0.33, 0.34, 0.33]))
+                        prob_down = float(probs[0]) if len(probs) > 0 else 0.33
+                        prob_up = float(probs[2]) if len(probs) > 2 else 0.33
+                        samples.append(
+                            {
+                                "code": str(code),
+                                "actual": int(actual),
+                                "predicted": int(ensemble_pred.predicted_class),
+                                "confidence": float(ensemble_pred.confidence),
+                                "agreement": float(getattr(ensemble_pred, "agreement", 1.0)),
+                                "entropy": float(getattr(ensemble_pred, "entropy", 0.0)),
+                                "prob_up": prob_up,
+                                "prob_down": prob_down,
+                                "future_return": float(ret_pct),
+                            }
+                        )
 
                 except Exception as e:
                     errors += 1
@@ -682,13 +701,16 @@ class ModelGuardian:
             if total == 0:
                 return _empty_result
 
-            return {
+            result = {
                 'accuracy': float(correct / total),
                 'avg_confidence': float(np.mean(confidences)) if confidences else 0.0,
                 'predictions_made': total,
                 'coverage': total / max(len(validation_codes), 1),
                 'errors': errors,
             }
+            if collect_samples:
+                result["samples"] = samples
+            return result
         except Exception as e:
             log.warning(f"Validation failed: {e}")
             import traceback
@@ -1053,6 +1075,7 @@ class ContinuousLearner:
 
     # FIX VAL: Minimum holdout predictions for reliable comparison
     _MIN_HOLDOUT_PREDICTIONS = 3
+    _MIN_TUNED_TRADES = 3
 
     def __init__(self):
         self.progress = LearningProgress()
@@ -2174,7 +2197,7 @@ class ContinuousLearner:
             return True
 
         post_val = self._guardian.validate_model(
-            interval, horizon, holdout_snapshot, lookback
+            interval, horizon, holdout_snapshot, lookback, collect_samples=True
         )
         post_acc = post_val.get('accuracy', 0)
         post_conf = post_val.get('avg_confidence', 0)
@@ -2193,7 +2216,12 @@ class ContinuousLearner:
                 f"Holdout insufficient ({post_preds}/{MIN_PREDS} predictions) "
                 f"— accepted on train acc={new_acc:.1%}"
             )
-            return new_acc >= 0.30
+            accepted = new_acc >= 0.30
+            if accepted:
+                self._maybe_tune_precision_thresholds(
+                    interval, horizon, post_val.get("samples", [])
+                )
+            return accepted
 
         if not pre_val or pre_val.get('predictions_made', 0) < MIN_PREDS:
             log.info(
@@ -2201,7 +2229,12 @@ class ContinuousLearner:
                 f"(preds={pre_val.get('predictions_made', 0) if pre_val else 0}). "
                 f"Holdout acc={post_acc:.1%}"
             )
-            return post_acc >= 0.30
+            accepted = post_acc >= 0.30
+            if accepted:
+                self._maybe_tune_precision_thresholds(
+                    interval, horizon, post_val.get("samples", [])
+                )
+            return accepted
 
         pre_acc = pre_val.get('accuracy', 0)
         pre_conf = pre_val.get('avg_confidence', 0)
@@ -2227,7 +2260,178 @@ class ContinuousLearner:
                 return False
 
         log.info(f"ACCEPTED: holdout acc={post_acc:.1%}")
+        self._maybe_tune_precision_thresholds(
+            interval, horizon, post_val.get("samples", [])
+        )
         return True
+
+    def _maybe_tune_precision_thresholds(
+        self,
+        interval: str,
+        horizon: int,
+        samples: List[Dict[str, Any]],
+    ) -> None:
+        cfg = getattr(CONFIG, "precision", None)
+        if not cfg or not bool(getattr(cfg, "enable_threshold_tuning", False)):
+            return
+        min_samples = int(getattr(cfg, "min_tuning_samples", 12))
+        if not samples or len(samples) < min_samples:
+            return
+        tuned = self._tune_precision_thresholds(samples)
+        if not tuned:
+            return
+        self._save_precision_profile(interval, horizon, tuned, samples)
+
+    def _tune_precision_thresholds(
+        self, samples: List[Dict[str, Any]]
+    ) -> Optional[Dict[str, float]]:
+        """
+        Grid-search confidence/agreement/entropy/edge thresholds that maximize
+        a profit-quality proxy on holdout samples.
+        """
+        conf_grid = [0.60, 0.65, 0.70, 0.75, 0.80]
+        agree_grid = [0.55, 0.60, 0.65, 0.70, 0.75]
+        entropy_grid = [0.30, 0.40, 0.50, 0.60]
+        edge_grid = [0.06, 0.10, 0.14, 0.18]
+
+        best_score = -1e18
+        best: Optional[Dict[str, float]] = None
+
+        for c in conf_grid:
+            for a in agree_grid:
+                for e in entropy_grid:
+                    for edge in edge_grid:
+                        metrics = self._score_thresholds(samples, c, a, e, edge)
+                        if metrics["trades"] < self._MIN_TUNED_TRADES:
+                            continue
+                        # Weighted objective: profit factor first, then precision.
+                        score = (
+                            metrics["profit_factor"] * 2.0
+                            + metrics["precision"] * 1.2
+                            + metrics["expectancy"] * 0.2
+                            - metrics["trade_rate"] * 0.05
+                        )
+                        if score > best_score:
+                            best_score = score
+                            best = {
+                                "min_confidence": float(c),
+                                "min_agreement": float(a),
+                                "max_entropy": float(e),
+                                "min_edge": float(edge),
+                                "precision": float(metrics["precision"]),
+                                "profit_factor": float(metrics["profit_factor"]),
+                                "expectancy": float(metrics["expectancy"]),
+                                "trades": float(metrics["trades"]),
+                                "trade_rate": float(metrics["trade_rate"]),
+                            }
+        return best
+
+    @staticmethod
+    def _score_thresholds(
+        samples: List[Dict[str, Any]],
+        min_conf: float,
+        min_agree: float,
+        max_entropy: float,
+        min_edge: float,
+    ) -> Dict[str, float]:
+        wins = 0
+        losses = 0
+        pnl_win = 0.0
+        pnl_loss = 0.0
+        trades = 0
+
+        for s in samples:
+            pred_cls = int(s.get("predicted", 1))
+            if pred_cls not in (0, 2):
+                continue
+            conf = float(s.get("confidence", 0.0))
+            agree = float(s.get("agreement", 0.0))
+            entropy = float(s.get("entropy", 1.0))
+            edge = abs(float(s.get("prob_up", 0.33)) - float(s.get("prob_down", 0.33)))
+            if conf < min_conf or agree < min_agree or entropy > max_entropy or edge < min_edge:
+                continue
+
+            trades += 1
+            actual = int(s.get("actual", 1))
+            ret = float(s.get("future_return", 0.0))
+            # Proxy net return after costs.
+            cost_pct = (
+                float(getattr(CONFIG.trading, "commission", 0.0))
+                + float(getattr(CONFIG.trading, "slippage", 0.0))
+                + float(getattr(CONFIG.trading, "stamp_tax", 0.0))
+            ) * 100.0
+            signed_ret = ret if pred_cls == 2 else -ret
+            net = signed_ret - cost_pct
+
+            if actual == pred_cls and net > 0:
+                wins += 1
+                pnl_win += net
+            else:
+                losses += 1
+                pnl_loss += abs(net) if net < 0 else cost_pct
+
+        precision = wins / max(trades, 1)
+        expectancy = (pnl_win - pnl_loss) / max(trades, 1)
+        if pnl_loss <= 1e-9:
+            profit_factor = float(wins) if wins > 0 else 0.0
+        else:
+            profit_factor = pnl_win / pnl_loss
+        return {
+            "trades": float(trades),
+            "precision": float(precision),
+            "profit_factor": float(profit_factor),
+            "expectancy": float(expectancy),
+            "trade_rate": float(trades / max(len(samples), 1)),
+        }
+
+    def _save_precision_profile(
+        self,
+        interval: str,
+        horizon: int,
+        tuned: Dict[str, float],
+        samples: List[Dict[str, Any]],
+    ) -> None:
+        try:
+            filename = str(getattr(CONFIG.precision, "profile_filename", "precision_thresholds.json"))
+            path = CONFIG.data_dir / filename
+            payload = {
+                "updated_at": datetime.now().isoformat(),
+                "interval": str(interval),
+                "horizon": int(horizon),
+                "sample_count": int(len(samples)),
+                "thresholds": {
+                    "min_confidence": float(tuned["min_confidence"]),
+                    "min_agreement": float(tuned["min_agreement"]),
+                    "max_entropy": float(tuned["max_entropy"]),
+                    "min_edge": float(tuned["min_edge"]),
+                },
+                "metrics": {
+                    "precision": float(tuned.get("precision", 0.0)),
+                    "profit_factor": float(tuned.get("profit_factor", 0.0)),
+                    "expectancy": float(tuned.get("expectancy", 0.0)),
+                    "trades": int(tuned.get("trades", 0.0)),
+                    "trade_rate": float(tuned.get("trade_rate", 0.0)),
+                },
+            }
+            path.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                from utils.atomic_io import atomic_write_json
+                atomic_write_json(path, payload, indent=2, use_lock=True)
+            except Exception:
+                path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+            log.info(
+                "Precision profile saved: conf>=%.2f agree>=%.2f ent<=%.2f edge>=%.2f "
+                "(PF=%.2f, precision=%.2f, trades=%d)",
+                payload["thresholds"]["min_confidence"],
+                payload["thresholds"]["min_agreement"],
+                payload["thresholds"]["max_entropy"],
+                payload["thresholds"]["min_edge"],
+                payload["metrics"]["profit_factor"],
+                payload["metrics"]["precision"],
+                payload["metrics"]["trades"],
+            )
+        except Exception as e:
+            log.debug("Failed saving precision profile: %s", e)
 
     def _cache_training_sequences(self, codes, interval, horizon, lookback):
         try:

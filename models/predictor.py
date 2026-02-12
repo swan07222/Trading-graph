@@ -7,6 +7,8 @@ from dataclasses import dataclass, field
 from enum import Enum
 import threading
 import time
+import os
+import json
 
 from config.settings import CONFIG
 from utils.logger import get_logger
@@ -125,8 +127,86 @@ class Predictor:
         # Track if constructor params were overridden by model metadata
         self._requested_interval = self.interval
         self._requested_horizon = self.horizon
+        self._high_precision = self._load_high_precision_config()
 
         self._load_models()
+
+    def _load_high_precision_config(self) -> Dict[str, float]:
+        """
+        Optional high-precision runtime gate.
+        Disabled by default so existing behavior is unchanged.
+        """
+        def _env_bool(name: str, default: bool = False) -> bool:
+            raw = os.environ.get(name)
+            if raw is None:
+                return default
+            return str(raw).strip().lower() in ("1", "true", "yes", "on")
+
+        def _env_float(name: str, default: float) -> float:
+            raw = os.environ.get(name)
+            if raw is None:
+                return float(default)
+            try:
+                return float(raw)
+            except Exception:
+                return float(default)
+
+        precision_cfg = getattr(CONFIG, "precision", None)
+        enabled_default = bool(getattr(precision_cfg, "enabled", False))
+        min_conf_default = max(
+            float(CONFIG.model.min_confidence),
+            float(getattr(precision_cfg, "min_confidence", 0.70)),
+        )
+        min_agree_default = max(
+            float(getattr(precision_cfg, "min_agreement", 0.65)),
+            0.65,
+        )
+        max_entropy_default = float(getattr(precision_cfg, "max_entropy", 0.45))
+        min_edge_default = float(getattr(precision_cfg, "min_edge", 0.10))
+        cfg = {
+            "enabled": 1.0 if _env_bool("TRADING_HIGH_PRECISION_MODE", enabled_default) else 0.0,
+            "min_confidence": _env_float("TRADING_HP_MIN_CONFIDENCE", min_conf_default),
+            "min_agreement": _env_float("TRADING_HP_MIN_AGREEMENT", min_agree_default),
+            "max_entropy": _env_float("TRADING_HP_MAX_ENTROPY", max_entropy_default),
+            "min_edge": _env_float("TRADING_HP_MIN_EDGE", min_edge_default),
+            "regime_routing": 1.0 if bool(getattr(precision_cfg, "regime_routing", True)) else 0.0,
+            "range_conf_boost": float(getattr(precision_cfg, "range_confidence_boost", 0.04)),
+            "high_vol_conf_boost": float(getattr(precision_cfg, "high_vol_confidence_boost", 0.05)),
+            "high_vol_atr_pct": float(getattr(precision_cfg, "high_vol_atr_pct", 0.035)),
+        }
+
+        # Load learned profile if available; env vars still have final override.
+        try:
+            profile_name = str(getattr(precision_cfg, "profile_filename", "precision_thresholds.json"))
+            profile_path = CONFIG.data_dir / profile_name
+            if profile_path.exists():
+                data = json.loads(profile_path.read_text(encoding="utf-8"))
+                if isinstance(data, dict):
+                    prof = data.get("thresholds", data)
+                    if isinstance(prof, dict):
+                        for key in ("min_confidence", "min_agreement", "max_entropy", "min_edge"):
+                            if key in prof:
+                                cfg[key] = float(prof[key])
+                        cfg["profile_loaded"] = 1.0
+        except Exception as e:
+            log.debug("High precision profile load failed: %s", e)
+
+        # Final environment override (highest priority)
+        cfg["min_confidence"] = _env_float("TRADING_HP_MIN_CONFIDENCE", cfg["min_confidence"])
+        cfg["min_agreement"] = _env_float("TRADING_HP_MIN_AGREEMENT", cfg["min_agreement"])
+        cfg["max_entropy"] = _env_float("TRADING_HP_MAX_ENTROPY", cfg["max_entropy"])
+        cfg["min_edge"] = _env_float("TRADING_HP_MIN_EDGE", cfg["min_edge"])
+
+        if cfg["enabled"] > 0:
+            log.info(
+                "High Precision Mode enabled: min_conf=%.2f min_agree=%.2f "
+                "max_entropy=%.2f min_edge=%.2f",
+                cfg["min_confidence"],
+                cfg["min_agreement"],
+                cfg["max_entropy"],
+                cfg["min_edge"],
+            )
+        return cfg
 
     # =========================================================================
     # =========================================================================
@@ -590,6 +670,52 @@ class Predictor:
         pred.signal = self._determine_signal(ensemble_pred, pred)
         pred.signal_strength = self._calculate_signal_strength(
             ensemble_pred, pred
+        )
+        self._apply_high_precision_gate(pred)
+
+    def _apply_high_precision_gate(self, pred: Prediction) -> None:
+        """Optionally downgrade weak actionable predictions to HOLD."""
+        cfg = self._high_precision
+        if not cfg or cfg.get("enabled", 0.0) <= 0:
+            return
+        if pred.signal == Signal.HOLD:
+            return
+
+        reasons: List[str] = []
+
+        # Regime-aware confidence floor: range/high-vol require stronger evidence.
+        required_conf = float(cfg["min_confidence"])
+        if cfg.get("regime_routing", 0.0) > 0:
+            if str(pred.trend).upper() == "SIDEWAYS":
+                required_conf += float(cfg.get("range_conf_boost", 0.0))
+            if float(pred.atr_pct_value) >= float(cfg.get("high_vol_atr_pct", 0.035)):
+                required_conf += float(cfg.get("high_vol_conf_boost", 0.0))
+
+        if pred.confidence < required_conf:
+            reasons.append(
+                f"confidence {pred.confidence:.2f} < {required_conf:.2f}"
+            )
+        if pred.model_agreement < cfg["min_agreement"]:
+            reasons.append(
+                f"agreement {pred.model_agreement:.2f} < {cfg['min_agreement']:.2f}"
+            )
+        if pred.entropy > cfg["max_entropy"]:
+            reasons.append(
+                f"entropy {pred.entropy:.2f} > {cfg['max_entropy']:.2f}"
+            )
+        edge = abs(float(pred.prob_up) - float(pred.prob_down))
+        if edge < cfg["min_edge"]:
+            reasons.append(f"edge {edge:.2f} < {cfg['min_edge']:.2f}")
+
+        if not reasons:
+            return
+
+        old_signal = pred.signal.value
+        pred.signal = Signal.HOLD
+        pred.signal_strength = min(float(pred.signal_strength), 0.49)
+        pred.warnings.append(
+            "High Precision Mode filtered signal "
+            f"{old_signal} -> HOLD ({'; '.join(reasons[:3])})"
         )
 
     # =========================================================================

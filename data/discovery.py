@@ -472,7 +472,14 @@ class UniversalStockDiscovery:
             try:
                 url = "https://qt.gtimg.cn/q=" + ",".join(chunk)
                 resp = requests.get(url, timeout=self._timeout)
+                # Tencent may return one long ';'-delimited line or multi-line text.
+                chunks = []
                 for line in resp.text.splitlines():
+                    if not line:
+                        continue
+                    chunks.extend([seg for seg in line.split(";") if seg])
+
+                for line in chunks:
                     if "~" not in line or "=" not in line:
                         continue
                     try:

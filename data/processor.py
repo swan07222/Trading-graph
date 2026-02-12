@@ -182,6 +182,7 @@ class DataProcessor:
         horizon: Optional[int] = None,
         up_thresh: Optional[float] = None,
         down_thresh: Optional[float] = None,
+        profit_aware: Optional[bool] = None,
     ) -> pd.DataFrame:
         """
         Create classification labels based on future returns.
@@ -222,6 +223,28 @@ class DataProcessor:
         close = pd.to_numeric(df["close"], errors="coerce")
         future_price = close.shift(-horizon)
         future_return = (future_price / close - 1) * 100
+
+        # Optional: cost-aware neutral band to optimize for tradable moves.
+        use_profit_aware = (
+            bool(profit_aware)
+            if profit_aware is not None
+            else bool(getattr(CONFIG.precision, "profit_aware_labels", False))
+        )
+        if use_profit_aware:
+            trading_cost_pct = (
+                float(getattr(CONFIG.trading, "commission", 0.0))
+                + float(getattr(CONFIG.trading, "slippage", 0.0))
+                + float(getattr(CONFIG.trading, "stamp_tax", 0.0))
+            ) * 100.0
+            cost_buffer = float(
+                getattr(CONFIG.precision, "label_cost_buffer_pct", 0.0)
+            )
+            min_edge = float(
+                getattr(CONFIG.precision, "min_label_edge_pct", 0.0)
+            )
+            required_edge = max(min_edge, trading_cost_pct + cost_buffer)
+            up_thresh = max(up_thresh, required_edge)
+            down_thresh = min(down_thresh, -required_edge)
 
         df["label"] = np.nan  # Start as float so NaN is representable
         df.loc[future_return >= up_thresh, "label"] = 2.0  # UP

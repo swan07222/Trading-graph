@@ -200,6 +200,43 @@ class AutoTradeConfig:
     # Paper trading safety — require explicit confirmation for live
     confirm_live_auto_trade: bool = True
 
+@dataclass
+class PrecisionConfig:
+    """
+    Precision-oriented controls for higher hit-rate/lower-frequency operation.
+
+    All options are optional and default-safe (disabled) so existing workflows
+    keep behaving the same unless explicitly enabled.
+    """
+    enabled: bool = False
+
+    # Predictor runtime gating
+    min_confidence: float = 0.72
+    min_agreement: float = 0.68
+    max_entropy: float = 0.45
+    min_edge: float = 0.10
+
+    # Regime-aware threshold routing (trend/range/high-vol)
+    regime_routing: bool = True
+    range_confidence_boost: float = 0.04
+    high_vol_confidence_boost: float = 0.05
+    high_vol_atr_pct: float = 0.035  # 3.5%
+
+    # Training labels: make neutral band cost-aware.
+    profit_aware_labels: bool = False
+    label_cost_buffer_pct: float = 0.20
+    min_label_edge_pct: float = 0.25
+
+    # Auto-trader: optionally allow only strong signals.
+    force_strong_signals_auto_trade: bool = False
+
+    # Auto-learner threshold tuning
+    enable_threshold_tuning: bool = True
+    min_tuning_samples: int = 12
+
+    # Persistence for learned threshold profile
+    profile_filename: str = "precision_thresholds.json"
+
 def _safe_dataclass_from_dict(dc_instance, data: Dict) -> List[str]:
     """
     Apply dict values to a dataclass instance with type checking.
@@ -318,6 +355,7 @@ class Config:
         self.security = SecurityConfig()
         self.alerts = AlertConfig()
         self.auto_trade = AutoTradeConfig()
+        self.precision = PrecisionConfig()
 
         self.capital: float = 100_000.0
         self.trading_mode: TradingMode = TradingMode.SIMULATION
@@ -797,6 +835,24 @@ class Config:
                     "Auto-trade max_position_pct exceeds risk max_position_pct"
                 )
 
+        # Precision config validation
+        if self.precision.min_confidence < 0 or self.precision.min_confidence > 1:
+            self._validation_warnings.append(
+                f"precision.min_confidence out of range: {self.precision.min_confidence}"
+            )
+        if self.precision.min_agreement < 0 or self.precision.min_agreement > 1:
+            self._validation_warnings.append(
+                f"precision.min_agreement out of range: {self.precision.min_agreement}"
+            )
+        if self.precision.max_entropy < 0 or self.precision.max_entropy > 1:
+            self._validation_warnings.append(
+                f"precision.max_entropy out of range: {self.precision.max_entropy}"
+            )
+        if self.precision.min_edge < 0 or self.precision.min_edge > 1:
+            self._validation_warnings.append(
+                f"precision.min_edge out of range: {self.precision.min_edge}"
+            )
+
         for w in self._validation_warnings:
             _log.warning("Config validation: %s", w)
 
@@ -839,6 +895,7 @@ class Config:
                 "security": _dataclass_to_dict(self.security),
                 "alerts": _dataclass_to_dict(self.alerts),
                 "auto_trade": _dataclass_to_dict(self.auto_trade),
+                "precision": _dataclass_to_dict(self.precision),
             }
 
         try:
@@ -878,6 +935,7 @@ class Config:
             self.security = SecurityConfig()
             self.alerts = AlertConfig()
             self.auto_trade = AutoTradeConfig()
+            self.precision = PrecisionConfig()
 
             # FIX RELOAD: Invalidate all path caches
             self._data_dir_cached = _SENTINEL

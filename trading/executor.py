@@ -383,6 +383,14 @@ class AutoTrader:
             Signal.STRONG_SELL: cfg.allow_strong_sell,
             Signal.HOLD: cfg.allow_hold,
         }
+        # Optional precision profile: disable weak BUY/SELL auto-trades.
+        try:
+            p_cfg = getattr(CONFIG, "precision", None)
+            if p_cfg and bool(getattr(p_cfg, "force_strong_signals_auto_trade", False)):
+                signal_allow_map[Signal.BUY] = False
+                signal_allow_map[Signal.SELL] = False
+        except Exception:
+            pass
 
         candidates = []
         for p in preds:

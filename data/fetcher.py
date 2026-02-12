@@ -4,6 +4,7 @@ import os
 import socket
 import time
 import threading
+import json
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple, Callable
 from dataclasses import dataclass
@@ -819,12 +820,124 @@ class TencentQuoteSource(DataSource):
         return res.get(str(code).zfill(6))
 
     def get_history(self, code: str, days: int) -> pd.DataFrame:
-        return pd.DataFrame()
+        inst = {"market": "CN", "asset": "EQUITY", "symbol": str(code).zfill(6)}
+        return self.get_history_instrument(inst, days=days, interval="1d")
 
     def get_history_instrument(
         self, inst: dict, days: int, interval: str = "1d"
     ) -> pd.DataFrame:
-        return pd.DataFrame()
+        if inst.get("market") != "CN" or inst.get("asset") != "EQUITY":
+            return pd.DataFrame()
+        if str(interval).lower() != "1d":
+            return pd.DataFrame()
+
+        code6 = str(inst.get("symbol") or "").zfill(6)
+        if not code6.isdigit() or len(code6) != 6:
+            return pd.DataFrame()
+
+        from core.constants import get_exchange
+
+        ex = get_exchange(code6)
+        prefix = {"SSE": "sh", "SZSE": "sz", "BSE": "bj"}.get(ex)
+        if not prefix:
+            return pd.DataFrame()
+
+        vendor_symbol = f"{prefix}{code6}"
+        start_t = time.time()
+        try:
+            # Tencent qfq daily K-line endpoint.
+            url = (
+                "https://web.ifzq.gtimg.cn/appstock/app/fqkline/get"
+                f"?param={vendor_symbol},day,,,{max(60, int(days) + 32)},qfq"
+            )
+            resp = self._session.get(url, timeout=8)
+            if resp.status_code != 200:
+                return pd.DataFrame()
+            payload = resp.text
+            if not payload:
+                return pd.DataFrame()
+            data = self._parse_daily_kline(payload, vendor_symbol)
+            if data.empty:
+                return pd.DataFrame()
+            latency = (time.time() - start_t) * 1000.0
+            self._record_success(latency)
+            return data.tail(max(1, int(days)))
+        except Exception as exc:
+            self._record_error(str(exc))
+            return pd.DataFrame()
+
+    @staticmethod
+    def _parse_daily_kline(payload_text: str, vendor_symbol: str) -> pd.DataFrame:
+        payload = None
+        text = str(payload_text or "").strip()
+        if not text:
+            return pd.DataFrame()
+        try:
+            payload = json.loads(text)
+        except Exception:
+            # Some Tencent responses are JSONP (e.g. callback({...})).
+            # Extract the object body conservatively.
+            left = text.find("{")
+            right = text.rfind("}")
+            if left < 0 or right <= left:
+                return pd.DataFrame()
+            try:
+                payload = json.loads(text[left : right + 1])
+            except Exception:
+                return pd.DataFrame()
+
+        data_root = payload.get("data") if isinstance(payload, dict) else None
+        if not isinstance(data_root, dict):
+            return pd.DataFrame()
+        item = data_root.get(vendor_symbol)
+        if not isinstance(item, dict):
+            return pd.DataFrame()
+
+        rows = (
+            item.get("qfqday")
+            or item.get("day")
+            or item.get("hfqday")
+            or []
+        )
+        if not isinstance(rows, list) or not rows:
+            return pd.DataFrame()
+
+        out_rows = []
+        for row in rows:
+            if not isinstance(row, (list, tuple)) or len(row) < 6:
+                continue
+            # Common format: [date, open, close, high, low, volume, ...]
+            try:
+                date = pd.to_datetime(str(row[0]), errors="coerce")
+                if pd.isna(date):
+                    continue
+                open_px = float(row[1] or 0)
+                close_px = float(row[2] or 0)
+                high_px = float(row[3] or 0)
+                low_px = float(row[4] or 0)
+                vol = float(row[5] or 0)
+                if close_px <= 0 or high_px < low_px:
+                    continue
+                out_rows.append(
+                    {
+                        "date": date,
+                        "open": open_px,
+                        "high": high_px,
+                        "low": low_px,
+                        "close": close_px,
+                        "volume": max(0.0, vol),
+                        "amount": max(0.0, close_px * max(0.0, vol)),
+                    }
+                )
+            except Exception:
+                continue
+
+        if not out_rows:
+            return pd.DataFrame()
+
+        df = pd.DataFrame(out_rows).dropna(subset=["date"]).sort_values("date")
+        df = df.set_index("date")
+        return df
 
 class DataFetcher:
     """
