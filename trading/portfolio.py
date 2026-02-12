@@ -79,6 +79,10 @@ class PortfolioStats:
     total_pnl_pct: float
     realized_pnl: float
     unrealized_pnl: float
+    exposure_pct: float
+    cash_ratio_pct: float
+    concentration_top1_pct: float
+    concentration_top3_pct: float
 
     total_trades: int
     winning_trades: int
@@ -89,6 +93,9 @@ class PortfolioStats:
     avg_loss: float
     largest_win: float
     largest_loss: float
+    expectancy: float
+    payoff_ratio: float
+    recovery_factor: float
 
     max_drawdown: float
     max_drawdown_pct: float
@@ -325,6 +332,7 @@ class Portfolio:
             ),
             realized_pnl=realized_pnl,
             unrealized_pnl=unrealized_pnl,
+            **self._compute_exposure_metrics(current_equity),
             **trade_stats,
             **risk_stats,
             **period_pnl,
@@ -371,6 +379,13 @@ class Portfolio:
             avg_loss=abs(float(np.mean(losses))) if losses else 0.0,
             largest_win=max(wins) if wins else 0.0,
             largest_loss=abs(min(losses)) if losses else 0.0,
+            expectancy=(gross_profit - gross_loss) / total if total > 0 else 0.0,
+            payoff_ratio=(
+                (float(np.mean(wins)) / abs(float(np.mean(losses))))
+                if wins and losses and abs(float(np.mean(losses))) > 0
+                else 0.0
+            ),
+            recovery_factor=0.0,  # filled by risk metrics when drawdown is known
         )
 
     def _compute_risk_metrics(self, current_equity: float) -> Dict:
@@ -403,12 +418,44 @@ class Portfolio:
                 ) * 100.0
                 calmar_ratio = annualized_return / (self._max_drawdown * 100.0)
 
+        max_drawdown_abs = self._max_drawdown * self._peak_equity
+        recovery_factor = (
+            (current_equity - self.initial_capital) / max_drawdown_abs
+            if max_drawdown_abs > 0
+            else 0.0
+        )
+
         return dict(
-            max_drawdown=self._max_drawdown * self._peak_equity,
+            max_drawdown=max_drawdown_abs,
             max_drawdown_pct=self._max_drawdown * 100.0,
             sharpe_ratio=sharpe_ratio,
             sortino_ratio=sortino_ratio,
             calmar_ratio=calmar_ratio,
+            recovery_factor=recovery_factor,
+        )
+
+    def _compute_exposure_metrics(self, current_equity: float) -> Dict:
+        if current_equity <= 0:
+            return dict(
+                exposure_pct=0.0,
+                cash_ratio_pct=0.0,
+                concentration_top1_pct=0.0,
+                concentration_top3_pct=0.0,
+            )
+
+        values = sorted(
+            [float(p.market_value) for p in self.positions.values() if float(p.market_value) > 0.0],
+            reverse=True,
+        )
+        positions_value = sum(values)
+        top1 = values[0] if values else 0.0
+        top3 = sum(values[:3]) if values else 0.0
+
+        return dict(
+            exposure_pct=(positions_value / current_equity) * 100.0,
+            cash_ratio_pct=(self.cash / current_equity) * 100.0,
+            concentration_top1_pct=(top1 / current_equity) * 100.0,
+            concentration_top3_pct=(top3 / current_equity) * 100.0,
         )
 
     def _compute_period_pnl(self, current_equity: float) -> Dict:

@@ -18,8 +18,14 @@ from trading.kill_switch import get_kill_switch
 from trading.health import get_health_monitor, ComponentType, HealthStatus
 from trading.alerts import get_alert_manager, AlertPriority
 from utils.security import get_access_control, get_audit_log
+from utils.policy import get_trade_policy_engine
 from utils.logger import get_logger
 from utils.metrics import inc_counter, set_gauge, observe
+try:
+    from utils.metrics_http import register_snapshot_provider, unregister_snapshot_provider
+except Exception:  # pragma: no cover - optional runtime integration
+    register_snapshot_provider = None
+    unregister_snapshot_provider = None
 
 log = get_logger(__name__)
 
@@ -776,6 +782,7 @@ class ExecutionEngine:
 
         # Auto-trader (created but not started until explicitly requested)
         self.auto_trader: Optional[AutoTrader] = None
+        self._snapshot_provider_name = "execution_engine"
 
     # -----------------------------------------------------------------
     # Auto-trade public API
@@ -893,6 +900,14 @@ class ExecutionEngine:
         self._health_monitor.report_component_health(
             ComponentType.BROKER, HealthStatus.HEALTHY
         )
+        if register_snapshot_provider is not None:
+            try:
+                register_snapshot_provider(
+                    self._snapshot_provider_name,
+                    self._build_execution_snapshot,
+                )
+            except Exception as e:
+                log.debug(f"Execution snapshot provider registration failed: {e}")
 
         log.info(f"Execution engine started ({self.mode.value})")
 
@@ -1025,8 +1040,42 @@ class ExecutionEngine:
             self._alert_manager.stop()
         except Exception:
             pass
+        if unregister_snapshot_provider is not None:
+            try:
+                unregister_snapshot_provider(self._snapshot_provider_name)
+            except Exception:
+                pass
 
         log.info("Execution engine stopped")
+
+    def _build_execution_snapshot(self) -> Dict[str, object]:
+        broker = self.broker
+        auto_state = None
+        if self.auto_trader is not None:
+            try:
+                auto_state = self.auto_trader.get_state()
+            except Exception:
+                auto_state = None
+
+        snapshot: Dict[str, object] = {
+            "running": bool(self._running),
+            "mode": str(getattr(self.mode, "value", self.mode)),
+            "broker": {
+                "name": getattr(broker, "name", "unknown"),
+                "connected": bool(getattr(broker, "is_connected", False)),
+            },
+            "auto_trade": {
+                "enabled": auto_state is not None,
+                "state": auto_state,
+            },
+        }
+
+        if hasattr(broker, "get_health_snapshot"):
+            try:
+                snapshot["broker"]["routing"] = broker.get_health_snapshot()
+            except Exception:
+                pass
+        return snapshot
 
     def _get_quote_snapshot(
         self, symbol: str
@@ -1111,6 +1160,7 @@ class ExecutionEngine:
         if not self._running:
             log.warning("Execution engine not running")
             return False
+        hinted_price = float(getattr(signal, "price", 0.0) or 0.0)
 
         # Operational guardrails: block/allow trading based on health status.
         try:
@@ -1169,6 +1219,12 @@ class ExecutionEngine:
 
             if mode_is_live and strict_live and not signal.auto_generated:
                 approvals = int(getattr(signal, "approvals_count", 0) or 0)
+                approver_ids = getattr(signal, "approver_ids", None)
+                if isinstance(approver_ids, list):
+                    approvals = max(
+                        approvals,
+                        len({str(x).strip().lower() for x in approver_ids if str(x).strip()}),
+                    )
                 required = max(1, min_approvals)
                 if approvals < required:
                     self._reject_signal(
@@ -1181,6 +1237,22 @@ class ExecutionEngine:
                             "signal_id": signal.id,
                             "approvals": approvals,
                             "required": required,
+                        },
+                    )
+                    return False
+
+            if mode_is_live:
+                decision = get_trade_policy_engine().evaluate_live_trade(signal)
+                if not decision.allowed:
+                    self._reject_signal(signal, f"Policy blocked: {decision.reason}")
+                    audit.log_risk_event(
+                        "live_trade_blocked_policy",
+                        {
+                            "symbol": signal.symbol,
+                            "signal_id": signal.id,
+                            "reason": decision.reason,
+                            "policy_version": decision.policy_version,
+                            "metadata": decision.metadata or {},
                         },
                     )
                     return False
@@ -1219,6 +1291,33 @@ class ExecutionEngine:
         if not ok:
             self._reject_signal(signal, msg)
             return False
+
+        # Best-execution sanity check: avoid large drift from hinted signal price.
+        try:
+            max_bps = float(getattr(CONFIG.risk, "max_quote_deviation_bps", 80.0))
+            if hinted_price > 0 and max_bps > 0:
+                dev_bps = abs((float(fresh_px) / hinted_price - 1.0) * 10000.0)
+                if dev_bps > max_bps:
+                    self._reject_signal(
+                        signal,
+                        f"Best-exec guard: quote deviation {dev_bps:.1f}bps > {max_bps:.1f}bps",
+                    )
+                    try:
+                        get_audit_log().log_risk_event(
+                            "best_execution_guard_reject",
+                            {
+                                "symbol": signal.symbol,
+                                "hinted_price": hinted_price,
+                                "fresh_price": float(fresh_px),
+                                "deviation_bps": float(dev_bps),
+                                "limit_bps": float(max_bps),
+                            },
+                        )
+                    except Exception:
+                        pass
+                    return False
+        except Exception:
+            pass
 
         signal.price = float(fresh_px)
 

@@ -1,0 +1,33 @@
+# Python cache/build
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# Runtime-generated project artifacts
+cache/
+audit/
+logs/
+data_storage/
+models_saved/
+data/session_bars/
+data/*.db
+data/*.db-shm
+data/*.db-wal
+
+# Local OS/editor files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

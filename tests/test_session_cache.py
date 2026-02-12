@@ -28,3 +28,49 @@ def test_session_cache_append_and_read(tmp_path):
 
     symbols = cache.get_recent_symbols(interval=interval, min_rows=1)
     assert symbol in symbols
+
+
+def test_session_cache_epoch_milliseconds_timestamp(tmp_path):
+    cache = SessionBarCache(root=tmp_path / "session_bars")
+
+    ok = cache.append_bar(
+        "600519",
+        "1m",
+        {
+            "timestamp": 1700000000000,  # 2023-11-14T22:13:20Z
+            "open": 10,
+            "high": 11,
+            "low": 9,
+            "close": 10.5,
+            "volume": 100,
+            "final": True,
+        },
+    )
+    assert ok
+
+    df = cache.read_history("600519", "1m", bars=10)
+    assert not df.empty
+    assert df.index[-1].year == 2023
+
+
+def test_session_cache_epoch_seconds_timestamp(tmp_path):
+    cache = SessionBarCache(root=tmp_path / "session_bars")
+
+    ok = cache.append_bar(
+        "600519",
+        "1m",
+        {
+            "timestamp": 1700000000,  # 2023-11-14T22:13:20Z
+            "open": 20,
+            "high": 21,
+            "low": 19,
+            "close": 20.5,
+            "volume": 100,
+            "final": True,
+        },
+    )
+    assert ok
+
+    df = cache.read_history("600519", "1m", bars=10)
+    assert not df.empty
+    assert df.index[-1].year == 2023

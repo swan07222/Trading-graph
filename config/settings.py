@@ -69,12 +69,12 @@ class ModelConfig:
     up_threshold: float = 2.0
     down_threshold: float = -2.0
     embargo_bars: int = 10
-    min_confidence: float = 0.55
+    min_confidence: float = 0.60
 
-    strong_buy_threshold: float = 0.65
-    buy_threshold: float = 0.55
-    sell_threshold: float = 0.55
-    strong_sell_threshold: float = 0.65
+    strong_buy_threshold: float = 0.72
+    buy_threshold: float = 0.60
+    sell_threshold: float = 0.60
+    strong_sell_threshold: float = 0.72
 
 @dataclass
 class TradingConfig:
@@ -93,6 +93,9 @@ class TradingConfig:
     market_close_am: time = field(default_factory=lambda: time(11, 30))
     market_open_pm: time = field(default_factory=lambda: time(13, 0))
     market_close_pm: time = field(default_factory=lambda: time(15, 0))
+    enable_multi_venue: bool = False
+    venue_priority: List[str] = field(default_factory=list)
+    venue_failover_cooldown_seconds: int = 30
 
 @dataclass
 class RiskConfig:
@@ -105,7 +108,11 @@ class RiskConfig:
     risk_per_trade_pct: float = 2.0
     var_confidence: float = 0.95
     kelly_fraction: float = 0.25
+    min_expected_edge_pct: float = 0.30
+    min_risk_reward_ratio: float = 1.25
+    max_position_scale: float = 1.25
     quote_staleness_seconds: float = 5.0
+    max_quote_deviation_bps: float = 80.0
 
     circuit_breaker_loss_pct: float = 5.0
     circuit_breaker_duration_minutes: int = 60
@@ -130,6 +137,8 @@ class SecurityConfig:
     auto_pause_auto_trader_on_degraded: bool = True
     max_session_hours: int = 8
     ip_whitelist: List[str] = field(default_factory=list)
+    audit_retention_days: int = 365
+    audit_auto_prune: bool = True
 
 @dataclass
 class AlertConfig:
@@ -163,9 +172,9 @@ class AutoTradeConfig:
     enabled: bool = False
 
     # Signal filters — minimum thresholds for auto-execution
-    min_confidence: float = 0.70
-    min_signal_strength: float = 0.60
-    min_model_agreement: float = 0.65
+    min_confidence: float = 0.78
+    min_signal_strength: float = 0.70
+    min_model_agreement: float = 0.72
 
     # Which signals to auto-trade
     allow_strong_buy: bool = True
@@ -208,18 +217,18 @@ class PrecisionConfig:
     All options are optional and default-safe (disabled) so existing workflows
     keep behaving the same unless explicitly enabled.
     """
-    enabled: bool = False
+    enabled: bool = True
 
     # Predictor runtime gating
-    min_confidence: float = 0.72
-    min_agreement: float = 0.68
-    max_entropy: float = 0.45
-    min_edge: float = 0.10
+    min_confidence: float = 0.78
+    min_agreement: float = 0.72
+    max_entropy: float = 0.35
+    min_edge: float = 0.14
 
     # Regime-aware threshold routing (trend/range/high-vol)
     regime_routing: bool = True
-    range_confidence_boost: float = 0.04
-    high_vol_confidence_boost: float = 0.05
+    range_confidence_boost: float = 0.06
+    high_vol_confidence_boost: float = 0.08
     high_vol_atr_pct: float = 0.035  # 3.5%
 
     # Training labels: make neutral band cost-aware.
@@ -228,7 +237,7 @@ class PrecisionConfig:
     min_label_edge_pct: float = 0.25
 
     # Auto-trader: optionally allow only strong signals.
-    force_strong_signals_auto_trade: bool = False
+    force_strong_signals_auto_trade: bool = True
 
     # Auto-learner threshold tuning
     enable_threshold_tuning: bool = True

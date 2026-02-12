@@ -19,6 +19,16 @@ def _norm_symbol(symbol: str) -> str:
     return s.zfill(6) if s else ""
 
 
+def _parse_epoch_timestamp(value: float) -> datetime:
+    """
+    Parse epoch numeric values in seconds or milliseconds.
+    """
+    v = float(value)
+    if abs(v) >= 1e11:
+        v = v / 1000.0
+    return datetime.fromtimestamp(v, tz=timezone.utc)
+
+
 class SessionBarCache:
     """
     Persists bars captured during a UI session so auto-learning can reuse
@@ -64,7 +74,7 @@ class SessionBarCache:
                     dt = datetime.fromisoformat(text.replace("Z", "+00:00"))
                 except Exception:
                     try:
-                        dt = datetime.fromtimestamp(float(text), tz=timezone.utc)
+                        dt = _parse_epoch_timestamp(float(text))
                     except Exception:
                         continue
             if dt.tzinfo is None:
@@ -135,7 +145,35 @@ class SessionBarCache:
             if df.empty:
                 return pd.DataFrame()
             if "timestamp" in df.columns:
-                df["datetime"] = pd.to_datetime(df["timestamp"], errors="coerce")
+                ts = df["timestamp"]
+                dt = pd.Series(pd.NaT, index=df.index, dtype="datetime64[ns]")
+
+                numeric_ts = pd.to_numeric(ts, errors="coerce")
+                numeric_mask = numeric_ts.notna()
+                if bool(numeric_mask.any()):
+                    # Treat large epoch values as milliseconds, otherwise seconds.
+                    numeric_vals = numeric_ts[numeric_mask]
+                    ms_mask = numeric_vals.abs() >= 1e11
+                    normalized_ms = numeric_vals.where(ms_mask, numeric_vals * 1000.0)
+                    parsed_num = pd.to_datetime(
+                        normalized_ms,
+                        unit="ms",
+                        errors="coerce",
+                        utc=True,
+                    ).dt.tz_localize(None)
+                    dt.loc[numeric_mask] = parsed_num
+
+                text_mask = dt.isna()
+                if bool(text_mask.any()):
+                    parsed_text = pd.to_datetime(
+                        ts[text_mask].astype(str),
+                        format="ISO8601",
+                        errors="coerce",
+                        utc=True,
+                    ).dt.tz_localize(None)
+                    dt.loc[text_mask] = parsed_text
+
+                df["datetime"] = dt
                 df = df.dropna(subset=["datetime"]).sort_values("datetime")
                 df = df.drop_duplicates(subset=["datetime"], keep="last")
                 df = df.set_index("datetime")

@@ -297,6 +297,53 @@ Focused regression pack:
 pytest -q tests/test_data.py tests/test_data_leakage.py tests/test_models.py tests/test_oms_fills.py tests/test_replay.py tests/test_audit_integrity.py tests/test_executor_health_guard.py
 ```
 
+## 16) Policy-As-Code Governance
+
+Live-trade governance can be enforced through:
+- `config/security_policy.json`
+- runtime checks in `trading/executor.py` via `utils/policy.py`
+
+Example policy keys:
+- `enabled`
+- `live_trade.min_approvals`
+- `live_trade.require_distinct_approvers`
+- `live_trade.max_order_notional`
+- `live_trade.blocked_symbols`
+- `live_trade.allowed_sides`
+
+If a trade violates policy, submission is rejected and audited as:
+- `risk` event type `live_trade_blocked_policy`
+
+## 17) Signed Release Artifacts
+
+Release workflow:
+- `.github/workflows/release.yml`
+- Trigger: push tag `v*` or manual dispatch
+- Outputs: wheel/sdist + `dist/release_manifest.json`
+- Includes build provenance attestation (`actions/attest-build-provenance`)
+
+Manifest generation:
+```bash
+python scripts/generate_release_manifest.py --dist-dir dist --version v1.2.3 --output dist/release_manifest.json
+```
+
+Optional manifest signature:
+- Set env var `RELEASE_MANIFEST_SECRET` in GitHub secrets for HMAC signature embedding.
+
+## 18) Multi-Provider Sentiment Fusion
+
+`analysis/sentiment.py` now supports:
+- built-in providers: `sina`, `eastmoney`
+- provider reliability weights for aggregation
+- runtime provider registration:
+
+```python
+from analysis.sentiment import NewsScraper
+
+scraper = NewsScraper()
+scraper.register_provider("custom_feed", fetcher_callable, weight=1.2)
+```
+
 ## 11) Troubleshooting
 
 1. Auto-learning stalls in VPN mode:

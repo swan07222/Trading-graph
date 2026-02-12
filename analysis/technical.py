@@ -61,10 +61,13 @@ class TechnicalAnalyzer:
         self.min_data_points = 60
         self._indicator_names = (
             "sma_5", "sma_10", "sma_20", "sma_50", "sma_200",
-            "ema_9", "ema_21", "ema_55",
+            "ema_9", "ema_21", "ema_55", "ema_100",
             "macd", "macd_signal", "macd_hist", "macd_hist_prev",
-            "rsi_14", "rsi_7", "stoch_k", "stoch_d",
+            "rsi_14", "rsi_7", "rsi_21", "stoch_k", "stoch_d", "stoch_rsi",
             "bb_upper", "bb_middle", "bb_lower", "bb_pct", "bb_width",
+            "keltner_upper", "keltner_middle", "keltner_lower",
+            "donchian_upper", "donchian_middle", "donchian_lower",
+            "ichimoku_conv", "ichimoku_base", "ichimoku_a", "ichimoku_b",
             "adx", "di_plus", "di_minus",
             "atr_14", "mfi", "cci", "williams_r",
             "roc_10", "obv", "vwap",
@@ -106,61 +109,82 @@ class TechnicalAnalyzer:
         volume = df['volume']
 
         indicators = {}
+        safe_last = lambda s, d=0.0: float(s.iloc[-1]) if len(s) and pd.notna(s.iloc[-1]) else float(d)
 
-        indicators['sma_5'] = close.rolling(5).mean().iloc[-1]
-        indicators['sma_10'] = close.rolling(10).mean().iloc[-1]
-        indicators['sma_20'] = close.rolling(20).mean().iloc[-1]
-        indicators['sma_50'] = close.rolling(50).mean().iloc[-1]
-        indicators['ema_9'] = close.ewm(span=9, adjust=False).mean().iloc[-1]
-        indicators['ema_21'] = close.ewm(span=21, adjust=False).mean().iloc[-1]
-        indicators['ema_55'] = close.ewm(span=55, adjust=False).mean().iloc[-1]
+        indicators['sma_5'] = safe_last(close.rolling(5).mean())
+        indicators['sma_10'] = safe_last(close.rolling(10).mean())
+        indicators['sma_20'] = safe_last(close.rolling(20).mean())
+        indicators['sma_50'] = safe_last(close.rolling(50).mean())
+        indicators['ema_9'] = safe_last(close.ewm(span=9, adjust=False).mean())
+        indicators['ema_21'] = safe_last(close.ewm(span=21, adjust=False).mean())
+        indicators['ema_55'] = safe_last(close.ewm(span=55, adjust=False).mean())
+        indicators['ema_100'] = safe_last(close.ewm(span=100, adjust=False).mean())
 
         if len(df) >= 200:
-            indicators['sma_200'] = close.rolling(200).mean().iloc[-1]
+            indicators['sma_200'] = safe_last(close.rolling(200).mean())
         else:
-            indicators['sma_200'] = close.rolling(len(df)).mean().iloc[-1]
+            indicators['sma_200'] = safe_last(close.rolling(len(df)).mean())
 
         macd = ta.trend.MACD(close)
-        indicators['macd'] = macd.macd().iloc[-1]
-        indicators['macd_signal'] = macd.macd_signal().iloc[-1]
-        indicators['macd_hist'] = macd.macd_diff().iloc[-1]
-        indicators['macd_hist_prev'] = macd.macd_diff().iloc[-2] if len(df) > 1 else 0
+        macd_diff = macd.macd_diff()
+        indicators['macd'] = safe_last(macd.macd())
+        indicators['macd_signal'] = safe_last(macd.macd_signal())
+        indicators['macd_hist'] = safe_last(macd_diff)
+        indicators['macd_hist_prev'] = float(macd_diff.iloc[-2]) if len(macd_diff) > 1 and pd.notna(macd_diff.iloc[-2]) else 0.0
 
-        indicators['rsi_14'] = ta.momentum.rsi(close, window=14).iloc[-1]
-        indicators['rsi_7'] = ta.momentum.rsi(close, window=7).iloc[-1]
+        indicators['rsi_14'] = safe_last(ta.momentum.rsi(close, window=14))
+        indicators['rsi_7'] = safe_last(ta.momentum.rsi(close, window=7))
+        indicators['rsi_21'] = safe_last(ta.momentum.rsi(close, window=21))
 
         stoch = ta.momentum.StochasticOscillator(high, low, close)
-        indicators['stoch_k'] = stoch.stoch().iloc[-1]
-        indicators['stoch_d'] = stoch.stoch_signal().iloc[-1]
+        indicators['stoch_k'] = safe_last(stoch.stoch())
+        indicators['stoch_d'] = safe_last(stoch.stoch_signal())
+        indicators['stoch_rsi'] = safe_last(ta.momentum.stochrsi(close, window=14, smooth1=3, smooth2=3))
 
         bb = ta.volatility.BollingerBands(close)
-        indicators['bb_upper'] = bb.bollinger_hband().iloc[-1]
-        indicators['bb_middle'] = bb.bollinger_mavg().iloc[-1]
-        indicators['bb_lower'] = bb.bollinger_lband().iloc[-1]
-        indicators['bb_pct'] = bb.bollinger_pband().iloc[-1]
-        indicators['bb_width'] = bb.bollinger_wband().iloc[-1]
+        indicators['bb_upper'] = safe_last(bb.bollinger_hband())
+        indicators['bb_middle'] = safe_last(bb.bollinger_mavg())
+        indicators['bb_lower'] = safe_last(bb.bollinger_lband())
+        indicators['bb_pct'] = safe_last(bb.bollinger_pband())
+        indicators['bb_width'] = safe_last(bb.bollinger_wband())
 
-        indicators['adx'] = ta.trend.adx(high, low, close).iloc[-1]
-        indicators['di_plus'] = ta.trend.adx_pos(high, low, close).iloc[-1]
-        indicators['di_minus'] = ta.trend.adx_neg(high, low, close).iloc[-1]
-        indicators['atr_14'] = ta.volatility.average_true_range(
+        kc = ta.volatility.KeltnerChannel(high, low, close)
+        indicators['keltner_upper'] = safe_last(kc.keltner_channel_hband())
+        indicators['keltner_middle'] = safe_last(kc.keltner_channel_mband())
+        indicators['keltner_lower'] = safe_last(kc.keltner_channel_lband())
+
+        dc = ta.volatility.DonchianChannel(high, low, close, window=20)
+        indicators['donchian_upper'] = safe_last(dc.donchian_channel_hband())
+        indicators['donchian_middle'] = safe_last(dc.donchian_channel_mband())
+        indicators['donchian_lower'] = safe_last(dc.donchian_channel_lband())
+
+        ichimoku = ta.trend.IchimokuIndicator(high, low, window1=9, window2=26, window3=52)
+        indicators['ichimoku_conv'] = safe_last(ichimoku.ichimoku_conversion_line())
+        indicators['ichimoku_base'] = safe_last(ichimoku.ichimoku_base_line())
+        indicators['ichimoku_a'] = safe_last(ichimoku.ichimoku_a())
+        indicators['ichimoku_b'] = safe_last(ichimoku.ichimoku_b())
+
+        indicators['adx'] = safe_last(ta.trend.adx(high, low, close))
+        indicators['di_plus'] = safe_last(ta.trend.adx_pos(high, low, close))
+        indicators['di_minus'] = safe_last(ta.trend.adx_neg(high, low, close))
+        indicators['atr_14'] = safe_last(ta.volatility.average_true_range(
             high, low, close, window=14
-        ).iloc[-1]
+        ))
 
-        vol_ma20 = volume.rolling(20).mean().iloc[-1]
-        indicators['volume_ratio'] = volume.iloc[-1] / vol_ma20 if vol_ma20 > 0 else 1
+        vol_ma20 = safe_last(volume.rolling(20).mean(), 1.0)
+        indicators['volume_ratio'] = float(volume.iloc[-1] / vol_ma20) if vol_ma20 > 0 else 1.0
 
-        indicators['mfi'] = ta.volume.money_flow_index(high, low, close, volume).iloc[-1]
+        indicators['mfi'] = safe_last(ta.volume.money_flow_index(high, low, close, volume))
 
-        indicators['cci'] = ta.trend.cci(high, low, close).iloc[-1]
-        indicators['williams_r'] = ta.momentum.williams_r(
+        indicators['cci'] = safe_last(ta.trend.cci(high, low, close))
+        indicators['williams_r'] = safe_last(ta.momentum.williams_r(
             high, low, close, lbp=14
-        ).iloc[-1]
-        indicators['roc_10'] = ta.momentum.roc(close, window=10).iloc[-1]
-        indicators['obv'] = ta.volume.on_balance_volume(close, volume).iloc[-1]
-        indicators['vwap'] = ta.volume.volume_weighted_average_price(
+        ))
+        indicators['roc_10'] = safe_last(ta.momentum.roc(close, window=10))
+        indicators['obv'] = safe_last(ta.volume.on_balance_volume(close, volume))
+        indicators['vwap'] = safe_last(ta.volume.volume_weighted_average_price(
             high, low, close, volume, window=20
-        ).iloc[-1]
+        ))
 
         indicators['close'] = close.iloc[-1]
         indicators['prev_close'] = close.iloc[-2] if len(df) > 1 else close.iloc[-1]
@@ -212,6 +236,26 @@ class TechnicalAnalyzer:
             signals.append(TechnicalSignal("BB", "buy", SignalStrength.MODERATE, ind['bb_lower'], "Price below lower BB"))
         elif ind['bb_pct'] > 1:
             signals.append(TechnicalSignal("BB", "sell", SignalStrength.MODERATE, ind['bb_upper'], "Price above upper BB"))
+
+        if ind['mfi'] < 20:
+            signals.append(TechnicalSignal("MFI", "buy", SignalStrength.MODERATE, ind['mfi'], "Money flow oversold"))
+        elif ind['mfi'] > 80:
+            signals.append(TechnicalSignal("MFI", "sell", SignalStrength.MODERATE, ind['mfi'], "Money flow overbought"))
+
+        if ind['cci'] < -100:
+            signals.append(TechnicalSignal("CCI", "buy", SignalStrength.WEAK, ind['cci'], "CCI oversold"))
+        elif ind['cci'] > 100:
+            signals.append(TechnicalSignal("CCI", "sell", SignalStrength.WEAK, ind['cci'], "CCI overbought"))
+
+        if close > ind['donchian_upper'] and ind['volume_ratio'] >= 1.2:
+            signals.append(TechnicalSignal("Donchian", "buy", SignalStrength.STRONG, ind['donchian_upper'], "Breakout above Donchian high"))
+        elif close < ind['donchian_lower'] and ind['volume_ratio'] >= 1.2:
+            signals.append(TechnicalSignal("Donchian", "sell", SignalStrength.STRONG, ind['donchian_lower'], "Breakdown below Donchian low"))
+
+        if close > ind['ichimoku_base'] and ind['ichimoku_conv'] > ind['ichimoku_base']:
+            signals.append(TechnicalSignal("Ichimoku", "buy", SignalStrength.WEAK, ind['ichimoku_base'], "Price above base and conversion > base"))
+        elif close < ind['ichimoku_base'] and ind['ichimoku_conv'] < ind['ichimoku_base']:
+            signals.append(TechnicalSignal("Ichimoku", "sell", SignalStrength.WEAK, ind['ichimoku_base'], "Price below base and conversion < base"))
 
         return signals
 

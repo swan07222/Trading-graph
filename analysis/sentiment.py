@@ -1,24 +1,27 @@
 # analysis/sentiment.py
-import re
-import time
+from __future__ import annotations
+
 import hashlib
-from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Tuple
-from dataclasses import dataclass
-from pathlib import Path
 import json
 import pickle
-import requests
-from bs4 import BeautifulSoup
+import re
+import time
+from dataclasses import dataclass
+from datetime import datetime
+from typing import Callable, Dict, List, Tuple
 
-from config.settings import CONFIG  # FIXED
+import requests
+
+from config.settings import CONFIG
 from utils.logger import get_logger
 
 log = get_logger(__name__)
 
+
 @dataclass
 class NewsItem:
     """News article"""
+
     title: str
     content: str
     source: str
@@ -28,47 +31,93 @@ class NewsItem:
     sentiment_score: float = 0.0
     sentiment_label: str = "neutral"
 
-@dataclass 
+
+@dataclass
 class SentimentResult:
     """Sentiment analysis result"""
+
     score: float
     confidence: float
     label: str
     method: str
 
+
 class KeywordSentimentAnalyzer:
-    """Keyword-based sentiment analysis for Chinese financial text"""
+    """Keyword-based sentiment analysis for financial text."""
 
     POSITIVE = {
-        '暴涨': 3, '涨停': 3, '大涨': 3, '飙升': 3,
-        '突破新高': 3, '业绩暴增': 3, '超预期': 3,
-        '上涨': 2, '涨': 2, '利好': 2, '增长': 2,
-        '强势': 2, '看好': 2, '推荐': 2, '买入': 2,
-        '稳定': 1, '向好': 1, '乐观': 1, '反弹': 1,
+        "surge": 3,
+        "limit up": 3,
+        "breakout": 3,
+        "beats estimate": 3,
+        "record high": 3,
+        "uptrend": 2,
+        "upgrade": 2,
+        "buy rating": 2,
+        "outperform": 2,
+        "growth": 1,
+        "recovery": 1,
+        "guidance raised": 2,
+        "profit rise": 2,
     }
-
     NEGATIVE = {
-        '暴跌': 3, '跌停': 3, '大跌': 3, '崩盘': 3,
-        '业绩暴雷': 3, '退市': 3, '重大利空': 3,
-        '下跌': 2, '跌': 2, '利空': 2, '下降': 2,
-        '减持': 2, '卖出': 2, '亏损': 2, '风险': 2,
-        '弱势': 1, '回调': 1, '下行': 1, '谨慎': 1,
+        "crash": 3,
+        "limit down": 3,
+        "misses estimate": 3,
+        "fraud": 3,
+        "default": 3,
+        "downgrade": 2,
+        "sell rating": 2,
+        "warning": 2,
+        "decline": 2,
+        "lawsuit": 2,
+        "loss": 2,
+        "weak guidance": 2,
+        "risk": 1,
+        "volatility spike": 1,
     }
+    NEGATIONS = ("not", "no", "never", "without")
+
+    @staticmethod
+    def _normalize(text: str) -> str:
+        return re.sub(r"\s+", " ", str(text or "").lower()).strip()
 
     def analyze(self, text: str) -> SentimentResult:
-        if not text:
+        norm = self._normalize(text)
+        if not norm:
             return SentimentResult(0.0, 0.0, "neutral", "keyword")
 
-        pos_score = sum(weight for word, weight in self.POSITIVE.items() if word in text)
-        neg_score = sum(weight for word, weight in self.NEGATIVE.items() if word in text)
+        pos_score = 0.0
+        neg_score = 0.0
+        tokens = norm.split(" ")
+
+        for word, weight in self.POSITIVE.items():
+            if word in norm:
+                pos_score += weight
+        for word, weight in self.NEGATIVE.items():
+            if word in norm:
+                neg_score += weight
+
+        # Simple negation flip in a small token window.
+        for idx, tok in enumerate(tokens):
+            if tok not in self.NEGATIONS:
+                continue
+            window = " ".join(tokens[idx : idx + 4])
+            for word, weight in self.POSITIVE.items():
+                if word in window:
+                    pos_score -= 0.6 * weight
+                    neg_score += 0.6 * weight
+            for word, weight in self.NEGATIVE.items():
+                if word in window:
+                    neg_score -= 0.6 * weight
+                    pos_score += 0.6 * weight
 
         total = pos_score + neg_score
-
-        if total == 0:
+        if total <= 0:
             return SentimentResult(0.0, 0.2, "neutral", "keyword")
 
         score = (pos_score - neg_score) / total
-        confidence = min(total / 10, 1.0)
+        confidence = min(total / 10.0, 1.0)
 
         if score > 0.2:
             label = "positive"
@@ -76,13 +125,17 @@ class KeywordSentimentAnalyzer:
             label = "negative"
         else:
             label = "neutral"
+        return SentimentResult(float(score), float(confidence), label, "keyword")
 
-        return SentimentResult(score, confidence, label, "keyword")
 
 class SentimentAnalyzer:
-    """Ensemble sentiment analyzer"""
+    """Ensemble sentiment analyzer."""
 
-    def __init__(self, use_bert: bool = False, hf_model: str = "IDEA-CCNL/Erlangshen-Roberta-110M-Sentiment"):
+    def __init__(
+        self,
+        use_bert: bool = False,
+        hf_model: str = "IDEA-CCNL/Erlangshen-Roberta-110M-Sentiment",
+    ):
         self.keyword_analyzer = KeywordSentimentAnalyzer()
         self._use_bert = bool(use_bert)
         self._hf = None
@@ -91,6 +144,7 @@ class SentimentAnalyzer:
         if self._use_bert:
             try:
                 from transformers import pipeline
+
                 self._hf = pipeline("sentiment-analysis", model=hf_model)
             except Exception as e:
                 log.warning(f"Failed to load HuggingFace model: {e}")
@@ -98,20 +152,19 @@ class SentimentAnalyzer:
                 self._use_bert = False
 
     def analyze(self, text: str) -> SentimentResult:
-        """Blend keyword + optional HF transformer sentiment"""
         kw = self.keyword_analyzer.analyze(text)
         if not self._use_bert or self._hf is None or not text:
             return kw
 
         try:
-            out = self._hf(text[:512])[0]
+            out = self._hf(str(text)[:512])[0]
             label = str(out.get("label", "")).lower()
             score = float(out.get("score", 0.5))
 
             if "neg" in label:
                 hf_score = -score
             elif "pos" in label:
-                hf_score = +score
+                hf_score = score
             else:
                 hf_score = 0.0
 
@@ -125,37 +178,86 @@ class SentimentAnalyzer:
             else:
                 lbl = "neutral"
 
-            return SentimentResult(blended, confidence, lbl, "keyword+hf")
+            return SentimentResult(float(blended), float(confidence), lbl, "keyword+hf")
         except Exception:
             return kw
 
     def analyze_batch(self, texts: List[str]) -> List[SentimentResult]:
         return [self.analyze(text) for text in texts]
 
+
 class NewsScraper:
-    """News scraper for Chinese financial news sources"""
+    """News scraper with short TTL cache and source failover."""
 
     def __init__(self):
         self.session = requests.Session()
-        self.session.headers.update({
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-        })
-
+        self.session.headers.update(
+            {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+        )
         self.analyzer = SentimentAnalyzer()
 
-        self._cache_dir = CONFIG.data_dir / "news_cache"  # FIXED: lowercase
-        self._cache_dir.mkdir(exist_ok=True)
-        self._seen_hashes = set()
+        self._cache_dir = CONFIG.data_dir / "news_cache"
+        self._cache_dir.mkdir(parents=True, exist_ok=True)
+        self._seen_hashes: set[str] = set()
+        self._seen_path = self._cache_dir / "seen_hashes.json"
+        self._load_seen_hashes()
 
-        self._last_request = {}
-        self._rate_limits = {'sina': 0.5, 'eastmoney': 0.5, 'cls': 0.5}
+        self._last_request: Dict[str, float] = {}
+        self._rate_limits = {"sina": 0.5, "eastmoney": 0.7}
+        self._provider_weights: Dict[str, float] = {"sina": 1.0, "eastmoney": 1.1}
+        self._providers: Dict[str, Callable[[], List[NewsItem]]] = {
+            "sina": lambda: self.scrape_sina(),
+            "eastmoney": lambda: self.scrape_eastmoney(),
+        }
+
+    def register_provider(
+        self,
+        name: str,
+        fetcher: Callable[[], List[NewsItem]],
+        weight: float = 1.0,
+    ) -> None:
+        norm = str(name or "").strip().lower()
+        if not norm:
+            raise ValueError("provider name cannot be empty")
+        if not callable(fetcher):
+            raise TypeError("fetcher must be callable")
+        self._providers[norm] = fetcher
+        self._provider_weights[norm] = float(max(0.1, weight))
+
+    def unregister_provider(self, name: str) -> bool:
+        norm = str(name or "").strip().lower()
+        if norm in ("sina", "eastmoney"):
+            return False
+        removed = self._providers.pop(norm, None)
+        self._provider_weights.pop(norm, None)
+        return removed is not None
+
+    def get_provider_weights(self) -> Dict[str, float]:
+        return dict(self._provider_weights)
+
+    def _load_seen_hashes(self) -> None:
+        try:
+            if not self._seen_path.exists():
+                return
+            data = json.loads(self._seen_path.read_text(encoding="utf-8"))
+            if isinstance(data, list):
+                self._seen_hashes = set(str(x) for x in data if x)
+        except Exception:
+            self._seen_hashes = set()
+
+    def _save_seen_hashes(self) -> None:
+        try:
+            data = list(self._seen_hashes)[-5000:]
+            self._seen_path.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+        except Exception:
+            pass
 
     def _hash(self, text: str) -> str:
-        return hashlib.md5(text.encode()).hexdigest()
+        return hashlib.md5(text.encode("utf-8")).hexdigest()
 
-    def _rate_limit(self, source: str):
+    def _rate_limit(self, source: str) -> None:
         limit = self._rate_limits.get(source, 0.5)
-        last = self._last_request.get(source, 0)
+        last = self._last_request.get(source, 0.0)
         elapsed = time.time() - last
         if elapsed < limit:
             time.sleep(limit - elapsed)
@@ -163,66 +265,108 @@ class NewsScraper:
 
     def _extract_stock_codes(self, text: str) -> List[str]:
         patterns = [
-            r'[（(]([036]\d{5})[)）]',
-            r'(?<!\d)([036]\d{5})(?!\d)',
+            r"[\(\[]([036]\d{5})[\)\]]",
+            r"(?<!\d)([036]\d{5})(?!\d)",
         ]
         codes = set()
         for p in patterns:
-            codes.update(re.findall(p, text))
+            codes.update(re.findall(p, str(text)))
         return list(codes)
 
     def scrape_sina(self, max_items: int = 50) -> List[NewsItem]:
-        """Scrape Sina Finance news"""
-        items = []
-        self._rate_limit('sina')
-
+        items: List[NewsItem] = []
+        self._rate_limit("sina")
         try:
             url = "https://feed.mix.sina.com.cn/api/roll/get"
-            params = {'pageid': 153, 'lid': 2516, 'num': max_items}
-
+            params = {"pageid": 153, "lid": 2516, "num": max_items}
             resp = self.session.get(url, params=params, timeout=10)
             data = resp.json()
-
-            for item in data.get('result', {}).get('data', []):
-                title = item.get('title', '')
-                content = item.get('intro', '')[:500]
-
-                h = self._hash(title + content)
+            for item in data.get("result", {}).get("data", []):
+                title = str(item.get("title") or "")
+                content = str(item.get("intro") or "")[:500]
+                if not title:
+                    continue
+                h = self._hash(f"sina::{title}::{content}")
                 if h in self._seen_hashes:
                     continue
                 self._seen_hashes.add(h)
-
-                text = title + " " + content
+                text = f"{title} {content}"
                 sentiment = self.analyzer.analyze(text)
 
+                raw_ts = str(item.get("ctime") or "")
                 try:
-                    ts = datetime.strptime(item.get('ctime', ''), "%Y-%m-%d %H:%M:%S")
-                except:
+                    ts = datetime.strptime(raw_ts, "%Y-%m-%d %H:%M:%S")
+                except Exception:
                     ts = datetime.now()
 
-                items.append(NewsItem(
-                    title=title,
-                    content=content,
-                    source='sina',
-                    url=item.get('url', ''),
-                    timestamp=ts,
-                    stock_codes=self._extract_stock_codes(text),
-                    sentiment_score=sentiment.score,
-                    sentiment_label=sentiment.label
-                ))
-
-            log.info(f"Scraped {len(items)} items from Sina")
-
+                items.append(
+                    NewsItem(
+                        title=title,
+                        content=content,
+                        source="sina",
+                        url=str(item.get("url") or ""),
+                        timestamp=ts,
+                        stock_codes=self._extract_stock_codes(text),
+                        sentiment_score=sentiment.score,
+                        sentiment_label=sentiment.label,
+                    )
+                )
         except Exception as e:
             log.error(f"Sina scraping error: {e}")
+        return items
 
+    def scrape_eastmoney(self, max_items: int = 30) -> List[NewsItem]:
+        items: List[NewsItem] = []
+        self._rate_limit("eastmoney")
+        try:
+            url = "https://np-anotice-stock.eastmoney.com/api/security/ann"
+            params = {
+                "sr": -1,
+                "page_size": max(10, min(100, int(max_items))),
+                "page_index": 1,
+                "ann_type": "A",
+                "client_source": "web",
+            }
+            resp = self.session.get(url, params=params, timeout=10)
+            data = resp.json()
+            rows = data.get("data", {}).get("list", []) if isinstance(data, dict) else []
+            for item in rows:
+                title = str(item.get("title") or "")
+                content = str(item.get("columns") or "")[:500]
+                if not title:
+                    continue
+                h = self._hash(f"eastmoney::{title}::{content}")
+                if h in self._seen_hashes:
+                    continue
+                self._seen_hashes.add(h)
+                text = f"{title} {content}"
+                sentiment = self.analyzer.analyze(text)
+
+                ts_ms = item.get("notice_date")
+                try:
+                    ts = datetime.fromtimestamp(float(ts_ms) / 1000.0) if ts_ms else datetime.now()
+                except Exception:
+                    ts = datetime.now()
+
+                items.append(
+                    NewsItem(
+                        title=title,
+                        content=content,
+                        source="eastmoney",
+                        url=str(item.get("art_code") or ""),
+                        timestamp=ts,
+                        stock_codes=self._extract_stock_codes(text),
+                        sentiment_score=sentiment.score,
+                        sentiment_label=sentiment.label,
+                    )
+                )
+        except Exception as e:
+            log.debug(f"Eastmoney scraping skipped: {e}")
         return items
 
     def scrape_all(self) -> List[NewsItem]:
-        """Scrape from all sources with short TTL disk cache."""
         cache_path = self._cache_dir / "scrape_all.pkl"
-        ttl_seconds = 180  # 3 minutes
-
+        ttl_seconds = 180
         try:
             if cache_path.exists():
                 mtime = cache_path.stat().st_mtime
@@ -235,68 +379,82 @@ class NewsScraper:
             pass
 
         items: List[NewsItem] = []
-        items.extend(self.scrape_sina())
+        for name, fetcher in list(self._providers.items()):
+            try:
+                out = fetcher()
+                if isinstance(out, list):
+                    for row in out:
+                        if isinstance(row, NewsItem) and not row.source:
+                            row.source = name
+                    items.extend([x for x in out if isinstance(x, NewsItem)])
+            except Exception as e:
+                log.debug(f"Provider {name} failed: {e}")
         items.sort(key=lambda x: x.timestamp, reverse=True)
+        self._save_seen_hashes()
 
         try:
             with open(cache_path, "wb") as f:
                 pickle.dump(items, f, protocol=pickle.HIGHEST_PROTOCOL)
         except Exception:
             pass
-
         return items
 
     def get_stock_sentiment(self, stock_code: str) -> Tuple[float, float]:
-        """Get aggregated sentiment for a specific stock"""
         all_news = self.scrape_all()
         relevant = [n for n in all_news if stock_code in n.stock_codes]
-
         if not relevant:
             return 0.0, 0.0
 
         now = datetime.now()
-        weighted_score = 0
-        total_weight = 0
-
+        weighted_score = 0.0
+        total_weight = 0.0
         for news in relevant:
-            hours_ago = (now - news.timestamp).total_seconds() / 3600
-            weight = 1 / (1 + hours_ago / 24)
-            weighted_score += news.sentiment_score * weight
+            hours_ago = max(0.0, (now - news.timestamp).total_seconds() / 3600.0)
+            src_w = float(self._provider_weights.get(news.source, 1.0))
+            weight = src_w * (1.0 / (1.0 + hours_ago / 24.0))
+            weighted_score += float(news.sentiment_score) * weight
             total_weight += weight
 
-        if total_weight == 0:
+        if total_weight <= 0:
             return 0.0, 0.0
 
         avg_score = weighted_score / total_weight
-        confidence = min(len(relevant) / 5, 1.0)
-
-        return avg_score, confidence
+        source_count = len(set(n.source for n in relevant))
+        breadth_boost = min(source_count / 3.0, 1.0)
+        confidence = min(1.0, 0.7 * min(len(relevant) / 8.0, 1.0) + 0.3 * breadth_boost)
+        return float(avg_score), float(confidence)
 
     def get_market_sentiment(self) -> Dict:
-        """Get overall market sentiment"""
         all_news = self.scrape_all()
-
         if not all_news:
-            return {'score': 0, 'label': 'neutral', 'news_count': 0}
+            return {"score": 0.0, "label": "neutral", "news_count": 0}
 
-        scores = [n.sentiment_score for n in all_news]
-        avg_score = sum(scores) / len(scores)
+        now = datetime.now()
+        weighted = []
+        for news in all_news:
+            age_h = max(0.0, (now - news.timestamp).total_seconds() / 3600.0)
+            recency_w = float(self._provider_weights.get(news.source, 1.0)) * (1.0 / (1.0 + age_h / 24.0))
+            weighted.append((float(news.sentiment_score), recency_w))
 
-        pos_count = sum(1 for n in all_news if n.sentiment_label == 'positive')
-        neg_count = sum(1 for n in all_news if n.sentiment_label == 'negative')
+        total_w = sum(w for _, w in weighted)
+        avg_score = (sum(s * w for s, w in weighted) / total_w) if total_w > 0 else 0.0
+
+        pos_count = sum(1 for n in all_news if n.sentiment_label == "positive")
+        neg_count = sum(1 for n in all_news if n.sentiment_label == "negative")
 
         if avg_score > 0.15:
-            label = 'bullish'
+            label = "bullish"
         elif avg_score < -0.15:
-            label = 'bearish'
+            label = "bearish"
         else:
-            label = 'neutral'
+            label = "neutral"
 
         return {
-            'score': avg_score,
-            'label': label,
-            'news_count': len(all_news),
-            'positive_count': pos_count,
-            'negative_count': neg_count,
-            'neutral_count': len(all_news) - pos_count - neg_count
+            "score": float(avg_score),
+            "label": label,
+            "news_count": len(all_news),
+            "positive_count": pos_count,
+            "negative_count": neg_count,
+            "neutral_count": len(all_news) - pos_count - neg_count,
+            "source_count": len(set(n.source for n in all_news)),
         }

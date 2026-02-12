@@ -52,8 +52,11 @@ class EnsemblePrediction:
     probabilities: np.ndarray
     predicted_class: int
     confidence: float
+    raw_confidence: float
     entropy: float
     agreement: float
+    margin: float
+    brier_score: float
     individual_predictions: Dict[str, np.ndarray]
 
     @property
@@ -709,11 +712,14 @@ class EnsembleModel:
             for i in range(end - start):
                 probs = final_probs[i]
                 pred_cls = int(np.argmax(probs))
-                conf = float(np.max(probs))
+                raw_conf = float(np.max(probs))
 
                 probs_safe = np.clip(probs, 1e-8, 1.0)
                 ent = float(-np.sum(probs_safe * np.log(probs_safe)))
                 ent_norm = ent / max_entropy if max_entropy > 0 else 0.0
+
+                sorted_probs = np.sort(probs)
+                margin = float(sorted_probs[-1] - sorted_probs[-2]) if len(sorted_probs) >= 2 else 0.0
 
                 model_preds = [
                     int(np.argmax(per_model_probs[m][i])) for m in per_model_probs
@@ -724,6 +730,17 @@ class EnsembleModel:
                 else:
                     agreement = 0.0
 
+                # Reliability-adjusted confidence:
+                # lower when entropy is high or model agreement is weak.
+                rel = max(0.0, min(1.0, 0.65 + 0.35 * agreement))
+                ent_penalty = max(0.0, min(1.0, 1.0 - 0.25 * ent_norm))
+                margin_boost = max(0.8, min(1.1, 0.8 + margin))
+                conf = max(0.0, min(1.0, raw_conf * rel * ent_penalty * margin_boost))
+
+                target = np.zeros_like(probs)
+                target[pred_cls] = 1.0
+                brier = float(np.mean((probs - target) ** 2))
+
                 indiv = {m: per_model_probs[m][i] for m in per_model_probs}
 
                 results.append(
@@ -731,8 +748,11 @@ class EnsembleModel:
                         probabilities=probs,
                         predicted_class=pred_cls,
                         confidence=conf,
+                        raw_confidence=raw_conf,
                         entropy=float(ent_norm),
                         agreement=float(agreement),
+                        margin=margin,
+                        brier_score=brier,
                         individual_predictions=indiv,
                     )
                 )

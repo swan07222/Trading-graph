@@ -11,7 +11,7 @@ import weakref
 import hashlib
 from pathlib import Path
 from datetime import datetime, timedelta, date
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, Tuple
 from dataclasses import dataclass
 from contextlib import contextmanager
 
@@ -248,6 +248,7 @@ class AuditLog:
         self._session_id = secrets.token_hex(16)
         self._closed = False
         self._prev_hash = ""
+        self._last_prune_date: Optional[date] = None
 
         # FIX #4: Use weakref so GC can collect this if all references drop
         self._atexit_ref = weakref.ref(self)
@@ -270,11 +271,26 @@ class AuditLog:
             try:
                 self._current_file = gzip.open(path, "at", encoding="utf-8")
                 self._current_date = today
+                self._maybe_auto_prune(today)
             except Exception as e:
                 log.error("Failed to open audit log file: %s", e)
                 self._current_file = None
 
         return self._current_file
+
+    def _maybe_auto_prune(self, today: date) -> None:
+        """Run daily retention prune based on security config."""
+        try:
+            sec = getattr(CONFIG, "security", None)
+            if not bool(getattr(sec, "audit_auto_prune", True)):
+                return
+            if self._last_prune_date == today:
+                return
+            self._last_prune_date = today
+            retention_days = int(getattr(sec, "audit_retention_days", 365))
+            self.prune_old_files(retention_days=retention_days)
+        except Exception as e:
+            log.debug("Audit auto-prune skipped: %s", e)
 
     def _write(self, record: AuditRecord) -> None:
         """Write record to buffer."""
@@ -448,6 +464,73 @@ class AuditLog:
                 except Exception:
                     pass
                 self._current_file = None
+
+    def mark_legal_hold(self, audit_file: Path) -> bool:
+        """Mark an audit file as legal-hold protected via sidecar marker."""
+        try:
+            p = Path(audit_file)
+            sidecar = p.with_name(p.name + ".hold")
+            sidecar.write_text(
+                json.dumps({"marked_at": datetime.now().isoformat()}),
+                encoding="utf-8",
+            )
+            return True
+        except Exception as e:
+            log.debug("Failed to mark legal hold for %s: %s", audit_file, e)
+            return False
+
+    def unmark_legal_hold(self, audit_file: Path) -> bool:
+        """Remove legal-hold sidecar marker."""
+        try:
+            p = Path(audit_file)
+            sidecar = p.with_name(p.name + ".hold")
+            if sidecar.exists():
+                sidecar.unlink()
+            return True
+        except Exception as e:
+            log.debug("Failed to unmark legal hold for %s: %s", audit_file, e)
+            return False
+
+    def prune_old_files(self, retention_days: int) -> Dict[str, int]:
+        """
+        Delete audit files older than retention_days, except legal-hold files.
+        """
+        stats = {"deleted": 0, "held": 0, "kept": 0}
+        try:
+            keep_since = date.today() - timedelta(days=max(1, int(retention_days)))
+            for path in self._log_dir.glob("audit_*.jsonl.gz"):
+                try:
+                    parts = path.name.split("_")
+                    if len(parts) < 2:
+                        stats["kept"] += 1
+                        continue
+                    file_day = date.fromisoformat(parts[1])
+                except Exception:
+                    stats["kept"] += 1
+                    continue
+
+                if file_day >= keep_since:
+                    stats["kept"] += 1
+                    continue
+
+                hold = path.with_name(path.name + ".hold")
+                if hold.exists():
+                    stats["held"] += 1
+                    continue
+
+                try:
+                    path.unlink()
+                    stats["deleted"] += 1
+                except Exception:
+                    stats["kept"] += 1
+            if stats["deleted"] > 0:
+                log.info(
+                    "Audit retention pruned: deleted=%d held=%d kept=%d",
+                    stats["deleted"], stats["held"], stats["kept"],
+                )
+        except Exception as e:
+            log.debug("Audit prune failed: %s", e)
+        return stats
 
     def query(
         self,
@@ -683,6 +766,7 @@ class AccessControl:
     })
 
     def __init__(self) -> None:
+        self._lock = threading.RLock()
         self._permissions: Dict[str, List[str]] = {
             "admin": ["*"],
             "trader": ["view", "trade_paper", "analyze"],
@@ -690,6 +774,10 @@ class AccessControl:
             "live_trader": ["view", "trade_paper", "trade_live", "analyze"],
         }
         self._current_role = "trader"
+        self._current_user = "system"
+        self._session_started_at = datetime.now()
+        self._session_ip: str = ""
+        self._two_factor_verified = False
         self._audit: Optional[AuditLog] = None
         self._logging_access = False  # FIX #10: Recursion guard
 
@@ -706,19 +794,105 @@ class AccessControl:
         """Set current role."""
         if not isinstance(role, str) or not role:
             raise ValueError("role must be a non-empty string")
-        if role not in self._permissions:
-            raise ValueError(
-                f"Unknown role {role!r}. Valid: {list(self._permissions.keys())}"
-            )
-        self._current_role = role
+        with self._lock:
+            if role not in self._permissions:
+                raise ValueError(
+                    f"Unknown role {role!r}. Valid: {list(self._permissions.keys())}"
+                )
+            self._current_role = role
+
+    def set_user(self, user: str) -> None:
+        if not isinstance(user, str) or not user.strip():
+            raise ValueError("user must be a non-empty string")
+        with self._lock:
+            self._current_user = user.strip()
+            audit = self._get_audit()
+            if audit is not None:
+                audit.set_user(self._current_user)
+
+    def set_session_ip(self, ip: str) -> None:
+        if not isinstance(ip, str):
+            raise ValueError("ip must be a string")
+        with self._lock:
+            self._session_ip = ip.strip()
+
+    def mark_2fa_verified(self, verified: bool = True) -> None:
+        with self._lock:
+            self._two_factor_verified = bool(verified)
+
+    def create_role(self, role: str, permissions: List[str]) -> None:
+        if not isinstance(role, str) or not role.strip():
+            raise ValueError("role must be a non-empty string")
+        if not isinstance(permissions, list):
+            raise ValueError("permissions must be a list")
+        clean: List[str] = []
+        for p in permissions:
+            p = str(p).strip()
+            if not p:
+                continue
+            if p != "*" and p not in self.VALID_PERMISSIONS:
+                raise ValueError(f"Unknown permission: {p}")
+            clean.append(p)
+        with self._lock:
+            self._permissions[role.strip()] = sorted(set(clean))
+
+    def grant_permission(self, role: str, permission: str) -> None:
+        if not isinstance(role, str) or not role.strip():
+            raise ValueError("role must be a non-empty string")
+        if not isinstance(permission, str) or not permission.strip():
+            raise ValueError("permission must be a non-empty string")
+        p = permission.strip()
+        if p != "*" and p not in self.VALID_PERMISSIONS:
+            raise ValueError(f"Unknown permission: {p}")
+        with self._lock:
+            if role not in self._permissions:
+                self._permissions[role] = []
+            if p not in self._permissions[role]:
+                self._permissions[role].append(p)
+
+    def revoke_permission(self, role: str, permission: str) -> None:
+        with self._lock:
+            perms = self._permissions.get(role, [])
+            p = str(permission or "").strip()
+            if p in perms:
+                perms.remove(p)
+
+    def validate_session_policy(self) -> Tuple[bool, str]:
+        sec = getattr(CONFIG, "security", None)
+        max_hours = int(getattr(sec, "max_session_hours", 8))
+        ip_whitelist = list(getattr(sec, "ip_whitelist", []) or [])
+
+        with self._lock:
+            elapsed = datetime.now() - self._session_started_at
+            if elapsed.total_seconds() > max(1, max_hours) * 3600:
+                return False, f"session expired ({elapsed.total_seconds() / 3600.0:.1f}h)"
+
+            if ip_whitelist:
+                current_ip = self._session_ip.strip()
+                if current_ip and current_ip not in ip_whitelist:
+                    return False, f"ip not allowed ({current_ip})"
+
+        return True, "ok"
 
     def check(self, permission: str) -> bool:
         """Check if current role has permission."""
         if not isinstance(permission, str) or not permission:
             raise ValueError("permission must be a non-empty string")
 
-        perms = self._permissions.get(self._current_role, [])
-        allowed = "*" in perms or permission in perms
+        allowed = False
+        role = ""
+        with self._lock:
+            role = self._current_role
+            perms = self._permissions.get(role, [])
+            allowed = "*" in perms or permission in perms
+
+            # Hard policy gates for privileged actions.
+            if allowed and permission == "trade_live":
+                ok, _reason = self.validate_session_policy()
+                if not ok:
+                    allowed = False
+                elif bool(getattr(CONFIG.security, "require_2fa_for_live", True)):
+                    allowed = allowed and self._two_factor_verified
 
         # FIX #10: Recursion guard — audit.log_access might trigger check()
         if not self._logging_access:
@@ -726,7 +900,7 @@ class AccessControl:
             try:
                 audit = self._get_audit()
                 if audit is not None:
-                    audit.log_access(permission, self._current_role, allowed)
+                    audit.log_access(permission, role, allowed)
             except Exception:
                 pass
             finally:
@@ -747,25 +921,28 @@ class AccessControl:
     @contextmanager
     def elevate(self, role: str):
         """Temporarily elevate to role."""
-        if role not in self._permissions:
-            raise ValueError(f"Unknown role {role!r}")
-
-        old_role = self._current_role
-        self._current_role = role
+        with self._lock:
+            if role not in self._permissions:
+                raise ValueError(f"Unknown role {role!r}")
+            old_role = self._current_role
+            self._current_role = role
         try:
             yield
         finally:
-            self._current_role = old_role
+            with self._lock:
+                self._current_role = old_role
 
     @property
     def current_role(self) -> str:
         """Current role (read-only)."""
-        return self._current_role
+        with self._lock:
+            return self._current_role
 
     @property
     def available_roles(self) -> List[str]:
         """List of available roles."""
-        return list(self._permissions.keys())
+        with self._lock:
+            return list(self._permissions.keys())
 
 # Module-level singletons with proper locks
 

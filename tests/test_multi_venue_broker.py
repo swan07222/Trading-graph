@@ -1,0 +1,98 @@
+from datetime import datetime
+
+from core.types import Account, Order, OrderStatus, OrderType, OrderSide
+from trading.broker import BrokerInterface, MultiVenueBroker, create_broker
+from config.settings import CONFIG
+
+
+class _DummyVenue(BrokerInterface):
+    def __init__(self, name: str, fail_submit: bool = False):
+        super().__init__()
+        self._name = name
+        self._connected = True
+        self._fail_submit = fail_submit
+        self.submit_calls = 0
+
+    @property
+    def name(self) -> str:
+        return self._name
+
+    @property
+    def is_connected(self) -> bool:
+        return self._connected
+
+    def connect(self, **kwargs) -> bool:
+        self._connected = True
+        return True
+
+    def disconnect(self):
+        self._connected = False
+
+    def get_account(self) -> Account:
+        return Account(broker_name=self._name)
+
+    def get_positions(self):
+        return {}
+
+    def get_position(self, symbol: str):
+        return None
+
+    def submit_order(self, order: Order) -> Order:
+        self.submit_calls += 1
+        if self._fail_submit:
+            raise RuntimeError(f"{self._name} down")
+        order.status = OrderStatus.SUBMITTED
+        order.broker_id = f"{self._name}-ok"
+        order.updated_at = datetime.now()
+        return order
+
+    def cancel_order(self, order_id: str) -> bool:
+        return True
+
+    def get_orders(self, active_only: bool = True):
+        return []
+
+    def get_quote(self, symbol: str):
+        return 10.0
+
+    def get_fills(self, since: datetime = None):
+        return []
+
+    def get_order_status(self, order_id: str):
+        return OrderStatus.SUBMITTED
+
+    def sync_order(self, order: Order) -> Order:
+        return order
+
+
+def test_multi_venue_failover_on_submit():
+    primary = _DummyVenue("primary", fail_submit=True)
+    secondary = _DummyVenue("secondary", fail_submit=False)
+    router = MultiVenueBroker([primary, secondary], failover_cooldown_seconds=60)
+
+    order = Order(symbol="600519", side=OrderSide.BUY, order_type=OrderType.LIMIT, quantity=100, price=10.0)
+    out = router.submit_order(order)
+    assert out.status == OrderStatus.SUBMITTED
+    assert out.broker_id == "secondary-ok"
+    assert primary.submit_calls == 1
+    assert secondary.submit_calls == 1
+
+    snap = router.get_health_snapshot()
+    assert snap["active_venue"] == "secondary"
+
+
+def test_create_broker_live_multi_venue_from_config():
+    old_enable = getattr(CONFIG.trading, "enable_multi_venue", False)
+    old_priority = list(getattr(CONFIG.trading, "venue_priority", []))
+    old_cooldown = getattr(CONFIG.trading, "venue_failover_cooldown_seconds", 30)
+    try:
+        CONFIG.trading.enable_multi_venue = True
+        CONFIG.trading.venue_priority = ["ths", "zszq"]
+        CONFIG.trading.venue_failover_cooldown_seconds = 15
+        broker = create_broker("live")
+        assert isinstance(broker, MultiVenueBroker)
+        assert broker.get_health_snapshot()["cooldown_seconds"] == 15
+    finally:
+        CONFIG.trading.enable_multi_venue = old_enable
+        CONFIG.trading.venue_priority = old_priority
+        CONFIG.trading.venue_failover_cooldown_seconds = old_cooldown

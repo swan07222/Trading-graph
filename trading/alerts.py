@@ -1,23 +1,26 @@
 # trading/alerts.py
-import threading
-import smtplib
+from __future__ import annotations
+
 import json
-import requests
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
-from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Callable
-from dataclasses import dataclass, field
-from enum import Enum
-from pathlib import Path
-from collections import defaultdict
 import queue
+import smtplib
+import threading
+from collections import defaultdict
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+from enum import Enum
+from typing import Callable, Dict, List, Optional
+
+import requests
 
 from config import CONFIG
 from utils.logger import get_logger
-from utils.security import get_secure_storage, get_audit_log
+from utils.security import get_audit_log, get_secure_storage
 
 log = get_logger(__name__)
+
 
 class AlertPriority(Enum):
     LOW = 1
@@ -25,12 +28,14 @@ class AlertPriority(Enum):
     HIGH = 3
     CRITICAL = 4
 
+
 class AlertChannel(Enum):
     LOG = "log"
     DESKTOP = "desktop"
     EMAIL = "email"
     SMS = "sms"
     WEBHOOK = "webhook"
+
 
 class AlertCategory(Enum):
     RISK = "risk"
@@ -40,28 +45,28 @@ class AlertCategory(Enum):
     DATA = "data"
     PERFORMANCE = "performance"
 
+
 @dataclass
 class Alert:
-    """Alert message"""
+    """Alert message."""
+
     id: str = ""
     category: AlertCategory = AlertCategory.SYSTEM
     priority: AlertPriority = AlertPriority.MEDIUM
     title: str = ""
     message: str = ""
     details: Dict = field(default_factory=dict)
-
     channels: List[AlertChannel] = field(default_factory=list)
-
-    created_at: datetime = None
-    sent_at: datetime = None
-    acknowledged_at: datetime = None
+    created_at: Optional[datetime] = None
+    sent_at: Optional[datetime] = None
+    acknowledged_at: Optional[datetime] = None
     acknowledged_by: str = ""
-
     throttle_key: str = ""
 
     def __post_init__(self):
         if not self.id:
             import uuid
+
             self.id = f"ALERT_{uuid.uuid4().hex[:12].upper()}"
         if not self.created_at:
             self.created_at = datetime.now()
@@ -70,17 +75,16 @@ class Alert:
 
     def to_dict(self) -> Dict:
         return {
-            'id': self.id,
-            'category': self.category.value,
-            'priority': self.priority.value,
-            'title': self.title,
-            'message': self.message,
-            'details': self.details,
-            'created_at': (
-                self.created_at.isoformat() if self.created_at else None
-            ),
-            'acknowledged': self.acknowledged_at is not None,
+            "id": self.id,
+            "category": self.category.value,
+            "priority": self.priority.value,
+            "title": self.title,
+            "message": self.message,
+            "details": self.details,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "acknowledged": self.acknowledged_at is not None,
         }
+
 
 class AlertThrottler:
     """Prevent alert spam by throttling similar alerts."""
@@ -89,7 +93,6 @@ class AlertThrottler:
         self._lock = threading.Lock()
         self._last_sent: Dict[str, datetime] = {}
         self._default_window = timedelta(seconds=default_window_seconds)
-
         self._windows = {
             AlertPriority.LOW: timedelta(minutes=30),
             AlertPriority.MEDIUM: timedelta(minutes=10),
@@ -104,29 +107,24 @@ class AlertThrottler:
         with self._lock:
             key = f"{alert.category.value}:{alert.throttle_key}"
             last = self._last_sent.get(key)
-
             if not last:
                 self._last_sent[key] = datetime.now()
                 return True
-
             window = self._windows.get(alert.priority, self._default_window)
-
             if datetime.now() - last > window:
                 self._last_sent[key] = datetime.now()
                 return True
-
             return False
 
-    def reset(self, throttle_key: str = None):
+    def reset(self, throttle_key: Optional[str] = None):
         with self._lock:
             if throttle_key:
-                keys_to_remove = [
-                    k for k in self._last_sent if throttle_key in k
-                ]
+                keys_to_remove = [k for k in self._last_sent if throttle_key in k]
                 for k in keys_to_remove:
                     del self._last_sent[k]
             else:
                 self._last_sent.clear()
+
 
 class AlertManager:
     """Central alert management system."""
@@ -137,28 +135,21 @@ class AlertManager:
         self._lock = threading.RLock()
         self._throttler = AlertThrottler()
         self._audit = get_audit_log()
-
         self._queue: queue.Queue = queue.Queue()
         self._running = False
         self._thread: Optional[threading.Thread] = None
-
         self._history: List[Alert] = []
         self._max_history = 1000
-
         self._pending_ack: Dict[str, Alert] = {}
-
+        self._repeat_counter: Dict[str, int] = defaultdict(int)
         self._desktop_callback: Optional[Callable] = None
-
         self._load_history()
 
     def start(self):
         if self._running:
             return
-
         self._running = True
-        self._thread = threading.Thread(
-            target=self._process_loop, daemon=True
-        )
+        self._thread = threading.Thread(target=self._process_loop, daemon=True)
         self._thread.start()
         log.info("Alert manager started")
 
@@ -167,7 +158,6 @@ class AlertManager:
         if self._thread:
             self._queue.put(None)
             self._thread.join(timeout=5)
-
         self._save_history()
         log.info("Alert manager stopped")
 
@@ -192,7 +182,19 @@ class AlertManager:
                 log.error(f"Alert processing error: {e}")
 
     def _process_alert(self, alert: Alert):
-        if not self._throttler.should_send(alert):
+        key = f"{alert.category.value}:{alert.throttle_key or alert.title}"
+        with self._lock:
+            self._repeat_counter[key] += 1
+            repeats = self._repeat_counter[key]
+
+        if repeats >= 3 and alert.priority == AlertPriority.MEDIUM:
+            alert.priority = AlertPriority.HIGH
+        elif repeats >= 5 and alert.priority == AlertPriority.HIGH:
+            alert.priority = AlertPriority.CRITICAL
+
+        # Allow escalation alerts through even if their base key is throttled.
+        throttled = not self._throttler.should_send(alert)
+        if throttled and repeats < 3:
             log.debug(f"Alert throttled: {alert.title}")
             return
 
@@ -203,16 +205,13 @@ class AlertManager:
                 log.error(f"Failed to send alert to {channel.value}: {e}")
 
         alert.sent_at = datetime.now()
-
         with self._lock:
             self._history.append(alert)
             if len(self._history) > self._max_history:
-                self._history = self._history[-self._max_history:]
-
-            if alert.priority in [AlertPriority.HIGH, AlertPriority.CRITICAL]:
+                self._history = self._history[-self._max_history :]
+            if alert.priority in (AlertPriority.HIGH, AlertPriority.CRITICAL):
                 self._pending_ack[alert.id] = alert
-
-        self._audit.log_risk_event('alert_sent', alert.to_dict())
+        self._audit.log_risk_event("alert_sent", alert.to_dict())
 
     def _send_to_channel(self, alert: Alert, channel: AlertChannel):
         if channel == AlertChannel.LOG:
@@ -231,12 +230,8 @@ class AlertManager:
             AlertPriority.HIGH: log.error,
             AlertPriority.CRITICAL: log.critical,
         }
-
         logger = level_map.get(alert.priority, log.warning)
-        logger(
-            f"🔔 [{alert.category.value.upper()}] "
-            f"{alert.title}: {alert.message}"
-        )
+        logger(f"[ALERT:{alert.category.value.upper()}] {alert.title}: {alert.message}")
 
     def _send_desktop(self, alert: Alert):
         if self._desktop_callback:
@@ -244,111 +239,97 @@ class AlertManager:
                 self._desktop_callback(alert)
             except Exception as e:
                 log.warning(f"Desktop notification failed: {e}")
-        else:
-            try:
-                import platform
-                if platform.system() == 'Windows':
-                    from win10toast import ToastNotifier
-                    toaster = ToastNotifier()
-                    toaster.show_toast(
-                        alert.title,
-                        alert.message,
-                        duration=5,
-                        threaded=True,
-                    )
-            except ImportError:
-                pass
+            return
+
+        try:
+            import platform
+
+            if platform.system() == "Windows":
+                from win10toast import ToastNotifier
+
+                toaster = ToastNotifier()
+                toaster.show_toast(
+                    alert.title,
+                    alert.message,
+                    duration=5,
+                    threaded=True,
+                )
+        except ImportError:
+            pass
+        except Exception as e:
+            log.debug(f"Desktop notification skipped: {e}")
 
     def _send_email(self, alert: Alert):
         if not CONFIG.alerts.email_enabled:
             return
-
         if not CONFIG.alerts.smtp_server or not CONFIG.alerts.email_recipients:
             return
 
         try:
             msg = MIMEMultipart()
-            msg['Subject'] = f"[{alert.priority.name}] {alert.title}"
-            from_addr = (
-                CONFIG.alerts.from_email
-                or CONFIG.alerts.smtp_username
-                or "trading-system@localhost"
-            )
+            msg["Subject"] = f"[{alert.priority.name}] {alert.title}"
+            from_addr = CONFIG.alerts.from_email or CONFIG.alerts.smtp_username or "trading-system@localhost"
             msg["From"] = f"Trading System <{from_addr}>"
-            msg['To'] = ", ".join(CONFIG.alerts.email_recipients)
+            msg["To"] = ", ".join(CONFIG.alerts.email_recipients)
+            body = (
+                "Trading System Alert\n"
+                "====================\n\n"
+                f"Category: {alert.category.value}\n"
+                f"Priority: {alert.priority.name}\n"
+                f"Time: {alert.created_at.isoformat()}\n\n"
+                f"{alert.message}\n\n"
+                "Details:\n"
+                f"{json.dumps(alert.details, indent=2)}\n"
+            )
+            msg.attach(MIMEText(body, "plain"))
 
-            body = f"""
-Trading System Alert
-====================
-
-Category: {alert.category.value}
-Priority: {alert.priority.name}
-Time: {alert.created_at.isoformat()}
-
-{alert.message}
-
-Details:
-{json.dumps(alert.details, indent=2)}
-"""
-            msg.attach(MIMEText(body, 'plain'))
-
-            with smtplib.SMTP(
-                CONFIG.alerts.smtp_server, CONFIG.alerts.smtp_port, timeout=10
-            ) as server:
+            with smtplib.SMTP(CONFIG.alerts.smtp_server, CONFIG.alerts.smtp_port, timeout=10) as server:
                 server.starttls()
-
                 user = CONFIG.alerts.smtp_username
-                pwd = get_secure_storage().get(
-                    CONFIG.alerts.smtp_password_key, ""
-                )
+                pwd = get_secure_storage().get(CONFIG.alerts.smtp_password_key, "")
                 if user and pwd:
                     server.login(user, pwd)
-
                 server.send_message(msg)
-
             log.info(f"Email alert sent: {alert.title}")
-
         except Exception as e:
             log.error(f"Email send failed: {e}")
 
     def _send_webhook(self, alert: Alert):
         if not CONFIG.alerts.webhook_enabled or not CONFIG.alerts.webhook_url:
             return
-
-        try:
-            payload = {
-                'alert': alert.to_dict(),
-                'timestamp': datetime.now().isoformat(),
-                'system': 'trading_system',
-            }
-
-            response = requests.post(
-                CONFIG.alerts.webhook_url,
-                json=payload,
-                timeout=10,
-            )
-            response.raise_for_status()
-
-            log.info(f"Webhook alert sent: {alert.title}")
-
-        except Exception as e:
-            log.error(f"Webhook send failed: {e}")
+        payload = {
+            "alert": alert.to_dict(),
+            "timestamp": datetime.now().isoformat(),
+            "system": "trading_system",
+        }
+        last_error = None
+        for _ in range(2):
+            try:
+                response = requests.post(
+                    CONFIG.alerts.webhook_url,
+                    json=payload,
+                    timeout=10,
+                )
+                response.raise_for_status()
+                log.info(f"Webhook alert sent: {alert.title}")
+                return
+            except Exception as e:
+                last_error = e
+        log.error(f"Webhook send failed: {last_error}")
 
     def acknowledge(self, alert_id: str, by: str = "user") -> bool:
         with self._lock:
             alert = self._pending_ack.get(alert_id)
-            if alert:
-                alert.acknowledged_at = datetime.now()
-                alert.acknowledged_by = by
-                del self._pending_ack[alert_id]
-
-                self._audit.log_risk_event('alert_acknowledged', {
-                    'alert_id': alert_id,
-                    'acknowledged_by': by,
-                })
-
-                return True
-            return False
+            if alert is None:
+                return False
+            alert.acknowledged_at = datetime.now()
+            alert.acknowledged_by = by
+            del self._pending_ack[alert_id]
+            self._audit.log_risk_event(
+                "alert_acknowledged",
+                {"alert_id": alert_id, "acknowledged_by": by},
+            )
+            return True
 
     def get_pending(self) -> List[Alert]:
         with self._lock:
@@ -356,85 +337,96 @@ Details:
 
     def get_history(
         self,
-        category: AlertCategory = None,
-        priority: AlertPriority = None,
+        category: Optional[AlertCategory] = None,
+        priority: Optional[AlertPriority] = None,
         limit: int = 100,
     ) -> List[Alert]:
         with self._lock:
-            alerts = self._history.copy()
+            alerts = list(self._history)
+        if category:
+            alerts = [a for a in alerts if a.category == category]
+        if priority:
+            alerts = [a for a in alerts if a.priority == priority]
+        return alerts[-limit:]
 
-            if category:
-                alerts = [a for a in alerts if a.category == category]
-            if priority:
-                alerts = [a for a in alerts if a.priority == priority]
-
-            return alerts[-limit:]
+    def get_alert_stats(self) -> Dict[str, Dict]:
+        with self._lock:
+            total = len(self._history)
+            acked = sum(1 for a in self._history if a.acknowledged_at is not None)
+            by_priority: Dict[str, int] = defaultdict(int)
+            by_category: Dict[str, int] = defaultdict(int)
+            for alert in self._history:
+                by_priority[alert.priority.name] += 1
+                by_category[alert.category.value] += 1
+            return {
+                "total": total,
+                "acknowledged": acked,
+                "ack_rate": (acked / total) if total > 0 else 0.0,
+                "pending_ack": len(self._pending_ack),
+                "by_priority": dict(by_priority),
+                "by_category": dict(by_category),
+            }
 
     def set_desktop_callback(self, callback: Callable):
         self._desktop_callback = callback
 
     def _save_history(self):
         path = CONFIG.data_dir / self.HISTORY_FILE
-
         try:
             data = [a.to_dict() for a in self._history[-500:]]
-            with open(path, 'w') as f:
-                json.dump(data, f, indent=2)
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2, ensure_ascii=False)
         except Exception as e:
             log.error(f"Failed to save alert history: {e}")
 
     def _load_history(self):
         path = CONFIG.data_dir / self.HISTORY_FILE
-
         if not path.exists():
             return
-
         try:
-            with open(path, 'r') as f:
+            with open(path, "r", encoding="utf-8") as f:
                 data = json.load(f)
-
             for item in data:
                 alert = Alert(
-                    id=item.get('id', ''),
-                    category=AlertCategory(item.get('category', 'system')),
-                    priority=AlertPriority(item.get('priority', 2)),
-                    title=item.get('title', ''),
-                    message=item.get('message', ''),
-                    details=item.get('details', {}),
+                    id=item.get("id", ""),
+                    category=AlertCategory(item.get("category", "system")),
+                    priority=AlertPriority(item.get("priority", 2)),
+                    title=item.get("title", ""),
+                    message=item.get("message", ""),
+                    details=item.get("details", {}),
                 )
-                if item.get('created_at'):
-                    alert.created_at = datetime.fromisoformat(
-                        item['created_at']
-                    )
-
+                raw_ts = item.get("created_at")
+                if raw_ts:
+                    alert.created_at = datetime.fromisoformat(raw_ts)
                 self._history.append(alert)
-
         except Exception as e:
             log.error(f"Failed to load alert history: {e}")
 
-    def risk_alert(self, title: str, message: str, details: Dict = None):
-        self.send(Alert(
-            category=AlertCategory.RISK,
-            priority=AlertPriority.HIGH,
-            title=title,
-            message=message,
-            details=details or {},
-            channels=[
-                AlertChannel.LOG, AlertChannel.DESKTOP, AlertChannel.EMAIL
-            ],
-            throttle_key=title,
-        ))
+    def risk_alert(self, title: str, message: str, details: Optional[Dict] = None):
+        self.send(
+            Alert(
+                category=AlertCategory.RISK,
+                priority=AlertPriority.HIGH,
+                title=title,
+                message=message,
+                details=details or {},
+                channels=[AlertChannel.LOG, AlertChannel.DESKTOP, AlertChannel.EMAIL],
+                throttle_key=title,
+            )
+        )
 
-    def trading_alert(self, title: str, message: str, details: Dict = None):
-        self.send(Alert(
-            category=AlertCategory.TRADING,
-            priority=AlertPriority.MEDIUM,
-            title=title,
-            message=message,
-            details=details or {},
-            channels=[AlertChannel.LOG, AlertChannel.DESKTOP],
-            throttle_key=title,
-        ))
+    def trading_alert(self, title: str, message: str, details: Optional[Dict] = None):
+        self.send(
+            Alert(
+                category=AlertCategory.TRADING,
+                priority=AlertPriority.MEDIUM,
+                title=title,
+                message=message,
+                details=details or {},
+                channels=[AlertChannel.LOG, AlertChannel.DESKTOP],
+                throttle_key=title,
+            )
+        )
 
     def system_alert(
         self,
@@ -442,34 +434,39 @@ Details:
         message: str,
         priority: AlertPriority = AlertPriority.MEDIUM,
     ):
-        self.send(Alert(
-            category=AlertCategory.SYSTEM,
-            priority=priority,
-            title=title,
-            message=message,
-            channels=[AlertChannel.LOG, AlertChannel.DESKTOP],
-            throttle_key=title,
-        ))
+        self.send(
+            Alert(
+                category=AlertCategory.SYSTEM,
+                priority=priority,
+                title=title,
+                message=message,
+                channels=[AlertChannel.LOG, AlertChannel.DESKTOP],
+                throttle_key=title,
+            )
+        )
 
-    def critical_alert(self, title: str, message: str, details: Dict = None):
-        self.send(Alert(
-            category=AlertCategory.SYSTEM,
-            priority=AlertPriority.CRITICAL,
-            title=title,
-            message=message,
-            details=details or {},
-            channels=[
-                AlertChannel.LOG,
-                AlertChannel.DESKTOP,
-                AlertChannel.EMAIL,
-                AlertChannel.WEBHOOK,
-            ],
-            throttle_key="",  # Never throttle critical
-        ))
+    def critical_alert(self, title: str, message: str, details: Optional[Dict] = None):
+        self.send(
+            Alert(
+                category=AlertCategory.SYSTEM,
+                priority=AlertPriority.CRITICAL,
+                title=title,
+                message=message,
+                details=details or {},
+                channels=[
+                    AlertChannel.LOG,
+                    AlertChannel.DESKTOP,
+                    AlertChannel.EMAIL,
+                    AlertChannel.WEBHOOK,
+                ],
+                throttle_key="",  # Never throttle critical.
+            )
+        )
 
-# FIX: Module-level lock instead of fragile globals() pattern
+
 _alert_manager: Optional[AlertManager] = None
 _alert_lock = threading.Lock()
+
 
 def get_alert_manager() -> AlertManager:
     global _alert_manager

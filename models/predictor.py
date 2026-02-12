@@ -43,6 +43,8 @@ class PositionSize:
     value: float = 0.0
     risk_amount: float = 0.0
     risk_pct: float = 0.0
+    expected_edge_pct: float = 0.0
+    risk_reward_ratio: float = 0.0
 
 @dataclass
 class Prediction:
@@ -980,18 +982,34 @@ class Predictor:
     # =========================================================================
 
     def _calculate_position(self, pred: Prediction) -> PositionSize:
-        """Calculate position size with proper guards."""
+        """Calculate position size using risk, quality and expected-edge gating."""
         price = pred.current_price
 
         if price <= 0:
             return PositionSize()
 
-        risk_pct = CONFIG.RISK_PER_TRADE / 100
-        risk_amount = self.capital * risk_pct
+        stop_distance, reward_distance = self._resolve_trade_distances(pred)
+        if stop_distance <= 0 or reward_distance <= 0:
+            return PositionSize()
 
-        stop_distance = abs(price - pred.levels.stop_loss)
-        if stop_distance <= 0:
-            stop_distance = price * 0.02
+        risk_pct = float(CONFIG.RISK_PER_TRADE) / 100.0
+        quality_scale = self._quality_scale(pred)
+        edge = self._expected_edge(pred, price, stop_distance, reward_distance)
+        rr_ratio = reward_distance / max(stop_distance, 1e-9)
+        min_edge = max(0.0, float(CONFIG.risk.min_expected_edge_pct) / 100.0)
+        min_rr = max(0.1, float(CONFIG.risk.min_risk_reward_ratio))
+
+        if rr_ratio < min_rr or edge <= 0.0:
+            return PositionSize(
+                expected_edge_pct=edge * 100.0,
+                risk_reward_ratio=rr_ratio,
+            )
+
+        edge_scale = 1.0
+        if min_edge > 0:
+            edge_scale = float(np.clip(edge / min_edge, 0.0, CONFIG.risk.max_position_scale))
+
+        risk_amount = self.capital * risk_pct * quality_scale * edge_scale
 
         lot_size = max(1, CONFIG.LOT_SIZE)
 
@@ -1021,7 +1039,80 @@ class Predictor:
             risk_pct=float(
                 (shares * stop_distance / self.capital) * 100
             ),
+            expected_edge_pct=float(edge * 100.0),
+            risk_reward_ratio=float(rr_ratio),
         )
+
+    def _resolve_trade_distances(self, pred: Prediction) -> Tuple[float, float]:
+        """Resolve stop and reward distances from level plan."""
+        price = float(pred.current_price)
+        if price <= 0:
+            return 0.0, 0.0
+
+        stop_distance = abs(price - float(pred.levels.stop_loss))
+        if stop_distance <= 0:
+            stop_distance = price * 0.02
+
+        d1 = abs(float(pred.levels.target_1) - price)
+        d2 = abs(float(pred.levels.target_2) - price)
+        # Weighted reward estimate: partial at target_1 plus runner to target_2.
+        reward_distance = (0.7 * d1) + (0.3 * d2)
+        if reward_distance <= 0:
+            reward_distance = d1 if d1 > 0 else stop_distance
+
+        return stop_distance, reward_distance
+
+    def _quality_scale(self, pred: Prediction) -> float:
+        """Scale risk by signal quality (confidence and strength)."""
+        conf = float(np.clip(pred.confidence, 0.0, 1.0))
+        strength = float(np.clip(pred.signal_strength, 0.0, 1.0))
+        agreement = float(np.clip(pred.model_agreement, 0.0, 1.0))
+        quality = (0.5 * conf) + (0.35 * strength) + (0.15 * agreement)
+        return float(np.clip(quality, 0.25, CONFIG.risk.max_position_scale))
+
+    def _expected_edge(
+        self,
+        pred: Prediction,
+        price: float,
+        stop_distance: float,
+        reward_distance: float,
+    ) -> float:
+        """
+        Estimate expected edge after costs.
+
+        Returns decimal edge (e.g. 0.003 means +0.3% expected value).
+        """
+        if price <= 0:
+            return 0.0
+
+        if pred.signal in (Signal.BUY, Signal.STRONG_BUY):
+            p_win = float(np.clip(pred.prob_up, 0.0, 1.0))
+            p_loss = float(np.clip(pred.prob_down, 0.0, 1.0))
+            side = "buy"
+        elif pred.signal in (Signal.SELL, Signal.STRONG_SELL):
+            p_win = float(np.clip(pred.prob_down, 0.0, 1.0))
+            p_loss = float(np.clip(pred.prob_up, 0.0, 1.0))
+            side = "sell"
+        else:
+            return 0.0
+
+        reward_pct = reward_distance / price
+        risk_pct = stop_distance / price
+        gross_edge = (p_win * reward_pct) - (p_loss * risk_pct)
+        cost_pct = self._round_trip_cost_pct(side)
+        return float(gross_edge - cost_pct)
+
+    def _round_trip_cost_pct(self, side: str) -> float:
+        """Estimate round-trip friction cost as decimal percentage."""
+        commission = max(float(CONFIG.COMMISSION), 0.0)
+        slippage = max(float(CONFIG.SLIPPAGE), 0.0)
+        stamp_tax = max(float(CONFIG.STAMP_TAX), 0.0)
+
+        if side == "sell":
+            # Short-cover path includes one sell leg with stamp tax.
+            return (2.0 * commission) + (2.0 * slippage) + stamp_tax
+        # Long round trip: buy then sell, stamp tax on sell leg.
+        return (2.0 * commission) + (2.0 * slippage) + stamp_tax
 
     # =========================================================================
     # =========================================================================

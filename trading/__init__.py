@@ -10,7 +10,7 @@ def __getattr__(name: str):
     trading package unimportable.
     """
     _BROKER = {
-        'BrokerInterface', 'SimulatorBroker', 'THSBroker', 'create_broker',
+        'BrokerInterface', 'SimulatorBroker', 'THSBroker', 'MultiVenueBroker', 'create_broker',
     }
     _OMS = {
         'Order', 'Fill', 'Position', 'Account',
@@ -29,7 +29,7 @@ def __getattr__(name: str):
 
     if name in _BROKER:
         from .broker import (
-            BrokerInterface, SimulatorBroker, THSBroker, create_broker,
+            BrokerInterface, SimulatorBroker, THSBroker, MultiVenueBroker, create_broker,
         )
         return locals()[name]
 
@@ -77,6 +77,7 @@ __all__ = [
     'BrokerInterface',
     'SimulatorBroker',
     'THSBroker',
+    'MultiVenueBroker',
     'create_broker',
     'Order',
     'Fill',

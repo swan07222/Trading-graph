@@ -122,6 +122,9 @@ class TestEnsemble:
         assert pred.predicted_class in [0, 1, 2]
         assert 0 <= pred.confidence <= 1
         assert len(pred.probabilities) == 3
+        assert 0 <= pred.raw_confidence <= 1
+        assert 0 <= pred.margin <= 1
+        assert pred.brier_score >= 0
 
     def test_ensemble_training(self, sample_data):
         """Test ensemble traini`ng (short)"""

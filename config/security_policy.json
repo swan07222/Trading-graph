@@ -1,0 +1,11 @@
+{
+  "version": "1.0",
+  "enabled": true,
+  "live_trade": {
+    "min_approvals": 2,
+    "require_distinct_approvers": true,
+    "max_order_notional": 250000.0,
+    "blocked_symbols": [],
+    "allowed_sides": ["buy", "sell"]
+  }
+}

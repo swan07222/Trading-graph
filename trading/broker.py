@@ -1373,6 +1373,202 @@ class ZSZQBroker(EasytraderBroker):
     def _get_easytrader_type(self) -> str:
         return 'universal'
 
+
+class MultiVenueBroker(BrokerInterface):
+    """
+    Multi-venue router with active failover.
+
+    - Uses a priority list of underlying brokers.
+    - Routes writes to the active venue.
+    - On write failure, rotates to next venue with cooldown.
+    """
+
+    def __init__(self, venues: List[BrokerInterface], failover_cooldown_seconds: int = 30):
+        super().__init__()
+        self._venues = [v for v in venues if v is not None]
+        self._active_idx = 0
+        self._cooldown_seconds = max(1, int(failover_cooldown_seconds or 30))
+        self._last_fail_ts: Dict[int, float] = {}
+        self._fail_counts: Dict[str, int] = {}
+        self._submit_counts: Dict[str, int] = {}
+        if not self._venues:
+            raise ValueError("MultiVenueBroker requires at least one venue")
+
+    @property
+    def name(self) -> str:
+        names = ",".join(v.name for v in self._venues)
+        return f"MultiVenueRouter[{names}]"
+
+    @property
+    def is_connected(self) -> bool:
+        return any(v.is_connected for v in self._venues)
+
+    def connect(self, **kwargs) -> bool:
+        ok_any = False
+        for i, venue in enumerate(self._venues):
+            try:
+                ok = bool(venue.connect(**kwargs))
+            except Exception as e:
+                ok = False
+                log.warning("Venue connect failed (%s): %s", venue.name, e)
+            if ok:
+                ok_any = True
+                if self._active_idx == 0:
+                    self._active_idx = i
+        return ok_any
+
+    def disconnect(self):
+        for venue in self._venues:
+            try:
+                venue.disconnect()
+            except Exception as e:
+                log.debug("Venue disconnect failed (%s): %s", venue.name, e)
+
+    def _eligible_indices(self) -> List[int]:
+        now = time.time()
+        out: List[int] = []
+        for i, venue in enumerate(self._venues):
+            if not venue.is_connected:
+                continue
+            last_fail = float(self._last_fail_ts.get(i, 0.0))
+            if last_fail > 0 and (now - last_fail) < self._cooldown_seconds:
+                continue
+            out.append(i)
+        return out
+
+    def _ordered_indices(self) -> List[int]:
+        eligible = self._eligible_indices()
+        if not eligible:
+            return []
+        if self._active_idx in eligible:
+            start = eligible.index(self._active_idx)
+            return eligible[start:] + eligible[:start]
+        return eligible
+
+    def _mark_failure(self, idx: int, exc: Exception) -> None:
+        self._last_fail_ts[idx] = time.time()
+        venue = self._venues[idx]
+        self._fail_counts[venue.name] = self._fail_counts.get(venue.name, 0) + 1
+        log.warning("Venue failure (%s): %s", venue.name, exc)
+
+    def _mark_submit(self, idx: int) -> None:
+        venue = self._venues[idx]
+        self._submit_counts[venue.name] = self._submit_counts.get(venue.name, 0) + 1
+
+    def _first_read(self, fn_name: str, *args, **kwargs):
+        for idx in self._ordered_indices():
+            venue = self._venues[idx]
+            try:
+                fn = getattr(venue, fn_name)
+                out = fn(*args, **kwargs)
+                self._active_idx = idx
+                return out
+            except Exception as e:
+                self._mark_failure(idx, e)
+        raise RuntimeError(f"All venues failed for {fn_name}")
+
+    def get_account(self) -> Account:
+        return self._first_read("get_account")
+
+    def get_positions(self) -> Dict[str, Position]:
+        return self._first_read("get_positions")
+
+    def get_position(self, symbol: str) -> Optional[Position]:
+        return self._first_read("get_position", symbol)
+
+    def submit_order(self, order: Order) -> Order:
+        last_exc: Optional[Exception] = None
+        for idx in self._ordered_indices():
+            venue = self._venues[idx]
+            try:
+                result = venue.submit_order(order)
+                self._active_idx = idx
+                self._mark_submit(idx)
+                return result
+            except Exception as e:
+                last_exc = e
+                self._mark_failure(idx, e)
+                continue
+        if last_exc:
+            raise last_exc
+        raise RuntimeError("No connected venue available")
+
+    def cancel_order(self, order_id: str) -> bool:
+        for idx in self._ordered_indices():
+            venue = self._venues[idx]
+            try:
+                ok = bool(venue.cancel_order(order_id))
+                if ok:
+                    self._active_idx = idx
+                    return True
+            except Exception as e:
+                self._mark_failure(idx, e)
+        return False
+
+    def get_orders(self, active_only: bool = True) -> List[Order]:
+        return self._first_read("get_orders", active_only)
+
+    def get_quote(self, symbol: str) -> Optional[float]:
+        return self._first_read("get_quote", symbol)
+
+    def get_fills(self, since: datetime = None) -> List[Fill]:
+        return self._first_read("get_fills", since)
+
+    def get_order_status(self, order_id: str) -> Optional[OrderStatus]:
+        for idx in self._ordered_indices():
+            venue = self._venues[idx]
+            try:
+                status = venue.get_order_status(order_id)
+                self._active_idx = idx
+                if status is not None:
+                    return status
+            except Exception as e:
+                self._mark_failure(idx, e)
+        return None
+
+    def sync_order(self, order: Order) -> Order:
+        for idx in self._ordered_indices():
+            venue = self._venues[idx]
+            try:
+                synced = venue.sync_order(order)
+                self._active_idx = idx
+                return synced
+            except Exception as e:
+                self._mark_failure(idx, e)
+        return order
+
+    def get_health_snapshot(self) -> Dict[str, object]:
+        active_name = None
+        if 0 <= self._active_idx < len(self._venues):
+            active_name = self._venues[self._active_idx].name
+        venues = []
+        for idx, venue in enumerate(self._venues):
+            venues.append(
+                {
+                    "name": venue.name,
+                    "connected": bool(venue.is_connected),
+                    "fail_count": int(self._fail_counts.get(venue.name, 0)),
+                    "submit_count": int(self._submit_counts.get(venue.name, 0)),
+                    "cooldown_until": float(self._last_fail_ts.get(idx, 0.0))
+                    + float(self._cooldown_seconds),
+                }
+            )
+        return {
+            "active_venue": active_name,
+            "cooldown_seconds": self._cooldown_seconds,
+            "venues": venues,
+        }
+
+
+def _create_live_broker_by_type(broker_type: str) -> BrokerInterface:
+    broker_type = str(broker_type or "ths").lower()
+    if broker_type in ('zszq', 'zhaoshang', '招商'):
+        return ZSZQBroker()
+    if broker_type in ('ths', 'ht', 'gj', 'yh'):
+        return THSBroker(broker_type=broker_type)
+    log.warning("Unknown live broker_type '%s', fallback to ths", broker_type)
+    return THSBroker(broker_type='ths')
+
 def create_broker(
     mode: str = None, **kwargs,
 ) -> BrokerInterface:
@@ -1400,10 +1596,32 @@ def create_broker(
             kwargs.get('capital', CONFIG.capital),
         )
     elif mode == 'live':
-        broker_type = kwargs.get('broker_type', 'ths')
-        if broker_type in ('zszq', 'zhaoshang', '招商'):
-            return ZSZQBroker()
-        return THSBroker(broker_type=broker_type)
+        priority = kwargs.get("venue_priority")
+        if priority is None:
+            priority = getattr(CONFIG.trading, "venue_priority", []) or []
+
+        enable_multi = bool(kwargs.get("enable_multi_venue", False))
+        if not enable_multi:
+            enable_multi = bool(getattr(CONFIG.trading, "enable_multi_venue", False))
+        if not enable_multi and isinstance(priority, list) and len(priority) > 1:
+            enable_multi = True
+
+        if enable_multi:
+            venues: List[BrokerInterface] = []
+            for item in priority:
+                bt = str(item or "").strip().lower()
+                if not bt:
+                    continue
+                venues.append(_create_live_broker_by_type(bt))
+            if not venues:
+                venues = [_create_live_broker_by_type(kwargs.get("broker_type", "ths"))]
+            cooldown = kwargs.get(
+                "venue_failover_cooldown_seconds",
+                getattr(CONFIG.trading, "venue_failover_cooldown_seconds", 30),
+            )
+            return MultiVenueBroker(venues, failover_cooldown_seconds=int(cooldown))
+
+        return _create_live_broker_by_type(kwargs.get('broker_type', 'ths'))
     elif mode in ('ths', 'ht', 'gj', 'yh'):
         return THSBroker(broker_type=mode)
     elif mode in ('zszq', 'zhaoshang', '招商'):
