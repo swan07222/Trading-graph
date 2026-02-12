@@ -1,4 +1,4 @@
-# models/auto_learner.py
+﻿# models/auto_learner.py
 
 import os
 import json
@@ -787,7 +787,7 @@ class StockRotator:
         self._failed.clear()
 
     def reset_processed(self):
-        """Clear processed set — used by plateau handler."""
+        """Clear processed set 鈥?used by plateau handler."""
         self._processed.clear()
 
     def reset_discovery(self):
@@ -795,7 +795,7 @@ class StockRotator:
         self._last_discovery = 0
 
     def clear_pool(self):
-        """Clear the stock pool — used by reset_rotation()."""
+        """Clear the stock pool 鈥?used by reset_rotation()."""
         self._pool.clear()
 
     # FIX PRIV: Public methods for state migration from old format
@@ -1154,7 +1154,7 @@ class ContinuousLearner:
         return self._should_stop()
 
     # =========================================================================
-    # LIFECYCLE — AUTO MODE
+    # LIFECYCLE 鈥?AUTO MODE
     # =========================================================================
 
     def start(
@@ -1239,7 +1239,7 @@ class ContinuousLearner:
         self._notify()
 
     # =========================================================================
-    # LIFECYCLE — TARGETED MODE
+    # LIFECYCLE 鈥?TARGETED MODE
     # =========================================================================
 
     def start_targeted(
@@ -1365,7 +1365,7 @@ class ContinuousLearner:
 
             return {
                 'valid': True, 'code': code, 'name': name, 'bars': bars,
-                'message': f'OK — {bars} bars available',
+                'message': f'OK 鈥?{bars} bars available',
             }
 
         except Exception as e:
@@ -1375,7 +1375,7 @@ class ContinuousLearner:
             }
 
     # =========================================================================
-    # MAIN LOOP — AUTO MODE
+    # MAIN LOOP 鈥?AUTO MODE
     # =========================================================================
 
     def _main_loop(
@@ -1447,7 +1447,7 @@ class ContinuousLearner:
             self._notify()
 
     # =========================================================================
-    # MAIN LOOP — TARGETED MODE
+    # MAIN LOOP 鈥?TARGETED MODE
     # =========================================================================
 
     def _targeted_loop(
@@ -1526,7 +1526,7 @@ class ContinuousLearner:
     def _handle_plateau(
         self, plateau: Dict, current_epochs: int, incremental: bool,
     ) -> Tuple[int, bool]:
-        """Graduated plateau response — uses public rotator methods."""
+        """Graduated plateau response 鈥?uses public rotator methods."""
         action = plateau['action']
         log.info(f"Plateau response: {plateau['message']}")
         self._update(message=plateau['message'])
@@ -1551,7 +1551,7 @@ class ContinuousLearner:
         return current_epochs, incremental
 
     # =========================================================================
-    # SINGLE CYCLE — AUTO MODE
+    # SINGLE CYCLE 鈥?AUTO MODE
     # =========================================================================
 
     def _run_cycle(
@@ -1793,7 +1793,7 @@ class ContinuousLearner:
             return False
 
     # =========================================================================
-    # SINGLE CYCLE — TARGETED MODE
+    # SINGLE CYCLE 鈥?TARGETED MODE
     # =========================================================================
 
     def _run_targeted_cycle(
@@ -1823,7 +1823,7 @@ class ContinuousLearner:
 
             if not train_codes:
                 self.progress.add_warning(
-                    "All selected stocks overlap with holdout set — "
+                    "All selected stocks overlap with holdout set 鈥?"
                     "training on them anyway"
                 )
                 train_codes = list(stock_codes)
@@ -2011,7 +2011,7 @@ class ContinuousLearner:
             self._update(
                 stage="complete", progress=100.0,
                 message=(
-                    f"✅ {label}Cycle {cycle_number}: acc={acc:.1%}, "
+                    f"鉁?{label}Cycle {cycle_number}: acc={acc:.1%}, "
                     f"{len(ok_codes)} trained, "
                     f"total={len(self._replay)} | ACCEPTED"
                 ),
@@ -2022,8 +2022,8 @@ class ContinuousLearner:
             self._update(
                 stage="complete", progress=100.0,
                 message=(
-                    f"⚠️ {label}Cycle {cycle_number}: acc={acc:.1%} | "
-                    f"REJECTED — previous model restored"
+                    f"鈿狅笍 {label}Cycle {cycle_number}: acc={acc:.1%} | "
+                    f"REJECTED 鈥?previous model restored"
                 ),
             )
 
@@ -2050,7 +2050,7 @@ class ContinuousLearner:
             eff_interval = "1d"
             bpd = BARS_PER_DAY.get(interval, 240)
             eff_horizon = max(1, int(np.ceil(horizon / bpd)))
-            log.info(f"Market closed: {interval}→1d, horizon {horizon}→{eff_horizon}")
+            log.info(f"Market closed: {interval}->1d, horizon {horizon}->{eff_horizon}")
 
         bpd = BARS_PER_DAY.get(eff_interval, 1)
         max_avail = int(INTERVAL_MAX_DAYS.get(eff_interval, 500) * bpd * 0.8)
@@ -2110,14 +2110,14 @@ class ContinuousLearner:
                 continue
 
         if not new_holdout:
-            log.warning("Failed to build new holdout set — keeping existing")
+            log.warning("Failed to build new holdout set 鈥?keeping existing")
             return
 
         # Atomic check-and-swap
         with self._lock:
             current_holdout_set = set(self._holdout_codes)
             if current_holdout_set != old_holdout_set and self._holdout_codes:
-                log.debug("Holdout already updated by another thread — skipping")
+                log.debug("Holdout already updated by another thread 鈥?skipping")
                 return
             self._holdout_codes = new_holdout
 
@@ -2193,7 +2193,7 @@ class ContinuousLearner:
         holdout_snapshot = list(self._get_holdout_set())
 
         if not holdout_snapshot:
-            log.info("No holdout validation — accepting")
+            log.info("No holdout validation 鈥?accepting")
             return True
 
         post_val = self._guardian.validate_model(
@@ -2206,22 +2206,17 @@ class ContinuousLearner:
         self.progress.old_stock_accuracy = post_acc
         self.progress.old_stock_confidence = post_conf
 
-        # FIX VAL: Insufficient holdout predictions
+        # Safety gate: insufficient holdout predictions cannot validate quality.
         if post_preds < MIN_PREDS:
             log.warning(
-                f"Holdout produced only {post_preds} predictions "
-                f"(need {MIN_PREDS}) — accepting on training accuracy"
+                f"REJECTED: holdout produced only {post_preds} predictions "
+                f"(need {MIN_PREDS}); restoring previous model"
             )
             self.progress.add_warning(
-                f"Holdout insufficient ({post_preds}/{MIN_PREDS} predictions) "
-                f"— accepted on train acc={new_acc:.1%}"
+                f"Rejected: holdout insufficient ({post_preds}/{MIN_PREDS} predictions)"
             )
-            accepted = new_acc >= 0.30
-            if accepted:
-                self._maybe_tune_precision_thresholds(
-                    interval, horizon, post_val.get("samples", [])
-                )
-            return accepted
+            self._guardian.restore_backup(interval, horizon)
+            return False
 
         if not pre_val or pre_val.get('predictions_made', 0) < MIN_PREDS:
             log.info(
@@ -2240,8 +2235,8 @@ class ContinuousLearner:
         pre_conf = pre_val.get('avg_confidence', 0)
 
         log.info(
-            f"Validation: holdout acc {pre_acc:.1%}→{post_acc:.1%}, "
-            f"conf {pre_conf:.3f}→{post_conf:.3f}, train acc={new_acc:.1%}"
+            f"Validation: holdout acc {pre_acc:.1%}->{post_acc:.1%}, "
+            f"conf {pre_conf:.3f}->{post_conf:.3f}, train acc={new_acc:.1%}"
         )
 
         if pre_acc > 0.1:
@@ -2249,7 +2244,7 @@ class ContinuousLearner:
             if degradation > MAX_DEGRADATION:
                 log.warning(f"REJECTED: holdout acc degraded {degradation:.1%}")
                 self._guardian.restore_backup(interval, horizon)
-                self.progress.add_warning(f"Rejected: holdout acc {pre_acc:.1%}→{post_acc:.1%}")
+                self.progress.add_warning(f"Rejected: holdout acc {pre_acc:.1%}->{post_acc:.1%}")
                 return False
 
         if pre_conf > 0.1:
@@ -2571,7 +2566,7 @@ class ContinuousLearner:
                 data_str = json.dumps(state, indent=2, sort_keys=True)
                 expected = hashlib.sha256(data_str.encode()).hexdigest()[:16]
                 if saved_checksum != expected:
-                    log.warning("State file checksum mismatch — may be corrupted")
+                    log.warning("State file checksum mismatch 鈥?may be corrupted")
             elif '_checksum' in raw:
                 raw_copy = dict(raw)
                 raw_copy.pop('_checksum', None)
