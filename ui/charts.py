@@ -20,7 +20,7 @@ except ImportError:
 
 
 # =============================================================================
-# CANDLESTICK ITEM (module-scope so it can be referenced by name)
+# CANDLESTICK ITEM
 # =============================================================================
 
 if HAS_PYQTGRAPH:
@@ -119,38 +119,38 @@ if HAS_PYQTGRAPH:
                 return pg.QtCore.QRectF()
 
 else:
-    # Stub when pyqtgraph not available
     CandlestickItem = None
 
 
 # =============================================================================
-# MAIN STOCK CHART
+# MAIN STOCK CHART - FIXED VERSION
 # =============================================================================
 
 class StockChart(QWidget):
     """
-    Interactive stock chart with AI prediction overlay.
-
-    Features:
-    - Historical price display (line or candlestick)
-    - AI-predicted future prices
-    - Trading levels (stop loss, targets)
-    - Real-time updates
+    Interactive stock chart with THREE layers:
+    
+    Layer 1 (BOTTOM): Prediction line (dashed green) - AI forecast
+    Layer 2 (MIDDLE): Price line (solid blue) - connects close prices  
+    Layer 3 (TOP): Candlesticks (red/green) - OHLCV bars
+    
+    Plus: Trading level lines (stop loss, targets)
     """
 
     def __init__(self, parent=None):
         super().__init__(parent)
 
-        # Data
+        # Data storage
+        self._bars: List[dict] = []
         self._actual_prices: List[float] = []
         self._predicted_prices: List[float] = []
         self._levels: Dict[str, float] = {}
 
-        # Plot references (set in _setup_pyqtgraph)
+        # Plot references
         self.plot_widget = None
-        self.actual_line = None
-        self.predicted_line = None
-        self.candles = None
+        self.candles = None           # Layer 3: Candlesticks (top)
+        self.actual_line = None       # Layer 2: Price line (middle)
+        self.predicted_line = None    # Layer 1: Prediction (bottom)
         self.level_lines: Dict[str, object] = {}
 
         self._setup_ui()
@@ -166,7 +166,7 @@ class StockChart(QWidget):
             self._setup_fallback()
 
     def _setup_pyqtgraph(self):
-        """Setup pyqtgraph chart — single initialization, no duplicates."""
+        """Setup pyqtgraph chart with all three layers."""
         pg.setConfigOptions(
             antialias=True,
             background='#0d1117',
@@ -179,20 +179,25 @@ class StockChart(QWidget):
         self.plot_widget.showGrid(x=True, y=True, alpha=0.3)
         self.plot_widget.setBackground('#0d1117')
 
-        # Actual price line
-        self.actual_line = self.plot_widget.plot(
-            pen=pg.mkPen(color='#58a6ff', width=2),
-            name='Actual'
-        )
-
-        # Predicted price line (dashed)
+        # === Layer 1 (BOTTOM): Prediction line - dashed green ===
         self.predicted_line = self.plot_widget.plot(
             pen=pg.mkPen(
-                color='#3fb950', width=2,
+                color='#3fb950',
+                width=2,
                 style=Qt.PenStyle.DashLine
             ),
-            name='Predicted'
+            name='AI Prediction'
         )
+
+        # === Layer 2 (MIDDLE): Price line - solid blue ===
+        self.actual_line = self.plot_widget.plot(
+            pen=pg.mkPen(color='#58a6ff', width=1.5),
+            name='Price'
+        )
+
+        # === Layer 3 (TOP): Candlesticks ===
+        self.candles = CandlestickItem()
+        self.plot_widget.addItem(self.candles)
 
         # Level lines dict
         self.level_lines = {}
@@ -200,14 +205,10 @@ class StockChart(QWidget):
         # Legend
         self.plot_widget.addLegend()
 
-        # FIX: Create CandlestickItem ONCE at module-scope class
-        self.candles = CandlestickItem()
-        self.plot_widget.addItem(self.candles)
-
         self.layout().addWidget(self.plot_widget)
 
     def _setup_fallback(self):
-        """Setup fallback when pyqtgraph not available"""
+        """Setup fallback when pyqtgraph not available."""
         self.fallback_label = QLabel(
             "Chart requires pyqtgraph\n\n"
             "Install with: pip install pyqtgraph"
@@ -225,7 +226,115 @@ class StockChart(QWidget):
         self.layout().addWidget(self.fallback_label)
 
     # =========================================================================
-    # CANDLESTICK UPDATE
+    # UNIFIED UPDATE METHOD - Draws all three layers together
+    # =========================================================================
+
+    def update_chart(
+        self,
+        bars: List[dict],
+        predicted_prices: List[float] = None,
+        levels: Dict[str, float] = None,
+    ):
+        """
+        UNIFIED update method - draws all three layers together.
+        
+        This is the PRIMARY method that should be called for updates.
+        Both update_candles() and update_data() now delegate to this.
+        
+        Args:
+            bars: List of OHLCV dicts with keys: open, high, low, close
+            predicted_prices: AI forecast prices (the "guessed graph")
+            levels: Trading levels dict (stop_loss, target_1, etc.)
+        """
+        self._bars = list(bars) if bars else []
+        self._predicted_prices = list(predicted_prices) if predicted_prices else []
+        self._levels = levels or {}
+
+        if not HAS_PYQTGRAPH:
+            return
+
+        if not self._bars:
+            self._clear_all()
+            return
+
+        try:
+            # Parse bar data - extract closes for line, OHLC for candles
+            closes: List[float] = []
+            ohlc: List[tuple] = []
+
+            for i, b in enumerate(self._bars[-180:]):
+                try:
+                    o = float(b.get("open", 0) or 0)
+                    h = float(b.get("high", 0) or 0)
+                    l_val = float(b.get("low", 0) or 0)
+                    c = float(b.get("close", 0) or 0)
+
+                    if c <= 0:
+                        continue
+
+                    # Fix missing OHLC values
+                    if o <= 0:
+                        o = c
+                    if h <= 0:
+                        h = max(o, c)
+                    if l_val <= 0:
+                        l_val = min(o, c)
+
+                    # Ensure high >= low
+                    if h < l_val:
+                        h, l_val = l_val, h
+
+                    ohlc.append((i, o, c, l_val, h))
+                    closes.append(c)
+                except (ValueError, TypeError):
+                    continue
+
+            if not closes:
+                self._clear_all()
+                return
+
+            # === Layer 3 (TOP): Candlesticks ===
+            if self.candles is not None:
+                self.candles.setData(ohlc)
+
+            # === Layer 2 (MIDDLE): Price line connecting closes ===
+            if self.actual_line is not None:
+                x_actual = np.arange(len(closes))
+                y_actual = np.array(closes, dtype=float)
+                self.actual_line.setData(x_actual, y_actual)
+
+            # === Layer 1 (BOTTOM): Prediction line (guessed graph) ===
+            if self.predicted_line is not None:
+                if closes and self._predicted_prices:
+                    start_x = len(closes) - 1
+                    x_pred = np.arange(
+                        start_x,
+                        start_x + len(self._predicted_prices) + 1
+                    )
+                    # Connect from last actual price to predictions
+                    y_pred = np.array(
+                        [closes[-1]] + list(self._predicted_prices),
+                        dtype=float
+                    )
+                    self.predicted_line.setData(x_pred, y_pred)
+                else:
+                    self.predicted_line.clear()
+
+            # Store for level line calculations
+            self._actual_prices = closes
+
+            # Update trading level lines
+            self._update_level_lines()
+
+            # Auto-range to fit all data
+            if self.plot_widget is not None:
+                self.plot_widget.autoRange()
+
+        except Exception as e:
+            log.warning(f"Chart update failed: {e}")
+
+    # =========================================================================
+    # BACKWARD COMPATIBLE METHODS - Now delegate to update_chart()
     # =========================================================================
 
     def update_candles(
@@ -236,78 +345,11 @@ class StockChart(QWidget):
     ):
         """
         Update chart with candlestick bar data.
-
-        Args:
-            bars: list of dicts with keys: open/high/low/close/timestamp
-            predicted_prices: AI-predicted future prices
-            levels: Trading levels dict
+        
+        BACKWARD COMPATIBLE: This now delegates to update_chart()
+        so all three layers are drawn together.
         """
-        self._levels = levels or {}
-        self._predicted_prices = (
-            list(predicted_prices) if predicted_prices else []
-        )
-
-        if not HAS_PYQTGRAPH or self.candles is None:
-            return
-
-        if not bars:
-            try:
-                self.candles.setData([])
-                if self.predicted_line:
-                    self.predicted_line.clear()
-                self._update_level_lines()
-            except Exception:
-                pass
-            return
-
-        try:
-            # Convert to (x, open, close, low, high)
-            ohlc = []
-            closes = []
-            for i, b in enumerate(bars[-180:]):
-                try:
-                    o = float(b.get("open", 0))
-                    h = float(b.get("high", 0))
-                    l_val = float(b.get("low", 0))
-                    c = float(b.get("close", 0))
-                    if o <= 0 or c <= 0 or h <= 0 or l_val <= 0:
-                        continue
-                    ohlc.append((i, o, c, l_val, h))
-                    closes.append(c)
-                except (ValueError, TypeError):
-                    continue
-
-            self.candles.setData(ohlc)
-
-            # Predicted line anchored from last close
-            if closes and self._predicted_prices and self.predicted_line:
-                start_x = len(ohlc) - 1
-                x_pred = np.arange(
-                    start_x,
-                    start_x + len(self._predicted_prices) + 1
-                )
-                y_pred = np.array(
-                    [closes[-1]] + list(self._predicted_prices),
-                    dtype=float
-                )
-                self.predicted_line.setData(x_pred, y_pred)
-            elif self.predicted_line:
-                self.predicted_line.clear()
-
-            # Also store closes for level lines
-            self._actual_prices = closes
-
-            self._update_level_lines()
-
-            if self.plot_widget:
-                self.plot_widget.autoRange()
-
-        except Exception as e:
-            log.warning(f"Candle chart update failed: {e}")
-
-    # =========================================================================
-    # LINE CHART UPDATE
-    # =========================================================================
+        self.update_chart(bars, predicted_prices, levels)
 
     def update_data(
         self,
@@ -317,68 +359,43 @@ class StockChart(QWidget):
     ):
         """
         Update chart with line data.
-
-        Args:
-            actual_prices: Historical prices
-            predicted_prices: AI-predicted future prices
-            levels: Trading levels (stop_loss, target_1, etc.)
+        
+        BACKWARD COMPATIBLE: Converts price list to bar format,
+        then delegates to update_chart() so all three layers work.
         """
-        self._actual_prices = list(actual_prices) if actual_prices else []
-        self._predicted_prices = (
-            list(predicted_prices) if predicted_prices else []
-        )
-        self._levels = levels or {}
+        # Convert simple price list to minimal bar format
+        bars = []
+        for p in actual_prices:
+            try:
+                price = float(p)
+                if price > 0:
+                    bars.append({
+                        "open": price,
+                        "high": price,
+                        "low": price,
+                        "close": price
+                    })
+            except (ValueError, TypeError):
+                continue
 
-        if not HAS_PYQTGRAPH:
-            return
+        self.update_chart(bars, predicted_prices, levels)
 
+    # =========================================================================
+    # HELPER METHODS
+    # =========================================================================
+
+    def _clear_all(self):
+        """Clear all chart elements."""
         try:
-            self._update_plot()
-        except Exception as e:
-            log.warning(f"Chart update failed: {e}")
-
-    def _update_plot(self):
-        """Update the plot with current data (safe for empty arrays)."""
-        if self.actual_line is None:
-            return
-
-        if not self._actual_prices:
-            self.actual_line.clear()
-            if self.predicted_line:
+            if self.candles is not None:
+                self.candles.setData([])
+            if self.actual_line is not None:
+                self.actual_line.clear()
+            if self.predicted_line is not None:
                 self.predicted_line.clear()
             self._update_level_lines()
-            return
-
-        x_actual = np.arange(len(self._actual_prices))
-        y_actual = np.array(self._actual_prices, dtype=float)
-        self.actual_line.setData(x_actual, y_actual)
-
-        if (
-            self._predicted_prices
-            and len(self._actual_prices) >= 1
-            and self.predicted_line
-        ):
-            start_x = len(self._actual_prices) - 1
-            x_pred = np.arange(
-                start_x,
-                start_x + len(self._predicted_prices) + 1
-            )
-            y_pred = np.array(
-                [self._actual_prices[-1]] + list(self._predicted_prices),
-                dtype=float
-            )
-            self.predicted_line.setData(x_pred, y_pred)
-        elif self.predicted_line:
-            self.predicted_line.clear()
-
-        self._update_level_lines()
-
-        if self.plot_widget:
-            self.plot_widget.autoRange()
-
-    # =========================================================================
-    # TRADING LEVEL LINES
-    # =========================================================================
+        except Exception as e:
+            log.debug(f"Chart clear failed: {e}")
 
     def _update_level_lines(self):
         """Update horizontal lines for trading levels."""
@@ -412,7 +429,8 @@ class StockChart(QWidget):
                         pos=price,
                         angle=0,
                         pen=pg.mkPen(
-                            color=color, width=1,
+                            color=color,
+                            width=1,
                             style=Qt.PenStyle.DotLine
                         ),
                         label=f'{name}: ¥{price:.2f}',
@@ -426,39 +444,17 @@ class StockChart(QWidget):
                 except Exception as e:
                     log.debug(f"Failed to add level line {name}: {e}")
 
-    # =========================================================================
-    # CLEAR / TITLE
-    # =========================================================================
-
     def clear(self):
-        """Clear all data from chart"""
+        """Clear all data from chart."""
+        self._bars = []
         self._actual_prices = []
         self._predicted_prices = []
         self._levels = {}
-
-        if not HAS_PYQTGRAPH:
-            return
-
-        try:
-            if self.actual_line:
-                self.actual_line.clear()
-            if self.predicted_line:
-                self.predicted_line.clear()
-            if self.candles:
-                self.candles.setData([])
-
-            for line in self.level_lines.values():
-                try:
-                    self.plot_widget.removeItem(line)
-                except Exception:
-                    pass
-            self.level_lines.clear()
-        except Exception as e:
-            log.debug(f"Chart clear failed: {e}")
+        self._clear_all()
 
     def set_title(self, title: str):
-        """Set chart title"""
-        if HAS_PYQTGRAPH and self.plot_widget:
+        """Set chart title."""
+        if HAS_PYQTGRAPH and self.plot_widget is not None:
             try:
                 self.plot_widget.setTitle(
                     title, color='#c9d1d9', size='12pt'
@@ -466,15 +462,17 @@ class StockChart(QWidget):
             except Exception:
                 pass
 
+    def get_bar_count(self) -> int:
+        """Get current number of bars."""
+        return len(self._bars)
+
 
 # =============================================================================
-# MINI CHART (for watchlist)
+# MINI CHART (for watchlist) - unchanged
 # =============================================================================
 
 class MiniChart(QWidget):
-    """
-    Compact mini chart for watchlist items.
-    """
+    """Compact mini chart for watchlist items."""
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -505,7 +503,7 @@ class MiniChart(QWidget):
             layout.addWidget(self.label)
 
     def update_data(self, prices: List[float]):
-        """Update mini chart"""
+        """Update mini chart."""
         self._prices = list(prices) if prices else []
 
         if not HAS_PYQTGRAPH or not self._prices or self.line is None:

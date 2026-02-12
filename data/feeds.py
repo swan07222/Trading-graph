@@ -151,12 +151,7 @@ class PollingFeed(DataFeed):
         log.debug(f"Unsubscribed from {symbol}")
 
     def _poll_loop(self):
-        """
-        Drift-resistant polling loop.
-        
-        FIX: Smoother back-pressure handling — skips to next aligned
-        tick instead of sleeping a full interval when behind.
-        """
+        """Drift-resistant polling loop."""
         next_tick = time.monotonic()
 
         while self._running:
@@ -199,13 +194,11 @@ class PollingFeed(DataFeed):
             except Exception as e:
                 log.error(f"Polling loop error: {e}")
 
-            # Smooth back-pressure: if behind, jump to next aligned tick
+            # Smooth back-pressure
             now = time.monotonic()
             if next_tick <= now:
-                # Calculate how many ticks we missed
                 missed = int((now - next_tick) / self._interval) + 1
                 next_tick += missed * self._interval
-                # Brief sleep to avoid tight loop
                 time.sleep(min(0.1, self._interval * 0.1))
             else:
                 time.sleep(max(0.0, next_tick - now))
@@ -215,7 +208,6 @@ class PollingFeed(DataFeed):
         result: Dict[str, object] = {}
         fetcher = self._get_fetcher()
 
-        # 1) Batch
         try:
             batch = fetcher.get_realtime_batch(symbols)
             if isinstance(batch, dict) and batch:
@@ -225,7 +217,6 @@ class PollingFeed(DataFeed):
 
         missing = [s for s in symbols if s not in result]
 
-        # 2) SpotCache fill
         if missing:
             try:
                 from data.fetcher import Quote, get_spot_cache
@@ -254,7 +245,6 @@ class PollingFeed(DataFeed):
             except Exception:
                 pass
 
-        # 3) Per-symbol fallback (only if few missing)
         missing = [s for s in symbols if s not in result]
         if missing and len(missing) <= 8:
             for symbol in missing:
@@ -404,7 +394,6 @@ class WebSocketFeed(DataFeed):
 
             self._last_message_time[symbol] = datetime.now()
 
-            # Safe int conversion for volume
             raw_vol = data.get("volume", 0)
             try:
                 vol = int(float(raw_vol))
@@ -454,10 +443,6 @@ class WebSocketFeed(DataFeed):
         self.status = FeedStatus.ERROR
 
     def _on_close(self, ws, close_status_code, close_msg):
-        """
-        Bounded reconnection — limited retries with exponential backoff.
-        FIX: Added maximum reconnect attempt limit.
-        """
         if not self._running:
             self.status = FeedStatus.DISCONNECTED
             return
@@ -481,7 +466,6 @@ class WebSocketFeed(DataFeed):
             f"{self._MAX_RECONNECT_ATTEMPTS})..."
         )
 
-        # Only allow one reconnect thread at a time
         if not self._reconnect_semaphore.acquire(blocking=False):
             log.debug("Reconnect already in progress, skipping")
             return
@@ -603,21 +587,27 @@ class AggregatedFeed(DataFeed):
 
 
 # ------------------------------------------------------------------
-# Bar aggregator
+# Volume mode enum
 # ------------------------------------------------------------------
 
 
 class VolumeMode(Enum):
     """Volume interpretation mode."""
-    CUMULATIVE = "cumulative"  # Volume field is cumulative (e.g., tencent)
-    DELTA = "delta"            # Volume field is per-tick delta
+    CUMULATIVE = "cumulative"
+    DELTA = "delta"
+
+
+# ------------------------------------------------------------------
+# Bar aggregator - FIXED to emit partial bars
+# ------------------------------------------------------------------
 
 
 class BarAggregator:
     """
     Aggregates ticks into OHLCV bars with configurable interval.
     
-    FIX: Supports both cumulative and delta volume modes.
+    FIXED: Now emits PARTIAL bars on every tick so the chart
+    updates in real-time, not just on bar boundaries.
     """
 
     def __init__(
@@ -647,7 +637,11 @@ class BarAggregator:
             self._volume_mode = mode
 
     def on_tick(self, quote):
-        """Process incoming tick/quote."""
+        """
+        Process incoming tick/quote.
+        
+        FIXED: Now emits partial bar on EVERY tick for real-time updates.
+        """
         symbol = getattr(quote, "code", None)
         if not symbol:
             return
@@ -668,7 +662,7 @@ class BarAggregator:
                 bar.get("session_date")
                 and bar["session_date"] != ts.date()
             ):
-                self._emit_bar(symbol, bar)
+                self._emit_bar(symbol, bar, final=True)
                 self._current_bars[symbol] = self._new_bar(quote)
                 bar = self._current_bars[symbol]
 
@@ -681,12 +675,15 @@ class BarAggregator:
             self._update_volume(bar, quote)
 
             # Bar boundary check
-            bar_end = bar["timestamp"] + timedelta(
-                seconds=self._interval
-            )
+            bar_end = bar["timestamp"] + timedelta(seconds=self._interval)
+            
             if ts >= bar_end:
-                self._emit_bar(symbol, bar)
+                # Bar complete - emit as final and start new bar
+                self._emit_bar(symbol, bar, final=True)
                 self._current_bars[symbol] = self._new_bar(quote)
+            else:
+                # FIXED: Emit partial bar for real-time chart updates
+                self._emit_bar(symbol, bar, final=False)
 
     def _update_volume(self, bar: Dict, quote):
         """Update bar volume based on configured mode."""
@@ -700,11 +697,9 @@ class BarAggregator:
             return
 
         if self._volume_mode == VolumeMode.CUMULATIVE:
-            # Cumulative: compute delta from last cumulative value
             last_cum = int(bar.get("last_cum_vol", 0) or 0)
 
             if vol_value < last_cum:
-                # Cumulative reset (new session) — don't spike
                 delta = 0
             else:
                 delta = vol_value - last_cum
@@ -713,14 +708,12 @@ class BarAggregator:
             bar["last_cum_vol"] = vol_value
 
         elif self._volume_mode == VolumeMode.DELTA:
-            # Delta: volume field is per-tick, add directly
             bar["volume"] += max(vol_value, 0)
 
     def _new_bar(self, quote) -> Dict:
         """Create a new bar with proper time alignment."""
         ts = getattr(quote, "timestamp", None) or datetime.now()
 
-        # Proper time alignment using seconds-since-midnight
         total_seconds = ts.hour * 3600 + ts.minute * 60 + ts.second
         remainder = total_seconds % max(self._interval, 1)
         bar_start = ts - timedelta(
@@ -753,62 +746,73 @@ class BarAggregator:
             self._interval = max(1, int(interval_seconds))
             self._current_bars.clear()
 
-    def _emit_bar(self, symbol: str, bar: Dict):
-        """Emit completed bar, persist to DB, notify callbacks."""
-        # Publish event
-        EVENT_BUS.publish(
-            BarEvent(
-                symbol=symbol,
-                open=bar["open"],
-                high=bar["high"],
-                low=bar["low"],
-                close=bar["close"],
-                volume=bar["volume"],
-                timestamp=bar["timestamp"],
-            )
-        )
+    def _emit_bar(self, symbol: str, bar: Dict, final: bool = True):
+        """
+        Emit bar to callbacks.
+        
+        Args:
+            symbol: Stock symbol
+            bar: Bar data dict
+            final: If True, this is a completed bar. If False, partial/live bar.
+        """
+        # Add final flag to bar data
+        bar_copy = dict(bar)
+        bar_copy["final"] = final
 
-        # Persist to DB (non-critical — log failures)
-        try:
-            import pandas as pd
-            from data.database import get_database
-
-            db = get_database()
-            df = pd.DataFrame(
-                [{
-                    "open": float(bar["open"]),
-                    "high": float(bar["high"]),
-                    "low": float(bar["low"]),
-                    "close": float(bar["close"]),
-                    "volume": int(bar["volume"]),
-                    "amount": 0.0,
-                }],
-                index=pd.DatetimeIndex([bar["timestamp"]]),
+        # Publish event only for final bars (to avoid spamming event bus)
+        if final:
+            EVENT_BUS.publish(
+                BarEvent(
+                    symbol=symbol,
+                    open=bar["open"],
+                    high=bar["high"],
+                    low=bar["low"],
+                    close=bar["close"],
+                    volume=bar["volume"],
+                    timestamp=bar["timestamp"],
+                )
             )
 
-            # Correct interval label
-            if self._interval >= 60:
-                mins = self._interval / 60
-                if mins == int(mins):
-                    label = f"{int(mins)}m"
+            # Persist final bars to DB
+            try:
+                import pandas as pd
+                from data.database import get_database
+
+                db = get_database()
+                df = pd.DataFrame(
+                    [{
+                        "open": float(bar["open"]),
+                        "high": float(bar["high"]),
+                        "low": float(bar["low"]),
+                        "close": float(bar["close"]),
+                        "volume": int(bar["volume"]),
+                        "amount": 0.0,
+                    }],
+                    index=pd.DatetimeIndex([bar["timestamp"]]),
+                )
+
+                if self._interval >= 60:
+                    mins = self._interval / 60
+                    if mins == int(mins):
+                        label = f"{int(mins)}m"
+                    else:
+                        label = f"{self._interval}s"
                 else:
                     label = f"{self._interval}s"
-            else:
-                label = f"{self._interval}s"
 
-            db.upsert_intraday_bars(symbol, label, df)
-        except ImportError:
-            pass
-        except Exception as e:
-            log.debug(f"Bar DB persist failed for {symbol}: {e}")
+                db.upsert_intraday_bars(symbol, label, df)
+            except ImportError:
+                pass
+            except Exception as e:
+                log.debug(f"Bar DB persist failed for {symbol}: {e}")
 
-        # Notify callbacks (safe copy under lock)
+        # Notify callbacks for BOTH partial and final bars
         with self._lock:
             callbacks = self._callbacks.copy()
 
         for cb in callbacks:
             try:
-                cb(symbol, bar)
+                cb(symbol, bar_copy)
             except Exception as e:
                 log.warning(f"Bar callback error: {e}")
 
@@ -979,13 +983,11 @@ class FeedManager:
             self.subscribe(symbol)
 
     def get_quote(self, symbol: str) -> Optional[object]:
-        # Check manager cache first
         with self._quotes_lock:
             q = self._last_quotes.get(str(symbol))
             if q:
                 return q
 
-        # Fallback to polling feed cache
         if isinstance(self._active_feed, PollingFeed):
             return self._active_feed.get_quote(symbol)
         return None
@@ -1004,7 +1006,7 @@ class FeedManager:
         self._bar_aggregator.add_callback(callback)
 
     def shutdown(self):
-        """Shutdown all feeds and reset state for potential re-init."""
+        """Shutdown all feeds and reset state."""
         for feed in self._feeds.values():
             try:
                 feed.disconnect()

@@ -607,42 +607,70 @@ class MainApp(QMainWindow):
             pass
 
     def _on_bar_ui(self, symbol: str, bar: dict):
-        """Handle bar data on UI thread."""
+        """
+        Handle bar data on UI thread.
+        
+        FIXED: Now properly updates chart with all three layers.
+        """
         symbol = self._ui_norm(symbol)
         if not symbol:
             return
 
+        # Get or create bar array for this symbol
         arr = self._bars_by_symbol.get(symbol)
         if arr is None:
             arr = []
             self._bars_by_symbol[symbol] = arr
 
-        arr.append(bar)
-        if len(arr) > 400:
-            del arr[:-400]
+        # Check if this is a partial (live) bar or final bar
+        is_final = bar.get("final", True)
 
+        if is_final:
+            # Final bar - append to history
+            arr.append(bar)
+            if len(arr) > 400:
+                del arr[:-400]
+        else:
+            # Partial bar - update the last bar in place
+            if arr:
+                # Update existing last bar
+                arr[-1] = bar
+            else:
+                # First bar - just append
+                arr.append(bar)
+
+        # Only update chart if this is the currently displayed stock
         current_code = self._ui_norm(self.stock_input.text())
         if current_code != symbol:
             return
 
-        if hasattr(self, 'chart') and hasattr(self.chart, "update_candles"):
-            predicted = []
-            if (
-                self.current_prediction
-                and getattr(self.current_prediction, "stock_code", "") == symbol
-            ):
-                predicted = (
-                    getattr(self.current_prediction, "predicted_prices", [])
-                    or []
+        # Get prediction if available
+        predicted = []
+        if (
+            self.current_prediction
+            and getattr(self.current_prediction, "stock_code", "") == symbol
+        ):
+            predicted = (
+                getattr(self.current_prediction, "predicted_prices", [])
+                or []
+            )
+
+        # UNIFIED chart update - draws candles + line + prediction
+        try:
+            if hasattr(self.chart, 'update_chart'):
+                self.chart.update_chart(
+                    arr,
+                    predicted_prices=predicted,
+                    levels=self._get_levels_dict()
                 )
-            try:
+            elif hasattr(self.chart, 'update_candles'):
                 self.chart.update_candles(
                     arr,
                     predicted_prices=predicted,
                     levels=self._get_levels_dict()
                 )
-            except Exception as e:
-                log.debug(f"Chart candle update failed: {e}")
+        except Exception as e:
+            log.debug(f"Chart update failed: {e}")
 
     # =========================================================================
     # MAIN UI LAYOUT
@@ -1618,7 +1646,13 @@ class MainApp(QMainWindow):
         QApplication.alert(self)
 
     def _on_price_updated(self, code: str, price: float):
-        """Handle price update from monitor - thread safe."""
+        """
+        Handle price update from monitor.
+        
+        FIXED: No longer calls update_data() which was overwriting candles.
+        Instead, updates the current bar's close price so the candle
+        reflects the live price.
+        """
         code = self._ui_norm(code)
         if not code:
             return
@@ -1632,38 +1666,48 @@ class MainApp(QMainWindow):
                 )
                 break
 
+        # Only process further if this is the current stock
         current_code = self._ui_norm(self.stock_input.text())
         if current_code != code:
             return
+
+        # Update the last bar's close price for live candle display
+        arr = self._bars_by_symbol.get(code)
+        if arr and len(arr) > 0:
+            # Update OHLC of current bar
+            arr[-1]["close"] = price
+            arr[-1]["high"] = max(arr[-1].get("high", price), price)
+            arr[-1]["low"] = min(arr[-1].get("low", price), price)
+
+            # Get prediction
+            predicted = []
+            if (
+                self.current_prediction
+                and getattr(self.current_prediction, "stock_code", "") == code
+            ):
+                predicted = (
+                    getattr(self.current_prediction, "predicted_prices", [])
+                    or []
+                )
+
+            # Update chart with modified bar data
+            try:
+                if hasattr(self.chart, 'update_chart'):
+                    self.chart.update_chart(
+                        arr,
+                        predicted_prices=predicted,
+                        levels=self._get_levels_dict()
+                    )
+            except Exception as e:
+                log.debug(f"Chart price update failed: {e}")
+
+        # =====================================================================
+        # THROTTLED FORECAST REFRESH (keep existing logic but simplified)
+        # =====================================================================
+        
         if not self.predictor:
             return
 
-        # Fast chart update (no inference) - thread safe
-        if (
-            self.current_prediction
-            and hasattr(self.current_prediction, "price_history")
-        ):
-            with self._price_series_lock:
-                series = (
-                    self._live_price_series.get(code)
-                    or list(self.current_prediction.price_history or [])
-                )
-                series = (series[-180:] + [float(price)])[-180:]
-                self._live_price_series[code] = series
-                series_copy = list(series)
-
-            predicted = getattr(
-                self.current_prediction, "predicted_prices", []
-            )
-            if hasattr(self.chart, 'update_data'):
-                try:
-                    self.chart.update_data(
-                        series_copy, predicted, self._get_levels_dict()
-                    )
-                except Exception as e:
-                    log.debug(f"Chart update failed: {e}")
-
-        # Throttle expensive refresh
         now = time.time()
         if (now - self._last_forecast_refresh_ts) < 2.0:
             return
@@ -1697,18 +1741,21 @@ class MainApp(QMainWindow):
                 if not res:
                     return
                 actual_prices, predicted_prices = res
-                if hasattr(self.chart, 'update_data'):
-                    self.chart.update_data(
-                        actual_prices,
-                        predicted_prices,
-                        self._get_levels_dict()
-                    )
+                
+                # Update current_prediction with new forecast
                 if (
                     self.current_prediction
                     and self.current_prediction.stock_code == code
                 ):
-                    self.current_prediction.predicted_prices = (
-                        predicted_prices
+                    self.current_prediction.predicted_prices = predicted_prices
+                
+                # Refresh chart with new prediction
+                arr = self._bars_by_symbol.get(code)
+                if arr and hasattr(self.chart, 'update_chart'):
+                    self.chart.update_chart(
+                        arr,
+                        predicted_prices=predicted_prices,
+                        levels=self._get_levels_dict()
                     )
             finally:
                 self.workers.pop("forecast_refresh", None)

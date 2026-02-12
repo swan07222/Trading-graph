@@ -1110,7 +1110,7 @@ class ContinuousLearner:
         self._fetcher = ParallelFetcher(max_workers=5)
 
         self._holdout_codes: List[str] = []
-        self._holdout_size: int = 15
+        self._holdout_size: int = 10
         self._holdout_refresh_interval: int = 50
 
         self.state_path = CONFIG.DATA_DIR / "learner_state.json"
@@ -1977,7 +1977,7 @@ class ContinuousLearner:
         return eff_interval, eff_horizon, eff_lookback, min_bars
 
     def _ensure_holdout(self, interval, lookback, min_bars, cycle_number):
-        """FIX C3: Atomic holdout refresh with check-and-swap pattern."""
+        """FIX: Adaptive holdout size based on pool size."""
         with self._lock:
             should_refresh = (
                 not self._holdout_codes
@@ -1987,7 +1987,7 @@ class ContinuousLearner:
                 return
             old_holdout_set = set(self._holdout_codes)
 
-        # Build candidate list (slow — outside lock)
+        # Build candidate list
         candidates = list(CONFIG.STOCK_POOL)
         replay_all = set(self._replay.get_all())
         extra = [c for c in replay_all if c not in candidates]
@@ -1995,12 +1995,19 @@ class ContinuousLearner:
         candidates.extend(extra[:20])
         random.shuffle(candidates)
 
-        # Fetch data for candidates (slow — outside lock)
+        # FIX: Adaptive holdout size - never more than 30% of pool
+        pool_size = len(candidates)
+        max_holdout = max(3, int(pool_size * 0.30))  # 30% max
+        target_holdout = min(self._holdout_size, max_holdout)
+        
+        log.debug(f"Holdout: pool={pool_size}, target={target_holdout}")
+
+        # Fetch data for candidates
         new_holdout = []
         fetcher = get_fetcher()
 
         for code in candidates:
-            if len(new_holdout) >= self._holdout_size:
+            if len(new_holdout) >= target_holdout:  # Use target, not self._holdout_size
                 break
             if self._should_stop():
                 break
@@ -2026,11 +2033,7 @@ class ContinuousLearner:
             self._holdout_codes = new_holdout
 
         self._guardian.set_holdout(new_holdout)
-
-        if not old_holdout_set:
-            log.info(f"Holdout set initialized: {len(new_holdout)} stocks: {new_holdout[:5]}...")
-        else:
-            log.info(f"Holdout set refreshed: {len(new_holdout)} stocks: {new_holdout[:5]}...")
+        log.info(f"Holdout set: {len(new_holdout)} stocks (30% of {pool_size})")
 
     def _train(
         self, ok_codes, epochs, interval, horizon, lookback, incremental, lr,

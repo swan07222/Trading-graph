@@ -433,7 +433,7 @@ class AkShareSource(DataSource):
 
     name = "akshare"
     priority = 1
-    needs_china_direct = True
+    needs_china_direct = False
 
     _AKSHARE_PERIOD_MAP = {"1d": "daily", "1wk": "weekly", "1mo": "monthly"}
     _AKSHARE_MIN_MAP = {"1m": "1", "5m": "5", "15m": "15", "30m": "30", "60m": "60"}
@@ -481,6 +481,14 @@ class AkShareSource(DataSource):
             self._spot_cache = get_spot_cache()
         return self._spot_cache
 
+    def _get_effective_timeout(self) -> int:
+        """Short timeout when eastmoney is known to be blocked."""
+        from core.network import get_network_env
+        env = get_network_env()
+        if not env.eastmoney_ok:
+            return 5  # Fast fail on VPN
+        return _AKSHARE_SOCKET_TIMEOUT  # Normal timeout on China direct
+
     @retry(max_attempts=2, delay=1.0, backoff=2.0)
     def get_history(self, code: str, days: int) -> pd.DataFrame:
         if not self._ak or not self.is_available():
@@ -488,7 +496,7 @@ class AkShareSource(DataSource):
 
         start_t = time.time()
         old_timeout = socket.getdefaulttimeout()
-        socket.setdefaulttimeout(_AKSHARE_SOCKET_TIMEOUT)
+        socket.setdefaulttimeout(self._get_effective_timeout())  # ← CHANGED
         try:
             end_date = datetime.now().strftime("%Y%m%d")
             start_date = (
@@ -537,7 +545,7 @@ class AkShareSource(DataSource):
 
         start_t = time.time()
         old_timeout = socket.getdefaulttimeout()
-        socket.setdefaulttimeout(_AKSHARE_SOCKET_TIMEOUT)
+        socket.setdefaulttimeout(self._get_effective_timeout())  # ← CHANGED
         try:
             # --- intraday ---
             if interval in self._AKSHARE_MIN_MAP:
@@ -628,7 +636,7 @@ class YahooSource(DataSource):
 
     name = "yahoo"
     priority = 1
-    needs_vpn = True
+    needs_vpn = False
 
     _SUFFIX_MAP = {"6": ".SS", "0": ".SZ", "3": ".SZ"}
 
@@ -651,10 +659,12 @@ class YahooSource(DataSource):
         return super().is_available()
 
     def is_suitable_for_network(self) -> bool:
-        """Yahoo should be enabled when reachable (env.yahoo_ok)."""
+        """Yahoo should be tried if it's reachable."""
         from core.network import get_network_env
         env = get_network_env()
-        return bool(getattr(env, "yahoo_ok", False))
+        # Try Yahoo if it was reachable, OR if we're not on China direct
+        # (where it's usually blocked)
+        return bool(getattr(env, "yahoo_ok", False)) or not env.is_china_direct
 
     def _to_yahoo_symbol(self, code: str) -> str:
         code = str(code).zfill(6)
@@ -984,11 +994,38 @@ class DataFetcher:
     # -- active source selection ---------------------------------------------
 
     def _get_active_sources(self) -> List[DataSource]:
-        active = [
-            s for s in self._all_sources
-            if s.is_available() and s.is_suitable_for_network()
-        ]
-        return sorted(active, key=lambda x: x.priority)
+        """
+        Get sources prioritized by current network environment.
+        
+        FIX: Network-suitable sources first, others as fallback.
+        """
+        from core.network import get_network_env
+        env = get_network_env()
+        
+        active = [s for s in self._all_sources if s.is_available()]
+        
+        def priority_key(s):
+            # On VPN: Yahoo first, AkShare last (it will timeout)
+            # On China direct: AkShare first, Yahoo last (it's blocked)
+            if env.is_china_direct:
+                if s.name == "akshare":
+                    return (0, s.priority)
+                elif s.name == "localdb":
+                    return (1, s.priority)
+                else:
+                    return (2, s.priority)
+            else:
+                # VPN/foreign: Yahoo first
+                if s.name == "yahoo":
+                    return (0, s.priority)
+                elif s.name == "localdb":
+                    return (1, s.priority)
+                elif s.name == "tencent":
+                    return (2, s.priority)
+                else:
+                    return (3, s.priority)  # AkShare last on VPN
+        
+        return sorted(active, key=priority_key)
 
     # -- rate limiting -------------------------------------------------------
 
@@ -1138,16 +1175,27 @@ class DataFetcher:
     def _fetch_from_sources_instrument(
         self, inst: dict, days: int, interval: str = "1d"
     ) -> pd.DataFrame:
+        """
+        Fetch from active sources with smart fallback.
+        
+        FIX: Tries ALL available sources, not just network-preferred ones.
+        """
         sources = self._get_active_sources()
 
         if not sources:
+            # No "active" sources — try ALL sources anyway
             log.warning(
-                f"No active sources for {inst.get('symbol')} ({interval})"
+                f"No active sources for {inst.get('symbol')} ({interval}), "
+                f"trying all sources as fallback"
             )
+            sources = [s for s in self._all_sources if s.name != "localdb"]
+
+        if not sources:
+            log.warning(f"No sources at all for {inst.get('symbol')} ({interval})")
             return pd.DataFrame()
 
         log.debug(
-            f"Active sources for {inst.get('symbol')} ({interval}): "
+            f"Sources for {inst.get('symbol')} ({interval}): "
             f"{[s.name for s in sources]}"
         )
 
@@ -1158,8 +1206,10 @@ class DataFetcher:
 
             if env.is_china_direct:
                 preferred = "akshare"
-            else:
+            elif env.yahoo_ok:
                 preferred = "yahoo"
+            else:
+                preferred = "akshare"  # Try anyway
 
             sources.sort(key=lambda s: (
                 0 if s.name == preferred else
@@ -1168,15 +1218,8 @@ class DataFetcher:
             ))
 
         with self._rate_limiter:
+            errors = []
             for source in sources:
-                if not source.is_available():
-                    log.debug(f"Source {source.name} not available")
-                    continue
-                if not source.is_suitable_for_network():
-                    log.debug(
-                        f"Source {source.name} not suitable for current network"
-                    )
-                    continue
                 try:
                     self._rate_limit(source.name, interval)
                     df = self._try_source_instrument(
@@ -1201,13 +1244,20 @@ class DataFetcher:
                             f"{inst.get('symbol')} ({interval})"
                         )
                 except Exception as exc:
+                    errors.append(f"{source.name}: {exc}")
                     log.debug(
                         f"{source.name} failed for "
                         f"{inst.get('symbol')} ({interval}): {exc}"
                     )
                     continue
 
-        log.warning(f"All sources failed for {inst.get('symbol')} ({interval})")
+        if errors:
+            log.warning(
+                f"All sources failed for {inst.get('symbol')} ({interval}): "
+                f"{'; '.join(errors[:3])}"
+            )
+        else:
+            log.warning(f"All sources failed for {inst.get('symbol')} ({interval})")
         return pd.DataFrame()
 
     @staticmethod

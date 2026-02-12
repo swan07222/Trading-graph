@@ -1,7 +1,6 @@
 # data/database.py
 import sqlite3
 import atexit
-import weakref
 from pathlib import Path
 from datetime import datetime, date, timedelta
 from typing import Dict, List, Optional, Tuple
@@ -30,13 +29,18 @@ class MarketDatabase:
     - intraday_bars: Intraday OHLCV data
     - features: Computed features
     - predictions: Model predictions
+    
+    FIX: Replaced weakref.WeakSet with regular set for connection tracking.
+    sqlite3.Connection does not support weak references.
     """
 
     def __init__(self, db_path: Path = None):
         self._db_path = db_path or CONFIG.data_dir / "market_data.db"
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
         self._local = threading.local()
-        self._connections: weakref.WeakSet = weakref.WeakSet()
+        # FIX: Use regular set instead of WeakSet
+        # sqlite3.Connection doesn't support weak references
+        self._connections: set = set()
         self._connections_lock = threading.Lock()
         self._schema_lock = threading.Lock()
         self._schema_ready = threading.Event()
@@ -129,7 +133,6 @@ class MarketDatabase:
                 self._apply_v1(conn)
             if current < 2:
                 self._apply_v2(conn)
-            # Add future migrations here: if current < 3: self._apply_v3(conn)
 
             self._set_schema_version(conn, _SCHEMA_VERSION)
         finally:
@@ -228,7 +231,7 @@ class MarketDatabase:
             )
 
     # ------------------------------------------------------------------
-    # NaN-safe type converters (module-level for reuse)
+    # NaN-safe type converters
     # ------------------------------------------------------------------
 
     @staticmethod
@@ -295,7 +298,7 @@ class MarketDatabase:
     def upsert_intraday_bars(
         self, code: str, interval: str, df: pd.DataFrame
     ):
-        """Insert/update intraday bars using vectorized row building."""
+        """Insert/update intraday bars."""
         if df is None or df.empty:
             return
 
@@ -333,7 +336,7 @@ class MarketDatabase:
     def _build_intraday_rows(
         self, code: str, interval: str, work: pd.DataFrame
     ) -> List[tuple]:
-        """Vectorized row construction for intraday bars."""
+        """Build rows for intraday bar insert."""
         tf = self._to_float
         ti = self._to_int
 
@@ -472,12 +475,6 @@ class MarketDatabase:
         """
         Get daily bars for a stock.
 
-        Args:
-            code: Stock code (e.g., '600519')
-            start_date: Optional start date filter
-            end_date: Optional end date filter
-            limit: Optional limit (returns most recent N bars)
-
         Returns:
             DataFrame with OHLCV data indexed by date (empty on error)
         """
@@ -538,31 +535,42 @@ class MarketDatabase:
     def get_last_date(self, code: str) -> Optional[date]:
         """Get last available date for a stock."""
         code = str(code).zfill(6)
-        cursor = self._conn.execute(
-            "SELECT MAX(date) FROM daily_bars WHERE code = ?", (code,)
-        )
-        row = cursor.fetchone()
-        if row and row[0]:
-            return datetime.fromisoformat(row[0]).date()
+        try:
+            cursor = self._conn.execute(
+                "SELECT MAX(date) FROM daily_bars WHERE code = ?", (code,)
+            )
+            row = cursor.fetchone()
+            if row and row[0]:
+                return datetime.fromisoformat(row[0]).date()
+        except Exception as e:
+            log.debug(f"get_last_date failed for {code}: {e}")
         return None
 
     def get_all_stocks(self) -> List[Dict]:
         """Get all stock metadata."""
-        cursor = self._conn.execute("SELECT * FROM stocks")
-        return [dict(row) for row in cursor.fetchall()]
+        try:
+            cursor = self._conn.execute("SELECT * FROM stocks")
+            return [dict(row) for row in cursor.fetchall()]
+        except Exception as e:
+            log.warning(f"get_all_stocks failed: {e}")
+            return []
 
     def get_stocks_with_data(self, min_days: int = 100) -> List[str]:
         """Get stock codes with at least *min_days* of bar data."""
-        cursor = self._conn.execute(
-            """
-            SELECT code, COUNT(*) as cnt
-            FROM daily_bars
-            GROUP BY code
-            HAVING cnt >= ?
-            """,
-            (min_days,),
-        )
-        return [row["code"] for row in cursor.fetchall()]
+        try:
+            cursor = self._conn.execute(
+                """
+                SELECT code, COUNT(*) as cnt
+                FROM daily_bars
+                GROUP BY code
+                HAVING cnt >= ?
+                """,
+                (min_days,),
+            )
+            return [row["code"] for row in cursor.fetchall()]
+        except Exception as e:
+            log.warning(f"get_stocks_with_data failed: {e}")
+            return []
 
     # ------------------------------------------------------------------
     # Predictions
@@ -577,7 +585,7 @@ class MarketDatabase:
         confidence: float,
         price: float,
     ):
-        """Save model prediction (upsert on code+timestamp)."""
+        """Save model prediction."""
         with self._transaction() as conn:
             conn.execute(
                 """
@@ -608,44 +616,54 @@ class MarketDatabase:
     # ------------------------------------------------------------------
 
     def get_data_stats(self) -> Dict:
-        """Get database statistics (safe for empty database)."""
+        """Get database statistics."""
         stats: Dict = {}
+        try:
+            cursor = self._conn.execute(
+                "SELECT COUNT(DISTINCT code) FROM stocks"
+            )
+            stats["total_stocks"] = cursor.fetchone()[0] or 0
 
-        cursor = self._conn.execute(
-            "SELECT COUNT(DISTINCT code) FROM stocks"
-        )
-        stats["total_stocks"] = cursor.fetchone()[0] or 0
+            cursor = self._conn.execute("SELECT COUNT(*) FROM daily_bars")
+            stats["total_bars"] = cursor.fetchone()[0] or 0
 
-        cursor = self._conn.execute("SELECT COUNT(*) FROM daily_bars")
-        stats["total_bars"] = cursor.fetchone()[0] or 0
-
-        cursor = self._conn.execute(
-            "SELECT MIN(date), MAX(date) FROM daily_bars"
-        )
-        row = cursor.fetchone()
-        stats["date_range"] = (row[0], row[1]) if row else (None, None)
+            cursor = self._conn.execute(
+                "SELECT MIN(date), MAX(date) FROM daily_bars"
+            )
+            row = cursor.fetchone()
+            stats["date_range"] = (row[0], row[1]) if row else (None, None)
+        except Exception as e:
+            log.warning(f"get_data_stats failed: {e}")
+            stats.setdefault("total_stocks", 0)
+            stats.setdefault("total_bars", 0)
+            stats.setdefault("date_range", (None, None))
 
         return stats
 
     def vacuum(self):
-        """Optimize database (must run outside any transaction)."""
+        """Optimize database."""
         conn = self._conn
-        # Commit any pending work, then run VACUUM in autocommit mode
         conn.commit()
         old_isolation = conn.isolation_level
         try:
-            conn.isolation_level = None  # autocommit
+            conn.isolation_level = None
             conn.execute("VACUUM")
         finally:
             conn.isolation_level = old_isolation
 
     def close(self):
         """Close this thread's connection."""
-        if hasattr(self._local, "conn") and self._local.conn:
+        if hasattr(self._local, "conn") and self._local.conn is None:
+            return
+        if hasattr(self._local, "conn"):
+            conn = self._local.conn
             try:
-                self._local.conn.close()
+                conn.close()
             except Exception:
                 pass
+            # Remove from tracked connections
+            with self._connections_lock:
+                self._connections.discard(conn)
             self._local.conn = None
 
     def close_all(self):
@@ -656,7 +674,14 @@ class MarketDatabase:
                     conn.close()
                 except Exception:
                     pass
-        self.close()
+            self._connections.clear()
+        # Also close this thread's connection
+        if hasattr(self._local, "conn") and self._local.conn is not None:
+            try:
+                self._local.conn.close()
+            except Exception:
+                pass
+            self._local.conn = None
 
 
 # ------------------------------------------------------------------
