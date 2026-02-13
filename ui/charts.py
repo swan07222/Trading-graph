@@ -71,18 +71,18 @@ if HAS_PYQTGRAPH:
 
                 top = max(o, c)
                 bot = min(o, c)
-                # Keep tiny/flat candles visible (e.g., partial live bars).
                 body_height = top - bot
-                min_body = max(abs(c) * 0.0008, 0.01)
-                if body_height < min_body:
-                    mid = (top + bot) / 2.0
-                    top = mid + (min_body / 2.0)
-                    bot = mid - (min_body / 2.0)
-                    body_height = min_body
-                rect = pg.QtCore.QRectF(
-                    t - w / 2.0, bot, w, body_height
-                )
-                p.drawRect(rect)
+                if body_height <= 1e-9:
+                    # Doji: keep as a thin horizontal mark without inflating body.
+                    p.drawLine(
+                        pg.QtCore.QPointF(t - (w / 2.0), c),
+                        pg.QtCore.QPointF(t + (w / 2.0), c),
+                    )
+                else:
+                    rect = pg.QtCore.QRectF(
+                        t - w / 2.0, bot, w, body_height
+                    )
+                    p.drawRect(rect)
 
             p.end()
             self._picture = pic
@@ -296,11 +296,14 @@ class StockChart(QWidget):
             closes: list[float] = []
             ohlc: list[tuple] = []
             prev_close: float | None = None
+            default_iv = str(
+                self._bars[-1].get("interval", "1m") if self._bars else "1m"
+            ).lower()
 
             # Render the full loaded window (7-day bars are prepared in app layer).
             # Keep a high cap for safety on very large inputs.
             render_bars = self._bars[-3000:]
-            for i, b in enumerate(render_bars):
+            for b in render_bars:
                 try:
                     o = float(b.get("open", 0) or 0)
                     h = float(b.get("high", 0) or 0)
@@ -331,15 +334,23 @@ class StockChart(QWidget):
 
                     # Clamp obvious outlier candle ranges to avoid visual spikes
                     # from bad ticks or malformed bars.
-                    iv = str(b.get("interval", "") or "").lower()
+                    iv = str(b.get("interval", default_iv) or default_iv).lower()
                     if iv == "1m":
-                        max_move = 0.03
+                        max_move = 0.012
+                        body_cap_pct = 0.004
+                        wick_cap_pct = 0.008
                     elif iv == "5m":
-                        max_move = 0.06
+                        max_move = 0.025
+                        body_cap_pct = 0.009
+                        wick_cap_pct = 0.016
                     elif iv in ("15m", "30m", "60m", "1h"):
-                        max_move = 0.10
+                        max_move = 0.045
+                        body_cap_pct = 0.015
+                        wick_cap_pct = 0.03
                     else:
-                        max_move = 0.25
+                        max_move = 0.12
+                        body_cap_pct = 0.04
+                        wick_cap_pct = 0.08
                     ref = prev_close if (prev_close and prev_close > 0) else c
                     if ref > 0:
                         hi_cap = ref * (1.0 + max_move)
@@ -348,10 +359,25 @@ class StockChart(QWidget):
                         l_val = max(l_val, lo_cap)
                         o = min(max(o, lo_cap), hi_cap)
                         c = min(max(c, lo_cap), hi_cap)
+                        # Prevent oversized candle bodies from stale/replayed partial bars.
+                        body_cap = max(ref * body_cap_pct, 1e-8)
+                        body = c - o
+                        if abs(body) > body_cap:
+                            if body > 0:
+                                o = c - body_cap
+                            else:
+                                o = c + body_cap
+
+                        top = max(o, c)
+                        bot = min(o, c)
+                        wick_cap = max(ref * wick_cap_pct, body_cap * 1.25)
+                        h = min(h, top + wick_cap)
+                        l_val = max(l_val, bot - wick_cap)
                         if h < l_val:
                             h, l_val = l_val, h
 
-                    ohlc.append((i, o, c, l_val, h))
+                    x_pos = len(closes)
+                    ohlc.append((x_pos, o, c, l_val, h))
                     closes.append(c)
                     prev_close = c
                 except (ValueError, TypeError):

@@ -1,4 +1,5 @@
 # models/predictor.py
+import copy
 import json
 import os
 import threading
@@ -117,6 +118,7 @@ class Predictor:
         # Components (lazy loaded)
         self.ensemble = None
         self.forecaster = None
+        self._forecaster_horizon: int = 0
         self.processor = None
         self.feature_engine = None
         self.fetcher = None
@@ -364,6 +366,31 @@ class Predictor:
 
         return None, None
 
+    def _find_best_forecaster_checkpoint(self, model_dir: Path) -> Path | None:
+        """Find best-matching forecaster for current interval+horizon."""
+        req_path = model_dir / f"forecast_{self.interval}_{self.horizon}.pt"
+        if req_path.exists():
+            return req_path
+
+        same_interval: list[tuple[int, float, Path]] = []
+        for fp in model_dir.glob(f"forecast_{self.interval}_*.pt"):
+            parts = fp.stem.split("_", 2)
+            if len(parts) != 3:
+                continue
+            try:
+                cand_h = int(parts[2])
+            except Exception:
+                continue
+            same_interval.append(
+                (abs(cand_h - int(self.horizon)), -fp.stat().st_mtime, fp)
+            )
+        if same_interval:
+            same_interval.sort(key=lambda x: (x[0], x[1]))
+            _delta, _mtime_neg, fp = same_interval[0]
+            return fp
+
+        return None
+
     def _extract_trained_stocks_from_ensemble(self) -> list[str]:
         if self.ensemble is None:
             return []
@@ -470,15 +497,18 @@ class Predictor:
 
             from models.networks import TCNModel
 
-            forecast_path = (
+            self.forecaster = None
+            self._forecaster_horizon = 0
+            forecast_path = self._find_best_forecaster_checkpoint(
                 CONFIG.MODEL_DIR
-                / f"forecast_{self.interval}_{self.horizon}.pt"
             )
-            if not forecast_path.exists():
-                forecast_path = CONFIG.MODEL_DIR / "forecast_1d_5.pt"
 
-            if not forecast_path.exists():
-                log.debug("No forecaster model found")
+            if forecast_path is None:
+                log.debug(
+                    "No matching forecaster model found for interval=%s horizon=%s",
+                    self.interval,
+                    self.horizon,
+                )
                 return
 
             data = torch.load(
@@ -493,23 +523,36 @@ class Predictor:
                 )
                 return
 
+            horizon = int(data.get("horizon", 0) or 0)
+            if horizon <= 0:
+                log.warning("Forecaster checkpoint has invalid horizon: %s", horizon)
+                return
+
             self.forecaster = TCNModel(
                 input_size=data["input_size"],
                 hidden_size=data["arch"]["hidden_size"],
-                num_classes=data["horizon"],
+                num_classes=horizon,
                 dropout=data["arch"]["dropout"],
             )
             self.forecaster.load_state_dict(data["state_dict"])
             self.forecaster.eval()
+            self._forecaster_horizon = horizon
 
-            log.info(f"Forecaster loaded: horizon={data['horizon']}")
+            log.info(
+                "Forecaster loaded: %s (interval=%s, horizon=%s)",
+                forecast_path.name,
+                self.interval,
+                horizon,
+            )
 
         except ImportError:
             log.debug("TCNModel not available — forecaster disabled")
             self.forecaster = None
+            self._forecaster_horizon = 0
         except Exception as e:
             log.debug(f"Forecaster not loaded: {e}")
             self.forecaster = None
+            self._forecaster_horizon = 0
 
     # =========================================================================
     # =========================================================================
@@ -545,9 +588,10 @@ class Predictor:
             )
 
             code = self._clean_code(stock_code)
+            cache_key = f"{code}:{interval}:{horizon}"
 
             if not skip_cache:
-                cached = self._get_cached_prediction(code)
+                cached = self._get_cached_prediction(cache_key)
                 if cached is not None:
                     return cached
 
@@ -600,13 +644,18 @@ class Predictor:
                     self._apply_ensemble_prediction(X, pred)
 
                 pred.predicted_prices = self._generate_forecast(
-                    X, pred.current_price, horizon, pred.atr_pct_value
+                    X,
+                    pred.current_price,
+                    horizon,
+                    pred.atr_pct_value,
+                    sequence_signature=self._sequence_signature(X),
+                    recent_prices=df["close"].tail(min(240, len(df))).tolist(),
                 )
                 pred.levels = self._calculate_levels(pred)
                 pred.position = self._calculate_position(pred)
                 self._generate_reasons(pred)
 
-                self._set_cached_prediction(code, pred)
+                self._set_cached_prediction(cache_key, pred)
 
             except Exception as e:
                 log.error(
@@ -759,7 +808,12 @@ class Predictor:
                 atr_pct = self._get_atr_pct(df)
 
                 predicted = self._generate_forecast(
-                    X, current_price, horizon, atr_pct
+                    X,
+                    current_price,
+                    horizon,
+                    atr_pct,
+                    sequence_signature=self._sequence_signature(X),
+                    recent_prices=actual,
                 )
 
                 return actual, predicted
@@ -880,21 +934,21 @@ class Predictor:
     # =========================================================================
     # =========================================================================
 
-    def _get_cached_prediction(self, code: str) -> Prediction | None:
+    def _get_cached_prediction(self, cache_key: str) -> Prediction | None:
         """Get cached prediction if still valid."""
         with self._cache_lock:
-            entry = self._pred_cache.get(code)
+            entry = self._pred_cache.get(cache_key)
             if entry is not None:
                 ts, pred = entry
                 if (time.time() - ts) < self._CACHE_TTL:
-                    return pred
-                del self._pred_cache[code]
+                    return copy.deepcopy(pred)
+                del self._pred_cache[cache_key]
         return None
 
-    def _set_cached_prediction(self, code: str, pred: Prediction):
+    def _set_cached_prediction(self, cache_key: str, pred: Prediction):
         """Cache a prediction result with bounded size."""
         with self._cache_lock:
-            self._pred_cache[code] = (time.time(), pred)
+            self._pred_cache[cache_key] = (time.time(), copy.deepcopy(pred))
 
             if len(self._pred_cache) > self._MAX_CACHE_SIZE:
                 now = time.time()
@@ -918,7 +972,11 @@ class Predictor:
         """Invalidate cache for a specific code or all codes."""
         with self._cache_lock:
             if code:
-                self._pred_cache.pop(code, None)
+                key = str(code).strip()
+                code6 = self._clean_code(key)
+                for k in list(self._pred_cache.keys()):
+                    if k == key or (code6 and str(k).startswith(f"{code6}:")):
+                        self._pred_cache.pop(k, None)
             else:
                 self._pred_cache.clear()
 
@@ -979,16 +1037,42 @@ class Predictor:
     # =========================================================================
     # =========================================================================
 
+    def _sequence_signature(self, X: np.ndarray) -> float:
+        """Stable numeric signature for the latest feature sequence."""
+        try:
+            arr = np.asarray(X, dtype=float).reshape(-1)
+            if arr.size <= 0:
+                return 0.0
+            tail = arr[-min(64, arr.size):]
+            weights = np.arange(1, tail.size + 1, dtype=float)
+            return float(np.sum(np.round(tail, 5) * weights))
+        except Exception:
+            return 0.0
+
     def _generate_forecast(
         self,
         X: np.ndarray,
         current_price: float,
         horizon: int,
         atr_pct: float = 0.02,
+        sequence_signature: float = 0.0,
+        recent_prices: list[float] | None = None,
     ) -> list[float]:
         """Generate price forecast using forecaster or ensemble."""
         if current_price <= 0:
             return []
+        horizon = max(1, int(horizon))
+        direction_hint = 0.0
+        if self.ensemble is not None:
+            try:
+                hint_pred = self.ensemble.predict(X)
+                probs_hint = getattr(hint_pred, "probabilities", None)
+                if probs_hint is not None and len(probs_hint) >= 3:
+                    direction_hint = (
+                        float(probs_hint[2]) - float(probs_hint[0])
+                    )
+            except Exception:
+                direction_hint = 0.0
 
         if self.forecaster is not None:
             try:
@@ -998,11 +1082,79 @@ class Predictor:
                 with torch.inference_mode():
                     X_tensor = torch.FloatTensor(X)
                     returns, _ = self.forecaster(X_tensor)
-                    returns = returns[0].cpu().numpy()
+                    returns_arr = np.asarray(
+                        returns[0].detach().cpu().numpy(), dtype=float
+                    ).reshape(-1)
+
+                if returns_arr.size <= 0:
+                    raise ValueError("Forecaster produced empty output")
+
+                returns_arr = np.nan_to_num(
+                    returns_arr, nan=0.0, posinf=0.0, neginf=0.0
+                )
+
+                neutral_mode = abs(direction_hint) < 0.10
+                neutral_bias = 0.0
+                if neutral_mode and returns_arr.size > 0:
+                    neutral_bias = float(
+                        np.mean(returns_arr[:min(8, returns_arr.size)])
+                    )
+
+                prices_arr = np.array(
+                    [float(p) for p in (recent_prices or []) if float(p) > 0],
+                    dtype=float,
+                )
+                recent_mu_pct = 0.0
+                if prices_arr.size >= 6:
+                    rets = np.diff(np.log(prices_arr[-min(90, prices_arr.size):]))
+                    if rets.size > 0:
+                        recent_mu_pct = float(
+                            np.clip(np.mean(rets) * 100.0, -0.25, 0.25)
+                        )
+
+                step_cap_pct = float(
+                    np.clip(max(float(atr_pct), 0.0035) * 140.0, 0.18, 3.0)
+                )
+                if neutral_mode:
+                    step_cap_pct = min(
+                        step_cap_pct,
+                        float(max(float(atr_pct) * 70.0, 0.35)),
+                    )
+
+                # Deterministic symbol-specific residual to avoid template-like tails.
+                seed = (
+                    int(abs(current_price) * 100)
+                    ^ int(abs(sequence_signature) * 1000)
+                    ^ int((direction_hint + 1.0) * 100000)
+                    ^ int(horizon * 131)
+                ) % (2**31 - 1)
+                rng = np.random.RandomState(seed)
+                prev_eps = 0.0
+                prev_ret = 0.0
 
                 prices = [current_price]
-                for r in returns[:horizon]:
-                    next_price = prices[-1] * (1 + float(r) / 100)
+                for i in range(horizon):
+                    if i < returns_arr.size:
+                        r_val = float(returns_arr[i])
+                    else:
+                        tail = returns_arr[-min(3, returns_arr.size):]
+                        r_val = float(np.mean(tail)) if tail.size > 0 else 0.0
+
+                    if neutral_mode:
+                        r_val = ((r_val - neutral_bias) * 0.45) + (recent_mu_pct * 0.35)
+                        mean_pull_pct = (-(prices[-1] / current_price - 1.0)) * 22.0
+                        r_val += mean_pull_pct
+                    else:
+                        r_val = (r_val * 0.84) + (recent_mu_pct * 0.16)
+
+                    eps_scale = step_cap_pct * (0.06 if neutral_mode else 0.10)
+                    eps = (0.62 * prev_eps) + float(rng.normal(0.0, eps_scale))
+                    prev_eps = eps
+                    r_val += eps
+                    r_val = (0.78 * r_val) + (0.22 * prev_ret)
+                    r_val = float(np.clip(r_val, -step_cap_pct, step_cap_pct))
+                    prev_ret = r_val
+                    next_price = prices[-1] * (1 + r_val / 100)
                     next_price = max(
                         next_price, current_price * 0.5
                     )
@@ -1011,12 +1163,23 @@ class Predictor:
                     )
                     prices.append(float(next_price))
 
-                return prices[1:]
+                out = prices[1:]
+                if neutral_mode:
+                    neutral_cap = max(float(atr_pct) * 0.55, 0.0045)
+                    lo = current_price * (1.0 - neutral_cap)
+                    hi = current_price * (1.0 + neutral_cap)
+                    out = [float(np.clip(p, lo, hi)) for p in out]
+                    if len(out) >= 2:
+                        for i in range(1, len(out)):
+                            out[i] = float((0.68 * out[i]) + (0.32 * out[i - 1]))
+                        out = [float(np.clip(p, lo, hi)) for p in out]
+
+                return out
 
             except Exception as e:
                 log.debug(f"Forecaster failed: {e}")
 
-        # Fallback: ensemble-guided stochastic forecast
+        # Fallback: ensemble-guided path shaped by recent symbol behavior.
         if self.ensemble:
             try:
                 pred = self.ensemble.predict(X)
@@ -1026,26 +1189,78 @@ class Predictor:
                     (float(probs[2]) if len(probs) > 2 else 0.33)
                     - (float(probs[0]) if len(probs) > 0 else 0.33)
                 )
+                neutral_mode = abs(direction) < 0.10
 
-                volatility = max(atr_pct, 0.005)
+                volatility = max(float(atr_pct), 0.005)
+                if neutral_mode:
+                    volatility = min(volatility, 0.012)
+
+                prices_arr = np.array(
+                    [float(p) for p in (recent_prices or []) if float(p) > 0],
+                    dtype=float,
+                )
+                if prices_arr.size >= 4:
+                    rets = np.diff(np.log(prices_arr[-min(80, prices_arr.size):]))
+                    ret_mu = float(np.clip(np.mean(rets), -0.02, 0.02))
+                    ret_sigma = float(
+                        np.clip(
+                            np.std(rets),
+                            0.0006,
+                            max(volatility * 0.8, 0.03),
+                        )
+                    )
+                else:
+                    ret_mu = 0.0
+                    ret_sigma = float(max(volatility * 0.45, 0.001))
+                if neutral_mode:
+                    ret_mu *= 0.35
+                    ret_sigma = max(ret_sigma * 0.55, 0.0004)
 
                 prices = []
                 price = current_price
 
-                # Deterministic seed per stock+time for consistency
-                seed = int(current_price * 100 + horizon) % (2**31)
+                # Deterministic seed using sequence signature to keep each symbol distinct.
+                seed = (
+                    int(abs(current_price) * 100)
+                    ^ int(abs(sequence_signature) * 1000)
+                    ^ int((direction + 1.0) * 100000)
+                    ^ int(horizon * 131)
+                ) % (2**31 - 1)
                 rng = np.random.RandomState(seed)
 
                 for i in range(horizon):
-                    # Mean-reverting drift with ensemble direction
-                    drift = direction * volatility * 0.3
-                    noise = rng.normal(0, volatility * 0.5)
-                    decay = 1.0 - (i / (horizon * 2))
-                    change = drift * decay + noise
+                    decay = 1.0 - (i / (horizon * 1.8))
+                    drift_scale = 0.10 if neutral_mode else 0.20
+                    mu_scale = 0.20 if neutral_mode else 0.35
+                    drift = (direction * volatility * drift_scale) + (ret_mu * mu_scale)
+                    noise = float(
+                        rng.normal(
+                            0.0,
+                            ret_sigma * ((0.35 if neutral_mode else 0.55) + (0.45 * decay)),
+                        )
+                    )
+                    mean_revert = (-(0.18 if neutral_mode else 0.10)) * (
+                        (price / current_price) - 1.0
+                    )
+                    change = drift + noise + mean_revert
+                    if neutral_mode:
+                        max_step = max(volatility * 1.3, 0.007)
+                    else:
+                        max_step = max(volatility * 2.2, 0.02)
+                    change = float(np.clip(change, -max_step, max_step))
                     price = price * (1 + change)
 
                     price = max(price, current_price * 0.5)
                     price = min(price, current_price * 2.0)
+                    if neutral_mode:
+                        neutral_cap = max(volatility, 0.008)
+                        price = float(
+                            np.clip(
+                                price,
+                                current_price * (1.0 - neutral_cap),
+                                current_price * (1.0 + neutral_cap),
+                            )
+                        )
 
                     prices.append(float(price))
 

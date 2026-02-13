@@ -3,7 +3,7 @@ import os
 import sys
 import threading
 import time
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from importlib import import_module
 from typing import Any
 
@@ -149,6 +149,15 @@ class RealTimeMonitor(QThread):
 
         while self.running and not self._stop_event.is_set():
             loop_start = time.time()
+
+            if not CONFIG.is_market_open():
+                self.status_changed.emit("Market closed - waiting for open")
+                idle_wait = max(5, min(60, int(self.scan_interval)))
+                for _ in range(idle_wait):
+                    if self._stop_event.is_set():
+                        break
+                    time.sleep(1)
+                continue
 
             try:
                 preds = self.predictor.predict_quick_batch(
@@ -318,6 +327,7 @@ class MainApp(QMainWindow):
 
         # Real-time state with thread safety
         self._last_forecast_refresh_ts: float = 0.0
+        self._forecast_refresh_symbol: str = ""
         self._live_price_series: dict[str, list[float]] = {}
         self._price_series_lock = threading.Lock()
         self._last_session_cache_write_ts: dict[str, float] = {}
@@ -607,6 +617,8 @@ class MainApp(QMainWindow):
 
     def _ensure_feed_subscription(self, code: str):
         """Subscribe symbol to realtime feed + ensure bar interval matches UI."""
+        if not CONFIG.is_market_open():
+            return
         try:
             from data.feeds import get_feed_manager
             fm = get_feed_manager(auto_init=True, async_init=True)
@@ -636,6 +648,8 @@ class MainApp(QMainWindow):
         Called from feed thread (NOT UI thread).
         Emit signal to update UI safely.
         """
+        if not CONFIG.is_market_open():
+            return
         try:
             self.bar_received.emit(str(symbol), dict(bar))
         except Exception:
@@ -643,6 +657,8 @@ class MainApp(QMainWindow):
 
     def _on_tick_from_feed(self, quote):
         """Forward feed quote updates to UI thread safely."""
+        if not CONFIG.is_market_open():
+            return
         try:
             symbol = self._ui_norm(getattr(quote, "code", ""))
             price = float(getattr(quote, "price", 0) or 0)
@@ -671,13 +687,14 @@ class MainApp(QMainWindow):
         ).strip().lower()
 
         ts_raw = bar.get("timestamp", bar.get("time"))
+        if not self._is_market_session_timestamp(ts_raw, interval):
+            return
         if ts_raw is None:
             ts_raw = self._now_iso()
-        ts = (
-            ts_raw.isoformat()
-            if hasattr(ts_raw, "isoformat")
-            else str(ts_raw)
-        )
+        ts_epoch = self._ts_to_epoch(ts_raw)
+        ts_bucket = self._bar_bucket_epoch(ts_epoch, interval)
+        ts = self._epoch_to_iso(ts_bucket)
+        ts_key = int(ts_bucket)
 
         try:
             c = float(bar.get("close", 0) or 0)
@@ -704,6 +721,7 @@ class MainApp(QMainWindow):
             "low": low,
             "close": c,
             "timestamp": ts,
+            "_ts_epoch": float(ts_bucket),
             "final": is_final,
             "interval": interval,
         }
@@ -728,7 +746,13 @@ class MainApp(QMainWindow):
         replaced = False
         if ts:
             for i in range(len(arr) - 1, max(-1, len(arr) - 8), -1):
-                if str(arr[i].get("timestamp", "")) != ts:
+                arr_epoch = self._bar_bucket_epoch(
+                    arr[i].get("_ts_epoch", arr[i].get("timestamp", ""))
+                    if isinstance(arr[i], dict)
+                    else time.time(),
+                    interval,
+                )
+                if int(arr_epoch) != ts_key:
                     continue
                 # Keep completed bars immutable; ignore stale partial rewrites.
                 if bool(arr[i].get("final", False)) and not is_final:
@@ -740,7 +764,11 @@ class MainApp(QMainWindow):
         if not replaced:
             arr.append(norm_bar)
 
-        arr.sort(key=lambda x: str(x.get("timestamp", "")))
+        arr.sort(
+            key=lambda x: float(
+                x.get("_ts_epoch", self._ts_to_epoch(x.get("timestamp", "")))
+            )
+        )
         keep = self._history_window_bars(interval)
         if len(arr) > keep:
             del arr[:-keep]
@@ -1877,9 +1905,47 @@ class MainApp(QMainWindow):
             return max(7, bars)
         return max(120, bars)
 
+    def _ts_to_epoch(self, ts_raw: Any) -> float:
+        """Normalize timestamp-like values to epoch seconds (UTC)."""
+        if ts_raw is None:
+            return float(time.time())
+
+        try:
+            if isinstance(ts_raw, (int, float)):
+                v = float(ts_raw)
+                # Treat large numeric timestamps as milliseconds.
+                if abs(v) >= 1e11:
+                    v = v / 1000.0
+                return v
+        except Exception:
+            pass
+
+        try:
+            if isinstance(ts_raw, datetime):
+                dt = ts_raw
+            else:
+                txt = str(ts_raw).strip()
+                if not txt:
+                    return float(time.time())
+                dt = datetime.fromisoformat(txt.replace("Z", "+00:00"))
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return float(dt.timestamp())
+        except Exception:
+            return float(time.time())
+
+    def _epoch_to_iso(self, epoch: float) -> str:
+        """Canonical ISO timestamp for chart bars."""
+        try:
+            return datetime.fromtimestamp(
+                float(epoch), tz=timezone.utc
+            ).isoformat(timespec="seconds")
+        except Exception:
+            return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
     def _now_iso(self) -> str:
         """Consistent sortable timestamp for live bars."""
-        return datetime.now().isoformat(timespec="seconds")
+        return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
     def _merge_bars(
         self,
@@ -1888,19 +1954,82 @@ class MainApp(QMainWindow):
         interval: str,
     ) -> list[dict[str, Any]]:
         """Merge+deduplicate bars by timestamp and keep a 7-day rolling window."""
-        merged: dict[str, dict[str, Any]] = {}
+        merged: dict[int, dict[str, Any]] = {}
+        iv = str(interval or "1m").strip().lower()
+
+        def _upsert(row_in: dict[str, Any]) -> None:
+            epoch = self._bar_bucket_epoch(
+                row_in.get("_ts_epoch", row_in.get("timestamp", "")),
+                iv,
+            )
+            row = dict(row_in)
+            row["_ts_epoch"] = float(epoch)
+            row["timestamp"] = self._epoch_to_iso(epoch)
+
+            # Never merge out-of-session intraday rows.
+            if not self._is_market_session_timestamp(row["_ts_epoch"], iv):
+                return
+
+            key = int(epoch)
+            existing = merged.get(key)
+            if existing is None:
+                merged[key] = row
+                return
+
+            existing_final = bool(existing.get("final", True))
+            row_final = bool(row.get("final", True))
+            if existing_final and not row_final:
+                return
+            if row_final and not existing_final:
+                merged[key] = row
+                return
+
+            # Same finality: keep richer bar by volume, otherwise prefer newer row.
+            try:
+                e_vol = float(existing.get("volume", 0) or 0)
+            except Exception:
+                e_vol = 0.0
+            try:
+                r_vol = float(row.get("volume", 0) or 0)
+            except Exception:
+                r_vol = 0.0
+            if r_vol >= e_vol:
+                merged[key] = row
+
         for b in (base or []):
-            ts = str(b.get("timestamp", ""))
-            if ts:
-                merged[ts] = dict(b)
+            _upsert(b)
         for b in (extra or []):
-            ts = str(b.get("timestamp", ""))
-            if ts:
-                merged[ts] = dict(b)
+            _upsert(b)
         out = list(merged.values())
-        out.sort(key=lambda x: str(x.get("timestamp", "")))
+        out.sort(
+            key=lambda x: float(
+                x.get(
+                    "_ts_epoch",
+                    self._ts_to_epoch(x.get("timestamp", "")),
+                )
+            )
+        )
+
+        # Drop remaining abrupt jumps that usually come from bad partial bars.
+        jump_cap = 0.035 if iv == "1m" else (0.07 if iv == "5m" else 0.20)
+        cleaned: list[dict[str, Any]] = []
+        prev_close: float | None = None
+        for row in out:
+            try:
+                c = float(row.get("close", 0) or 0)
+            except Exception:
+                continue
+            if c <= 0:
+                continue
+            if prev_close and prev_close > 0:
+                jump = abs(c / prev_close - 1.0)
+                if jump > jump_cap:
+                    continue
+            cleaned.append(row)
+            prev_close = c
+
         keep = self._history_window_bars(interval)
-        return out[-keep:]
+        return cleaned[-keep:]
 
     def _interval_seconds(self, interval: str) -> int:
         """Map UI interval token to candle duration in seconds."""
@@ -1915,6 +2044,123 @@ class MainApp(QMainWindow):
             "1d": 86400,
         }
         return int(mapping.get(iv, 60))
+
+    def _bar_bucket_epoch(self, ts_raw: Any, interval: str) -> float:
+        """Floor any timestamp to the interval bucket start (epoch seconds)."""
+        epoch = self._ts_to_epoch(ts_raw)
+        step = float(max(1, self._interval_seconds(interval)))
+        return float(int(epoch // step) * int(step))
+
+    def _shanghai_now(self) -> datetime:
+        """Current time in Asia/Shanghai when zoneinfo is available."""
+        try:
+            from zoneinfo import ZoneInfo
+            return datetime.now(tz=ZoneInfo("Asia/Shanghai"))
+        except Exception:
+            return datetime.now()
+
+    def _is_cn_trading_day(self, day_obj) -> bool:
+        """Best-effort CN trading-day check (weekday + optional holiday calendar)."""
+        try:
+            if day_obj.weekday() >= 5:
+                return False
+        except Exception:
+            return False
+
+        try:
+            from core.constants import is_trading_day
+            return bool(is_trading_day(day_obj))
+        except Exception:
+            return True
+
+    def _market_hours_text(self) -> str:
+        """Human-readable CN session hours."""
+        t = CONFIG.trading
+        return (
+            f"{t.market_open_am.strftime('%H:%M')}-{t.market_close_am.strftime('%H:%M')}, "
+            f"{t.market_open_pm.strftime('%H:%M')}-{t.market_close_pm.strftime('%H:%M')} CST"
+        )
+
+    def _next_market_open(self, now_sh: datetime | None = None) -> datetime | None:
+        """Next CN market open timestamp in Shanghai time."""
+        now_val = now_sh or self._shanghai_now()
+        t = CONFIG.trading
+
+        for days_ahead in range(0, 15):
+            day_val = (now_val + timedelta(days=days_ahead)).date()
+            if not self._is_cn_trading_day(day_val):
+                continue
+
+            open_am = now_val.replace(
+                year=day_val.year,
+                month=day_val.month,
+                day=day_val.day,
+                hour=t.market_open_am.hour,
+                minute=t.market_open_am.minute,
+                second=0,
+                microsecond=0,
+            )
+            open_pm = now_val.replace(
+                year=day_val.year,
+                month=day_val.month,
+                day=day_val.day,
+                hour=t.market_open_pm.hour,
+                minute=t.market_open_pm.minute,
+                second=0,
+                microsecond=0,
+            )
+
+            if days_ahead > 0:
+                return open_am
+
+            cur_time = now_val.time()
+            if cur_time < t.market_open_am:
+                return open_am
+            if t.market_close_am < cur_time < t.market_open_pm:
+                return open_pm
+            if cur_time > t.market_close_pm:
+                continue
+
+        return None
+
+    def _is_market_session_timestamp(self, ts_raw: Any, interval: str) -> bool:
+        """True when timestamp falls inside CN trading session for intraday intervals."""
+        iv = str(interval or "1m").strip().lower()
+        if iv in ("1d", "1wk", "1mo"):
+            return True
+
+        epoch = self._ts_to_epoch(ts_raw)
+        try:
+            from zoneinfo import ZoneInfo
+            dt_val = datetime.fromtimestamp(float(epoch), tz=ZoneInfo("Asia/Shanghai"))
+        except Exception:
+            dt_val = datetime.fromtimestamp(float(epoch))
+
+        if not self._is_cn_trading_day(dt_val.date()):
+            return False
+
+        cur_time = dt_val.time()
+        t = CONFIG.trading
+        morning = t.market_open_am <= cur_time <= t.market_close_am
+        afternoon = t.market_open_pm <= cur_time <= t.market_close_pm
+        return bool(morning or afternoon)
+
+    def _filter_bars_to_market_session(
+        self,
+        bars: list[dict[str, Any]],
+        interval: str,
+    ) -> list[dict[str, Any]]:
+        """Drop out-of-session intraday bars before chart rendering."""
+        iv = str(interval or "1m").strip().lower()
+        if iv in ("1d", "1wk", "1mo"):
+            return list(bars or [])
+
+        out: list[dict[str, Any]] = []
+        for b in (bars or []):
+            ts_raw = b.get("_ts_epoch", b.get("timestamp", b.get("time")))
+            if self._is_market_session_timestamp(ts_raw, iv):
+                out.append(b)
+        return out
 
     def _is_outlier_tick(self, prev_price: float, new_price: float) -> bool:
         """
@@ -2085,6 +2331,9 @@ class MainApp(QMainWindow):
         Instead, updates the current bar's close price so the candle
         reflects the live price.
         """
+        if not CONFIG.is_market_open():
+            return
+
         code = self._ui_norm(code)
         try:
             price = float(price)
@@ -2107,6 +2356,12 @@ class MainApp(QMainWindow):
 
         # Update the last bar's close price for live candle display.
         arr = self._bars_by_symbol.get(code)
+        if arr and len(arr) > 1:
+            arr.sort(
+                key=lambda x: float(
+                    x.get("_ts_epoch", self._ts_to_epoch(x.get("timestamp", "")))
+                )
+            )
         interval = str(
             (arr[-1].get("interval") if arr else None)
             or self.interval_combo.currentText()
@@ -2142,16 +2397,20 @@ class MainApp(QMainWindow):
                     log.debug(f"Chart price refresh failed: {e}")
 
         if not has_recent_feed_bar:
+            bucket_s = float(max(interval_s, 1))
+            bucket_epoch = float(int(now_ts // bucket_s) * int(bucket_s))
+            bucket_iso = self._epoch_to_iso(bucket_epoch)
+
             if not arr:
                 arr = [{
                     "open": price,
                     "high": price,
                     "low": price,
                     "close": price,
-                    "timestamp": self._now_iso(),
+                    "timestamp": bucket_iso,
                     "final": False,
                     "interval": interval,
-                    "_ts_epoch": now_ts,
+                    "_ts_epoch": bucket_epoch,
                 }]
                 self._bars_by_symbol[code] = arr
             if arr and len(arr) > 0:
@@ -2163,32 +2422,46 @@ class MainApp(QMainWindow):
                     )
                     return
 
-                last_epoch = float(last.get("_ts_epoch", now_ts) or now_ts)
-                if (
-                    not bool(last.get("final", False))
-                    and (now_ts - last_epoch) >= float(interval_s)
-                ):
-                    arr.append({
+                last_epoch = self._ts_to_epoch(
+                    last.get("_ts_epoch", last.get("timestamp", bucket_iso))
+                )
+                last_bucket = float(int(last_epoch // bucket_s) * int(bucket_s))
+                if int(last_bucket) != int(bucket_epoch):
+                    if not bool(last.get("final", False)):
+                        last["final"] = True
+                    last = {
                         "open": price,
                         "high": price,
                         "low": price,
                         "close": price,
-                        "timestamp": self._now_iso(),
+                        "timestamp": bucket_iso,
                         "final": False,
                         "interval": interval,
-                        "_ts_epoch": now_ts,
-                    })
+                        "_ts_epoch": bucket_epoch,
+                    }
+                    arr.append(last)
                     keep = self._history_window_bars(interval)
                     if len(arr) > keep:
                         del arr[:-keep]
-                    last = arr[-1]
                 else:
+                    if float(last.get("open", 0) or 0) <= 0:
+                        last["open"] = price
                     last["close"] = price
                     last["high"] = max(float(last.get("high", price) or price), price)
                     last["low"] = min(float(last.get("low", price) or price), price)
                     last["final"] = False
-                    if "_ts_epoch" not in last:
-                        last["_ts_epoch"] = now_ts
+                    last["timestamp"] = bucket_iso
+                    last["_ts_epoch"] = bucket_epoch
+
+                arr.sort(
+                    key=lambda x: float(
+                        x.get("_ts_epoch", self._ts_to_epoch(x.get("timestamp", "")))
+                    )
+                )
+                keep = self._history_window_bars(interval)
+                if len(arr) > keep:
+                    del arr[:-keep]
+                last = arr[-1]
 
                 if current_code == code:
                     predicted = []
@@ -2238,10 +2511,15 @@ class MainApp(QMainWindow):
             return
         self._last_forecast_refresh_ts = now
 
-        interval = self.interval_combo.currentText().strip()
+        interval = self.interval_combo.currentText().strip().lower()
         horizon = self.forecast_spin.value()
-        # Real-time guess should be based on the latest 120 candles.
-        lookback = 120
+        lookback = max(
+            120,
+            int(self.lookback_spin.value()),
+            int(self._seven_day_lookback(interval)),
+        )
+        lookback = min(3000, lookback)
+        use_realtime = bool(CONFIG.is_market_open())
 
         def do_forecast():
             if hasattr(self.predictor, "get_realtime_forecast_curve"):
@@ -2250,17 +2528,24 @@ class MainApp(QMainWindow):
                     interval=interval,
                     horizon_steps=horizon,
                     lookback_bars=lookback,
-                    use_realtime_price=True,
+                    use_realtime_price=use_realtime,
                 )
             return None
 
         w_old = self.workers.get("forecast_refresh")
         if w_old and w_old.isRunning():
-            return
+            if (
+                self._forecast_refresh_symbol
+                and self._forecast_refresh_symbol != code
+            ):
+                w_old.cancel()
+            else:
+                return
 
         worker = WorkerThread(do_forecast, timeout_seconds=30)
         self._track_worker(worker)
         self.workers["forecast_refresh"] = worker
+        self._forecast_refresh_symbol = code
 
         def on_done(res):
             try:
@@ -2288,11 +2573,15 @@ class MainApp(QMainWindow):
                     self._chart_symbol = code
             finally:
                 self.workers.pop("forecast_refresh", None)
+                if self._forecast_refresh_symbol == code:
+                    self._forecast_refresh_symbol = ""
 
         worker.result.connect(on_done)
-        worker.error.connect(
-            lambda e: self.workers.pop("forecast_refresh", None)
-        )
+        def on_error(_e):
+            self.workers.pop("forecast_refresh", None)
+            if self._forecast_refresh_symbol == code:
+                self._forecast_refresh_symbol = ""
+        worker.error.connect(on_error)
         worker.start()
 
     def _refresh_live_chart_forecast(self):
@@ -2300,6 +2589,8 @@ class MainApp(QMainWindow):
         Periodic chart refresh for selected symbol.
         Ensures guessed graph updates in real time even with sparse feed ticks.
         """
+        if not CONFIG.is_market_open():
+            return
         if not self.predictor:
             return
         code = self._ui_norm(self.stock_input.text())
@@ -2385,6 +2676,11 @@ class MainApp(QMainWindow):
         old_worker = self.workers.get("analyze")
         if old_worker and old_worker.isRunning():
             old_worker.cancel()
+        forecast_worker = self.workers.get("forecast_refresh")
+        if forecast_worker and forecast_worker.isRunning():
+            forecast_worker.cancel()
+        self._forecast_refresh_symbol = ""
+        self._last_forecast_refresh_ts = 0.0
 
         if self._chart_symbol and self._chart_symbol != code:
             try:
@@ -2470,6 +2766,7 @@ class MainApp(QMainWindow):
             int(self.lookback_spin.value()),
             self._seven_day_lookback(interval),
         )
+        use_realtime = bool(CONFIG.is_market_open())
 
         self.analyze_action.setEnabled(False)
 
@@ -2487,7 +2784,7 @@ class MainApp(QMainWindow):
         def analyze():
             return self.predictor.predict(
                 normalized,
-                use_realtime_price=True,
+                use_realtime_price=use_realtime,
                 interval=interval,
                 forecast_minutes=forecast_bars,
                 lookback_bars=forecast_lookback,
@@ -2517,6 +2814,9 @@ class MainApp(QMainWindow):
             norm_iv = str(interval).strip().lower()
             min_floor = 7 if norm_iv == "1d" else 120
             lookback = max(min_floor, int(lookback_bars))
+            is_intraday = norm_iv not in ("1d", "1wk", "1mo")
+            market_open = bool(CONFIG.is_market_open())
+            now_bucket = self._bar_bucket_epoch(time.time(), norm_iv)
             df = fetcher.get_history(
                 symbol,
                 interval=norm_iv,
@@ -2537,14 +2837,15 @@ class MainApp(QMainWindow):
                     if h < low:
                         h, low = low, h
                     ts_obj = row.get("datetime", idx)
-                    ts = ts_obj.isoformat() if hasattr(ts_obj, "isoformat") else str(ts_obj)
+                    epoch = self._bar_bucket_epoch(ts_obj, norm_iv)
                     out.append(
                         {
                             "open": o,
                             "high": h,
                             "low": low,
                             "close": c,
-                            "timestamp": ts,
+                            "timestamp": self._epoch_to_iso(epoch),
+                            "_ts_epoch": float(epoch),
                             "final": True,
                             "interval": norm_iv,
                         }
@@ -2565,25 +2866,74 @@ class MainApp(QMainWindow):
                         low = float(row.get("low", c) or c)
                         if h < low:
                             h, low = low, h
-                        ts = idx.isoformat() if hasattr(idx, "isoformat") else str(idx)
+                        epoch = self._bar_bucket_epoch(idx, norm_iv)
+                        is_final = bool(row.get("is_final", True))
+                        if (
+                            is_intraday
+                            and not is_final
+                            and (
+                                (not market_open)
+                                or int(epoch) != int(now_bucket)
+                            )
+                        ):
+                            # Keep only the current bucket partial bar while market is open.
+                            continue
                         out.append(
                             {
                                 "open": o,
                                 "high": h,
                                 "low": low,
                                 "close": c,
-                                "timestamp": ts,
-                                "final": bool(row.get("is_final", True)),
+                                "timestamp": self._epoch_to_iso(epoch),
+                                "_ts_epoch": float(epoch),
+                                "final": is_final,
                                 "interval": norm_iv,
                             }
                         )
 
-            # Deduplicate by timestamp and keep latest.
-            merged: dict[str, dict[str, Any]] = {}
+            out = self._filter_bars_to_market_session(out, norm_iv)
+
+            # Deduplicate by normalized epoch and keep latest.
+            merged: dict[int, dict[str, Any]] = {}
             for b in out:
-                merged[str(b.get("timestamp", ""))] = b
+                epoch = self._bar_bucket_epoch(
+                    b.get("_ts_epoch", b.get("timestamp", "")),
+                    norm_iv,
+                )
+                row = dict(b)
+                row["_ts_epoch"] = float(epoch)
+                row["timestamp"] = self._epoch_to_iso(epoch)
+                key = int(epoch)
+                existing = merged.get(key)
+                if existing is None:
+                    merged[key] = row
+                    continue
+
+                existing_final = bool(existing.get("final", True))
+                row_final = bool(row.get("final", True))
+                if existing_final and not row_final:
+                    continue
+                if row_final and not existing_final:
+                    merged[key] = row
+                    continue
+
+                # Same finality: prefer richer bar (volume) then later row.
+                try:
+                    e_vol = float(existing.get("volume", 0) or 0)
+                except Exception:
+                    e_vol = 0.0
+                try:
+                    r_vol = float(row.get("volume", 0) or 0)
+                except Exception:
+                    r_vol = 0.0
+                if r_vol >= e_vol:
+                    merged[key] = row
             out = list(merged.values())
-            out.sort(key=lambda x: str(x.get("timestamp", "")))
+            out.sort(
+                key=lambda x: float(
+                    x.get("_ts_epoch", self._ts_to_epoch(x.get("timestamp", "")))
+                )
+            )
             out = out[-lookback:]
             return out
         except Exception as e:
@@ -2630,6 +2980,7 @@ class MainApp(QMainWindow):
                     arr = self._merge_bars(
                         arr, existing_same_interval, interval
                     )
+            arr = self._filter_bars_to_market_session(arr, interval)
 
             if not arr and current_price > 0:
                 arr = [{
@@ -2666,7 +3017,11 @@ class MainApp(QMainWindow):
                     )
                     arr[-1]["final"] = False
                     if "_ts_epoch" not in arr[-1]:
-                        arr[-1]["_ts_epoch"] = time.time()
+                        arr[-1]["_ts_epoch"] = self._bar_bucket_epoch(
+                            arr[-1].get("timestamp"),
+                            interval,
+                        )
+                    arr[-1]["timestamp"] = self._epoch_to_iso(arr[-1]["_ts_epoch"])
 
             if arr:
                 self._bars_by_symbol[symbol] = arr
@@ -4314,14 +4669,25 @@ class MainApp(QMainWindow):
     def _update_market_status(self):
         """Update market status"""
         is_open = CONFIG.is_market_open()
+        hours_text = self._market_hours_text()
+        now_sh = self._shanghai_now()
 
         if is_open:
-            self.market_label.setText("Market Open")
+            self.market_label.setText(
+                f"Market Open | Trading Hours: {hours_text}"
+            )
             self.market_label.setStyleSheet(
                 "color: #3fb950; font-weight: bold;"
             )
         else:
-            self.market_label.setText("Market Closed")
+            next_open = self._next_market_open(now_sh)
+            if next_open is not None:
+                next_open_text = next_open.strftime("%Y-%m-%d %H:%M CST")
+            else:
+                next_open_text = "--"
+            self.market_label.setText(
+                f"Market Closed | Trading Hours: {hours_text} | Next Open: {next_open_text}"
+            )
             self.market_label.setStyleSheet("color: #f85149;")
 
     def log(self, message: str, level: str = "info"):
