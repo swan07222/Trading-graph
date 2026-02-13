@@ -27,6 +27,7 @@ from PyQt6.QtWidgets import (
     QMessageBox,
     QProgressBar,
     QPushButton,
+    QScrollArea,
     QSizePolicy,
     QSpinBox,
     QSplitter,
@@ -315,7 +316,8 @@ class MainApp(QMainWindow):
         super().__init__()
 
         self.setWindowTitle("AI Stock Trading System v2.0")
-        self.setGeometry(80, 60, 1460, 840)
+        self.setMinimumSize(980, 640)
+        self._set_initial_window_geometry()
 
         self.predictor = None
         self.executor = None
@@ -380,6 +382,22 @@ class MainApp(QMainWindow):
     def _ui_norm(self, text: str) -> str:
         """Normalize stock code for UI comparison."""
         return _normalize_stock_code(text)
+
+    def _set_initial_window_geometry(self) -> None:
+        """Fit initial window to available screen so bottom controls remain visible."""
+        try:
+            screen = QApplication.primaryScreen()
+            if screen is None:
+                self.setGeometry(80, 60, 1360, 780)
+                return
+            avail = screen.availableGeometry()
+            width = min(max(1120, int(avail.width() * 0.90)), int(avail.width()))
+            height = min(max(700, int(avail.height() * 0.90)), int(avail.height()))
+            x = int(avail.left() + ((avail.width() - width) / 2))
+            y = int(avail.top() + ((avail.height() - height) / 2))
+            self.setGeometry(x, y, width, height)
+        except Exception:
+            self.setGeometry(80, 60, 1360, 780)
 
     def _track_worker(self, worker: WorkerThread) -> None:
         """Track worker lifecycle so threads are never orphaned."""
@@ -862,9 +880,19 @@ class MainApp(QMainWindow):
         layout.setContentsMargins(10, 10, 10, 10)
 
         main_splitter = QSplitter(Qt.Orientation.Horizontal)
+        main_splitter.setChildrenCollapsible(False)
 
         # Left Panel - Control & Watchlist
         left_panel = self._create_left_panel()
+        left_scroll = QScrollArea()
+        left_scroll.setWidgetResizable(True)
+        left_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        left_scroll.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
+        left_scroll.setWidget(left_panel)
+        left_scroll.setMinimumWidth(240)
+        left_scroll.setMaximumWidth(340)
 
         # Center Panel - Charts & Signals
         center_panel = self._create_center_panel()
@@ -872,16 +900,20 @@ class MainApp(QMainWindow):
         # Right Panel - Portfolio & Orders
         right_panel = self._create_right_panel()
 
-        main_splitter.addWidget(left_panel)
+        main_splitter.addWidget(left_scroll)
         main_splitter.addWidget(center_panel)
         main_splitter.addWidget(right_panel)
-        main_splitter.setSizes([250, 720, 380])
+        main_splitter.setStretchFactor(0, 0)
+        main_splitter.setStretchFactor(1, 1)
+        main_splitter.setStretchFactor(2, 0)
+        main_splitter.setSizes([280, 760, 360])
 
         layout.addWidget(main_splitter)
 
     def _create_left_panel(self) -> QWidget:
         """Create left control panel with interval/forecast settings"""
         panel = QWidget()
+        panel.setMinimumWidth(250)
         panel.setMaximumWidth(320)
         layout = QVBoxLayout(panel)
         layout.setSpacing(10)
@@ -1082,7 +1114,13 @@ class MainApp(QMainWindow):
             self.signal_panel = SignalPanel()
         except ImportError:
             self.signal_panel = QLabel("Signal Panel")
-            self.signal_panel.setMinimumHeight(80)
+            self.signal_panel.setMinimumHeight(72)
+        self.signal_panel.setMinimumHeight(120)
+        self.signal_panel.setMaximumHeight(170)
+        self.signal_panel.setSizePolicy(
+            QSizePolicy.Policy.Preferred,
+            QSizePolicy.Policy.Fixed,
+        )
         layout.addWidget(self.signal_panel)
 
         chart_group = QGroupBox("Price Chart and AI Prediction")
@@ -1091,12 +1129,12 @@ class MainApp(QMainWindow):
         try:
             from .charts import StockChart
             self.chart = StockChart()
-            self.chart.setMinimumHeight(320)
+            self.chart.setMinimumHeight(260)
             if hasattr(self.chart, "trade_requested"):
                 self.chart.trade_requested.connect(self._on_chart_trade_requested)
         except ImportError:
             self.chart = QLabel("Chart (charts module not found)")
-            self.chart.setMinimumHeight(320)
+            self.chart.setMinimumHeight(260)
             self.chart.setAlignment(Qt.AlignmentFlag.AlignCenter)
         chart_layout.addWidget(self.chart)
 
@@ -1144,7 +1182,7 @@ class MainApp(QMainWindow):
         self.details_text = QTextEdit()
         self.details_text.setReadOnly(True)
         self.details_text.setFont(QFont("Consolas", 10))
-        self.details_text.setMaximumHeight(160)
+        self.details_text.setMaximumHeight(120)
         details_layout.addWidget(self.details_text)
 
         details_group.setLayout(details_layout)
@@ -1266,11 +1304,14 @@ class MainApp(QMainWindow):
         trained_layout.addWidget(self.trained_stock_search)
 
         self.trained_stock_list = QListWidget()
+        self.trained_stock_list.itemClicked.connect(
+            self._on_trained_stock_activated
+        )
         self.trained_stock_list.itemDoubleClicked.connect(
             self._on_trained_stock_activated
         )
         self.trained_stock_list.setToolTip(
-            "Double-click a stock to load and analyze it"
+            "Click a stock to load and analyze it"
         )
         trained_layout.addWidget(self.trained_stock_list, 1)
         self._trained_tab_index = tabs.addTab(trained_tab, "Trained Stocks")
@@ -2824,6 +2865,16 @@ class MainApp(QMainWindow):
                 use_cache=True,
                 update_db=False,
             )
+            if df is None or df.empty:
+                # For symbols opened from trained-list (not yet in watchlist/cache),
+                # force a one-time refresh so chart has bars to render.
+                df = fetcher.get_history(
+                    symbol,
+                    interval=norm_iv,
+                    bars=lookback,
+                    use_cache=True,
+                    update_db=True,
+                )
             out: list[dict[str, Any]] = []
 
             if df is not None and not df.empty:

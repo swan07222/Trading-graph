@@ -15,6 +15,6 @@
   "forecast": 30,
   "lookback": 1680,
   "capital": 100000.0,
-  "last_stock": "002475",
+  "last_stock": "301656",
   "auto_trade_mode": "manual"
 }
