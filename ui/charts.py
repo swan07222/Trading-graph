@@ -276,8 +276,12 @@ class StockChart(QWidget):
             # Parse bar data - extract closes for line, OHLC for candles
             closes: List[float] = []
             ohlc: List[tuple] = []
+            prev_close: Optional[float] = None
 
-            for i, b in enumerate(self._bars[-180:]):
+            # Render the full loaded window (7-day bars are prepared in app layer).
+            # Keep a high cap for safety on very large inputs.
+            render_bars = self._bars[-3000:]
+            for i, b in enumerate(render_bars):
                 try:
                     o = float(b.get("open", 0) or 0)
                     h = float(b.get("high", 0) or 0)
@@ -299,8 +303,31 @@ class StockChart(QWidget):
                     if h < l_val:
                         h, l_val = l_val, h
 
+                    # Clamp obvious outlier candle ranges to avoid visual spikes
+                    # from bad ticks or malformed bars.
+                    iv = str(b.get("interval", "") or "").lower()
+                    if iv == "1m":
+                        max_move = 0.03
+                    elif iv == "5m":
+                        max_move = 0.06
+                    elif iv in ("15m", "30m", "60m", "1h"):
+                        max_move = 0.10
+                    else:
+                        max_move = 0.25
+                    ref = prev_close if (prev_close and prev_close > 0) else c
+                    if ref > 0:
+                        hi_cap = ref * (1.0 + max_move)
+                        lo_cap = ref * (1.0 - max_move)
+                        h = min(h, hi_cap)
+                        l_val = max(l_val, lo_cap)
+                        o = min(max(o, lo_cap), hi_cap)
+                        c = min(max(c, lo_cap), hi_cap)
+                        if h < l_val:
+                            h, l_val = l_val, h
+
                     ohlc.append((i, o, c, l_val, h))
                     closes.append(c)
+                    prev_close = c
                 except (ValueError, TypeError):
                     continue
 

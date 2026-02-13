@@ -5,8 +5,10 @@ import queue
 import threading
 import time
 import copy
+from collections import deque
 from datetime import datetime, timedelta, date
 from typing import Dict, Optional, Callable, Set, List, Tuple
+from pathlib import Path
 
 from config import CONFIG, TradingMode
 from core.types import (
@@ -22,6 +24,7 @@ from utils.security import get_access_control, get_audit_log
 from utils.policy import get_trade_policy_engine
 from utils.logger import get_logger
 from utils.metrics import inc_counter, set_gauge, observe
+from utils.atomic_io import atomic_write_json, read_json
 try:
     from utils.metrics_http import register_snapshot_provider, unregister_snapshot_provider
 except Exception:  # pragma: no cover - optional runtime integration
@@ -782,6 +785,7 @@ class ExecutionEngine:
 
     # Watermark overlap to avoid missing same-timestamp fills
     _FILL_WATERMARK_OVERLAP_SECONDS: float = 2.0
+    _RUNTIME_STATE_FILE: str = "execution_runtime_state.json"
 
     def __init__(self, mode: TradingMode = None):
         self.mode = mode or CONFIG.trading_mode
@@ -801,10 +805,22 @@ class ExecutionEngine:
         self._status_sync_thread: Optional[threading.Thread] = None
         self._recon_thread: Optional[threading.Thread] = None
         self._reconnect_thread: Optional[threading.Thread] = None
+        self._watchdog_thread: Optional[threading.Thread] = None
+        self._checkpoint_thread: Optional[threading.Thread] = None
 
         self._processed_fill_ids: Set[str] = set()
 
         self._last_fill_sync: Optional[datetime] = None
+        self._last_checkpoint_ts: float = 0.0
+        self._thread_heartbeats: Dict[str, float] = {}
+        self._thread_hb_lock = threading.RLock()
+        self._recent_submit_keys: Dict[str, float] = {}
+        self._recent_submissions: Dict[str, deque] = {}
+        self._recent_rejections: deque = deque()
+        self._last_watchdog_warning_ts: float = 0.0
+        self._runtime_state_path = Path(CONFIG.data_dir) / self._RUNTIME_STATE_FILE
+        self._runtime_recovered = False
+        self._recovered_auto_state: Optional[dict] = None
 
         self.on_fill: Optional[Callable[[Order, Fill], None]] = None
         self.on_reject: Optional[Callable[[Order, str], None]] = None
@@ -816,6 +832,7 @@ class ExecutionEngine:
         # Auto-trader (created but not started until explicitly requested)
         self.auto_trader: Optional[AutoTrader] = None
         self._snapshot_provider_name = "execution_engine"
+        self._restore_runtime_state()
 
     # -----------------------------------------------------------------
     # Auto-trade public API
@@ -831,6 +848,7 @@ class ExecutionEngine:
             predictor=predictor,
             watch_list=watch_list,
         )
+        self._restore_auto_trader_state()
         log.info("Auto-trader initialized")
 
     def start_auto_trade(self, mode: AutoTradeMode = AutoTradeMode.AUTO):
@@ -908,6 +926,8 @@ class ExecutionEngine:
         self._alert_manager.start()
 
         self._running = True
+        self._heartbeat("main")
+        self._persist_runtime_state(clean_shutdown=False)
 
         self._exec_thread = threading.Thread(
             target=self._execution_loop, name="exec", daemon=True
@@ -929,6 +949,16 @@ class ExecutionEngine:
         )
         self._recon_thread.start()
 
+        self._watchdog_thread = threading.Thread(
+            target=self._watchdog_loop, name="watchdog", daemon=True
+        )
+        self._watchdog_thread.start()
+
+        self._checkpoint_thread = threading.Thread(
+            target=self._checkpoint_loop, name="checkpoint", daemon=True
+        )
+        self._checkpoint_thread.start()
+
         self._health_monitor.attach_broker(self.broker)
         self._health_monitor.report_component_health(
             ComponentType.BROKER, HealthStatus.HEALTHY
@@ -943,6 +973,11 @@ class ExecutionEngine:
                 log.debug(f"Execution snapshot provider registration failed: {e}")
 
         log.info(f"Execution engine started ({self.mode.value})")
+        if self._runtime_recovered:
+            self._alert_manager.risk_alert(
+                "Runtime recovery mode",
+                "Previous session ended uncleanly. Auto-trading starts in safe MANUAL mode.",
+            )
 
         self._alert_manager.system_alert(
             "Trading System Started",
@@ -961,9 +996,16 @@ class ExecutionEngine:
 
         # Start auto-trader if it was initialized and config says enabled
         if self.auto_trader and CONFIG.auto_trade.enabled:
-            auto_mode = AutoTradeMode.AUTO
-            self.auto_trader.start()
-            log.info("Auto-trader auto-started (config.auto_trade.enabled=True)")
+            if self._runtime_recovered:
+                self.auto_trader.set_mode(AutoTradeMode.MANUAL)
+                self.auto_trader.pause(
+                    "Recovered from unclean shutdown; manual review required.",
+                    duration_seconds=0,
+                )
+                log.warning("Auto-trader held in MANUAL due to runtime recovery mode")
+            else:
+                self.auto_trader.start()
+                log.info("Auto-trader auto-started (config.auto_trade.enabled=True)")
 
         return True
 
@@ -1059,6 +1101,8 @@ class ExecutionEngine:
             self._status_sync_thread,
             self._recon_thread,
             self._reconnect_thread,
+            self._watchdog_thread,
+            self._checkpoint_thread,
         ]:
             if t and t.is_alive():
                 t.join(timeout=5)
@@ -1078,6 +1122,7 @@ class ExecutionEngine:
                 unregister_snapshot_provider(self._snapshot_provider_name)
             except Exception:
                 pass
+        self._persist_runtime_state(clean_shutdown=True)
 
         log.info("Execution engine stopped")
 
@@ -1112,7 +1157,160 @@ class ExecutionEngine:
                 snapshot["broker"]["routing"] = broker.get_health_snapshot()
             except Exception:
                 pass
+        try:
+            with self._thread_hb_lock:
+                now = time.time()
+                hb_age = {
+                    k: max(0.0, now - float(v))
+                    for k, v in self._thread_heartbeats.items()
+                }
+            snapshot["runtime"] = {
+                "recovered_from_checkpoint": bool(self._runtime_recovered),
+                "last_checkpoint_age_seconds": (
+                    max(0.0, now - float(self._last_checkpoint_ts))
+                    if self._last_checkpoint_ts > 0
+                    else None
+                ),
+                "queue_depth": int(self._queue.qsize()),
+                "thread_heartbeat_age_seconds": hb_age,
+                "recent_rejections_window": int(len(self._recent_rejections)),
+            }
+        except Exception:
+            pass
         return snapshot
+
+    def _heartbeat(self, name: str):
+        """Record thread heartbeat for watchdog + observability."""
+        with self._thread_hb_lock:
+            self._thread_heartbeats[str(name)] = time.time()
+
+    def _runtime_state_payload(self, clean_shutdown: bool) -> Dict[str, object]:
+        """Persistable runtime checkpoint for crash recovery."""
+        auto_state = None
+        if self.auto_trader is not None:
+            try:
+                auto_state = self.auto_trader.get_state()
+            except Exception:
+                auto_state = None
+        with self._thread_hb_lock:
+            hb = dict(self._thread_heartbeats)
+        return {
+            "ts": datetime.now().isoformat(),
+            "running": bool(self._running),
+            "clean_shutdown": bool(clean_shutdown),
+            "mode": str(getattr(self.mode, "value", self.mode)),
+            "queue_depth": int(self._queue.qsize()),
+            "auto_trade_state": (
+                auto_state.to_dict() if hasattr(auto_state, "to_dict") else None
+            ),
+            "thread_heartbeats": hb,
+        }
+
+    def _persist_runtime_state(self, clean_shutdown: bool = False):
+        """Write runtime checkpoint atomically."""
+        try:
+            payload = self._runtime_state_payload(clean_shutdown=clean_shutdown)
+            atomic_write_json(self._runtime_state_path, payload, indent=2)
+            self._last_checkpoint_ts = time.time()
+        except Exception as e:
+            log.debug(f"Runtime checkpoint write failed: {e}")
+
+    def _restore_runtime_state(self):
+        """Best-effort restore markers from prior run for HA/DR awareness."""
+        try:
+            if not self._runtime_state_path.exists():
+                return
+            state = read_json(self._runtime_state_path)
+            if not isinstance(state, dict):
+                return
+            was_running = bool(state.get("running", False))
+            clean_shutdown = bool(state.get("clean_shutdown", False))
+            if was_running and not clean_shutdown:
+                self._runtime_recovered = True
+                self._recovered_auto_state = state.get("auto_trade_state")
+                log.warning(
+                    "Recovered unclean runtime state from previous session; "
+                    "autonomous trading will start in safe mode until reviewed."
+                )
+        except Exception as e:
+            log.debug(f"Runtime checkpoint restore failed: {e}")
+
+    def _restore_auto_trader_state(self):
+        """Apply recovered auto-trader pause markers after crash recovery."""
+        if self.auto_trader is None or not isinstance(self._recovered_auto_state, dict):
+            return
+        try:
+            recovered_mode = str(self._recovered_auto_state.get("mode", "manual")).lower()
+            if recovered_mode in ("auto", "semi_auto"):
+                self.auto_trader.pause(
+                    "Recovered from unclean shutdown; manual review required.",
+                    duration_seconds=0,
+                )
+                self.auto_trader.set_mode(AutoTradeMode.MANUAL)
+        except Exception as e:
+            log.debug(f"Auto-trader recovery state apply failed: {e}")
+
+    def _checkpoint_loop(self):
+        """Periodic runtime checkpoint loop for crash recovery."""
+        interval = float(getattr(CONFIG, "runtime_checkpoint_seconds", 5.0) or 5.0)
+        interval = max(2.0, min(interval, 60.0))
+        while self._running:
+            try:
+                self._heartbeat("checkpoint")
+                self._persist_runtime_state(clean_shutdown=False)
+            except Exception as e:
+                log.debug(f"Checkpoint loop error: {e}")
+            time.sleep(interval)
+
+    def _watchdog_loop(self):
+        """
+        Watchdog for core execution threads.
+        On heartbeat stall, pause auto-trader and report degraded health.
+        """
+        stall_seconds = float(getattr(CONFIG, "runtime_watchdog_stall_seconds", 25.0) or 25.0)
+        stall_seconds = max(8.0, stall_seconds)
+        while self._running:
+            time.sleep(2.0)
+            now = time.time()
+            self._heartbeat("watchdog")
+            stalled: List[str] = []
+            with self._thread_hb_lock:
+                for name in ("exec", "fill_sync", "status_sync", "recon"):
+                    ts = float(self._thread_heartbeats.get(name, 0.0) or 0.0)
+                    if ts <= 0.0:
+                        continue
+                    age = now - ts
+                    set_gauge("runtime_thread_heartbeat_age_seconds", age, labels={"thread": name})
+                    if age > stall_seconds:
+                        stalled.append(f"{name}:{age:.1f}s")
+            set_gauge("runtime_queue_depth", float(self._queue.qsize()))
+
+            if not stalled:
+                continue
+
+            # Throttle repeated alerts.
+            if (now - self._last_watchdog_warning_ts) < 15.0:
+                continue
+            self._last_watchdog_warning_ts = now
+            msg = f"Watchdog stall detected ({', '.join(stalled)})"
+            log.warning(msg)
+            try:
+                self._health_monitor.report_component_health(
+                    ComponentType.RISK_MANAGER,
+                    HealthStatus.DEGRADED,
+                    error=msg,
+                )
+            except Exception:
+                pass
+            try:
+                if self.auto_trader is not None:
+                    self.auto_trader.pause(msg, duration_seconds=300)
+            except Exception:
+                pass
+            try:
+                self._alert_manager.risk_alert("Runtime watchdog", msg)
+            except Exception:
+                pass
 
     def _get_quote_snapshot(
         self, symbol: str
@@ -1191,6 +1389,87 @@ class ExecutionEngine:
         if hasattr(CONFIG, "risk") and hasattr(CONFIG.risk, "quote_staleness_seconds"):
             max_age = float(CONFIG.risk.quote_staleness_seconds)
         return self._require_fresh_quote(symbol, max_age_seconds=max_age)
+
+    @staticmethod
+    def _make_submit_fingerprint(signal: TradeSignal) -> str:
+        """Deterministic key for duplicate submission suppression."""
+        sym = str(getattr(signal, "symbol", "") or "").strip()
+        side = str(getattr(getattr(signal, "side", None), "value", "") or "").strip()
+        qty = int(getattr(signal, "quantity", 0) or 0)
+        px = float(getattr(signal, "price", 0.0) or 0.0)
+        return f"{sym}:{side}:{qty}:{round(px, 4)}"
+
+    def _check_submission_guardrails(
+        self, signal: TradeSignal
+    ) -> Tuple[bool, str]:
+        """
+        Extra exchange-style guardrails:
+        - duplicate suppression
+        - per-symbol burst cap
+        - max single-order notional cap
+        """
+        now = time.time()
+        risk_cfg = getattr(CONFIG, "risk", None)
+
+        dedupe_seconds = float(getattr(risk_cfg, "duplicate_signal_cooldown_seconds", 5.0) or 5.0)
+        per_symbol_per_min = int(getattr(risk_cfg, "max_orders_per_symbol_per_minute", 4) or 4)
+        max_notional = float(getattr(risk_cfg, "max_single_order_value", 500000.0) or 500000.0)
+
+        # Duplicate suppression
+        key = self._make_submit_fingerprint(signal)
+        last_seen = float(self._recent_submit_keys.get(key, 0.0) or 0.0)
+        if last_seen > 0 and (now - last_seen) < dedupe_seconds:
+            return False, f"Duplicate signal suppressed ({now - last_seen:.1f}s)"
+        self._recent_submit_keys[key] = now
+
+        # Trim old dedupe keys
+        expire_before = now - max(30.0, dedupe_seconds * 4.0)
+        stale_keys = [k for k, ts in self._recent_submit_keys.items() if float(ts) < expire_before]
+        for k in stale_keys[:500]:
+            self._recent_submit_keys.pop(k, None)
+
+        # Per-symbol burst cap
+        sym = str(getattr(signal, "symbol", "") or "").strip()
+        bucket = self._recent_submissions.get(sym)
+        if bucket is None:
+            bucket = deque()
+            self._recent_submissions[sym] = bucket
+        while bucket and (now - float(bucket[0])) > 60.0:
+            bucket.popleft()
+        if len(bucket) >= max(1, per_symbol_per_min):
+            return False, f"Per-symbol order burst limit ({per_symbol_per_min}/min)"
+        bucket.append(now)
+
+        # Max single order notional
+        qty = int(getattr(signal, "quantity", 0) or 0)
+        px = float(getattr(signal, "price", 0.0) or 0.0)
+        notional = max(0.0, qty * px)
+        if max_notional > 0 and notional > max_notional:
+            return False, f"Single-order notional {notional:,.2f} exceeds {max_notional:,.2f}"
+
+        return True, ""
+
+    def _record_rejection_guardrail(self, reason: str):
+        """Track reject bursts and trip kill-switch on persistent failures."""
+        now = time.time()
+        self._recent_rejections.append(now)
+        while self._recent_rejections and (now - float(self._recent_rejections[0])) > 120.0:
+            self._recent_rejections.popleft()
+        set_gauge("order_rejections_window", float(len(self._recent_rejections)))
+
+        threshold = int(getattr(getattr(CONFIG, "risk", None), "reject_kill_switch_threshold", 12) or 12)
+        if len(self._recent_rejections) < max(3, threshold):
+            return
+        try:
+            if self._kill_switch.can_trade:
+                msg = f"Excessive rejections detected ({len(self._recent_rejections)} in 120s)"
+                self._kill_switch.activate(msg, activated_by="execution_guardrail")
+                get_audit_log().log_risk_event(
+                    "execution_reject_kill_switch",
+                    {"count": int(len(self._recent_rejections)), "last_reason": str(reason)},
+                )
+        except Exception as e:
+            log.debug(f"Reject kill-switch guard failed: {e}")
 
     def submit(self, signal: TradeSignal) -> bool:
         """Submit a trading signal for execution with strict quote freshness."""
@@ -1358,6 +1637,11 @@ class ExecutionEngine:
 
         signal.price = float(fresh_px)
 
+        guard_ok, guard_msg = self._check_submission_guardrails(signal)
+        if not guard_ok:
+            self._reject_signal(signal, guard_msg)
+            return False
+
         # CN limit up/down sanity
         try:
             from core.constants import get_price_limit
@@ -1397,6 +1681,7 @@ class ExecutionEngine:
             return False
 
         self._queue.put(signal)
+        set_gauge("runtime_queue_depth", float(self._queue.qsize()))
         log.info(
             f"Signal queued: {signal.side.value} {signal.quantity} "
             f"{signal.symbol} @ {signal.price:.2f}"
@@ -1453,6 +1738,7 @@ class ExecutionEngine:
         last_risk_update = 0.0
 
         while self._running:
+            self._heartbeat("exec")
             try:
                 signal = self._queue.get(timeout=0.2)
                 if signal is None:
@@ -1709,6 +1995,7 @@ class ExecutionEngine:
     def _fill_sync_loop(self):
         """Poll broker for fills."""
         while self._running:
+            self._heartbeat("fill_sync")
             try:
                 time.sleep(1.0)
                 if not self.broker.is_connected:
@@ -1758,6 +2045,7 @@ class ExecutionEngine:
             stuck_seconds = int(CONFIG.risk.order_stuck_seconds)
 
         while self._running:
+            self._heartbeat("status_sync")
             try:
                 time.sleep(3.0)
                 if not self.broker.is_connected:
@@ -1867,6 +2155,7 @@ class ExecutionEngine:
         oms = get_oms()
 
         while self._running:
+            self._heartbeat("recon")
             try:
                 time.sleep(300)
                 if not self.broker.is_connected:
@@ -1916,6 +2205,7 @@ class ExecutionEngine:
         """Reconnect with exponential backoff."""
         backoff = 1.0
         while self._running:
+            self._heartbeat("reconnect")
             try:
                 time.sleep(2.0)
                 if self.broker.is_connected:
@@ -1981,6 +2271,11 @@ class ExecutionEngine:
     def _reject_signal(self, signal: TradeSignal, reason: str):
         """Handle signal rejection."""
         log.warning(f"Signal rejected: {signal.symbol} - {reason}")
+        inc_counter(
+            "signals_rejected_total",
+            labels={"symbol": str(getattr(signal, "symbol", ""))[:12]},
+        )
+        self._record_rejection_guardrail(reason)
         if self.on_reject:
             order = Order(
                 symbol=signal.symbol,

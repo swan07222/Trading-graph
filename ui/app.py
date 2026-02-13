@@ -591,8 +591,11 @@ class MainApp(QMainWindow):
         if is_final:
             # Final bar - append to history
             arr.append(bar)
-            if len(arr) > 400:
-                del arr[:-400]
+            keep = self._history_window_bars(
+                str(bar.get("interval") or self.interval_combo.currentText())
+            )
+            if len(arr) > keep:
+                del arr[:-keep]
         else:
             # Partial bar - update the last bar in place
             if arr:
@@ -1522,6 +1525,61 @@ class MainApp(QMainWindow):
         bars = int(max(7, round(7.0 * bpd)))
         return max(50, bars) if iv != "1d" else 7
 
+    def _history_window_bars(self, interval: str) -> int:
+        """Rolling chart/session window size (7-day equivalent)."""
+        return max(120, int(self._seven_day_lookback(interval)))
+
+    def _now_iso(self) -> str:
+        """Consistent sortable timestamp for live bars."""
+        return datetime.now().isoformat(timespec="seconds")
+
+    def _merge_bars(
+        self,
+        base: List[Dict[str, Any]],
+        extra: List[Dict[str, Any]],
+        interval: str,
+    ) -> List[Dict[str, Any]]:
+        """Merge+deduplicate bars by timestamp and keep a 7-day rolling window."""
+        merged: Dict[str, Dict[str, Any]] = {}
+        for b in (base or []):
+            ts = str(b.get("timestamp", ""))
+            if ts:
+                merged[ts] = dict(b)
+        for b in (extra or []):
+            ts = str(b.get("timestamp", ""))
+            if ts:
+                merged[ts] = dict(b)
+        out = list(merged.values())
+        out.sort(key=lambda x: str(x.get("timestamp", "")))
+        keep = self._history_window_bars(interval)
+        return out[-keep:]
+
+    def _interval_seconds(self, interval: str) -> int:
+        """Map UI interval token to candle duration in seconds."""
+        iv = str(interval or "1m").strip().lower()
+        mapping = {
+            "1m": 60,
+            "5m": 300,
+            "15m": 900,
+            "30m": 1800,
+            "60m": 3600,
+            "1h": 3600,
+            "1d": 86400,
+        }
+        return int(mapping.get(iv, 60))
+
+    def _is_outlier_tick(self, prev_price: float, new_price: float) -> bool:
+        """
+        Guard against bad ticks creating abnormal long candles.
+        20% jump on a single tick is treated as suspicious and ignored.
+        """
+        prev = float(prev_price or 0.0)
+        new = float(new_price or 0.0)
+        if prev <= 0 or new <= 0:
+            return False
+        jump_pct = abs(new / prev - 1.0)
+        return jump_pct > 0.20
+
         # =========================================================================
         # REAL-TIME MONITORING
     # =========================================================================
@@ -1678,7 +1736,11 @@ class MainApp(QMainWindow):
         reflects the live price.
         """
         code = self._ui_norm(code)
-        if not code:
+        try:
+            price = float(price)
+        except Exception:
+            return
+        if not code or price <= 0:
             return
 
         for row in range(self.watchlist.rowCount()):
@@ -1692,57 +1754,91 @@ class MainApp(QMainWindow):
         self._refresh_guess_rows_for_symbol(code, price)
 
         current_code = self._ui_norm(self.stock_input.text())
-        if current_code != code:
-            return
 
         # Update the last bar's close price for live candle display.
         arr = self._bars_by_symbol.get(code)
+        interval = str(
+            (arr[-1].get("interval") if arr else None)
+            or self.interval_combo.currentText()
+        ).strip().lower()
+        interval_s = self._interval_seconds(interval)
+        now_ts = time.time()
         if not arr:
             arr = [{
                 "open": price,
                 "high": price,
                 "low": price,
                 "close": price,
-                "timestamp": datetime.now().strftime("%H:%M:%S"),
+                "timestamp": self._now_iso(),
                 "final": False,
-                "interval": self.interval_combo.currentText().strip().lower(),
+                "interval": interval,
+                "_ts_epoch": now_ts,
             }]
             self._bars_by_symbol[code] = arr
         if arr and len(arr) > 0:
-            arr[-1]["close"] = price
-            arr[-1]["high"] = max(arr[-1].get("high", price), price)
-            arr[-1]["low"] = min(arr[-1].get("low", price), price)
-            arr[-1]["timestamp"] = datetime.now().strftime("%H:%M:%S")
-            arr[-1]["final"] = False
-
-            predicted = []
-            if (
-                self.current_prediction
-                and getattr(self.current_prediction, "stock_code", "") == code
-            ):
-                predicted = (
-                    getattr(self.current_prediction, "predicted_prices", [])
-                    or []
+            last = arr[-1]
+            prev_close = float(last.get("close", price) or price)
+            if self._is_outlier_tick(prev_close, price):
+                log.debug(
+                    f"Skip outlier tick for {code}: prev={prev_close:.2f} new={price:.2f}"
                 )
+                return
 
-            try:
-                if hasattr(self.chart, 'update_chart'):
-                    self.chart.update_chart(
-                        arr,
-                        predicted_prices=predicted,
-                        levels=self._get_levels_dict()
+            last_epoch = float(last.get("_ts_epoch", now_ts) or now_ts)
+            if (
+                not bool(last.get("final", False))
+                and (now_ts - last_epoch) >= float(interval_s)
+            ):
+                arr.append({
+                    "open": price,
+                    "high": price,
+                    "low": price,
+                    "close": price,
+                    "timestamp": self._now_iso(),
+                    "final": False,
+                    "interval": interval,
+                    "_ts_epoch": now_ts,
+                })
+                keep = self._history_window_bars(interval)
+                if len(arr) > keep:
+                    del arr[:-keep]
+                last = arr[-1]
+            else:
+                last["close"] = price
+                last["high"] = max(float(last.get("high", price) or price), price)
+                last["low"] = min(float(last.get("low", price) or price), price)
+                last["timestamp"] = self._now_iso()
+                last["final"] = False
+                if "_ts_epoch" not in last:
+                    last["_ts_epoch"] = now_ts
+
+            if current_code == code:
+                predicted = []
+                if (
+                    self.current_prediction
+                    and getattr(self.current_prediction, "stock_code", "") == code
+                ):
+                    predicted = (
+                        getattr(self.current_prediction, "predicted_prices", [])
+                        or []
                     )
-                    self._update_chart_latest_label(code, bar=arr[-1], price=price)
-            except Exception as e:
-                log.debug(f"Chart price update failed: {e}")
+
+                try:
+                    if hasattr(self.chart, 'update_chart'):
+                        self.chart.update_chart(
+                            arr,
+                            predicted_prices=predicted,
+                            levels=self._get_levels_dict()
+                        )
+                        self._update_chart_latest_label(code, bar=last, price=price)
+                except Exception as e:
+                    log.debug(f"Chart price update failed: {e}")
 
             try:
                 if self._session_bar_cache is not None:
-                    interval = self.interval_combo.currentText().strip().lower()
                     key = f"{code}:{interval}:tick"
-                    now_ts = time.time()
                     if (now_ts - float(self._last_session_cache_write_ts.get(key, 0.0))) >= 0.9:
-                        self._session_bar_cache.append_bar(code, interval, arr[-1])
+                        self._session_bar_cache.append_bar(code, interval, last)
                         self._last_session_cache_write_ts[key] = now_ts
             except Exception as e:
                 log.debug(f"Session cache tick write failed: {e}")
@@ -1761,7 +1857,9 @@ class MainApp(QMainWindow):
 
         interval = self.interval_combo.currentText().strip()
         horizon = self.forecast_spin.value()
-        lookback = self.lookback_spin.value()
+        # Real-time guessed graph uses latest 120 candles.
+        arr_for_forecast = self._bars_by_symbol.get(code) or []
+        lookback = max(20, min(120, len(arr_for_forecast) or 120))
 
         def do_forecast():
             if hasattr(self.predictor, "get_realtime_forecast_curve"):
@@ -1960,6 +2058,7 @@ class MainApp(QMainWindow):
         interval = self.interval_combo.currentText().strip()
         forecast_bars = self.forecast_spin.value()
         lookback = self.lookback_spin.value()
+        forecast_lookback = 120
 
         self.analyze_action.setEnabled(False)
 
@@ -1976,7 +2075,7 @@ class MainApp(QMainWindow):
                 use_realtime_price=True,
                 interval=interval,
                 forecast_minutes=forecast_bars,
-                lookback_bars=lookback,
+                lookback_bars=forecast_lookback,
                 skip_cache=True
             )
 
@@ -1999,39 +2098,76 @@ class MainApp(QMainWindow):
             fetcher = getattr(self.predictor, "fetcher", None)
             if fetcher is None:
                 return []
+            lookback = max(120, int(lookback_bars))
+            norm_iv = str(interval).strip().lower()
             df = fetcher.get_history(
                 symbol,
-                interval=str(interval).strip().lower(),
-                bars=max(20, int(lookback_bars)),
+                interval=norm_iv,
+                bars=lookback,
                 use_cache=True,
                 update_db=False,
             )
-            if df is None or df.empty:
-                return []
-
             out: List[Dict[str, Any]] = []
-            for idx, row in df.tail(320).iterrows():
-                c = float(row.get("close", 0) or 0)
-                if c <= 0:
-                    continue
-                o = float(row.get("open", c) or c)
-                h = float(row.get("high", c) or c)
-                l = float(row.get("low", c) or c)
-                if h < l:
-                    h, l = l, h
-                ts_obj = row.get("datetime", idx)
-                ts = ts_obj.isoformat() if hasattr(ts_obj, "isoformat") else str(ts_obj)
-                out.append(
-                    {
-                        "open": o,
-                        "high": h,
-                        "low": l,
-                        "close": c,
-                        "timestamp": ts,
-                        "final": True,
-                        "interval": str(interval).strip().lower(),
-                    }
+
+            if df is not None and not df.empty:
+                for idx, row in df.tail(lookback).iterrows():
+                    c = float(row.get("close", 0) or 0)
+                    if c <= 0:
+                        continue
+                    o = float(row.get("open", c) or c)
+                    h = float(row.get("high", c) or c)
+                    l = float(row.get("low", c) or c)
+                    if h < l:
+                        h, l = l, h
+                    ts_obj = row.get("datetime", idx)
+                    ts = ts_obj.isoformat() if hasattr(ts_obj, "isoformat") else str(ts_obj)
+                    out.append(
+                        {
+                            "open": o,
+                            "high": h,
+                            "low": l,
+                            "close": c,
+                            "timestamp": ts,
+                            "final": True,
+                            "interval": norm_iv,
+                        }
+                    )
+
+            # Include session-persisted bars so refresh/restart keeps data continuity.
+            if self._session_bar_cache is not None:
+                sdf = self._session_bar_cache.read_history(
+                    symbol, norm_iv, bars=lookback, final_only=False
                 )
+                if sdf is not None and not sdf.empty:
+                    for idx, row in sdf.tail(lookback).iterrows():
+                        c = float(row.get("close", 0) or 0)
+                        if c <= 0:
+                            continue
+                        o = float(row.get("open", c) or c)
+                        h = float(row.get("high", c) or c)
+                        l = float(row.get("low", c) or c)
+                        if h < l:
+                            h, l = l, h
+                        ts = idx.isoformat() if hasattr(idx, "isoformat") else str(idx)
+                        out.append(
+                            {
+                                "open": o,
+                                "high": h,
+                                "low": l,
+                                "close": c,
+                                "timestamp": ts,
+                                "final": bool(row.get("is_final", True)),
+                                "interval": norm_iv,
+                            }
+                        )
+
+            # Deduplicate by timestamp and keep latest.
+            merged: Dict[str, Dict[str, Any]] = {}
+            for b in out:
+                merged[str(b.get("timestamp", ""))] = b
+            out = list(merged.values())
+            out.sort(key=lambda x: str(x.get("timestamp", "")))
+            out = out[-lookback:]
             return out
         except Exception as e:
             log.debug(f"Historical chart load failed for {symbol}: {e}")
@@ -2051,10 +2187,16 @@ class MainApp(QMainWindow):
         symbol = self._ui_norm(getattr(pred, "stock_code", ""))
         current_price = float(getattr(pred, "current_price", 0) or 0)
         interval = self.interval_combo.currentText().strip().lower()
-        lookback = int(self.lookback_spin.value())
+        lookback = max(
+            int(self.lookback_spin.value()),
+            self._seven_day_lookback(interval),
+        )
 
         if symbol:
             arr = self._load_chart_history_bars(symbol, interval, lookback)
+            existing = self._bars_by_symbol.get(symbol) or []
+            if existing:
+                arr = self._merge_bars(arr, existing, interval)
 
             if not arr and current_price > 0:
                 arr = [{
@@ -2062,9 +2204,10 @@ class MainApp(QMainWindow):
                     "high": current_price,
                     "low": current_price,
                     "close": current_price,
-                    "timestamp": datetime.now().strftime("%H:%M:%S"),
+                    "timestamp": self._now_iso(),
                     "final": False,
                     "interval": interval,
+                    "_ts_epoch": time.time(),
                 }]
 
             if arr and current_price > 0:
@@ -2078,7 +2221,9 @@ class MainApp(QMainWindow):
                     current_price,
                 )
                 arr[-1]["final"] = False
-                arr[-1]["timestamp"] = datetime.now().strftime("%H:%M:%S")
+                arr[-1]["timestamp"] = self._now_iso()
+                if "_ts_epoch" not in arr[-1]:
+                    arr[-1]["_ts_epoch"] = time.time()
 
             if arr:
                 self._bars_by_symbol[symbol] = arr
@@ -3875,6 +4020,17 @@ class MainApp(QMainWindow):
                             self._auto_trade_mode = AutoTradeMode.MANUAL
                     except (ValueError, KeyError):
                         self._auto_trade_mode = AutoTradeMode.MANUAL
+
+                # Enforce requested behavior:
+                # - forecast uses latest 120 candles
+                # - lookback keeps at least 7 trading days
+                self.forecast_spin.setValue(120)
+                min_lookback = self._seven_day_lookback(
+                    self.interval_combo.currentText()
+                )
+                self.lookback_spin.setValue(
+                    max(int(self.lookback_spin.value()), int(min_lookback))
+                )
 
                 log.debug("Application state restored")
         except Exception as e:
