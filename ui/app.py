@@ -300,6 +300,7 @@ class MainApp(QMainWindow):
     MAX_WATCHLIST_SIZE = 50
 
     bar_received = pyqtSignal(str, dict)
+    quote_received = pyqtSignal(str, float)
 
     def __init__(self):
         super().__init__()
@@ -318,6 +319,7 @@ class MainApp(QMainWindow):
         self._last_forecast_refresh_ts: float = 0.0
         self._live_price_series: Dict[str, List[float]] = {}
         self._price_series_lock = threading.Lock()
+        self._last_session_cache_write_ts: Dict[str, float] = {}
 
         self._bars_by_symbol: Dict[str, List[dict]] = {}
         self._syncing_mode_ui = False
@@ -344,6 +346,7 @@ class MainApp(QMainWindow):
         self._setup_timers()
         self._apply_professional_style()
         self.bar_received.connect(self._on_bar_ui)
+        self.quote_received.connect(self._on_price_updated)
 
         try:
             self._load_state()
@@ -537,6 +540,9 @@ class MainApp(QMainWindow):
             if not getattr(self, "_bar_callback_attached", False):
                 self._bar_callback_attached = True
                 fm.add_bar_callback(self._on_bar_from_feed)
+            if not getattr(self, "_tick_callback_attached", False):
+                self._tick_callback_attached = True
+                fm.add_tick_callback(self._on_tick_from_feed)
 
         except Exception as e:
             log.debug(f"Feed subscription failed: {e}")
@@ -548,6 +554,16 @@ class MainApp(QMainWindow):
         """
         try:
             self.bar_received.emit(str(symbol), dict(bar))
+        except Exception:
+            pass
+
+    def _on_tick_from_feed(self, quote):
+        """Forward feed quote updates to UI thread safely."""
+        try:
+            symbol = self._ui_norm(getattr(quote, "code", ""))
+            price = float(getattr(quote, "price", 0) or 0)
+            if symbol and price > 0:
+                self.quote_received.emit(symbol, price)
         except Exception:
             pass
 
@@ -574,12 +590,6 @@ class MainApp(QMainWindow):
             arr.append(bar)
             if len(arr) > 400:
                 del arr[:-400]
-            try:
-                if self._session_bar_cache is not None:
-                    interval = str(bar.get("interval") or self.interval_combo.currentText()).strip().lower()
-                    self._session_bar_cache.append_bar(symbol, interval, bar)
-            except Exception as e:
-                log.debug(f"Session cache write failed: {e}")
         else:
             # Partial bar - update the last bar in place
             if arr:
@@ -587,6 +597,20 @@ class MainApp(QMainWindow):
             else:
                 # First bar - just append
                 arr.append(bar)
+
+        try:
+            if self._session_bar_cache is not None:
+                interval = str(bar.get("interval") or self.interval_combo.currentText()).strip().lower()
+                key = f"{symbol}:{interval}"
+                now_ts = time.time()
+                # Avoid excessive disk writes for partial updates.
+                min_gap = 0.9 if not is_final else 0.0
+                last_ts = float(self._last_session_cache_write_ts.get(key, 0.0))
+                if (now_ts - last_ts) >= min_gap:
+                    self._session_bar_cache.append_bar(symbol, interval, bar)
+                    self._last_session_cache_write_ts[key] = now_ts
+        except Exception as e:
+            log.debug(f"Session cache write failed: {e}")
 
         current_code = self._ui_norm(self.stock_input.text())
         if current_code != symbol:
@@ -616,8 +640,37 @@ class MainApp(QMainWindow):
                     predicted_prices=predicted,
                     levels=self._get_levels_dict()
                 )
+            self._update_chart_latest_label(symbol, bar=arr[-1] if arr else None)
         except Exception as e:
             log.debug(f"Chart update failed: {e}")
+
+    def _update_chart_latest_label(
+        self,
+        symbol: str,
+        *,
+        bar: Optional[Dict[str, Any]] = None,
+        price: Optional[float] = None,
+    ) -> None:
+        """Show latest quote/bar summary below chart."""
+        label = getattr(self, "chart_latest_label", None)
+        if label is None:
+            return
+        try:
+            if bar:
+                o = float(bar.get("open", 0) or 0)
+                h = float(bar.get("high", 0) or 0)
+                l = float(bar.get("low", 0) or 0)
+                c = float(bar.get("close", 0) or 0)
+                ts = bar.get("timestamp") or bar.get("time") or "--"
+                label.setText(
+                    f"Latest {symbol} | O {o:.2f}  H {h:.2f}  L {l:.2f}  C {c:.2f} | {ts}"
+                )
+            elif price is not None and float(price) > 0:
+                label.setText(
+                    f"Latest {symbol} | Price {float(price):.2f} | waiting for OHLC bar"
+                )
+        except Exception:
+            pass
 
     # =========================================================================
     # =========================================================================
@@ -716,7 +769,7 @@ class MainApp(QMainWindow):
 
         self.lookback_spin = QSpinBox()
         self.lookback_spin.setRange(100, 5000)
-        self.lookback_spin.setValue(1400)
+        self.lookback_spin.setValue(self._seven_day_lookback("1m"))
         self.lookback_spin.setSuffix(" bars")
         self.lookback_spin.setToolTip("Historical bars to use for analysis")
         self._add_labeled(settings_layout, 5, "Lookback:", self.lookback_spin)
@@ -849,6 +902,26 @@ class MainApp(QMainWindow):
             self.chart.setAlignment(Qt.AlignmentFlag.AlignCenter)
         chart_layout.addWidget(self.chart)
 
+        chart_actions = QHBoxLayout()
+        self.zoom_in_btn = QPushButton("Zoom In")
+        self.zoom_out_btn = QPushButton("Zoom Out")
+        self.zoom_reset_btn = QPushButton("Reset View")
+        self.zoom_in_btn.setMaximumWidth(110)
+        self.zoom_out_btn.setMaximumWidth(110)
+        self.zoom_reset_btn.setMaximumWidth(120)
+        self.zoom_in_btn.clicked.connect(self._zoom_chart_in)
+        self.zoom_out_btn.clicked.connect(self._zoom_chart_out)
+        self.zoom_reset_btn.clicked.connect(self._zoom_chart_reset)
+        chart_actions.addWidget(self.zoom_in_btn)
+        chart_actions.addWidget(self.zoom_out_btn)
+        chart_actions.addWidget(self.zoom_reset_btn)
+        chart_actions.addStretch(1)
+        chart_layout.addLayout(chart_actions)
+
+        self.chart_latest_label = QLabel("Latest --")
+        self.chart_latest_label.setStyleSheet("color: #9aa4b2; font-size: 11px;")
+        chart_layout.addWidget(self.chart_latest_label)
+
         chart_group.setLayout(chart_layout)
         layout.addWidget(chart_group)
 
@@ -865,6 +938,27 @@ class MainApp(QMainWindow):
         layout.addWidget(details_group)
 
         return panel
+
+    def _zoom_chart_in(self):
+        if hasattr(self.chart, "zoom_in"):
+            try:
+                self.chart.zoom_in()
+            except Exception:
+                pass
+
+    def _zoom_chart_out(self):
+        if hasattr(self.chart, "zoom_out"):
+            try:
+                self.chart.zoom_out()
+            except Exception:
+                pass
+
+    def _zoom_chart_reset(self):
+        if hasattr(self.chart, "reset_view"):
+            try:
+                self.chart.reset_view()
+            except Exception:
+                pass
 
     def _create_right_panel(self) -> QWidget:
         """Create right panel with portfolio, news, orders, and auto-trade"""
@@ -1099,6 +1193,11 @@ class MainApp(QMainWindow):
         self.auto_trade_timer.timeout.connect(self._refresh_auto_trade_ui)
         self.auto_trade_timer.start(2000)
 
+        # Live chart refresh: keep real + guessed lines moving.
+        self.chart_live_timer = QTimer()
+        self.chart_live_timer.timeout.connect(self._refresh_live_chart_forecast)
+        self.chart_live_timer.start(1500)
+
         self._update_market_status()
 
         # =========================================================================
@@ -1331,6 +1430,14 @@ class MainApp(QMainWindow):
         # Initialize auto-trader on executor if available
         self._init_auto_trader()
 
+        # Auto-start live monitor when model is available.
+        if self.predictor is not None and self.predictor.ensemble is not None:
+            try:
+                self.monitor_action.setChecked(True)
+                self._start_monitoring()
+            except Exception as e:
+                log.debug(f"Auto-start monitoring failed: {e}")
+
         self.log("System initialized - Ready for trading", "info")
 
     def _init_auto_trader(self):
@@ -1361,8 +1468,7 @@ class MainApp(QMainWindow):
         horizon = self.forecast_spin.value()
         self.model_info.setText(f"Interval: {interval}, Horizon: {horizon}")
 
-        lookback_map = {"1m": 1400, "5m": 600, "15m": 600}
-        self.lookback_spin.setValue(lookback_map.get(interval, 300))
+        self.lookback_spin.setValue(self._seven_day_lookback(interval))
 
         was_monitoring = bool(self.monitor and self.monitor.isRunning())
         if was_monitoring:
@@ -1394,6 +1500,18 @@ class MainApp(QMainWindow):
         ):
             self.executor.auto_trader.update_predictor(self.predictor)
 
+    def _seven_day_lookback(self, interval: str) -> int:
+        """Return lookback bars representing ~7 trading days for interval."""
+        iv = str(interval or "1m").strip().lower()
+        try:
+            from data.fetcher import BARS_PER_DAY
+            bpd = float(BARS_PER_DAY.get(iv, 1.0))
+        except Exception:
+            fallback = {"1m": 240.0, "5m": 48.0, "15m": 16.0, "30m": 8.0, "60m": 4.0, "1h": 4.0, "1d": 1.0}
+            bpd = float(fallback.get(iv, 1.0))
+        bars = int(max(7, round(7.0 * bpd)))
+        return max(50, bars) if iv != "1d" else 7
+
         # =========================================================================
         # REAL-TIME MONITORING
     # =========================================================================
@@ -1417,7 +1535,8 @@ class MainApp(QMainWindow):
 
         interval = self.interval_combo.currentText().strip()
         forecast_bars = self.forecast_spin.value()
-        lookback = self.lookback_spin.value()
+        lookback = self._seven_day_lookback(interval)
+        self.lookback_spin.setValue(lookback)
 
         try:
             from data.feeds import get_feed_manager
@@ -1564,12 +1683,25 @@ class MainApp(QMainWindow):
         if current_code != code:
             return
 
-        # Update the last bar's close price for live candle display
+        # Update the last bar's close price for live candle display.
         arr = self._bars_by_symbol.get(code)
+        if not arr:
+            arr = [{
+                "open": price,
+                "high": price,
+                "low": price,
+                "close": price,
+                "timestamp": datetime.now().strftime("%H:%M:%S"),
+                "final": False,
+                "interval": self.interval_combo.currentText().strip().lower(),
+            }]
+            self._bars_by_symbol[code] = arr
         if arr and len(arr) > 0:
             arr[-1]["close"] = price
             arr[-1]["high"] = max(arr[-1].get("high", price), price)
             arr[-1]["low"] = min(arr[-1].get("low", price), price)
+            arr[-1]["timestamp"] = datetime.now().strftime("%H:%M:%S")
+            arr[-1]["final"] = False
 
             predicted = []
             if (
@@ -1588,8 +1720,20 @@ class MainApp(QMainWindow):
                         predicted_prices=predicted,
                         levels=self._get_levels_dict()
                     )
+                    self._update_chart_latest_label(code, bar=arr[-1], price=price)
             except Exception as e:
                 log.debug(f"Chart price update failed: {e}")
+
+            try:
+                if self._session_bar_cache is not None:
+                    interval = self.interval_combo.currentText().strip().lower()
+                    key = f"{code}:{interval}:tick"
+                    now_ts = time.time()
+                    if (now_ts - float(self._last_session_cache_write_ts.get(key, 0.0))) >= 0.9:
+                        self._session_bar_cache.append_bar(code, interval, arr[-1])
+                        self._last_session_cache_write_ts[key] = now_ts
+            except Exception as e:
+                log.debug(f"Session cache tick write failed: {e}")
 
         # =====================================================================
         # THROTTLED FORECAST REFRESH (keep existing logic but simplified)
@@ -1599,7 +1743,7 @@ class MainApp(QMainWindow):
             return
 
         now = time.time()
-        if (now - self._last_forecast_refresh_ts) < 2.0:
+        if (now - self._last_forecast_refresh_ts) < 1.0:
             return
         self._last_forecast_refresh_ts = now
 
@@ -1653,6 +1797,33 @@ class MainApp(QMainWindow):
             lambda e: self.workers.pop("forecast_refresh", None)
         )
         worker.start()
+
+    def _refresh_live_chart_forecast(self):
+        """
+        Periodic chart refresh for selected symbol.
+        Ensures guessed graph updates in real time even with sparse feed ticks.
+        """
+        if not self.predictor:
+            return
+        code = self._ui_norm(self.stock_input.text())
+        if not code:
+            return
+        try:
+            from data.feeds import get_feed_manager
+            fm = get_feed_manager(auto_init=True, async_init=True)
+            q = fm.get_quote(code)
+            if q and float(getattr(q, "price", 0) or 0) > 0:
+                self._on_price_updated(code, float(q.price))
+                return
+        except Exception:
+            pass
+        try:
+            from data.fetcher import get_fetcher
+            q2 = get_fetcher().get_realtime(code)
+            if q2 and float(getattr(q2, "price", 0) or 0) > 0:
+                self._on_price_updated(code, float(q2.price))
+        except Exception:
+            pass
 
     def _get_levels_dict(self) -> Optional[Dict[str, float]]:
         """Get trading levels as dict"""
@@ -1803,6 +1974,57 @@ class MainApp(QMainWindow):
         self.workers["analyze"] = worker
         worker.start()
 
+    def _load_chart_history_bars(
+        self,
+        symbol: str,
+        interval: str,
+        lookback_bars: int,
+    ) -> List[Dict[str, Any]]:
+        """Load historical OHLC bars for chart rendering."""
+        if not self.predictor:
+            return []
+        try:
+            fetcher = getattr(self.predictor, "fetcher", None)
+            if fetcher is None:
+                return []
+            df = fetcher.get_history(
+                symbol,
+                interval=str(interval).strip().lower(),
+                bars=max(20, int(lookback_bars)),
+                use_cache=True,
+                update_db=False,
+            )
+            if df is None or df.empty:
+                return []
+
+            out: List[Dict[str, Any]] = []
+            for idx, row in df.tail(320).iterrows():
+                c = float(row.get("close", 0) or 0)
+                if c <= 0:
+                    continue
+                o = float(row.get("open", c) or c)
+                h = float(row.get("high", c) or c)
+                l = float(row.get("low", c) or c)
+                if h < l:
+                    h, l = l, h
+                ts_obj = row.get("datetime", idx)
+                ts = ts_obj.isoformat() if hasattr(ts_obj, "isoformat") else str(ts_obj)
+                out.append(
+                    {
+                        "open": o,
+                        "high": h,
+                        "low": l,
+                        "close": c,
+                        "timestamp": ts,
+                        "final": True,
+                        "interval": str(interval).strip().lower(),
+                    }
+                )
+            return out
+        except Exception as e:
+            log.debug(f"Historical chart load failed for {symbol}: {e}")
+            return []
+
     def _on_analysis_done(self, pred):
         """Handle analysis completion — also triggers news fetch"""
         self.analyze_action.setEnabled(True)
@@ -1814,16 +2036,51 @@ class MainApp(QMainWindow):
         if hasattr(self.signal_panel, 'update_prediction'):
             self.signal_panel.update_prediction(pred)
 
-        if hasattr(self.chart, 'update_data'):
-            levels = self._get_levels_dict()
-            price_history = getattr(pred, 'price_history', [])
-            predicted_prices = getattr(pred, 'predicted_prices', [])
-            try:
-                self.chart.update_data(
-                    price_history, predicted_prices, levels
+        symbol = self._ui_norm(getattr(pred, "stock_code", ""))
+        current_price = float(getattr(pred, "current_price", 0) or 0)
+        interval = self.interval_combo.currentText().strip().lower()
+        lookback = int(self.lookback_spin.value())
+
+        if symbol:
+            arr = self._load_chart_history_bars(symbol, interval, lookback)
+
+            if not arr and current_price > 0:
+                arr = [{
+                    "open": current_price,
+                    "high": current_price,
+                    "low": current_price,
+                    "close": current_price,
+                    "timestamp": datetime.now().strftime("%H:%M:%S"),
+                    "final": False,
+                    "interval": interval,
+                }]
+
+            if arr and current_price > 0:
+                arr[-1]["close"] = current_price
+                arr[-1]["high"] = max(
+                    float(arr[-1].get("high", current_price) or current_price),
+                    current_price,
                 )
-            except Exception as e:
-                log.debug(f"Chart update failed: {e}")
+                arr[-1]["low"] = min(
+                    float(arr[-1].get("low", current_price) or current_price),
+                    current_price,
+                )
+                arr[-1]["final"] = False
+                arr[-1]["timestamp"] = datetime.now().strftime("%H:%M:%S")
+
+            if arr:
+                self._bars_by_symbol[symbol] = arr
+                if hasattr(self.chart, "update_chart"):
+                    self.chart.update_chart(
+                        arr,
+                        predicted_prices=getattr(pred, "predicted_prices", []) or [],
+                        levels=self._get_levels_dict(),
+                    )
+                self._update_chart_latest_label(
+                    symbol,
+                    bar=arr[-1] if arr else None,
+                    price=current_price if current_price > 0 else None,
+                )
 
         # Update details (with news sentiment)
         self._update_details(pred)
@@ -1843,6 +2100,12 @@ class MainApp(QMainWindow):
             self._ensure_feed_subscription(pred.stock_code)
         except Exception:
             pass
+        if not (self.monitor and self.monitor.isRunning()):
+            try:
+                self.monitor_action.setChecked(True)
+                self._start_monitoring()
+            except Exception:
+                pass
 
         Signal = _lazy_get("models.predictor", "Signal")
         if hasattr(pred, 'signal'):
@@ -3340,7 +3603,7 @@ class MainApp(QMainWindow):
         for timer_name in (
             "clock_timer", "market_timer",
             "portfolio_timer", "watchlist_timer",
-            "auto_trade_timer"
+            "auto_trade_timer", "chart_live_timer"
         ):
             timer = getattr(self, timer_name, None)
             try:

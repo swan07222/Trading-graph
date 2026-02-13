@@ -2067,9 +2067,12 @@ class ContinuousLearner:
 
     def _ensure_holdout(self, interval, lookback, min_bars, cycle_number):
         """FIX: Adaptive holdout size based on pool size."""
+        min_required = max(1, int(self._MIN_HOLDOUT_PREDICTIONS))
         with self._lock:
+            current_holdout_size = len(self._holdout_codes)
             should_refresh = (
                 not self._holdout_codes
+                or current_holdout_size < min_required
                 or (cycle_number > 1 and cycle_number % self._holdout_refresh_interval == 0)
             )
             if not should_refresh:
@@ -2109,7 +2112,7 @@ class ContinuousLearner:
             except Exception:
                 continue
 
-        if not new_holdout:
+        if len(new_holdout) < min_required:
             log.warning("Failed to build new holdout set 鈥?keeping existing")
             return
 

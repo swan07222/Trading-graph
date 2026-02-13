@@ -1110,11 +1110,10 @@ class AutoLearnDialog(QDialog):
             from data.session_cache import get_session_bar_cache
             cache = get_session_bar_cache()
             interval = "1m"
-            if str(mode).lower() == "targeted":
-                try:
-                    interval = self.target_interval_combo.currentText().strip().lower()
-                except Exception:
-                    interval = "1m"
+            try:
+                interval = self.target_interval_combo.currentText().strip().lower()
+            except Exception:
+                interval = "1m"
             live_codes = cache.get_recent_symbols(interval=interval, min_rows=10)
             codes.extend(live_codes)
         except Exception:

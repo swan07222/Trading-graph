@@ -72,7 +72,14 @@ if HAS_PYQTGRAPH:
 
                 top = max(o, c)
                 bot = min(o, c)
-                body_height = max(1e-8, top - bot)
+                # Keep tiny/flat candles visible (e.g., partial live bars).
+                body_height = top - bot
+                min_body = max(abs(c) * 0.0008, 0.01)
+                if body_height < min_body:
+                    mid = (top + bot) / 2.0
+                    top = mid + (min_body / 2.0)
+                    bot = mid - (min_body / 2.0)
+                    body_height = min_body
                 rect = pg.QtCore.QRectF(
                     t - w / 2.0, bot, w, body_height
                 )
@@ -141,6 +148,7 @@ class StockChart(QWidget):
         self.predicted_line = None    # Layer 1: Prediction (bottom)
         self.level_lines: Dict[str, object] = {}
         self.overlay_lines: Dict[str, object] = {}
+        self._manual_zoom: bool = False
 
         self._setup_ui()
 
@@ -331,8 +339,8 @@ class StockChart(QWidget):
             self._update_overlay_lines(closes)
             self._update_level_lines()
 
-            # Auto-range to fit all data
-            if self.plot_widget is not None:
+            # Auto-range unless user enabled manual zoom.
+            if self.plot_widget is not None and not self._manual_zoom:
                 self.plot_widget.autoRange()
 
         except Exception as e:
@@ -523,6 +531,38 @@ class StockChart(QWidget):
         self._predicted_prices = []
         self._levels = {}
         self._clear_all()
+
+    def zoom_in(self):
+        """Zoom into current view."""
+        if not HAS_PYQTGRAPH or self.plot_widget is None:
+            return
+        try:
+            vb = self.plot_widget.plotItem.vb
+            vb.scaleBy((0.8, 0.8))
+            self._manual_zoom = True
+        except Exception:
+            pass
+
+    def zoom_out(self):
+        """Zoom out from current view."""
+        if not HAS_PYQTGRAPH or self.plot_widget is None:
+            return
+        try:
+            vb = self.plot_widget.plotItem.vb
+            vb.scaleBy((1.25, 1.25))
+            self._manual_zoom = True
+        except Exception:
+            pass
+
+    def reset_view(self):
+        """Reset view and resume auto-follow."""
+        if not HAS_PYQTGRAPH or self.plot_widget is None:
+            return
+        try:
+            self._manual_zoom = False
+            self.plot_widget.autoRange()
+        except Exception:
+            pass
 
     def set_title(self, title: str):
         """Set chart title."""
