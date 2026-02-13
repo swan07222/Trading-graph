@@ -1,7 +1,7 @@
 from datetime import datetime
 
 from config.settings import CONFIG
-from core.types import Account, Order, OrderSide, OrderStatus, OrderType
+from core.types import Account, Fill, Order, OrderSide, OrderStatus, OrderType
 from trading.broker import BrokerInterface, MultiVenueBroker, create_broker
 
 
@@ -14,6 +14,8 @@ class _DummyVenue(BrokerInterface):
         self._reject_submit = False
         self._reject_message = "Not connected to broker"
         self.submit_calls = 0
+        self.cancel_calls = 0
+        self.fills: list[Fill] = []
 
     @property
     def name(self) -> str:
@@ -54,6 +56,7 @@ class _DummyVenue(BrokerInterface):
         return order
 
     def cancel_order(self, order_id: str) -> bool:
+        self.cancel_calls += 1
         return True
 
     def get_orders(self, active_only: bool = True):
@@ -63,7 +66,7 @@ class _DummyVenue(BrokerInterface):
         return 10.0
 
     def get_fills(self, since: datetime = None):
-        return []
+        return list(self.fills)
 
     def get_order_status(self, order_id: str):
         return OrderStatus.SUBMITTED
@@ -142,3 +145,40 @@ def test_multi_venue_health_snapshot_cooldown_until_zero_when_no_failure():
     snap = router.get_health_snapshot()
     assert snap["venues"][0]["cooldown_until"] == 0.0
     assert snap["venues"][1]["cooldown_until"] == 0.0
+
+
+def test_multi_venue_aggregates_fills_from_all_connected_venues():
+    primary = _DummyVenue("primary", fail_submit=False)
+    secondary = _DummyVenue("secondary", fail_submit=False)
+
+    f1 = Fill(order_id="O1", symbol="600519", side=OrderSide.BUY, quantity=100, price=10.0)
+    f1.id = "F1"
+    f2 = Fill(order_id="O2", symbol="000001", side=OrderSide.SELL, quantity=100, price=9.9)
+    f2.id = "F2"
+    primary.fills = [f1]
+    secondary.fills = [f2]
+
+    router = MultiVenueBroker([primary, secondary], failover_cooldown_seconds=60)
+    out = router.get_fills()
+    out_ids = {x.id for x in out}
+    assert out_ids == {"F1", "F2"}
+
+
+def test_multi_venue_cancel_prefers_order_affinity_venue():
+    primary = _DummyVenue("primary", fail_submit=True)
+    secondary = _DummyVenue("secondary", fail_submit=False)
+    router = MultiVenueBroker([primary, secondary], failover_cooldown_seconds=60)
+
+    order = Order(
+        symbol="600519",
+        side=OrderSide.BUY,
+        order_type=OrderType.LIMIT,
+        quantity=100,
+        price=10.0,
+    )
+    out = router.submit_order(order)
+    assert out.broker_id == "secondary-ok"
+
+    assert router.cancel_order(order.id) is True
+    assert secondary.cancel_calls == 1
+    assert primary.cancel_calls == 0

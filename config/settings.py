@@ -139,6 +139,12 @@ class SecurityConfig:
     ip_whitelist: list[str] = field(default_factory=list)
     audit_retention_days: int = 365
     audit_auto_prune: bool = True
+    enable_runtime_lease: bool = True
+    runtime_lease_backend: str = "sqlite"
+    runtime_lease_cluster: str = "execution_engine"
+    runtime_lease_path: str = ""
+    runtime_lease_node_id: str = ""
+    runtime_lease_ttl_seconds: float = 20.0
 
 @dataclass
 class AlertConfig:
@@ -371,6 +377,9 @@ class Config:
         self.risk_profile: RiskProfile = RiskProfile.MODERATE
         self.market_type: MarketType = MarketType.A_SHARE
         self.broker_path: str = ""
+        self.runtime_checkpoint_seconds: float = 5.0
+        self.runtime_watchdog_stall_seconds: float = 25.0
+        self.runtime_lease_heartbeat_seconds: float = 5.0
 
         self._base_dir = Path(__file__).parent.parent
         self._model_dir_override: str | None = None
@@ -646,6 +655,18 @@ class Config:
                 "auto_trade.enabled",
                 lambda x: x.lower() in ("true", "1", "yes"),
             ),
+            "RUNTIME_LEASE_ENABLED": (
+                "security.enable_runtime_lease",
+                lambda x: x.lower() in ("true", "1", "yes"),
+            ),
+            "RUNTIME_LEASE_BACKEND": ("security.runtime_lease_backend", str),
+            "RUNTIME_LEASE_CLUSTER": ("security.runtime_lease_cluster", str),
+            "RUNTIME_LEASE_PATH": ("security.runtime_lease_path", str),
+            "RUNTIME_LEASE_NODE_ID": ("security.runtime_lease_node_id", str),
+            "RUNTIME_LEASE_TTL_SECONDS": ("security.runtime_lease_ttl_seconds", float),
+            "RUNTIME_CHECKPOINT_SECONDS": ("runtime_checkpoint_seconds", float),
+            "RUNTIME_WATCHDOG_STALL_SECONDS": ("runtime_watchdog_stall_seconds", float),
+            "RUNTIME_LEASE_HEARTBEAT_SECONDS": ("runtime_lease_heartbeat_seconds", float),
         }
 
         for env_key, (attr_path, converter) in env_mappings.items():

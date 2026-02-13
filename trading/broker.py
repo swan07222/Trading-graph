@@ -1388,6 +1388,7 @@ class MultiVenueBroker(BrokerInterface):
         self._last_fail_ts: dict[int, float] = {}
         self._fail_counts: dict[str, int] = {}
         self._submit_counts: dict[str, int] = {}
+        self._order_venue_idx: dict[str, int] = {}
         if not self._venues:
             raise ValueError("MultiVenueBroker requires at least one venue")
 
@@ -1441,6 +1442,28 @@ class MultiVenueBroker(BrokerInterface):
             start = eligible.index(self._active_idx)
             return eligible[start:] + eligible[:start]
         return eligible
+
+    def _connected_indices(self) -> list[int]:
+        out: list[int] = []
+        for i, venue in enumerate(self._venues):
+            try:
+                if venue.is_connected:
+                    out.append(i)
+            except Exception:
+                continue
+        return out
+
+    def _preferred_indices_for_order(self, order_id: str) -> list[int]:
+        preferred = self._order_venue_idx.get(str(order_id or ""))
+        if preferred is None:
+            return self._ordered_indices()
+
+        ordered = self._ordered_indices()
+        if preferred in ordered:
+            return [preferred] + [i for i in ordered if i != preferred]
+        if 0 <= preferred < len(self._venues):
+            return [preferred] + ordered
+        return ordered
 
     def _mark_failure(self, idx: int, exc: Exception) -> None:
         self._last_fail_ts[idx] = time.time()
@@ -1516,6 +1539,10 @@ class MultiVenueBroker(BrokerInterface):
                     continue
                 self._active_idx = idx
                 self._mark_submit(idx)
+                if getattr(result, "id", ""):
+                    self._order_venue_idx[str(result.id)] = idx
+                if getattr(result, "broker_id", ""):
+                    self.register_order_mapping(str(result.id), str(result.broker_id))
                 return result
             except Exception as e:
                 last_exc = e
@@ -1526,44 +1553,98 @@ class MultiVenueBroker(BrokerInterface):
         raise RuntimeError("No connected venue available")
 
     def cancel_order(self, order_id: str) -> bool:
-        for idx in self._ordered_indices():
+        for idx in self._preferred_indices_for_order(order_id):
             venue = self._venues[idx]
             try:
                 ok = bool(venue.cancel_order(order_id))
                 if ok:
                     self._active_idx = idx
+                    self._order_venue_idx[str(order_id)] = idx
                     return True
             except Exception as e:
                 self._mark_failure(idx, e)
         return False
 
     def get_orders(self, active_only: bool = True) -> list[Order]:
-        return self._first_read("get_orders", active_only)
+        out: list[Order] = []
+        seen: set[str] = set()
+        for idx in self._connected_indices():
+            venue = self._venues[idx]
+            try:
+                rows = venue.get_orders(active_only)
+            except Exception as e:
+                self._mark_failure(idx, e)
+                continue
+            for order in (rows or []):
+                oid = str(getattr(order, "id", "") or "")
+                if not oid or oid in seen:
+                    continue
+                seen.add(oid)
+                out.append(order)
+                self._order_venue_idx[oid] = idx
+                bid = str(getattr(order, "broker_id", "") or "").strip()
+                if bid:
+                    self.register_order_mapping(oid, bid)
+        return out
 
     def get_quote(self, symbol: str) -> float | None:
         return self._first_read("get_quote", symbol)
 
     def get_fills(self, since: datetime = None) -> list[Fill]:
-        return self._first_read("get_fills", since)
+        out: list[Fill] = []
+        seen: set[str] = set()
+        for idx in self._connected_indices():
+            venue = self._venues[idx]
+            try:
+                rows = venue.get_fills(since)
+            except Exception as e:
+                self._mark_failure(idx, e)
+                continue
+            for fill in (rows or []):
+                fid = str(getattr(fill, "id", "") or "").strip()
+                if not fid:
+                    bfid = str(getattr(fill, "broker_fill_id", "") or "").strip()
+                    fid = "|".join(
+                        [
+                            str(getattr(fill, "order_id", "") or ""),
+                            bfid,
+                            str(getattr(fill, "symbol", "") or ""),
+                            str(getattr(fill, "quantity", 0) or 0),
+                            f"{float(getattr(fill, 'price', 0.0) or 0.0):.6f}",
+                            str(getattr(fill, "timestamp", "") or ""),
+                        ]
+                    )
+                if fid in seen:
+                    continue
+                seen.add(fid)
+                out.append(fill)
+        return out
 
     def get_order_status(self, order_id: str) -> OrderStatus | None:
-        for idx in self._ordered_indices():
+        for idx in self._preferred_indices_for_order(order_id):
             venue = self._venues[idx]
             try:
                 status = venue.get_order_status(order_id)
                 self._active_idx = idx
                 if status is not None:
+                    self._order_venue_idx[str(order_id)] = idx
                     return status
             except Exception as e:
                 self._mark_failure(idx, e)
         return None
 
     def sync_order(self, order: Order) -> Order:
-        for idx in self._ordered_indices():
+        order_id = str(getattr(order, "id", "") or "")
+        for idx in self._preferred_indices_for_order(order_id):
             venue = self._venues[idx]
             try:
                 synced = venue.sync_order(order)
                 self._active_idx = idx
+                if order_id:
+                    self._order_venue_idx[order_id] = idx
+                bid = str(getattr(synced, "broker_id", "") or "").strip()
+                if order_id and bid:
+                    self.register_order_mapping(order_id, bid)
                 return synced
             except Exception as e:
                 self._mark_failure(idx, e)
@@ -1593,6 +1674,7 @@ class MultiVenueBroker(BrokerInterface):
         return {
             "active_venue": active_name,
             "cooldown_seconds": self._cooldown_seconds,
+            "order_affinity_count": int(len(self._order_venue_idx)),
             "venues": venues,
         }
 

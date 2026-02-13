@@ -6,6 +6,11 @@
     "require_distinct_approvers": true,
     "max_order_notional": 250000.0,
     "blocked_symbols": [],
-    "allowed_sides": ["buy", "sell"]
+    "allowed_sides": ["buy", "sell"],
+    "allowed_order_types": ["limit", "market"],
+    "blocked_strategies": [],
+    "require_manual_for_live": false,
+    "require_change_ticket": false,
+    "require_business_justification": false
   }
 }

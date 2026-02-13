@@ -2,9 +2,12 @@
 from __future__ import annotations
 
 import copy
+import os
 import queue
+import socket
 import threading
 import time
+import uuid
 from collections import deque
 from collections.abc import Callable
 from datetime import date, datetime, timedelta
@@ -28,6 +31,7 @@ from trading.alerts import AlertPriority, get_alert_manager
 from trading.broker import BrokerInterface, create_broker
 from trading.health import ComponentType, HealthStatus, get_health_monitor
 from trading.kill_switch import get_kill_switch
+from trading.runtime_lease import RuntimeLeaseClient, create_runtime_lease_client
 from trading.risk import RiskManager, get_risk_manager
 from utils.atomic_io import atomic_write_json, read_json
 from utils.logger import get_logger
@@ -799,6 +803,8 @@ class ExecutionEngine:
     # Watermark overlap to avoid missing same-timestamp fills
     _FILL_WATERMARK_OVERLAP_SECONDS: float = 2.0
     _RUNTIME_STATE_FILE: str = "execution_runtime_state.json"
+    _RUNTIME_LEASE_FILE: str = "execution_runtime_lease.json"
+    _RUNTIME_LEASE_DB_FILE: str = "execution_runtime_lease.db"
 
     def __init__(self, mode: TradingMode = None):
         self.mode = mode or CONFIG.trading_mode
@@ -842,6 +848,37 @@ class ExecutionEngine:
         }
         self._last_watchdog_warning_ts: float = 0.0
         self._runtime_state_path = Path(CONFIG.data_dir) / self._RUNTIME_STATE_FILE
+        sec_cfg = getattr(CONFIG, "security", None)
+        self._runtime_lease_backend = str(
+            getattr(sec_cfg, "runtime_lease_backend", "sqlite") or "sqlite"
+        ).strip().lower()
+        self._runtime_lease_cluster = str(
+            getattr(sec_cfg, "runtime_lease_cluster", "execution_engine")
+            or "execution_engine"
+        ).strip()
+        node_cfg = str(getattr(sec_cfg, "runtime_lease_node_id", "") or "").strip()
+        node_id = node_cfg or f"{socket.gethostname()}:{os.getpid()}"
+        self._runtime_lease_id = f"{node_id}:{uuid.uuid4().hex[:10]}"
+        lease_path_cfg = str(getattr(sec_cfg, "runtime_lease_path", "") or "").strip()
+        default_lease_name = (
+            self._RUNTIME_LEASE_DB_FILE
+            if self._runtime_lease_backend == "sqlite"
+            else self._RUNTIME_LEASE_FILE
+        )
+        self._runtime_lease_path = (
+            Path(lease_path_cfg)
+            if lease_path_cfg
+            else (Path(CONFIG.data_dir) / default_lease_name)
+        )
+        self._runtime_lease_enabled = bool(
+            getattr(sec_cfg, "enable_runtime_lease", True)
+        )
+        self._runtime_lease_ttl_seconds = float(
+            getattr(sec_cfg, "runtime_lease_ttl_seconds", 20.0) or 20.0
+        )
+        self._runtime_lease_client: RuntimeLeaseClient | None = None
+        self._runtime_lease_owner_hint: dict[str, Any] | None = None
+        self._runtime_lease_fencing_token: int = 0
         self._runtime_recovered = False
         self._recovered_auto_state: dict | None = None
 
@@ -923,6 +960,18 @@ class ExecutionEngine:
     def start(self) -> bool:
         if self._running:
             return True
+
+        if not self._acquire_runtime_lease():
+            owner = self._runtime_lease_owner_hint or {}
+            owner_id = str(owner.get("owner_id", "unknown") or "unknown")
+            hb_ts = float(owner.get("heartbeat_ts", 0.0) or 0.0)
+            age = max(0.0, time.time() - hb_ts) if hb_ts > 0 else -1.0
+            log.error(
+                "Execution runtime lease is held by another process: owner=%s age=%.1fs",
+                owner_id,
+                age,
+            )
+            return False
 
         if not self.broker.connect():
             log.error("Broker connection failed")
@@ -1102,6 +1151,7 @@ class ExecutionEngine:
 
     def stop(self):
         if not self._running:
+            self._release_runtime_lease()
             return
 
         # Stop auto-trader first
@@ -1146,6 +1196,7 @@ class ExecutionEngine:
             except Exception:
                 pass
         self._persist_runtime_state(clean_shutdown=True)
+        self._release_runtime_lease()
 
         log.info("Execution engine stopped")
 
@@ -1194,10 +1245,24 @@ class ExecutionEngine:
                     if self._last_checkpoint_ts > 0
                     else None
                 ),
+                "lease_enabled": bool(self._runtime_lease_enabled),
+                "lease_backend": str(getattr(self, "_runtime_lease_backend", "file")),
+                "lease_cluster": str(getattr(self, "_runtime_lease_cluster", "execution_engine")),
+                "lease_owner_id": str(self._runtime_lease_id),
+                "lease_fencing_token": int(getattr(self, "_runtime_lease_fencing_token", 0) or 0),
+                "lease_path": str(getattr(self, "_runtime_lease_path", "")),
                 "queue_depth": int(self._queue.qsize()),
                 "thread_heartbeat_age_seconds": hb_age,
                 "recent_rejections_window": int(len(self._recent_rejections)),
             }
+            try:
+                lease_client = self._get_runtime_lease_client()
+                if lease_client is not None:
+                    record = lease_client.read()
+                    if isinstance(record, dict) and record:
+                        snapshot["runtime"]["lease_record"] = record
+            except Exception:
+                pass
             snapshot["execution_quality"] = self._get_execution_quality_snapshot()
             with self._synthetic_exit_lock:
                 snapshot["synthetic_exits"] = {
@@ -1243,12 +1308,132 @@ class ExecutionEngine:
             "running": bool(self._running),
             "clean_shutdown": bool(clean_shutdown),
             "mode": str(getattr(self.mode, "value", self.mode)),
+            "runtime_lease_id": str(self._runtime_lease_id),
+            "runtime_lease_backend": str(getattr(self, "_runtime_lease_backend", "file")),
+            "runtime_lease_cluster": str(getattr(self, "_runtime_lease_cluster", "execution_engine")),
+            "runtime_lease_fencing_token": int(getattr(self, "_runtime_lease_fencing_token", 0) or 0),
             "queue_depth": int(self._queue.qsize()),
             "auto_trade_state": (
                 auto_state.to_dict() if hasattr(auto_state, "to_dict") else None
             ),
             "thread_heartbeats": hb,
         }
+
+    def _runtime_lease_payload(self) -> dict[str, object]:
+        return {
+            "owner_id": str(self._runtime_lease_id),
+            "pid": int(os.getpid()),
+            "host": str(socket.gethostname()),
+            "mode": str(getattr(self.mode, "value", self.mode)),
+            "heartbeat_ts": float(time.time()),
+            "cluster": str(getattr(self, "_runtime_lease_cluster", "execution_engine")),
+            "backend": str(getattr(self, "_runtime_lease_backend", "file")),
+        }
+
+    def _get_runtime_lease_client(self) -> RuntimeLeaseClient | None:
+        client = getattr(self, "_runtime_lease_client", None)
+        if client is not None:
+            return client
+        try:
+            backend = str(getattr(self, "_runtime_lease_backend", "file") or "file").strip().lower()
+            cluster = str(getattr(self, "_runtime_lease_cluster", "execution_engine") or "execution_engine").strip()
+            path_attr = getattr(self, "_runtime_lease_path", None)
+            if path_attr is None:
+                name = (
+                    self._RUNTIME_LEASE_DB_FILE
+                    if backend == "sqlite"
+                    else self._RUNTIME_LEASE_FILE
+                )
+                path = Path(CONFIG.data_dir) / name
+                self._runtime_lease_path = path
+            else:
+                path = Path(path_attr)
+            client = create_runtime_lease_client(
+                backend=backend,
+                cluster=cluster,
+                path=path,
+            )
+            self._runtime_lease_client = client
+            return client
+        except Exception as e:
+            log.warning("Runtime lease client init failed: %s", e)
+            return None
+
+    def _acquire_runtime_lease(self) -> bool:
+        """
+        Acquire a local single-writer runtime lease.
+
+        This prevents split-brain auto execution when two engine processes
+        run against the same working directory.
+        """
+        if not self._runtime_lease_enabled:
+            return True
+
+        try:
+            client = self._get_runtime_lease_client()
+            if client is None:
+                return False
+            result = client.acquire(
+                owner_id=self._runtime_lease_id,
+                ttl_seconds=self._runtime_lease_ttl_seconds,
+                metadata=self._runtime_lease_payload(),
+            )
+            self._runtime_lease_owner_hint = (
+                dict(result.record or {})
+                if isinstance(result.record, dict)
+                else None
+            )
+            if result.ok:
+                row = dict(result.record or {})
+                self._runtime_lease_fencing_token = int(row.get("generation", 0) or 0)
+                self._runtime_lease_owner_hint = None
+                return True
+        except Exception as e:
+            log.warning(f"Runtime lease acquire failed: {e}")
+            return False
+
+        return False
+
+    def _refresh_runtime_lease(self) -> bool:
+        if not self._runtime_lease_enabled:
+            return True
+        try:
+            client = self._get_runtime_lease_client()
+            if client is None:
+                return False
+            result = client.refresh(
+                owner_id=self._runtime_lease_id,
+                ttl_seconds=self._runtime_lease_ttl_seconds,
+                metadata=self._runtime_lease_payload(),
+            )
+            self._runtime_lease_owner_hint = (
+                dict(result.record or {})
+                if isinstance(result.record, dict)
+                else None
+            )
+            if result.ok:
+                row = dict(result.record or {})
+                self._runtime_lease_fencing_token = int(row.get("generation", 0) or 0)
+                self._runtime_lease_owner_hint = None
+                return True
+            return False
+        except Exception as e:
+            log.warning(f"Runtime lease refresh failed: {e}")
+            return False
+
+    def _release_runtime_lease(self) -> None:
+        if not self._runtime_lease_enabled:
+            return
+        try:
+            client = self._get_runtime_lease_client()
+            if client is None:
+                return
+            client.release(
+                owner_id=self._runtime_lease_id,
+                metadata={"released_by": self._runtime_lease_id},
+            )
+        except Exception:
+            pass
 
     def _persist_runtime_state(self, clean_shutdown: bool = False):
         """Write runtime checkpoint atomically."""
@@ -1297,11 +1482,24 @@ class ExecutionEngine:
     def _checkpoint_loop(self):
         """Periodic runtime checkpoint loop for crash recovery."""
         interval = float(getattr(CONFIG, "runtime_checkpoint_seconds", 5.0) or 5.0)
+        lease_interval = float(getattr(CONFIG, "runtime_lease_heartbeat_seconds", 5.0) or 5.0)
         interval = max(2.0, min(interval, 60.0))
+        lease_interval = max(1.0, min(lease_interval, 30.0))
+        last_lease = 0.0
         while self._running:
             try:
                 self._heartbeat("checkpoint")
                 self._persist_runtime_state(clean_shutdown=False)
+                now = time.time()
+                if (now - last_lease) >= lease_interval:
+                    if not self._refresh_runtime_lease():
+                        msg = "Runtime lease lost to another process; kill switch engaged"
+                        log.critical(msg)
+                        try:
+                            self._kill_switch.activate(msg, activated_by="runtime_lease")
+                        except Exception:
+                            pass
+                    last_lease = now
             except Exception as e:
                 log.debug(f"Checkpoint loop error: {e}")
             time.sleep(interval)

@@ -65,3 +65,87 @@ def test_policy_engine_enforces_notional_and_approvals(tmp_path):
     d2 = eng.evaluate_live_trade(_signal(quantity=10, price=100.0, approver_ids=["a"], approvals_count=1))
     assert d2.allowed is False
     assert "distinct approvals" in d2.reason
+
+
+def test_policy_engine_enforces_manual_and_change_ticket(tmp_path):
+    policy_path = tmp_path / "security_policy.json"
+    policy_path.write_text(
+        json.dumps(
+            {
+                "version": "9.3",
+                "enabled": True,
+                "live_trade": {
+                    "min_approvals": 1,
+                    "allowed_sides": ["buy", "sell"],
+                    "allowed_order_types": ["limit"],
+                    "require_manual_for_live": True,
+                    "require_change_ticket": True,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    eng = TradePolicyEngine(policy_path=policy_path)
+
+    d1 = eng.evaluate_live_trade(
+        _signal(auto_generated=True, order_type="limit", approvals_count=1)
+    )
+    assert d1.allowed is False
+    assert "manual" in d1.reason
+
+    d2 = eng.evaluate_live_trade(
+        _signal(auto_generated=False, order_type="limit", approvals_count=1)
+    )
+    assert d2.allowed is False
+    assert "change ticket" in d2.reason.lower()
+
+    d3 = eng.evaluate_live_trade(
+        _signal(
+            auto_generated=False,
+            order_type="limit",
+            approvals_count=1,
+            change_ticket="CHG-1024",
+        )
+    )
+    assert d3.allowed is True
+
+
+def test_policy_engine_enforces_strategy_and_justification(tmp_path):
+    policy_path = tmp_path / "security_policy.json"
+    policy_path.write_text(
+        json.dumps(
+            {
+                "version": "9.4",
+                "enabled": True,
+                "live_trade": {
+                    "min_approvals": 1,
+                    "allowed_sides": ["buy", "sell"],
+                    "blocked_strategies": ["high_risk_scalper"],
+                    "require_business_justification": True,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    eng = TradePolicyEngine(policy_path=policy_path)
+
+    d1 = eng.evaluate_live_trade(
+        _signal(strategy="high_risk_scalper", approvals_count=1)
+    )
+    assert d1.allowed is False
+    assert "blocked strategy" in d1.reason.lower()
+
+    d2 = eng.evaluate_live_trade(
+        _signal(strategy="swing_alpha", approvals_count=1, reasons=[])
+    )
+    assert d2.allowed is False
+    assert "justification" in d2.reason.lower()
+
+    d3 = eng.evaluate_live_trade(
+        _signal(
+            strategy="swing_alpha",
+            approvals_count=1,
+            reasons=["earnings drift setup"],
+        )
+    )
+    assert d3.allowed is True

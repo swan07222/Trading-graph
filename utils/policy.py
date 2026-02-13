@@ -50,6 +50,11 @@ class TradePolicyEngine:
                 "max_order_notional": 250000.0,
                 "blocked_symbols": [],
                 "allowed_sides": ["buy", "sell"],
+                "allowed_order_types": ["limit", "market"],
+                "blocked_strategies": [],
+                "require_manual_for_live": False,
+                "require_change_ticket": False,
+                "require_business_justification": False,
             },
         }
 
@@ -85,9 +90,12 @@ class TradePolicyEngine:
         lp = dict(p.get("live_trade") or {})
         symbol = str(getattr(signal, "symbol", "") or "").strip()
         side = str(getattr(getattr(signal, "side", ""), "value", getattr(signal, "side", "")) or "").strip().lower()
+        order_type = str(getattr(signal, "order_type", "limit") or "limit").strip().lower()
         qty = int(getattr(signal, "quantity", 0) or 0)
         px = float(getattr(signal, "price", 0.0) or 0.0)
         notional = float(max(0.0, qty * px))
+        strategy = str(getattr(signal, "strategy", "") or "").strip().lower()
+        auto_generated = bool(getattr(signal, "auto_generated", False))
 
         blocked = {str(x).strip() for x in list(lp.get("blocked_symbols", []) or []) if str(x).strip()}
         if symbol and symbol in blocked:
@@ -96,6 +104,66 @@ class TradePolicyEngine:
         allowed_sides = {str(x).strip().lower() for x in list(lp.get("allowed_sides", ["buy", "sell"]))}
         if side and side not in allowed_sides:
             return PolicyDecision(False, f"side not allowed by policy: {side}", version, {"side": side})
+
+        allowed_order_types = {
+            str(x).strip().lower()
+            for x in list(lp.get("allowed_order_types", ["limit", "market"]))
+            if str(x).strip()
+        }
+        if order_type and allowed_order_types and order_type not in allowed_order_types:
+            return PolicyDecision(
+                False,
+                f"order_type not allowed by policy: {order_type}",
+                version,
+                {"order_type": order_type},
+            )
+
+        blocked_strategies = {
+            str(x).strip().lower()
+            for x in list(lp.get("blocked_strategies", []) or [])
+            if str(x).strip()
+        }
+        if strategy and strategy in blocked_strategies:
+            return PolicyDecision(
+                False,
+                f"policy blocked strategy: {strategy}",
+                version,
+                {"strategy": strategy},
+            )
+
+        if bool(lp.get("require_manual_for_live", False)) and auto_generated:
+            return PolicyDecision(
+                False,
+                "policy requires manual submission for live trades",
+                version,
+                {"auto_generated": True},
+            )
+
+        if bool(lp.get("require_change_ticket", False)):
+            ticket = str(
+                getattr(signal, "change_ticket", "")
+                or getattr(signal, "ticket_id", "")
+                or ""
+            ).strip()
+            if not ticket:
+                return PolicyDecision(
+                    False,
+                    "policy requires change ticket for live trade",
+                    version,
+                    {},
+                )
+
+        if bool(lp.get("require_business_justification", False)):
+            reasons = getattr(signal, "reasons", None)
+            reason_count = len([x for x in reasons if str(x).strip()]) if isinstance(reasons, list) else 0
+            justification = str(getattr(signal, "business_justification", "") or "").strip()
+            if reason_count <= 0 and not justification:
+                return PolicyDecision(
+                    False,
+                    "policy requires non-empty business justification",
+                    version,
+                    {},
+                )
 
         max_notional = float(lp.get("max_order_notional", 0.0) or 0.0)
         if max_notional > 0 and notional > max_notional:
