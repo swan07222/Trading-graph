@@ -1,8 +1,9 @@
 import queue
+import threading
 from types import SimpleNamespace
 
 from config.settings import TradingMode
-from core.types import TradeSignal, OrderSide, AutoTradeMode
+from core.types import TradeSignal, Order, Fill, OrderSide, AutoTradeMode
 from trading.executor import ExecutionEngine
 from trading.health import HealthStatus
 from config.settings import CONFIG
@@ -102,3 +103,59 @@ def test_execution_snapshot_includes_broker_routing():
     assert snap["running"] is True
     assert snap["broker"]["name"] == "router"
     assert snap["broker"]["routing"]["active_venue"] == "ths"
+
+
+def test_execution_quality_snapshot_tracks_slippage():
+    eng = ExecutionEngine.__new__(ExecutionEngine)
+    eng._exec_quality_lock = threading.RLock()
+    eng._exec_quality = {
+        "fills": 0,
+        "slippage_bps_sum": 0.0,
+        "slippage_bps_abs_sum": 0.0,
+        "by_reason": {},
+        "last_update": "",
+    }
+
+    order = Order(symbol="600519", side=OrderSide.BUY, quantity=100, price=10.0)
+    order.tags["arrival_price"] = 10.0
+    fill = Fill(order_id=order.id, symbol=order.symbol, side=OrderSide.BUY, quantity=100, price=10.1)
+
+    eng._record_execution_quality(order, fill)
+    snap = eng._get_execution_quality_snapshot()
+
+    assert snap["fills"] == 1
+    assert snap["avg_signed_slippage_bps"] > 0
+    assert snap["avg_abs_slippage_bps"] > 0
+    assert snap["by_reason"].get("entry", 0) == 1
+
+
+def test_synthetic_exit_plan_triggers_and_clears():
+    eng = ExecutionEngine.__new__(ExecutionEngine)
+    eng._synthetic_exit_lock = threading.RLock()
+    eng._synthetic_exits = {}
+    eng._get_quote_snapshot = lambda symbol: (12.0, None, "test")
+
+    calls = []
+
+    def _fake_submit(plan, trigger_price, reason):
+        calls.append((plan["symbol"], trigger_price, reason))
+        return True
+
+    eng._submit_synthetic_exit = _fake_submit
+
+    order = Order(
+        symbol="600519",
+        side=OrderSide.BUY,
+        quantity=100,
+        price=10.0,
+        stop_loss=9.2,
+        take_profit=11.0,
+    )
+    fill = Fill(order_id=order.id, symbol=order.symbol, side=OrderSide.BUY, quantity=100, price=10.0)
+
+    eng._maybe_register_synthetic_exit(order, fill)
+    assert order.id in eng._synthetic_exits
+
+    eng._evaluate_synthetic_exits()
+    assert calls, "synthetic exit should submit when TP is crossed"
+    assert order.id not in eng._synthetic_exits

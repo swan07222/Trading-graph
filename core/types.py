@@ -474,6 +474,10 @@ class TradeSignal:
     auto_trade_action_id: str = ""
     approvals_count: int = 0
     approved_by: List[str] = field(default_factory=list)
+    order_type: str = "limit"
+    trailing_stop_pct: float = 0.0
+    oco_group: str = ""
+    bracket: bool = False
 
     def __post_init__(self):
         if not self.id:

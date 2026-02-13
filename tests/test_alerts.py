@@ -33,3 +33,5 @@ def test_alert_stats_snapshot():
     assert stats["total"] >= 1
     assert "by_priority" in stats
     assert "by_category" in stats
+    assert "channel_delivery" in stats
+    assert "top_repeats" in stats

@@ -11,7 +11,7 @@ from datetime import datetime, timedelta
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from enum import Enum
-from typing import Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 import requests
 
@@ -142,6 +142,14 @@ class AlertManager:
         self._max_history = 1000
         self._pending_ack: Dict[str, Alert] = {}
         self._repeat_counter: Dict[str, int] = defaultdict(int)
+        self._channel_stats: Dict[str, Dict[str, Any]] = defaultdict(
+            lambda: {
+                "sent": 0,
+                "failed": 0,
+                "last_sent_at": None,
+                "last_error": "",
+            }
+        )
         self._desktop_callback: Optional[Callable] = None
         self._load_history()
 
@@ -198,11 +206,17 @@ class AlertManager:
             log.debug(f"Alert throttled: {alert.title}")
             return
 
+        sent_channels = 0
+        failed_channels = 0
         for channel in alert.channels:
             try:
                 self._send_to_channel(alert, channel)
+                self._record_channel_result(channel, ok=True)
+                sent_channels += 1
             except Exception as e:
+                self._record_channel_result(channel, ok=False, error=str(e))
                 log.error(f"Failed to send alert to {channel.value}: {e}")
+                failed_channels += 1
 
         alert.sent_at = datetime.now()
         with self._lock:
@@ -211,7 +225,34 @@ class AlertManager:
                 self._history = self._history[-self._max_history :]
             if alert.priority in (AlertPriority.HIGH, AlertPriority.CRITICAL):
                 self._pending_ack[alert.id] = alert
+        if failed_channels > 0:
+            self._audit.log_risk_event(
+                "alert_delivery_partial_failure",
+                {
+                    "alert_id": alert.id,
+                    "title": alert.title,
+                    "failed_channels": int(failed_channels),
+                    "sent_channels": int(sent_channels),
+                },
+            )
         self._audit.log_risk_event("alert_sent", alert.to_dict())
+
+    def _record_channel_result(
+        self,
+        channel: AlertChannel,
+        ok: bool,
+        error: str = "",
+    ) -> None:
+        name = channel.value
+        now_iso = datetime.now().isoformat()
+        with self._lock:
+            stats = self._channel_stats[name]
+            if ok:
+                stats["sent"] = int(stats.get("sent", 0)) + 1
+                stats["last_sent_at"] = now_iso
+            else:
+                stats["failed"] = int(stats.get("failed", 0)) + 1
+                stats["last_error"] = str(error or "")[:300]
 
     def _send_to_channel(self, alert: Alert, channel: AlertChannel):
         if channel == AlertChannel.LOG:
@@ -358,6 +399,15 @@ class AlertManager:
             for alert in self._history:
                 by_priority[alert.priority.name] += 1
                 by_category[alert.category.value] += 1
+            top_repeats = sorted(
+                (
+                    {"key": k, "count": int(v)}
+                    for k, v in self._repeat_counter.items()
+                    if int(v) > 1
+                ),
+                key=lambda x: x["count"],
+                reverse=True,
+            )[:10]
             return {
                 "total": total,
                 "acknowledged": acked,
@@ -365,6 +415,8 @@ class AlertManager:
                 "pending_ack": len(self._pending_ack),
                 "by_priority": dict(by_priority),
                 "by_category": dict(by_category),
+                "channel_delivery": dict(self._channel_stats),
+                "top_repeats": top_repeats,
             }
 
     def set_desktop_callback(self, callback: Callable):

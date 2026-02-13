@@ -7,12 +7,12 @@ import time
 import copy
 from collections import deque
 from datetime import datetime, timedelta, date
-from typing import Dict, Optional, Callable, Set, List, Tuple
+from typing import Any, Dict, Optional, Callable, Set, List, Tuple
 from pathlib import Path
 
 from config import CONFIG, TradingMode
 from core.types import (
-    Order, OrderSide, OrderStatus, TradeSignal, Account, Fill,
+    Order, OrderSide, OrderType, OrderStatus, TradeSignal, Account, Fill,
     AutoTradeMode, AutoTradeState, AutoTradeAction,
 )
 from trading.broker import BrokerInterface, create_broker
@@ -817,6 +817,16 @@ class ExecutionEngine:
         self._recent_submit_keys: Dict[str, float] = {}
         self._recent_submissions: Dict[str, deque] = {}
         self._recent_rejections: deque = deque()
+        self._synthetic_exits: Dict[str, Dict[str, Any]] = {}
+        self._synthetic_exit_lock = threading.RLock()
+        self._exec_quality_lock = threading.RLock()
+        self._exec_quality: Dict[str, Any] = {
+            "fills": 0,
+            "slippage_bps_sum": 0.0,
+            "slippage_bps_abs_sum": 0.0,
+            "by_reason": {},
+            "last_update": "",
+        }
         self._last_watchdog_warning_ts: float = 0.0
         self._runtime_state_path = Path(CONFIG.data_dir) / self._RUNTIME_STATE_FILE
         self._runtime_recovered = False
@@ -1175,9 +1185,30 @@ class ExecutionEngine:
                 "thread_heartbeat_age_seconds": hb_age,
                 "recent_rejections_window": int(len(self._recent_rejections)),
             }
+            snapshot["execution_quality"] = self._get_execution_quality_snapshot()
+            with self._synthetic_exit_lock:
+                snapshot["synthetic_exits"] = {
+                    "active_plans": int(len(self._synthetic_exits)),
+                    "plans": list(self._synthetic_exits.values())[:50],
+                }
         except Exception:
             pass
         return snapshot
+
+    def _get_execution_quality_snapshot(self) -> Dict[str, object]:
+        with self._exec_quality_lock:
+            fills = int(self._exec_quality.get("fills", 0) or 0)
+            sum_signed = float(self._exec_quality.get("slippage_bps_sum", 0.0) or 0.0)
+            sum_abs = float(self._exec_quality.get("slippage_bps_abs_sum", 0.0) or 0.0)
+            avg_signed = (sum_signed / fills) if fills > 0 else 0.0
+            avg_abs = (sum_abs / fills) if fills > 0 else 0.0
+            return {
+                "fills": fills,
+                "avg_signed_slippage_bps": avg_signed,
+                "avg_abs_slippage_bps": avg_abs,
+                "by_reason": dict(self._exec_quality.get("by_reason", {})),
+                "last_update": str(self._exec_quality.get("last_update", "")),
+            }
 
     def _heartbeat(self, name: str):
         """Record thread heartbeat for watchdog + observability."""
@@ -1793,6 +1824,7 @@ class ExecutionEngine:
                 side=signal.side,
                 quantity=int(signal.quantity),
                 price=float(signal.price),
+                order_type=OrderType.LIMIT,
                 stop_loss=(
                     float(signal.stop_loss) if signal.stop_loss else 0.0
                 ),
@@ -1803,11 +1835,43 @@ class ExecutionEngine:
                 strategy=signal.strategy or "",
             )
 
+            requested_order_type = str(
+                getattr(signal, "order_type", "limit") or "limit"
+            ).strip().lower()
+            requested_enum = OrderType.LIMIT
+            try:
+                requested_enum = OrderType(requested_order_type)
+            except Exception:
+                requested_enum = OrderType.LIMIT
+
+            broker_order_type = requested_enum
+            if requested_enum == OrderType.STOP:
+                # Emulate stop behavior via runtime exits; submit market.
+                broker_order_type = OrderType.MARKET
+            elif requested_enum == OrderType.STOP_LIMIT:
+                broker_order_type = OrderType.LIMIT
+                if order.price <= 0:
+                    order.price = float(signal.price or 0.0)
+            order.order_type = broker_order_type
+
             # Tag auto-trade orders for audit
             if signal.auto_generated:
                 order.tags["auto_trade"] = True
                 order.tags["auto_trade_action_id"] = signal.auto_trade_action_id
                 order.strategy = order.strategy or "auto_trade"
+            order.tags["arrival_price"] = float(signal.price or 0.0)
+            order.tags["requested_order_type"] = requested_enum.value
+            order.tags["order_type_emulated"] = bool(
+                broker_order_type != requested_enum
+            )
+            order.tags["bracket_enabled"] = bool(
+                getattr(signal, "bracket", False)
+                or order.stop_loss > 0
+                or order.take_profit > 0
+            )
+            trailing_pct = float(getattr(signal, "trailing_stop_pct", 0.0) or 0.0)
+            if trailing_pct > 0:
+                order.tags["trailing_stop_pct"] = trailing_pct
 
             order = oms.submit_order(order)
 
@@ -1940,6 +2004,8 @@ class ExecutionEngine:
                         continue
 
                     oms.process_fill(order, fill)
+                    self._record_execution_quality(order, fill)
+                    self._maybe_register_synthetic_exit(order, fill)
                     log.info(
                         f"Fill processed: {fill_id} for order {order.id}"
                     )
@@ -2001,8 +2067,186 @@ class ExecutionEngine:
                 if not self.broker.is_connected:
                     continue
                 self._process_pending_fills()
+                self._evaluate_synthetic_exits()
             except Exception as e:
                 log.error(f"Fill sync loop error: {e}")
+
+    def _record_execution_quality(self, order: Order, fill: Fill) -> None:
+        try:
+            tags = dict(getattr(order, "tags", {}) or {})
+            arrival = float(tags.get("arrival_price", 0.0) or 0.0)
+            if arrival <= 0:
+                arrival = float(getattr(order, "price", 0.0) or 0.0)
+            if arrival <= 0 or float(fill.price) <= 0:
+                return
+
+            if fill.side == OrderSide.BUY:
+                slip_bps = (float(fill.price) / arrival - 1.0) * 10000.0
+            else:
+                slip_bps = (arrival / float(fill.price) - 1.0) * 10000.0
+
+            reason = str(tags.get("exit_reason", "entry") or "entry")
+            with self._exec_quality_lock:
+                self._exec_quality["fills"] = int(
+                    self._exec_quality.get("fills", 0)
+                ) + 1
+                self._exec_quality["slippage_bps_sum"] = float(
+                    self._exec_quality.get("slippage_bps_sum", 0.0)
+                ) + float(slip_bps)
+                self._exec_quality["slippage_bps_abs_sum"] = float(
+                    self._exec_quality.get("slippage_bps_abs_sum", 0.0)
+                ) + abs(float(slip_bps))
+                by_reason = self._exec_quality.setdefault("by_reason", {})
+                by_reason[str(reason)] = int(by_reason.get(str(reason), 0)) + 1
+                self._exec_quality["last_update"] = datetime.now().isoformat()
+
+            observe(
+                "execution_slippage_bps",
+                float(slip_bps),
+                labels={"side": fill.side.value},
+            )
+        except Exception as e:
+            log.debug(f"Execution quality accounting failed: {e}")
+
+    def _maybe_register_synthetic_exit(self, order: Order, fill: Fill) -> None:
+        # Synthetic bracket/OCO exits for filled entry orders.
+        if order.side != OrderSide.BUY:
+            return
+        tags = dict(getattr(order, "tags", {}) or {})
+        if bool(tags.get("synthetic_exit", False)):
+            return
+
+        stop_loss = float(getattr(order, "stop_loss", 0.0) or 0.0)
+        take_profit = float(getattr(order, "take_profit", 0.0) or 0.0)
+        trailing_pct = float(tags.get("trailing_stop_pct", 0.0) or 0.0)
+        if stop_loss <= 0 and take_profit <= 0 and trailing_pct <= 0:
+            return
+
+        with self._synthetic_exit_lock:
+            plan = self._synthetic_exits.get(order.id)
+            if plan is None:
+                plan = {
+                    "plan_id": order.id,
+                    "source_order_id": order.id,
+                    "symbol": order.symbol,
+                    "side": "long",
+                    "open_qty": 0,
+                    "stop_loss": stop_loss,
+                    "take_profit": take_profit,
+                    "trailing_stop_pct": trailing_pct,
+                    "highest_price": float(fill.price),
+                    "armed_at": datetime.now().isoformat(),
+                }
+                self._synthetic_exits[order.id] = plan
+            plan["open_qty"] = int(plan.get("open_qty", 0)) + int(fill.quantity)
+            plan["highest_price"] = max(
+                float(plan.get("highest_price", 0.0) or 0.0),
+                float(fill.price),
+            )
+            if trailing_pct > 0:
+                dyn_stop = float(plan["highest_price"]) * (1.0 - trailing_pct / 100.0)
+                cur_stop = float(plan.get("stop_loss", 0.0) or 0.0)
+                plan["stop_loss"] = max(cur_stop, dyn_stop) if cur_stop > 0 else dyn_stop
+
+    def _evaluate_synthetic_exits(self) -> None:
+        with self._synthetic_exit_lock:
+            plans = list(self._synthetic_exits.values())
+
+        for plan in plans:
+            symbol = str(plan.get("symbol", "") or "").strip()
+            qty = int(plan.get("open_qty", 0) or 0)
+            if not symbol or qty <= 0:
+                continue
+
+            px, _, _ = self._get_quote_snapshot(symbol)
+            if px <= 0:
+                continue
+
+            trailing_pct = float(plan.get("trailing_stop_pct", 0.0) or 0.0)
+            if trailing_pct > 0:
+                with self._synthetic_exit_lock:
+                    cur = self._synthetic_exits.get(str(plan.get("plan_id", "")))
+                    if cur is not None:
+                        cur["highest_price"] = max(
+                            float(cur.get("highest_price", 0.0) or 0.0),
+                            float(px),
+                        )
+                        dyn_stop = float(cur["highest_price"]) * (
+                            1.0 - trailing_pct / 100.0
+                        )
+                        cur_stop = float(cur.get("stop_loss", 0.0) or 0.0)
+                        cur["stop_loss"] = max(cur_stop, dyn_stop) if cur_stop > 0 else dyn_stop
+                        plan = dict(cur)
+
+            take_profit = float(plan.get("take_profit", 0.0) or 0.0)
+            stop_loss = float(plan.get("stop_loss", 0.0) or 0.0)
+            reason = ""
+            if take_profit > 0 and px >= take_profit:
+                reason = "take_profit"
+            elif stop_loss > 0 and px <= stop_loss:
+                reason = "stop_loss"
+            if not reason:
+                continue
+
+            if self._submit_synthetic_exit(plan, trigger_price=float(px), reason=reason):
+                with self._synthetic_exit_lock:
+                    self._synthetic_exits.pop(str(plan.get("plan_id", "")), None)
+
+    def _submit_synthetic_exit(
+        self,
+        plan: Dict[str, Any],
+        trigger_price: float,
+        reason: str,
+    ) -> bool:
+        from trading.oms import get_oms
+
+        symbol = str(plan.get("symbol", "") or "").strip()
+        qty = int(plan.get("open_qty", 0) or 0)
+        if not symbol or qty <= 0:
+            return False
+
+        order = Order(
+            symbol=symbol,
+            side=OrderSide.SELL,
+            quantity=qty,
+            order_type=OrderType.MARKET,
+            price=0.0,
+            strategy="synthetic_bracket_exit",
+            parent_id=str(plan.get("source_order_id", "") or ""),
+        )
+        order.tags["synthetic_exit"] = True
+        order.tags["exit_reason"] = str(reason)
+        order.tags["exit_parent_order_id"] = str(plan.get("source_order_id", "") or "")
+        order.tags["arrival_price"] = float(trigger_price or 0.0)
+
+        try:
+            oms = get_oms()
+            order = oms.submit_order(order)
+            result = self._submit_with_retry(order, attempts=2)
+            oms.update_order_status(
+                order.id,
+                result.status,
+                message=result.message or "",
+                broker_id=result.broker_id or "",
+            )
+            if result.status == OrderStatus.REJECTED:
+                self._alert_manager.risk_alert(
+                    "Synthetic exit rejected",
+                    f"{symbol}: {result.message or 'rejected'}",
+                    {"reason": reason, "qty": qty},
+                )
+                return False
+            log.warning(
+                "Synthetic %s exit submitted: %s qty=%s trigger=%.2f",
+                reason,
+                symbol,
+                qty,
+                float(trigger_price or 0.0),
+            )
+            return True
+        except Exception as e:
+            log.error(f"Synthetic exit submit failed: {symbol} {reason}: {e}")
+            return False
 
     def _prune_processed_fills_unlocked(self, max_size: int = 50000):
         """
