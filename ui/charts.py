@@ -310,6 +310,13 @@ class StockChart(QWidget):
                     if c <= 0:
                         continue
 
+                    # Drop impossible jumps between consecutive candles
+                    # to prevent broken spikes from corrupting the chart.
+                    if prev_close and prev_close > 0:
+                        jump = abs(c / prev_close - 1.0)
+                        if jump > 0.20:
+                            continue
+
                     # Fix missing OHLC values
                     if o <= 0:
                         o = c

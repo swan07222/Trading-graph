@@ -31,8 +31,8 @@ from trading.alerts import AlertPriority, get_alert_manager
 from trading.broker import BrokerInterface, create_broker
 from trading.health import ComponentType, HealthStatus, get_health_monitor
 from trading.kill_switch import get_kill_switch
-from trading.runtime_lease import RuntimeLeaseClient, create_runtime_lease_client
 from trading.risk import RiskManager, get_risk_manager
+from trading.runtime_lease import RuntimeLeaseClient, create_runtime_lease_client
 from utils.atomic_io import atomic_write_json, read_json
 from utils.logger import get_logger
 from utils.metrics import inc_counter, observe, set_gauge

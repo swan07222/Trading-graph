@@ -139,6 +139,7 @@ class EnsembleModel:
         # Metadata — updated by train() and load()
         self.interval: str = "1d"
         self.prediction_horizon: int = int(CONFIG.model.prediction_horizon)
+        self.trained_stock_codes: list[str] = []
 
         model_names = model_names or ["lstm", "gru", "tcn", "transformer", "hybrid"]
 
@@ -820,6 +821,7 @@ class EnsembleModel:
                 "meta": {
                     "interval": interval,
                     "prediction_horizon": horizon,
+                    "trained_stock_codes": list(self.trained_stock_codes),
                 },
                 "arch": {
                     "hidden_size": CONFIG.model.hidden_size,
@@ -844,6 +846,8 @@ class EnsembleModel:
             "temperature": self.temperature,
             "interval": interval,
             "prediction_horizon": horizon,
+            "trained_stock_count": len(self.trained_stock_codes),
+            "trained_stock_codes": list(self.trained_stock_codes),
         }
 
         manifest_path = path.parent / f"model_manifest_{path.stem}.json"
@@ -886,6 +890,11 @@ class EnsembleModel:
                 self.prediction_horizon = int(
                     meta.get("prediction_horizon", CONFIG.model.prediction_horizon)
                 )
+                self.trained_stock_codes = [
+                    str(x).strip()
+                    for x in list(meta.get("trained_stock_codes", []) or [])
+                    if str(x).strip()
+                ]
 
                 arch = state.get("arch", {})
                 h = int(arch.get("hidden_size", CONFIG.model.hidden_size))
@@ -961,6 +970,8 @@ class EnsembleModel:
                     for m in self.models.values()
                 ),
                 "device": self.device,
+                "trained_stock_count": int(len(self.trained_stock_codes)),
+                "trained_stock_codes": list(self.trained_stock_codes),
             }
 
     def set_eval_mode(self):

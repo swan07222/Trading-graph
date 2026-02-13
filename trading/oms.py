@@ -130,6 +130,7 @@ class OrderDatabase:
                         message TEXT,
                         strategy TEXT,
                         signal_id TEXT,
+                        parent_id TEXT,
                         stop_loss REAL,
                         take_profit REAL,
                         created_at TEXT,
@@ -140,6 +141,7 @@ class OrderDatabase:
                         tags TEXT
                     )
                 """)
+                self._ensure_orders_schema(conn)
 
                 conn.execute("""
                     CREATE TABLE IF NOT EXISTS fills (
@@ -250,6 +252,19 @@ class OrderDatabase:
                     "ON order_events(order_id, created_at)"
                 )
 
+    def _ensure_orders_schema(self, conn: sqlite3.Connection) -> None:
+        """
+        Apply non-destructive schema upgrades for legacy OMS databases.
+        """
+        cols = {
+            str(row["name"])
+            for row in conn.execute("PRAGMA table_info(orders)").fetchall()
+        }
+        if "parent_id" not in cols:
+            conn.execute(
+                "ALTER TABLE orders ADD COLUMN parent_id TEXT DEFAULT ''"
+            )
+
     # ------------------------------------------------------------------
     # ------------------------------------------------------------------
 
@@ -263,12 +278,12 @@ class OrderDatabase:
                 INSERT INTO orders (
                     id, broker_id, symbol, name, side, order_type,
                     quantity, price, stop_price, status, filled_qty,
-                    avg_price, commission, message, strategy, signal_id,
+                    avg_price, commission, message, strategy, signal_id, parent_id,
                     stop_loss, take_profit, created_at, submitted_at,
                     filled_at, cancelled_at, updated_at, tags
                 )
                 VALUES (
-                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
                     ?, ?, ?, ?, ?, ?, ?, ?
                 )
                 ON CONFLICT(id) DO UPDATE SET
@@ -287,6 +302,7 @@ class OrderDatabase:
                     message=excluded.message,
                     strategy=excluded.strategy,
                     signal_id=excluded.signal_id,
+                    parent_id=excluded.parent_id,
                     stop_loss=excluded.stop_loss,
                     take_profit=excluded.take_profit,
                     created_at=excluded.created_at,
@@ -301,7 +317,8 @@ class OrderDatabase:
                 order.quantity, order.price, order.stop_price,
                 order.status.value, order.filled_qty, order.avg_price,
                 order.commission, order.message, order.strategy,
-                order.signal_id, order.stop_loss, order.take_profit,
+                order.signal_id, order.parent_id,
+                order.stop_loss, order.take_profit,
                 order.created_at.isoformat() if order.created_at else None,
                 order.submitted_at.isoformat() if order.submitted_at else None,
                 order.filled_at.isoformat() if order.filled_at else None,
@@ -365,7 +382,11 @@ class OrderDatabase:
         order.message = row['message'] or ''
         order.strategy = row['strategy'] or ''
         order.signal_id = row['signal_id'] or ''
-        order.parent_id = ''
+        order.parent_id = (
+            row['parent_id']
+            if 'parent_id' in row.keys() and row['parent_id'] is not None
+            else ''
+        )
         order.stop_loss = row['stop_loss'] or 0.0
         order.take_profit = row['take_profit'] or 0.0
 
@@ -387,12 +408,15 @@ class OrderDatabase:
         )
         order.updated_at = (
             datetime.fromisoformat(row['updated_at'])
-            if row.get('updated_at') else None
+            if row['updated_at'] else None
         )
 
         if row['tags']:
-            loaded = json.loads(row['tags'])
-            order.tags = loaded if isinstance(loaded, dict) else {}
+            try:
+                loaded = json.loads(row['tags'])
+                order.tags = loaded if isinstance(loaded, dict) else {}
+            except Exception:
+                order.tags = {}
         else:
             order.tags = {}
 

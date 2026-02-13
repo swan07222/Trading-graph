@@ -148,6 +148,31 @@ class TestEnsemble:
         assert len(history['lstm']['val_acc']) >= 1
         assert len(history['lstm']['val_acc']) <= 2
 
+    def test_ensemble_save_load_preserves_trained_stock_codes(
+        self, sample_data, tmp_path
+    ):
+        """Trained stock metadata should round-trip through save/load."""
+        from models.ensemble import EnsembleModel
+
+        X, _y = sample_data
+        input_size = X.shape[2]
+
+        ensemble = EnsembleModel(input_size, model_names=['lstm'])
+        ensemble.interval = "1m"
+        ensemble.prediction_horizon = 20
+        ensemble.trained_stock_codes = ["600519", "000001", "300750"]
+
+        model_path = tmp_path / "ensemble_1m_20.pt"
+        ensemble.save(str(model_path))
+
+        loaded = EnsembleModel(input_size, model_names=['lstm'])
+        assert loaded.load(str(model_path)) is True
+        info = loaded.get_model_info()
+        assert info.get("trained_stock_count", 0) == 3
+        assert info.get("trained_stock_codes", []) == [
+            "600519", "000001", "300750"
+        ]
+
 class TestTrainer:
     """Test trainer module"""
 

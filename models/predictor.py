@@ -6,6 +6,7 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -130,6 +131,8 @@ class Predictor:
         self._requested_interval = self.interval
         self._requested_horizon = self.horizon
         self._high_precision = self._load_high_precision_config()
+        self._loaded_ensemble_path: Path | None = None
+        self._trained_stock_codes: list[str] = []
 
         self._load_models()
 
@@ -244,6 +247,7 @@ class Predictor:
 
             self.ensemble = None
             if chosen_ens and chosen_ens.exists():
+                self._loaded_ensemble_path = Path(chosen_ens)
                 input_size = (
                     self.processor.n_features or len(self._feature_cols)
                 )
@@ -275,6 +279,14 @@ class Predictor:
 
                     self.interval = loaded_interval
                     self.horizon = loaded_horizon
+                    self._trained_stock_codes = (
+                        self._extract_trained_stocks_from_ensemble()
+                        or self._load_trained_stocks_from_manifest(chosen_ens)
+                        or self._load_trained_stocks_from_learner_state(
+                            loaded_interval,
+                            loaded_horizon,
+                        )
+                    )
 
                     log.info(
                         f"Ensemble loaded from {chosen_ens.name} "
@@ -307,13 +319,34 @@ class Predictor:
         if req_ens.exists():
             return req_ens, req_scl if req_scl.exists() else None
 
-        # Fallback 1: common default
+        # Fallback 1: same interval, nearest available horizon with scaler.
+        same_interval: list[tuple[int, float, Path, Path]] = []
+        for ep in model_dir.glob(f"ensemble_{self.interval}_*.pt"):
+            parts = ep.stem.split("_", 2)
+            if len(parts) != 3:
+                continue
+            try:
+                cand_h = int(parts[2])
+            except Exception:
+                continue
+            sp = model_dir / f"scaler_{self.interval}_{cand_h}.pkl"
+            if not sp.exists():
+                continue
+            same_interval.append(
+                (abs(cand_h - int(self.horizon)), -ep.stat().st_mtime, ep, sp)
+            )
+        if same_interval:
+            same_interval.sort(key=lambda x: (x[0], x[1]))
+            _delta, _mtime_neg, ep, sp = same_interval[0]
+            return ep, sp
+
+        # Fallback 2: common default
         fb_ens = model_dir / "ensemble_1d_5.pt"
         fb_scl = model_dir / "scaler_1d_5.pkl"
         if fb_ens.exists():
             return fb_ens, fb_scl if fb_scl.exists() else None
 
-        # Fallback 2: any available ensemble, prefer matching scaler
+        # Fallback 3: any available ensemble, prefer matching scaler
         ensembles = sorted(
             model_dir.glob("ensemble_*.pt"),
             key=lambda p: p.stat().st_mtime,
@@ -330,6 +363,105 @@ class Predictor:
             return ensembles[0], None
 
         return None, None
+
+    def _extract_trained_stocks_from_ensemble(self) -> list[str]:
+        if self.ensemble is None:
+            return []
+        try:
+            info = self.ensemble.get_model_info()
+            if not isinstance(info, dict):
+                return []
+            out = [
+                str(x).strip()
+                for x in list(info.get("trained_stock_codes", []) or [])
+                if str(x).strip()
+            ]
+            return out
+        except Exception:
+            return []
+
+    def _load_trained_stocks_from_manifest(self, ensemble_path: Path) -> list[str]:
+        """Fallback for legacy model loads when ensemble metadata is missing."""
+        try:
+            stem = Path(ensemble_path).stem
+            p = Path(ensemble_path).parent / f"model_manifest_{stem}.json"
+            if not p.exists():
+                return []
+            data = json.loads(p.read_text(encoding="utf-8"))
+            if not isinstance(data, dict):
+                return []
+            out = [
+                str(x).strip()
+                for x in list(data.get("trained_stock_codes", []) or [])
+                if str(x).strip()
+            ]
+            return out
+        except Exception:
+            return []
+
+    def _load_trained_stocks_from_learner_state(
+        self,
+        interval: str,
+        horizon: int,
+    ) -> list[str]:
+        """
+        Last-resort fallback for legacy artifacts missing stock metadata.
+        Uses persisted learner_state only when interval+horizon match.
+        """
+        try:
+            p = Path(CONFIG.data_dir) / "learner_state.json"
+            if not p.exists():
+                return []
+            raw = json.loads(p.read_text(encoding="utf-8"))
+            if not isinstance(raw, dict):
+                return []
+            data = raw.get("_data", raw)
+            if not isinstance(data, dict):
+                return []
+
+            iv = str(data.get("last_interval", "")).strip().lower()
+            try:
+                hz = int(data.get("last_horizon", 0) or 0)
+            except Exception:
+                hz = 0
+
+            if iv != str(interval).strip().lower() or hz != int(horizon):
+                return []
+
+            replay = data.get("replay", {})
+            if not isinstance(replay, dict):
+                replay = {}
+            candidates = list(replay.get("buffer", []) or [])
+
+            if not candidates:
+                rot = data.get("rotator", {})
+                if isinstance(rot, dict):
+                    candidates = list(rot.get("processed", []) or [])
+
+            out: list[str] = []
+            seen: set[str] = set()
+            for x in candidates:
+                code = "".join(c for c in str(x).strip() if c.isdigit())
+                if len(code) != 6 or code in seen:
+                    continue
+                seen.add(code)
+                out.append(code)
+            return out
+        except Exception:
+            return []
+
+    def get_trained_stock_codes(self, limit: int | None = None) -> list[str]:
+        """
+        Return stock codes used in the currently loaded training artifact.
+        """
+        codes = list(self._trained_stock_codes)
+        if limit is not None:
+            try:
+                n = max(0, int(limit))
+                return codes[:n]
+            except Exception:
+                pass
+        return codes
 
     def _load_forecaster(self):
         """Load TCN forecaster for price curve prediction."""
@@ -567,9 +699,7 @@ class Predictor:
         with self._predict_lock:
             interval = str(interval or self.interval).lower()
             horizon = int(horizon_steps or self.horizon)
-            lookback = int(
-                lookback_bars or (1400 if interval == "1m" else 600)
-            )
+            lookback = max(120, int(lookback_bars or 120))
 
             code = self._clean_code(stock_code)
 
@@ -578,9 +708,16 @@ class Predictor:
                     self.feature_engine, 'MIN_ROWS',
                     CONFIG.SEQUENCE_LENGTH
                 )
+                window = int(
+                    max(lookback, int(min_rows), int(CONFIG.SEQUENCE_LENGTH))
+                )
 
-                df = self._fetch_data(
-                    code, interval, lookback, use_realtime_price
+                df = self.fetcher.get_history(
+                    code,
+                    interval=interval,
+                    bars=window,
+                    use_cache=True,
+                    update_db=True,
                 )
 
                 if (
@@ -591,7 +728,27 @@ class Predictor:
                 ):
                     return [], []
 
-                actual = df["close"].tail(180).tolist()
+                # Real-time guess should follow the latest candles window.
+                df = df.tail(window).copy()
+
+                if use_realtime_price:
+                    try:
+                        quote = self.fetcher.get_realtime(code)
+                        if quote and float(getattr(quote, "price", 0) or 0) > 0:
+                            px = float(quote.price)
+                            df.loc[df.index[-1], "close"] = px
+                            df.loc[df.index[-1], "high"] = max(
+                                float(df["high"].iloc[-1]),
+                                px,
+                            )
+                            df.loc[df.index[-1], "low"] = min(
+                                float(df["low"].iloc[-1]),
+                                px,
+                            )
+                    except Exception:
+                        pass
+
+                actual = df["close"].tail(min(lookback, len(df))).tolist()
                 current_price = float(df["close"].iloc[-1])
 
                 df = self.feature_engine.create_features(df)

@@ -22,6 +22,7 @@ from PyQt6.QtWidgets import (
     QInputDialog,
     QLabel,
     QLineEdit,
+    QListWidget,
     QMainWindow,
     QMessageBox,
     QProgressBar,
@@ -249,7 +250,7 @@ class RealTimeMonitor(QThread):
 
 class WorkerThread(QThread):
     """Generic worker thread for background tasks with timeout support"""
-    finished = pyqtSignal(object)
+    result = pyqtSignal(object)
     error = pyqtSignal(str)
     progress = pyqtSignal(int, str)
 
@@ -263,42 +264,14 @@ class WorkerThread(QThread):
 
     def run(self):
         try:
-            if self._cancelled:
+            if self._cancelled or self.isInterruptionRequested():
                 return
 
-            # Run function with timeout via threading.Timer watchdog
-            result_holder = [None]
-            error_holder = [None]
-            done_event = threading.Event()
+            out = self.func(*self.args, **self.kwargs)
 
-            def target():
-                try:
-                    result_holder[0] = self.func(*self.args, **self.kwargs)
-                except Exception as e:
-                    error_holder[0] = e
-                finally:
-                    done_event.set()
-
-            worker = threading.Thread(target=target, daemon=True)
-            worker.start()
-
-            done_event.wait(timeout=self._timeout)
-
-            if not done_event.is_set():
-                self._cancelled = True
-                if not self._cancelled:
-                    self.error.emit(
-                        f"Operation timed out after {self._timeout}s"
-                    )
+            if self._cancelled or self.isInterruptionRequested():
                 return
-
-            if self._cancelled:
-                return
-
-            if error_holder[0] is not None:
-                self.error.emit(str(error_holder[0]))
-            else:
-                self.finished.emit(result_holder[0])
+            self.result.emit(out)
 
         except Exception as e:
             if not self._cancelled:
@@ -307,6 +280,10 @@ class WorkerThread(QThread):
     def cancel(self):
         """Cancel the worker"""
         self._cancelled = True
+        try:
+            self.requestInterruption()
+        except Exception:
+            pass
 
 class MainApp(QMainWindow):
     """
@@ -329,12 +306,13 @@ class MainApp(QMainWindow):
         super().__init__()
 
         self.setWindowTitle("AI Stock Trading System v2.0")
-        self.setGeometry(50, 50, 1800, 1000)
+        self.setGeometry(80, 60, 1460, 840)
 
         self.predictor = None
         self.executor = None
         self.current_prediction = None
         self.workers: dict[str, WorkerThread] = {}
+        self._active_workers: set[WorkerThread] = set()
         self.monitor: RealTimeMonitor | None = None
         self.watch_list: list[str] = CONFIG.STOCK_POOL[:10]
 
@@ -348,6 +326,9 @@ class MainApp(QMainWindow):
         )
 
         self._bars_by_symbol: dict[str, list[dict]] = {}
+        self._trained_stock_codes_cache: list[str] = []
+        self._last_bar_feed_ts: dict[str, float] = {}
+        self._chart_symbol: str = ""
         self._syncing_mode_ui = False
         self._session_bar_cache = None
         try:
@@ -389,6 +370,83 @@ class MainApp(QMainWindow):
     def _ui_norm(self, text: str) -> str:
         """Normalize stock code for UI comparison."""
         return _normalize_stock_code(text)
+
+    def _track_worker(self, worker: WorkerThread) -> None:
+        """Track worker lifecycle so threads are never orphaned."""
+        self._active_workers.add(worker)
+
+        def _drop(*_args):
+            self._active_workers.discard(worker)
+
+        worker.finished.connect(_drop)
+
+    def _model_interval_to_ui_token(self, interval: str) -> str:
+        """Normalize model interval metadata to available UI tokens."""
+        iv = str(interval or "").strip().lower()
+        if iv == "1h":
+            return "60m"
+        return iv
+
+    def _sync_ui_to_loaded_model(
+        self,
+        requested_interval: str | None = None,
+        requested_horizon: int | None = None,
+    ) -> tuple[str, int]:
+        """
+        Align UI controls to the actual loaded model metadata.
+        Prevents 'UI says 1m/120 while model runs 1d/5' mismatches.
+        """
+        if not self.predictor:
+            iv = str(requested_interval or self.interval_combo.currentText()).strip().lower()
+            h = int(requested_horizon or self.forecast_spin.value())
+            return iv, h
+
+        model_iv_raw = str(
+            getattr(self.predictor, "interval", requested_interval or self.interval_combo.currentText())
+        ).strip().lower()
+        model_iv = self._model_interval_to_ui_token(model_iv_raw)
+
+        items = [
+            str(self.interval_combo.itemText(i)).strip().lower()
+            for i in range(self.interval_combo.count())
+        ]
+        if model_iv not in items:
+            model_iv = str(requested_interval or self.interval_combo.currentText()).strip().lower()
+
+        try:
+            model_h = int(
+                getattr(
+                    self.predictor,
+                    "horizon",
+                    requested_horizon if requested_horizon is not None else self.forecast_spin.value(),
+                )
+            )
+        except Exception:
+            model_h = int(self.forecast_spin.value())
+
+        model_h = max(
+            int(self.forecast_spin.minimum()),
+            min(int(self.forecast_spin.maximum()), int(model_h)),
+        )
+
+        self.interval_combo.blockSignals(True)
+        try:
+            self.interval_combo.setCurrentText(model_iv)
+        finally:
+            self.interval_combo.blockSignals(False)
+        self.forecast_spin.setValue(model_h)
+        self.model_info.setText(f"Interval: {model_iv}, Horizon: {model_h}")
+
+        if requested_interval is not None and requested_horizon is not None:
+            req_iv = str(requested_interval).strip().lower()
+            req_h = int(requested_horizon)
+            if req_iv != model_iv or req_h != model_h:
+                self.log(
+                    f"Loaded model metadata applied: requested {req_iv}/{req_h} -> active {model_iv}/{model_h}",
+                    "warning",
+                )
+
+        return model_iv, model_h
 
     # =========================================================================
     # =========================================================================
@@ -556,7 +614,7 @@ class MainApp(QMainWindow):
             interval = self.interval_combo.currentText().strip().lower()
             bar_seconds_map = {
                 "1m": 60, "5m": 300, "15m": 900,
-                "30m": 1800, "60m": 3600, "1h": 3600,
+                "30m": 1800, "60m": 3600, "1h": 3600, "1d": 86400,
             }
             bar_seconds = bar_seconds_map.get(interval, 60)
 
@@ -608,35 +666,95 @@ class MainApp(QMainWindow):
             arr = []
             self._bars_by_symbol[symbol] = arr
 
-        # Check if this is a partial (live) bar or final bar
-        is_final = bar.get("final", True)
+        interval = str(
+            bar.get("interval") or self.interval_combo.currentText()
+        ).strip().lower()
 
-        if is_final:
-            # Final bar - append to history
-            arr.append(bar)
-            keep = self._history_window_bars(
-                str(bar.get("interval") or self.interval_combo.currentText())
-            )
-            if len(arr) > keep:
-                del arr[:-keep]
-        else:
-            # Partial bar - update the last bar in place
-            if arr:
-                arr[-1] = bar
-            else:
-                # First bar - just append
-                arr.append(bar)
+        ts_raw = bar.get("timestamp", bar.get("time"))
+        if ts_raw is None:
+            ts_raw = self._now_iso()
+        ts = (
+            ts_raw.isoformat()
+            if hasattr(ts_raw, "isoformat")
+            else str(ts_raw)
+        )
+
+        try:
+            c = float(bar.get("close", 0) or 0)
+            o = float(bar.get("open", c) or c)
+            h = float(bar.get("high", c) or c)
+            low = float(bar.get("low", c) or c)
+        except Exception:
+            return
+        if c <= 0:
+            return
+        if o <= 0:
+            o = c
+        if h <= 0:
+            h = max(o, c)
+        if low <= 0:
+            low = min(o, c)
+        if h < low:
+            h, low = low, h
+
+        is_final = bool(bar.get("final", True))
+        norm_bar: dict[str, Any] = {
+            "open": o,
+            "high": h,
+            "low": low,
+            "close": c,
+            "timestamp": ts,
+            "final": is_final,
+            "interval": interval,
+        }
+        if "volume" in bar:
+            try:
+                norm_bar["volume"] = float(bar.get("volume", 0) or 0)
+            except Exception:
+                norm_bar["volume"] = 0.0
+
+        # Guard against bad feed bars causing endpoint jumps/spikes.
+        if arr:
+            try:
+                ref = float(arr[-1].get("close", c) or c)
+                if self._is_outlier_tick(ref, c):
+                    log.debug(
+                        f"Skip outlier bar for {symbol}: prev={ref:.2f} new={c:.2f}"
+                    )
+                    return
+            except Exception:
+                pass
+
+        replaced = False
+        if ts:
+            for i in range(len(arr) - 1, max(-1, len(arr) - 8), -1):
+                if str(arr[i].get("timestamp", "")) != ts:
+                    continue
+                # Keep completed bars immutable; ignore stale partial rewrites.
+                if bool(arr[i].get("final", False)) and not is_final:
+                    replaced = True
+                    break
+                arr[i] = norm_bar
+                replaced = True
+                break
+        if not replaced:
+            arr.append(norm_bar)
+
+        arr.sort(key=lambda x: str(x.get("timestamp", "")))
+        keep = self._history_window_bars(interval)
+        if len(arr) > keep:
+            del arr[:-keep]
+        self._last_bar_feed_ts[symbol] = time.time()
 
         try:
             if self._session_bar_cache is not None:
-                interval = str(bar.get("interval") or self.interval_combo.currentText()).strip().lower()
                 key = f"{symbol}:{interval}"
                 now_ts = time.time()
                 # Avoid excessive disk writes for partial updates.
                 min_gap = 0.9 if not is_final else 0.0
                 last_ts = float(self._last_session_cache_write_ts.get(key, 0.0))
                 if (now_ts - last_ts) >= min_gap:
-                    self._session_bar_cache.append_bar(symbol, interval, bar)
+                    self._session_bar_cache.append_bar(symbol, interval, norm_bar)
                     self._last_session_cache_write_ts[key] = now_ts
         except Exception as e:
             log.debug(f"Session cache write failed: {e}")
@@ -663,12 +781,14 @@ class MainApp(QMainWindow):
                     predicted_prices=predicted,
                     levels=self._get_levels_dict()
                 )
+                self._chart_symbol = symbol
             elif hasattr(self.chart, 'update_candles'):
                 self.chart.update_candles(
                     arr,
                     predicted_prices=predicted,
                     levels=self._get_levels_dict()
                 )
+                self._chart_symbol = symbol
             self._update_chart_latest_label(symbol, bar=arr[-1] if arr else None)
         except Exception as e:
             log.debug(f"Chart update failed: {e}")
@@ -727,14 +847,14 @@ class MainApp(QMainWindow):
         main_splitter.addWidget(left_panel)
         main_splitter.addWidget(center_panel)
         main_splitter.addWidget(right_panel)
-        main_splitter.setSizes([300, 900, 500])
+        main_splitter.setSizes([250, 720, 380])
 
         layout.addWidget(main_splitter)
 
     def _create_left_panel(self) -> QWidget:
         """Create left control panel with interval/forecast settings"""
         panel = QWidget()
-        panel.setMaximumWidth(350)
+        panel.setMaximumWidth(320)
         layout = QVBoxLayout(panel)
         layout.setSpacing(10)
 
@@ -744,7 +864,7 @@ class MainApp(QMainWindow):
         self.watchlist = self._make_table(
             ["Code", "Price", "Change", "Signal"], max_height=250
         )
-        self.watchlist.cellDoubleClicked.connect(self._on_watchlist_click)
+        self.watchlist.cellClicked.connect(self._on_watchlist_click)
 
         self._update_watchlist()
         watchlist_layout.addWidget(self.watchlist)
@@ -797,7 +917,7 @@ class MainApp(QMainWindow):
         self._add_labeled(settings_layout, 4, "Forecast:", self.forecast_spin)
 
         self.lookback_spin = QSpinBox()
-        self.lookback_spin.setRange(100, 5000)
+        self.lookback_spin.setRange(7, 5000)
         self.lookback_spin.setValue(self._seven_day_lookback("1m"))
         self.lookback_spin.setSuffix(" bars")
         self.lookback_spin.setToolTip("Historical bars to use for analysis")
@@ -842,6 +962,23 @@ class MainApp(QMainWindow):
         self.model_info = QLabel("")
         self.model_info.setStyleSheet("color: #888; font-size: 10px;")
         ai_layout.addWidget(self.model_info)
+
+        self.trained_stocks_label = QLabel("Trained Stocks: --")
+        self.trained_stocks_label.setStyleSheet("color: #9aa4b8; font-size: 10px;")
+        ai_layout.addWidget(self.trained_stocks_label)
+
+        self.trained_stocks_hint = QLabel(
+            "Full trained stock list is in the right panel tab:\n"
+            "Trained Stocks"
+        )
+        self.trained_stocks_hint.setStyleSheet("color: #6e7681; font-size: 10px;")
+        ai_layout.addWidget(self.trained_stocks_hint)
+
+        self.open_trained_tab_btn = QPushButton("Open Trained Stocks")
+        self.open_trained_tab_btn.clicked.connect(
+            self._focus_trained_stocks_tab
+        )
+        ai_layout.addWidget(self.open_trained_tab_btn)
 
         self.train_btn = QPushButton("Train Model")
         self.train_btn.clicked.connect(self._start_training)
@@ -917,7 +1054,7 @@ class MainApp(QMainWindow):
             self.signal_panel = SignalPanel()
         except ImportError:
             self.signal_panel = QLabel("Signal Panel")
-            self.signal_panel.setMinimumHeight(100)
+            self.signal_panel.setMinimumHeight(80)
         layout.addWidget(self.signal_panel)
 
         chart_group = QGroupBox("Price Chart and AI Prediction")
@@ -926,12 +1063,12 @@ class MainApp(QMainWindow):
         try:
             from .charts import StockChart
             self.chart = StockChart()
-            self.chart.setMinimumHeight(400)
+            self.chart.setMinimumHeight(320)
             if hasattr(self.chart, "trade_requested"):
                 self.chart.trade_requested.connect(self._on_chart_trade_requested)
         except ImportError:
             self.chart = QLabel("Chart (charts module not found)")
-            self.chart.setMinimumHeight(400)
+            self.chart.setMinimumHeight(320)
             self.chart.setAlignment(Qt.AlignmentFlag.AlignCenter)
         chart_layout.addWidget(self.chart)
 
@@ -979,7 +1116,7 @@ class MainApp(QMainWindow):
         self.details_text = QTextEdit()
         self.details_text.setReadOnly(True)
         self.details_text.setFont(QFont("Consolas", 10))
-        self.details_text.setMaximumHeight(200)
+        self.details_text.setMaximumHeight(160)
         details_layout.addWidget(self.details_text)
 
         details_group.setLayout(details_layout)
@@ -1021,7 +1158,8 @@ class MainApp(QMainWindow):
         layout = QVBoxLayout(panel)
         layout.setSpacing(10)
 
-        tabs = QTabWidget()
+        self.right_tabs = QTabWidget()
+        tabs = self.right_tabs
 
         portfolio_tab = QWidget()
         portfolio_layout = QVBoxLayout(portfolio_tab)
@@ -1077,6 +1215,37 @@ class MainApp(QMainWindow):
         ])
         history_layout.addWidget(self.history_table)
         tabs.addTab(history_tab, "History")
+
+        trained_tab = QWidget()
+        trained_layout = QVBoxLayout(trained_tab)
+
+        trained_top = QHBoxLayout()
+        self.trained_stock_count_label = QLabel("Trained: --")
+        self.trained_stock_count_label.setStyleSheet(
+            "color: #9aa4b8; font-size: 10px;"
+        )
+        trained_top.addWidget(self.trained_stock_count_label)
+        trained_top.addStretch(1)
+        trained_layout.addLayout(trained_top)
+
+        self.trained_stock_search = QLineEdit()
+        self.trained_stock_search.setPlaceholderText(
+            "Search trained stock code..."
+        )
+        self.trained_stock_search.textChanged.connect(
+            self._filter_trained_stocks_ui
+        )
+        trained_layout.addWidget(self.trained_stock_search)
+
+        self.trained_stock_list = QListWidget()
+        self.trained_stock_list.itemDoubleClicked.connect(
+            self._on_trained_stock_activated
+        )
+        self.trained_stock_list.setToolTip(
+            "Double-click a stock to load and analyze it"
+        )
+        trained_layout.addWidget(self.trained_stock_list, 1)
+        self._trained_tab_index = tabs.addTab(trained_tab, "Trained Stocks")
 
         # ==================== AUTO-TRADE TAB ====================
         auto_trade_tab = QWidget()
@@ -1464,9 +1633,8 @@ class MainApp(QMainWindow):
                     f"Model: Loaded ({num_models} networks)"
                 )
                 self.model_status.setStyleSheet("color: #4CAF50;")
-                self.model_info.setText(
-                    f"Interval: {interval}, Horizon: {horizon}"
-                )
+                self._sync_ui_to_loaded_model(interval, horizon)
+                self._update_trained_stocks_ui()
                 self.log("AI model loaded successfully", "success")
             else:
                 self.model_status.setText("Model: Not trained")
@@ -1474,6 +1642,7 @@ class MainApp(QMainWindow):
                 self.model_info.setText(
                     "Train a model to enable predictions"
                 )
+                self._update_trained_stocks_ui([])
                 self.log(
                     "No trained model found. Please train a model.", "warning"
                 )
@@ -1484,6 +1653,7 @@ class MainApp(QMainWindow):
             self.predictor = None
             self.model_status.setText("Model: Error")
             self.model_status.setStyleSheet("color: #F44336;")
+            self._update_trained_stocks_ui([])
 
         # Initialize auto-trader on executor if available
         self._init_auto_trader()
@@ -1497,6 +1667,111 @@ class MainApp(QMainWindow):
                 log.debug(f"Auto-start monitoring failed: {e}")
 
         self.log("System initialized - Ready for trading", "info")
+
+    def _get_trained_stock_codes(self) -> list[str]:
+        """Read trained stock list from loaded predictor metadata."""
+        if self.predictor is None:
+            return []
+        try:
+            fn = getattr(self.predictor, "get_trained_stock_codes", None)
+            if callable(fn):
+                out = fn()
+                if isinstance(out, list):
+                    return [
+                        str(x).strip()
+                        for x in out
+                        if str(x).strip()
+                    ]
+        except Exception:
+            pass
+        return []
+
+    def _filter_trained_stocks_ui(self, text: str):
+        """Filter right-panel trained stock list by search query."""
+        self._refresh_trained_stock_list(
+            list(getattr(self, "_trained_stock_codes_cache", [])),
+            str(text or ""),
+        )
+
+    def _on_trained_stock_activated(self, item):
+        """Load selected trained stock from right-panel list."""
+        if item is None:
+            return
+        code = self._ui_norm(item.text())
+        if not code:
+            return
+        self.stock_input.setText(code)
+        self._on_watchlist_click(-1, -1, code_override=code)
+
+    def _refresh_trained_stock_list(
+        self, stocks: list[str], query: str = ""
+    ) -> None:
+        """Render searchable trained-stock list in the right panel."""
+        if not hasattr(self, "trained_stock_list"):
+            return
+        all_codes = [
+            str(x).strip()
+            for x in list(stocks or [])
+            if str(x).strip()
+        ]
+        q = str(query or "").strip().lower()
+        if q:
+            view_codes = [c for c in all_codes if q in c.lower()]
+        else:
+            view_codes = all_codes
+
+        self.trained_stock_list.clear()
+        if view_codes:
+            self.trained_stock_list.addItems(view_codes)
+        elif all_codes and q:
+            self.trained_stock_list.addItem(
+                "No matching trained stocks for current search."
+            )
+        else:
+            self.trained_stock_list.addItem(
+                "No trained stock metadata found in the loaded model."
+            )
+
+        if hasattr(self, "trained_stock_count_label"):
+            self.trained_stock_count_label.setText(
+                f"Trained: {len(view_codes)} / {len(all_codes)}"
+            )
+
+        tabs = getattr(self, "right_tabs", None)
+        idx = int(getattr(self, "_trained_tab_index", -1))
+        if tabs is not None and idx >= 0:
+            tabs.setTabText(idx, f"Trained Stocks ({len(all_codes)})")
+
+    def _update_trained_stocks_ui(self, codes: list[str] | None = None):
+        """Refresh trained-stock metadata section in AI panel."""
+        stocks = list(codes) if isinstance(codes, list) else self._get_trained_stock_codes()
+        self._trained_stock_codes_cache = list(stocks)
+
+        if hasattr(self, "trained_stocks_label"):
+            if not stocks:
+                self.trained_stocks_label.setText("Trained Stocks: --")
+            else:
+                self.trained_stocks_label.setText(
+                    f"Trained Stocks: {len(stocks)}"
+                )
+
+        query = ""
+        if hasattr(self, "trained_stock_search"):
+            try:
+                query = self.trained_stock_search.text()
+            except Exception:
+                query = ""
+        self._refresh_trained_stock_list(stocks, query=query)
+
+        if not stocks:
+            return
+
+    def _focus_trained_stocks_tab(self):
+        """Focus the right-panel trained-stocks tab."""
+        tabs = getattr(self, "right_tabs", None)
+        idx = int(getattr(self, "_trained_tab_index", -1))
+        if tabs is not None and idx >= 0:
+            tabs.setCurrentIndex(idx)
 
     def _init_auto_trader(self):
         """Initialize auto-trader on the execution engine."""
@@ -1525,8 +1800,18 @@ class MainApp(QMainWindow):
         """Handle interval change - reload model and restart monitor."""
         horizon = self.forecast_spin.value()
         self.model_info.setText(f"Interval: {interval}, Horizon: {horizon}")
+        self._update_trained_stocks_ui([])
 
         self.lookback_spin.setValue(self._seven_day_lookback(interval))
+        self._bars_by_symbol.clear()
+        self._chart_symbol = ""
+        try:
+            if hasattr(self.chart, "clear"):
+                self.chart.clear()
+            if hasattr(self, "chart_latest_label"):
+                self.chart_latest_label.setText("Latest --")
+        except Exception:
+            pass
 
         was_monitoring = bool(self.monitor and self.monitor.isRunning())
         if was_monitoring:
@@ -1541,9 +1826,14 @@ class MainApp(QMainWindow):
                     prediction_horizon=horizon
                 )
                 if self.predictor.ensemble:
-                    self.log(
-                        f"Model reloaded for {interval} interval", "info"
+                    active_iv, active_h = self._sync_ui_to_loaded_model(
+                        interval, horizon
                     )
+                    self.log(
+                        f"Model reloaded for {active_iv} interval, horizon {active_h}",
+                        "info",
+                    )
+                    self._update_trained_stocks_ui()
             except Exception as e:
                 self.log(f"Model reload failed: {e}", "warning")
 
@@ -1557,6 +1847,15 @@ class MainApp(QMainWindow):
             and self.predictor
         ):
             self.executor.auto_trader.update_predictor(self.predictor)
+
+        selected = self._ui_norm(self.stock_input.text())
+        if (
+            selected
+            and self.predictor is not None
+            and self.predictor.ensemble is not None
+        ):
+            self.stock_input.setText(selected)
+            self._analyze_stock()
 
     def _seven_day_lookback(self, interval: str) -> int:
         """Return lookback bars representing ~7 trading days for interval."""
@@ -1572,7 +1871,11 @@ class MainApp(QMainWindow):
 
     def _history_window_bars(self, interval: str) -> int:
         """Rolling chart/session window size (7-day equivalent)."""
-        return max(120, int(self._seven_day_lookback(interval)))
+        iv = str(interval or "1m").strip().lower()
+        bars = int(self._seven_day_lookback(iv))
+        if iv == "1d":
+            return max(7, bars)
+        return max(120, bars)
 
     def _now_iso(self) -> str:
         """Consistent sortable timestamp for live bars."""
@@ -1649,7 +1952,9 @@ class MainApp(QMainWindow):
         interval = self.interval_combo.currentText().strip()
         forecast_bars = self.forecast_spin.value()
         lookback = self._seven_day_lookback(interval)
-        self.lookback_spin.setValue(lookback)
+        self.lookback_spin.setValue(
+            max(int(self.lookback_spin.value()), int(lookback))
+        )
 
         try:
             from data.feeds import get_feed_manager
@@ -1808,56 +2113,13 @@ class MainApp(QMainWindow):
         ).strip().lower()
         interval_s = self._interval_seconds(interval)
         now_ts = time.time()
-        if not arr:
-            arr = [{
-                "open": price,
-                "high": price,
-                "low": price,
-                "close": price,
-                "timestamp": self._now_iso(),
-                "final": False,
-                "interval": interval,
-                "_ts_epoch": now_ts,
-            }]
-            self._bars_by_symbol[code] = arr
-        if arr and len(arr) > 0:
-            last = arr[-1]
-            prev_close = float(last.get("close", price) or price)
-            if self._is_outlier_tick(prev_close, price):
-                log.debug(
-                    f"Skip outlier tick for {code}: prev={prev_close:.2f} new={price:.2f}"
-                )
-                return
-
-            last_epoch = float(last.get("_ts_epoch", now_ts) or now_ts)
-            if (
-                not bool(last.get("final", False))
-                and (now_ts - last_epoch) >= float(interval_s)
-            ):
-                arr.append({
-                    "open": price,
-                    "high": price,
-                    "low": price,
-                    "close": price,
-                    "timestamp": self._now_iso(),
-                    "final": False,
-                    "interval": interval,
-                    "_ts_epoch": now_ts,
-                })
-                keep = self._history_window_bars(interval)
-                if len(arr) > keep:
-                    del arr[:-keep]
-                last = arr[-1]
-            else:
-                last["close"] = price
-                last["high"] = max(float(last.get("high", price) or price), price)
-                last["low"] = min(float(last.get("low", price) or price), price)
-                last["timestamp"] = self._now_iso()
-                last["final"] = False
-                if "_ts_epoch" not in last:
-                    last["_ts_epoch"] = now_ts
-
-            if current_code == code:
+        feed_age = now_ts - float(self._last_bar_feed_ts.get(code, 0.0))
+        has_recent_feed_bar = (
+            bool(arr)
+            and feed_age <= max(2.0, float(interval_s) * 1.2)
+        )
+        if has_recent_feed_bar:
+            if current_code == code and arr:
                 predicted = []
                 if (
                     self.current_prediction
@@ -1867,7 +2129,6 @@ class MainApp(QMainWindow):
                         getattr(self.current_prediction, "predicted_prices", [])
                         or []
                     )
-
                 try:
                     if hasattr(self.chart, 'update_chart'):
                         self.chart.update_chart(
@@ -1875,18 +2136,95 @@ class MainApp(QMainWindow):
                             predicted_prices=predicted,
                             levels=self._get_levels_dict()
                         )
-                        self._update_chart_latest_label(code, bar=last, price=price)
+                        self._chart_symbol = code
+                    self._update_chart_latest_label(code, bar=arr[-1], price=price)
                 except Exception as e:
-                    log.debug(f"Chart price update failed: {e}")
+                    log.debug(f"Chart price refresh failed: {e}")
 
-            try:
-                if self._session_bar_cache is not None:
-                    key = f"{code}:{interval}:tick"
-                    if (now_ts - float(self._last_session_cache_write_ts.get(key, 0.0))) >= 0.9:
-                        self._session_bar_cache.append_bar(code, interval, last)
-                        self._last_session_cache_write_ts[key] = now_ts
-            except Exception as e:
-                log.debug(f"Session cache tick write failed: {e}")
+        if not has_recent_feed_bar:
+            if not arr:
+                arr = [{
+                    "open": price,
+                    "high": price,
+                    "low": price,
+                    "close": price,
+                    "timestamp": self._now_iso(),
+                    "final": False,
+                    "interval": interval,
+                    "_ts_epoch": now_ts,
+                }]
+                self._bars_by_symbol[code] = arr
+            if arr and len(arr) > 0:
+                last = arr[-1]
+                prev_close = float(last.get("close", price) or price)
+                if self._is_outlier_tick(prev_close, price):
+                    log.debug(
+                        f"Skip outlier tick for {code}: prev={prev_close:.2f} new={price:.2f}"
+                    )
+                    return
+
+                last_epoch = float(last.get("_ts_epoch", now_ts) or now_ts)
+                if (
+                    not bool(last.get("final", False))
+                    and (now_ts - last_epoch) >= float(interval_s)
+                ):
+                    arr.append({
+                        "open": price,
+                        "high": price,
+                        "low": price,
+                        "close": price,
+                        "timestamp": self._now_iso(),
+                        "final": False,
+                        "interval": interval,
+                        "_ts_epoch": now_ts,
+                    })
+                    keep = self._history_window_bars(interval)
+                    if len(arr) > keep:
+                        del arr[:-keep]
+                    last = arr[-1]
+                else:
+                    last["close"] = price
+                    last["high"] = max(float(last.get("high", price) or price), price)
+                    last["low"] = min(float(last.get("low", price) or price), price)
+                    last["final"] = False
+                    if "_ts_epoch" not in last:
+                        last["_ts_epoch"] = now_ts
+
+                if current_code == code:
+                    predicted = []
+                    if (
+                        self.current_prediction
+                        and getattr(self.current_prediction, "stock_code", "") == code
+                    ):
+                        predicted = (
+                            getattr(self.current_prediction, "predicted_prices", [])
+                            or []
+                        )
+
+                    try:
+                        if hasattr(self.chart, 'update_chart'):
+                            self.chart.update_chart(
+                                arr,
+                                predicted_prices=predicted,
+                                levels=self._get_levels_dict()
+                            )
+                            self._chart_symbol = code
+                            self._update_chart_latest_label(code, bar=last, price=price)
+                    except Exception as e:
+                        log.debug(f"Chart price update failed: {e}")
+
+                try:
+                    if self._session_bar_cache is not None:
+                        key = f"{code}:{interval}:tick"
+                        if (now_ts - float(self._last_session_cache_write_ts.get(key, 0.0))) >= 0.9:
+                            self._session_bar_cache.append_bar(code, interval, last)
+                            self._last_session_cache_write_ts[key] = now_ts
+                except Exception as e:
+                    log.debug(f"Session cache tick write failed: {e}")
+
+        # Only refresh guessed graph for the currently selected symbol.
+        if current_code != code:
+            return
 
         # =====================================================================
         # THROTTLED FORECAST REFRESH (keep existing logic but simplified)
@@ -1902,9 +2240,8 @@ class MainApp(QMainWindow):
 
         interval = self.interval_combo.currentText().strip()
         horizon = self.forecast_spin.value()
-        # Real-time guessed graph uses latest 120 candles.
-        arr_for_forecast = self._bars_by_symbol.get(code) or []
-        lookback = max(20, min(120, len(arr_for_forecast) or 120))
+        # Real-time guess should be based on the latest 120 candles.
+        lookback = 120
 
         def do_forecast():
             if hasattr(self.predictor, "get_realtime_forecast_curve"):
@@ -1922,6 +2259,7 @@ class MainApp(QMainWindow):
             return
 
         worker = WorkerThread(do_forecast, timeout_seconds=30)
+        self._track_worker(worker)
         self.workers["forecast_refresh"] = worker
 
         def on_done(res):
@@ -1929,6 +2267,9 @@ class MainApp(QMainWindow):
                 if not res:
                     return
                 actual_prices, predicted_prices = res
+                selected = self._ui_norm(self.stock_input.text())
+                if selected != code:
+                    return
 
                 # Update current_prediction with new forecast
                 if (
@@ -1944,10 +2285,11 @@ class MainApp(QMainWindow):
                         predicted_prices=predicted_prices,
                         levels=self._get_levels_dict()
                     )
+                    self._chart_symbol = code
             finally:
                 self.workers.pop("forecast_refresh", None)
 
-        worker.finished.connect(on_done)
+        worker.result.connect(on_done)
         worker.error.connect(
             lambda e: self.workers.pop("forecast_refresh", None)
         )
@@ -2022,14 +2364,36 @@ class MainApp(QMainWindow):
                         row, col, QTableWidgetItem("--")
                     )
 
-    def _on_watchlist_click(self, row, col):
-        """Handle watchlist double-click with bounds check"""
-        if row < 0 or row >= self.watchlist.rowCount():
+    def _on_watchlist_click(
+        self, row: int, col: int, code_override: str | None = None
+    ):
+        """Handle watchlist click and load selected stock reliably."""
+        _ = col
+        code = self._ui_norm(code_override or "")
+        if not code:
+            if row < 0 or row >= self.watchlist.rowCount():
+                return
+            item = self.watchlist.item(row, 0)
+            if not item:
+                return
+            code = self._ui_norm(item.text())
+        if not code:
             return
-        item = self.watchlist.item(row, 0)
-        if item:
-            self.stock_input.setText(item.text())
-            self._analyze_stock()
+
+        self.stock_input.setText(code)
+
+        old_worker = self.workers.get("analyze")
+        if old_worker and old_worker.isRunning():
+            old_worker.cancel()
+
+        if self._chart_symbol and self._chart_symbol != code:
+            try:
+                if hasattr(self.chart, "reset_view"):
+                    self.chart.reset_view()
+            except Exception:
+                pass
+
+        self._analyze_stock()
 
     def _add_to_watchlist(self):
         """Add stock to watchlist with validation"""
@@ -2102,7 +2466,10 @@ class MainApp(QMainWindow):
 
         interval = self.interval_combo.currentText().strip()
         forecast_bars = self.forecast_spin.value()
-        forecast_lookback = 120
+        forecast_lookback = max(
+            int(self.lookback_spin.value()),
+            self._seven_day_lookback(interval),
+        )
 
         self.analyze_action.setEnabled(False)
 
@@ -2112,6 +2479,10 @@ class MainApp(QMainWindow):
         self.status_label.setText(f"Analyzing {normalized}...")
         self.progress.setRange(0, 0)
         self.progress.show()
+
+        old_worker = self.workers.get("analyze")
+        if old_worker and old_worker.isRunning():
+            old_worker.cancel()
 
         def analyze():
             return self.predictor.predict(
@@ -2124,7 +2495,8 @@ class MainApp(QMainWindow):
             )
 
         worker = WorkerThread(analyze, timeout_seconds=120)
-        worker.finished.connect(self._on_analysis_done)
+        self._track_worker(worker)
+        worker.result.connect(self._on_analysis_done)
         worker.error.connect(self._on_analysis_error)
         self.workers["analyze"] = worker
         worker.start()
@@ -2142,8 +2514,9 @@ class MainApp(QMainWindow):
             fetcher = getattr(self.predictor, "fetcher", None)
             if fetcher is None:
                 return []
-            lookback = max(120, int(lookback_bars))
             norm_iv = str(interval).strip().lower()
+            min_floor = 7 if norm_iv == "1d" else 120
+            lookback = max(min_floor, int(lookback_bars))
             df = fetcher.get_history(
                 symbol,
                 interval=norm_iv,
@@ -2223,12 +2596,18 @@ class MainApp(QMainWindow):
         self.progress.hide()
         self.status_label.setText("Ready")
 
+        symbol = self._ui_norm(getattr(pred, "stock_code", ""))
+        selected = self._ui_norm(self.stock_input.text())
+        if selected and symbol and selected != symbol:
+            # User switched symbol while worker was running; ignore stale result.
+            self.workers.pop('analyze', None)
+            return
+
         self.current_prediction = pred
 
         if hasattr(self.signal_panel, 'update_prediction'):
             self.signal_panel.update_prediction(pred)
 
-        symbol = self._ui_norm(getattr(pred, "stock_code", ""))
         current_price = float(getattr(pred, "current_price", 0) or 0)
         interval = self.interval_combo.currentText().strip().lower()
         lookback = max(
@@ -2240,7 +2619,17 @@ class MainApp(QMainWindow):
             arr = self._load_chart_history_bars(symbol, interval, lookback)
             existing = self._bars_by_symbol.get(symbol) or []
             if existing:
-                arr = self._merge_bars(arr, existing, interval)
+                existing_same_interval = [
+                    b for b in existing
+                    if str(
+                        b.get("interval", interval)
+                        or interval
+                    ).strip().lower() == interval
+                ]
+                if existing_same_interval:
+                    arr = self._merge_bars(
+                        arr, existing_same_interval, interval
+                    )
 
             if not arr and current_price > 0:
                 arr = [{
@@ -2255,28 +2644,44 @@ class MainApp(QMainWindow):
                 }]
 
             if arr and current_price > 0:
-                arr[-1]["close"] = current_price
-                arr[-1]["high"] = max(
-                    float(arr[-1].get("high", current_price) or current_price),
-                    current_price,
-                )
-                arr[-1]["low"] = min(
-                    float(arr[-1].get("low", current_price) or current_price),
-                    current_price,
-                )
-                arr[-1]["final"] = False
-                arr[-1]["timestamp"] = self._now_iso()
-                if "_ts_epoch" not in arr[-1]:
-                    arr[-1]["_ts_epoch"] = time.time()
+                update_last = True
+                if len(arr) >= 2:
+                    try:
+                        prev_ref = float(
+                            arr[-2].get("close", current_price) or current_price
+                        )
+                        if self._is_outlier_tick(prev_ref, current_price):
+                            update_last = False
+                    except Exception:
+                        update_last = True
+                if update_last:
+                    arr[-1]["close"] = current_price
+                    arr[-1]["high"] = max(
+                        float(arr[-1].get("high", current_price) or current_price),
+                        current_price,
+                    )
+                    arr[-1]["low"] = min(
+                        float(arr[-1].get("low", current_price) or current_price),
+                        current_price,
+                    )
+                    arr[-1]["final"] = False
+                    if "_ts_epoch" not in arr[-1]:
+                        arr[-1]["_ts_epoch"] = time.time()
 
             if arr:
                 self._bars_by_symbol[symbol] = arr
                 if hasattr(self.chart, "update_chart"):
+                    if self._chart_symbol and self._chart_symbol != symbol:
+                        try:
+                            self.chart.reset_view()
+                        except Exception:
+                            pass
                     self.chart.update_chart(
                         arr,
                         predicted_prices=getattr(pred, "predicted_prices", []) or [],
                         levels=self._get_levels_dict(),
                     )
+                    self._chart_symbol = symbol
                 self._update_chart_latest_label(
                     symbol,
                     bar=arr[-1] if arr else None,
@@ -2761,11 +3166,13 @@ class MainApp(QMainWindow):
             return []
 
         worker = WorkerThread(scan, timeout_seconds=180)
-        worker.finished.connect(self._on_scan_done)
+        self._track_worker(worker)
+        worker.result.connect(self._on_scan_done)
         worker.error.connect(
             lambda e: (
                 self.log(f"Scan failed: {e}", "error"),
-                self.progress.hide()
+                self.progress.hide(),
+                self.workers.pop('scan', None),
             )
         )
         self.workers['scan'] = worker
@@ -3962,13 +4369,17 @@ class MainApp(QMainWindow):
             except Exception:
                 pass
 
-        for _name, worker in list(self.workers.items()):
+        all_workers = set(self._active_workers) | set(self.workers.values())
+        for worker in list(all_workers):
             try:
                 worker.cancel()
                 worker.quit()
-                worker.wait(2000)
+                if not worker.wait(3000):
+                    worker.terminate()
+                    worker.wait(1000)
             except Exception:
                 pass
+        self._active_workers.clear()
         self.workers.clear()
 
         if self.executor:
@@ -4063,10 +4474,7 @@ class MainApp(QMainWindow):
                     except (ValueError, KeyError):
                         self._auto_trade_mode = AutoTradeMode.MANUAL
 
-                # Enforce requested behavior:
-                # - forecast uses latest 120 candles
-                # - lookback keeps at least 7 trading days
-                self.forecast_spin.setValue(120)
+                # Keep lookback at least 7 trading days.
                 min_lookback = self._seven_day_lookback(
                     self.interval_combo.currentText()
                 )

@@ -12,9 +12,9 @@
     "002230"
   ],
   "interval": "1m",
-  "forecast": 120,
+  "forecast": 30,
   "lookback": 1680,
   "capital": 100000.0,
-  "last_stock": "600519",
+  "last_stock": "600036",
   "auto_trade_mode": "manual"
 }

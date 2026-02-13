@@ -544,6 +544,7 @@ class Trainer:
             raise ValueError("No valid stock data available for training")
 
         log.info(f"Loaded {len(raw_data)} stocks successfully")
+        trained_stock_codes = [str(c).strip() for c in raw_data.keys() if str(c).strip()]
 
         # --- Phase 2: Split and fit scaler ---
         split_data, scaler_ok = self._split_and_fit_scaler(
@@ -612,6 +613,7 @@ class Trainer:
 
         self.ensemble.interval = str(interval)
         self.ensemble.prediction_horizon = int(horizon)
+        self.ensemble.trained_stock_codes = list(trained_stock_codes)
 
         if X_val is None or len(X_val) == 0:
             split_idx = int(len(X_train) * 0.85)
@@ -700,6 +702,8 @@ class Trainer:
             ),
             "interval": str(interval),
             "prediction_horizon": int(horizon),
+            "trained_stock_count": int(len(trained_stock_codes)),
+            "trained_stock_codes": list(trained_stock_codes),
             "forecaster_trained": forecaster_trained,
             "model_path": f"ensemble_{interval}_{horizon}.pt",
             "scaler_path": f"scaler_{interval}_{horizon}.pkl",

@@ -271,7 +271,7 @@ class HealthMonitor:
                     if account and (
                         account.cash > 0
                         or account.equity > 0
-                        or len(account.positions) >= 0
+                        or len(account.positions) > 0
                     ):
                         comp.status = HealthStatus.HEALTHY
                         comp.latency_ms = (time.time() - start) * 1000
@@ -326,24 +326,47 @@ class HealthMonitor:
             legacy_model = model_dir / "ensemble.pt"
             legacy_scaler = model_dir / "scaler.pkl"
 
-            has_new_model = any(model_dir.glob("ensemble_*.pt"))
-            has_new_scaler = any(model_dir.glob("scaler_*.pkl"))
+            has_new_model = list(model_dir.glob("ensemble_*.pt"))
+            has_new_scaler = list(model_dir.glob("scaler_*.pkl"))
 
-            has_model = legacy_model.exists() or has_new_model
-            has_scaler = legacy_scaler.exists() or has_new_scaler
+            has_model = legacy_model.exists() or bool(has_new_model)
+            has_scaler = legacy_scaler.exists() or bool(has_new_scaler)
 
-            if has_model and has_scaler:
+            matched_pairs: set[str] = set()
+            if legacy_model.exists() and legacy_scaler.exists():
+                matched_pairs.add("legacy")
+
+            for ens in has_new_model:
+                stem = str(ens.stem)
+                if not stem.startswith("ensemble_"):
+                    continue
+                suffix = stem[len("ensemble_"):]
+                if not suffix:
+                    continue
+                sc = model_dir / f"scaler_{suffix}.pkl"
+                if sc.exists():
+                    matched_pairs.add(suffix)
+
+            if matched_pairs:
                 comp.status = HealthStatus.HEALTHY
                 comp.last_success = datetime.now()
                 comp.last_error = ""
+                comp.details["matched_model_scaler_pairs"] = sorted(matched_pairs)
             else:
                 comp.status = HealthStatus.DEGRADED
-                missing = []
-                if not has_model:
-                    missing.append("model")
-                if not has_scaler:
-                    missing.append("scaler")
-                comp.last_error = f"Missing: {', '.join(missing)}"
+                comp.details["matched_model_scaler_pairs"] = []
+                if not has_model and not has_scaler:
+                    comp.last_error = "Missing: model, scaler"
+                elif not has_model:
+                    comp.last_error = "Missing: model"
+                elif not has_scaler:
+                    comp.last_error = "Missing: scaler"
+                else:
+                    comp.last_error = (
+                        "Model/scaler files exist but no compatible pair found "
+                        "(expected ensemble_<interval>_<horizon>.pt + "
+                        "scaler_<interval>_<horizon>.pkl)"
+                    )
 
         except Exception as e:
             comp.status = HealthStatus.UNHEALTHY
