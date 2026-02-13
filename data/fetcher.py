@@ -1303,6 +1303,7 @@ class DataFetcher:
 
         with self._rate_limiter:
             errors = []
+            collected: List[pd.DataFrame] = []
             for source in sources:
                 try:
                     self._rate_limit(source.name, interval)
@@ -1316,12 +1317,14 @@ class DataFetcher:
                                 f"Got {len(df)} bars from {source.name} "
                                 f"for {inst.get('symbol')} ({interval})"
                             )
-                            return df
+                            collected.append(df)
+                            continue
                         log.debug(
                             f"{source.name} returned {len(df)} bars for "
                             f"{inst.get('symbol')} ({interval}), "
                             f"need >= {min_required}"
                         )
+                        collected.append(df)
                     else:
                         log.debug(
                             f"{source.name} returned empty for "
@@ -1334,6 +1337,17 @@ class DataFetcher:
                         f"{inst.get('symbol')} ({interval}): {exc}"
                     )
                     continue
+
+        if collected:
+            try:
+                merged = self._clean_dataframe(pd.concat(collected, axis=0))
+                if not merged.empty:
+                    return merged
+            except Exception as exc:
+                log.debug(
+                    "Failed to merge history from multiple sources for %s: %s",
+                    inst.get("symbol"), exc
+                )
 
         if errors:
             log.warning(
@@ -1449,7 +1463,7 @@ class DataFetcher:
         interval = str(interval).lower()
         offline = _is_offline()
 
-        count = max(1, int(bars if bars is not None else days))
+        count = self._resolve_requested_bar_count(days=days, bars=bars, interval=interval)
         max_days = INTERVAL_MAX_DAYS.get(interval, 10_000)
         fetch_days = min(bars_to_days(count, interval), max_days)
 
@@ -1504,6 +1518,32 @@ class DataFetcher:
         out = self._merge_parts(df, session_df).tail(count)
         self._cache.set(cache_key, out)
         return out
+
+    @staticmethod
+    def _resolve_requested_bar_count(
+        days: int,
+        bars: Optional[int],
+        interval: str,
+    ) -> int:
+        """
+        Resolve requested history length.
+
+        For intraday intervals, `days` is interpreted as calendar days when
+        `bars` is not explicitly provided. This increases data depth for charting
+        and replay workflows that request e.g. "7 days" of 1m data.
+        """
+        if bars is not None:
+            return max(1, int(bars))
+
+        iv = str(interval or "1d").lower()
+        if iv == "1d":
+            return max(1, int(days))
+
+        day_count = max(1, int(days))
+        bpd = BARS_PER_DAY.get(iv, 1.0)
+        approx = int(math.ceil(day_count * max(1.0, bpd)))
+        max_bars = int(INTERVAL_MAX_DAYS.get(iv, 365) * max(1.0, bpd))
+        return max(1, min(approx, max_bars))
 
     def _get_history_cn_intraday(
         self,

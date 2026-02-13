@@ -61,7 +61,7 @@ class TechnicalAnalyzer:
         self.min_data_points = 60
         self._indicator_names = (
             "sma_5", "sma_10", "sma_20", "sma_50", "sma_200",
-            "ema_9", "ema_21", "ema_55", "ema_100",
+            "ema_9", "ema_21", "ema_55", "ema_100", "ema_200",
             "macd", "macd_signal", "macd_hist", "macd_hist_prev",
             "rsi_14", "rsi_7", "rsi_21", "stoch_k", "stoch_d", "stoch_rsi",
             "bb_upper", "bb_middle", "bb_lower", "bb_pct", "bb_width",
@@ -71,6 +71,7 @@ class TechnicalAnalyzer:
             "adx", "di_plus", "di_minus",
             "atr_14", "mfi", "cci", "williams_r",
             "roc_10", "obv", "vwap",
+            "volatility_20", "atr_pct", "momentum_20",
             "volume_ratio", "close", "prev_close", "change_pct",
         )
 
@@ -119,6 +120,7 @@ class TechnicalAnalyzer:
         indicators['ema_21'] = safe_last(close.ewm(span=21, adjust=False).mean())
         indicators['ema_55'] = safe_last(close.ewm(span=55, adjust=False).mean())
         indicators['ema_100'] = safe_last(close.ewm(span=100, adjust=False).mean())
+        indicators['ema_200'] = safe_last(close.ewm(span=200, adjust=False).mean())
 
         if len(df) >= 200:
             indicators['sma_200'] = safe_last(close.rolling(200).mean())
@@ -181,6 +183,10 @@ class TechnicalAnalyzer:
             high, low, close, lbp=14
         ))
         indicators['roc_10'] = safe_last(ta.momentum.roc(close, window=10))
+        indicators['momentum_20'] = safe_last(close.pct_change(20) * 100.0)
+        indicators['volatility_20'] = safe_last(
+            close.pct_change().rolling(20).std() * np.sqrt(252) * 100.0
+        )
         indicators['obv'] = safe_last(ta.volume.on_balance_volume(close, volume))
         indicators['vwap'] = safe_last(ta.volume.volume_weighted_average_price(
             high, low, close, volume, window=20
@@ -189,6 +195,11 @@ class TechnicalAnalyzer:
         indicators['close'] = close.iloc[-1]
         indicators['prev_close'] = close.iloc[-2] if len(df) > 1 else close.iloc[-1]
         indicators['change_pct'] = (close.iloc[-1] / close.iloc[-2] - 1) * 100 if len(df) > 1 else 0
+        indicators['atr_pct'] = (
+            (indicators['atr_14'] / indicators['close']) * 100.0
+            if indicators['close'] > 0
+            else 0.0
+        )
 
         for key, value in indicators.items():
             if pd.isna(value):
@@ -221,6 +232,11 @@ class TechnicalAnalyzer:
         else:
             signals.append(TechnicalSignal("SMA", "sell", SignalStrength.MODERATE, ind['sma_20'], "Price below SMA 20"))
 
+        if close > ind['ema_21'] > ind['ema_55'] > ind['ema_200']:
+            signals.append(TechnicalSignal("EMA Trend", "buy", SignalStrength.MODERATE, ind['ema_21'], "Bullish EMA stack"))
+        elif close < ind['ema_21'] < ind['ema_55'] < ind['ema_200']:
+            signals.append(TechnicalSignal("EMA Trend", "sell", SignalStrength.MODERATE, ind['ema_21'], "Bearish EMA stack"))
+
         if ind['adx'] > 25:
             if ind['di_plus'] > ind['di_minus']:
                 signals.append(TechnicalSignal("ADX", "buy", SignalStrength.STRONG, ind['adx'], f"Strong uptrend (ADX={ind['adx']:.0f})"))
@@ -236,6 +252,9 @@ class TechnicalAnalyzer:
             signals.append(TechnicalSignal("BB", "buy", SignalStrength.MODERATE, ind['bb_lower'], "Price below lower BB"))
         elif ind['bb_pct'] > 1:
             signals.append(TechnicalSignal("BB", "sell", SignalStrength.MODERATE, ind['bb_upper'], "Price above upper BB"))
+        elif ind['bb_width'] < 8 and ind['adx'] > 20:
+            side = "buy" if ind['di_plus'] >= ind['di_minus'] else "sell"
+            signals.append(TechnicalSignal("BB Squeeze", side, SignalStrength.WEAK, ind['bb_width'], "Volatility squeeze with trend pressure"))
 
         if ind['mfi'] < 20:
             signals.append(TechnicalSignal("MFI", "buy", SignalStrength.MODERATE, ind['mfi'], "Money flow oversold"))

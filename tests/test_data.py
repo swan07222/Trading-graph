@@ -83,6 +83,14 @@ class TestDataFetcher:
 
         assert len(out) == rows
 
+    def test_resolve_intraday_days_to_bar_depth(self):
+        bars = DataFetcher._resolve_requested_bar_count(
+            days=7,
+            bars=None,
+            interval="1m",
+        )
+        assert bars >= 1000
+
 class TestDataProcessor:
     """Tests for DataProcessor"""
 

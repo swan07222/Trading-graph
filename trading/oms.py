@@ -158,6 +158,21 @@ class OrderDatabase:
                         FOREIGN KEY (order_id) REFERENCES orders(id)
                     )
                 """)
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS order_events (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        order_id TEXT NOT NULL,
+                        event_type TEXT NOT NULL,
+                        old_status TEXT,
+                        new_status TEXT,
+                        filled_qty INTEGER,
+                        avg_price REAL,
+                        message TEXT,
+                        payload TEXT,
+                        created_at TEXT NOT NULL,
+                        FOREIGN KEY (order_id) REFERENCES orders(id)
+                    )
+                """)
 
                 # Dedup index: prefer broker_fill_id when present
                 conn.execute("""
@@ -231,6 +246,10 @@ class OrderDatabase:
                 conn.execute(
                     "CREATE INDEX IF NOT EXISTS idx_fills_order "
                     "ON fills(order_id)"
+                )
+                conn.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_order_events_order_ts "
+                    "ON order_events(order_id, created_at)"
                 )
 
     # ------------------------------------------------------------------
@@ -475,6 +494,81 @@ class OrderDatabase:
             fills.append(fill)
 
         return fills
+
+    def save_order_event(
+        self,
+        order_id: str,
+        event_type: str,
+        old_status: Optional[str] = None,
+        new_status: Optional[str] = None,
+        filled_qty: Optional[int] = None,
+        avg_price: Optional[float] = None,
+        message: str = "",
+        payload: Optional[Dict] = None,
+        conn: sqlite3.Connection = None,
+    ) -> None:
+        target = conn or self._conn
+        auto_commit = conn is None
+        try:
+            target.execute(
+                """
+                INSERT INTO order_events
+                (order_id, event_type, old_status, new_status, filled_qty,
+                 avg_price, message, payload, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    str(order_id),
+                    str(event_type or "event"),
+                    str(old_status) if old_status else None,
+                    str(new_status) if new_status else None,
+                    int(filled_qty) if filled_qty is not None else None,
+                    float(avg_price) if avg_price is not None else None,
+                    str(message or ""),
+                    json.dumps(payload or {}, ensure_ascii=False),
+                    datetime.now().isoformat(),
+                ),
+            )
+            if auto_commit:
+                target.commit()
+        except Exception:
+            if auto_commit:
+                target.rollback()
+            raise
+
+    def load_order_events(self, order_id: str, limit: int = 200) -> List[Dict]:
+        rows = self._conn.execute(
+            """
+            SELECT order_id, event_type, old_status, new_status, filled_qty,
+                   avg_price, message, payload, created_at
+            FROM order_events
+            WHERE order_id = ?
+            ORDER BY id ASC
+            LIMIT ?
+            """,
+            (str(order_id), int(max(1, limit))),
+        ).fetchall()
+        out: List[Dict] = []
+        for r in rows:
+            payload_raw = r["payload"] if "payload" in r.keys() else "{}"
+            try:
+                payload = json.loads(payload_raw) if payload_raw else {}
+            except Exception:
+                payload = {}
+            out.append(
+                {
+                    "order_id": r["order_id"],
+                    "event_type": r["event_type"],
+                    "old_status": r["old_status"],
+                    "new_status": r["new_status"],
+                    "filled_qty": int(r["filled_qty"]) if r["filled_qty"] is not None else None,
+                    "avg_price": float(r["avg_price"]) if r["avg_price"] is not None else None,
+                    "message": r["message"] or "",
+                    "payload": payload,
+                    "created_at": r["created_at"],
+                }
+            )
+        return out
 
     # ------------------------------------------------------------------
     # ------------------------------------------------------------------
@@ -924,6 +1018,22 @@ class OrderManagementSystem:
             with self._db.transaction() as conn:
                 self._db.save_order(order, conn)
                 self._db.save_account_state(self._account, conn)
+                self._db.save_order_event(
+                    order_id=order.id,
+                    event_type="submitted",
+                    old_status=None,
+                    new_status=order.status.value,
+                    filled_qty=order.filled_qty,
+                    avg_price=order.avg_price,
+                    message=order.message or "",
+                    payload={
+                        "symbol": order.symbol,
+                        "side": order.side.value,
+                        "quantity": int(order.quantity),
+                        "price": float(order.price or 0.0),
+                    },
+                    conn=conn,
+                )
 
                 if order.side == OrderSide.SELL:
                     pos = self._account.positions.get(order.symbol)
@@ -1045,7 +1155,19 @@ class OrderManagementSystem:
                 if avg_price is not None:
                     order.avg_price = avg_price
                 order.updated_at = datetime.now()
-                self._db.save_order(order)
+                with self._db.transaction() as conn:
+                    self._db.save_order(order, conn)
+                    self._db.save_order_event(
+                        order_id=order.id,
+                        event_type="status_refresh",
+                        old_status=old_status.value,
+                        new_status=new_status.value,
+                        filled_qty=order.filled_qty,
+                        avg_price=order.avg_price,
+                        message=message or "",
+                        payload={"broker_id": broker_id or order.broker_id or ""},
+                        conn=conn,
+                    )
                 self._notify_order_update(order)
                 return order
 
@@ -1081,6 +1203,17 @@ class OrderManagementSystem:
             with self._db.transaction() as conn:
                 self._db.save_order(order, conn)
                 self._db.save_account_state(self._account, conn)
+                self._db.save_order_event(
+                    order_id=order.id,
+                    event_type="status_transition",
+                    old_status=old_status.value,
+                    new_status=new_status.value,
+                    filled_qty=order.filled_qty,
+                    avg_price=order.avg_price,
+                    message=order.message or "",
+                    payload={"broker_id": broker_id or order.broker_id or ""},
+                    conn=conn,
+                )
 
                 if order.side == OrderSide.SELL and new_status in (
                     OrderStatus.CANCELLED, OrderStatus.REJECTED,
@@ -1276,6 +1409,29 @@ class OrderManagementSystem:
 
                 self._db.save_order(order, conn)
                 self._db.save_account_state(self._account, conn)
+                self._db.save_order_event(
+                    order_id=order.id,
+                    event_type="fill",
+                    old_status=None,
+                    new_status=order.status.value,
+                    filled_qty=order.filled_qty,
+                    avg_price=order.avg_price,
+                    message=f"fill:{fill.id}",
+                    payload={
+                        "fill_id": fill.id,
+                        "broker_fill_id": fill.broker_fill_id,
+                        "qty": int(fill.quantity),
+                        "price": float(fill.price),
+                        "commission": float(fill.commission or 0.0),
+                        "stamp_tax": float(fill.stamp_tax or 0.0),
+                        "timestamp": (
+                            fill.timestamp.isoformat()
+                            if fill.timestamp is not None
+                            else ""
+                        ),
+                    },
+                    conn=conn,
+                )
 
             # Outside transaction: audit, callbacks, events
             self._audit.log_trade(
@@ -1440,6 +1596,13 @@ class OrderManagementSystem:
 
     def get_fills(self, order_id: str = None) -> List[Fill]:
         return self._db.load_fills(order_id)
+
+    def get_order_timeline(self, order_id: str, limit: int = 200) -> List[Dict]:
+        """
+        Return order lifecycle events in ascending time order.
+        Useful for UI/ops troubleshooting of OMS state transitions.
+        """
+        return self._db.load_order_events(order_id, limit=limit)
 
     def get_position(self, symbol: str) -> Optional[Position]:
         return self._account.positions.get(symbol)

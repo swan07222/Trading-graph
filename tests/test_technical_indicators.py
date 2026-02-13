@@ -21,8 +21,9 @@ def test_technical_analyzer_has_extended_indicators():
     summary = ta.analyze(_df())
     keys = set(summary.indicators.keys())
     assert {
-        "ema_9", "ema_21", "ema_55", "ema_100",
+        "ema_9", "ema_21", "ema_55", "ema_100", "ema_200",
         "atr_14", "williams_r", "roc_10", "obv", "vwap",
+        "atr_pct", "volatility_20", "momentum_20",
         "donchian_upper", "donchian_middle", "donchian_lower",
         "keltner_upper", "keltner_middle", "keltner_lower",
         "ichimoku_conv", "ichimoku_base", "stoch_rsi",

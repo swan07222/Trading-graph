@@ -925,6 +925,21 @@ class MainApp(QMainWindow):
         chart_actions.addWidget(self.zoom_in_btn)
         chart_actions.addWidget(self.zoom_out_btn)
         chart_actions.addWidget(self.zoom_reset_btn)
+
+        self.chart_bbands_chk = QCheckBox("BBands")
+        self.chart_bbands_chk.setChecked(True)
+        self.chart_bbands_chk.toggled.connect(
+            lambda v: self._set_chart_overlay("bbands", v)
+        )
+        chart_actions.addWidget(self.chart_bbands_chk)
+
+        self.chart_vwap_chk = QCheckBox("VWAP20")
+        self.chart_vwap_chk.setChecked(True)
+        self.chart_vwap_chk.toggled.connect(
+            lambda v: self._set_chart_overlay("vwap20", v)
+        )
+        chart_actions.addWidget(self.chart_vwap_chk)
+
         chart_actions.addStretch(1)
         chart_layout.addLayout(chart_actions)
 
@@ -967,6 +982,13 @@ class MainApp(QMainWindow):
         if hasattr(self.chart, "reset_view"):
             try:
                 self.chart.reset_view()
+            except Exception:
+                pass
+
+    def _set_chart_overlay(self, key: str, enabled: bool):
+        if hasattr(self.chart, "set_overlay_enabled"):
+            try:
+                self.chart.set_overlay_enabled(str(key), bool(enabled))
             except Exception:
                 pass
 

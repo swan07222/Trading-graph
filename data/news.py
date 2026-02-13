@@ -504,6 +504,21 @@ class NewsAggregator:
                 state["failed_calls"] = int(state.get("failed_calls", 0)) + 1
                 state["last_error"] = str(error)[:240]
 
+    def _source_reliability_weight(self, source: str) -> float:
+        """
+        Reliability prior from rolling source health.
+        Returns [0.5, 1.3] so weak sources are down-weighted, not removed.
+        """
+        with self._lock:
+            state = self._source_health.get(source, {})
+            ok_calls = int(state.get("ok_calls", 0))
+            failed_calls = int(state.get("failed_calls", 0))
+        total = ok_calls + failed_calls
+        if total <= 0:
+            return 1.0
+        rate = ok_calls / float(total)
+        return float(min(1.3, max(0.5, 0.6 + 0.9 * rate)))
+
     # -- market news ---------------------------------------------------------
 
     def get_market_news(
@@ -672,19 +687,48 @@ class NewsAggregator:
                 "top_negative": [],
             }
 
-        scores = [n.sentiment_score for n in news]
-        overall = sum(scores) / len(scores)
+        now = datetime.now()
+        scores = [float(n.sentiment_score) for n in news]
+        simple_avg = (sum(scores) / len(scores)) if scores else 0.0
+
+        weighted_total = 0.0
+        weight_sum = 0.0
+        for n in news:
+            score = float(getattr(n, "sentiment_score", 0.0) or 0.0)
+            importance = float(getattr(n, "importance", 0.5) or 0.5)
+            age_h = max(
+                0.0,
+                (now - getattr(n, "publish_time", now)).total_seconds() / 3600.0,
+            )
+            recency_w = 1.0 / (1.0 + age_h / 24.0)
+            src = str(getattr(n, "source", "") or "").strip().lower()
+            src_w = self._source_reliability_weight(src)
+            w = max(0.05, recency_w * src_w * max(0.1, importance))
+            weighted_total += score * w
+            weight_sum += w
+        overall = (weighted_total / weight_sum) if weight_sum > 0 else simple_avg
 
         positive = [n for n in news if n.sentiment_label == "positive"]
         negative = [n for n in news if n.sentiment_label == "negative"]
         neutral = [n for n in news if n.sentiment_label == "neutral"]
 
+        confidence = min(
+            1.0,
+            max(
+                0.0,
+                (len(news) / 25.0) * (0.6 + 0.4 * min(1.0, abs(float(overall)))),
+            ),
+        )
+
         return {
             "overall_sentiment": round(overall, 3),
+            "simple_sentiment": round(simple_avg, 3),
             "label": (
                 "positive" if overall > 0.1
                 else ("negative" if overall < -0.1 else "neutral")
             ),
+            "confidence": round(float(confidence), 3),
+            "weighted": True,
             "positive_count": len(positive),
             "negative_count": len(negative),
             "neutral_count": len(neutral),

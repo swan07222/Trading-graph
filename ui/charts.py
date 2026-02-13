@@ -148,6 +148,14 @@ class StockChart(QWidget):
         self.predicted_line = None    # Layer 1: Prediction (bottom)
         self.level_lines: Dict[str, object] = {}
         self.overlay_lines: Dict[str, object] = {}
+        self.overlay_enabled: Dict[str, bool] = {
+            "sma20": True,
+            "sma50": True,
+            "ema21": True,
+            "bb_upper": True,
+            "bb_lower": True,
+            "vwap20": True,
+        }
         self._manual_zoom: bool = False
 
         self._setup_ui()
@@ -215,6 +223,18 @@ class StockChart(QWidget):
             "ema21": self.plot_widget.plot(
                 pen=pg.mkPen(color="#ffa657", width=1.2, style=Qt.PenStyle.DotLine),
                 name="EMA21",
+            ),
+            "bb_upper": self.plot_widget.plot(
+                pen=pg.mkPen(color="#8b949e", width=1, style=Qt.PenStyle.DashLine),
+                name="BB Upper",
+            ),
+            "bb_lower": self.plot_widget.plot(
+                pen=pg.mkPen(color="#8b949e", width=1, style=Qt.PenStyle.DashLine),
+                name="BB Lower",
+            ),
+            "vwap20": self.plot_widget.plot(
+                pen=pg.mkPen(color="#79c0ff", width=1, style=Qt.PenStyle.DotLine),
+                name="VWAP20",
             ),
         }
 
@@ -363,7 +383,7 @@ class StockChart(QWidget):
 
             self._actual_prices = closes
 
-            self._update_overlay_lines(closes)
+            self._update_overlay_lines(render_bars, closes)
             self._update_level_lines()
 
             # Auto-range unless user enabled manual zoom.
@@ -462,6 +482,9 @@ class StockChart(QWidget):
         line = self.overlay_lines.get(key)
         if line is None:
             return
+        if not self.overlay_enabled.get(key, True):
+            line.clear()
+            return
         if y.size == 0:
             line.clear()
             return
@@ -472,13 +495,50 @@ class StockChart(QWidget):
             return
         line.setData(x[mask], y[mask])
 
-    def _update_overlay_lines(self, closes: List[float]):
+    def _update_overlay_lines(self, bars: List[dict], closes: List[float]):
         if not HAS_PYQTGRAPH or not self.overlay_lines:
             return
         arr = np.array(closes, dtype=float)
         self._plot_series("sma20", self._rolling_mean(arr, 20))
         self._plot_series("sma50", self._rolling_mean(arr, 50))
         self._plot_series("ema21", self._ema(arr, 21))
+        bb_mid = self._rolling_mean(arr, 20)
+        bb_std = np.full(len(arr), np.nan)
+        if len(arr) >= 20:
+            for i in range(19, len(arr)):
+                bb_std[i] = float(np.std(arr[i - 19:i + 1]))
+        self._plot_series("bb_upper", bb_mid + (2.0 * bb_std))
+        self._plot_series("bb_lower", bb_mid - (2.0 * bb_std))
+
+        if bars:
+            highs = []
+            lows = []
+            vols = []
+            for b in bars:
+                c = float(b.get("close", 0) or 0)
+                if c <= 0:
+                    continue
+                h = float(b.get("high", c) or c)
+                l = float(b.get("low", c) or c)
+                v = float(b.get("volume", 0) or 0)
+                highs.append(h if h > 0 else c)
+                lows.append(l if l > 0 else c)
+                vols.append(max(0.0, v))
+            n = min(len(highs), len(arr))
+            if n <= 0:
+                return
+            tp = (np.array(highs[:n]) + np.array(lows[:n]) + arr[:n]) / 3.0
+            v = np.array(vols[:n], dtype=float)
+            vwap = np.full(n, np.nan)
+            if len(tp) >= 20:
+                for i in range(19, len(tp)):
+                    vv = v[i - 19:i + 1]
+                    denom = float(np.sum(vv))
+                    if denom > 0:
+                        vwap[i] = float(np.sum(tp[i - 19:i + 1] * vv) / denom)
+                    else:
+                        vwap[i] = float(np.mean(tp[i - 19:i + 1]))
+            self._plot_series("vwap20", vwap)
 
     def _on_context_menu(self, pos):
         if not HAS_PYQTGRAPH or self.plot_widget is None:
@@ -499,11 +559,55 @@ class StockChart(QWidget):
         menu = QMenu(self)
         buy_action = menu.addAction(f"Buy @ {price:.2f}")
         sell_action = menu.addAction(f"Sell @ {price:.2f}")
+        menu.addSeparator()
+        overlay_actions: Dict[object, str] = {}
+        for key, name in (
+            ("sma20", "SMA20"),
+            ("sma50", "SMA50"),
+            ("ema21", "EMA21"),
+            ("bb_upper", "Bollinger"),
+            ("vwap20", "VWAP20"),
+        ):
+            act = menu.addAction(f"Overlay: {name}")
+            act.setCheckable(True)
+            if key == "bb_upper":
+                checked = bool(self.overlay_enabled.get("bb_upper", True) and self.overlay_enabled.get("bb_lower", True))
+            else:
+                checked = bool(self.overlay_enabled.get(key, True))
+            act.setChecked(checked)
+            overlay_actions[act] = key
+        menu.addSeparator()
+        reset_view = menu.addAction("Reset View")
         chosen = menu.exec(self.plot_widget.mapToGlobal(pos))
         if chosen == buy_action:
             self.trade_requested.emit("buy", float(price))
         elif chosen == sell_action:
             self.trade_requested.emit("sell", float(price))
+        elif chosen == reset_view:
+            self.reset_view()
+        elif chosen in overlay_actions:
+            self._toggle_overlay(overlay_actions[chosen])
+
+    def _toggle_overlay(self, key: str):
+        if key == "bb_upper":
+            new_state = not (
+                self.overlay_enabled.get("bb_upper", True)
+                and self.overlay_enabled.get("bb_lower", True)
+            )
+            self.overlay_enabled["bb_upper"] = new_state
+            self.overlay_enabled["bb_lower"] = new_state
+        else:
+            self.overlay_enabled[key] = not self.overlay_enabled.get(key, True)
+        if self._bars:
+            closes = []
+            for b in self._bars[-3000:]:
+                try:
+                    c = float(b.get("close", 0) or 0)
+                    if c > 0:
+                        closes.append(c)
+                except Exception:
+                    continue
+            self._update_overlay_lines(self._bars[-3000:], closes)
 
     def _update_level_lines(self):
         """Update horizontal lines for trading levels."""
@@ -600,6 +704,27 @@ class StockChart(QWidget):
                 )
             except Exception:
                 pass
+
+    def set_overlay_enabled(self, key: str, enabled: bool):
+        """
+        Public overlay toggle for UI controls.
+        For Bollinger, use key='bbands' to control both bands.
+        """
+        if key == "bbands":
+            self.overlay_enabled["bb_upper"] = bool(enabled)
+            self.overlay_enabled["bb_lower"] = bool(enabled)
+        else:
+            self.overlay_enabled[str(key)] = bool(enabled)
+        if self._bars:
+            closes = []
+            for b in self._bars[-3000:]:
+                try:
+                    c = float(b.get("close", 0) or 0)
+                    if c > 0:
+                        closes.append(c)
+                except Exception:
+                    continue
+            self._update_overlay_lines(self._bars[-3000:], closes)
 
     def get_bar_count(self) -> int:
         """Get current number of bars."""

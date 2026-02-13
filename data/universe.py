@@ -125,6 +125,77 @@ def _can_use_akshare() -> bool:
 
     return bool(env.is_china_direct)
 
+def _find_first_column(candidates: List[str], columns: List[str]) -> Optional[str]:
+    colset = set(columns)
+    for c in candidates:
+        if c in colset:
+            return c
+    return None
+
+def _rank_codes_by_liquidity(df) -> List[str]:
+    """
+    Rank universe candidates by liquidity/size when columns are available.
+    Falls back to the original code order if ranking fields are missing.
+    """
+    cols = list(getattr(df, "columns", []))
+    code_col = _find_first_column(
+        ["代码", "证券代码", "浠ｇ爜", "璇佸埜浠ｇ爜", "code"],
+        cols,
+    )
+    if code_col is None:
+        return []
+    if not _HAS_PANDAS:
+        raw_codes = (
+            df[code_col].astype(str).str.extract(r"(\d+)")[0].dropna().tolist()
+        )
+        return _validate_codes(raw_codes)
+
+    ranked = df.copy()
+    ranked["__code__"] = (
+        ranked[code_col]
+        .astype(str)
+        .str.extract(r"(\d+)")[0]
+        .fillna("")
+        .astype(str)
+        .str.zfill(6)
+    )
+    ranked = ranked[ranked["__code__"].str.fullmatch(r"\d{6}")]
+
+    amount_col = _find_first_column(
+        ["成交额", "amount", "turnover", "amount_zh"],
+        cols,
+    )
+    volume_col = _find_first_column(
+        ["成交量", "volume", "vol"],
+        cols,
+    )
+    cap_col = _find_first_column(
+        ["总市值", "market_cap", "mktcap"],
+        cols,
+    )
+
+    if amount_col:
+        ranked["__amount__"] = pd.to_numeric(ranked[amount_col], errors="coerce").fillna(0.0)
+    else:
+        ranked["__amount__"] = 0.0
+    if volume_col:
+        ranked["__volume__"] = pd.to_numeric(ranked[volume_col], errors="coerce").fillna(0.0)
+    else:
+        ranked["__volume__"] = 0.0
+    if cap_col:
+        ranked["__cap__"] = pd.to_numeric(ranked[cap_col], errors="coerce").fillna(0.0)
+    else:
+        ranked["__cap__"] = 0.0
+
+    if (ranked["__amount__"].sum() + ranked["__volume__"].sum() + ranked["__cap__"].sum()) <= 0:
+        return _validate_codes(ranked["__code__"].tolist())
+
+    ranked = ranked.sort_values(
+        by=["__amount__", "__volume__", "__cap__", "__code__"],
+        ascending=[False, False, False, True],
+    )
+    return _validate_codes(ranked["__code__"].tolist())
+
 def _try_akshare_fetch(timeout: int = 20) -> Optional[List[str]]:
     """
     Try to fetch stock universe from AkShare.
@@ -159,8 +230,10 @@ def _try_akshare_fetch(timeout: int = 20) -> Optional[List[str]]:
             log.warning(f"No code column found. Columns: {list(df.columns)[:10]}")
             return None
 
-        raw_codes = df[code_col].astype(str).str.extract(r"(\d+)")[0].dropna().tolist()
-        codes = _validate_codes(raw_codes)
+        codes = _rank_codes_by_liquidity(df)
+        if not codes:
+            raw_codes = df[code_col].astype(str).str.extract(r"(\d+)")[0].dropna().tolist()
+            codes = _validate_codes(raw_codes)
 
         if codes:
             log.info(f"AkShare returned {len(codes)} valid codes")
