@@ -407,6 +407,17 @@ class AkShareSource(DataSource):
             return False
         return super().is_available()
 
+    def is_suitable_for_network(self) -> bool:
+        """
+        AkShare should only be used when EastMoney is reachable.
+        This avoids repeated connection-aborted storms in degraded networks.
+        """
+        from core.network import get_network_env
+        env = get_network_env()
+        if not bool(getattr(env, "eastmoney_ok", False)):
+            return False
+        return bool(env.is_china_direct)
+
     def _get_spot_cache(self) -> SpotCache:
         if self._spot_cache is None:
             self._spot_cache = get_spot_cache()
@@ -965,7 +976,7 @@ class DataFetcher:
         self._rt_single_microcache: dict[str, dict[str, object]] = {}
 
         self._rate_lock = threading.Lock()
-        self._last_network_mode: bool | None = None
+        self._last_network_mode: tuple[bool, bool, bool] | None = None
         self._init_sources()
 
     def _init_sources(self) -> None:
@@ -1042,10 +1053,15 @@ class DataFetcher:
         env = get_network_env()
 
         # If user toggles VPN/China-direct, clear source cooldowns and pacing state.
+        net_sig = (
+            bool(env.is_china_direct),
+            bool(getattr(env, "eastmoney_ok", False)),
+            bool(getattr(env, "yahoo_ok", False)),
+        )
         if self._last_network_mode is None:
-            self._last_network_mode = bool(env.is_china_direct)
-        elif bool(env.is_china_direct) != self._last_network_mode:
-            self._last_network_mode = bool(env.is_china_direct)
+            self._last_network_mode = net_sig
+        elif net_sig != self._last_network_mode:
+            self._last_network_mode = net_sig
             for s in self._all_sources:
                 with s._lock:
                     s.status.consecutive_errors = 0
@@ -1076,10 +1092,11 @@ class DataFetcher:
         if source.name == "localdb":
             score += 120.0
         elif env.is_china_direct:
+            eastmoney_ok = bool(getattr(env, "eastmoney_ok", False))
             if source.name == "akshare":
-                score += 90.0
+                score += 90.0 if eastmoney_ok else 8.0
             elif source.name == "tencent":
-                score += 55.0
+                score += 55.0 if eastmoney_ok else 88.0
             elif source.name == "yahoo":
                 score += 10.0
         else:
@@ -1288,12 +1305,14 @@ class DataFetcher:
             from core.network import get_network_env
             env = get_network_env()
 
-            if env.is_china_direct:
+            if env.is_china_direct and bool(getattr(env, "eastmoney_ok", False)):
                 preferred = "akshare"
+            elif bool(getattr(env, "tencent_ok", False)):
+                preferred = "tencent"
             elif env.yahoo_ok:
                 preferred = "yahoo"
             else:
-                preferred = "akshare"  # Try anyway
+                preferred = "localdb"
 
             sources.sort(key=lambda s: (
                 0 if s.name == preferred else

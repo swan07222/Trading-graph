@@ -108,18 +108,20 @@ def _can_use_akshare() -> bool:
     """
     Decide if AkShare/Eastmoney is worth trying.
 
-    In VPN-foreign mode with Eastmoney blocked, skip to avoid repeated timeouts.
+    AkShare is backed by EastMoney; if EastMoney probe fails, skip it
+    to avoid repeated connection-aborted warnings.
     """
     try:
         env = get_network_env()
     except Exception:
         return True
 
-    if env.eastmoney_ok:
-        return True
-
-    if env.is_vpn_active and not env.eastmoney_ok:
-        log.info("Skipping AkShare universe fetch: VPN mode with Eastmoney blocked")
+    if not bool(getattr(env, "eastmoney_ok", False)):
+        mode = "VPN" if bool(getattr(env, "is_vpn_active", False)) else "DIRECT"
+        log.info(
+            "Skipping AkShare universe fetch: Eastmoney unreachable "
+            f"(mode={mode})"
+        )
         return False
 
     return bool(env.is_china_direct)
