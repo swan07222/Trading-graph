@@ -61,6 +61,31 @@ class ColorFormatter(logging.Formatter):
             record_copy.levelname = f"{color}{record_copy.levelname}{self.RESET}"
         return super().format(record_copy)
 
+class SafeConsoleHandler(logging.StreamHandler):
+    """
+    Console handler resilient to terminal encoding limitations.
+
+    On Windows GBK consoles, symbols like '¥' can raise UnicodeEncodeError.
+    This handler falls back to ASCII-safe output instead of emitting
+    logging internal tracebacks.
+    """
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            msg = self.format(record)
+            stream = self.stream
+            try:
+                stream.write(msg + self.terminator)
+            except UnicodeEncodeError:
+                enc = getattr(stream, "encoding", None) or "utf-8"
+                safe = msg.encode(enc, errors="replace").decode(
+                    enc, errors="replace"
+                )
+                stream.write(safe + self.terminator)
+            self.flush()
+        except Exception:
+            self.handleError(record)
+
 class LoggerManager:
     """
     Thread-safe singleton logger manager.
@@ -195,7 +220,7 @@ class LoggerManager:
 
     def _create_console_handler(self) -> logging.StreamHandler:
         """Create a console handler with optional color formatting."""
-        handler = logging.StreamHandler(sys.stdout)
+        handler = SafeConsoleHandler(sys.stdout)
         handler.setLevel(self._log_level)
 
         use_color = False

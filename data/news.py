@@ -440,6 +440,36 @@ class NewsAggregator:
 
         # Rolling news buffer (last N items)
         self._all_news: deque = deque(maxlen=_NEWS_BUFFER_SIZE)
+        self._source_health: Dict[str, Dict[str, object]] = {
+            "tencent": {
+                "ok_calls": 0,
+                "failed_calls": 0,
+                "last_success_ts": 0.0,
+                "last_error": "",
+                "last_items": 0,
+            },
+            "sina": {
+                "ok_calls": 0,
+                "failed_calls": 0,
+                "last_success_ts": 0.0,
+                "last_error": "",
+                "last_items": 0,
+            },
+            "eastmoney_policy": {
+                "ok_calls": 0,
+                "failed_calls": 0,
+                "last_success_ts": 0.0,
+                "last_error": "",
+                "last_items": 0,
+            },
+            "eastmoney_stock": {
+                "ok_calls": 0,
+                "failed_calls": 0,
+                "last_success_ts": 0.0,
+                "last_error": "",
+                "last_items": 0,
+            },
+        }
 
     # -- cache helpers -------------------------------------------------------
 
@@ -449,6 +479,30 @@ class NewsAggregator:
             key in self._cache
             and (time.time() - self._cache_time.get(key, 0)) < self._cache_ttl
         )
+
+    def _record_source_result(
+        self, source: str, ok: bool, item_count: int = 0, error: str = ""
+    ) -> None:
+        with self._lock:
+            state = self._source_health.get(source)
+            if state is None:
+                state = {
+                    "ok_calls": 0,
+                    "failed_calls": 0,
+                    "last_success_ts": 0.0,
+                    "last_error": "",
+                    "last_items": 0,
+                }
+                self._source_health[source] = state
+
+            if ok:
+                state["ok_calls"] = int(state.get("ok_calls", 0)) + 1
+                state["last_success_ts"] = float(time.time())
+                state["last_error"] = ""
+                state["last_items"] = int(item_count)
+            else:
+                state["failed_calls"] = int(state.get("failed_calls", 0)) + 1
+                state["last_error"] = str(error)[:240]
 
     # -- market news ---------------------------------------------------------
 
@@ -470,26 +524,47 @@ class NewsAggregator:
         # Tencent always works (China or VPN)
         if env.tencent_ok:
             try:
-                all_items.extend(self._tencent.fetch_market_news(count))
-            except Exception:
-                pass
+                fetched = self._tencent.fetch_market_news(count)
+                all_items.extend(fetched)
+                self._record_source_result("tencent", True, len(fetched))
+            except Exception as exc:
+                self._record_source_result("tencent", False, error=str(exc))
 
         # China direct: use Sina + Eastmoney
         if env.is_china_direct:
             try:
-                all_items.extend(self._sina.fetch_market_news(count))
-            except Exception:
-                pass
+                fetched = self._sina.fetch_market_news(count)
+                all_items.extend(fetched)
+                self._record_source_result("sina", True, len(fetched))
+            except Exception as exc:
+                self._record_source_result("sina", False, error=str(exc))
 
             if env.eastmoney_ok:
                 try:
-                    all_items.extend(self._eastmoney.fetch_policy_news(count))
-                except Exception:
-                    pass
+                    fetched = self._eastmoney.fetch_policy_news(count)
+                    all_items.extend(fetched)
+                    self._record_source_result(
+                        "eastmoney_policy", True, len(fetched)
+                    )
+                except Exception as exc:
+                    self._record_source_result(
+                        "eastmoney_policy", False, error=str(exc)
+                    )
 
         unique = self._deduplicate(all_items)
         unique.sort(key=lambda x: x.publish_time, reverse=True)
         unique = unique[:count]
+
+        # Institutional fail-safe: stale cache fallback if all providers fail.
+        if not unique:
+            with self._lock:
+                stale = list(self._cache.get(cache_key, []))
+            if stale:
+                log.warning(
+                    "News providers returned no items; serving stale cache "
+                    f"({len(stale)} items)"
+                )
+                return stale[:count]
 
         with self._lock:
             self._cache[cache_key] = unique
@@ -524,17 +599,23 @@ class NewsAggregator:
         # China direct: full access
         if env.is_china_direct:
             try:
-                all_items.extend(self._sina.fetch_stock_news(code6, count))
-            except Exception:
-                pass
+                fetched = self._sina.fetch_stock_news(code6, count)
+                all_items.extend(fetched)
+                self._record_source_result("sina", True, len(fetched))
+            except Exception as exc:
+                self._record_source_result("sina", False, error=str(exc))
 
             if env.eastmoney_ok:
                 try:
-                    all_items.extend(
-                        self._eastmoney.fetch_stock_news(code6, count)
+                    fetched = self._eastmoney.fetch_stock_news(code6, count)
+                    all_items.extend(fetched)
+                    self._record_source_result(
+                        "eastmoney_stock", True, len(fetched)
                     )
-                except Exception:
-                    pass
+                except Exception as exc:
+                    self._record_source_result(
+                        "eastmoney_stock", False, error=str(exc)
+                    )
 
         with self._lock:
             for item in self._all_news:
@@ -716,6 +797,82 @@ class NewsAggregator:
         with self._lock:
             self._cache.clear()
             self._cache_time.clear()
+
+    def get_source_health(self) -> Dict[str, Dict[str, object]]:
+        """Institutional telemetry: fetch-source reliability and freshness."""
+        with self._lock:
+            out: Dict[str, Dict[str, object]] = {}
+            now_ts = float(time.time())
+            for src, state in self._source_health.items():
+                ok_calls = int(state.get("ok_calls", 0))
+                failed_calls = int(state.get("failed_calls", 0))
+                total = ok_calls + failed_calls
+                success_rate = (ok_calls / total) if total > 0 else 1.0
+                last_success_ts = float(state.get("last_success_ts", 0.0) or 0.0)
+                age_s = (now_ts - last_success_ts) if last_success_ts > 0 else float("inf")
+                out[src] = {
+                    "ok_calls": ok_calls,
+                    "failed_calls": failed_calls,
+                    "success_rate": round(float(success_rate), 4),
+                    "last_success_age_seconds": (
+                        round(float(age_s), 1) if math.isfinite(age_s) else None
+                    ),
+                    "last_items": int(state.get("last_items", 0)),
+                    "last_error": str(state.get("last_error", "")),
+                }
+            return out
+
+    def get_institutional_snapshot(
+        self, stock_code: Optional[str] = None, hours_lookback: int = 24
+    ) -> Dict[str, object]:
+        """
+        Institutional-grade unified news snapshot.
+        Includes sentiment, model features, source health, and freshness stats.
+        """
+        news = (
+            self.get_stock_news(stock_code, count=60)
+            if stock_code
+            else self.get_market_news(count=60)
+        )
+        summary = self.get_sentiment_summary(stock_code=stock_code)
+        features = self.get_news_features(
+            stock_code=stock_code, hours_lookback=hours_lookback
+        )
+        source_health = self.get_source_health()
+
+        now = datetime.now()
+        ages = [
+            (now - n.publish_time).total_seconds()
+            for n in news
+            if getattr(n, "publish_time", None) is not None
+        ]
+        freshness = {
+            "latest_age_seconds": round(float(min(ages)), 1) if ages else None,
+            "median_age_seconds": round(float(np.median(ages)), 1) if ages else None,
+            "items_with_timestamp": int(len(ages)),
+        }
+
+        source_counts: Dict[str, int] = {}
+        for n in news:
+            src = str(getattr(n, "source", "") or "unknown").strip().lower()
+            source_counts[src] = source_counts.get(src, 0) + 1
+        total = max(len(news), 1)
+        source_mix = {
+            src: round(cnt / total, 4) for src, cnt in sorted(
+                source_counts.items(), key=lambda kv: kv[1], reverse=True
+            )
+        }
+
+        return {
+            "scope": str(stock_code or "market"),
+            "timestamp": now.isoformat(),
+            "news_count": len(news),
+            "source_mix": source_mix,
+            "source_health": source_health,
+            "freshness": freshness,
+            "sentiment": summary,
+            "features": features,
+        }
 
 # Thread-safe singleton
 

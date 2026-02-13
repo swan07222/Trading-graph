@@ -4,6 +4,7 @@ from __future__ import annotations
 import queue
 import threading
 import time
+import copy
 from datetime import datetime, timedelta, date
 from typing import Dict, Optional, Callable, Set, List, Tuple
 
@@ -144,17 +145,44 @@ class AutoTrader:
     def get_state(self) -> AutoTradeState:
         """Get a snapshot of the current state."""
         with self._lock:
-            return self.state
+            return copy.deepcopy(self.state)
 
     def get_recent_actions(self, n: int = 50) -> List[AutoTradeAction]:
         """Get recent auto-trade actions."""
         with self._lock:
-            return list(self.state.recent_actions[:n])
+            return copy.deepcopy(self.state.recent_actions[:n])
 
     def get_pending_approvals(self) -> List[AutoTradeAction]:
         """Get pending approvals (SEMI_AUTO mode)."""
         with self._lock:
-            return list(self.state.pending_approvals)
+            return copy.deepcopy(self.state.pending_approvals)
+
+    def _passes_precision_quality_gate(self, pred) -> Tuple[bool, str]:
+        """
+        Additional precision guardrails for autonomous trading.
+        Uses entropy and directional edge thresholds from PrecisionConfig.
+        """
+        try:
+            p_cfg = getattr(CONFIG, "precision", None)
+            if not p_cfg or not bool(getattr(p_cfg, "enabled", True)):
+                return True, ""
+
+            entropy = float(getattr(pred, "entropy", 0.0) or 0.0)
+            max_entropy = float(getattr(p_cfg, "max_entropy", 1.0) or 1.0)
+            if entropy > max_entropy:
+                return False, f"High uncertainty (entropy {entropy:.2f} > {max_entropy:.2f})"
+
+            prob_up = float(getattr(pred, "prob_up", 0.0) or 0.0)
+            prob_down = float(getattr(pred, "prob_down", 0.0) or 0.0)
+            edge = abs(prob_up - prob_down)
+            min_edge = float(getattr(p_cfg, "min_edge", 0.0) or 0.0)
+            if edge < min_edge:
+                return False, f"Weak directional edge ({edge:.2f} < {min_edge:.2f})"
+        except Exception:
+            # Fail-open to avoid accidental trading halt from malformed config.
+            return True, ""
+
+        return True, ""
 
     def approve_pending(self, action_id: str) -> bool:
         """Approve a pending auto-trade action (SEMI_AUTO mode)."""
@@ -478,6 +506,11 @@ class AutoTrader:
                 continue
             if full_conf < cfg.min_confidence:
                 continue
+            ok, reason = self._passes_precision_quality_gate(full_pred)
+            if not ok:
+                with self._lock:
+                    self._record_skip(full_pred, Signal, reason)
+                continue
 
             price = getattr(full_pred, 'current_price', 0.0)
             position = getattr(full_pred, 'position', None)
@@ -710,7 +743,7 @@ class AutoTrader:
         """Notify UI of state change."""
         if self.on_state_changed:
             try:
-                self.on_state_changed(self.state)
+                self.on_state_changed(copy.deepcopy(self.state))
             except Exception as e:
                 log.debug(f"State callback error: {e}")
 
@@ -1066,7 +1099,11 @@ class ExecutionEngine:
             },
             "auto_trade": {
                 "enabled": auto_state is not None,
-                "state": auto_state,
+                "state": (
+                    auto_state.to_dict()
+                    if hasattr(auto_state, "to_dict")
+                    else auto_state
+                ),
             },
         }
 
