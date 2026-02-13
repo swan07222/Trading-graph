@@ -178,7 +178,9 @@ class AutoLearnWorker(QThread):
                 self.msleep(200)
 
             self._stop_learner()
-            if self._error_flag:
+            if self.token.is_cancelled or not self.running:
+                results["status"] = "stopped"
+            elif self._error_flag:
                 results["status"] = "error"
                 results["error"] = self._error_message or "Auto-learning failed"
                 if self.running:
@@ -232,9 +234,9 @@ class AutoLearnWorker(QThread):
 
         if self._learner_thread is not None:
             try:
-                self._learner_thread.join(timeout=10)
+                self._learner_thread.join(timeout=35)
                 if self._learner_thread.is_alive():
-                    log.warning("Learner thread did not stop cleanly")
+                    log.info("Learner thread still finalizing after stop request")
             except Exception:
                 pass
 
@@ -361,6 +363,10 @@ class TargetedLearnWorker(QThread):
                 self.msleep(200)
 
             self._stop_learner()
+            if self.token.is_cancelled or not self.running:
+                results["status"] = "stopped"
+            else:
+                results["status"] = "ok"
             results["stocks_trained"] = stock_codes
             self.finished_result.emit(results)
 
@@ -394,7 +400,9 @@ class TargetedLearnWorker(QThread):
 
         if self._learner_thread is not None:
             try:
-                self._learner_thread.join(timeout=10)
+                self._learner_thread.join(timeout=35)
+                if self._learner_thread.is_alive():
+                    log.info("Targeted learner thread still finalizing after stop request")
             except Exception:
                 pass
 
@@ -1225,8 +1233,12 @@ class AutoLearnDialog(QDialog):
 
         if self.worker:
             self.worker.stop()
-            if not self.worker.wait(20000):
-                self._log("Worker did not stop cleanly", "warning")
+            if not self.worker.wait(30000):
+                self._log(
+                    "Stop requested. Finalizing current training step...",
+                    "info",
+                )
+                return
             self.worker = None
 
         self._log("Auto-learning stopped by user", "warning")
@@ -1318,10 +1330,12 @@ class AutoLearnDialog(QDialog):
 
         if self.targeted_worker:
             self.targeted_worker.stop()
-            if not self.targeted_worker.wait(20000):
+            if not self.targeted_worker.wait(30000):
                 self._log(
-                    "Targeted worker did not stop cleanly", "warning"
+                    "Stop requested. Finalizing current training step...",
+                    "info"
                 )
+                return
             self.targeted_worker = None
 
         self._log("Targeted training stopped by user", "warning")
@@ -1410,6 +1424,12 @@ class AutoLearnDialog(QDialog):
         """Handle auto-learning completion."""
         self._log("=" * 50, "info")
         status = results.get("status", "ok")
+        if status == "stopped":
+            self._log("Auto-learning stopped by user", "warning")
+            self._set_running(False)
+            self.status_label.setText("Stopped")
+            self.progress_bar.setValue(0)
+            return
         if status == "error":
             err = str(results.get("error") or "Auto-learning failed")
             self._log(f"Auto-learning failed: {err}", "error")
@@ -1443,6 +1463,14 @@ class AutoLearnDialog(QDialog):
     def _on_targeted_finished(self, results: dict):
         """Handle targeted training completion."""
         self._log("=" * 50, "info")
+        status = results.get("status", "ok")
+        if status == "stopped":
+            self._log("Targeted training stopped by user", "warning")
+            self._set_running(False)
+            self.status_label.setText("Stopped")
+            self.progress_bar.setValue(0)
+            return
+
         self._log("🎉 Targeted training completed!", "success")
         self._log_results(results)
 

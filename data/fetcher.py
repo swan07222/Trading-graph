@@ -976,6 +976,10 @@ class DataFetcher:
         self._rt_single_microcache: dict[str, dict[str, object]] = {}
 
         self._rate_lock = threading.Lock()
+        self._last_source_fail_warn_ts: dict[str, float] = {}
+        self._source_fail_warn_cooldown_s: float = 45.0
+        self._last_source_fail_warn_global_ts: float = 0.0
+        self._source_fail_warn_global_cooldown_s: float = 8.0
         self._last_network_mode: tuple[bool, bool, bool] | None = None
         self._init_sources()
 
@@ -1369,13 +1373,62 @@ class DataFetcher:
                 )
 
         if errors:
-            log.warning(
-                f"All sources failed for {inst.get('symbol')} ({interval}): "
-                f"{'; '.join(errors[:3])}"
-            )
+            severe_errors = [
+                e for e in errors if not self._is_expected_no_data_error(e)
+            ]
+            symbol = str(inst.get("symbol") or "")
+            if severe_errors:
+                if self._should_emit_source_fail_warning(symbol, interval):
+                    log.warning(
+                        f"All sources failed for {symbol} ({interval}): "
+                        f"{'; '.join(severe_errors[:3])}"
+                    )
+                else:
+                    log.debug(
+                        f"Suppressed repeated source-fail warning for "
+                        f"{symbol} ({interval})"
+                    )
+            else:
+                log.debug(
+                    f"No usable history for {symbol} ({interval}); "
+                    f"only expected no-data responses"
+                )
         else:
-            log.warning(f"All sources failed for {inst.get('symbol')} ({interval})")
+            # Common for newly listed / suspended names in rotation batches.
+            log.debug(
+                f"No history returned by active sources for "
+                f"{inst.get('symbol')} ({interval})"
+            )
         return pd.DataFrame()
+
+    @staticmethod
+    def _is_expected_no_data_error(err_msg: str) -> bool:
+        msg = str(err_msg or "").lower()
+        expected = (
+            "no data",
+            "returned empty",
+            "empty dataframe",
+            "not found",
+            "404",
+            "no history",
+            "symbol not found",
+        )
+        return any(k in msg for k in expected)
+
+    def _should_emit_source_fail_warning(self, symbol: str, interval: str) -> bool:
+        key = f"{str(symbol)}:{str(interval)}"
+        now = time.time()
+        if (
+            now - float(self._last_source_fail_warn_global_ts)
+            < self._source_fail_warn_global_cooldown_s
+        ):
+            return False
+        last = float(self._last_source_fail_warn_ts.get(key, 0.0))
+        if (now - last) < self._source_fail_warn_cooldown_s:
+            return False
+        self._last_source_fail_warn_ts[key] = now
+        self._last_source_fail_warn_global_ts = now
+        return True
 
     @staticmethod
     def _try_source_instrument(
