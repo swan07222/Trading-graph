@@ -2,30 +2,44 @@
 import sys
 import argparse
 from pathlib import Path
+from importlib.util import find_spec
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-def check_dependencies(require_gui: bool = False) -> bool:
-    """Check required dependencies. Only require GUI libs if launching GUI."""
-    required = [
-        ("torch", "pytorch"),
-        ("numpy", "numpy"),
-        ("pandas", "pandas"),
-        ("sklearn", "scikit-learn"),
-        ("psutil", "psutil"),
-    ]
+def _module_exists(module: str) -> bool:
+    """Fast dependency probe without importing heavy modules."""
+    try:
+        return find_spec(module) is not None
+    except Exception:
+        return False
 
-    # GUI: PyQt6 is required; pyqtgraph is OPTIONAL (you already have fallback).
+
+def check_dependencies(require_gui: bool = False, require_ml: bool = False) -> bool:
+    """
+    Check required dependencies.
+
+    Startup optimization:
+    - Use find_spec() instead of importing heavy modules.
+    - Only require ML stack for ML-heavy modes.
+    """
+    required = [("psutil", "psutil")]
+    if require_ml:
+        required.extend([
+            ("torch", "pytorch"),
+            ("numpy", "numpy"),
+            ("pandas", "pandas"),
+            ("sklearn", "scikit-learn"),
+        ])
+
     optional = []
     if require_gui:
         required.append(("PyQt6", "PyQt6"))
+        # Optional chart accel lib; app already has fallback.
         optional.append(("pyqtgraph", "pyqtgraph"))
 
     missing = []
     for module, package in required:
-        try:
-            __import__(module)
-        except ImportError:
+        if not _module_exists(module):
             missing.append(package)
 
     if missing:
@@ -35,9 +49,7 @@ def check_dependencies(require_gui: bool = False) -> bool:
 
     # Optional warnings
     for module, package in optional:
-        try:
-            __import__(module)
-        except ImportError:
+        if not _module_exists(module):
             print(f"Optional package missing: {package} (some UI charts may be simplified)")
 
     return True
@@ -68,8 +80,11 @@ def main():
         args.train, args.auto_learn, args.predict, args.backtest, args.replay_file,
         args.health, args.cli, args.recovery_drill,
     ])
+    require_ml = any([
+        args.train, args.auto_learn, args.predict, args.backtest, args.replay_file,
+    ])
 
-    if not check_dependencies(require_gui=require_gui):
+    if not check_dependencies(require_gui=require_gui, require_ml=require_ml):
         sys.exit(1)
 
     from utils.logger import get_logger

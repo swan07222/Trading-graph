@@ -12,11 +12,17 @@ def reset_cache():
     if os.environ.get("TRADING_SKIP_TEST_CACHE_CLEAR", "0") == "1":
         yield
         return
+    old_manual = os.environ.get("TRADING_MANUAL_CACHE_DELETE")
+    os.environ["TRADING_MANUAL_CACHE_DELETE"] = "1"
     from data.cache import get_cache
     cache = get_cache()
     cache.clear()
     yield
     cache.clear()
+    if old_manual is None:
+        os.environ.pop("TRADING_MANUAL_CACHE_DELETE", None)
+    else:
+        os.environ["TRADING_MANUAL_CACHE_DELETE"] = old_manual
 
 @pytest.fixture
 def temp_model_dir(tmp_path):

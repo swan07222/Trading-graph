@@ -1,4 +1,5 @@
 from datetime import datetime
+import time
 
 from analysis.sentiment import KeywordSentimentAnalyzer, NewsItem, NewsScraper
 
@@ -40,3 +41,13 @@ def test_news_scraper_custom_provider_registration():
     assert c >= 0
     assert s >= 0
     assert scraper.unregister_provider("custom") is True
+
+
+def test_news_scraper_offline_skips_builtin_providers():
+    scraper = NewsScraper()
+    scraper._providers["sina"] = lambda: (_ for _ in ()).throw(RuntimeError("should_skip_sina"))
+    scraper._providers["eastmoney"] = lambda: (_ for _ in ()).throw(RuntimeError("should_skip_east"))
+    scraper._network_available_cache = False
+    scraper._last_network_check_ts = time.time()
+    items = scraper.scrape_all()
+    assert isinstance(items, list)

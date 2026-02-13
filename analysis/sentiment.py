@@ -5,6 +5,7 @@ import hashlib
 import json
 import pickle
 import re
+import socket
 import time
 from dataclasses import dataclass
 from datetime import datetime
@@ -209,6 +210,12 @@ class NewsScraper:
             "sina": lambda: self.scrape_sina(),
             "eastmoney": lambda: self.scrape_eastmoney(),
         }
+        self._network_check_ttl_s = 30.0
+        self._last_network_check_ts = 0.0
+        self._network_available_cache = True
+        self._request_timeout = float(
+            max(1.0, min(2.0, float(getattr(CONFIG.data, "request_timeout", 2))))
+        )
 
     def register_provider(
         self,
@@ -273,13 +280,38 @@ class NewsScraper:
             codes.update(re.findall(p, str(text)))
         return list(codes)
 
+    def _network_available(self) -> bool:
+        """
+        Fast connectivity probe for external news providers.
+
+        Cached for a short TTL so offline environments do not repeatedly pay
+        provider-level HTTP timeout costs.
+        """
+        now = time.time()
+        if (now - self._last_network_check_ts) < self._network_check_ttl_s:
+            return bool(self._network_available_cache)
+
+        hosts = ("feed.mix.sina.com.cn", "np-anotice-stock.eastmoney.com")
+        ok = False
+        for host in hosts:
+            try:
+                with socket.create_connection((host, 443), timeout=0.8):
+                    ok = True
+                    break
+            except OSError:
+                continue
+
+        self._last_network_check_ts = now
+        self._network_available_cache = ok
+        return ok
+
     def scrape_sina(self, max_items: int = 50) -> List[NewsItem]:
         items: List[NewsItem] = []
         self._rate_limit("sina")
         try:
             url = "https://feed.mix.sina.com.cn/api/roll/get"
             params = {"pageid": 153, "lid": 2516, "num": max_items}
-            resp = self.session.get(url, params=params, timeout=10)
+            resp = self.session.get(url, params=params, timeout=self._request_timeout)
             data = resp.json()
             for item in data.get("result", {}).get("data", []):
                 title = str(item.get("title") or "")
@@ -327,7 +359,7 @@ class NewsScraper:
                 "ann_type": "A",
                 "client_source": "web",
             }
-            resp = self.session.get(url, params=params, timeout=10)
+            resp = self.session.get(url, params=params, timeout=self._request_timeout)
             data = resp.json()
             rows = data.get("data", {}).get("list", []) if isinstance(data, dict) else []
             for item in rows:
@@ -380,6 +412,8 @@ class NewsScraper:
 
         items: List[NewsItem] = []
         for name, fetcher in list(self._providers.items()):
+            if name in ("sina", "eastmoney") and not self._network_available():
+                continue
             try:
                 out = fetcher()
                 if isinstance(out, list):
@@ -400,11 +434,41 @@ class NewsScraper:
         return items
 
     def get_stock_sentiment(self, stock_code: str) -> Tuple[float, float]:
+        code = str(stock_code or "").strip()
+        custom_sources = [
+            name for name in self._providers.keys()
+            if name not in ("sina", "eastmoney")
+        ]
+
+        # Fast path: if custom providers are registered and they provide
+        # relevant records, avoid external provider latency.
+        if custom_sources:
+            custom_news: List[NewsItem] = []
+            for name in custom_sources:
+                fetcher = self._providers.get(name)
+                if fetcher is None:
+                    continue
+                try:
+                    out = fetcher()
+                    if isinstance(out, list):
+                        for row in out:
+                            if isinstance(row, NewsItem):
+                                if not row.source:
+                                    row.source = name
+                                custom_news.append(row)
+                except Exception as e:
+                    log.debug(f"Custom provider {name} failed: {e}")
+            relevant_custom = [n for n in custom_news if code in n.stock_codes]
+            if relevant_custom:
+                return self._aggregate_stock_sentiment(relevant_custom)
+
         all_news = self.scrape_all()
-        relevant = [n for n in all_news if stock_code in n.stock_codes]
+        relevant = [n for n in all_news if code in n.stock_codes]
         if not relevant:
             return 0.0, 0.0
+        return self._aggregate_stock_sentiment(relevant)
 
+    def _aggregate_stock_sentiment(self, relevant: List[NewsItem]) -> Tuple[float, float]:
         now = datetime.now()
         weighted_score = 0.0
         total_weight = 0.0

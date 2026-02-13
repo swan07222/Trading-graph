@@ -297,6 +297,11 @@ Focused regression pack:
 pytest -q tests/test_data.py tests/test_data_leakage.py tests/test_models.py tests/test_oms_fills.py tests/test_replay.py tests/test_audit_integrity.py tests/test_executor_health_guard.py
 ```
 
+Manual cache delete (guarded):
+```bash
+python scripts/manual_cache_delete.py --confirm --tier all
+```
+
 ## 16) Policy-As-Code Governance
 
 Live-trade governance can be enforced through:

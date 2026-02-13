@@ -57,6 +57,10 @@ class BacktestResult:
     total_return: float
     excess_return: float
     sharpe_ratio: float
+    sortino_ratio: float
+    information_ratio: float
+    alpha: float
+    beta: float
     max_drawdown: float
     max_drawdown_pct: float
     calmar_ratio: float
@@ -98,6 +102,9 @@ class BacktestResult:
 
   RISK METRICS:
     Sharpe Ratio:        {self.sharpe_ratio:.2f}
+    Sortino Ratio:       {self.sortino_ratio:.2f}
+    Information Ratio:   {self.information_ratio:.2f}
+    Alpha/Beta:          {self.alpha:+.2f} / {self.beta:.2f}
     Max Drawdown:        {self.max_drawdown_pct:.1f}%
     Calmar Ratio:        {self.calmar_ratio:.2f}
     Volatility (ann.):   {self.volatility:.1f}%
@@ -773,6 +780,32 @@ class Backtester:
         else:
             sharpe = 0
 
+        neg_daily = daily_returns[daily_returns < 0]
+        downside_std = float(np.std(neg_daily)) if len(neg_daily) > 0 else 0.0
+        if len(daily_returns) > 1 and downside_std > 0:
+            sortino = float(np.mean(daily_returns) / downside_std * np.sqrt(252))
+        else:
+            sortino = 0.0
+
+        active_returns = daily_returns - benchmark_daily
+        active_std = float(np.std(active_returns)) if len(active_returns) > 0 else 0.0
+        if len(active_returns) > 1 and active_std > 0:
+            information = float(np.mean(active_returns) / active_std * np.sqrt(252))
+        else:
+            information = 0.0
+
+        if len(daily_returns) > 1 and len(benchmark_daily) == len(daily_returns):
+            bench_var = float(np.var(benchmark_daily))
+            if bench_var > 0:
+                covariance = float(np.cov(daily_returns, benchmark_daily, ddof=0)[0, 1])
+                beta = covariance / bench_var
+            else:
+                beta = 0.0
+            alpha = float((np.mean(daily_returns) - beta * np.mean(benchmark_daily)) * 252.0)
+        else:
+            alpha = 0.0
+            beta = 0.0
+
         if len(equity) > 0:
             running_max = np.maximum.accumulate(equity)
             drawdown = (equity - running_max) / running_max
@@ -817,6 +850,10 @@ class Backtester:
             benchmark_return=benchmark_return,
             excess_return=total_return - benchmark_return,
             sharpe_ratio=sharpe,
+            sortino_ratio=sortino,
+            information_ratio=information,
+            alpha=alpha,
+            beta=beta,
             max_drawdown=max_dd,
             max_drawdown_pct=max_dd_pct,
             calmar_ratio=calmar,

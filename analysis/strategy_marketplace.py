@@ -102,11 +102,19 @@ class StrategyMarketplace:
         return defaults
 
     def save_enabled_ids(self, strategy_ids: List[str]) -> None:
+        valid_entries = {str(item["id"]): item for item in self.list_entries()}
         clean = []
         seen = set()
         for sid in strategy_ids:
             s = str(sid).strip()
             if not s or s in seen:
+                continue
+            entry = valid_entries.get(s)
+            if not entry:
+                continue
+            if not bool(entry.get("installed", False)):
+                continue
+            if str(entry.get("integrity", "")) in ("mismatch", "missing", "error"):
                 continue
             seen.add(s)
             clean.append(s)
@@ -124,3 +132,21 @@ class StrategyMarketplace:
                 continue
             files.append(self._dir / str(item["file"]))
         return files
+
+    def get_integrity_summary(self) -> Dict[str, int]:
+        summary: Dict[str, int] = {
+            "total": 0,
+            "ok": 0,
+            "unverified": 0,
+            "mismatch": 0,
+            "missing": 0,
+            "error": 0,
+            "unknown": 0,
+        }
+        for item in self.list_entries():
+            summary["total"] += 1
+            key = str(item.get("integrity", "unknown"))
+            if key not in summary:
+                key = "unknown"
+            summary[key] += 1
+        return summary

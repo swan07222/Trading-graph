@@ -1455,6 +1455,35 @@ class MultiVenueBroker(BrokerInterface):
         venue = self._venues[idx]
         self._submit_counts[venue.name] = self._submit_counts.get(venue.name, 0) + 1
 
+    @staticmethod
+    def _is_transient_reject(order: Order) -> bool:
+        """
+        Detect infrastructure-style rejects that should trigger failover.
+
+        Business rejects (insufficient funds, rule violations, etc.) should
+        not fan out to other venues.
+        """
+        if getattr(order, "status", None) != OrderStatus.REJECTED:
+            return False
+
+        msg = str(getattr(order, "message", "") or "").lower()
+        if not msg:
+            return False
+
+        transient_markers = (
+            "not connected",
+            "timeout",
+            "timed out",
+            "network",
+            "connection",
+            "temporar",
+            "unavailable",
+            "service down",
+            "gateway",
+            "try again",
+        )
+        return any(marker in msg for marker in transient_markers)
+
     def _first_read(self, fn_name: str, *args, **kwargs):
         for idx in self._ordered_indices():
             venue = self._venues[idx]
@@ -1482,6 +1511,12 @@ class MultiVenueBroker(BrokerInterface):
             venue = self._venues[idx]
             try:
                 result = venue.submit_order(order)
+                if self._is_transient_reject(result):
+                    last_exc = RuntimeError(
+                        f"{venue.name} transient rejection: {result.message}"
+                    )
+                    self._mark_failure(idx, last_exc)
+                    continue
                 self._active_idx = idx
                 self._mark_submit(idx)
                 return result
@@ -1543,14 +1578,19 @@ class MultiVenueBroker(BrokerInterface):
             active_name = self._venues[self._active_idx].name
         venues = []
         for idx, venue in enumerate(self._venues):
+            last_fail = float(self._last_fail_ts.get(idx, 0.0))
+            cooldown_until = (
+                last_fail + float(self._cooldown_seconds)
+                if last_fail > 0
+                else 0.0
+            )
             venues.append(
                 {
                     "name": venue.name,
                     "connected": bool(venue.is_connected),
                     "fail_count": int(self._fail_counts.get(venue.name, 0)),
                     "submit_count": int(self._submit_counts.get(venue.name, 0)),
-                    "cooldown_until": float(self._last_fail_ts.get(idx, 0.0))
-                    + float(self._cooldown_seconds),
+                    "cooldown_until": cooldown_until,
                 }
             )
         return {

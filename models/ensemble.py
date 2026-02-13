@@ -372,7 +372,12 @@ class EnsembleModel:
         val_ds = TensorDataset(torch.FloatTensor(X_val), torch.LongTensor(y_val))
 
         pin = self.device == "cuda"
-        n_workers = min(4, max(0, (os.cpu_count() or 1) - 1))
+        sample_count = int(len(train_ds))
+        # Windows process-spawn overhead can dominate small training jobs.
+        if sample_count < 5000 or os.name == "nt":
+            n_workers = 0
+        else:
+            n_workers = min(4, max(0, (os.cpu_count() or 1) - 1))
         if n_workers <= 0:
             n_workers = 0
         persist = n_workers > 0
@@ -418,7 +423,7 @@ class EnsembleModel:
 
         self._update_weights(val_accuracies)
 
-        if len(X_val) > 0:
+        if len(X_val) >= 128:
             self.calibrate(X_val, y_val)
 
         if self.device == "cuda":

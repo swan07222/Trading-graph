@@ -22,6 +22,11 @@ from utils.logger import get_logger
 log = get_logger(__name__)
 
 T = TypeVar("T")
+_MANUAL_DELETE_ENV = "TRADING_MANUAL_CACHE_DELETE"
+
+
+def _cache_delete_allowed() -> bool:
+    return os.environ.get(_MANUAL_DELETE_ENV, "0") == "1"
 
 @dataclass
 class CacheStats:
@@ -309,6 +314,9 @@ class DiskCache:
                     pass
 
     def delete(self, key: str) -> bool:
+        if not _cache_delete_allowed():
+            log.warning("Cache delete blocked for key=%s (manual override required)", key)
+            return False
         path = self._key_to_path(key)
         try:
             if path.exists():
@@ -320,6 +328,9 @@ class DiskCache:
 
     def clear(self, older_than_hours: float = None):
         """Clear cache, optionally only old files."""
+        if not _cache_delete_allowed():
+            log.warning("Cache clear blocked (manual override required)")
+            return
         now = datetime.now()
         patterns = ["*.pkl", "*.pkl.gz"]
         for pattern in patterns:
@@ -411,6 +422,9 @@ class TieredCache:
 
     def delete(self, key: str):
         """Delete from all tiers."""
+        if not _cache_delete_allowed():
+            log.warning("Tiered cache delete blocked for key=%s (manual override required)", key)
+            return
         self._l1.delete(key)
         self._l2.delete(key)
         self._l3.delete(key)
@@ -421,6 +435,9 @@ class TieredCache:
         older_than_hours: float = None,
     ):
         """Clear cache (optionally one tier or old entries only)."""
+        if not _cache_delete_allowed():
+            log.warning("Tiered cache clear blocked (manual override required)")
+            return
         if tier is None or tier == "l1":
             self._l1.clear()
         if tier is None or tier == "l2":

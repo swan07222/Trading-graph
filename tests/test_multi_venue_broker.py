@@ -11,6 +11,8 @@ class _DummyVenue(BrokerInterface):
         self._name = name
         self._connected = True
         self._fail_submit = fail_submit
+        self._reject_submit = False
+        self._reject_message = "Not connected to broker"
         self.submit_calls = 0
 
     @property
@@ -41,6 +43,11 @@ class _DummyVenue(BrokerInterface):
         self.submit_calls += 1
         if self._fail_submit:
             raise RuntimeError(f"{self._name} down")
+        if self._reject_submit:
+            order.status = OrderStatus.REJECTED
+            order.message = self._reject_message
+            order.updated_at = datetime.now()
+            return order
         order.status = OrderStatus.SUBMITTED
         order.broker_id = f"{self._name}-ok"
         order.updated_at = datetime.now()
@@ -96,3 +103,42 @@ def test_create_broker_live_multi_venue_from_config():
         CONFIG.trading.enable_multi_venue = old_enable
         CONFIG.trading.venue_priority = old_priority
         CONFIG.trading.venue_failover_cooldown_seconds = old_cooldown
+
+
+def test_multi_venue_failover_on_transient_reject():
+    primary = _DummyVenue("primary", fail_submit=False)
+    primary._reject_submit = True
+    primary._reject_message = "Not connected to broker"
+    secondary = _DummyVenue("secondary", fail_submit=False)
+    router = MultiVenueBroker([primary, secondary], failover_cooldown_seconds=60)
+
+    order = Order(symbol="600519", side=OrderSide.BUY, order_type=OrderType.LIMIT, quantity=100, price=10.0)
+    out = router.submit_order(order)
+    assert out.status == OrderStatus.SUBMITTED
+    assert out.broker_id == "secondary-ok"
+    assert primary.submit_calls == 1
+    assert secondary.submit_calls == 1
+
+
+def test_multi_venue_business_reject_no_failover():
+    primary = _DummyVenue("primary", fail_submit=False)
+    primary._reject_submit = True
+    primary._reject_message = "Insufficient funds"
+    secondary = _DummyVenue("secondary", fail_submit=False)
+    router = MultiVenueBroker([primary, secondary], failover_cooldown_seconds=60)
+
+    order = Order(symbol="600519", side=OrderSide.BUY, order_type=OrderType.LIMIT, quantity=100, price=10.0)
+    out = router.submit_order(order)
+    assert out.status == OrderStatus.REJECTED
+    assert "Insufficient funds" in (out.message or "")
+    assert primary.submit_calls == 1
+    assert secondary.submit_calls == 0
+
+
+def test_multi_venue_health_snapshot_cooldown_until_zero_when_no_failure():
+    primary = _DummyVenue("primary", fail_submit=False)
+    secondary = _DummyVenue("secondary", fail_submit=False)
+    router = MultiVenueBroker([primary, secondary], failover_cooldown_seconds=60)
+    snap = router.get_health_snapshot()
+    assert snap["venues"][0]["cooldown_until"] == 0.0
+    assert snap["venues"][1]["cooldown_until"] == 0.0
