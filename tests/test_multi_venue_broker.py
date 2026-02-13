@@ -1,8 +1,8 @@
 from datetime import datetime
 
-from core.types import Account, Order, OrderStatus, OrderType, OrderSide
-from trading.broker import BrokerInterface, MultiVenueBroker, create_broker
 from config.settings import CONFIG
+from core.types import Account, Order, OrderSide, OrderStatus, OrderType
+from trading.broker import BrokerInterface, MultiVenueBroker, create_broker
 
 
 class _DummyVenue(BrokerInterface):

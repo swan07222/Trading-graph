@@ -1,9 +1,10 @@
 
-from dataclasses import dataclass, field
-from datetime import datetime, date
-from enum import Enum
-from typing import Dict, List, Optional, Any
 import uuid
+from dataclasses import dataclass, field
+from datetime import date, datetime
+from enum import Enum
+from typing import Any
+
 
 class OrderSide(Enum):
     BUY = "buy"
@@ -90,7 +91,7 @@ class Order:
     strategy: str = ""
     signal_id: str = ""
     parent_id: str = ""
-    tags: Dict[str, Any] = field(default_factory=dict)
+    tags: dict[str, Any] = field(default_factory=dict)
 
     stop_loss: float = 0.0
     take_profit: float = 0.0
@@ -137,7 +138,7 @@ class Order:
     def filled_value(self) -> float:
         return self.filled_qty * self.avg_price
 
-    def to_dict(self) -> Dict:
+    def to_dict(self) -> dict:
         return {
             'id': self.id,
             'broker_id': self.broker_id,
@@ -158,7 +159,7 @@ class Order:
         }
 
     @classmethod
-    def from_dict(cls, data: Dict) -> 'Order':
+    def from_dict(cls, data: dict) -> 'Order':
         order = cls()
         order.id = data.get('id', order.id)
         order.broker_id = data.get('broker_id', '')
@@ -217,7 +218,7 @@ class Fill:
         else:
             return self.value - self.total_cost
 
-    def to_dict(self) -> Dict:
+    def to_dict(self) -> dict:
         return {
             'id': self.id,
             'order_id': self.order_id,
@@ -293,7 +294,7 @@ class Position:
         self.current_price = price
         self.last_updated = datetime.now()
 
-    def to_dict(self) -> Dict:
+    def to_dict(self) -> dict:
         return {
             'symbol': self.symbol,
             'name': self.name,
@@ -318,7 +319,7 @@ class Account:
     available: float = 0.0
     frozen: float = 0.0
 
-    positions: Dict[str, Position] = field(default_factory=dict)
+    positions: dict[str, Position] = field(default_factory=dict)
 
     # P&L tracking
     initial_capital: float = 0.0
@@ -387,10 +388,10 @@ class Account:
             return 0
         return (self.peak_equity - self.equity) / self.peak_equity * 100
 
-    def get_position(self, symbol: str) -> Optional[Position]:
+    def get_position(self, symbol: str) -> Position | None:
         return self.positions.get(symbol)
 
-    def to_dict(self) -> Dict:
+    def to_dict(self) -> dict:
         return {
             'broker_name': self.broker_name,
             'equity': self.equity,
@@ -441,7 +442,7 @@ class RiskMetrics:
     can_trade: bool = True
     circuit_breaker_active: bool = False
     kill_switch_active: bool = False
-    warnings: List[str] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
 
     timestamp: datetime = None
 
@@ -464,7 +465,7 @@ class TradeSignal:
 
     confidence: float = 0.0
     strategy: str = ""
-    reasons: List[str] = field(default_factory=list)
+    reasons: list[str] = field(default_factory=list)
 
     generated_at: datetime = None
     expires_at: datetime = None
@@ -473,7 +474,7 @@ class TradeSignal:
     auto_generated: bool = False
     auto_trade_action_id: str = ""
     approvals_count: int = 0
-    approved_by: List[str] = field(default_factory=list)
+    approved_by: list[str] = field(default_factory=list)
     order_type: str = "limit"
     trailing_stop_pct: float = 0.0
     oco_group: str = ""
@@ -530,7 +531,7 @@ class AutoTradeAction:
         if not self.timestamp:
             self.timestamp = datetime.now()
 
-    def to_dict(self) -> Dict:
+    def to_dict(self) -> dict:
         return {
             'id': self.id,
             'timestamp': self.timestamp.isoformat() if self.timestamp else None,
@@ -567,7 +568,7 @@ class AutoTradeState:
 
     # Session counters (reset daily)
     trades_today: int = 0
-    trades_per_stock_today: Dict[str, int] = field(default_factory=dict)
+    trades_per_stock_today: dict[str, int] = field(default_factory=dict)
     buys_today: int = 0
     sells_today: int = 0
     skipped_today: int = 0
@@ -578,17 +579,17 @@ class AutoTradeState:
     auto_trade_losses: int = 0
 
     # Cooldowns: stock_code -> datetime when cooldown expires
-    cooldowns: Dict[str, datetime] = field(default_factory=dict)
+    cooldowns: dict[str, datetime] = field(default_factory=dict)
 
     is_paused: bool = False
     pause_reason: str = ""
     pause_until: datetime = None
 
     # Recent actions (bounded list, newest first)
-    recent_actions: List[AutoTradeAction] = field(default_factory=list)
+    recent_actions: list[AutoTradeAction] = field(default_factory=list)
 
     # Pending approvals (for SEMI_AUTO mode)
-    pending_approvals: List[AutoTradeAction] = field(default_factory=list)
+    pending_approvals: list[AutoTradeAction] = field(default_factory=list)
 
     last_scan_time: datetime = None
     last_trade_time: datetime = None
@@ -645,7 +646,7 @@ class AutoTradeState:
                 self.record_action(a)
             self.pending_approvals = self.pending_approvals[:self.MAX_PENDING_APPROVALS]
 
-    def remove_pending(self, action_id: str) -> Optional[AutoTradeAction]:
+    def remove_pending(self, action_id: str) -> AutoTradeAction | None:
         """Remove and return a pending approval by ID."""
         for i, a in enumerate(self.pending_approvals):
             if a.id == action_id:
@@ -715,7 +716,7 @@ class AutoTradeState:
             return False
         return True
 
-    def to_dict(self) -> Dict:
+    def to_dict(self) -> dict:
         return {
             'mode': self.mode.value,
             'is_running': self.is_running,

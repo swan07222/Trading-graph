@@ -6,12 +6,13 @@ import queue
 import smtplib
 import threading
 from collections import defaultdict
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from enum import Enum
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any
 
 import requests
 
@@ -55,11 +56,11 @@ class Alert:
     priority: AlertPriority = AlertPriority.MEDIUM
     title: str = ""
     message: str = ""
-    details: Dict = field(default_factory=dict)
-    channels: List[AlertChannel] = field(default_factory=list)
-    created_at: Optional[datetime] = None
-    sent_at: Optional[datetime] = None
-    acknowledged_at: Optional[datetime] = None
+    details: dict = field(default_factory=dict)
+    channels: list[AlertChannel] = field(default_factory=list)
+    created_at: datetime | None = None
+    sent_at: datetime | None = None
+    acknowledged_at: datetime | None = None
     acknowledged_by: str = ""
     throttle_key: str = ""
 
@@ -73,7 +74,7 @@ class Alert:
         if not self.channels:
             self.channels = [AlertChannel.LOG, AlertChannel.DESKTOP]
 
-    def to_dict(self) -> Dict:
+    def to_dict(self) -> dict:
         return {
             "id": self.id,
             "category": self.category.value,
@@ -91,7 +92,7 @@ class AlertThrottler:
 
     def __init__(self, default_window_seconds: int = 300):
         self._lock = threading.Lock()
-        self._last_sent: Dict[str, datetime] = {}
+        self._last_sent: dict[str, datetime] = {}
         self._default_window = timedelta(seconds=default_window_seconds)
         self._windows = {
             AlertPriority.LOW: timedelta(minutes=30),
@@ -116,7 +117,7 @@ class AlertThrottler:
                 return True
             return False
 
-    def reset(self, throttle_key: Optional[str] = None):
+    def reset(self, throttle_key: str | None = None):
         with self._lock:
             if throttle_key:
                 keys_to_remove = [k for k in self._last_sent if throttle_key in k]
@@ -137,12 +138,12 @@ class AlertManager:
         self._audit = get_audit_log()
         self._queue: queue.Queue = queue.Queue()
         self._running = False
-        self._thread: Optional[threading.Thread] = None
-        self._history: List[Alert] = []
+        self._thread: threading.Thread | None = None
+        self._history: list[Alert] = []
         self._max_history = 1000
-        self._pending_ack: Dict[str, Alert] = {}
-        self._repeat_counter: Dict[str, int] = defaultdict(int)
-        self._channel_stats: Dict[str, Dict[str, Any]] = defaultdict(
+        self._pending_ack: dict[str, Alert] = {}
+        self._repeat_counter: dict[str, int] = defaultdict(int)
+        self._channel_stats: dict[str, dict[str, Any]] = defaultdict(
             lambda: {
                 "sent": 0,
                 "failed": 0,
@@ -150,7 +151,7 @@ class AlertManager:
                 "last_error": "",
             }
         )
-        self._desktop_callback: Optional[Callable] = None
+        self._desktop_callback: Callable | None = None
         self._load_history()
 
     def start(self):
@@ -372,16 +373,16 @@ class AlertManager:
             )
             return True
 
-    def get_pending(self) -> List[Alert]:
+    def get_pending(self) -> list[Alert]:
         with self._lock:
             return list(self._pending_ack.values())
 
     def get_history(
         self,
-        category: Optional[AlertCategory] = None,
-        priority: Optional[AlertPriority] = None,
+        category: AlertCategory | None = None,
+        priority: AlertPriority | None = None,
         limit: int = 100,
-    ) -> List[Alert]:
+    ) -> list[Alert]:
         with self._lock:
             alerts = list(self._history)
         if category:
@@ -390,12 +391,12 @@ class AlertManager:
             alerts = [a for a in alerts if a.priority == priority]
         return alerts[-limit:]
 
-    def get_alert_stats(self) -> Dict[str, Dict]:
+    def get_alert_stats(self) -> dict[str, dict]:
         with self._lock:
             total = len(self._history)
             acked = sum(1 for a in self._history if a.acknowledged_at is not None)
-            by_priority: Dict[str, int] = defaultdict(int)
-            by_category: Dict[str, int] = defaultdict(int)
+            by_priority: dict[str, int] = defaultdict(int)
+            by_category: dict[str, int] = defaultdict(int)
             for alert in self._history:
                 by_priority[alert.priority.name] += 1
                 by_category[alert.category.value] += 1
@@ -436,7 +437,7 @@ class AlertManager:
         if not path.exists():
             return
         try:
-            with open(path, "r", encoding="utf-8") as f:
+            with open(path, encoding="utf-8") as f:
                 data = json.load(f)
             for item in data:
                 alert = Alert(
@@ -454,7 +455,7 @@ class AlertManager:
         except Exception as e:
             log.error(f"Failed to load alert history: {e}")
 
-    def risk_alert(self, title: str, message: str, details: Optional[Dict] = None):
+    def risk_alert(self, title: str, message: str, details: dict | None = None):
         self.send(
             Alert(
                 category=AlertCategory.RISK,
@@ -467,7 +468,7 @@ class AlertManager:
             )
         )
 
-    def trading_alert(self, title: str, message: str, details: Optional[Dict] = None):
+    def trading_alert(self, title: str, message: str, details: dict | None = None):
         self.send(
             Alert(
                 category=AlertCategory.TRADING,
@@ -497,7 +498,7 @@ class AlertManager:
             )
         )
 
-    def critical_alert(self, title: str, message: str, details: Optional[Dict] = None):
+    def critical_alert(self, title: str, message: str, details: dict | None = None):
         self.send(
             Alert(
                 category=AlertCategory.SYSTEM,
@@ -516,7 +517,7 @@ class AlertManager:
         )
 
 
-_alert_manager: Optional[AlertManager] = None
+_alert_manager: AlertManager | None = None
 _alert_lock = threading.Lock()
 
 

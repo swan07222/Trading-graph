@@ -1,18 +1,21 @@
 # trading/risk.py
 
 import threading
-import numpy as np
 from collections import deque
-from datetime import datetime, date, timedelta
-from typing import Dict, List, Tuple, Optional
-from dataclasses import dataclass
+from datetime import date, datetime, timedelta
+
+import numpy as np
 
 from config.settings import CONFIG
+from core.events import EVENT_BUS, Event, EventType, RiskEvent
 from core.types import (
-    Account, Position, RiskMetrics, RiskLevel,
-    OrderSide, OrderStatus, Order,
+    Account,
+    OrderSide,
+    OrderStatus,
+    Position,
+    RiskLevel,
+    RiskMetrics,
 )
-from core.events import EVENT_BUS, EventType, Event, RiskEvent
 from utils.logger import get_logger
 
 log = get_logger(__name__)
@@ -47,7 +50,7 @@ def _estimate_order_cost(
     quantity: int,
     price: float,
     side: OrderSide = OrderSide.BUY,
-) -> Tuple[float, float, float]:
+) -> tuple[float, float, float]:
     """
     Estimate total order cost including slippage, commission, and stamp tax.
 
@@ -171,7 +174,7 @@ class RiskManager:
         self._lock = threading.RLock()
         self._audit = _get_audit_log()  # FIX(7): safe import
 
-        self._account: Optional[Account] = None
+        self._account: Account | None = None
         self._initial_equity: float = 0.0
         self._daily_start_equity: float = 0.0
         self._peak_equity: float = 0.0
@@ -189,11 +192,11 @@ class RiskManager:
         self._errors_this_minute: deque = deque()
 
         # Quote timestamps for staleness — FIX(9): bounded dict
-        self._quote_timestamps: Dict[str, datetime] = {}
+        self._quote_timestamps: dict[str, datetime] = {}
         self._staleness_threshold_seconds: float = self.STALENESS_THRESHOLD_DEFAULT
-        self._equity_by_day: Dict[date, float] = {}
-        self._last_var_day: Optional[date] = None
-        self._last_breach: Dict[str, datetime] = {}
+        self._equity_by_day: dict[date, float] = {}
+        self._last_var_day: date | None = None
+        self._last_breach: dict[str, datetime] = {}
 
         # FIX(1): Removed _on_trade (was no-op). Only subscribe to
         # events we actually handle.
@@ -458,7 +461,7 @@ class RiskManager:
             equity = account.equity
 
             metrics = RiskMetrics()
-            warnings: List[str] = []
+            warnings: list[str] = []
 
             metrics.equity = equity
             metrics.cash = account.cash
@@ -754,7 +757,7 @@ class RiskManager:
     # =========================================================================
     # =========================================================================
 
-    def _check_quote_staleness(self, symbol: str) -> Tuple[bool, str]:
+    def _check_quote_staleness(self, symbol: str) -> tuple[bool, str]:
         """Check if quote is fresh enough for trading."""
         last_quote_time = self._quote_timestamps.get(symbol)
 
@@ -783,7 +786,7 @@ class RiskManager:
         side: OrderSide,
         quantity: int,
         price: float,
-    ) -> Tuple[bool, str]:
+    ) -> tuple[bool, str]:
         """
         Comprehensive pre-trade order validation.
 
@@ -862,7 +865,7 @@ class RiskManager:
         price: float,
         metrics: RiskMetrics,
         account: Account,
-    ) -> Tuple[bool, str]:
+    ) -> tuple[bool, str]:
         """Validate buy order against all risk limits."""
         lot_size = _get_lot_size(symbol)
         if quantity % lot_size != 0:
@@ -940,7 +943,7 @@ class RiskManager:
 
     def _validate_sell_order(
         self, symbol: str, quantity: int, account: Account,
-    ) -> Tuple[bool, str]:
+    ) -> tuple[bool, str]:
         """Validate sell order."""
         if symbol not in account.positions:
             return False, f"No position in {symbol}"
@@ -956,7 +959,7 @@ class RiskManager:
 
     def _check_top3_concentration(
         self, symbol: str, new_value: float, account: Account,
-    ) -> Tuple[bool, str]:
+    ) -> tuple[bool, str]:
         """Check top-3 position concentration limit."""
         equity = account.equity
         if equity <= 0:
@@ -1057,7 +1060,7 @@ class RiskManager:
         entry_price: float,
         stop_loss: float,
         confidence: float = 1.0,
-    ) -> Dict:
+    ) -> dict:
         """Get detailed position size recommendation."""
         # FIX(11): calculate_position_size already acquires lock;
         # we get account snapshot separately to avoid double-lock
@@ -1099,12 +1102,12 @@ class RiskManager:
     # =========================================================================
     # =========================================================================
 
-    def get_account(self) -> Optional[Account]:
+    def get_account(self) -> Account | None:
         """Get current account snapshot."""
         with self._lock:
             return self._account
 
-    def get_daily_pnl(self) -> Tuple[float, float]:
+    def get_daily_pnl(self) -> tuple[float, float]:
         """Get daily P&L in absolute and percentage."""
         with self._lock:
             if self._account is None or self._daily_start_equity <= 0:
@@ -1113,7 +1116,7 @@ class RiskManager:
             pnl_pct = (pnl / self._daily_start_equity) * 100.0
             return pnl, pnl_pct
 
-    def get_total_pnl(self) -> Tuple[float, float]:
+    def get_total_pnl(self) -> tuple[float, float]:
         """Get total P&L since inception."""
         with self._lock:
             if self._account is None or self._initial_equity <= 0:
@@ -1150,7 +1153,7 @@ class RiskManager:
 
 # Module-level singleton
 
-_risk_manager: Optional[RiskManager] = None
+_risk_manager: RiskManager | None = None
 _risk_manager_lock = threading.Lock()
 
 def get_risk_manager() -> RiskManager:

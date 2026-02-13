@@ -1,8 +1,8 @@
 
-import sys
 import argparse
-from pathlib import Path
+import sys
 from importlib.util import find_spec
+from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 
@@ -56,7 +56,6 @@ def check_dependencies(require_gui: bool = False, require_ml: bool = False) -> b
 
 def main():
     """Main entry point"""
-    import argparse
     import os
 
     parser = argparse.ArgumentParser(description='AI Stock Trading System')
@@ -202,8 +201,9 @@ def run_recovery_drill():
     """
     import tempfile
     from pathlib import Path
+
+    from core.types import Fill, Order, OrderSide, OrderType
     from trading.oms import get_oms, reset_oms
-    from core.types import Order, OrderSide, OrderType, Fill
 
     tmpdir = Path(tempfile.mkdtemp(prefix="recovery_drill_"))
     db_path = tmpdir / "orders_drill.db"

@@ -1,15 +1,15 @@
 # config/settings.py
 from __future__ import annotations
 
-import os
 import json
 import logging
-from pathlib import Path
-from dataclasses import dataclass, field, fields
-from typing import List, Optional, Dict, Any
-from enum import Enum
-from datetime import datetime, time
+import os
 import threading
+from dataclasses import dataclass, field, fields
+from datetime import datetime, time
+from enum import Enum
+from pathlib import Path
+from typing import Any
 
 _SENTINEL = object()
 
@@ -94,7 +94,7 @@ class TradingConfig:
     market_open_pm: time = field(default_factory=lambda: time(13, 0))
     market_close_pm: time = field(default_factory=lambda: time(15, 0))
     enable_multi_venue: bool = False
-    venue_priority: List[str] = field(default_factory=list)
+    venue_priority: list[str] = field(default_factory=list)
     venue_failover_cooldown_seconds: int = 30
 
 @dataclass
@@ -136,7 +136,7 @@ class SecurityConfig:
     block_trading_when_degraded: bool = False
     auto_pause_auto_trader_on_degraded: bool = True
     max_session_hours: int = 8
-    ip_whitelist: List[str] = field(default_factory=list)
+    ip_whitelist: list[str] = field(default_factory=list)
     audit_retention_days: int = 365
     audit_auto_prune: bool = True
 
@@ -145,7 +145,7 @@ class AlertConfig:
     """Alerting configuration."""
     enabled: bool = True
     email_enabled: bool = False
-    email_recipients: List[str] = field(default_factory=list)
+    email_recipients: list[str] = field(default_factory=list)
     smtp_server: str = ""
     smtp_port: int = 587
     sms_enabled: bool = False
@@ -246,7 +246,7 @@ class PrecisionConfig:
     # Persistence for learned threshold profile
     profile_filename: str = "precision_thresholds.json"
 
-def _safe_dataclass_from_dict(dc_instance, data: Dict) -> List[str]:
+def _safe_dataclass_from_dict(dc_instance, data: dict) -> list[str]:
     """
     Apply dict values to a dataclass instance with type checking.
     Returns list of warnings for bad values.
@@ -298,7 +298,7 @@ def _safe_dataclass_from_dict(dc_instance, data: Dict) -> List[str]:
 
     return warnings_list
 
-def _dataclass_to_dict(dc_instance) -> Dict:
+def _dataclass_to_dict(dc_instance) -> dict:
     """Serialize a dataclass to dict, handling special types."""
     result = {}
     for f in fields(dc_instance):
@@ -325,7 +325,7 @@ class Config:
         __all__ = ["CONFIG", "TradingMode", "RiskProfile", "MarketType"]
     """
 
-    _instance: Optional[Config] = None
+    _instance: Config | None = None
     _instance_lock = threading.RLock()
 
     def __new__(cls) -> Config:
@@ -354,7 +354,7 @@ class Config:
         self._lock = threading.RLock()
         self._config_file = Path(__file__).parent.parent / "config.json"
         self._env_prefix = "TRADING_"
-        self._validation_warnings: List[str] = []
+        self._validation_warnings: list[str] = []
 
         # Sub-configs
         self.data = DataConfig()
@@ -373,7 +373,7 @@ class Config:
         self.broker_path: str = ""
 
         self._base_dir = Path(__file__).parent.parent
-        self._model_dir_override: Optional[str] = None
+        self._model_dir_override: str | None = None
 
         # FIX #6: Sentinel-based caching for path properties
         self._data_dir_cached: Any = _SENTINEL
@@ -383,7 +383,7 @@ class Config:
         self._cache_dir_cached: Any = _SENTINEL
         self._audit_dir_cached: Any = _SENTINEL
 
-        self.stock_pool: List[str] = [
+        self.stock_pool: list[str] = [
             "600519", "601318", "600036", "000858", "600900",
             "002594", "300750", "002475", "300059", "002230",
             "000333", "000651", "600887", "603288", "600276",
@@ -405,7 +405,7 @@ class Config:
     # ==================== LEGACY COMPATIBILITY ====================
 
     # FIX #8: Single unified mapping
-    _LEGACY_MAP: Dict[str, str] = {
+    _LEGACY_MAP: dict[str, str] = {
         "SEQUENCE_LENGTH": "model.sequence_length",
         "PREDICTION_HORIZON": "model.prediction_horizon",
         "NUM_CLASSES": "model.num_classes",
@@ -472,10 +472,10 @@ class Config:
         # to check without recursing.
         try:
             initialized = object.__getattribute__(self, '_initialized')
-        except AttributeError:
+        except AttributeError as exc:
             raise AttributeError(
                 f"{self.__class__.__name__} has no attribute {name!r}"
-            )
+            ) from exc
 
         if not initialized:
             raise AttributeError(
@@ -620,7 +620,7 @@ class Config:
         """
         if self._config_file.exists():
             try:
-                with open(self._config_file, "r", encoding="utf-8") as f:
+                with open(self._config_file, encoding="utf-8") as f:
                     data = json.load(f)
                 self._apply_dict(data, _from_init=True)
             except Exception as e:
@@ -660,7 +660,7 @@ class Config:
                         "Failed to apply env %s=%r: %s", full_key, value, e
                     )
 
-    def _apply_dict(self, data: Dict, _from_init: bool = False) -> None:
+    def _apply_dict(self, data: dict, _from_init: bool = False) -> None:
         """
         Apply dictionary to config with type checking.
 
@@ -677,7 +677,7 @@ class Config:
             if not _from_init:
                 self._lock.release()
 
-    def _apply_dict_inner(self, data: Dict) -> None:
+    def _apply_dict_inner(self, data: dict) -> None:
         """Inner implementation of _apply_dict without locking."""
         # Sub-config dataclasses
         sub_configs = {
@@ -875,7 +875,7 @@ class Config:
             )
 
     @property
-    def validation_warnings(self) -> List[str]:
+    def validation_warnings(self) -> list[str]:
         """Access validation warnings without re-validating."""
         return list(self._validation_warnings)
 
@@ -957,7 +957,7 @@ class Config:
             # Re-load from file/env
             if self._config_file.exists():
                 try:
-                    with open(self._config_file, "r", encoding="utf-8") as f:
+                    with open(self._config_file, encoding="utf-8") as f:
                         data = json.load(f)
                     self._apply_dict_inner(data)
                 except Exception as e:

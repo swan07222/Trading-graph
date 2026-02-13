@@ -1,14 +1,20 @@
 # ui/widgets.py
 from datetime import datetime
-from typing import Dict, List, Optional
 
-from PyQt6.QtWidgets import (
-    QFrame, QVBoxLayout, QHBoxLayout, QLabel,
-    QProgressBar, QTableWidget, QTableWidgetItem,
-    QHeaderView, QTextEdit, QWidget
-)
 from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QFont, QColor
+from PyQt6.QtGui import QColor, QFont
+from PyQt6.QtWidgets import (
+    QFrame,
+    QHBoxLayout,
+    QHeaderView,
+    QLabel,
+    QProgressBar,
+    QTableWidget,
+    QTableWidgetItem,
+    QTextEdit,
+    QVBoxLayout,
+    QWidget,
+)
 
 from utils.logger import get_logger
 
@@ -317,7 +323,7 @@ class PositionTable(QTableWidget):
         except (TypeError, ValueError):
             return default
 
-    def update_positions(self, positions: Dict):
+    def update_positions(self, positions: dict):
         """Update table with position data - handles missing attributes."""
         if positions is None:
             positions = {}

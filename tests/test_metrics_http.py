@@ -43,7 +43,7 @@ def test_metrics_http_api_key_guard(monkeypatch):
         req = urllib.request.Request(f"{server.url}/api/v1/providers")
         try:
             urllib.request.urlopen(req, timeout=5)
-            assert False, "Expected unauthorized response"
+            raise AssertionError("Expected unauthorized response")
         except urllib.error.HTTPError as exc:
             assert exc.code == 401
 

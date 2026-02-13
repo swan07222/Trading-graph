@@ -28,36 +28,28 @@ def __getattr__(name: str):
     _EXECUTOR = {'ExecutionEngine'}
 
     if name in _BROKER:
-        from .broker import (
-            BrokerInterface, SimulatorBroker, THSBroker, MultiVenueBroker, create_broker,
-        )
-        return locals()[name]
+        from . import broker as _broker
+        return getattr(_broker, name)
 
     if name in _OMS:
-        from .oms import (
-            Order, Fill, Position, Account,
-            OrderManagementSystem, get_oms,
-        )
-        return locals()[name]
+        from . import oms as _oms
+        return getattr(_oms, name)
 
     if name in _RISK:
-        from .risk import RiskManager, get_risk_manager
-        return locals()[name]
+        from . import risk as _risk
+        return getattr(_risk, name)
 
     if name in _KILL:
-        from .kill_switch import KillSwitch, CircuitBreakerType, get_kill_switch
-        return locals()[name]
+        from . import kill_switch as _kill_switch
+        return getattr(_kill_switch, name)
 
     if name in _HEALTH:
-        from .health import HealthMonitor, HealthStatus, get_health_monitor
-        return locals()[name]
+        from . import health as _health
+        return getattr(_health, name)
 
     if name in _ALERTS:
-        from .alerts import (
-            AlertManager, Alert, AlertPriority, AlertCategory,
-            get_alert_manager,
-        )
-        return locals()[name]
+        from . import alerts as _alerts
+        return getattr(_alerts, name)
 
     if name in _PORTFOLIO:
         from .portfolio import Portfolio

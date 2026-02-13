@@ -1,17 +1,33 @@
 # ui/auto_learn_dialog.py
 
-from PyQt6.QtWidgets import (
-    QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-    QProgressBar, QTextEdit, QGroupBox, QSpinBox, QComboBox,
-    QCheckBox, QMessageBox, QGridLayout, QTabWidget, QWidget,
-    QLineEdit, QListWidget, QListWidgetItem, QAbstractItemView, QScrollArea,
-)
-from PyQt6.QtCore import Qt, QThread, pyqtSignal
-from datetime import datetime
-import time
-from typing import Optional, List
 import threading
+import time
 import traceback
+from datetime import datetime
+
+from PyQt6.QtCore import Qt, QThread, pyqtSignal
+from PyQt6.QtWidgets import (
+    QAbstractItemView,
+    QCheckBox,
+    QComboBox,
+    QDialog,
+    QGridLayout,
+    QGroupBox,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QListWidget,
+    QListWidgetItem,
+    QMessageBox,
+    QProgressBar,
+    QPushButton,
+    QScrollArea,
+    QSpinBox,
+    QTabWidget,
+    QTextEdit,
+    QVBoxLayout,
+    QWidget,
+)
 
 from utils.logger import get_logger
 
@@ -61,7 +77,7 @@ class AutoLearnWorker(QThread):
         self.running = False
         self.token = _get_cancellation_token()
         self._learner = None
-        self._learner_thread: Optional[threading.Thread] = None
+        self._learner_thread: threading.Thread | None = None
         self._error_flag = False
         self._error_message = ""
 
@@ -248,7 +264,7 @@ class TargetedLearnWorker(QThread):
         self.running = False
         self.token = _get_cancellation_token()
         self._learner = None
-        self._learner_thread: Optional[threading.Thread] = None
+        self._learner_thread: threading.Thread | None = None
 
     def run(self):
         self.running = True
@@ -443,21 +459,21 @@ class AutoLearnDialog(QDialog):
     - Train by Search: user-selected stocks (new)
     """
 
-    def __init__(self, parent=None, seed_stock_codes: Optional[List[str]] = None):
+    def __init__(self, parent=None, seed_stock_codes: list[str] | None = None):
         super().__init__(parent)
         self.setWindowTitle("🤖 Auto Learning")
         self.setMinimumSize(700, 540)
         self.resize(920, 660)
         self.setSizeGripEnabled(True)
 
-        self.worker: Optional[AutoLearnWorker] = None
-        self.targeted_worker: Optional[TargetedLearnWorker] = None
-        self._validator: Optional[StockValidatorWorker] = None
+        self.worker: AutoLearnWorker | None = None
+        self.targeted_worker: TargetedLearnWorker | None = None
+        self._validator: StockValidatorWorker | None = None
 
         self._is_running = False
         self._active_mode = ""  # "auto" or "targeted"
-        self._targeted_stock_codes: List[str] = []
-        self._seed_stock_codes: List[str] = [
+        self._targeted_stock_codes: list[str] = []
+        self._seed_stock_codes: list[str] = [
             str(c).strip() for c in (seed_stock_codes or []) if str(c).strip()
         ]
         self._validation_request_id = 0
@@ -1104,7 +1120,7 @@ class AutoLearnDialog(QDialog):
             f"Session seed stocks: {len(self._seed_stock_codes)} (added {added})"
         )
 
-    def _collect_priority_codes(self, mode: str = "auto") -> List[str]:
+    def _collect_priority_codes(self, mode: str = "auto") -> list[str]:
         codes = list(self._seed_stock_codes)
         try:
             from data.session_cache import get_session_bar_cache
@@ -1700,7 +1716,7 @@ class AutoLearnDialog(QDialog):
 
         super().closeEvent(event)
 
-def show_auto_learn_dialog(parent=None, seed_stock_codes: Optional[List[str]] = None):
+def show_auto_learn_dialog(parent=None, seed_stock_codes: list[str] | None = None):
     """Show the auto-learn dialog — convenience function."""
     dialog = AutoLearnDialog(parent, seed_stock_codes=seed_stock_codes)
     dialog.exec()

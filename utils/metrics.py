@@ -4,8 +4,6 @@ from __future__ import annotations
 import re
 import threading
 import time
-from typing import Dict, List, Optional, Tuple
-from datetime import datetime
 
 from utils.logger import get_logger
 
@@ -15,7 +13,7 @@ _VALID_METRIC_NAME = re.compile(r"^[a-zA-Z_:][a-zA-Z0-9_:]*$")
 _VALID_LABEL_NAME = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
 
 # Default histogram buckets (latency-oriented)
-DEFAULT_BUCKETS: Tuple[float, ...] = (
+DEFAULT_BUCKETS: tuple[float, ...] = (
     0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0,
 )
 
@@ -32,7 +30,7 @@ def _sanitize_name(name: str) -> str:
         sanitized = "_unnamed"
     return sanitized
 
-def _validate_labels(labels: Optional[Dict[str, str]]) -> None:
+def _validate_labels(labels: dict[str, str] | None) -> None:
     """Validate label names and values."""
     if labels is None:
         return
@@ -53,21 +51,21 @@ class MetricsRegistry:
 
     def __init__(self, max_keys: int = 10000) -> None:
         self._lock = threading.RLock()
-        self._counters: Dict[str, float] = {}
-        self._gauges: Dict[str, float] = {}
-        self._histograms: Dict[str, List[float]] = {}
-        self._histogram_buckets: Dict[str, Tuple[float, ...]] = {}
+        self._counters: dict[str, float] = {}
+        self._gauges: dict[str, float] = {}
+        self._histograms: dict[str, list[float]] = {}
+        self._histogram_buckets: dict[str, tuple[float, ...]] = {}
         self._max_keys = max_keys
         self._max_observations = 1000
 
-        self._metric_types: Dict[str, str] = {}
-        self._metric_help: Dict[str, str] = {}
+        self._metric_types: dict[str, str] = {}
+        self._metric_help: dict[str, str] = {}
 
     def inc_counter(
         self,
         name: str,
         value: float = 1.0,
-        labels: Optional[Dict[str, str]] = None,
+        labels: dict[str, str] | None = None,
         help_text: str = "",
     ) -> None:
         """Increment a counter."""
@@ -89,7 +87,7 @@ class MetricsRegistry:
         self,
         name: str,
         value: float,
-        labels: Optional[Dict[str, str]] = None,
+        labels: dict[str, str] | None = None,
         help_text: str = "",
     ) -> None:
         """Set a gauge value."""
@@ -108,8 +106,8 @@ class MetricsRegistry:
         self,
         name: str,
         value: float,
-        labels: Optional[Dict[str, str]] = None,
-        buckets: Optional[Tuple[float, ...]] = None,
+        labels: dict[str, str] | None = None,
+        buckets: tuple[float, ...] | None = None,
         help_text: str = "",
     ) -> None:
         """Observe a value for histogram."""
@@ -134,7 +132,7 @@ class MetricsRegistry:
                 self._metric_help[name] = help_text
             self._check_key_limit()
 
-    def _make_key(self, name: str, labels: Optional[Dict[str, str]] = None) -> str:
+    def _make_key(self, name: str, labels: dict[str, str] | None = None) -> str:
         """Build Prometheus-format key: metric_name{label="value",...}"""
         if not labels:
             return name
@@ -143,7 +141,7 @@ class MetricsRegistry:
         )
         return f"{name}{{{label_str}}}"
 
-    def _parse_key(self, key: str) -> Tuple[str, str]:
+    def _parse_key(self, key: str) -> tuple[str, str]:
         """Split key into (base_name, labels_string)."""
         if "{" in key:
             idx = key.index("{")
@@ -177,7 +175,7 @@ class MetricsRegistry:
             self._metric_types.clear()
             self._metric_help.clear()
 
-    def remove(self, name: str, labels: Optional[Dict[str, str]] = None) -> None:
+    def remove(self, name: str, labels: dict[str, str] | None = None) -> None:
         """FIX #7: Remove a specific metric."""
         name = _sanitize_name(name)
         key = self._make_key(name, labels)
@@ -187,7 +185,7 @@ class MetricsRegistry:
             self._histograms.pop(key, None)
             self._histogram_buckets.pop(key, None)
 
-    def get_all(self) -> Dict:
+    def get_all(self) -> dict:
         """Get all metrics as a dict."""
         with self._lock:
             result = {
@@ -209,7 +207,7 @@ class MetricsRegistry:
         Includes # TYPE and # HELP annotations.
         Histograms emit proper _bucket, _count, _sum lines.
         """
-        lines: List[str] = []
+        lines: list[str] = []
         emitted_types: set = set()
 
         with self._lock:
@@ -287,21 +285,21 @@ def get_metrics() -> MetricsRegistry:
 def inc_counter(
     name: str,
     value: float = 1.0,
-    labels: Optional[Dict[str, str]] = None,
+    labels: dict[str, str] | None = None,
 ) -> None:
     _metrics.inc_counter(name, value, labels)
 
 def set_gauge(
     name: str,
     value: float,
-    labels: Optional[Dict[str, str]] = None,
+    labels: dict[str, str] | None = None,
 ) -> None:
     _metrics.set_gauge(name, value, labels)
 
 def observe(
     name: str,
     value: float,
-    labels: Optional[Dict[str, str]] = None,
+    labels: dict[str, str] | None = None,
 ) -> None:
     _metrics.observe_histogram(name, value, labels)
 
@@ -324,8 +322,9 @@ def start_process_metrics(interval_seconds: float = 5.0) -> None:
         _process_metrics_started = True
 
     try:
-        import psutil
         import os
+
+        import psutil
     except ImportError:
         log.debug("psutil not available — process metrics disabled")
         return

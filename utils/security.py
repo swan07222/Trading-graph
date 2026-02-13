@@ -2,18 +2,18 @@
 from __future__ import annotations
 
 import atexit
-import os
+import gzip
+import hashlib
 import json
+import os
 import secrets
 import threading
-import gzip
 import weakref
-import hashlib
-from pathlib import Path
-from datetime import datetime, timedelta, date
-from typing import Dict, List, Optional, Any, Tuple
-from dataclasses import dataclass
 from contextlib import contextmanager
+from dataclasses import dataclass
+from datetime import date, datetime, timedelta
+from pathlib import Path
+from typing import Any
 
 from config.settings import CONFIG
 from utils.logger import get_logger
@@ -46,7 +46,7 @@ class SecureStorage:
         self._key_path = CONFIG.data_dir / ".key"
         self._lock = threading.RLock()
         self._cipher = self._init_cipher()
-        self._cache: Dict[str, str] = {}
+        self._cache: dict[str, str] = {}
         self._closed = False
         self._load()
 
@@ -147,7 +147,7 @@ class SecureStorage:
             self._cache[key] = value
             self._save()
 
-    def get(self, key: str, default: Optional[str] = None) -> Optional[str]:
+    def get(self, key: str, default: str | None = None) -> str | None:
         """Retrieve decrypted value."""
         if not isinstance(key, str) or not key:
             raise ValueError("key must be a non-empty string")
@@ -196,13 +196,13 @@ class AuditRecord:
     event_type: str
     user: str
     action: str
-    details: Dict[str, Any]
+    details: dict[str, Any]
     ip_address: str = ""
     session_id: str = ""
     prev_hash: str = ""
     record_hash: str = ""
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "timestamp": self.timestamp.isoformat(),
             "event_type": self.event_type,
@@ -239,16 +239,16 @@ class AuditLog:
         self._log_dir = CONFIG.audit_dir
         self._log_dir.mkdir(parents=True, exist_ok=True)
         self._current_file = None
-        self._current_date: Optional[date] = None
+        self._current_date: date | None = None
         self._lock = threading.RLock()
-        self._buffer: List[AuditRecord] = []
+        self._buffer: list[AuditRecord] = []
         self._buffer_size = 100
         self._max_buffer_size = 10000  # Hard cap to prevent memory issues
         self._user = "system"
         self._session_id = secrets.token_hex(16)
         self._closed = False
         self._prev_hash = ""
-        self._last_prune_date: Optional[date] = None
+        self._last_prune_date: date | None = None
 
         # FIX #4: Use weakref so GC can collect this if all references drop
         self._atexit_ref = weakref.ref(self)
@@ -306,7 +306,7 @@ class AuditLog:
                 self._flush()
 
     @staticmethod
-    def _canonical_details(details: Dict[str, Any]) -> str:
+    def _canonical_details(details: dict[str, Any]) -> str:
         try:
             return json.dumps(details, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
         except Exception:
@@ -350,7 +350,7 @@ class AuditLog:
             log.error("Audit log flush failed: %s", e)
 
     def log(
-        self, event_type: str, action: str, details: Optional[Dict] = None
+        self, event_type: str, action: str, details: dict | None = None
     ) -> None:
         """Log audit event."""
         record = AuditRecord(
@@ -369,7 +369,7 @@ class AuditLog:
         signal: str,
         confidence: float,
         price: float,
-        reasons: Optional[List[str]] = None,
+        reasons: list[str] | None = None,
     ) -> None:
         """Log trading signal."""
         self.log(
@@ -414,7 +414,7 @@ class AuditLog:
         quantity: int,
         price: float,
         commission: float,
-        pnl: Optional[float] = None,
+        pnl: float | None = None,
     ) -> None:
         """Log trade execution."""
         self.log(
@@ -431,7 +431,7 @@ class AuditLog:
             },
         )
 
-    def log_risk_event(self, event_type: str, details: Dict) -> None:
+    def log_risk_event(self, event_type: str, details: dict) -> None:
         """Log risk management event."""
         self.log("risk", event_type, details)
 
@@ -491,7 +491,7 @@ class AuditLog:
             log.debug("Failed to unmark legal hold for %s: %s", audit_file, e)
             return False
 
-    def prune_old_files(self, retention_days: int) -> Dict[str, int]:
+    def prune_old_files(self, retention_days: int) -> dict[str, int]:
         """
         Delete audit files older than retention_days, except legal-hold files.
         """
@@ -534,11 +534,11 @@ class AuditLog:
 
     def query(
         self,
-        start_date: Optional[datetime] = None,
-        end_date: Optional[datetime] = None,
-        event_type: Optional[str] = None,
+        start_date: datetime | None = None,
+        end_date: datetime | None = None,
+        event_type: str | None = None,
         limit: int = 1000,
-    ) -> List[Dict]:
+    ) -> list[dict]:
         """
         Query audit records.
 
@@ -548,7 +548,7 @@ class AuditLog:
         with self._lock:
             self._flush()
 
-        results: List[Dict] = []
+        results: list[dict] = []
 
         start = (
             start_date.date()
@@ -594,10 +594,10 @@ class AuditLog:
 
     def verify_integrity(
         self,
-        start_date: Optional[datetime] = None,
-        end_date: Optional[datetime] = None,
+        start_date: datetime | None = None,
+        end_date: datetime | None = None,
         limit: int = 100000,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Verify tamper-evident hash chain across queried audit records.
         """
@@ -646,13 +646,13 @@ class RateLimiter:
     _MAX_WINDOW_SIZE = 10000  # Hard cap per window
 
     def __init__(self) -> None:
-        self._limits: Dict[str, int] = {
+        self._limits: dict[str, int] = {
             "orders_per_minute": 10,
             "orders_per_hour": 100,
             "api_calls_per_second": 10,
             "predictions_per_minute": 60,
         }
-        self._windows: Dict[str, List[datetime]] = {}
+        self._windows: dict[str, list[datetime]] = {}
         self._lock = threading.RLock()
 
     def _get_window_duration(self, limit_type: str) -> timedelta:
@@ -730,7 +730,7 @@ class RateLimiter:
             raise ValueError(f"limit value must be a positive integer, got {value}")
         self._limits[limit_type] = value
 
-    def get_usage(self, limit_type: str) -> Dict[str, Any]:
+    def get_usage(self, limit_type: str) -> dict[str, Any]:
         """Get current usage for a limit type."""
         with self._lock:
             limit = self._limits.get(limit_type, 100)
@@ -767,7 +767,7 @@ class AccessControl:
 
     def __init__(self) -> None:
         self._lock = threading.RLock()
-        self._permissions: Dict[str, List[str]] = {
+        self._permissions: dict[str, list[str]] = {
             "admin": ["*"],
             "trader": ["view", "trade_paper", "analyze"],
             "viewer": ["view", "analyze"],
@@ -778,10 +778,10 @@ class AccessControl:
         self._session_started_at = datetime.now()
         self._session_ip: str = ""
         self._two_factor_verified = False
-        self._audit: Optional[AuditLog] = None
+        self._audit: AuditLog | None = None
         self._logging_access = False  # FIX #10: Recursion guard
 
-    def _get_audit(self) -> Optional[AuditLog]:
+    def _get_audit(self) -> AuditLog | None:
         """Lazy audit log access to break circular init."""
         if self._audit is None:
             try:
@@ -820,12 +820,12 @@ class AccessControl:
         with self._lock:
             self._two_factor_verified = bool(verified)
 
-    def create_role(self, role: str, permissions: List[str]) -> None:
+    def create_role(self, role: str, permissions: list[str]) -> None:
         if not isinstance(role, str) or not role.strip():
             raise ValueError("role must be a non-empty string")
         if not isinstance(permissions, list):
             raise ValueError("permissions must be a list")
-        clean: List[str] = []
+        clean: list[str] = []
         for p in permissions:
             p = str(p).strip()
             if not p:
@@ -857,7 +857,7 @@ class AccessControl:
             if p in perms:
                 perms.remove(p)
 
-    def validate_session_policy(self) -> Tuple[bool, str]:
+    def validate_session_policy(self) -> tuple[bool, str]:
         sec = getattr(CONFIG, "security", None)
         max_hours = int(getattr(sec, "max_session_hours", 8))
         ip_whitelist = list(getattr(sec, "ip_whitelist", []) or [])
@@ -939,23 +939,23 @@ class AccessControl:
             return self._current_role
 
     @property
-    def available_roles(self) -> List[str]:
+    def available_roles(self) -> list[str]:
         """List of available roles."""
         with self._lock:
             return list(self._permissions.keys())
 
 # Module-level singletons with proper locks
 
-_secure_storage: Optional[SecureStorage] = None
+_secure_storage: SecureStorage | None = None
 _secure_storage_lock = threading.Lock()
 
-_audit_log: Optional[AuditLog] = None
+_audit_log: AuditLog | None = None
 _audit_log_lock = threading.Lock()
 
-_rate_limiter: Optional[RateLimiter] = None
+_rate_limiter: RateLimiter | None = None
 _rate_limiter_lock = threading.Lock()
 
-_access_control: Optional[AccessControl] = None
+_access_control: AccessControl | None = None
 _access_control_lock = threading.Lock()
 
 def get_secure_storage() -> SecureStorage:

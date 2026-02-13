@@ -5,10 +5,9 @@ import copy
 import logging
 import logging.handlers
 import sys
-from pathlib import Path
-from datetime import datetime
-from typing import Optional, Dict
 import threading
+from datetime import datetime
+from pathlib import Path
 
 _colorama_lock = threading.Lock()
 _colorama_initialized = False
@@ -94,7 +93,7 @@ class LoggerManager:
     Supports optional file logging with rotation.
     """
 
-    _instance: Optional[LoggerManager] = None
+    _instance: LoggerManager | None = None
     _instance_lock = threading.Lock()
 
     def __new__(cls) -> LoggerManager:
@@ -119,15 +118,15 @@ class LoggerManager:
             return
 
         self._initialized = True
-        self._loggers: Dict[str, logging.Logger] = {}
+        self._loggers: dict[str, logging.Logger] = {}
         self._logger_lock = threading.Lock()
-        self._log_dir: Optional[Path] = None
-        self._file_handler: Optional[logging.Handler] = None
+        self._log_dir: Path | None = None
+        self._file_handler: logging.Handler | None = None
         self._log_level: int = logging.INFO
 
     def setup(
         self,
-        log_dir: Optional[Path] = None,
+        log_dir: Path | None = None,
         level: int = logging.INFO,
         max_bytes: int = 10 * 1024 * 1024,  # 10 MB
         backup_count: int = 5,
@@ -276,7 +275,7 @@ def get_logger(name: str = "trading") -> logging.Logger:
     return _manager.get_logger(name)
 
 def setup_logging(
-    log_dir: Optional[Path] = None,
+    log_dir: Path | None = None,
     level: int = logging.INFO,
 ) -> None:
     """Setup global logging configuration."""

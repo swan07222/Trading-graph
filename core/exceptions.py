@@ -2,7 +2,8 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Optional, Dict, Any, List
+from typing import Any
+
 
 class TradingSystemError(Exception):
     """Base exception for trading system."""
@@ -10,17 +11,17 @@ class TradingSystemError(Exception):
     def __init__(
         self,
         message: str,
-        code: Optional[str] = None,
-        details: Optional[Dict[str, Any]] = None,
+        code: str | None = None,
+        details: dict[str, Any] | None = None,
     ) -> None:
         super().__init__(message)
         self.message = message
         self.code = code or self.__class__.__name__
         # FIX #3: Defensive copy so caller mutations don't affect us
-        self.details: Dict[str, Any] = dict(details) if details else {}
+        self.details: dict[str, Any] = dict(details) if details else {}
         self.timestamp = datetime.now()
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Serialize to dict for logging/API responses."""
         return {
             "error_type": self.__class__.__name__,

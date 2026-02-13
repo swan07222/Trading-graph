@@ -1,13 +1,13 @@
 
 import re
-from datetime import datetime, date, timedelta
-from typing import List, Dict, Optional, Tuple, Any, Union
 from dataclasses import dataclass
-import pandas as pd
+from datetime import date, datetime
+from typing import Any
+
 import numpy as np
+import pandas as pd
 
 from core.constants import (
-    EXCHANGES,
     get_exchange,
     get_lot_size,
     is_trading_day,
@@ -22,8 +22,8 @@ class ValidationResult:
     """Result of validation."""
 
     valid: bool
-    errors: List[str]
-    warnings: List[str]
+    errors: list[str]
+    warnings: list[str]
     data: Any = None
 
     def __bool__(self) -> bool:
@@ -61,8 +61,8 @@ class StockCodeValidator:
         Returns:
             ValidationResult with cleaned code in ``data`` on success.
         """
-        errors: List[str] = []
-        warnings: List[str] = []
+        errors: list[str] = []
+        warnings: list[str] = []
 
         if not code:
             errors.append("Stock code is required")
@@ -122,13 +122,13 @@ class StockCodeValidator:
     @classmethod
     def validate_many(
         cls,
-        codes: List[str],
+        codes: list[str],
         market: str = "a_share",
     ) -> ValidationResult:
         """Validate multiple stock codes, returning all valid ones."""
-        errors: List[str] = []
-        warnings: List[str] = []
-        valid_codes: List[str] = []
+        errors: list[str] = []
+        warnings: list[str] = []
+        valid_codes: list[str] = []
 
         if not codes:
             errors.append("No stock codes provided")
@@ -147,7 +147,7 @@ class StockCodeValidator:
             return ValidationResult(False, errors, warnings)
 
         seen: set = set()
-        deduped: List[str] = []
+        deduped: list[str] = []
         for c in valid_codes:
             if c not in seen:
                 seen.add(c)
@@ -179,8 +179,8 @@ class DateRangeValidator:
             ValidationResult with ``data = (start_date, end_date)`` as
             ``date`` objects on success.
         """
-        errors: List[str] = []
-        warnings: List[str] = []
+        errors: list[str] = []
+        warnings: list[str] = []
         today = date.today()
 
         # Parse end_date
@@ -221,8 +221,8 @@ class DateRangeValidator:
 
     @staticmethod
     def _parse_date(
-        value: Any, field_name: str, errors: List[str]
-    ) -> Optional[date]:
+        value: Any, field_name: str, errors: list[str]
+    ) -> date | None:
         """Parse a value into a ``date``, appending to *errors* on failure."""
         if value is None:
             return None
@@ -277,8 +277,8 @@ class OHLCVValidator:
         Returns:
             ValidationResult with cleaned DataFrame in ``data``.
         """
-        errors: List[str] = []
-        warnings: List[str] = []
+        errors: list[str] = []
+        warnings: list[str] = []
 
         if df is None or df.empty:
             errors.append("DataFrame is empty")
@@ -368,7 +368,7 @@ class OHLCVValidator:
         cls,
         df: pd.DataFrame,
         fix_errors: bool,
-    ) -> Tuple[pd.DataFrame, List[str]]:
+    ) -> tuple[pd.DataFrame, list[str]]:
         """
         Validate OHLC price relationships in a single pass.
 
@@ -379,7 +379,7 @@ class OHLCVValidator:
         Returns:
             (cleaned_df, list_of_warning_strings)
         """
-        warnings: List[str] = []
+        warnings: list[str] = []
         price_cols = ["open", "high", "low", "close"]
 
         # ---- Drop rows with non-positive prices ---------------------
@@ -437,7 +437,7 @@ class FeatureValidator:
     def validate(
         cls,
         df: pd.DataFrame,
-        feature_cols: List[str],
+        feature_cols: list[str],
         max_nan_pct: float = 0.1,
         max_inf_pct: float = 0.01,
         fix_errors: bool = True,
@@ -461,8 +461,8 @@ class FeatureValidator:
         Returns:
             ValidationResult with cleaned DataFrame.
         """
-        errors: List[str] = []
-        warnings: List[str] = []
+        errors: list[str] = []
+        warnings: list[str] = []
 
         if df is None or df.empty:
             errors.append("DataFrame is empty")
@@ -558,8 +558,8 @@ class OrderValidator:
         Returns:
             ValidationResult with normalised order dict in ``data``.
         """
-        errors: List[str] = []
-        warnings: List[str] = []
+        errors: list[str] = []
+        warnings: list[str] = []
 
         # ---- Symbol --------------------------------------------------
         code_result = StockCodeValidator.validate(symbol, market=market)
@@ -657,8 +657,8 @@ class ConfigValidator:
 
         Accepts either a dict or a RiskConfig dataclass.
         """
-        errors: List[str] = []
-        warnings: List[str] = []
+        errors: list[str] = []
+        warnings: list[str] = []
 
         required = [
             "max_position_pct",
@@ -706,8 +706,8 @@ class ConfigValidator:
     @classmethod
     def validate_data_config(cls, config: Any) -> ValidationResult:
         """Validate DataConfig fields."""
-        errors: List[str] = []
-        warnings: List[str] = []
+        errors: list[str] = []
+        warnings: list[str] = []
 
         ttl = cls._get_field(config, "cache_ttl_hours", 0)
         if ttl <= 0:
@@ -730,8 +730,8 @@ class ConfigValidator:
     @classmethod
     def validate_model_config(cls, config: Any) -> ValidationResult:
         """Validate ModelConfig fields."""
-        errors: List[str] = []
-        warnings: List[str] = []
+        errors: list[str] = []
+        warnings: list[str] = []
 
         seq_len = cls._get_field(config, "sequence_length", 0)
         if seq_len < 1:
@@ -781,8 +781,8 @@ class TradingDayValidator:
         Returns:
             ValidationResult with ``date`` object in ``data``.
         """
-        errors: List[str] = []
-        warnings: List[str] = []
+        errors: list[str] = []
+        warnings: list[str] = []
 
         parsed = DateRangeValidator._parse_date(d, "date", errors)
         if parsed is None:
@@ -815,7 +815,7 @@ def validate_ohlcv(
     return result.data
 
 def validate_features(
-    df: pd.DataFrame, feature_cols: List[str]
+    df: pd.DataFrame, feature_cols: list[str]
 ) -> pd.DataFrame:
     """Validate and return cleaned feature DataFrame. Raises on failure."""
     result = FeatureValidator.validate(df, feature_cols)
@@ -826,7 +826,7 @@ def validate_date_range(
     start_date: Any,
     end_date: Any = None,
     max_range_days: int = 3650,
-) -> Tuple[date, date]:
+) -> tuple[date, date]:
     """Validate and return (start_date, end_date). Raises on failure."""
     result = DateRangeValidator.validate(
         start_date, end_date, max_range_days=max_range_days

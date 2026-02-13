@@ -1,25 +1,26 @@
 ﻿# models/auto_learner.py
 
-import os
+import hashlib
 import json
-import time
+import os
 import random
 import shutil
-import hashlib
 import threading
-from datetime import datetime, timedelta
-from pathlib import Path
-from typing import Dict, List, Optional, Callable, Tuple, Set, Any
-from dataclasses import dataclass, field
+import time
 from collections import deque
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass, field
+from datetime import datetime
+from pathlib import Path
+from typing import Any
+
 import numpy as np
-import pandas as pd
 
 from config.settings import CONFIG
-from utils.logger import get_logger
-from utils.cancellation import CancellationToken, CancelledException
 from data.fetcher import get_fetcher
+from utils.cancellation import CancellationToken, CancelledException
+from utils.logger import get_logger
 
 log = get_logger(__name__)
 
@@ -63,8 +64,8 @@ class LearningProgress:
     validation_accuracy: float = 0.0
     is_running: bool = False
     is_paused: bool = False
-    errors: List[str] = field(default_factory=list)
-    warnings: List[str] = field(default_factory=list)
+    errors: list[str] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
     last_update: datetime = field(default_factory=datetime.now)
 
     total_training_sessions: int = 0
@@ -85,7 +86,7 @@ class LearningProgress:
     plateau_count: int = 0
 
     training_mode: str = "auto"  # "auto" or "targeted"
-    targeted_stocks: List[str] = field(default_factory=list)
+    targeted_stocks: list[str] = field(default_factory=list)
 
     # --- bounded message helpers (Issue 11) ---
 
@@ -113,7 +114,7 @@ class LearningProgress:
         self.training_mode = "auto"
         self.targeted_stocks = []
 
-    def to_dict(self) -> Dict:
+    def to_dict(self) -> dict:
         """FIX M5: Include all fields in serialization."""
         return {
             'stage': self.stage,
@@ -211,7 +212,7 @@ class MetricTracker:
         with self._lock:
             return self._plateau_count
 
-    def get_plateau_response(self) -> Dict[str, Any]:
+    def get_plateau_response(self) -> dict[str, Any]:
         """Graduated response to plateau."""
         with self._lock:
             if not self._is_plateau_unlocked():
@@ -262,7 +263,7 @@ class MetricTracker:
         spread = max(self._history) - min(self._history)
         return spread < self._plateau_threshold
 
-    def to_dict(self) -> Dict:
+    def to_dict(self) -> dict:
         with self._lock:
             return {
                 'history': list(self._history),
@@ -270,7 +271,7 @@ class MetricTracker:
                 'best_ema': self._best_ema,
             }
 
-    def from_dict(self, data: Dict):
+    def from_dict(self, data: dict):
         with self._lock:
             self._history = deque(
                 data.get('history', []), maxlen=self._window
@@ -294,16 +295,16 @@ class ExperienceReplayBuffer:
         cache_ttl_hours: float = 72.0,
     ):
         self.max_size = max_size
-        self._buffer: List[str] = []
-        self._performance: Dict[str, float] = {}
-        self._cache_times: Dict[str, float] = {}
+        self._buffer: list[str] = []
+        self._performance: dict[str, float] = {}
+        self._cache_times: dict[str, float] = {}
         self._cache_ttl = cache_ttl_hours * 3600
         self._lock = threading.Lock()
 
         self._cache_dir = cache_dir or CONFIG.DATA_DIR / "replay_cache"
         self._cache_dir.mkdir(parents=True, exist_ok=True)
 
-    def add(self, codes: List[str], confidence: float = 0.5):
+    def add(self, codes: list[str], confidence: float = 0.5):
         """Add successfully trained codes"""
         with self._lock:
             for code in codes:
@@ -318,7 +319,7 @@ class ExperienceReplayBuffer:
                     self._performance.pop(code, None)
                     self._remove_cache(code)
 
-    def sample(self, n: int) -> List[str]:
+    def sample(self, n: int) -> list[str]:
         """
         Stratified sampling.
 
@@ -389,7 +390,7 @@ class ExperienceReplayBuffer:
 
     def get_cached_sequences(
         self, code: str
-    ) -> Optional[Tuple[np.ndarray, np.ndarray]]:
+    ) -> tuple[np.ndarray, np.ndarray] | None:
         """Load cached sequences if not stale"""
         try:
             path = self._cache_dir / f"{code}.npz"
@@ -405,7 +406,7 @@ class ExperienceReplayBuffer:
         except Exception:
             return None
 
-    def get_cached_codes(self) -> List[str]:
+    def get_cached_codes(self) -> list[str]:
         """Get codes with valid cache"""
         now = time.time()
         with self._lock:
@@ -429,7 +430,7 @@ class ExperienceReplayBuffer:
         except Exception:
             pass
 
-    def get_all(self) -> List[str]:
+    def get_all(self) -> list[str]:
         with self._lock:
             return list(self._buffer)
 
@@ -437,7 +438,7 @@ class ExperienceReplayBuffer:
         with self._lock:
             return len(self._buffer)
 
-    def to_dict(self) -> Dict:
+    def to_dict(self) -> dict:
         with self._lock:
             return {
                 'buffer': list(self._buffer[-self.max_size:]),
@@ -448,7 +449,7 @@ class ExperienceReplayBuffer:
                 },
             }
 
-    def from_dict(self, data: Dict):
+    def from_dict(self, data: dict):
         with self._lock:
             self._buffer = list(data.get('buffer', []))[-self.max_size:]
             self._performance = dict(data.get('performance', {}))
@@ -479,16 +480,16 @@ class ModelGuardian:
 
     def __init__(self, model_dir: Path = None, max_backups: int = 5):
         self.model_dir = model_dir or CONFIG.MODEL_DIR
-        self._best_metrics: Dict[str, float] = {}
+        self._best_metrics: dict[str, float] = {}
         self._max_backups = max_backups
         self._lock = threading.Lock()
-        self._holdout_codes: List[str] = []
+        self._holdout_codes: list[str] = []
 
-    def set_holdout(self, codes: List[str]):
+    def set_holdout(self, codes: list[str]):
         with self._lock:
             self._holdout_codes = list(codes)
 
-    def get_holdout(self) -> List[str]:
+    def get_holdout(self) -> list[str]:
         with self._lock:
             return list(self._holdout_codes)
 
@@ -530,7 +531,7 @@ class ModelGuardian:
                 log.error(f"Restore failed: {e}")
                 return False
 
-    def save_as_best(self, interval: str, horizon: int, metrics: Dict) -> bool:
+    def save_as_best(self, interval: str, horizon: int, metrics: dict) -> bool:
         with self._lock:
             try:
                 for filename in self._model_files(interval, horizon):
@@ -557,13 +558,13 @@ class ModelGuardian:
                 log.warning(f"Save best failed: {e}")
                 return False
 
-    def get_best_metrics(self, interval: str, horizon: int) -> Dict:
+    def get_best_metrics(self, interval: str, horizon: int) -> dict:
         if self._best_metrics:
             return self._best_metrics
         try:
             path = self.model_dir / f"best_metrics_{interval}_{horizon}.json"
             if path.exists():
-                with open(path, 'r') as f:
+                with open(path) as f:
                     self._best_metrics = json.load(f)
                 return self._best_metrics
         except Exception:
@@ -572,9 +573,9 @@ class ModelGuardian:
 
     def validate_model(
         self, interval: str, horizon: int,
-        validation_codes: List[str], lookback_bars: int,
+        validation_codes: list[str], lookback_bars: int,
         collect_samples: bool = False,
-    ) -> Dict[str, float]:
+    ) -> dict[str, float]:
         """
         Validate model on holdout stocks.
 
@@ -588,9 +589,9 @@ class ModelGuardian:
             return _empty_result
 
         try:
-            from models.ensemble import EnsembleModel
             from data.features import FeatureEngine
             from data.processor import DataProcessor
+            from models.ensemble import EnsembleModel
 
             model_path = self.model_dir / f"ensemble_{interval}_{horizon}.pt"
             scaler_path = self.model_dir / f"scaler_{interval}_{horizon}.pkl"
@@ -623,7 +624,7 @@ class ModelGuardian:
             total = 0
             confidences = []
             errors = 0
-            samples: List[Dict[str, Any]] = []
+            samples: list[dict[str, Any]] = []
 
             for code in validation_codes:
                 try:
@@ -717,7 +718,7 @@ class ModelGuardian:
             traceback.print_exc()
             return _empty_result
 
-    def _model_files(self, interval, horizon) -> List[str]:
+    def _model_files(self, interval, horizon) -> list[str]:
         return [
             f"ensemble_{interval}_{horizon}.pt",
             f"forecast_{interval}_{horizon}.pt",
@@ -746,18 +747,18 @@ class StockRotator:
     """
 
     def __init__(self):
-        self._processed: Set[str] = set()
-        self._failed: Dict[str, int] = {}
+        self._processed: set[str] = set()
+        self._failed: dict[str, int] = {}
         self._fail_max = 3
-        self._pool: List[str] = []
+        self._pool: list[str] = []
         self._last_discovery: float = 0.0
         self._discovery_ttl: float = 3600.0
-        self._last_network_state: Optional[bool] = None
+        self._last_network_state: bool | None = None
 
     def discover_new(
         self, max_stocks: int, min_market_cap: float,
         stop_check: Callable, progress_cb: Callable,
-    ) -> List[str]:
+    ) -> list[str]:
         self._maybe_refresh_pool(max_stocks, min_market_cap, stop_check, progress_cb)
         if not self._pool:
             self._pool = list(CONFIG.STOCK_POOL)
@@ -776,7 +777,7 @@ class StockRotator:
         ordered = never_tried + retries
         return ordered[:max_stocks]
 
-    def mark_processed(self, codes: List[str]):
+    def mark_processed(self, codes: list[str]):
         for code in codes:
             self._processed.add(code)
 
@@ -799,11 +800,11 @@ class StockRotator:
         self._pool.clear()
 
     # FIX PRIV: Public methods for state migration from old format
-    def set_processed(self, codes: Set[str]):
+    def set_processed(self, codes: set[str]):
         """Set processed codes from loaded state."""
         self._processed = set(codes)
 
-    def set_failed(self, failed: Dict[str, int]):
+    def set_failed(self, failed: dict[str, int]):
         """Set failed codes from loaded state."""
         self._failed = dict(failed)
 
@@ -826,7 +827,7 @@ class StockRotator:
             return
 
         try:
-            from data.universe import get_universe_codes, get_new_listings
+            from data.universe import get_new_listings, get_universe_codes
             universe = get_universe_codes(force_refresh=network_changed)
             new_listed = get_new_listings(days=60)
         except Exception:
@@ -860,10 +861,10 @@ class StockRotator:
     def pool_size(self) -> int:
         return len(self._pool)
 
-    def get_pool_snapshot(self) -> List[str]:
+    def get_pool_snapshot(self) -> list[str]:
         return list(self._pool)
 
-    def to_dict(self) -> Dict:
+    def to_dict(self) -> dict:
         return {
             'processed': list(self._processed),
             'failed': dict(self._failed),
@@ -871,7 +872,7 @@ class StockRotator:
             'last_discovery': self._last_discovery,
         }
 
-    def from_dict(self, data: Dict):
+    def from_dict(self, data: dict):
         self._processed = set(data.get('processed', []))
         failed = data.get('failed', {})
         if isinstance(failed, list):
@@ -929,13 +930,13 @@ class ParallelFetcher:
 
     def fetch_batch(
         self,
-        codes: List[str],
+        codes: list[str],
         interval: str,
         lookback: int,
         min_bars: int,
         stop_check: Callable,
         progress_cb: Callable,
-    ) -> Tuple[List[str], List[str]]:
+    ) -> tuple[list[str], list[str]]:
         """
         Fetch data for multiple stocks in parallel.
         Returns (ok_codes, failed_codes).
@@ -945,8 +946,8 @@ class ParallelFetcher:
             return [], []
 
         fetcher = get_fetcher()
-        ok_codes: List[str] = []
-        failed_codes: List[str] = []
+        ok_codes: list[str] = []
+        failed_codes: list[str] = []
         completed = 0
         lock = threading.Lock()
 
@@ -973,7 +974,7 @@ class ParallelFetcher:
 
         semaphore = threading.Semaphore(max_concurrent)
 
-        def fetch_one(code: str) -> Tuple[str, bool]:
+        def fetch_one(code: str) -> tuple[str, bool]:
             if stop_check():
                 return code, False
 
@@ -1047,7 +1048,7 @@ class ContinuousLearner:
     """
 
     # FIX M2: Complete BARS_PER_DAY fallback dictionary
-    _BARS_PER_DAY_FALLBACK: Dict[str, int] = {
+    _BARS_PER_DAY_FALLBACK: dict[str, int] = {
         "1m": 240,
         "2m": 120,
         "5m": 48,
@@ -1060,7 +1061,7 @@ class ContinuousLearner:
         "1mo": 1,
     }
 
-    _INTERVAL_MAX_DAYS_FALLBACK: Dict[str, int] = {
+    _INTERVAL_MAX_DAYS_FALLBACK: dict[str, int] = {
         "1m": 7,
         "2m": 60,
         "5m": 60,
@@ -1080,8 +1081,8 @@ class ContinuousLearner:
     def __init__(self):
         self.progress = LearningProgress()
         self._cancel_token = CancellationToken()
-        self._thread: Optional[threading.Thread] = None
-        self._callbacks: List[Callable[[LearningProgress], None]] = []
+        self._thread: threading.Thread | None = None
+        self._callbacks: list[Callable[[LearningProgress], None]] = []
         self._lock = threading.RLock()
 
         self._rotator = StockRotator()
@@ -1091,7 +1092,7 @@ class ContinuousLearner:
         self._lr_scheduler = LRScheduler()
         self._fetcher = ParallelFetcher(max_workers=5)
 
-        self._holdout_codes: List[str] = []
+        self._holdout_codes: list[str] = []
         self._holdout_size: int = 10
         self._holdout_refresh_interval: int = 50
 
@@ -1135,11 +1136,11 @@ class ContinuousLearner:
     def _should_stop(self) -> bool:
         return self._cancel_token.is_cancelled
 
-    def _get_holdout_set(self) -> Set[str]:
+    def _get_holdout_set(self) -> set[str]:
         with self._lock:
             return set(self._holdout_codes)
 
-    def _set_holdout_codes(self, codes: List[str]):
+    def _set_holdout_codes(self, codes: list[str]):
         with self._lock:
             self._holdout_codes = list(codes)
         self._guardian.set_holdout(codes)
@@ -1162,7 +1163,7 @@ class ContinuousLearner:
         min_market_cap=10, include_all_markets=True, continuous=True,
         learning_while_trading=True, interval="1m", prediction_horizon=30,
         lookback_bars=None, cycle_interval_seconds=900, incremental=True,
-        priority_stock_codes: Optional[List[str]] = None,
+        priority_stock_codes: list[str] | None = None,
     ):
         if self._thread and self._thread.is_alive():
             if self.progress.is_paused:
@@ -1182,7 +1183,7 @@ class ContinuousLearner:
             lookback_bars = self._compute_lookback_bars(interval)
 
         try:
-            from core.network import invalidate_network_cache, get_network_env
+            from core.network import get_network_env, invalidate_network_cache
             invalidate_network_cache()
             get_network_env(force_refresh=True)
         except Exception:
@@ -1244,11 +1245,11 @@ class ContinuousLearner:
 
     def start_targeted(
         self,
-        stock_codes: List[str],
+        stock_codes: list[str],
         epochs_per_cycle: int = 10,
         interval: str = "1m",
         prediction_horizon: int = 30,
-        lookback_bars: Optional[int] = None,
+        lookback_bars: int | None = None,
         incremental: bool = True,
         continuous: bool = False,
         cycle_interval_seconds: int = 900,
@@ -1320,7 +1321,7 @@ class ContinuousLearner:
 
     def validate_stock_code(
         self, code: str, interval: str = "1d"
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Validate that a stock code exists and has sufficient data."""
         code = str(code).strip()
         if not code:
@@ -1452,7 +1453,7 @@ class ContinuousLearner:
 
     def _targeted_loop(
         self,
-        stock_codes: List[str],
+        stock_codes: list[str],
         epochs: int,
         interval: str,
         horizon: int,
@@ -1524,8 +1525,8 @@ class ContinuousLearner:
             time.sleep(1)
 
     def _handle_plateau(
-        self, plateau: Dict, current_epochs: int, incremental: bool,
-    ) -> Tuple[int, bool]:
+        self, plateau: dict, current_epochs: int, incremental: bool,
+    ) -> tuple[int, bool]:
         """Graduated plateau response 鈥?uses public rotator methods."""
         action = plateau['action']
         log.info(f"Plateau response: {plateau['message']}")
@@ -1557,7 +1558,7 @@ class ContinuousLearner:
     def _run_cycle(
         self, max_stocks, epochs, min_market_cap, interval,
         horizon, lookback, incremental, cycle_number,
-        priority_stock_codes: Optional[List[str]] = None,
+        priority_stock_codes: list[str] | None = None,
     ) -> bool:
         start_time = datetime.now()
 
@@ -1798,7 +1799,7 @@ class ContinuousLearner:
 
     def _run_targeted_cycle(
         self,
-        stock_codes: List[str],
+        stock_codes: list[str],
         epochs: int,
         interval: str,
         horizon: int,
@@ -1974,7 +1975,7 @@ class ContinuousLearner:
 
     def _finalize_cycle(
         self, accepted: bool,
-        ok_codes: List[str], new_batch: List[str], replay_batch: List[str],
+        ok_codes: list[str], new_batch: list[str], replay_batch: list[str],
         interval: str, horizon: int, lookback: int,
         acc: float, cycle_number: int, start_time: datetime,
     ):
@@ -2129,7 +2130,7 @@ class ContinuousLearner:
 
     def _train(
         self, ok_codes, epochs, interval, horizon, lookback, incremental, lr,
-    ) -> Dict:
+    ) -> dict:
         """
         Train model.
 
@@ -2267,7 +2268,7 @@ class ContinuousLearner:
         self,
         interval: str,
         horizon: int,
-        samples: List[Dict[str, Any]],
+        samples: list[dict[str, Any]],
     ) -> None:
         cfg = getattr(CONFIG, "precision", None)
         if not cfg or not bool(getattr(cfg, "enable_threshold_tuning", False)):
@@ -2281,8 +2282,8 @@ class ContinuousLearner:
         self._save_precision_profile(interval, horizon, tuned, samples)
 
     def _tune_precision_thresholds(
-        self, samples: List[Dict[str, Any]]
-    ) -> Optional[Dict[str, float]]:
+        self, samples: list[dict[str, Any]]
+    ) -> dict[str, float] | None:
         """
         Grid-search confidence/agreement/entropy/edge thresholds that maximize
         a profit-quality proxy on holdout samples.
@@ -2293,7 +2294,7 @@ class ContinuousLearner:
         edge_grid = [0.06, 0.10, 0.14, 0.18]
 
         best_score = -1e18
-        best: Optional[Dict[str, float]] = None
+        best: dict[str, float] | None = None
 
         for c in conf_grid:
             for a in agree_grid:
@@ -2326,12 +2327,12 @@ class ContinuousLearner:
 
     @staticmethod
     def _score_thresholds(
-        samples: List[Dict[str, Any]],
+        samples: list[dict[str, Any]],
         min_conf: float,
         min_agree: float,
         max_entropy: float,
         min_edge: float,
-    ) -> Dict[str, float]:
+    ) -> dict[str, float]:
         wins = 0
         losses = 0
         pnl_win = 0.0
@@ -2386,8 +2387,8 @@ class ContinuousLearner:
         self,
         interval: str,
         horizon: int,
-        tuned: Dict[str, float],
-        samples: List[Dict[str, Any]],
+        tuned: dict[str, float],
+        samples: list[dict[str, Any]],
     ) -> None:
         try:
             filename = str(getattr(CONFIG.precision, "profile_filename", "precision_thresholds.json"))
@@ -2560,7 +2561,7 @@ class ContinuousLearner:
                 from utils.atomic_io import read_json
                 raw = read_json(self.state_path)
             except ImportError:
-                with open(self.state_path, 'r') as f:
+                with open(self.state_path) as f:
                     raw = json.load(f)
 
             if '_data' in raw and '_checksum' in raw:
@@ -2643,7 +2644,7 @@ class ContinuousLearner:
         self._save_state()
         log.info("Full reset")
 
-    def get_stats(self) -> Dict:
+    def get_stats(self) -> dict:
         return {
             'is_running': self.progress.is_running,
             'is_paused': self.progress.is_paused,

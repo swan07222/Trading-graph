@@ -18,14 +18,14 @@ except ImportError:
     show_auto_learn_dialog = None
 
 try:
-    from .widgets import SignalPanel, PositionTable, LogWidget
+    from .widgets import LogWidget, PositionTable, SignalPanel
 except ImportError:
     SignalPanel = None
     PositionTable = None
     LogWidget = None
 
 try:
-    from .dialogs import TrainingDialog, BacktestDialog
+    from .dialogs import BacktestDialog, TrainingDialog
 except ImportError:
     TrainingDialog = None
     BacktestDialog = None

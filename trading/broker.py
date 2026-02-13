@@ -11,22 +11,19 @@ Supports:
 - 银河证券 (YH)
 
 """
+import hashlib
+import threading
+import time
+import uuid
 from abc import ABC, abstractmethod
 from collections import OrderedDict
-from datetime import datetime, date, timedelta
-from typing import Dict, List, Optional, Callable, Tuple
-from pathlib import Path
-import threading
-import uuid
-import time
-import hashlib
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
+from datetime import date, datetime
+from pathlib import Path
 
 from config.settings import CONFIG
-from core.types import (
-    Order, OrderSide, OrderType, OrderStatus,
-    Position, Account, Fill
-)
+from core.types import Account, Fill, Order, OrderSide, OrderStatus, OrderType, Position
 from utils.logger import get_logger
 
 log = get_logger(__name__)
@@ -115,7 +112,7 @@ class BrokerInterface(ABC):
 
     def __init__(self):
         self._lock = threading.RLock()
-        self._callbacks: Dict[str, List[Callable]] = {
+        self._callbacks: dict[str, list[Callable]] = {
             'order_update': [],
             'trade': [],
             'error': [],
@@ -151,11 +148,11 @@ class BrokerInterface(ABC):
         pass
 
     @abstractmethod
-    def get_positions(self) -> Dict[str, Position]:
+    def get_positions(self) -> dict[str, Position]:
         pass
 
     @abstractmethod
-    def get_position(self, symbol: str) -> Optional[Position]:
+    def get_position(self, symbol: str) -> Position | None:
         pass
 
     @abstractmethod
@@ -167,29 +164,29 @@ class BrokerInterface(ABC):
         pass
 
     @abstractmethod
-    def get_orders(self, active_only: bool = True) -> List[Order]:
+    def get_orders(self, active_only: bool = True) -> list[Order]:
         pass
 
     @abstractmethod
-    def get_quote(self, symbol: str) -> Optional[float]:
+    def get_quote(self, symbol: str) -> float | None:
         pass
 
     @abstractmethod
-    def get_fills(self, since: datetime = None) -> List[Fill]:
+    def get_fills(self, since: datetime = None) -> list[Fill]:
         pass
 
     @abstractmethod
-    def get_order_status(self, order_id: str) -> Optional[OrderStatus]:
+    def get_order_status(self, order_id: str) -> OrderStatus | None:
         pass
 
     @abstractmethod
     def sync_order(self, order: Order) -> Order:
         pass
 
-    def get_broker_id(self, order_id: str) -> Optional[str]:
+    def get_broker_id(self, order_id: str) -> str | None:
         return self._order_id_to_broker_id.get(order_id)
 
-    def get_order_id(self, broker_id: str) -> Optional[str]:
+    def get_order_id(self, broker_id: str) -> str | None:
         return self._broker_id_to_order_id.get(broker_id)
 
     def register_order_mapping(self, order_id: str, broker_id: str):
@@ -224,7 +221,7 @@ class BrokerInterface(ABC):
         )
         return self.submit_order(order)
 
-    def sell_all(self, symbol: str, price: float = None) -> Optional[Order]:
+    def sell_all(self, symbol: str, price: float = None) -> Order | None:
         pos = self.get_position(symbol)
         if pos and pos.available_qty > 0:
             return self.sell(symbol, pos.available_qty, price)
@@ -258,10 +255,10 @@ class SimulatorBroker(BrokerInterface):
         super().__init__()
         self._initial_capital = initial_capital or CONFIG.capital
         self._cash = self._initial_capital
-        self._positions: Dict[str, Position] = {}
-        self._orders: Dict[str, Order] = {}
-        self._order_history: List[Order] = []
-        self._fills: List[Fill] = []
+        self._positions: dict[str, Position] = {}
+        self._orders: dict[str, Order] = {}
+        self._order_history: list[Order] = []
+        self._fills: list[Fill] = []
 
         # FIX(2): Cursor-based fill tracking instead of clearing list
         self._fill_cursor: int = 0
@@ -269,7 +266,7 @@ class SimulatorBroker(BrokerInterface):
         self._connected = False
 
         # T+1 tracking
-        self._purchase_dates: Dict[str, date] = {}
+        self._purchase_dates: dict[str, date] = {}
         self._last_settlement_date = date.today()
 
         # Data fetcher (lazy init)
@@ -315,7 +312,7 @@ class SimulatorBroker(BrokerInterface):
                 pass
             log.info("Simulator disconnected")
 
-    def get_quote(self, symbol: str) -> Optional[float]:
+    def get_quote(self, symbol: str) -> float | None:
         try:
             from data.feeds import get_feed_manager
             fm = get_feed_manager(auto_init=False)
@@ -364,13 +361,13 @@ class SimulatorBroker(BrokerInterface):
                 last_updated=datetime.now(),
             )
 
-    def get_positions(self) -> Dict[str, Position]:
+    def get_positions(self) -> dict[str, Position]:
         with self._lock:
             self._check_settlement()
             self._update_prices()
             return dict(self._positions)
 
-    def get_position(self, symbol: str) -> Optional[Position]:
+    def get_position(self, symbol: str) -> Position | None:
         with self._lock:
             self._check_settlement()
             pos = self._positions.get(symbol)
@@ -488,7 +485,7 @@ class SimulatorBroker(BrokerInterface):
 
     def _validate_order(
         self, order: Order, price: float,
-    ) -> Tuple[bool, str]:
+    ) -> tuple[bool, str]:
         if order.quantity <= 0:
             return False, "Quantity must be positive"
 
@@ -554,7 +551,7 @@ class SimulatorBroker(BrokerInterface):
         price: float,
         prev_close: float,
         name: str = None,
-    ) -> Tuple[bool, str]:
+    ) -> tuple[bool, str]:
         from core.constants import get_price_limit
 
         if prev_close <= 0:
@@ -755,7 +752,7 @@ class SimulatorBroker(BrokerInterface):
         )
         self._emit('trade', order, fill)
 
-    def get_fills(self, since: datetime = None) -> List[Fill]:
+    def get_fills(self, since: datetime = None) -> list[Fill]:
         """
         Get new fills since last call.
 
@@ -774,12 +771,12 @@ class SimulatorBroker(BrokerInterface):
             if f.timestamp and f.timestamp >= since
         ]
 
-    def get_all_fills(self) -> List[Fill]:
+    def get_all_fills(self) -> list[Fill]:
         """Get ALL fills (not just new ones)."""
         with self._lock:
             return list(self._fills)
 
-    def get_order_status(self, order_id: str) -> Optional[OrderStatus]:
+    def get_order_status(self, order_id: str) -> OrderStatus | None:
         with self._lock:
             order = self._orders.get(order_id)
             return order.status if order else None
@@ -808,7 +805,7 @@ class SimulatorBroker(BrokerInterface):
                 return True
             return False
 
-    def get_orders(self, active_only: bool = True) -> List[Order]:
+    def get_orders(self, active_only: bool = True) -> list[Order]:
         with self._lock:
             if active_only:
                 return [
@@ -831,7 +828,7 @@ class SimulatorBroker(BrokerInterface):
             return
 
         # It's a new trading day — settle all positions
-        for symbol, pos in self._positions.items():
+        for _symbol, pos in self._positions.items():
             pos.available_qty = pos.quantity
         self._last_settlement_date = today
         log.info("T+1 settlement: all shares now available")
@@ -842,7 +839,7 @@ class SimulatorBroker(BrokerInterface):
             if price:
                 pos.update_price(price)
 
-    def get_trade_history(self) -> List[Dict]:
+    def get_trade_history(self) -> list[dict]:
         with self._lock:
             return [
                 {
@@ -873,7 +870,7 @@ class SimulatorBroker(BrokerInterface):
             self._broker_id_to_order_id.clear()
             log.info("Simulator reset to initial state")
 
-    def reconcile(self) -> Dict:
+    def reconcile(self) -> dict:
         with self._lock:
             return {
                 'cash_diff': 0.0,
@@ -900,7 +897,7 @@ class EasytraderBroker(BrokerInterface):
         super().__init__()
         self._client = None
         self._connected = False
-        self._orders: Dict[str, Order] = {}
+        self._orders: dict[str, Order] = {}
         self._seen_fill_ids: set = set()
         self._fetcher = None
 
@@ -965,7 +962,7 @@ class EasytraderBroker(BrokerInterface):
         self._connected = False
         log.info(f"Disconnected from {self.name}")
 
-    def get_quote(self, symbol: str) -> Optional[float]:
+    def get_quote(self, symbol: str) -> float | None:
         try:
             from data.feeds import get_feed_manager
             fm = get_feed_manager(auto_init=False)
@@ -1016,7 +1013,7 @@ class EasytraderBroker(BrokerInterface):
             log.error(f"Failed to get account: {e}")
             return Account()
 
-    def get_positions(self) -> Dict[str, Position]:
+    def get_positions(self) -> dict[str, Position]:
         if not self.is_connected:
             return {}
 
@@ -1073,7 +1070,7 @@ class EasytraderBroker(BrokerInterface):
             log.error(f"Failed to get positions: {e}")
             return {}
 
-    def get_position(self, symbol: str) -> Optional[Position]:
+    def get_position(self, symbol: str) -> Position | None:
         return self.get_positions().get(symbol)
 
     def submit_order(self, order: Order) -> Order:
@@ -1144,12 +1141,12 @@ class EasytraderBroker(BrokerInterface):
             order.message = str(e)
             return order
 
-    def get_fills(self, since: datetime = None) -> List[Fill]:
+    def get_fills(self, since: datetime = None) -> list[Fill]:
         """Get fills from broker — deduplicates by broker_fill_id."""
         if not self.is_connected:
             return []
 
-        fills: List[Fill] = []
+        fills: list[Fill] = []
         try:
             trades = self._client.today_trades
 
@@ -1242,7 +1239,7 @@ class EasytraderBroker(BrokerInterface):
 
     def get_order_status(
         self, order_id: str,
-    ) -> Optional[OrderStatus]:
+    ) -> OrderStatus | None:
         if not self.is_connected:
             return None
 
@@ -1325,7 +1322,7 @@ class EasytraderBroker(BrokerInterface):
             log.error(f"Cancel failed: {e}")
             return False
 
-    def get_orders(self, active_only: bool = True) -> List[Order]:
+    def get_orders(self, active_only: bool = True) -> list[Order]:
         if active_only:
             return [
                 o for o in self._orders.values() if o.is_active
@@ -1383,14 +1380,14 @@ class MultiVenueBroker(BrokerInterface):
     - On write failure, rotates to next venue with cooldown.
     """
 
-    def __init__(self, venues: List[BrokerInterface], failover_cooldown_seconds: int = 30):
+    def __init__(self, venues: list[BrokerInterface], failover_cooldown_seconds: int = 30):
         super().__init__()
         self._venues = [v for v in venues if v is not None]
         self._active_idx = 0
         self._cooldown_seconds = max(1, int(failover_cooldown_seconds or 30))
-        self._last_fail_ts: Dict[int, float] = {}
-        self._fail_counts: Dict[str, int] = {}
-        self._submit_counts: Dict[str, int] = {}
+        self._last_fail_ts: dict[int, float] = {}
+        self._fail_counts: dict[str, int] = {}
+        self._submit_counts: dict[str, int] = {}
         if not self._venues:
             raise ValueError("MultiVenueBroker requires at least one venue")
 
@@ -1424,9 +1421,9 @@ class MultiVenueBroker(BrokerInterface):
             except Exception as e:
                 log.debug("Venue disconnect failed (%s): %s", venue.name, e)
 
-    def _eligible_indices(self) -> List[int]:
+    def _eligible_indices(self) -> list[int]:
         now = time.time()
-        out: List[int] = []
+        out: list[int] = []
         for i, venue in enumerate(self._venues):
             if not venue.is_connected:
                 continue
@@ -1436,7 +1433,7 @@ class MultiVenueBroker(BrokerInterface):
             out.append(i)
         return out
 
-    def _ordered_indices(self) -> List[int]:
+    def _ordered_indices(self) -> list[int]:
         eligible = self._eligible_indices()
         if not eligible:
             return []
@@ -1499,14 +1496,14 @@ class MultiVenueBroker(BrokerInterface):
     def get_account(self) -> Account:
         return self._first_read("get_account")
 
-    def get_positions(self) -> Dict[str, Position]:
+    def get_positions(self) -> dict[str, Position]:
         return self._first_read("get_positions")
 
-    def get_position(self, symbol: str) -> Optional[Position]:
+    def get_position(self, symbol: str) -> Position | None:
         return self._first_read("get_position", symbol)
 
     def submit_order(self, order: Order) -> Order:
-        last_exc: Optional[Exception] = None
+        last_exc: Exception | None = None
         for idx in self._ordered_indices():
             venue = self._venues[idx]
             try:
@@ -1540,16 +1537,16 @@ class MultiVenueBroker(BrokerInterface):
                 self._mark_failure(idx, e)
         return False
 
-    def get_orders(self, active_only: bool = True) -> List[Order]:
+    def get_orders(self, active_only: bool = True) -> list[Order]:
         return self._first_read("get_orders", active_only)
 
-    def get_quote(self, symbol: str) -> Optional[float]:
+    def get_quote(self, symbol: str) -> float | None:
         return self._first_read("get_quote", symbol)
 
-    def get_fills(self, since: datetime = None) -> List[Fill]:
+    def get_fills(self, since: datetime = None) -> list[Fill]:
         return self._first_read("get_fills", since)
 
-    def get_order_status(self, order_id: str) -> Optional[OrderStatus]:
+    def get_order_status(self, order_id: str) -> OrderStatus | None:
         for idx in self._ordered_indices():
             venue = self._venues[idx]
             try:
@@ -1572,7 +1569,7 @@ class MultiVenueBroker(BrokerInterface):
                 self._mark_failure(idx, e)
         return order
 
-    def get_health_snapshot(self) -> Dict[str, object]:
+    def get_health_snapshot(self) -> dict[str, object]:
         active_name = None
         if 0 <= self._active_idx < len(self._venues):
             active_name = self._venues[self._active_idx].name
@@ -1620,7 +1617,6 @@ def create_broker(
               'gj', 'yh', 'zszq'
         **kwargs: Additional arguments for broker
     """
-    from config.settings import TradingMode
 
     if mode is None:
         mode = (
@@ -1647,7 +1643,7 @@ def create_broker(
             enable_multi = True
 
         if enable_multi:
-            venues: List[BrokerInterface] = []
+            venues: list[BrokerInterface] = []
             for item in priority:
                 bt = str(item or "").strip().lower()
                 if not bt:

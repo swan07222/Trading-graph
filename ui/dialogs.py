@@ -1,16 +1,28 @@
 # ui/dialogs.py
 from __future__ import annotations
 
-from typing import List, Optional, Dict, Any
-from pathlib import Path
-
-from PyQt6.QtCore import Qt, QThread, pyqtSignal
+from PyQt6.QtCore import QThread, pyqtSignal
 from PyQt6.QtGui import QFont
 from PyQt6.QtWidgets import (
-    QDialog, QVBoxLayout, QHBoxLayout, QGridLayout, QFormLayout,
-    QLabel, QPushButton, QProgressBar, QTextEdit, QSpinBox,
-    QDoubleSpinBox, QCheckBox, QLineEdit, QMessageBox, QFileDialog,
-    QGroupBox, QDialogButtonBox, QListWidget, QListWidgetItem, QComboBox
+    QComboBox,
+    QDialog,
+    QDialogButtonBox,
+    QDoubleSpinBox,
+    QFileDialog,
+    QFormLayout,
+    QGridLayout,
+    QGroupBox,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QListWidget,
+    QListWidgetItem,
+    QMessageBox,
+    QProgressBar,
+    QPushButton,
+    QSpinBox,
+    QTextEdit,
+    QVBoxLayout,
 )
 
 from config.settings import CONFIG, TradingMode
@@ -86,7 +98,7 @@ class TrainWorker(QThread):
     finished = pyqtSignal(dict)
     failed = pyqtSignal(str)
 
-    def __init__(self, stocks: List[str], epochs: int):
+    def __init__(self, stocks: list[str], epochs: int):
         super().__init__()
         self.stocks = list(stocks)
         self.epochs = int(epochs)
@@ -152,7 +164,7 @@ class BacktestWorker(QThread):
 
     def __init__(
         self,
-        stocks: List[str],
+        stocks: list[str],
         train_months: int,
         test_months: int
     ):
@@ -196,7 +208,7 @@ class TrainingDialog(QDialog):
         self.setMinimumSize(720, 520)
         _apply_dialog_theme(self)
 
-        self.worker: Optional[TrainWorker] = None
+        self.worker: TrainWorker | None = None
         self._is_training = False
 
         layout = QVBoxLayout(self)
@@ -313,7 +325,7 @@ class TrainingDialog(QDialog):
 
         layout.addWidget(btns)
 
-    def _selected_stocks(self) -> List[str]:
+    def _selected_stocks(self) -> list[str]:
         """Get list of selected stock codes."""
         items = self.stocks_list.selectedItems()
         return [
@@ -517,7 +529,7 @@ class BacktestDialog(QDialog):
         self.setMinimumSize(720, 520)
         _apply_dialog_theme(self)
 
-        self.worker: Optional[BacktestWorker] = None
+        self.worker: BacktestWorker | None = None
 
         layout = QVBoxLayout(self)
 

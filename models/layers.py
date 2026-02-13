@@ -1,9 +1,10 @@
 # models/layers.py
+import math
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import math
-from typing import Optional, Tuple
+
 
 class PositionalEncoding(nn.Module):
     """Sinusoidal positional encoding for transformer models."""
@@ -69,8 +70,8 @@ class MultiHeadAttention(nn.Module):
         self,
         x: torch.Tensor,
         causal: bool = False,
-        mask: Optional[torch.Tensor] = None,
-    ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
+        mask: torch.Tensor | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor | None]:
         """
         Args:
             x: (batch, seq_len, d_model)
@@ -124,7 +125,7 @@ class FeedForward(nn.Module):
     def __init__(
         self,
         d_model: int,
-        d_ff: Optional[int] = None,
+        d_ff: int | None = None,
         dropout: float = 0.1,
         use_glu: bool = False,
     ):
@@ -181,7 +182,7 @@ class TransformerBlock(nn.Module):
         self.norm2 = nn.LayerNorm(d_model)
 
     def forward(
-        self, x: torch.Tensor, mask: Optional[torch.Tensor] = None
+        self, x: torch.Tensor, mask: torch.Tensor | None = None
     ) -> torch.Tensor:
         attn_out, _ = self.attention(self.norm1(x), causal=self.causal, mask=mask)
         x = x + attn_out

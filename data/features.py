@@ -1,11 +1,9 @@
 # data/features.py
 import warnings
-from typing import List
 
 import numpy as np
 import pandas as pd
 
-from config.settings import CONFIG
 from utils.logger import get_logger
 
 log = get_logger(__name__)
@@ -20,7 +18,7 @@ class FeatureEngine:
     ALL features use only past data (strictly causal).
     """
 
-    FEATURE_NAMES: List[str] = [
+    FEATURE_NAMES: list[str] = [
         # Returns (2)
         "returns", "log_returns",
         # Volatility (4)
@@ -107,7 +105,7 @@ class FeatureEngine:
 
         return result
 
-    def get_feature_columns(self) -> List[str]:
+    def get_feature_columns(self) -> list[str]:
         """Return a copy of the canonical feature name list."""
         return self.FEATURE_NAMES.copy()
 
@@ -274,7 +272,7 @@ class FeatureEngine:
     @staticmethod
     def _calc_ultimate_oscillator(
         close: pd.Series, high: pd.Series, low: pd.Series,
-        s: int = 7, m: int = 14, l: int = 28,
+        s: int = 7, m: int = 14, long_window: int = 28,
     ) -> pd.Series:
         """
         Ultimate Oscillator (Williams) — no external dependency.
@@ -303,8 +301,8 @@ class FeatureEngine:
         avg_m = bp.rolling(m, min_periods=m).sum() / (
             tr.rolling(m, min_periods=m).sum() + _EPS
         )
-        avg_l = bp.rolling(l, min_periods=l).sum() / (
-            tr.rolling(l, min_periods=l).sum() + _EPS
+        avg_l = bp.rolling(long_window, min_periods=long_window).sum() / (
+            tr.rolling(long_window, min_periods=long_window).sum() + _EPS
         )
         uo = 100 * (4 * avg_s + 2 * avg_m + avg_l) / 7
         return uo

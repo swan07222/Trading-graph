@@ -1,9 +1,8 @@
 # ui/charts.py
-from typing import List, Dict, Optional
-import numpy as np
 
-from PyQt6.QtWidgets import QWidget, QVBoxLayout, QLabel, QMenu
+import numpy as np
 from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtWidgets import QLabel, QMenu, QVBoxLayout, QWidget
 
 from utils.logger import get_logger
 
@@ -137,18 +136,18 @@ class StockChart(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
 
-        self._bars: List[dict] = []
-        self._actual_prices: List[float] = []
-        self._predicted_prices: List[float] = []
-        self._levels: Dict[str, float] = {}
+        self._bars: list[dict] = []
+        self._actual_prices: list[float] = []
+        self._predicted_prices: list[float] = []
+        self._levels: dict[str, float] = {}
 
         self.plot_widget = None
         self.candles = None           # Layer 3: Candlesticks (top)
         self.actual_line = None       # Layer 2: Price line (middle)
         self.predicted_line = None    # Layer 1: Prediction (bottom)
-        self.level_lines: Dict[str, object] = {}
-        self.overlay_lines: Dict[str, object] = {}
-        self.overlay_enabled: Dict[str, bool] = {
+        self.level_lines: dict[str, object] = {}
+        self.overlay_lines: dict[str, object] = {}
+        self.overlay_enabled: dict[str, bool] = {
             "sma20": True,
             "sma50": True,
             "ema21": True,
@@ -266,9 +265,9 @@ class StockChart(QWidget):
 
     def update_chart(
         self,
-        bars: List[dict],
-        predicted_prices: List[float] = None,
-        levels: Dict[str, float] = None,
+        bars: list[dict],
+        predicted_prices: list[float] = None,
+        levels: dict[str, float] = None,
     ):
         """
         UNIFIED update method - draws all three layers together.
@@ -294,9 +293,9 @@ class StockChart(QWidget):
 
         try:
             # Parse bar data - extract closes for line, OHLC for candles
-            closes: List[float] = []
-            ohlc: List[tuple] = []
-            prev_close: Optional[float] = None
+            closes: list[float] = []
+            ohlc: list[tuple] = []
+            prev_close: float | None = None
 
             # Render the full loaded window (7-day bars are prepared in app layer).
             # Keep a high cap for safety on very large inputs.
@@ -399,9 +398,9 @@ class StockChart(QWidget):
 
     def update_candles(
         self,
-        bars: List[dict],
-        predicted_prices: List[float] = None,
-        levels: Dict[str, float] = None,
+        bars: list[dict],
+        predicted_prices: list[float] = None,
+        levels: dict[str, float] = None,
     ):
         """
         Update chart with candlestick bar data.
@@ -413,9 +412,9 @@ class StockChart(QWidget):
 
     def update_data(
         self,
-        actual_prices: List[float],
-        predicted_prices: List[float] = None,
-        levels: Dict[str, float] = None
+        actual_prices: list[float],
+        predicted_prices: list[float] = None,
+        levels: dict[str, float] = None
     ):
         """
         Update chart with line data.
@@ -495,7 +494,7 @@ class StockChart(QWidget):
             return
         line.setData(x[mask], y[mask])
 
-    def _update_overlay_lines(self, bars: List[dict], closes: List[float]):
+    def _update_overlay_lines(self, bars: list[dict], closes: list[float]):
         if not HAS_PYQTGRAPH or not self.overlay_lines:
             return
         arr = np.array(closes, dtype=float)
@@ -519,10 +518,10 @@ class StockChart(QWidget):
                 if c <= 0:
                     continue
                 h = float(b.get("high", c) or c)
-                l = float(b.get("low", c) or c)
+                low = float(b.get("low", c) or c)
                 v = float(b.get("volume", 0) or 0)
                 highs.append(h if h > 0 else c)
-                lows.append(l if l > 0 else c)
+                lows.append(low if low > 0 else c)
                 vols.append(max(0.0, v))
             n = min(len(highs), len(arr))
             if n <= 0:
@@ -560,7 +559,7 @@ class StockChart(QWidget):
         buy_action = menu.addAction(f"Buy @ {price:.2f}")
         sell_action = menu.addAction(f"Sell @ {price:.2f}")
         menu.addSeparator()
-        overlay_actions: Dict[object, str] = {}
+        overlay_actions: dict[object, str] = {}
         for key, name in (
             ("sma20", "SMA20"),
             ("sma50", "SMA50"),
@@ -738,7 +737,7 @@ class MiniChart(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setFixedSize(100, 40)
-        self._prices: List[float] = []
+        self._prices: list[float] = []
         self._setup_ui()
 
     def _setup_ui(self):
@@ -763,7 +762,7 @@ class MiniChart(QWidget):
             self.label.setStyleSheet("color: #888;")
             layout.addWidget(self.label)
 
-    def update_data(self, prices: List[float]):
+    def update_data(self, prices: list[float]):
         """Update mini chart."""
         self._prices = list(prices) if prices else []
 

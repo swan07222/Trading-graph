@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import re
-from typing import Dict, Any
+from typing import Any
 
 try:
     # Safe import: constants does not import instruments -> no circular
@@ -67,14 +67,14 @@ def _cn_yahoo_suffix(code6: str) -> str:
         return ".BJ"
     return ""
 
-def instrument_key(inst: Dict[str, Any]) -> str:
+def instrument_key(inst: dict[str, Any]) -> str:
     """Stable unique key for caching/storage."""
     market = str(inst.get("market") or "UNKNOWN").upper()
     asset = str(inst.get("asset") or "UNKNOWN").upper()
     sym = str(inst.get("symbol") or "")
     return f"{market}:{asset}:{sym}"
 
-def parse_instrument(code: str) -> Dict[str, Any]:
+def parse_instrument(code: str) -> dict[str, Any]:
     """
     Parse a user-provided symbol/code into a normalized instrument dict.
 
@@ -108,8 +108,6 @@ def parse_instrument(code: str) -> Dict[str, Any]:
     # -------------------------
     is_explicit_hk = s_upper.startswith(tuple(p.upper() for p in HK_PREFIXES)) or s_upper.endswith(".HK")
     is_explicit_us = s_upper.startswith(tuple(p.upper() for p in US_PREFIXES))
-    is_explicit_cn = s_upper.startswith(tuple(p.upper() for p in CN_PREFIXES)) or any(s_upper.endswith(x) for x in (".SS", ".SZ", ".BJ"))
-
     # -------------------------
     # Crypto detection (best effort)
     # -------------------------

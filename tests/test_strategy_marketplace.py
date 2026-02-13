@@ -1,5 +1,5 @@
-import json
 import hashlib
+import json
 from pathlib import Path
 
 from analysis.strategy_marketplace import StrategyMarketplace

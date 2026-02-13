@@ -3,10 +3,10 @@ from __future__ import annotations
 import csv
 import json
 import time
+from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, Iterator, List, Optional
 
 from utils.logger import get_logger
 
@@ -34,12 +34,12 @@ class MarketReplay:
     - JSONL files where each line is a dict with equivalent fields
     """
 
-    def __init__(self, bars: List[ReplayBar]):
+    def __init__(self, bars: list[ReplayBar]):
         self._bars = sorted(bars, key=lambda b: (b.ts, b.symbol))
         self._idx = 0
 
     @classmethod
-    def from_file(cls, path: Path) -> "MarketReplay":
+    def from_file(cls, path: Path) -> MarketReplay:
         path = Path(path)
         if not path.exists():
             raise FileNotFoundError(f"Replay file not found: {path}")
@@ -52,7 +52,7 @@ class MarketReplay:
         raise ValueError(f"Unsupported replay format: {path.suffix}")
 
     @staticmethod
-    def _parse_bar(obj: Dict) -> Optional[ReplayBar]:
+    def _parse_bar(obj: dict) -> ReplayBar | None:
         try:
             ts_raw = obj.get("ts") or obj.get("timestamp")
             if ts_raw is None:
@@ -79,8 +79,8 @@ class MarketReplay:
             return None
 
     @classmethod
-    def _load_csv(cls, path: Path) -> List[ReplayBar]:
-        out: List[ReplayBar] = []
+    def _load_csv(cls, path: Path) -> list[ReplayBar]:
+        out: list[ReplayBar] = []
         with path.open("r", encoding="utf-8") as f:
             reader = csv.DictReader(f)
             for row in reader:
@@ -91,8 +91,8 @@ class MarketReplay:
         return out
 
     @classmethod
-    def _load_jsonl(cls, path: Path) -> List[ReplayBar]:
-        out: List[ReplayBar] = []
+    def _load_jsonl(cls, path: Path) -> list[ReplayBar]:
+        out: list[ReplayBar] = []
         with path.open("r", encoding="utf-8") as f:
             for line in f:
                 line = line.strip()
@@ -114,7 +114,7 @@ class MarketReplay:
     def reset(self) -> None:
         self._idx = 0
 
-    def next(self) -> Optional[ReplayBar]:
+    def next(self) -> ReplayBar | None:
         if self._idx >= len(self._bars):
             return None
         bar = self._bars[self._idx]
@@ -138,7 +138,7 @@ class MarketReplay:
         if not self._bars:
             return
 
-        prev_ts: Optional[datetime] = None
+        prev_ts: datetime | None = None
         for bar in self._bars:
             if prev_ts is not None:
                 dt = (bar.ts - prev_ts).total_seconds()

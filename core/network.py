@@ -1,13 +1,12 @@
 # core/network.py
 
-import time
-import threading
-import requests
-from dataclasses import dataclass, field
-from typing import Optional
-from datetime import datetime, timedelta
-
 import os
+import threading
+import time
+from dataclasses import dataclass
+from datetime import datetime
+
+import requests
 
 from utils.logger import get_logger
 
@@ -25,7 +24,7 @@ class NetworkEnv:
     yahoo_ok: bool = False                # Yahoo Finance
     csindex_ok: bool = False              # CSIndex constituents
 
-    detected_at: Optional[datetime] = None
+    detected_at: datetime | None = None
     detection_method: str = ""
     latency_ms: float = 0.0
 
@@ -52,7 +51,7 @@ class NetworkDetector:
         if self._initialized:
             return
         self._initialized = True
-        self._env: Optional[NetworkEnv] = None
+        self._env: NetworkEnv | None = None
         self._env_time: float = 0.0
         self._ttl: float = 120.0  # Re-detect every 2 minutes
         self._probe_lock = threading.Lock()
@@ -86,7 +85,7 @@ class NetworkDetector:
         env = NetworkEnv(detected_at=datetime.now())
         start = time.time()
 
-        def _env_bool(key: str) -> Optional[bool]:
+        def _env_bool(key: str) -> bool | None:
             val = os.environ.get(key)
             if val is None:
                 return None

@@ -4,7 +4,6 @@ import csv
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, List, Optional
 
 import pandas as pd
 
@@ -35,11 +34,11 @@ class SessionBarCache:
     recently seen market data without refetching.
     """
 
-    def __init__(self, root: Optional[Path] = None) -> None:
+    def __init__(self, root: Path | None = None) -> None:
         base = Path(root) if root else (CONFIG.data_dir / "session_bars")
         self._root = base
         self._root.mkdir(parents=True, exist_ok=True)
-        self._locks: Dict[str, threading.Lock] = {}
+        self._locks: dict[str, threading.Lock] = {}
         self._global_lock = threading.Lock()
 
     @property
@@ -191,11 +190,11 @@ class SessionBarCache:
 
     def get_recent_symbols(
         self,
-        interval: Optional[str] = None,
+        interval: str | None = None,
         min_rows: int = 10,
-    ) -> List[str]:
+    ) -> list[str]:
         iv = str(interval).lower() if interval else None
-        out: List[str] = []
+        out: list[str] = []
         for path in sorted(self._root.glob("*.csv")):
             stem = path.stem
             if "_" not in stem:
@@ -204,7 +203,8 @@ class SessionBarCache:
             if iv and file_iv != iv:
                 continue
             try:
-                rows = sum(1 for _ in path.open("r", encoding="utf-8")) - 1
+                with path.open("r", encoding="utf-8") as handle:
+                    rows = sum(1 for _ in handle) - 1
             except Exception:
                 rows = 0
             if rows >= min_rows:
@@ -212,7 +212,7 @@ class SessionBarCache:
         return sorted(set(c for c in out if c))
 
 
-_session_cache: Optional[SessionBarCache] = None
+_session_cache: SessionBarCache | None = None
 _session_cache_lock = threading.Lock()
 
 

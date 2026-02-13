@@ -2,15 +2,16 @@
 from __future__ import annotations
 
 import copy
+import pickle
+import threading
+from collections import deque
+from datetime import datetime
+from pathlib import Path
+from typing import Any, Protocol
+
 import numpy as np
 import pandas as pd
-from typing import Tuple, List, Optional, Dict, Union, Any, Protocol
 from sklearn.preprocessing import RobustScaler
-import pickle
-from pathlib import Path
-import threading
-from datetime import datetime
-from collections import deque
 
 from config.settings import CONFIG
 from utils.logger import get_logger
@@ -29,7 +30,7 @@ class FeatureEngineProtocol(Protocol):
     MIN_ROWS: int
 
     def create_features(self, df: pd.DataFrame) -> pd.DataFrame: ...
-    def get_feature_columns(self) -> List[str]: ...
+    def get_feature_columns(self) -> list[str]: ...
 
 class RealtimeBuffer:
     """
@@ -41,24 +42,24 @@ class RealtimeBuffer:
     ``with buffer.lock:`` to hold the lock across multiple calls.
     """
 
-    def __init__(self, max_size: Optional[int] = None):
+    def __init__(self, max_size: int | None = None):
         self.max_size = max_size or CONFIG.SEQUENCE_LENGTH * 2
         self._buffer: deque = deque(maxlen=self.max_size)
         self._lock = threading.RLock()
-        self._last_update: Optional[datetime] = None
+        self._last_update: datetime | None = None
 
     @property
     def lock(self) -> threading.RLock:
         """Expose lock for compound atomic operations."""
         return self._lock
 
-    def append(self, row: Dict[str, float]) -> None:
+    def append(self, row: dict[str, float]) -> None:
         """Add a new bar to the buffer."""
         with self._lock:
             self._buffer.append(row)
             self._last_update = datetime.now()
 
-    def extend(self, rows: List[Dict[str, float]]) -> None:
+    def extend(self, rows: list[dict[str, float]]) -> None:
         """Add multiple bars to the buffer."""
         with self._lock:
             for row in rows:
@@ -73,7 +74,7 @@ class RealtimeBuffer:
                 return pd.DataFrame()
             return pd.DataFrame(list(self._buffer))
 
-    def get_latest(self, n: Optional[int] = None) -> pd.DataFrame:
+    def get_latest(self, n: int | None = None) -> pd.DataFrame:
         """Get the latest N bars as DataFrame."""
         n = n or CONFIG.SEQUENCE_LENGTH
         with self._lock:
@@ -82,7 +83,7 @@ class RealtimeBuffer:
             data = list(self._buffer)[-n:]
             return pd.DataFrame(data)
 
-    def is_ready(self, min_bars: Optional[int] = None) -> bool:
+    def is_ready(self, min_bars: int | None = None) -> bool:
         """Check if buffer has enough data for prediction."""
         min_bars = min_bars or CONFIG.SEQUENCE_LENGTH
         with self._lock:
@@ -95,8 +96,8 @@ class RealtimeBuffer:
             self._last_update = None
 
     def append_and_snapshot(
-        self, row: Dict[str, float], min_required: int
-    ) -> Optional[pd.DataFrame]:
+        self, row: dict[str, float], min_required: int
+    ) -> pd.DataFrame | None:
         """
         Atomically append a row and return a DataFrame snapshot
         if the buffer has >= min_required rows, else None.
@@ -135,7 +136,7 @@ class RealtimeBuffer:
             return len(self._buffer)
 
     @property
-    def last_update(self) -> Optional[datetime]:
+    def last_update(self) -> datetime | None:
         with self._lock:
             return self._last_update
 
@@ -159,10 +160,10 @@ class DataProcessor:
     """
 
     def __init__(self) -> None:
-        self.scaler: Optional[RobustScaler] = None
+        self.scaler: RobustScaler | None = None
         self._fitted = False
         self._lock = threading.RLock()
-        self._n_features: Optional[int] = None
+        self._n_features: int | None = None
         self._fit_samples: int = 0
 
         self._interval: str = "1d"
@@ -170,7 +171,7 @@ class DataProcessor:
         self._scaler_version: str = ""
 
         # Real-time buffers per stock
-        self._realtime_buffers: Dict[str, RealtimeBuffer] = {}
+        self._realtime_buffers: dict[str, RealtimeBuffer] = {}
         self._buffer_lock = threading.RLock()
 
     # =========================================================================
@@ -179,10 +180,10 @@ class DataProcessor:
     def create_labels(
         self,
         df: pd.DataFrame,
-        horizon: Optional[int] = None,
-        up_thresh: Optional[float] = None,
-        down_thresh: Optional[float] = None,
-        profit_aware: Optional[bool] = None,
+        horizon: int | None = None,
+        up_thresh: float | None = None,
+        down_thresh: float | None = None,
+        profit_aware: bool | None = None,
     ) -> pd.DataFrame:
         """
         Create classification labels based on future returns.
@@ -269,9 +270,9 @@ class DataProcessor:
     def fit_scaler(
         self,
         features: np.ndarray,
-        interval: Optional[str] = None,
-        horizon: Optional[int] = None,
-    ) -> "DataProcessor":
+        interval: str | None = None,
+        horizon: int | None = None,
+    ) -> DataProcessor:
         """
         Fit scaler on training data ONLY.
         Thread-safe.
@@ -369,9 +370,9 @@ class DataProcessor:
 
     def save_scaler(
         self,
-        path: Optional[Union[str, Path]] = None,
-        interval: Optional[str] = None,
-        horizon: Optional[int] = None,
+        path: str | Path | None = None,
+        interval: str | None = None,
+        horizon: int | None = None,
     ) -> None:
         """
         Save scaler atomically with metadata.
@@ -438,9 +439,9 @@ class DataProcessor:
 
     def load_scaler(
         self,
-        path: Optional[Union[str, Path]] = None,
-        interval: Optional[str] = None,
-        horizon: Optional[int] = None,
+        path: str | Path | None = None,
+        interval: str | None = None,
+        horizon: int | None = None,
     ) -> bool:
         """
         Load saved scaler for inference.
@@ -502,7 +503,7 @@ class DataProcessor:
             return self._fitted
 
     @property
-    def n_features(self) -> Optional[int]:
+    def n_features(self) -> int | None:
         """Get number of features."""
         with self._lock:
             return self._n_features
@@ -513,15 +514,12 @@ class DataProcessor:
     def prepare_sequences(
         self,
         df: pd.DataFrame,
-        feature_cols: List[str],
+        feature_cols: list[str],
         fit_scaler: bool = False,
         return_index: bool = False,
-        interval: Optional[str] = None,
-        horizon: Optional[int] = None,
-    ) -> Union[
-        Tuple[np.ndarray, np.ndarray, np.ndarray],
-        Tuple[np.ndarray, np.ndarray, np.ndarray, pd.DatetimeIndex],
-    ]:
+        interval: str | None = None,
+        horizon: int | None = None,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray] | tuple[np.ndarray, np.ndarray, np.ndarray, pd.DatetimeIndex]:
         """
         Prepare sequences for training/validation.
 
@@ -601,10 +599,10 @@ class DataProcessor:
                 -FEATURE_CLIP_VALUE, FEATURE_CLIP_VALUE,
             ).astype(np.float32)
 
-        X_list: List[np.ndarray] = []
-        y_list: List[int] = []
-        r_list: List[float] = []
-        idx_list: List[Any] = []
+        X_list: list[np.ndarray] = []
+        y_list: list[int] = []
+        r_list: list[float] = []
+        idx_list: list[Any] = []
         skipped_invalid = 0
 
         for i in range(seq_len - 1, len(features)):
@@ -659,15 +657,12 @@ class DataProcessor:
     def prepare_forecast_sequences(
         self,
         df: pd.DataFrame,
-        feature_cols: List[str],
+        feature_cols: list[str],
         horizon: int,
         fit_scaler: bool = False,
         return_index: bool = False,
-        interval: Optional[str] = None,
-    ) -> Union[
-        Tuple[np.ndarray, np.ndarray],
-        Tuple[np.ndarray, np.ndarray, pd.DatetimeIndex],
-    ]:
+        interval: str | None = None,
+    ) -> tuple[np.ndarray, np.ndarray] | tuple[np.ndarray, np.ndarray, pd.DatetimeIndex]:
         """
         Prepare multi-step forecasting dataset.
 
@@ -727,9 +722,9 @@ class DataProcessor:
                 -FEATURE_CLIP_VALUE, FEATURE_CLIP_VALUE,
             ).astype(np.float32)
 
-        X_list: List[np.ndarray] = []
-        Y_list: List[np.ndarray] = []
-        idx_list: List[Any] = []
+        X_list: list[np.ndarray] = []
+        Y_list: list[np.ndarray] = []
+        idx_list: list[Any] = []
 
         n = len(df)
         for i in range(seq_len - 1, n):
@@ -780,7 +775,7 @@ class DataProcessor:
     def prepare_inference_sequence(
         self,
         df: pd.DataFrame,
-        feature_cols: List[str],
+        feature_cols: list[str],
     ) -> np.ndarray:
         """
         Prepare a single sequence for inference using the last
@@ -830,10 +825,10 @@ class DataProcessor:
     def prepare_realtime_sequence(
         self,
         code: str,
-        new_bar: Dict[str, float],
-        feature_cols: List[str],
-        feature_engine: Optional[Any] = None,
-    ) -> Optional[np.ndarray]:
+        new_bar: dict[str, float],
+        feature_cols: list[str],
+        feature_engine: Any | None = None,
+    ) -> np.ndarray | None:
         """
         Prepare sequence for real-time prediction with streaming data.
         Uses config-driven feature lookback instead of magic number.
@@ -887,12 +882,12 @@ class DataProcessor:
 
     def prepare_batch_inference(
         self,
-        dataframes: Dict[str, pd.DataFrame],
-        feature_cols: List[str],
-    ) -> Tuple[np.ndarray, List[str]]:
+        dataframes: dict[str, pd.DataFrame],
+        feature_cols: list[str],
+    ) -> tuple[np.ndarray, list[str]]:
         """Prepare batch inference for multiple stocks."""
-        X_list: List[np.ndarray] = []
-        codes: List[str] = []
+        X_list: list[np.ndarray] = []
+        codes: list[str] = []
 
         for code, df in dataframes.items():
             try:
@@ -909,12 +904,12 @@ class DataProcessor:
 
     def get_realtime_buffer(
         self, code: str
-    ) -> Optional[RealtimeBuffer]:
+    ) -> RealtimeBuffer | None:
         """Get the realtime buffer for a stock."""
         with self._buffer_lock:
             return self._realtime_buffers.get(code)
 
-    def clear_realtime_buffer(self, code: Optional[str] = None) -> None:
+    def clear_realtime_buffer(self, code: str | None = None) -> None:
         """Clear realtime buffer(s)."""
         with self._buffer_lock:
             if code:
@@ -950,11 +945,11 @@ class DataProcessor:
     def split_temporal(
         self,
         df: pd.DataFrame,
-        feature_cols: List[str],
+        feature_cols: list[str],
         fit_scaler_on_train: bool = True,
-        horizon: Optional[int] = None,
-        feature_engine: Optional[Any] = None,
-    ) -> Dict[str, Tuple[np.ndarray, np.ndarray, np.ndarray]]:
+        horizon: int | None = None,
+        feature_engine: Any | None = None,
+    ) -> dict[str, tuple[np.ndarray, np.ndarray, np.ndarray]]:
         """Alias for split_temporal_single_stock."""
         return self.split_temporal_single_stock(
             df,
@@ -967,11 +962,11 @@ class DataProcessor:
     def split_temporal_single_stock(
         self,
         df: pd.DataFrame,
-        feature_cols: List[str],
+        feature_cols: list[str],
         fit_scaler_on_train: bool = True,
-        horizon: Optional[int] = None,
-        feature_engine: Optional[Any] = None,
-    ) -> Dict[str, Tuple[np.ndarray, np.ndarray, np.ndarray]]:
+        horizon: int | None = None,
+        feature_engine: Any | None = None,
+    ) -> dict[str, tuple[np.ndarray, np.ndarray, np.ndarray]]:
         """
         Split a single stock temporally with embargo gap between splits.
 
@@ -989,7 +984,7 @@ class DataProcessor:
         n_features = len(feature_cols)
 
         # FIX SHAPE: Define properly shaped empty arrays
-        empty: Tuple[np.ndarray, np.ndarray, np.ndarray] = (
+        empty: tuple[np.ndarray, np.ndarray, np.ndarray] = (
             np.zeros((0, seq_len, n_features), dtype=np.float32),
             np.zeros((0,), dtype=np.int64),
             np.zeros((0,), dtype=np.float32),
@@ -1181,7 +1176,7 @@ class DataProcessor:
                         )
 
         # ---- prepare sequences for each split ----
-        results: Dict[str, Tuple[np.ndarray, np.ndarray, np.ndarray]] = {}
+        results: dict[str, tuple[np.ndarray, np.ndarray, np.ndarray]] = {}
 
         for name, split_df in [
             ("train", train_df),
@@ -1220,12 +1215,12 @@ class DataProcessor:
     # =========================================================================
 
     def prepare_single_sequence(
-        self, df: pd.DataFrame, feature_cols: List[str]
+        self, df: pd.DataFrame, feature_cols: list[str]
     ) -> np.ndarray:
         """Alias for prepare_inference_sequence."""
         return self.prepare_inference_sequence(df, feature_cols)
 
-    def get_class_distribution(self, y: np.ndarray) -> Dict[str, int]:
+    def get_class_distribution(self, y: np.ndarray) -> dict[str, int]:
         """
         Get class distribution for logging.
         Dynamically handles any NUM_CLASSES value.
@@ -1235,7 +1230,7 @@ class DataProcessor:
         num_classes = int(CONFIG.NUM_CLASSES)
 
         if len(y) == 0:
-            dist: Dict[str, int] = {}
+            dist: dict[str, int] = {}
             for i in range(num_classes):
                 label_name = _DEFAULT_LABEL_NAMES.get(i, f"CLASS_{i}")
                 dist[label_name] = 0
@@ -1272,7 +1267,7 @@ class DataProcessor:
 
         return dist
 
-    def get_scaler_info(self) -> Dict[str, Any]:
+    def get_scaler_info(self) -> dict[str, Any]:
         """Get scaler metadata."""
         with self._lock:
             return {
@@ -1285,7 +1280,7 @@ class DataProcessor:
             }
 
     def validate_features(
-        self, df: pd.DataFrame, feature_cols: List[str]
+        self, df: pd.DataFrame, feature_cols: list[str]
     ) -> bool:
         """Validate that DataFrame has all required features."""
         missing = set(feature_cols) - set(df.columns)
@@ -1314,11 +1309,11 @@ class RealtimePredictor:
         self.horizon = int(horizon)
 
         self.processor = DataProcessor()
-        self.feature_engine: Optional[Any] = None
-        self.ensemble: Optional[Any] = None
-        self.forecaster: Optional[Any] = None
+        self.feature_engine: Any | None = None
+        self.ensemble: Any | None = None
+        self.forecaster: Any | None = None
 
-        self._feature_cols: List[str] = []
+        self._feature_cols: list[str] = []
         self._loaded = False
         self._loading = False
         self._lock = threading.RLock()
@@ -1434,6 +1429,7 @@ class RealtimePredictor:
         Only load from trusted model files.
         """
         import torch
+
         from models.networks import TCNModel
 
         try:
@@ -1475,7 +1471,7 @@ class RealtimePredictor:
         self,
         df: pd.DataFrame,
         include_forecast: bool = True,
-    ) -> Optional[Dict[str, Any]]:
+    ) -> dict[str, Any] | None:
         """
         Make real-time prediction.
 
@@ -1506,7 +1502,7 @@ class RealtimePredictor:
         self,
         df: pd.DataFrame,
         include_forecast: bool,
-    ) -> Optional[Dict[str, Any]]:
+    ) -> dict[str, Any] | None:
         """
         Internal prediction logic.
 
@@ -1530,7 +1526,7 @@ class RealtimePredictor:
             )
 
             num_classes = int(CONFIG.NUM_CLASSES)
-            result: Dict[str, Any] = {
+            result: dict[str, Any] = {
                 "timestamp": datetime.now(),
                 "signal": "HOLD",
                 "confidence": 0.0,
@@ -1583,11 +1579,11 @@ class RealtimePredictor:
 
     def predict_batch(
         self,
-        dataframes: Dict[str, pd.DataFrame],
+        dataframes: dict[str, pd.DataFrame],
         include_forecast: bool = False,
-    ) -> Dict[str, Dict[str, Any]]:
+    ) -> dict[str, dict[str, Any]]:
         """Make predictions for multiple stocks."""
-        results: Dict[str, Dict[str, Any]] = {}
+        results: dict[str, dict[str, Any]] = {}
 
         for code, df in dataframes.items():
             pred = self.predict(
@@ -1601,8 +1597,8 @@ class RealtimePredictor:
     def update_and_predict(
         self,
         code: str,
-        new_bar: Dict[str, float],
-    ) -> Optional[Dict[str, Any]]:
+        new_bar: dict[str, float],
+    ) -> dict[str, Any] | None:
         """Update buffer with new bar and make prediction."""
         with self._lock:
             is_loaded = self._loaded
@@ -1617,8 +1613,8 @@ class RealtimePredictor:
     def _do_update_and_predict(
         self,
         code: str,
-        new_bar: Dict[str, float],
-    ) -> Optional[Dict[str, Any]]:
+        new_bar: dict[str, float],
+    ) -> dict[str, Any] | None:
         """Internal update and predict logic."""
         X = self.processor.prepare_realtime_sequence(
             code, new_bar, self._feature_cols, self.feature_engine
@@ -1627,7 +1623,7 @@ class RealtimePredictor:
         if X is None:
             return None
 
-        result: Dict[str, Any] = {
+        result: dict[str, Any] = {
             "code": code,
             "timestamp": datetime.now(),
             "signal": "HOLD",

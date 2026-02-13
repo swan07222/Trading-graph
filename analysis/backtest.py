@@ -1,19 +1,18 @@
 # analysis/backtest.py
-import os
-import numpy as np
-import pandas as pd
-from typing import Dict, List, Tuple, Optional
+from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime
-from collections import defaultdict
+
+import numpy as np
+import pandas as pd
 
 from config.settings import CONFIG
-from data.fetcher import DataFetcher
+from core.constants import get_exchange, get_lot_size, get_price_limit
 from data.features import FeatureEngine
+from data.fetcher import DataFetcher
 from data.processor import DataProcessor
 from models.ensemble import EnsembleModel
 from utils.logger import get_logger
-from core.constants import get_price_limit, get_lot_size, get_exchange
 
 log = get_logger(__name__)
 
@@ -21,7 +20,7 @@ log = get_logger(__name__)
 class BacktestTrade:
     """Single trade record"""
     entry_date: datetime
-    exit_date: Optional[datetime]
+    exit_date: datetime | None
     stock_code: str
     side: str
     entry_price: float
@@ -77,9 +76,9 @@ class BacktestResult:
     avg_fold_accuracy: float
 
     benchmark_return: float = 0.0
-    fold_results: List[Dict] = field(default_factory=list)
-    equity_curve: List[float] = field(default_factory=list)
-    dates: List[datetime] = field(default_factory=list)
+    fold_results: list[dict] = field(default_factory=list)
+    equity_curve: list[float] = field(default_factory=list)
+    dates: list[datetime] = field(default_factory=list)
 
     def is_profitable(self) -> bool:
         return (
@@ -135,7 +134,7 @@ class Backtester:
 
     def run(
         self,
-        stock_codes: List[str] = None,
+        stock_codes: list[str] = None,
         train_months: int = 12,
         test_months: int = 1,
         min_data_days: int = 500,
@@ -145,7 +144,7 @@ class Backtester:
         stocks = self._get_stock_list(stock_codes)
         capital = initial_capital or getattr(CONFIG, 'capital', 1000000)
 
-        log.info(f"Starting walk-forward backtest:")
+        log.info("Starting walk-forward backtest:")
         log.info(f"  Stocks to test: {stocks}")
         log.info(f"  Train: {train_months} months, Test: {test_months} months")
         log.info(f"  Capital: ¥{capital:,.2f}")
@@ -176,8 +175,8 @@ class Backtester:
         log.info(f"  Folds: {len(folds)}")
 
         all_trades = []
-        daily_returns_by_date: Dict[datetime, List[float]] = defaultdict(list)
-        benchmark_returns_by_date: Dict[datetime, List[float]] = defaultdict(list)
+        daily_returns_by_date: dict[datetime, list[float]] = defaultdict(list)
+        benchmark_returns_by_date: dict[datetime, list[float]] = defaultdict(list)
         fold_accuracies = []
         fold_results = []
 
@@ -241,7 +240,7 @@ class Backtester:
 
         return result
 
-    def _get_stock_list(self, stock_codes: Optional[List[str]]) -> List[str]:
+    def _get_stock_list(self, stock_codes: list[str] | None) -> list[str]:
         """Get stock list with fallbacks"""
         if stock_codes:
             return stock_codes
@@ -265,9 +264,9 @@ class Backtester:
         log.warning(f"No stock pool configured, using default stocks: {default_stocks}")
         return default_stocks
 
-    def _collect_data(self, stocks: List[str], min_days: int) -> Dict[str, pd.DataFrame]:
+    def _collect_data(self, stocks: list[str], min_days: int) -> dict[str, pd.DataFrame]:
         """Collect RAW OHLCV only (NO features here to avoid fold leakage)."""
-        all_data: Dict[str, pd.DataFrame] = {}
+        all_data: dict[str, pd.DataFrame] = {}
         errors = []
 
         for code in stocks:
@@ -307,7 +306,7 @@ class Backtester:
 
         return all_data
 
-    def _diagnose_data_issue(self, stocks: List[str]) -> str:
+    def _diagnose_data_issue(self, stocks: list[str]) -> str:
         """Provide detailed diagnosis of data issues"""
         issues = []
 
@@ -340,7 +339,7 @@ class Backtester:
         max_date: pd.Timestamp,
         train_months: int,
         test_months: int
-    ) -> List[Tuple]:
+    ) -> list[tuple]:
         """Generate walk-forward folds with proper separation"""
         folds = []
 
@@ -365,13 +364,13 @@ class Backtester:
 
     def _run_fold(
         self,
-        all_data: Dict[str, pd.DataFrame],   # RAW OHLCV now
+        all_data: dict[str, pd.DataFrame],   # RAW OHLCV now
         train_start: pd.Timestamp,
         train_end: pd.Timestamp,
         test_start: pd.Timestamp,
         test_end: pd.Timestamp,
         capital: float
-    ) -> Optional[Tuple]:
+    ) -> tuple | None:
         processor = DataProcessor()
         feature_cols = self.feature_engine.get_feature_columns()
 
@@ -411,7 +410,7 @@ class Backtester:
         # -------------------------
         X_train_list, y_train_list = [], []
 
-        for code, feat_train in train_split_data.items():
+        for _code, feat_train in train_split_data.items():
             if len(feat_train) >= seq_length + 10:
                 X, y, _ = processor.prepare_sequences(feat_train, feature_cols, fit_scaler=False)
                 if len(X) > 0:
@@ -441,11 +440,11 @@ class Backtester:
         # -------------------------
         # 4) Prepare TEST (compute features inside fold, with lookback context)
         # -------------------------
-        trades: List[BacktestTrade] = []
+        trades: list[BacktestTrade] = []
         predictions, actuals = [], []
 
-        portfolio_values_by_date: Dict[pd.Timestamp, float] = defaultdict(float)
-        benchmark_values_by_date: Dict[pd.Timestamp, float] = defaultdict(float)
+        portfolio_values_by_date: dict[pd.Timestamp, float] = defaultdict(float)
+        benchmark_values_by_date: dict[pd.Timestamp, float] = defaultdict(float)
 
         valid_test_codes = []
         prepared = {}
@@ -521,8 +520,8 @@ class Backtester:
         log.info(f"  Fold accuracy: {accuracy:.2%}")
 
         sorted_dates = sorted(portfolio_values_by_date.keys())
-        returns_by_date: Dict[pd.Timestamp, float] = {}
-        bench_by_date: Dict[pd.Timestamp, float] = {}
+        returns_by_date: dict[pd.Timestamp, float] = {}
+        bench_by_date: dict[pd.Timestamp, float] = {}
 
         for i, dt in enumerate(sorted_dates):
             if i == 0:
@@ -553,22 +552,22 @@ class Backtester:
         volumes: np.ndarray,
         stock_code: str,
         capital: float,
-        preds: Optional[List] = None,
-    ) -> Tuple[List[BacktestTrade], Dict, Dict]:
+        preds: list | None = None,
+    ) -> tuple[list[BacktestTrade], dict, dict]:
         """Simulate trading with realistic costs"""
         slippage_model = SlippageModel()
         lot = int(get_lot_size(stock_code))
 
-        trades: List[BacktestTrade] = []
+        trades: list[BacktestTrade] = []
 
         cash = float(capital)
         shares = 0
         entry_price = 0.0
-        entry_exec_i: Optional[int] = None
-        pending_signal: Optional[Tuple[str, float, pd.Timestamp]] = None
+        entry_exec_i: int | None = None
+        pending_signal: tuple[str, float, pd.Timestamp] | None = None
 
-        daily_portfolio_values: Dict[pd.Timestamp, float] = {}
-        daily_benchmark_values: Dict[pd.Timestamp, float] = {}
+        daily_portfolio_values: dict[pd.Timestamp, float] = {}
+        daily_benchmark_values: dict[pd.Timestamp, float] = {}
 
         horizon = 5
         min_confidence = 0.6
@@ -752,14 +751,14 @@ class Backtester:
 
     def _calculate_metrics(
         self,
-        trades: List[BacktestTrade],
+        trades: list[BacktestTrade],
         daily_returns: np.ndarray,
         benchmark_daily: np.ndarray,
-        dates: List,
+        dates: list,
         capital: float,
         num_folds: int,
-        fold_accuracies: List[float],
-        fold_results: List[Dict]
+        fold_accuracies: list[float],
+        fold_results: list[dict]
     ) -> BacktestResult:
         """Calculate comprehensive backtest metrics"""
 

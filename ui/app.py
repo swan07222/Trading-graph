@@ -1,27 +1,50 @@
 # ui/app.py
-import sys
 import os
+import sys
 import threading
 import time
 from datetime import datetime
 from importlib import import_module
-from typing import Optional, Dict, List, Any
+from typing import Any
 
+from PyQt6.QtCore import QSize, Qt, QThread, QTimer, pyqtSignal
+from PyQt6.QtGui import QAction, QActionGroup, QColor, QFont
 from PyQt6.QtWidgets import (
-    QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QPushButton, QLabel, QLineEdit, QGroupBox, QProgressBar,
-    QTabWidget, QStatusBar, QTextEdit, QDoubleSpinBox, QSpinBox,
-    QSplitter, QComboBox, QMessageBox, QListWidget, QGridLayout,
-    QFrame, QTableWidget, QTableWidgetItem, QHeaderView, QToolBar,
-    QDockWidget, QSystemTrayIcon, QMenu, QSizePolicy, QCheckBox,
+    QApplication,
+    QCheckBox,
+    QComboBox,
+    QDoubleSpinBox,
+    QFrame,
+    QGridLayout,
+    QGroupBox,
+    QHBoxLayout,
+    QHeaderView,
     QInputDialog,
+    QLabel,
+    QLineEdit,
+    QMainWindow,
+    QMessageBox,
+    QProgressBar,
+    QPushButton,
+    QSizePolicy,
+    QSpinBox,
+    QSplitter,
+    QStatusBar,
+    QTableWidget,
+    QTableWidgetItem,
+    QTabWidget,
+    QTextEdit,
+    QToolBar,
+    QVBoxLayout,
+    QWidget,
 )
-from PyQt6.QtCore import Qt, QTimer, QThread, pyqtSignal, QSize
-from PyQt6.QtGui import QFont, QColor, QIcon, QAction, QPalette, QActionGroup
 
 from config.settings import CONFIG, TradingMode
 from core.types import (
-    AutoTradeMode, AutoTradeState, AutoTradeAction, TradeSignal, OrderSide,
+    AutoTradeAction,
+    AutoTradeMode,
+    OrderSide,
+    TradeSignal,
 )
 from utils.logger import get_logger
 
@@ -85,7 +108,7 @@ class RealTimeMonitor(QThread):
     def __init__(
         self,
         predictor: Any,
-        watch_list: List[str],
+        watch_list: list[str],
         interval: str = "1m",
         forecast_minutes: int = 120,
         lookback_bars: int = 1400
@@ -311,20 +334,20 @@ class MainApp(QMainWindow):
         self.predictor = None
         self.executor = None
         self.current_prediction = None
-        self.workers: Dict[str, WorkerThread] = {}
-        self.monitor: Optional[RealTimeMonitor] = None
-        self.watch_list: List[str] = CONFIG.STOCK_POOL[:10]
+        self.workers: dict[str, WorkerThread] = {}
+        self.monitor: RealTimeMonitor | None = None
+        self.watch_list: list[str] = CONFIG.STOCK_POOL[:10]
 
         # Real-time state with thread safety
         self._last_forecast_refresh_ts: float = 0.0
-        self._live_price_series: Dict[str, List[float]] = {}
+        self._live_price_series: dict[str, list[float]] = {}
         self._price_series_lock = threading.Lock()
-        self._last_session_cache_write_ts: Dict[str, float] = {}
+        self._last_session_cache_write_ts: dict[str, float] = {}
         self._guess_profit_notional_shares: int = max(
             1, int(getattr(CONFIG, "LOT_SIZE", 100) or 100)
         )
 
-        self._bars_by_symbol: Dict[str, List[dict]] = {}
+        self._bars_by_symbol: dict[str, list[dict]] = {}
         self._syncing_mode_ui = False
         self._session_bar_cache = None
         try:
@@ -654,8 +677,8 @@ class MainApp(QMainWindow):
         self,
         symbol: str,
         *,
-        bar: Optional[Dict[str, Any]] = None,
-        price: Optional[float] = None,
+        bar: dict[str, Any] | None = None,
+        price: float | None = None,
     ) -> None:
         """Show latest quote/bar summary below chart."""
         label = getattr(self, "chart_latest_label", None)
@@ -665,11 +688,11 @@ class MainApp(QMainWindow):
             if bar:
                 o = float(bar.get("open", 0) or 0)
                 h = float(bar.get("high", 0) or 0)
-                l = float(bar.get("low", 0) or 0)
+                low = float(bar.get("low", 0) or 0)
                 c = float(bar.get("close", 0) or 0)
                 ts = bar.get("timestamp") or bar.get("time") or "--"
                 label.setText(
-                    f"Latest {symbol} | O {o:.2f}  H {h:.2f}  L {l:.2f}  C {c:.2f} | {ts}"
+                    f"Latest {symbol} | O {o:.2f}  H {h:.2f}  L {low:.2f}  C {c:.2f} | {ts}"
                 )
             elif price is not None and float(price) > 0:
                 label.setText(
@@ -838,7 +861,7 @@ class MainApp(QMainWindow):
         layout.addStretch()
         return panel
 
-    def _make_table(self, headers: List[str], max_height: Optional[int] = None):
+    def _make_table(self, headers: list[str], max_height: int | None = None):
         table = QTableWidget()
         table.setColumnCount(len(headers))
         table.setHorizontalHeaderLabels(headers)
@@ -1557,12 +1580,12 @@ class MainApp(QMainWindow):
 
     def _merge_bars(
         self,
-        base: List[Dict[str, Any]],
-        extra: List[Dict[str, Any]],
+        base: list[dict[str, Any]],
+        extra: list[dict[str, Any]],
         interval: str,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """Merge+deduplicate bars by timestamp and keep a 7-day rolling window."""
-        merged: Dict[str, Dict[str, Any]] = {}
+        merged: dict[str, dict[str, Any]] = {}
         for b in (base or []):
             ts = str(b.get("timestamp", ""))
             if ts:
@@ -1957,7 +1980,7 @@ class MainApp(QMainWindow):
         except Exception:
             pass
 
-    def _get_levels_dict(self) -> Optional[Dict[str, float]]:
+    def _get_levels_dict(self) -> dict[str, float] | None:
         """Get trading levels as dict"""
         if (
             not self.current_prediction
@@ -2079,7 +2102,6 @@ class MainApp(QMainWindow):
 
         interval = self.interval_combo.currentText().strip()
         forecast_bars = self.forecast_spin.value()
-        lookback = self.lookback_spin.value()
         forecast_lookback = 120
 
         self.analyze_action.setEnabled(False)
@@ -2112,7 +2134,7 @@ class MainApp(QMainWindow):
         symbol: str,
         interval: str,
         lookback_bars: int,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """Load historical OHLC bars for chart rendering."""
         if not self.predictor:
             return []
@@ -2129,7 +2151,7 @@ class MainApp(QMainWindow):
                 use_cache=True,
                 update_db=False,
             )
-            out: List[Dict[str, Any]] = []
+            out: list[dict[str, Any]] = []
 
             if df is not None and not df.empty:
                 for idx, row in df.tail(lookback).iterrows():
@@ -2138,16 +2160,16 @@ class MainApp(QMainWindow):
                         continue
                     o = float(row.get("open", c) or c)
                     h = float(row.get("high", c) or c)
-                    l = float(row.get("low", c) or c)
-                    if h < l:
-                        h, l = l, h
+                    low = float(row.get("low", c) or c)
+                    if h < low:
+                        h, low = low, h
                     ts_obj = row.get("datetime", idx)
                     ts = ts_obj.isoformat() if hasattr(ts_obj, "isoformat") else str(ts_obj)
                     out.append(
                         {
                             "open": o,
                             "high": h,
-                            "low": l,
+                            "low": low,
                             "close": c,
                             "timestamp": ts,
                             "final": True,
@@ -2167,15 +2189,15 @@ class MainApp(QMainWindow):
                             continue
                         o = float(row.get("open", c) or c)
                         h = float(row.get("high", c) or c)
-                        l = float(row.get("low", c) or c)
-                        if h < l:
-                            h, l = l, h
+                        low = float(row.get("low", c) or c)
+                        if h < low:
+                            h, low = low, h
                         ts = idx.isoformat() if hasattr(idx, "isoformat") else str(idx)
                         out.append(
                             {
                                 "open": o,
                                 "high": h,
-                                "low": l,
+                                "low": low,
                                 "close": c,
                                 "timestamp": ts,
                                 "final": bool(row.get("is_final", True)),
@@ -2184,7 +2206,7 @@ class MainApp(QMainWindow):
                         )
 
             # Deduplicate by timestamp and keep latest.
-            merged: Dict[str, Dict[str, Any]] = {}
+            merged: dict[str, dict[str, Any]] = {}
             for b in out:
                 merged[str(b.get("timestamp", ""))] = b
             out = list(merged.values())
@@ -2361,8 +2383,8 @@ class MainApp(QMainWindow):
 
         news_html = ""
         try:
-            from data.news import get_news_aggregator
             from core.network import get_network_env
+            from data.news import get_news_aggregator
 
             env = get_network_env()
             if env.is_china_direct or env.tencent_ok:
@@ -2657,7 +2679,7 @@ class MainApp(QMainWindow):
 
         self._update_correct_guess_profit_ui()
 
-    def _calculate_realtime_correct_guess_profit(self) -> Dict[str, float]:
+    def _calculate_realtime_correct_guess_profit(self) -> dict[str, float]:
         """
         Aggregate real-time guess quality across history rows.
         correct_profit sums only profitable (correct) directional guesses.
@@ -3137,7 +3159,7 @@ class MainApp(QMainWindow):
             )
 
             if reply == QMessageBox.StandardButton.Yes:
-                from core.types import TradeSignal, OrderSide
+                from core.types import OrderSide, TradeSignal
 
                 signal = TradeSignal(
                     symbol=pred.stock_code,
@@ -3248,7 +3270,7 @@ class MainApp(QMainWindow):
         """Show auto-learning dialog"""
         try:
             from .auto_learn_dialog import show_auto_learn_dialog
-            seed_codes: List[str] = []
+            seed_codes: list[str] = []
             try:
                 if self._session_bar_cache is not None:
                     interval = self.interval_combo.currentText().strip().lower()
@@ -3489,9 +3511,7 @@ class MainApp(QMainWindow):
 
     def _show_auto_trade_settings(self):
         """Show auto-trade settings dialog."""
-        from PyQt6.QtWidgets import (
-            QDialog, QFormLayout, QDialogButtonBox
-        )
+        from PyQt6.QtWidgets import QDialog, QDialogButtonBox, QFormLayout
 
         dialog = QDialog(self)
         dialog.setWindowTitle("Auto-Trade Settings")
@@ -3942,7 +3962,7 @@ class MainApp(QMainWindow):
             except Exception:
                 pass
 
-        for name, worker in list(self.workers.items()):
+        for _name, worker in list(self.workers.items()):
             try:
                 worker.cancel()
                 worker.quit()
@@ -4010,7 +4030,7 @@ class MainApp(QMainWindow):
             state_path = CONFIG.DATA_DIR / "app_state.json"
 
             if state_path.exists():
-                with open(state_path, 'r') as f:
+                with open(state_path) as f:
                     state = json.load(f)
 
                 if 'watch_list' in state:

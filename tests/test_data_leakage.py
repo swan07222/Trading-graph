@@ -1,16 +1,17 @@
 
-import pytest
-import numpy as np
-import pandas as pd
-from datetime import datetime, timedelta
 import sys
 from pathlib import Path
+
+import numpy as np
+import pandas as pd
+import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from config import CONFIG
-from data.processor import DataProcessor
 from data.features import FeatureEngine
+from data.processor import DataProcessor
+
 
 class TestScalerLeakage:
     """Tests to ensure scaler is not fitted on test data"""
@@ -84,9 +85,6 @@ class TestScalerLeakage:
         splits = processor.split_temporal(df, feature_cols)
 
         # Verify embargo is applied (train should be shorter than expected)
-        n = len(df)
-        expected_train_end = int(n * CONFIG.TRAIN_RATIO) - CONFIG.EMBARGO_BARS
-
         assert splits['train'][0].shape[0] > 0
         assert splits['val'][0].shape[0] > 0
         assert splits['test'][0].shape[0] > 0

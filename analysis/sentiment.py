@@ -7,9 +7,9 @@ import pickle
 import re
 import socket
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Callable, Dict, List, Tuple
 
 import requests
 
@@ -28,7 +28,7 @@ class NewsItem:
     source: str
     url: str
     timestamp: datetime
-    stock_codes: List[str]
+    stock_codes: list[str]
     sentiment_score: float = 0.0
     sentiment_label: str = "neutral"
 
@@ -183,7 +183,7 @@ class SentimentAnalyzer:
         except Exception:
             return kw
 
-    def analyze_batch(self, texts: List[str]) -> List[SentimentResult]:
+    def analyze_batch(self, texts: list[str]) -> list[SentimentResult]:
         return [self.analyze(text) for text in texts]
 
 
@@ -203,10 +203,10 @@ class NewsScraper:
         self._seen_path = self._cache_dir / "seen_hashes.json"
         self._load_seen_hashes()
 
-        self._last_request: Dict[str, float] = {}
+        self._last_request: dict[str, float] = {}
         self._rate_limits = {"sina": 0.5, "eastmoney": 0.7}
-        self._provider_weights: Dict[str, float] = {"sina": 1.0, "eastmoney": 1.1}
-        self._providers: Dict[str, Callable[[], List[NewsItem]]] = {
+        self._provider_weights: dict[str, float] = {"sina": 1.0, "eastmoney": 1.1}
+        self._providers: dict[str, Callable[[], list[NewsItem]]] = {
             "sina": lambda: self.scrape_sina(),
             "eastmoney": lambda: self.scrape_eastmoney(),
         }
@@ -220,7 +220,7 @@ class NewsScraper:
     def register_provider(
         self,
         name: str,
-        fetcher: Callable[[], List[NewsItem]],
+        fetcher: Callable[[], list[NewsItem]],
         weight: float = 1.0,
     ) -> None:
         norm = str(name or "").strip().lower()
@@ -239,7 +239,7 @@ class NewsScraper:
         self._provider_weights.pop(norm, None)
         return removed is not None
 
-    def get_provider_weights(self) -> Dict[str, float]:
+    def get_provider_weights(self) -> dict[str, float]:
         return dict(self._provider_weights)
 
     def _load_seen_hashes(self) -> None:
@@ -270,7 +270,7 @@ class NewsScraper:
             time.sleep(limit - elapsed)
         self._last_request[source] = time.time()
 
-    def _extract_stock_codes(self, text: str) -> List[str]:
+    def _extract_stock_codes(self, text: str) -> list[str]:
         patterns = [
             r"[\(\[]([036]\d{5})[\)\]]",
             r"(?<!\d)([036]\d{5})(?!\d)",
@@ -305,8 +305,8 @@ class NewsScraper:
         self._network_available_cache = ok
         return ok
 
-    def scrape_sina(self, max_items: int = 50) -> List[NewsItem]:
-        items: List[NewsItem] = []
+    def scrape_sina(self, max_items: int = 50) -> list[NewsItem]:
+        items: list[NewsItem] = []
         self._rate_limit("sina")
         try:
             url = "https://feed.mix.sina.com.cn/api/roll/get"
@@ -347,8 +347,8 @@ class NewsScraper:
             log.error(f"Sina scraping error: {e}")
         return items
 
-    def scrape_eastmoney(self, max_items: int = 30) -> List[NewsItem]:
-        items: List[NewsItem] = []
+    def scrape_eastmoney(self, max_items: int = 30) -> list[NewsItem]:
+        items: list[NewsItem] = []
         self._rate_limit("eastmoney")
         try:
             url = "https://np-anotice-stock.eastmoney.com/api/security/ann"
@@ -396,7 +396,7 @@ class NewsScraper:
             log.debug(f"Eastmoney scraping skipped: {e}")
         return items
 
-    def scrape_all(self) -> List[NewsItem]:
+    def scrape_all(self) -> list[NewsItem]:
         cache_path = self._cache_dir / "scrape_all.pkl"
         ttl_seconds = 180
         try:
@@ -410,7 +410,7 @@ class NewsScraper:
         except Exception:
             pass
 
-        items: List[NewsItem] = []
+        items: list[NewsItem] = []
         for name, fetcher in list(self._providers.items()):
             if name in ("sina", "eastmoney") and not self._network_available():
                 continue
@@ -433,7 +433,7 @@ class NewsScraper:
             pass
         return items
 
-    def get_stock_sentiment(self, stock_code: str) -> Tuple[float, float]:
+    def get_stock_sentiment(self, stock_code: str) -> tuple[float, float]:
         code = str(stock_code or "").strip()
         custom_sources = [
             name for name in self._providers.keys()
@@ -443,7 +443,7 @@ class NewsScraper:
         # Fast path: if custom providers are registered and they provide
         # relevant records, avoid external provider latency.
         if custom_sources:
-            custom_news: List[NewsItem] = []
+            custom_news: list[NewsItem] = []
             for name in custom_sources:
                 fetcher = self._providers.get(name)
                 if fetcher is None:
@@ -468,7 +468,7 @@ class NewsScraper:
             return 0.0, 0.0
         return self._aggregate_stock_sentiment(relevant)
 
-    def _aggregate_stock_sentiment(self, relevant: List[NewsItem]) -> Tuple[float, float]:
+    def _aggregate_stock_sentiment(self, relevant: list[NewsItem]) -> tuple[float, float]:
         now = datetime.now()
         weighted_score = 0.0
         total_weight = 0.0
@@ -488,7 +488,7 @@ class NewsScraper:
         confidence = min(1.0, 0.7 * min(len(relevant) / 8.0, 1.0) + 0.3 * breadth_boost)
         return float(avg_score), float(confidence)
 
-    def get_market_sentiment(self) -> Dict:
+    def get_market_sentiment(self) -> dict:
         all_news = self.scrape_all()
         if not all_news:
             return {"score": 0.0, "label": "neutral", "news_count": 0}

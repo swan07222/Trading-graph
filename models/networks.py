@@ -1,9 +1,10 @@
 # models/networks.py
 import math
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from typing import Tuple, Optional
+
 
 def _safe_num_heads(dim: int, preferred: int = 8) -> int:
     """Return the largest num_heads <= preferred that divides dim."""
@@ -121,7 +122,7 @@ class TransformerBlock(nn.Module):
             nn.Dropout(dropout),
         )
 
-        self._mask_cache: Optional[torch.Tensor] = None
+        self._mask_cache: torch.Tensor | None = None
         self._mask_cache_size: int = 0
 
     def _get_causal_mask(self, seq_len: int, device: torch.device) -> torch.Tensor:
@@ -332,7 +333,7 @@ class _ClassifierHead(nn.Module):
             nn.Sigmoid(),
         )
 
-    def forward(self, pooled: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+    def forward(self, pooled: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         return self.classifier(pooled), self.confidence(pooled)
 
 class LSTMModel(nn.Module):
@@ -359,7 +360,7 @@ class LSTMModel(nn.Module):
 
         self.apply(_init_weights)
 
-    def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+    def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         """
         Args:
             x: (batch, seq_len, input_size)
@@ -405,7 +406,7 @@ class TransformerModel(nn.Module):
 
         self.apply(_init_weights)
 
-    def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+    def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         """
         Args:
             x: (batch, seq_len, input_size)
@@ -455,7 +456,7 @@ class GRUModel(nn.Module):
 
         self.apply(_init_weights)
 
-    def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+    def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         """
         Args:
             x: (batch, seq_len, input_size)
@@ -502,7 +503,7 @@ class TCNModel(nn.Module):
 
         self.apply(_init_weights)
 
-    def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+    def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         """
         Args:
             x: (batch, seq_len, input_size)
@@ -565,7 +566,7 @@ class HybridModel(nn.Module):
 
         self.apply(_init_weights)
 
-    def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+    def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         """
         Args:
             x: (batch, seq_len, input_size)

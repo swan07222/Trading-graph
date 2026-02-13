@@ -1,15 +1,13 @@
 # trading/kill_switch.py
-import threading
-from datetime import datetime, timedelta
-from typing import Optional, Callable, List, Dict
-from dataclasses import dataclass
-from enum import Enum
-from pathlib import Path
 import json
+import threading
+from collections.abc import Callable
+from dataclasses import dataclass
+from datetime import datetime, timedelta
+from enum import Enum
 
 from config.settings import CONFIG
-from core.types import SystemStatus, RiskLevel
-from core.events import EVENT_BUS, EventType, Event
+from core.events import EVENT_BUS, Event, EventType
 from utils.logger import get_logger
 from utils.security import get_audit_log
 
@@ -27,8 +25,8 @@ class CircuitBreakerState:
     """Circuit breaker state"""
     type: CircuitBreakerType
     triggered: bool = False
-    triggered_at: Optional[datetime] = None
-    reset_at: Optional[datetime] = None
+    triggered_at: datetime | None = None
+    reset_at: datetime | None = None
     trigger_value: float = 0.0
     threshold: float = 0.0
     message: str = ""
@@ -43,15 +41,15 @@ class KillSwitch:
         self._audit = get_audit_log()
 
         self._active = False
-        self._activated_at: Optional[datetime] = None
+        self._activated_at: datetime | None = None
         self._activated_by: str = ""
         self._reason: str = ""
 
-        self._circuit_breakers: Dict[CircuitBreakerType, CircuitBreakerState] = {}
+        self._circuit_breakers: dict[CircuitBreakerType, CircuitBreakerState] = {}
         self._init_circuit_breakers()
 
-        self._on_activate: List[Callable] = []
-        self._on_deactivate: List[Callable] = []
+        self._on_activate: list[Callable] = []
+        self._on_deactivate: list[Callable] = []
 
         self._load_state()
 
@@ -374,7 +372,7 @@ class KillSwitch:
             return
 
         try:
-            with open(path, 'r') as f:
+            with open(path) as f:
                 state = json.load(f)
 
             self._active = state.get('active', False)
@@ -426,7 +424,7 @@ class KillSwitch:
         self._on_deactivate.append(callback)
 
 # FIX: Module-level lock instead of globals() pattern
-_kill_switch: Optional[KillSwitch] = None
+_kill_switch: KillSwitch | None = None
 _kill_switch_lock = threading.Lock()
 
 def get_kill_switch() -> KillSwitch:

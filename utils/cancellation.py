@@ -2,8 +2,9 @@
 from __future__ import annotations
 
 import threading
-from typing import Callable, Optional
+from collections.abc import Callable
 from contextlib import contextmanager
+
 
 class CancelledException(Exception):
     """Raised when a cancellable operation is cancelled."""
@@ -113,7 +114,7 @@ class CancellationToken:
         if self._cancelled.is_set():
             raise CancelledException("Operation was cancelled")
 
-    def wait(self, timeout: Optional[float] = None) -> bool:
+    def wait(self, timeout: float | None = None) -> bool:
         """
         Block until cancellation is requested or timeout expires.
 
@@ -157,7 +158,7 @@ class CancellationToken:
                 self._callbacks.clear()
 
 @contextmanager
-def cancellable_operation(token: Optional[CancellationToken] = None):
+def cancellable_operation(token: CancellationToken | None = None):
     """
     Context manager for cancellable operations.
 

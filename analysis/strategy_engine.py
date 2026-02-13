@@ -4,10 +4,10 @@ from dataclasses import dataclass
 from datetime import datetime
 from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
-from config.settings import CONFIG
 from analysis.strategy_marketplace import StrategyMarketplace
+from config.settings import CONFIG
 from utils.logger import get_logger
 
 log = get_logger(__name__)
@@ -31,12 +31,12 @@ class StrategyScriptEngine:
       Dict keys: action(str), score(float), reason(str, optional)
     """
 
-    def __init__(self, strategies_dir: Optional[Path] = None) -> None:
+    def __init__(self, strategies_dir: Path | None = None) -> None:
         base = Path(getattr(CONFIG, "base_dir", Path(".")))
         self._dir = Path(strategies_dir) if strategies_dir else (base / "strategies")
         self._marketplace = StrategyMarketplace(self._dir)
 
-    def list_strategy_files(self) -> List[Path]:
+    def list_strategy_files(self) -> list[Path]:
         files = self._marketplace.get_enabled_files()
         if files:
             return files
@@ -55,16 +55,16 @@ class StrategyScriptEngine:
     def evaluate(
         self,
         df,
-        indicators: Optional[Dict[str, float]],
+        indicators: dict[str, float] | None,
         symbol: str,
-    ) -> Tuple[float, List[str]]:
+    ) -> tuple[float, list[str]]:
         """
         Evaluate all strategy scripts and return:
         - bias score contribution in [-25, +25]
         - human-readable reasons list
         """
         total_bias = 0.0
-        reasons: List[str] = []
+        reasons: list[str] = []
         indicator_map = dict(indicators or {})
         context = {
             "symbol": str(symbol or ""),
@@ -93,9 +93,9 @@ class StrategyScriptEngine:
         self,
         path: Path,
         df,
-        indicators: Dict[str, float],
-        context: Dict[str, Any],
-    ) -> Optional[StrategySignal]:
+        indicators: dict[str, float],
+        context: dict[str, Any],
+    ) -> StrategySignal | None:
         try:
             module_name = f"strategy_{path.stem}"
             spec = spec_from_file_location(module_name, str(path))

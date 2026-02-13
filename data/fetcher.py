@@ -1,32 +1,32 @@
 # data/fetcher.py
+import json
 import math
 import os
 import socket
-import time
 import threading
-import json
-from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Tuple, Callable
-from dataclasses import dataclass
+import time
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass
+from datetime import datetime, timedelta
 from functools import wraps
 
-import pandas as pd
 import numpy as np
+import pandas as pd
 import requests
 
 from config.settings import CONFIG
+from core.exceptions import DataFetchError, DataSourceUnavailableError
 from data.cache import get_cache
 from data.database import get_database
 from data.session_cache import get_session_bar_cache
-from core.exceptions import DataFetchError, DataSourceUnavailableError
-from utils.logger import get_logger
 from utils.helpers import to_float, to_int
+from utils.logger import get_logger
 
 log = get_logger(__name__)
 
 # Maximum calendar days each interval can fetch (API limits)
-INTERVAL_MAX_DAYS: Dict[str, int] = {
+INTERVAL_MAX_DAYS: dict[str, int] = {
     "1m": 7,
     "2m": 60,
     "5m": 60,
@@ -39,7 +39,7 @@ INTERVAL_MAX_DAYS: Dict[str, int] = {
     "1mo": 10_000,
 }
 
-BARS_PER_DAY: Dict[str, float] = {
+BARS_PER_DAY: dict[str, float] = {
     "1m": 240,
     "2m": 120,
     "5m": 48,
@@ -90,7 +90,7 @@ def retry(max_attempts: int = 3, delay: float = 1.0, backoff: float = 2.0):
     def decorator(func: Callable) -> Callable:
         @wraps(func)
         def wrapper(*args, **kwargs):
-            last_error: Optional[Exception] = None
+            last_error: Exception | None = None
             current_delay = delay
             for attempt in range(max_attempts):
                 try:
@@ -126,7 +126,7 @@ class Quote:
     ask: float = 0.0
     bid_vol: int = 0
     ask_vol: int = 0
-    timestamp: Optional[datetime] = None
+    timestamp: datetime | None = None
     source: str = ""
     is_delayed: bool = True
     latency_ms: float = 0.0
@@ -140,13 +140,13 @@ class DataSourceStatus:
     """Health / telemetry for a single data source."""
     name: str
     available: bool = True
-    last_success: Optional[datetime] = None
-    last_error: Optional[str] = None
+    last_success: datetime | None = None
+    last_error: str | None = None
     success_count: int = 0
     error_count: int = 0
     consecutive_errors: int = 0
     avg_latency_ms: float = 0.0
-    disabled_until: Optional[datetime] = None
+    disabled_until: datetime | None = None
 
 class DataSource:
     """Abstract data source with error tracking and circuit-breaker."""
@@ -171,7 +171,7 @@ class DataSource:
                 "AppleWebKit/537.36"
             )
         })
-        self._latencies: List[float] = []
+        self._latencies: list[float] = []
         self._lock = threading.Lock()
 
     def is_available(self) -> bool:
@@ -238,14 +238,14 @@ class DataSource:
     ) -> pd.DataFrame:
         raise NotImplementedError
 
-    def get_realtime(self, code: str) -> Optional[Quote]:
+    def get_realtime(self, code: str) -> Quote | None:
         return None
 
 class SpotCache:
     """Thread-safe cached A-share spot data with TTL."""
 
     def __init__(self, ttl_seconds: float = _SPOT_CACHE_TTL):
-        self._cache: Optional[pd.DataFrame] = None
+        self._cache: pd.DataFrame | None = None
         self._cache_time: float = 0.0
         self._ttl = ttl_seconds
         self._lock = threading.RLock()
@@ -257,7 +257,7 @@ class SpotCache:
         except ImportError:
             pass
 
-    def get(self, force_refresh: bool = False) -> Optional[pd.DataFrame]:
+    def get(self, force_refresh: bool = False) -> pd.DataFrame | None:
         """Return cached spot DataFrame, refreshing if stale."""
         now = time.time()
 
@@ -306,7 +306,7 @@ class SpotCache:
                 with self._lock:
                     return self._cache
 
-    def get_quote(self, symbol: str) -> Optional[Dict]:
+    def get_quote(self, symbol: str) -> dict | None:
         """Look up a single stock from the cached spot snapshot."""
         symbol = str(symbol).strip()
         for prefix in ("sh", "sz", "SH", "SZ", "bj", "BJ"):
@@ -347,7 +347,7 @@ class SpotCache:
             "change_pct": to_float(r.get("涨跌幅", 0)),
         }
 
-_spot_cache: Optional[SpotCache] = None
+_spot_cache: SpotCache | None = None
 _spot_cache_lock = threading.Lock()
 
 def get_spot_cache() -> SpotCache:
@@ -391,7 +391,7 @@ class AkShareSource(DataSource):
     def __init__(self):
         super().__init__()
         self._ak = None
-        self._spot_cache: Optional[SpotCache] = None
+        self._spot_cache: SpotCache | None = None
         try:
             import akshare as ak
             self._ak = ak
@@ -448,7 +448,7 @@ class AkShareSource(DataSource):
         self._record_success(latency)
         return df.tail(days)
 
-    def get_realtime(self, code: str) -> Optional[Quote]:
+    def get_realtime(self, code: str) -> Quote | None:
         if not self._ak or not self.is_available():
             return None
         try:
@@ -682,7 +682,7 @@ class YahooSource(DataSource):
             )
             return pd.DataFrame()
 
-    def get_realtime(self, code: str) -> Optional[Quote]:
+    def get_realtime(self, code: str) -> Quote | None:
         if not self._yf or not self.is_available():
             return None
         try:
@@ -706,7 +706,7 @@ class YahooSource(DataSource):
             self._record_error(str(exc))
             return None
 
-    def _resolve_symbol(self, inst: dict) -> Optional[str]:
+    def _resolve_symbol(self, inst: dict) -> str | None:
         if inst.get("market") == "CN" and inst.get("asset") == "EQUITY":
             code6 = str(inst.get("symbol", "")).zfill(6)
             if not code6 or code6[0] not in self._SUPPORTED_PREFIXES:
@@ -739,14 +739,14 @@ class TencentQuoteSource(DataSource):
     needs_china_direct = False
     needs_vpn = False
 
-    def get_realtime_batch(self, codes: List[str]) -> Dict[str, Quote]:
+    def get_realtime_batch(self, codes: list[str]) -> dict[str, Quote]:
         if not self.is_available():
             return {}
 
         from core.constants import get_exchange
 
-        vendor_symbols: List[str] = []
-        vendor_to_code: Dict[str, str] = {}
+        vendor_symbols: list[str] = []
+        vendor_to_code: dict[str, str] = {}
         for c in codes:
             code6 = str(c).zfill(6)
             ex = get_exchange(code6)
@@ -761,7 +761,7 @@ class TencentQuoteSource(DataSource):
         if not vendor_symbols:
             return {}
 
-        out: Dict[str, Quote] = {}
+        out: dict[str, Quote] = {}
         start_all = time.time()
 
         try:
@@ -815,7 +815,7 @@ class TencentQuoteSource(DataSource):
             self._record_error(str(exc))
             return {}
 
-    def get_realtime(self, code: str) -> Optional[Quote]:
+    def get_realtime(self, code: str) -> Quote | None:
         res = self.get_realtime_batch([code])
         return res.get(str(code).zfill(6))
 
@@ -946,26 +946,26 @@ class DataFetcher:
     """
 
     def __init__(self):
-        self._all_sources: List[DataSource] = []
+        self._all_sources: list[DataSource] = []
         self._cache = get_cache()
         self._db = get_database()
         self._rate_limiter = threading.Semaphore(CONFIG.data.parallel_downloads)
-        self._request_times: Dict[str, float] = {}
+        self._request_times: dict[str, float] = {}
         self._min_interval: float = 0.5
         self._intraday_interval: float = 1.2
 
-        self._last_good_quotes: Dict[str, Quote] = {}
+        self._last_good_quotes: dict[str, Quote] = {}
         self._last_good_lock = threading.RLock()
 
         # Micro-caches — initialized here, not lazily
         self._rt_cache_lock = threading.RLock()
-        self._rt_batch_microcache: Dict[str, object] = {
+        self._rt_batch_microcache: dict[str, object] = {
             "ts": 0.0, "key": None, "data": {},
         }
-        self._rt_single_microcache: Dict[str, Dict[str, object]] = {}
+        self._rt_single_microcache: dict[str, dict[str, object]] = {}
 
         self._rate_lock = threading.Lock()
-        self._last_network_mode: Optional[bool] = None
+        self._last_network_mode: bool | None = None
         self._init_sources()
 
     def _init_sources(self) -> None:
@@ -1018,7 +1018,7 @@ class DataFetcher:
                         sym, interval=interval, limit=int(days)
                     )
 
-                def get_realtime(self, code: str) -> Optional[Quote]:
+                def get_realtime(self, code: str) -> Quote | None:
                     return None
 
             self._all_sources.append(LocalDatabaseSource(db))
@@ -1028,11 +1028,11 @@ class DataFetcher:
             log.warning(f"Failed to init localdb source: {exc}")
 
     @property
-    def _sources(self) -> List[DataSource]:
+    def _sources(self) -> list[DataSource]:
         """Backward-compatible alias — always reflects current _all_sources."""
         return self._all_sources
 
-    def _get_active_sources(self) -> List[DataSource]:
+    def _get_active_sources(self) -> list[DataSource]:
         """
         Get sources prioritized by current network environment.
 
@@ -1154,7 +1154,7 @@ class DataFetcher:
         except Exception:
             return False
 
-    def get_realtime_batch(self, codes: List[str]) -> Dict[str, Quote]:
+    def get_realtime_batch(self, codes: list[str]) -> dict[str, Quote]:
         """Fetch real-time quotes for multiple codes in one batch."""
         cleaned = list(dict.fromkeys(
             c for c in (self.clean_code(c) for c in codes) if c
@@ -1178,7 +1178,7 @@ class DataFetcher:
                 if isinstance(data, dict) and data:
                     return dict(data)
 
-        result: Dict[str, Quote] = {}
+        result: dict[str, Quote] = {}
 
         # Try batch-capable sources first
         for source in self._get_active_sources():
@@ -1216,7 +1216,7 @@ class DataFetcher:
         return result
 
     def _fill_from_spot_cache(
-        self, missing: List[str], result: Dict[str, Quote]
+        self, missing: list[str], result: dict[str, Quote]
     ) -> None:
         """Attempt to fill missing quotes from EastMoney spot cache."""
         try:
@@ -1243,9 +1243,9 @@ class DataFetcher:
         except Exception:
             pass
 
-    def _fallback_last_good(self, codes: List[str]) -> Dict[str, Quote]:
+    def _fallback_last_good(self, codes: list[str]) -> dict[str, Quote]:
         """Return last-good quotes if they are recent enough."""
-        result: Dict[str, Quote] = {}
+        result: dict[str, Quote] = {}
         with self._last_good_lock:
             for c in codes:
                 q = self._last_good_quotes.get(c)
@@ -1303,7 +1303,7 @@ class DataFetcher:
 
         with self._rate_limiter:
             errors = []
-            collected: List[pd.DataFrame] = []
+            collected: list[pd.DataFrame] = []
             for source in sources:
                 try:
                     self._rate_limit(source.name, interval)
@@ -1444,19 +1444,19 @@ class DataFetcher:
         self,
         code: str,
         days: int = 500,
-        bars: Optional[int] = None,
+        bars: int | None = None,
         use_cache: bool = True,
         update_db: bool = True,
-        instrument: Optional[dict] = None,
+        instrument: dict | None = None,
         interval: str = "1d",
-        max_age_hours: Optional[float] = None,
+        max_age_hours: float | None = None,
     ) -> pd.DataFrame:
         """
         Unified history fetcher.
 
         Priority: memory cache → local DB → online sources.
         """
-        from core.instruments import parse_instrument, instrument_key
+        from core.instruments import instrument_key, parse_instrument
 
         inst = instrument or parse_instrument(code)
         key = instrument_key(inst)
@@ -1522,7 +1522,7 @@ class DataFetcher:
     @staticmethod
     def _resolve_requested_bar_count(
         days: int,
-        bars: Optional[int],
+        bars: int | None,
         interval: str,
     ) -> int:
         """
@@ -1553,7 +1553,7 @@ class DataFetcher:
         interval: str,
         cache_key: str,
         offline: bool,
-        session_df: Optional[pd.DataFrame] = None,
+        session_df: pd.DataFrame | None = None,
     ) -> pd.DataFrame:
         """Handle CN equity intraday intervals."""
         code6 = str(inst["symbol"]).zfill(6)
@@ -1596,7 +1596,7 @@ class DataFetcher:
         cache_key: str,
         offline: bool,
         update_db: bool,
-        session_df: Optional[pd.DataFrame] = None,
+        session_df: pd.DataFrame | None = None,
     ) -> pd.DataFrame:
         """Handle CN equity daily interval."""
         code6 = str(inst["symbol"]).zfill(6)
@@ -1658,8 +1658,8 @@ class DataFetcher:
             return pd.DataFrame()
 
     def get_realtime(
-        self, code: str, instrument: Optional[dict] = None
-    ) -> Optional[Quote]:
+        self, code: str, instrument: dict | None = None
+    ) -> Quote | None:
         """Get real-time quote for a single instrument."""
         from core.instruments import parse_instrument
         inst = instrument or parse_instrument(code)
@@ -1676,7 +1676,7 @@ class DataFetcher:
         # Generic path: try each source
         return self._get_realtime_generic(inst)
 
-    def _get_realtime_cn(self, code6: str) -> Optional[Quote]:
+    def _get_realtime_cn(self, code6: str) -> Quote | None:
         """Optimized CN equity real-time via batch + micro-cache."""
         now = time.time()
 
@@ -1707,9 +1707,9 @@ class DataFetcher:
                     return q
         return None
 
-    def _get_realtime_generic(self, inst: dict) -> Optional[Quote]:
+    def _get_realtime_generic(self, inst: dict) -> Quote | None:
         """Fetch real-time quote from all sources, pick best."""
-        candidates: List[Quote] = []
+        candidates: list[Quote] = []
         with self._rate_limiter:
             for source in self._get_active_sources():
                 try:
@@ -1747,14 +1747,14 @@ class DataFetcher:
 
     def get_multiple_parallel(
         self,
-        codes: List[str],
+        codes: list[str],
         days: int = 500,
-        callback: Optional[Callable[[str, int, int], None]] = None,
-        max_workers: Optional[int] = None,
+        callback: Callable[[str, int, int], None] | None = None,
+        max_workers: int | None = None,
         interval: str = "1d",
-    ) -> Dict[str, pd.DataFrame]:
+    ) -> dict[str, pd.DataFrame]:
         """Fetch history for multiple codes in parallel."""
-        results: Dict[str, pd.DataFrame] = {}
+        results: dict[str, pd.DataFrame] = {}
         total = len(codes)
         completed = 0
         lock = threading.Lock()
@@ -1765,7 +1765,7 @@ class DataFetcher:
                 source.status.consecutive_errors = 0
                 source.status.disabled_until = None
 
-        def fetch_one(code: str) -> Tuple[str, pd.DataFrame]:
+        def fetch_one(code: str) -> tuple[str, pd.DataFrame]:
             try:
                 df = self.get_history(code, days, interval=interval)
                 return code, df
@@ -1810,7 +1810,7 @@ class DataFetcher:
                     log.warning(f"Failed to get stock list: {exc}")
         return pd.DataFrame()
 
-    def get_source_status(self) -> List[DataSourceStatus]:
+    def get_source_status(self) -> list[DataSourceStatus]:
         return [s.status for s in self._all_sources]
 
     def reset_sources(self) -> None:
@@ -1824,7 +1824,7 @@ class DataFetcher:
                 source.status.available = True
         log.info("All data sources reset, network cache invalidated")
 
-_fetcher: Optional[DataFetcher] = None
+_fetcher: DataFetcher | None = None
 _fetcher_lock = threading.Lock()
 
 def get_fetcher() -> DataFetcher:

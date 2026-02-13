@@ -21,16 +21,16 @@ def __getattr__(name: str):
     }
 
     if name in _CACHE:
-        from .cache import TieredCache, get_cache, cached, CacheStats
-        return locals()[name]
+        from . import cache as _cache
+        return getattr(_cache, name)
 
     if name in _DATABASE:
-        from .database import MarketDatabase, get_database
-        return locals()[name]
+        from . import database as _database
+        return getattr(_database, name)
 
     if name in _FETCHER:
-        from .fetcher import DataFetcher, Quote, get_fetcher
-        return locals()[name]
+        from . import fetcher as _fetcher
+        return getattr(_fetcher, name)
 
     if name in _FEATURES:
         from .features import FeatureEngine
@@ -41,27 +41,20 @@ def __getattr__(name: str):
         return DataProcessor
 
     if name in _DISCOVERY:
-        from .discovery import UniversalStockDiscovery, DiscoveredStock
-        return locals()[name]
+        from . import discovery as _discovery
+        return getattr(_discovery, name)
 
     if name in _FEEDS:
-        from .feeds import (
-            DataFeed, PollingFeed, AggregatedFeed,
-            FeedManager, get_feed_manager,
-        )
-        return locals()[name]
+        from . import feeds as _feeds
+        return getattr(_feeds, name)
 
     if name in _SESSION:
-        from .session_cache import SessionBarCache, get_session_bar_cache
-        return locals()[name]
+        from . import session_cache as _session_cache
+        return getattr(_session_cache, name)
 
     if name in _VALIDATORS:
-        from .validators import (
-            ValidationResult, StockCodeValidator, OHLCVValidator,
-            FeatureValidator, OrderValidator,
-            validate_stock_code, validate_ohlcv, validate_features,
-        )
-        return locals()[name]
+        from . import validators as _validators
+        return getattr(_validators, name)
 
     raise AttributeError(f"module 'data' has no attribute {name!r}")
 

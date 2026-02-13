@@ -1,14 +1,14 @@
 # models/predictor.py
-import numpy as np
-import pandas as pd
-from datetime import datetime
-from typing import Optional, List, Dict, Tuple, Any
-from dataclasses import dataclass, field
-from enum import Enum
+import json
+import os
 import threading
 import time
-import os
-import json
+from dataclasses import dataclass, field
+from datetime import datetime
+from enum import Enum
+
+import numpy as np
+import pandas as pd
 
 from config.settings import CONFIG
 from utils.logger import get_logger
@@ -62,8 +62,8 @@ class Prediction:
     prob_down: float = 0.33
 
     current_price: float = 0.0
-    price_history: List[float] = field(default_factory=list)
-    predicted_prices: List[float] = field(default_factory=list)
+    price_history: list[float] = field(default_factory=list)
+    predicted_prices: list[float] = field(default_factory=list)
 
     rsi: float = 50.0
     macd_signal: str = "NEUTRAL"
@@ -73,8 +73,8 @@ class Prediction:
 
     position: PositionSize = field(default_factory=PositionSize)
 
-    reasons: List[str] = field(default_factory=list)
-    warnings: List[str] = field(default_factory=list)
+    reasons: list[str] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
 
     interval: str = "1d"
     horizon: int = 5
@@ -120,10 +120,10 @@ class Predictor:
         self.feature_engine = None
         self.fetcher = None
 
-        self._feature_cols: List[str] = []
+        self._feature_cols: list[str] = []
 
         # Prediction cache: code -> (timestamp, Prediction)
-        self._pred_cache: Dict[str, Tuple[float, Prediction]] = {}
+        self._pred_cache: dict[str, tuple[float, Prediction]] = {}
         self._cache_lock = threading.Lock()
 
         # Track if constructor params were overridden by model metadata
@@ -133,7 +133,7 @@ class Predictor:
 
         self._load_models()
 
-    def _load_high_precision_config(self) -> Dict[str, float]:
+    def _load_high_precision_config(self) -> dict[str, float]:
         """
         Optional high-precision runtime gate.
         Disabled by default so existing behavior is unchanged.
@@ -216,9 +216,9 @@ class Predictor:
     def _load_models(self) -> bool:
         """Load all required models with robust fallback."""
         try:
-            from data.processor import DataProcessor
             from data.features import FeatureEngine
             from data.fetcher import get_fetcher
+            from data.processor import DataProcessor
             from models.ensemble import EnsembleModel
 
             self.processor = DataProcessor()
@@ -300,7 +300,6 @@ class Predictor:
 
     def _find_best_model_pair(self, model_dir):
         """Find the best ensemble + scaler file pair."""
-        from pathlib import Path
 
         req_ens = model_dir / f"ensemble_{self.interval}_{self.horizon}.pt"
         req_scl = model_dir / f"scaler_{self.interval}_{self.horizon}.pkl"
@@ -336,6 +335,7 @@ class Predictor:
         """Load TCN forecaster for price curve prediction."""
         try:
             import torch
+
             from models.networks import TCNModel
 
             forecast_path = (
@@ -489,11 +489,11 @@ class Predictor:
 
     def predict_quick_batch(
         self,
-        stock_codes: List[str],
+        stock_codes: list[str],
         use_realtime_price: bool = True,
         interval: str = None,
         lookback_bars: int = None,
-    ) -> List[Prediction]:
+    ) -> list[Prediction]:
         """Quick batch prediction without full forecasting."""
         with self._predict_lock:
             interval = str(interval or self.interval).lower()
@@ -501,7 +501,7 @@ class Predictor:
                 lookback_bars or (1400 if interval == "1m" else 300)
             )
 
-            predictions: List[Prediction] = []
+            predictions: list[Prediction] = []
 
             for stock_code in stock_codes:
                 try:
@@ -557,7 +557,7 @@ class Predictor:
         horizon_steps: int = None,
         lookback_bars: int = None,
         use_realtime_price: bool = True,
-    ) -> Tuple[List[float], List[float]]:
+    ) -> tuple[list[float], list[float]]:
         """
         Get real-time forecast curve for charting.
 
@@ -613,10 +613,10 @@ class Predictor:
 
     def get_top_picks(
         self,
-        stock_codes: List[str],
+        stock_codes: list[str],
         n: int = 10,
         signal_type: str = "buy",
-    ) -> List[Prediction]:
+    ) -> list[Prediction]:
         """Get top N stock picks based on signal type."""
         with self._predict_lock:
             predictions = self.predict_quick_batch(stock_codes)
@@ -683,7 +683,7 @@ class Predictor:
         if pred.signal == Signal.HOLD:
             return
 
-        reasons: List[str] = []
+        reasons: list[str] = []
 
         # Regime-aware confidence floor: range/high-vol require stronger evidence.
         required_conf = float(cfg["min_confidence"])
@@ -723,7 +723,7 @@ class Predictor:
     # =========================================================================
     # =========================================================================
 
-    def _get_cached_prediction(self, code: str) -> Optional[Prediction]:
+    def _get_cached_prediction(self, code: str) -> Prediction | None:
         """Get cached prediction if still valid."""
         with self._cache_lock:
             entry = self._pred_cache.get(code)
@@ -774,7 +774,7 @@ class Predictor:
         interval: str,
         lookback: int,
         use_realtime: bool,
-    ) -> Optional[pd.DataFrame]:
+    ) -> pd.DataFrame | None:
         """Fetch stock data with minimum data requirement."""
         try:
             from data.fetcher import BARS_PER_DAY
@@ -828,7 +828,7 @@ class Predictor:
         current_price: float,
         horizon: int,
         atr_pct: float = 0.02,
-    ) -> List[float]:
+    ) -> list[float]:
         """Generate price forecast using forecaster or ensemble."""
         if current_price <= 0:
             return []
@@ -1043,7 +1043,7 @@ class Predictor:
             risk_reward_ratio=float(rr_ratio),
         )
 
-    def _resolve_trade_distances(self, pred: Prediction) -> Tuple[float, float]:
+    def _resolve_trade_distances(self, pred: Prediction) -> tuple[float, float]:
         """Resolve stop and reward distances from level plan."""
         price = float(pred.current_price)
         if price <= 0:

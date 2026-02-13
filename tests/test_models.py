@@ -1,13 +1,15 @@
 
-import pytest
-import numpy as np
-import torch
 import sys
 from pathlib import Path
+
+import numpy as np
+import pytest
+import torch
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from config import CONFIG
+
 
 class TestNetworkArchitectures:
     """Test neural network architectures"""

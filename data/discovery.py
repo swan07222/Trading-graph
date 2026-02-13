@@ -2,12 +2,12 @@
 from __future__ import annotations
 
 import re
-import time
 import socket
 import threading
-from datetime import datetime
-from typing import List, Dict, Optional, Callable
+import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
+from datetime import datetime
 
 import pandas as pd
 
@@ -61,7 +61,7 @@ _VALID_PREFIXES = (
 )
 
 # Prefix → exchange mapping (aligned with core/constants.py naming)
-_PREFIX_TO_EXCHANGE: Dict[str, str] = {}
+_PREFIX_TO_EXCHANGE: dict[str, str] = {}
 _SSE_PREFIXES = ("600", "601", "603", "605", "688")
 _SZSE_PREFIXES = ("000", "001", "002", "003", "300", "301")
 _BSE_PREFIXES = ("83", "87", "43")
@@ -213,11 +213,11 @@ class UniversalStockDiscovery:
     # ================================================================== #
     def discover_all(
         self,
-        callback: Optional[Callable[[str, int], None]] = None,
-        max_stocks: Optional[int] = None,
+        callback: Callable[[str, int], None] | None = None,
+        max_stocks: int | None = None,
         min_market_cap: float = 0,
         include_st: bool = False,
-    ) -> List[DiscoveredStock]:
+    ) -> list[DiscoveredStock]:
         """
         Discover stocks from the best available source.
 
@@ -236,7 +236,7 @@ class UniversalStockDiscovery:
             mode = "China direct" if env.is_china_direct else "VPN / foreign IP"
             callback(f"Network: {mode}. Discovering stocks…", 0)
 
-        all_stocks: Dict[str, DiscoveredStock] = {}
+        all_stocks: dict[str, DiscoveredStock] = {}
 
         # -------------------------------------------------------------- #
         # 1. AkShare full spot (China direct only)
@@ -294,10 +294,10 @@ class UniversalStockDiscovery:
     # ================================================================== #
     def _finalize(
         self,
-        stocks: List[DiscoveredStock],
-        max_stocks: Optional[int],
+        stocks: list[DiscoveredStock],
+        max_stocks: int | None,
         min_market_cap: float,
-    ) -> List[DiscoveredStock]:
+    ) -> list[DiscoveredStock]:
         """
         Centralised post-processing applied exactly once to every
         discovery path. Eliminates the old duplicated logic.
@@ -378,9 +378,9 @@ class UniversalStockDiscovery:
     # ================================================================== #
     def _discover_via_akshare(
         self,
-        callback: Optional[Callable] = None,
+        callback: Callable | None = None,
         include_st: bool = False,
-    ) -> Optional[List[DiscoveredStock]]:
+    ) -> list[DiscoveredStock] | None:
         """Full AkShare discovery — China direct IP only."""
         if not self._ak:
             return None
@@ -409,7 +409,7 @@ class UniversalStockDiscovery:
                 ("CSI 1000", self._get_csi1000),
             ]
 
-        all_stocks: Dict[str, DiscoveredStock] = {}
+        all_stocks: dict[str, DiscoveredStock] = {}
         for label, fn in sources:
             if callback:
                 callback(f"Searching {label}…", len(all_stocks))
@@ -440,7 +440,7 @@ class UniversalStockDiscovery:
 
     # ================================================================== #
     # ================================================================== #
-    def _discover_via_tencent(self) -> List[DiscoveredStock]:
+    def _discover_via_tencent(self) -> list[DiscoveredStock]:
         """
         Verify fallback stocks via Tencent HTTP quotes.
         Works from any IP.  Returns only stocks with a valid live price.
@@ -452,8 +452,8 @@ class UniversalStockDiscovery:
         from core.constants import get_exchange
 
         candidates = self._get_fallback_stocks()
-        vendor_symbols: List[str] = []
-        code_map: Dict[str, str] = {}
+        vendor_symbols: list[str] = []
+        code_map: dict[str, str] = {}
 
         for s in candidates:
             ex = get_exchange(s.code)
@@ -466,7 +466,7 @@ class UniversalStockDiscovery:
             vendor_symbols.append(sym)
             code_map[sym] = s.code
 
-        verified: List[DiscoveredStock] = []
+        verified: list[DiscoveredStock] = []
         for i in range(0, len(vendor_symbols), _TENCENT_CHUNK_SIZE):
             chunk = vendor_symbols[i : i + _TENCENT_CHUNK_SIZE]
             try:
@@ -514,18 +514,18 @@ class UniversalStockDiscovery:
     # ================================================================== #
     # Index constituents (AkShare)
     # ================================================================== #
-    def _get_csi300(self) -> List[DiscoveredStock]:
+    def _get_csi300(self) -> list[DiscoveredStock]:
         return self._fetch_index("000300", "CSI300", 0.8)
 
-    def _get_csi500(self) -> List[DiscoveredStock]:
+    def _get_csi500(self) -> list[DiscoveredStock]:
         return self._fetch_index("000905", "CSI500", 0.7)
 
-    def _get_csi1000(self) -> List[DiscoveredStock]:
+    def _get_csi1000(self) -> list[DiscoveredStock]:
         return self._fetch_index("000852", "CSI1000", 0.6)
 
     def _fetch_index(
         self, symbol: str, source: str, base_score: float
-    ) -> List[DiscoveredStock]:
+    ) -> list[DiscoveredStock]:
         if not self._ak:
             return []
         try:
@@ -538,8 +538,8 @@ class UniversalStockDiscovery:
 
     @staticmethod
     def _parse_index_df(
-        df: Optional[pd.DataFrame], source: str, base_score: float
-    ) -> List[DiscoveredStock]:
+        df: pd.DataFrame | None, source: str, base_score: float
+    ) -> list[DiscoveredStock]:
         if df is None or df.empty:
             return []
 
@@ -550,7 +550,7 @@ class UniversalStockDiscovery:
             df, ["成分券名称", "证券简称", "名称", "stock_name", "name"]
         )
 
-        stocks: List[DiscoveredStock] = []
+        stocks: list[DiscoveredStock] = []
         for _, row in df.iterrows():
             s = DiscoveredStock(
                 code=str(row.get(code_col, "")),
@@ -567,8 +567,8 @@ class UniversalStockDiscovery:
     # ================================================================== #
     @staticmethod
     def _from_spot_df(
-        df: Optional[pd.DataFrame], filter_type: str
-    ) -> List[DiscoveredStock]:
+        df: pd.DataFrame | None, filter_type: str
+    ) -> list[DiscoveredStock]:
         if df is None or df.empty:
             return []
         work = df.copy()
@@ -586,7 +586,7 @@ class UniversalStockDiscovery:
                 _SPOT_DF_LIMIT
             )
 
-        items: List[DiscoveredStock] = []
+        items: list[DiscoveredStock] = []
         for _, row in work.iterrows():
             items.append(
                 DiscoveredStock(
@@ -604,7 +604,7 @@ class UniversalStockDiscovery:
     # Fallback (hardcoded blue-chips)
     # ================================================================== #
     @staticmethod
-    def _get_fallback_stocks() -> List[DiscoveredStock]:
+    def _get_fallback_stocks() -> list[DiscoveredStock]:
         """Return a curated list of liquid A-share blue-chips."""
         _FALLBACK = (
             ("600519", "贵州茅台"), ("601318", "中国平安"),
@@ -659,7 +659,7 @@ class UniversalStockDiscovery:
         )
 
         seen: set = set()
-        stocks: List[DiscoveredStock] = []
+        stocks: list[DiscoveredStock] = []
         for code, name in _FALLBACK:
             s = DiscoveredStock(
                 code=code, name=name, source="fallback", score=0.7
@@ -673,15 +673,15 @@ class UniversalStockDiscovery:
 
 # MODULE-LEVEL HELPERS
 
-def _is_st(name: Optional[str]) -> bool:
+def _is_st(name: str | None) -> bool:
     """Check if a stock name indicates ST status."""
     if not name:
         return False
     return "ST" in name.upper()
 
 def _find_column(
-    df: pd.DataFrame, candidates: List[str]
-) -> Optional[str]:
+    df: pd.DataFrame, candidates: list[str]
+) -> str | None:
     """Return the first column name from *candidates* that exists in *df*."""
     for col in candidates:
         if col in df.columns:

@@ -1,5 +1,4 @@
 import json
-
 from types import SimpleNamespace
 
 from utils.policy import TradePolicyEngine

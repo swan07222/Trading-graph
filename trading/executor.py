@@ -1,30 +1,40 @@
 # trading/executor.py
 from __future__ import annotations
 
+import copy
 import queue
 import threading
 import time
-import copy
 from collections import deque
-from datetime import datetime, timedelta, date
-from typing import Any, Dict, Optional, Callable, Set, List, Tuple
+from collections.abc import Callable
+from datetime import date, datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 from config import CONFIG, TradingMode
 from core.types import (
-    Order, OrderSide, OrderType, OrderStatus, TradeSignal, Account, Fill,
-    AutoTradeMode, AutoTradeState, AutoTradeAction,
+    Account,
+    AutoTradeAction,
+    AutoTradeMode,
+    AutoTradeState,
+    Fill,
+    Order,
+    OrderSide,
+    OrderStatus,
+    OrderType,
+    TradeSignal,
 )
+from trading.alerts import AlertPriority, get_alert_manager
 from trading.broker import BrokerInterface, create_broker
-from trading.risk import RiskManager, get_risk_manager
+from trading.health import ComponentType, HealthStatus, get_health_monitor
 from trading.kill_switch import get_kill_switch
-from trading.health import get_health_monitor, ComponentType, HealthStatus
-from trading.alerts import get_alert_manager, AlertPriority
-from utils.security import get_access_control, get_audit_log
-from utils.policy import get_trade_policy_engine
-from utils.logger import get_logger
-from utils.metrics import inc_counter, set_gauge, observe
+from trading.risk import RiskManager, get_risk_manager
 from utils.atomic_io import atomic_write_json, read_json
+from utils.logger import get_logger
+from utils.metrics import inc_counter, observe, set_gauge
+from utils.policy import get_trade_policy_engine
+from utils.security import get_access_control, get_audit_log
+
 try:
     from utils.metrics_http import register_snapshot_provider, unregister_snapshot_provider
 except Exception:  # pragma: no cover - optional runtime integration
@@ -67,9 +77,9 @@ class AutoTrader:
 
     def __init__(
         self,
-        engine: "ExecutionEngine",
+        engine: ExecutionEngine,
         predictor,
-        watch_list: List[str],
+        watch_list: list[str],
     ):
         self._engine = engine
         self._predictor = predictor
@@ -77,13 +87,13 @@ class AutoTrader:
 
         self._lock = threading.RLock()
         self._stop_event = threading.Event()
-        self._thread: Optional[threading.Thread] = None
+        self._thread: threading.Thread | None = None
 
         self.state = AutoTradeState()
 
-        self.on_action: Optional[Callable[[AutoTradeAction], None]] = None
-        self.on_state_changed: Optional[Callable[[AutoTradeState], None]] = None
-        self.on_pending_approval: Optional[Callable[[AutoTradeAction], None]] = None
+        self.on_action: Callable[[AutoTradeAction], None] | None = None
+        self.on_state_changed: Callable[[AutoTradeState], None] | None = None
+        self.on_pending_approval: Callable[[AutoTradeAction], None] | None = None
 
     # -----------------------------------------------------------------
     # -----------------------------------------------------------------
@@ -135,7 +145,7 @@ class AutoTrader:
             self._notify_state_changed()
             log.info("Auto-trader stopped")
 
-    def update_watchlist(self, watch_list: List[str]):
+    def update_watchlist(self, watch_list: list[str]):
         """Update the watchlist (thread-safe)."""
         with self._lock:
             self._watch_list = list(watch_list)[:50]
@@ -150,17 +160,17 @@ class AutoTrader:
         with self._lock:
             return copy.deepcopy(self.state)
 
-    def get_recent_actions(self, n: int = 50) -> List[AutoTradeAction]:
+    def get_recent_actions(self, n: int = 50) -> list[AutoTradeAction]:
         """Get recent auto-trade actions."""
         with self._lock:
             return copy.deepcopy(self.state.recent_actions[:n])
 
-    def get_pending_approvals(self) -> List[AutoTradeAction]:
+    def get_pending_approvals(self) -> list[AutoTradeAction]:
         """Get pending approvals (SEMI_AUTO mode)."""
         with self._lock:
             return copy.deepcopy(self.state.pending_approvals)
 
-    def _passes_precision_quality_gate(self, pred) -> Tuple[bool, str]:
+    def _passes_precision_quality_gate(self, pred) -> tuple[bool, str]:
         """
         Additional precision guardrails for autonomous trading.
         Uses entropy and directional edge thresholds from PrecisionConfig.
@@ -644,8 +654,11 @@ class AutoTrader:
         MUST be called with ``_lock`` held (for state updates).
         """
         try:
-            from models.predictor import Signal as PredSignal
+            import importlib.util
+            signal_spec = importlib.util.find_spec("models.predictor")
         except ImportError:
+            signal_spec = None
+        if signal_spec is None:
             action.skip_reason = "Cannot import Signal"
             return False
 
@@ -797,30 +810,30 @@ class ExecutionEngine:
         self._alert_manager = get_alert_manager()
         self._fills_lock = threading.RLock()
 
-        self._queue: queue.Queue[Optional[TradeSignal]] = queue.Queue()
+        self._queue: queue.Queue[TradeSignal | None] = queue.Queue()
         self._running = False
 
-        self._exec_thread: Optional[threading.Thread] = None
-        self._fill_sync_thread: Optional[threading.Thread] = None
-        self._status_sync_thread: Optional[threading.Thread] = None
-        self._recon_thread: Optional[threading.Thread] = None
-        self._reconnect_thread: Optional[threading.Thread] = None
-        self._watchdog_thread: Optional[threading.Thread] = None
-        self._checkpoint_thread: Optional[threading.Thread] = None
+        self._exec_thread: threading.Thread | None = None
+        self._fill_sync_thread: threading.Thread | None = None
+        self._status_sync_thread: threading.Thread | None = None
+        self._recon_thread: threading.Thread | None = None
+        self._reconnect_thread: threading.Thread | None = None
+        self._watchdog_thread: threading.Thread | None = None
+        self._checkpoint_thread: threading.Thread | None = None
 
-        self._processed_fill_ids: Set[str] = set()
+        self._processed_fill_ids: set[str] = set()
 
-        self._last_fill_sync: Optional[datetime] = None
+        self._last_fill_sync: datetime | None = None
         self._last_checkpoint_ts: float = 0.0
-        self._thread_heartbeats: Dict[str, float] = {}
+        self._thread_heartbeats: dict[str, float] = {}
         self._thread_hb_lock = threading.RLock()
-        self._recent_submit_keys: Dict[str, float] = {}
-        self._recent_submissions: Dict[str, deque] = {}
+        self._recent_submit_keys: dict[str, float] = {}
+        self._recent_submissions: dict[str, deque] = {}
         self._recent_rejections: deque = deque()
-        self._synthetic_exits: Dict[str, Dict[str, Any]] = {}
+        self._synthetic_exits: dict[str, dict[str, Any]] = {}
         self._synthetic_exit_lock = threading.RLock()
         self._exec_quality_lock = threading.RLock()
-        self._exec_quality: Dict[str, Any] = {
+        self._exec_quality: dict[str, Any] = {
             "fills": 0,
             "slippage_bps_sum": 0.0,
             "slippage_bps_abs_sum": 0.0,
@@ -830,17 +843,17 @@ class ExecutionEngine:
         self._last_watchdog_warning_ts: float = 0.0
         self._runtime_state_path = Path(CONFIG.data_dir) / self._RUNTIME_STATE_FILE
         self._runtime_recovered = False
-        self._recovered_auto_state: Optional[dict] = None
+        self._recovered_auto_state: dict | None = None
 
-        self.on_fill: Optional[Callable[[Order, Fill], None]] = None
-        self.on_reject: Optional[Callable[[Order, str], None]] = None
+        self.on_fill: Callable[[Order, Fill], None] | None = None
+        self.on_reject: Callable[[Order, str], None] | None = None
 
         self._kill_switch.on_activate(self._on_kill_switch)
         self._health_monitor.on_degraded(self._on_health_degraded)
         self._processed_fill_ids = self._load_processed_fills()
 
         # Auto-trader (created but not started until explicitly requested)
-        self.auto_trader: Optional[AutoTrader] = None
+        self.auto_trader: AutoTrader | None = None
         self._snapshot_provider_name = "execution_engine"
         self._restore_runtime_state()
 
@@ -848,7 +861,7 @@ class ExecutionEngine:
     # Auto-trade public API
     # -----------------------------------------------------------------
 
-    def init_auto_trader(self, predictor, watch_list: List[str]):
+    def init_auto_trader(self, predictor, watch_list: list[str]):
         """
         Initialize the auto-trader with a predictor and watchlist.
         Must be called before start_auto_trade().
@@ -898,7 +911,7 @@ class ExecutionEngine:
         if self.auto_trader:
             self.auto_trader.set_mode(mode)
 
-    def get_auto_trade_state(self) -> Optional[AutoTradeState]:
+    def get_auto_trade_state(self) -> AutoTradeState | None:
         """Get auto-trade state snapshot."""
         if self.auto_trader:
             return self.auto_trader.get_state()
@@ -1019,7 +1032,7 @@ class ExecutionEngine:
 
         return True
 
-    def _load_processed_fills(self) -> Set[str]:
+    def _load_processed_fills(self) -> set[str]:
         """Load already-processed fill IDs from OMS DB (source of truth)."""
         try:
             from trading.oms import get_oms
@@ -1136,7 +1149,7 @@ class ExecutionEngine:
 
         log.info("Execution engine stopped")
 
-    def _build_execution_snapshot(self) -> Dict[str, object]:
+    def _build_execution_snapshot(self) -> dict[str, object]:
         broker = self.broker
         auto_state = None
         if self.auto_trader is not None:
@@ -1145,7 +1158,7 @@ class ExecutionEngine:
             except Exception:
                 auto_state = None
 
-        snapshot: Dict[str, object] = {
+        snapshot: dict[str, object] = {
             "running": bool(self._running),
             "mode": str(getattr(self.mode, "value", self.mode)),
             "broker": {
@@ -1195,7 +1208,7 @@ class ExecutionEngine:
             pass
         return snapshot
 
-    def _get_execution_quality_snapshot(self) -> Dict[str, object]:
+    def _get_execution_quality_snapshot(self) -> dict[str, object]:
         with self._exec_quality_lock:
             fills = int(self._exec_quality.get("fills", 0) or 0)
             sum_signed = float(self._exec_quality.get("slippage_bps_sum", 0.0) or 0.0)
@@ -1215,7 +1228,7 @@ class ExecutionEngine:
         with self._thread_hb_lock:
             self._thread_heartbeats[str(name)] = time.time()
 
-    def _runtime_state_payload(self, clean_shutdown: bool) -> Dict[str, object]:
+    def _runtime_state_payload(self, clean_shutdown: bool) -> dict[str, object]:
         """Persistable runtime checkpoint for crash recovery."""
         auto_state = None
         if self.auto_trader is not None:
@@ -1304,7 +1317,7 @@ class ExecutionEngine:
             time.sleep(2.0)
             now = time.time()
             self._heartbeat("watchdog")
-            stalled: List[str] = []
+            stalled: list[str] = []
             with self._thread_hb_lock:
                 for name in ("exec", "fill_sync", "status_sync", "recon"):
                     ts = float(self._thread_heartbeats.get(name, 0.0) or 0.0)
@@ -1345,7 +1358,7 @@ class ExecutionEngine:
 
     def _get_quote_snapshot(
         self, symbol: str
-    ) -> Tuple[float, Optional[datetime], str]:
+    ) -> tuple[float, datetime | None, str]:
         """
         Returns (price, timestamp, source).
         """
@@ -1387,7 +1400,7 @@ class ExecutionEngine:
 
     def _require_fresh_quote(
         self, symbol: str, max_age_seconds: float = 15.0
-    ) -> Tuple[bool, str, float]:
+    ) -> tuple[bool, str, float]:
         """
         Strict quote freshness gate for order submission.
         Returns (ok, message, price).
@@ -1414,7 +1427,7 @@ class ExecutionEngine:
 
     def check_quote_freshness(
         self, symbol: str
-    ) -> Tuple[bool, str, float]:
+    ) -> tuple[bool, str, float]:
         """Public wrapper for quote freshness gating."""
         max_age = 15.0
         if hasattr(CONFIG, "risk") and hasattr(CONFIG.risk, "quote_staleness_seconds"):
@@ -1432,7 +1445,7 @@ class ExecutionEngine:
 
     def _check_submission_guardrails(
         self, signal: TradeSignal
-    ) -> Tuple[bool, str]:
+    ) -> tuple[bool, str]:
         """
         Extra exchange-style guardrails:
         - duplicate suppression
@@ -1811,7 +1824,7 @@ class ExecutionEngine:
         from trading.oms import get_oms
 
         oms = get_oms()
-        order: Optional[Order] = None
+        order: Order | None = None
 
         try:
             if not self._kill_switch.can_trade:
@@ -2194,7 +2207,7 @@ class ExecutionEngine:
 
     def _submit_synthetic_exit(
         self,
-        plan: Dict[str, Any],
+        plan: dict[str, Any],
         trigger_price: float,
         reason: str,
     ) -> bool:
@@ -2282,7 +2295,7 @@ class ExecutionEngine:
         from trading.oms import get_oms
 
         oms = get_oms()
-        first_seen: Dict[str, datetime] = {}
+        first_seen: dict[str, datetime] = {}
 
         stuck_seconds = 60
         if hasattr(CONFIG, "risk") and hasattr(CONFIG.risk, "order_stuck_seconds"):
@@ -2432,7 +2445,7 @@ class ExecutionEngine:
         """
         delay = 0.5
         last_exc = None
-        for i in range(int(attempts)):
+        for _i in range(int(attempts)):
             try:
                 result = self.broker.submit_order(order)
                 if getattr(result, "status", None) == OrderStatus.REJECTED:

@@ -3,12 +3,11 @@
 from __future__ import annotations
 
 import json
-import time
 import socket
 import threading
-from datetime import datetime, date, timedelta
+import time
+from datetime import date, datetime, timedelta
 from pathlib import Path
-from typing import Dict, List, Optional
 
 from config.settings import CONFIG
 from core.constants import get_exchange
@@ -29,7 +28,7 @@ _universe_lock = threading.Lock()
 def _universe_path() -> Path:
     return Path(CONFIG.data_dir) / "stock_universe.json"
 
-def load_universe() -> Dict:
+def load_universe() -> dict:
     """Load universe from disk."""
     path = _universe_path()
     if not path.exists():
@@ -44,7 +43,7 @@ def load_universe() -> Dict:
         log.warning(f"Failed to load universe file: {exc}")
         return {}
 
-def save_universe(data: Dict) -> None:
+def save_universe(data: dict) -> None:
     """Atomically save universe to disk."""
     path = _universe_path()
     with _universe_lock:
@@ -64,7 +63,7 @@ def save_universe(data: Dict) -> None:
         except OSError as exc:
             log.warning(f"Failed to save universe: {exc}")
 
-def _parse_updated_ts(data: Dict) -> float:
+def _parse_updated_ts(data: dict) -> float:
     raw = data.get("updated_ts")
     if raw is None:
         return 0.0
@@ -73,9 +72,9 @@ def _parse_updated_ts(data: Dict) -> float:
     except (ValueError, TypeError):
         return 0.0
 
-def _validate_codes(codes: List) -> List[str]:
+def _validate_codes(codes: list) -> list[str]:
     """Validate stock codes."""
-    validated: List[str] = []
+    validated: list[str] = []
     for c in codes:
         s = str(c).strip()
         if not s.isdigit():
@@ -86,7 +85,7 @@ def _validate_codes(codes: List) -> List[str]:
         validated.append(code6)
     return sorted(set(validated))
 
-def _fallback_codes() -> List[str]:
+def _fallback_codes() -> list[str]:
     """Build robust offline fallback universe."""
     base = _validate_codes(getattr(CONFIG, "stock_pool", []))
 
@@ -125,14 +124,14 @@ def _can_use_akshare() -> bool:
 
     return bool(env.is_china_direct)
 
-def _find_first_column(candidates: List[str], columns: List[str]) -> Optional[str]:
+def _find_first_column(candidates: list[str], columns: list[str]) -> str | None:
     colset = set(columns)
     for c in candidates:
         if c in colset:
             return c
     return None
 
-def _rank_codes_by_liquidity(df) -> List[str]:
+def _rank_codes_by_liquidity(df) -> list[str]:
     """
     Rank universe candidates by liquidity/size when columns are available.
     Falls back to the original code order if ranking fields are missing.
@@ -196,7 +195,7 @@ def _rank_codes_by_liquidity(df) -> List[str]:
     )
     return _validate_codes(ranked["__code__"].tolist())
 
-def _try_akshare_fetch(timeout: int = 20) -> Optional[List[str]]:
+def _try_akshare_fetch(timeout: int = 20) -> list[str] | None:
     """
     Try to fetch stock universe from AkShare.
 
@@ -251,7 +250,7 @@ def _try_akshare_fetch(timeout: int = 20) -> Optional[List[str]]:
 def get_universe_codes(
     force_refresh: bool = False,
     max_age_hours: float = 12.0,
-) -> List[str]:
+) -> list[str]:
     """
     Return all known A-share stock codes.
 
@@ -299,7 +298,7 @@ def get_universe_codes(
     log.error("No stock codes available from any source!")
     return []
 
-def refresh_universe() -> Dict:
+def refresh_universe() -> dict:
     """
     Refresh universe from AkShare.
 
@@ -338,7 +337,7 @@ def refresh_universe() -> Dict:
 
     return {"codes": [], "updated_ts": time.time(), "source": "empty"}
 
-def get_new_listings(days: int = 60, force_refresh: bool = False) -> List[str]:
+def get_new_listings(days: int = 60, force_refresh: bool = False) -> list[str]:
     """Return codes of stocks listed within the last N days."""
     if not _HAS_PANDAS:
         return []

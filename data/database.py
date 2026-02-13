@@ -1,17 +1,16 @@
 # data/database.py
-import sqlite3
 import atexit
-from pathlib import Path
-from datetime import datetime, date, timedelta
-from typing import Dict, List, Optional, Tuple
-from contextlib import contextmanager
+import sqlite3
 import threading
+from contextlib import contextmanager
+from datetime import date, datetime
+from pathlib import Path
+
 import pandas as pd
-import numpy as np
 
 from config.settings import CONFIG
-from utils.logger import get_logger
 from utils.helpers import to_float, to_int
+from utils.logger import get_logger
 
 log = get_logger(__name__)
 
@@ -314,7 +313,7 @@ class MarketDatabase:
 
     def _build_intraday_rows(
         self, code: str, interval: str, work: pd.DataFrame
-    ) -> List[tuple]:
+    ) -> list[tuple]:
         """Build rows for intraday bar insert."""
         tf = self._to_float
         ti = self._to_int
@@ -324,8 +323,8 @@ class MarketDatabase:
         ).values
 
         rows = []
-        for i, (ts_iso, (_, row)) in enumerate(
-            zip(timestamps, work.iterrows())
+        for _i, (ts_iso, (_, row)) in enumerate(
+            zip(timestamps, work.iterrows(), strict=False)
         ):
             rows.append((
                 code,
@@ -418,7 +417,7 @@ class MarketDatabase:
 
     def _build_daily_rows(
         self, code: str, work: pd.DataFrame
-    ) -> List[tuple]:
+    ) -> list[tuple]:
         """Build rows for daily bar insert."""
         tf = self._to_float
         ti = self._to_int
@@ -508,7 +507,7 @@ class MarketDatabase:
 
         return df
 
-    def get_last_date(self, code: str) -> Optional[date]:
+    def get_last_date(self, code: str) -> date | None:
         """Get last available date for a stock."""
         code = str(code).zfill(6)
         try:
@@ -522,7 +521,7 @@ class MarketDatabase:
             log.debug(f"get_last_date failed for {code}: {e}")
         return None
 
-    def get_all_stocks(self) -> List[Dict]:
+    def get_all_stocks(self) -> list[dict]:
         """Get all stock metadata."""
         try:
             cursor = self._conn.execute("SELECT * FROM stocks")
@@ -531,7 +530,7 @@ class MarketDatabase:
             log.warning(f"get_all_stocks failed: {e}")
             return []
 
-    def get_stocks_with_data(self, min_days: int = 100) -> List[str]:
+    def get_stocks_with_data(self, min_days: int = 100) -> list[str]:
         """Get stock codes with at least *min_days* of bar data."""
         try:
             cursor = self._conn.execute(
@@ -590,9 +589,9 @@ class MarketDatabase:
     # Stats / maintenance
     # ------------------------------------------------------------------
 
-    def get_data_stats(self) -> Dict:
+    def get_data_stats(self) -> dict:
         """Get database statistics."""
-        stats: Dict = {}
+        stats: dict = {}
         try:
             cursor = self._conn.execute(
                 "SELECT COUNT(DISTINCT code) FROM stocks"
@@ -659,7 +658,7 @@ class MarketDatabase:
 
 # Global database instance (thread-safe)
 
-_db: Optional[MarketDatabase] = None
+_db: MarketDatabase | None = None
 _db_lock = threading.Lock()
 
 def get_database() -> MarketDatabase:

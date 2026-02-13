@@ -1,12 +1,13 @@
 # core/events.py
-from enum import Enum, auto
+import queue
+import threading
+from abc import ABC, abstractmethod
+from collections import defaultdict, deque
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Callable, Dict, List, Optional
-from collections import defaultdict, deque
-import threading
-import queue
-from abc import ABC, abstractmethod
+from enum import Enum, auto
+from typing import Any
 
 from utils.logger import get_logger
 
@@ -47,7 +48,7 @@ class Event:
     type: EventType = EventType.SYSTEM_START
     timestamp: datetime = field(default_factory=datetime.now)
     source: str = ""
-    data: Dict[str, Any] = field(default_factory=dict)
+    data: dict[str, Any] = field(default_factory=dict)
 
 @dataclass
 class TickEvent(Event):
@@ -94,7 +95,7 @@ class SignalEvent(Event):
     entry_price: float = 0.0
     stop_loss: float = 0.0
     take_profit: float = 0.0
-    reasons: List[str] = field(default_factory=list)
+    reasons: list[str] = field(default_factory=list)
 
 @dataclass
 class RiskEvent(Event):
@@ -137,10 +138,10 @@ class EventBus:
             return
 
         self._initialized = True
-        self._subscribers: Dict[EventType, List[Callable]] = defaultdict(list)
+        self._subscribers: dict[EventType, list[Callable]] = defaultdict(list)
         self._queue: queue.Queue = queue.Queue()
         self._running = False
-        self._worker_thread: Optional[threading.Thread] = None
+        self._worker_thread: threading.Thread | None = None
         self._sub_lock = threading.RLock()
 
         # FIX: Use deque with maxlen for O(1) bounded history
@@ -288,7 +289,7 @@ class EventBus:
         self,
         event_type: EventType = None,
         limit: int = 100
-    ) -> List[Event]:
+    ) -> list[Event]:
         """
         Get event history.
 

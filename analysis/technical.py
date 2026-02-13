@@ -1,9 +1,9 @@
 # analysis/technical.py
-import numpy as np
-import pandas as pd
-from typing import Dict, List, Tuple, Optional
 from dataclasses import dataclass
 from enum import Enum
+
+import numpy as np
+import pandas as pd
 import ta
 
 from utils.logger import get_logger
@@ -48,11 +48,11 @@ class TechnicalSummary:
     """Complete technical analysis summary"""
     trend: TrendDirection
     trend_strength: float
-    signals: List[TechnicalSignal]
+    signals: list[TechnicalSignal]
     support_resistance: SupportResistance
     overall_signal: str  # "buy", "sell", "neutral"
     overall_score: float  # -100 to +100
-    indicators: Dict[str, float]
+    indicators: dict[str, float]
 
 class TechnicalAnalyzer:
     """Comprehensive technical analysis engine"""
@@ -75,7 +75,7 @@ class TechnicalAnalyzer:
             "volume_ratio", "close", "prev_close", "change_pct",
         )
 
-    def list_supported_indicators(self) -> List[str]:
+    def list_supported_indicators(self) -> list[str]:
         """Return a stable list of supported indicator names."""
         return list(self._indicator_names)
 
@@ -102,7 +102,7 @@ class TechnicalAnalyzer:
             indicators=indicators
         )
 
-    def _calculate_indicators(self, df: pd.DataFrame) -> Dict[str, float]:
+    def _calculate_indicators(self, df: pd.DataFrame) -> dict[str, float]:
         """Calculate all technical indicators"""
         close = df['close']
         high = df['high']
@@ -110,7 +110,11 @@ class TechnicalAnalyzer:
         volume = df['volume']
 
         indicators = {}
-        safe_last = lambda s, d=0.0: float(s.iloc[-1]) if len(s) and pd.notna(s.iloc[-1]) else float(d)
+
+        def safe_last(series: pd.Series, default: float = 0.0) -> float:
+            if len(series) and pd.notna(series.iloc[-1]):
+                return float(series.iloc[-1])
+            return float(default)
 
         indicators['sma_5'] = safe_last(close.rolling(5).mean())
         indicators['sma_10'] = safe_last(close.rolling(10).mean())
@@ -207,7 +211,7 @@ class TechnicalAnalyzer:
 
         return indicators
 
-    def _generate_signals(self, df: pd.DataFrame, ind: Dict[str, float]) -> List[TechnicalSignal]:
+    def _generate_signals(self, df: pd.DataFrame, ind: dict[str, float]) -> list[TechnicalSignal]:
         """Generate trading signals from indicators"""
         signals = []
         close = ind['close']
@@ -278,7 +282,7 @@ class TechnicalAnalyzer:
 
         return signals
 
-    def _analyze_trend(self, df: pd.DataFrame, ind: Dict[str, float]) -> Tuple[TrendDirection, float]:
+    def _analyze_trend(self, df: pd.DataFrame, ind: dict[str, float]) -> tuple[TrendDirection, float]:
         """Analyze overall trend"""
         close = ind['close']
         scores = []
@@ -353,7 +357,7 @@ class TechnicalAnalyzer:
             pivot=round(pivot, 2)
         )
 
-    def _calculate_overall(self, signals: List[TechnicalSignal], trend: TrendDirection) -> Tuple[float, str]:
+    def _calculate_overall(self, signals: list[TechnicalSignal], trend: TrendDirection) -> tuple[float, str]:
         """Calculate overall score and signal"""
         score = 0
 

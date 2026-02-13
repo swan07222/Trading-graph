@@ -1,23 +1,21 @@
 # trading/oms.py
+import json
 import sqlite3
 import threading
-import json
-from datetime import datetime, date, timedelta
-from typing import Dict, List, Optional, Callable, Tuple
-from pathlib import Path
+from collections.abc import Callable
 from contextlib import contextmanager
-import uuid
+from datetime import date, datetime, timedelta
+from pathlib import Path
 
 from config.settings import CONFIG
-from core.types import (
-    Order, OrderSide, OrderType, OrderStatus,
-    Fill, Position, Account
-)
 from core.events import EVENT_BUS, EventType, OrderEvent
 from core.exceptions import (
-    OrderError, OrderValidationError,
-    InsufficientFundsError, InsufficientPositionError
+    InsufficientFundsError,
+    InsufficientPositionError,
+    OrderError,
+    OrderValidationError,
 )
+from core.types import Account, Fill, Order, OrderSide, OrderStatus, OrderType, Position
 from utils.logger import get_logger
 from utils.security import get_audit_log
 
@@ -319,26 +317,26 @@ class OrderDatabase:
                 target.rollback()
             raise
 
-    def load_order(self, order_id: str) -> Optional[Order]:
+    def load_order(self, order_id: str) -> Order | None:
         row = self._conn.execute(
             "SELECT * FROM orders WHERE id = ?", (order_id,)
         ).fetchone()
         return self._row_to_order(row) if row else None
 
-    def load_order_by_broker_id(self, broker_id: str) -> Optional[Order]:
+    def load_order_by_broker_id(self, broker_id: str) -> Order | None:
         row = self._conn.execute(
             "SELECT * FROM orders WHERE broker_id = ?", (broker_id,)
         ).fetchone()
         return self._row_to_order(row) if row else None
 
-    def load_active_orders(self) -> List[Order]:
+    def load_active_orders(self) -> list[Order]:
         rows = self._conn.execute("""
             SELECT * FROM orders
             WHERE status IN ('pending', 'submitted', 'accepted', 'partial')
         """).fetchall()
         return [self._row_to_order(r) for r in rows]
 
-    def load_orders_by_symbol(self, symbol: str) -> List[Order]:
+    def load_orders_by_symbol(self, symbol: str) -> list[Order]:
         rows = self._conn.execute(
             "SELECT * FROM orders WHERE symbol = ? ORDER BY created_at DESC",
             (symbol,)
@@ -464,7 +462,7 @@ class OrderDatabase:
         )
         return cur.fetchone() is not None
 
-    def load_fills(self, order_id: str = None) -> List[Fill]:
+    def load_fills(self, order_id: str = None) -> list[Fill]:
         if order_id:
             rows = self._conn.execute(
                 "SELECT * FROM fills WHERE order_id = ? ORDER BY timestamp",
@@ -499,12 +497,12 @@ class OrderDatabase:
         self,
         order_id: str,
         event_type: str,
-        old_status: Optional[str] = None,
-        new_status: Optional[str] = None,
-        filled_qty: Optional[int] = None,
-        avg_price: Optional[float] = None,
+        old_status: str | None = None,
+        new_status: str | None = None,
+        filled_qty: int | None = None,
+        avg_price: float | None = None,
         message: str = "",
-        payload: Optional[Dict] = None,
+        payload: dict | None = None,
         conn: sqlite3.Connection = None,
     ) -> None:
         target = conn or self._conn
@@ -536,7 +534,7 @@ class OrderDatabase:
                 target.rollback()
             raise
 
-    def load_order_events(self, order_id: str, limit: int = 200) -> List[Dict]:
+    def load_order_events(self, order_id: str, limit: int = 200) -> list[dict]:
         rows = self._conn.execute(
             """
             SELECT order_id, event_type, old_status, new_status, filled_qty,
@@ -548,7 +546,7 @@ class OrderDatabase:
             """,
             (str(order_id), int(max(1, limit))),
         ).fetchall()
-        out: List[Dict] = []
+        out: list[dict] = []
         for r in rows:
             payload_raw = r["payload"] if "payload" in r.keys() else "{}"
             try:
@@ -600,7 +598,7 @@ class OrderDatabase:
                 target.rollback()
             raise
 
-    def load_positions(self) -> Dict[str, Position]:
+    def load_positions(self) -> dict[str, Position]:
         rows = self._conn.execute(
             "SELECT * FROM positions WHERE quantity > 0"
         ).fetchall()
@@ -679,7 +677,7 @@ class OrderDatabase:
                 target.rollback()
             raise
 
-    def load_account_state(self) -> Optional[Account]:
+    def load_account_state(self) -> Account | None:
         row = self._conn.execute(
             "SELECT * FROM account_state WHERE id = 1"
         ).fetchone()
@@ -736,12 +734,12 @@ class OrderDatabase:
                 target.rollback()
             raise
 
-    def get_t1_pending(self) -> Dict[str, List[Tuple[int, date]]]:
+    def get_t1_pending(self) -> dict[str, list[tuple[int, date]]]:
         rows = self._conn.execute(
             "SELECT symbol, purchase_date, quantity FROM t1_pending"
         ).fetchall()
 
-        result: Dict[str, List[Tuple[int, date]]] = {}
+        result: dict[str, list[tuple[int, date]]] = {}
         for row in rows:
             symbol = row['symbol']
             if symbol not in result:
@@ -779,7 +777,7 @@ class OrderDatabase:
                 target.rollback()
             raise
 
-    def process_t1_settlement(self) -> List[str]:
+    def process_t1_settlement(self) -> list[str]:
         """Process T+1 settlement — only on trading days."""
         from core.constants import is_trading_day
 
@@ -845,8 +843,8 @@ class OrderManagementSystem:
         self._db = OrderDatabase(db_path=db_path)
         self._audit = get_audit_log()
 
-        self._on_order_update: List[Callable] = []
-        self._on_fill: List[Callable] = []
+        self._on_order_update: list[Callable] = []
+        self._on_fill: list[Callable] = []
 
         self._account = self._recover_or_init(initial_capital)
         self._reconstruct_reservations()
@@ -886,7 +884,7 @@ class OrderManagementSystem:
             return
 
         total_cash_reserved = 0.0
-        frozen_by_symbol: Dict[str, int] = {}
+        frozen_by_symbol: dict[str, int] = {}
 
         for order in active_orders:
             if order.side == OrderSide.BUY:
@@ -982,7 +980,7 @@ class OrderManagementSystem:
     # ------------------------------------------------------------------
     # ------------------------------------------------------------------
 
-    def get_active_orders(self) -> List[Order]:
+    def get_active_orders(self) -> list[Order]:
         """Get all active (non-terminal) orders."""
         return self._db.load_active_orders()
 
@@ -1129,7 +1127,7 @@ class OrderManagementSystem:
         broker_id: str = None,
         filled_qty: int = None,
         avg_price: float = None
-    ) -> Optional[Order]:
+    ) -> Order | None:
         """
         Update order status with state machine validation.
         Idempotent: same-status updates just refresh metadata.
@@ -1241,7 +1239,7 @@ class OrderManagementSystem:
 
     def get_order_by_broker_id(
         self, broker_id: str
-    ) -> Optional[Order]:
+    ) -> Order | None:
         return self._db.load_order_by_broker_id(broker_id)
 
     def _release_reserved(self, order: Order):
@@ -1586,34 +1584,34 @@ class OrderManagementSystem:
         )
         return bool(updated and updated.status == OrderStatus.CANCELLED)
 
-    def get_order(self, order_id: str) -> Optional[Order]:
+    def get_order(self, order_id: str) -> Order | None:
         return self._db.load_order(order_id)
 
-    def get_orders(self, symbol: str = None) -> List[Order]:
+    def get_orders(self, symbol: str = None) -> list[Order]:
         if symbol:
             return self._db.load_orders_by_symbol(symbol)
         return self._db.load_active_orders()
 
-    def get_fills(self, order_id: str = None) -> List[Fill]:
+    def get_fills(self, order_id: str = None) -> list[Fill]:
         return self._db.load_fills(order_id)
 
-    def get_order_timeline(self, order_id: str, limit: int = 200) -> List[Dict]:
+    def get_order_timeline(self, order_id: str, limit: int = 200) -> list[dict]:
         """
         Return order lifecycle events in ascending time order.
         Useful for UI/ops troubleshooting of OMS state transitions.
         """
         return self._db.load_order_events(order_id, limit=limit)
 
-    def get_position(self, symbol: str) -> Optional[Position]:
+    def get_position(self, symbol: str) -> Position | None:
         return self._account.positions.get(symbol)
 
-    def get_positions(self) -> Dict[str, Position]:
+    def get_positions(self) -> dict[str, Position]:
         return self._account.positions.copy()
 
     def get_account(self) -> Account:
         return self._account
 
-    def update_prices(self, prices: Dict[str, float]):
+    def update_prices(self, prices: dict[str, float]):
         """Update position prices and persist."""
         with self._lock:
             updated = False
@@ -1663,9 +1661,9 @@ class OrderManagementSystem:
 
     def reconcile(
         self,
-        broker_positions: Dict[str, Position],
+        broker_positions: dict[str, Position],
         broker_cash: float
-    ) -> Dict:
+    ) -> dict:
         """Reconcile OMS state with broker. Returns discrepancies."""
         with self._lock:
             discrepancies = {
@@ -1721,7 +1719,7 @@ class OrderManagementSystem:
 
     def force_sync_from_broker(
         self,
-        broker_positions: Dict[str, Position],
+        broker_positions: dict[str, Position],
         broker_cash: float,
         broker_available: float = None
     ):
@@ -1779,7 +1777,7 @@ class OrderManagementSystem:
         except Exception as e:
             log.warning(f"Error closing OMS: {e}")
 
-_oms: Optional[OrderManagementSystem] = None
+_oms: OrderManagementSystem | None = None
 _oms_lock = threading.Lock()
 
 def get_oms(

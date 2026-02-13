@@ -4,16 +4,15 @@ import copy
 import json
 import threading
 import uuid
-from dataclasses import dataclass, field, asdict
-from datetime import datetime, date, timedelta
+from dataclasses import asdict, dataclass
+from datetime import date, datetime, timedelta
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
 
 from config import CONFIG
-from core.types import Position, Account
+from core.types import Account, Position
 from utils.logger import get_logger
 
 log = get_logger(__name__)
@@ -122,18 +121,18 @@ class Portfolio:
         - Persist / restore state across restarts
     """
 
-    def __init__(self, initial_capital: Optional[float] = None):
+    def __init__(self, initial_capital: float | None = None):
         self._lock = threading.RLock()
 
         self.initial_capital: float = initial_capital or CONFIG.CAPITAL
         self.cash: float = self.initial_capital
 
-        self.positions: Dict[str, Position] = {}
-        self.trades: List[Trade] = []
-        self.daily_performance: List[DailyPerformance] = []
+        self.positions: dict[str, Position] = {}
+        self.trades: list[Trade] = []
+        self.daily_performance: list[DailyPerformance] = []
 
         now = datetime.now()
-        self.equity_history: List[Tuple[datetime, float]] = [
+        self.equity_history: list[tuple[datetime, float]] = [
             (now, self.initial_capital)
         ]
 
@@ -195,17 +194,17 @@ class Portfolio:
         with self._lock:
             return self._compute_stats()
 
-    def get_equity_curve(self) -> List[Tuple[datetime, float]]:
+    def get_equity_curve(self) -> list[tuple[datetime, float]]:
         """Return a copy of the equity curve."""
         with self._lock:
             return list(self.equity_history)
 
-    def get_trade_history(self) -> List[Trade]:
+    def get_trade_history(self) -> list[Trade]:
         """Return a copy of all recorded trades."""
         with self._lock:
             return list(self.trades)
 
-    def get_position_summary(self) -> List[Dict]:
+    def get_position_summary(self) -> list[dict]:
         """Snapshot of current positions sorted by market value descending."""
         with self._lock:
             snapshot = dict(self.positions)
@@ -338,7 +337,7 @@ class Portfolio:
             **period_pnl,
         )
 
-    def _compute_trade_stats(self) -> Dict:
+    def _compute_trade_stats(self) -> dict:
         sell_trades = [t for t in self.trades if t.side == "sell"]
         total = len(sell_trades)
 
@@ -388,7 +387,7 @@ class Portfolio:
             recovery_factor=0.0,  # filled by risk metrics when drawdown is known
         )
 
-    def _compute_risk_metrics(self, current_equity: float) -> Dict:
+    def _compute_risk_metrics(self, current_equity: float) -> dict:
         returns = self._calculate_returns()
 
         sharpe_ratio = 0.0
@@ -434,7 +433,7 @@ class Portfolio:
             recovery_factor=recovery_factor,
         )
 
-    def _compute_exposure_metrics(self, current_equity: float) -> Dict:
+    def _compute_exposure_metrics(self, current_equity: float) -> dict:
         if current_equity <= 0:
             return dict(
                 exposure_pct=0.0,
@@ -458,7 +457,7 @@ class Portfolio:
             concentration_top3_pct=(top3 / current_equity) * 100.0,
         )
 
-    def _compute_period_pnl(self, current_equity: float) -> Dict:
+    def _compute_period_pnl(self, current_equity: float) -> dict:
         daily_pnl = current_equity - self._daily_start_equity
         daily_pnl_pct = (
             (daily_pnl / self._daily_start_equity * 100.0)
@@ -591,7 +590,7 @@ class Portfolio:
             return
 
         try:
-            with open(path, "r", encoding="utf-8") as fh:
+            with open(path, encoding="utf-8") as fh:
                 data = json.load(fh)
         except Exception as exc:
             log.warning("Failed to read portfolio file: %s", exc)

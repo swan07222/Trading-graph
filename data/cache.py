@@ -1,17 +1,18 @@
 # data/cache.py
-import os
-import pickle
 import gzip
 import hashlib
+import os
+import pickle
+import sys
 import tempfile
 import threading
-from pathlib import Path
-from datetime import datetime, timedelta
-from typing import Any, Optional, Callable, TypeVar
 from collections import OrderedDict
+from collections.abc import Callable
 from dataclasses import dataclass, field
+from datetime import datetime
 from functools import wraps
-import sys
+from pathlib import Path
+from typing import Any, TypeVar
 
 import numpy as np
 import pandas as pd
@@ -275,7 +276,7 @@ class DiskCache:
         2. Windows PermissionError (two handles to same file)
         """
         path = self._key_to_path(key)
-        tmp_path: Optional[Path] = None
+        tmp_path: Path | None = None
 
         try:
             with self._lock:
@@ -377,7 +378,7 @@ class TieredCache:
 
     def get(
         self, key: str, max_age_hours: float = None
-    ) -> Optional[Any]:
+    ) -> Any | None:
         """Get value with tiered lookup. Returns None on miss."""
         max_age = max_age_hours or CONFIG.data.cache_ttl_hours
 
@@ -489,7 +490,7 @@ class TieredCache:
             # Python < 3.9 doesn't have cancel_futures
             self._l3_executor.shutdown(wait=True)
 
-_cache: Optional[TieredCache] = None
+_cache: TieredCache | None = None
 _cache_lock = threading.Lock()
 
 def get_cache() -> TieredCache:

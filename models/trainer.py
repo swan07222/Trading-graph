@@ -1,24 +1,26 @@
 # models/trainer.py
 from __future__ import annotations
 
+import random
+from collections.abc import Callable
+from datetime import datetime
+from pathlib import Path
+from typing import Any
+
 import numpy as np
+import pandas as pd
 import torch
 import torch.nn as nn
-import random
-import pandas as pd
-from typing import Dict, List, Optional, Callable, Tuple, Any
-from pathlib import Path
-from datetime import datetime
-from tqdm import tqdm
 from torch.utils.data import DataLoader, TensorDataset
+from tqdm import tqdm
 
 from config.settings import CONFIG
-from data.fetcher import DataFetcher, get_fetcher
-from data.processor import DataProcessor
 from data.features import FeatureEngine
+from data.fetcher import get_fetcher
+from data.processor import DataProcessor
 from models.ensemble import EnsembleModel
-from utils.logger import get_logger
 from utils.cancellation import CancelledException
+from utils.logger import get_logger
 
 log = get_logger(__name__)
 
@@ -41,7 +43,7 @@ _EPS = 1e-8
 # Stop check interval for batch loops (check every N batches)
 _STOP_CHECK_INTERVAL = 10
 
-def _resolve_learning_rate(explicit_lr: Optional[float] = None) -> float:
+def _resolve_learning_rate(explicit_lr: float | None = None) -> float:
     """
     Resolve learning rate from multiple sources in priority order:
     1. Explicit parameter (highest priority)
@@ -75,8 +77,8 @@ class Trainer:
         self.processor = DataProcessor()
         self.feature_engine = FeatureEngine()
 
-        self.ensemble: Optional[EnsembleModel] = None
-        self.history: Dict = {}
+        self.ensemble: EnsembleModel | None = None
+        self.history: dict = {}
         self.input_size: int = 0
 
         self.interval: str = "1d"
@@ -118,8 +120,8 @@ class Trainer:
         self,
         df_raw: pd.DataFrame,
         horizon: int,
-        feature_cols: List[str],
-    ) -> Optional[Dict[str, pd.DataFrame]]:
+        feature_cols: list[str],
+    ) -> dict[str, pd.DataFrame] | None:
         """
         Split a single stock's RAW data temporally, compute features
         and labels WITHIN each split, and invalidate warmup rows.
@@ -228,14 +230,14 @@ class Trainer:
 
     def _fetch_raw_data(
         self,
-        stocks: List[str],
+        stocks: list[str],
         interval: str,
         bars: int,
         stop_flag: Any = None,
         verbose: bool = True,
-    ) -> Dict[str, pd.DataFrame]:
+    ) -> dict[str, pd.DataFrame]:
         """Fetch raw OHLCV data for all stocks."""
-        raw_data: Dict[str, pd.DataFrame] = {}
+        raw_data: dict[str, pd.DataFrame] = {}
         iterator = tqdm(stocks, desc="Loading stocks") if verbose else stocks
 
         for code in iterator:
@@ -272,11 +274,11 @@ class Trainer:
 
     def _split_and_fit_scaler(
         self,
-        raw_data: Dict[str, pd.DataFrame],
-        feature_cols: List[str],
+        raw_data: dict[str, pd.DataFrame],
+        feature_cols: list[str],
         horizon: int,
         interval: str,
-    ) -> Tuple[Dict[str, Dict[str, pd.DataFrame]], bool]:
+    ) -> tuple[dict[str, dict[str, pd.DataFrame]], bool]:
         """
         Split all stocks temporally, compute features per split,
         and fit scaler on training data.
@@ -285,7 +287,7 @@ class Trainer:
             (split_data, has_valid_data)
         """
         all_train_features = []
-        split_data: Dict[str, Dict[str, pd.DataFrame]] = {}
+        split_data: dict[str, dict[str, pd.DataFrame]] = {}
 
         for code, df_raw in raw_data.items():
             splits = self._split_single_stock(df_raw, horizon, feature_cols)
@@ -335,10 +337,10 @@ class Trainer:
 
     def _create_sequences_from_splits(
         self,
-        split_data: Dict[str, Dict[str, pd.DataFrame]],
-        feature_cols: List[str],
+        split_data: dict[str, dict[str, pd.DataFrame]],
+        feature_cols: list[str],
         include_returns: bool = True,
-    ) -> Dict[str, Dict[str, List]]:
+    ) -> dict[str, dict[str, list]]:
         """Create sequences for train/val/test from split data."""
         storage = {
             "train": {"X": [], "y": [], "r": []},
@@ -370,8 +372,8 @@ class Trainer:
 
     @staticmethod
     def _combine_arrays(
-        storage: Dict[str, List],
-    ) -> Tuple[Optional[np.ndarray], Optional[np.ndarray], Optional[np.ndarray]]:
+        storage: dict[str, list],
+    ) -> tuple[np.ndarray | None, np.ndarray | None, np.ndarray | None]:
         """Combine arrays from multiple stocks."""
         if not storage["X"]:
             return None, None, None
@@ -386,13 +388,13 @@ class Trainer:
 
     def prepare_data(
         self,
-        stock_codes: List[str] = None,
+        stock_codes: list[str] = None,
         min_samples_per_stock: int = 100,
         verbose: bool = True,
         interval: str = "1d",
         prediction_horizon: int = None,
         lookback_bars: int = None,
-    ) -> Tuple:
+    ) -> tuple:
         """
         Prepare training data with proper temporal split.
 
@@ -484,10 +486,10 @@ class Trainer:
 
     def train(
         self,
-        stock_codes: List[str] = None,
+        stock_codes: list[str] = None,
         epochs: int = None,
         batch_size: int = None,
-        model_names: List[str] = None,
+        model_names: list[str] = None,
         callback: Callable = None,
         stop_flag: Any = None,
         save_model: bool = True,
@@ -496,13 +498,12 @@ class Trainer:
         prediction_horizon: int = None,
         lookback_bars: int = 2400,
         learning_rate: float = None,
-    ) -> Dict:
+    ) -> dict:
         """
         Train complete pipeline:
         1) Classification ensemble for trading signals
         2) Multi-step forecaster for AI-generated price curves
         """
-        from models.networks import TCNModel
 
         epochs = int(epochs or CONFIG.EPOCHS)
         batch_size = int(batch_size or CONFIG.BATCH_SIZE)
@@ -616,7 +617,6 @@ class Trainer:
             split_idx = int(len(X_train) * 0.85)
             X_val = X_train[split_idx:]
             y_val = y_train[split_idx:]
-            r_val = r_train[split_idx:] if r_train is not None else None
             X_train = X_train[:split_idx]
             y_train = y_train[:split_idx]
             r_train = r_train[:split_idx] if r_train is not None else None
@@ -711,8 +711,8 @@ class Trainer:
 
     def _train_forecaster(
         self,
-        split_data: Dict[str, Dict[str, pd.DataFrame]],
-        feature_cols: List[str],
+        split_data: dict[str, dict[str, pd.DataFrame]],
+        feature_cols: list[str],
         horizon: int,
         interval: str,
         batch_size: int,
@@ -938,11 +938,11 @@ class Trainer:
         X: np.ndarray,
         y: np.ndarray,
         r: np.ndarray,
-    ) -> Dict:
+    ) -> dict:
         """Evaluate model on test data."""
         from sklearn.metrics import (
-            precision_recall_fscore_support,
             confusion_matrix,
+            precision_recall_fscore_support,
         )
 
         if len(X) == 0 or len(y) == 0:
@@ -1028,7 +1028,7 @@ class Trainer:
         preds: np.ndarray,
         confs: np.ndarray,
         returns: np.ndarray,
-    ) -> Dict:
+    ) -> dict:
         """
         Simulate trading with proper compounding and consistent units.
 
@@ -1158,11 +1158,11 @@ class Trainer:
     # =========================================================================
     # =========================================================================
 
-    def get_ensemble(self) -> Optional[EnsembleModel]:
+    def get_ensemble(self) -> EnsembleModel | None:
         """Get the trained ensemble model."""
         return self.ensemble
 
-    def save_training_report(self, results: Dict, path: str = None):
+    def save_training_report(self, results: dict, path: str = None):
         """Save training report to file."""
         import json
 

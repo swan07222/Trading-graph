@@ -2,8 +2,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Dict, List, Optional, Tuple, Union
 from enum import Enum
+from typing import TYPE_CHECKING
+
 import numpy as np
 
 from config.settings import CONFIG
@@ -12,8 +13,8 @@ from utils.logger import get_logger
 # Type-checking imports (no runtime cost)
 if TYPE_CHECKING:
     import pandas as pd
-    from models.predictor import Prediction, Signal as SignalEnum
-    from analysis.technical import TechnicalSummary, TrendDirection
+
+    from models.predictor import Prediction
 
 from models.predictor import Signal
 
@@ -93,8 +94,8 @@ class TradingSignal:
     risk_amount: float
 
     # Reasons and warnings
-    reasons: List[str] = field(default_factory=list)
-    warnings: List[str] = field(default_factory=list)
+    reasons: list[str] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
 
     def __post_init__(self):
         """Validate fields after initialization."""
@@ -189,7 +190,7 @@ class SignalGenerator:
             log.warning(f"Could not init technical analyzer: {e}")
 
         try:
-            from analysis.sentiment import SentimentAnalyzer, NewsScraper
+            from analysis.sentiment import NewsScraper, SentimentAnalyzer
             self.sentiment_analyzer = SentimentAnalyzer()
             self.news_scraper = NewsScraper()
             log.debug("Sentiment analyzer initialized")
@@ -247,7 +248,7 @@ class SignalGenerator:
     def generate(
         self, 
         prediction: Prediction, 
-        df: Optional[pd.DataFrame] = None, 
+        df: pd.DataFrame | None = None, 
         include_sentiment: bool = True
     ) -> TradingSignal:
         """
@@ -267,8 +268,8 @@ class SignalGenerator:
         if prediction is None:
             raise ValueError("Prediction cannot be None")
 
-        reasons: List[str] = list(self._safe_get(prediction, "reasons", []) or [])
-        warnings: List[str] = list(self._safe_get(prediction, "warnings", []) or [])
+        reasons: list[str] = list(self._safe_get(prediction, "reasons", []) or [])
+        warnings: list[str] = list(self._safe_get(prediction, "warnings", []) or [])
 
         stock_code = str(self._safe_get(prediction, "stock_code", "") or "")
         stock_name = str(self._safe_get(prediction, "stock_name", "") or "")
@@ -410,10 +411,10 @@ class SignalGenerator:
 
     def _analyze_technical(
         self, 
-        df: Optional[pd.DataFrame], 
-        reasons: List[str], 
-        warnings: List[str]
-    ) -> Tuple[float, str, str, Dict[str, float]]:
+        df: pd.DataFrame | None, 
+        reasons: list[str], 
+        warnings: list[str]
+    ) -> tuple[float, str, str, dict[str, float]]:
         """
         Perform technical analysis on price data.
 
@@ -429,7 +430,7 @@ class SignalGenerator:
         tech_signal = "neutral"
         trend = "sideways"
 
-        indicators: Dict[str, float] = {}
+        indicators: dict[str, float] = {}
         if df is None or len(df) < 60 or self.tech_analyzer is None:
             return tech_score, tech_signal, trend, indicators
 
@@ -475,8 +476,8 @@ class SignalGenerator:
         self, 
         stock_code: str, 
         include_sentiment: bool, 
-        reasons: List[str]
-    ) -> Tuple[float, str, int]:
+        reasons: list[str]
+    ) -> tuple[float, str, int]:
         """
         Analyze news sentiment for stock.
 
@@ -526,7 +527,7 @@ class SignalGenerator:
         self, 
         combined_score: float, 
         ai_confidence: float
-    ) -> Tuple[Signal, float]:
+    ) -> tuple[Signal, float]:
         """
         Determine final trading signal from combined score.
 
@@ -592,7 +593,7 @@ class SignalGenerator:
 
     def _generate_warnings(
         self,
-        warnings: List[str],
+        warnings: list[str],
         ai_conf: float,
         model_agreement: float,
         tech_score: float,
@@ -633,10 +634,10 @@ class SignalGenerator:
 
     def scan_stocks(
         self,
-        predictions: List[Prediction],
+        predictions: list[Prediction],
         min_signal_strength: float = 0.5,
         signal_type: str = "all"
-    ) -> List[TradingSignal]:
+    ) -> list[TradingSignal]:
         """
         Scan multiple stocks and filter by signal criteria.
 
@@ -648,7 +649,7 @@ class SignalGenerator:
         Returns:
             Sorted list of TradingSignals matching criteria
         """
-        signals: List[TradingSignal] = []
+        signals: list[TradingSignal] = []
 
         for pred in predictions:
             try:
@@ -684,9 +685,9 @@ class SignalGenerator:
 
     def get_top_opportunities(
         self,
-        predictions: List[Prediction],
+        predictions: list[Prediction],
         n: int = 5
-    ) -> Dict[str, List[TradingSignal]]:
+    ) -> dict[str, list[TradingSignal]]:
         """
         Get top N buy and sell opportunities.
 
@@ -727,23 +728,23 @@ class SignalGenerator:
             f"{'='*50}",
             f"📈 {signal.stock_name} ({signal.stock_code})",
             f"{'='*50}",
-            f"",
+            "",
             f"Signal: {signal.signal} (Strength: {signal.signal_strength:.0%})",
             f"Confidence: {signal.confidence.value}",
             f"Price: ¥{signal.current_price:.2f}",
-            f"",
-            f"--- Scores ---",
+            "",
+            "--- Scores ---",
             f"Combined: {signal.combined_score:+.1f}",
             f"AI: {signal.ai_confidence:.0%} confidence",
             f"Technical: {signal.tech_score:+.1f} ({signal.tech_signal})",
             f"Sentiment: {signal.sentiment_score:+.1f} ({signal.sentiment_label})",
             f"Trend: {signal.trend}",
-            f"",
+            "",
         ]
 
         if signal.entry_price > 0:
             lines.extend([
-                f"--- Trading Plan ---",
+                "--- Trading Plan ---",
                 f"Entry: ¥{signal.entry_price:.2f}",
                 f"Stop Loss: ¥{signal.stop_loss:.2f}",
                 f"Target 1: ¥{signal.take_profit_1:.2f}",
@@ -751,7 +752,7 @@ class SignalGenerator:
                 f"Position: {signal.position_size} shares (¥{signal.position_value:,.0f})",
                 f"Risk: ¥{signal.risk_amount:,.0f}",
                 f"R/R Ratio: {signal.risk_reward_ratio:.2f}",
-                f"",
+                "",
             ])
 
         if signal.reasons:

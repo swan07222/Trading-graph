@@ -3,7 +3,6 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
-from typing import Dict, List, Optional
 
 from config.settings import CONFIG
 from utils.logger import get_logger
@@ -14,7 +13,7 @@ log = get_logger(__name__)
 class StrategyMarketplace:
     """Local strategy catalog with enable/disable state and integrity checks."""
 
-    def __init__(self, strategies_dir: Optional[Path] = None) -> None:
+    def __init__(self, strategies_dir: Path | None = None) -> None:
         base = Path(getattr(CONFIG, "base_dir", Path(".")))
         self._dir = Path(strategies_dir) if strategies_dir else (base / "strategies")
         self._manifest_path = self._dir / "marketplace.json"
@@ -52,12 +51,12 @@ class StrategyMarketplace:
                 h.update(chunk)
         return h.hexdigest()
 
-    def list_entries(self) -> List[Dict]:
+    def list_entries(self) -> list[dict]:
         raw = self._read_json(self._manifest_path, {"strategies": []})
         items = list(raw.get("strategies", []) or [])
         enabled_set = set(self.get_enabled_ids())
 
-        out: List[Dict] = []
+        out: list[dict] = []
         for entry in items:
             sid = str(entry.get("id", "")).strip()
             file_name = str(entry.get("file", "")).strip()
@@ -87,21 +86,21 @@ class StrategyMarketplace:
             out.append(item)
         return out
 
-    def get_enabled_ids(self) -> List[str]:
+    def get_enabled_ids(self) -> list[str]:
         data = self._read_json(self._enabled_path, {})
         enabled = data.get("enabled")
         if isinstance(enabled, list):
             return [str(x).strip() for x in enabled if str(x).strip()]
 
         # Fallback to defaults from manifest
-        defaults: List[str] = []
+        defaults: list[str] = []
         for item in self._read_json(self._manifest_path, {"strategies": []}).get("strategies", []):
             sid = str(item.get("id", "")).strip()
             if sid and bool(item.get("enabled_by_default", False)):
                 defaults.append(sid)
         return defaults
 
-    def save_enabled_ids(self, strategy_ids: List[str]) -> None:
+    def save_enabled_ids(self, strategy_ids: list[str]) -> None:
         valid_entries = {str(item["id"]): item for item in self.list_entries()}
         clean = []
         seen = set()
@@ -120,9 +119,9 @@ class StrategyMarketplace:
             clean.append(s)
         self._write_json(self._enabled_path, {"enabled": clean})
 
-    def get_enabled_files(self) -> List[Path]:
+    def get_enabled_files(self) -> list[Path]:
         enabled = set(self.get_enabled_ids())
-        files: List[Path] = []
+        files: list[Path] = []
         for item in self.list_entries():
             if item["id"] not in enabled:
                 continue
@@ -133,8 +132,8 @@ class StrategyMarketplace:
             files.append(self._dir / str(item["file"]))
         return files
 
-    def get_integrity_summary(self) -> Dict[str, int]:
-        summary: Dict[str, int] = {
+    def get_integrity_summary(self) -> dict[str, int]:
+        summary: dict[str, int] = {
             "total": 0,
             "ok": 0,
             "unverified": 0,

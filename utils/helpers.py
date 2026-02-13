@@ -2,10 +2,11 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Sequence
 from datetime import datetime, timedelta
-from typing import List, Optional, Sequence, Union
 
 import numpy as np
+
 
 def to_float(x, default: float = 0.0) -> float:
     """Safely convert to float with NaN/Inf handling."""
@@ -112,7 +113,7 @@ def get_trading_dates(
     start: datetime,
     end: datetime,
     exclude_weekends: bool = True,
-) -> List[datetime]:
+) -> list[datetime]:
     """
     Get list of potential trading dates between start and end (inclusive).
 
@@ -141,7 +142,7 @@ def get_trading_dates(
     return dates
 
 def calculate_sharpe(
-    returns: Union[np.ndarray, Sequence[float]],
+    returns: np.ndarray | Sequence[float],
     risk_free_annual: float = 0.03,
     periods_per_year: int = 252,
 ) -> float:
@@ -180,7 +181,7 @@ def calculate_sharpe(
     return float(np.mean(excess) / std * np.sqrt(periods_per_year))
 
 def calculate_max_drawdown(
-    equity: Union[np.ndarray, Sequence[float]],
+    equity: np.ndarray | Sequence[float],
 ) -> float:
     """
     Calculate maximum drawdown from an equity curve.

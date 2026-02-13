@@ -1,10 +1,11 @@
 # core/constants.py
-from datetime import time, date, datetime
-from typing import Dict, List, Set, Tuple
-from enum import Enum, auto
-from core.types import OrderSide, OrderType, OrderStatus
-from pathlib import Path
+from datetime import date, datetime, time
+from enum import Enum
 from functools import lru_cache
+from pathlib import Path
+
+from core.types import OrderSide, OrderStatus, OrderType
+
 
 class Exchange(Enum):
     """Stock exchanges"""
@@ -53,7 +54,7 @@ TRADING_HOURS = {
 
 # HOLIDAYS (2024-2025 China)
 
-HOLIDAYS_2024: Set[date] = {
+HOLIDAYS_2024: set[date] = {
     date(2024, 1, 1),
     date(2024, 2, 9), date(2024, 2, 10), date(2024, 2, 11),
     date(2024, 2, 12), date(2024, 2, 13), date(2024, 2, 14),
@@ -69,7 +70,7 @@ HOLIDAYS_2024: Set[date] = {
     date(2024, 10, 7),
 }
 
-HOLIDAYS_2025: Set[date] = {
+HOLIDAYS_2025: set[date] = {
     date(2025, 1, 1),
     date(2025, 1, 28), date(2025, 1, 29), date(2025, 1, 30),
     date(2025, 1, 31), date(2025, 2, 1), date(2025, 2, 2),
@@ -219,7 +220,7 @@ def _load_external_holidays() -> frozenset:
     File format: <data_dir>/holidays_cn.json
     Content: ["2026-01-01", "2026-02-10", ...]
     """
-    extra: Set[date] = set()
+    extra: set[date] = set()
     try:
         from config.settings import CONFIG
 

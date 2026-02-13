@@ -1,14 +1,19 @@
 # ui/news_widget.py
-from datetime import datetime
-from typing import List, Optional
 
-from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel,
-    QTableWidget, QTableWidgetItem, QHeaderView,
-    QPushButton, QGroupBox, QFrame, QProgressBar,
-)
-from PyQt6.QtCore import Qt, QTimer, QThread, pyqtSignal
+from PyQt6.QtCore import QThread, QTimer, pyqtSignal
 from PyQt6.QtGui import QColor, QFont
+from PyQt6.QtWidgets import (
+    QFrame,
+    QHBoxLayout,
+    QHeaderView,
+    QLabel,
+    QProgressBar,
+    QPushButton,
+    QTableWidget,
+    QTableWidgetItem,
+    QVBoxLayout,
+    QWidget,
+)
 
 from utils.logger import get_logger
 
@@ -222,8 +227,8 @@ class NewsPanel(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self._current_stock: Optional[str] = None
-        self._fetch_thread: Optional[NewsFetchThread] = None
+        self._current_stock: str | None = None
+        self._fetch_thread: NewsFetchThread | None = None
         self._is_fetching = False
 
         self._setup_ui()

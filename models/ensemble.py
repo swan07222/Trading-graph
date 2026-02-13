@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import os
 import threading
+from collections.abc import Callable
 from contextlib import nullcontext
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Tuple, Union
+from typing import Any
 
 import numpy as np
 import torch
@@ -57,7 +58,7 @@ class EnsemblePrediction:
     agreement: float
     margin: float
     brier_score: float
-    individual_predictions: Dict[str, np.ndarray]
+    individual_predictions: dict[str, np.ndarray]
 
     @property
     def prob_up(self) -> float:
@@ -109,12 +110,12 @@ class EnsembleModel:
     - Incremental training
     """
 
-    _MODEL_CLASSES: Optional[Dict] = None  # class-level cache
+    _MODEL_CLASSES: dict | None = None  # class-level cache
 
     def __init__(
         self,
         input_size: int,
-        model_names: Optional[List[str]] = None,
+        model_names: list[str] | None = None,
     ):
         """
         Initialize ensemble with specified models.
@@ -141,8 +142,8 @@ class EnsembleModel:
 
         model_names = model_names or ["lstm", "gru", "tcn", "transformer", "hybrid"]
 
-        self.models: Dict[str, nn.Module] = {}
-        self.weights: Dict[str, float] = {}
+        self.models: dict[str, nn.Module] = {}
+        self.weights: dict[str, float] = {}
 
         cls_map = self._get_model_classes()
         for name in model_names:
@@ -166,10 +167,14 @@ class EnsembleModel:
     # ------------------------------------------------------------------
 
     @classmethod
-    def _get_model_classes(cls) -> Dict:
+    def _get_model_classes(cls) -> dict:
         if cls._MODEL_CLASSES is None:
             from .networks import (
-                LSTMModel, TransformerModel, GRUModel, TCNModel, HybridModel,
+                GRUModel,
+                HybridModel,
+                LSTMModel,
+                TCNModel,
+                TransformerModel,
             )
             cls._MODEL_CLASSES = {
                 "lstm": LSTMModel,
@@ -183,9 +188,9 @@ class EnsembleModel:
     def _init_model(
         self,
         name: str,
-        hidden_size: Optional[int] = None,
-        dropout: Optional[float] = None,
-        num_classes: Optional[int] = None,
+        hidden_size: int | None = None,
+        dropout: float | None = None,
+        num_classes: int | None = None,
     ):
         cls_map = self._get_model_classes()
         try:
@@ -267,7 +272,7 @@ class EnsembleModel:
 
         for batch_X, batch_y in loader:
             batch_X = batch_X.to(self.device)
-            weighted_logits: Optional[torch.Tensor] = None
+            weighted_logits: torch.Tensor | None = None
 
             with torch.inference_mode():
                 for name, model in models:
@@ -318,14 +323,14 @@ class EnsembleModel:
         y_train: np.ndarray,
         X_val: np.ndarray,
         y_val: np.ndarray,
-        epochs: Optional[int] = None,
-        batch_size: Optional[int] = None,
-        callback: Optional[Callable] = None,
+        epochs: int | None = None,
+        batch_size: int | None = None,
+        callback: Callable | None = None,
         stop_flag: Any = None,
-        interval: Optional[str] = None,
-        horizon: Optional[int] = None,
-        learning_rate: Optional[float] = None,
-    ) -> Dict:
+        interval: str | None = None,
+        horizon: int | None = None,
+        learning_rate: float | None = None,
+    ) -> dict:
         """
         Train all models in the ensemble.
 
@@ -396,8 +401,8 @@ class EnsembleModel:
         inv_freq /= inv_freq.sum()
         class_weights = torch.FloatTensor(inv_freq).to(self.device)
 
-        history: Dict[str, Dict] = {}
-        val_accuracies: Dict[str, float] = {}
+        history: dict[str, dict] = {}
+        val_accuracies: dict[str, float] = {}
 
         log.info(f"Training with learning_rate={effective_lr:.6f}")
 
@@ -440,9 +445,9 @@ class EnsembleModel:
         class_weights: torch.Tensor,
         epochs: int,
         learning_rate: float,
-        callback: Optional[Callable] = None,
+        callback: Callable | None = None,
         stop_flag: Any = None,
-    ) -> Tuple[Dict, float]:
+    ) -> tuple[dict, float]:
         """
         Train one model with early stopping, warmup + cosine schedule,
         optional AMP.
@@ -480,7 +485,7 @@ class EnsembleModel:
         history = {"train_loss": [], "val_loss": [], "val_acc": []}
         best_val_acc = 0.0
         patience_counter = 0
-        best_state: Optional[Dict] = None
+        best_state: dict | None = None
         patience_limit = int(CONFIG.model.early_stop_patience)
 
         _STOP_CHECK_INTERVAL = 10
@@ -595,7 +600,7 @@ class EnsembleModel:
         log.info(f"{name} done — best val acc: {best_val_acc:.2%}")
         return history, best_val_acc
 
-    def _update_weights(self, val_accuracies: Dict[str, float]):
+    def _update_weights(self, val_accuracies: dict[str, float]):
         """Softmax-weighted ensemble based on validation accuracy."""
         if not val_accuracies:
             return
@@ -614,7 +619,9 @@ class EnsembleModel:
         exp_w /= exp_w.sum()
 
         with self._lock:
-            self.weights = {n: float(w) for n, w in zip(names, exp_w)}
+            self.weights = {
+                n: float(w) for n, w in zip(names, exp_w, strict=False)
+            }
 
         log.info(f"Ensemble weights: {self.weights}")
 
@@ -649,7 +656,7 @@ class EnsembleModel:
 
     def predict_batch(
         self, X: np.ndarray, batch_size: int = 1024
-    ) -> List[EnsemblePrediction]:
+    ) -> list[EnsemblePrediction]:
         """
         Batch prediction.
 
@@ -684,15 +691,15 @@ class EnsembleModel:
 
         num_classes = CONFIG.model.num_classes
         max_entropy = float(np.log(num_classes)) if num_classes > 1 else 1.0
-        results: List[EnsemblePrediction] = []
+        results: list[EnsemblePrediction] = []
         n = len(X)
 
         for start in range(0, n, batch_size):
             end = min(n, start + batch_size)
             X_t = torch.FloatTensor(X[start:end]).to(self.device)
 
-            per_model_probs: Dict[str, np.ndarray] = {}
-            weighted_logits: Optional[torch.Tensor] = None
+            per_model_probs: dict[str, np.ndarray] = {}
+            weighted_logits: torch.Tensor | None = None
 
             with torch.inference_mode():
                 for name, model in models:
@@ -767,7 +774,7 @@ class EnsembleModel:
     # ------------------------------------------------------------------
     # ------------------------------------------------------------------
 
-    def save(self, path: Optional[str] = None):
+    def save(self, path: str | None = None):
         """
         Save ensemble atomically.
 
@@ -850,7 +857,7 @@ class EnsembleModel:
 
         log.info(f"Ensemble saved → {path}")
 
-    def load(self, path: Optional[str] = None) -> bool:
+    def load(self, path: str | None = None) -> bool:
         """
         Load ensemble from file.
 
@@ -939,7 +946,7 @@ class EnsembleModel:
     # ------------------------------------------------------------------
     # ------------------------------------------------------------------
 
-    def get_model_info(self) -> Dict[str, Any]:
+    def get_model_info(self) -> dict[str, Any]:
         """Get information about the ensemble models."""
         with self._lock:
             return {
@@ -968,7 +975,7 @@ class EnsembleModel:
             for model in self.models.values():
                 model.train()
 
-    def to(self, device: str) -> "EnsembleModel":
+    def to(self, device: str) -> EnsembleModel:
         """
         Move all models to specified device.
 

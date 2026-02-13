@@ -2,11 +2,10 @@ import queue
 import threading
 from types import SimpleNamespace
 
-from config.settings import TradingMode
-from core.types import TradeSignal, Order, Fill, OrderSide, AutoTradeMode
+from config.settings import CONFIG, TradingMode
+from core.types import AutoTradeMode, Fill, Order, OrderSide, TradeSignal
 from trading.executor import ExecutionEngine
 from trading.health import HealthStatus
-from config.settings import CONFIG
 
 
 def test_submit_blocks_when_unhealthy():

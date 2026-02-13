@@ -1,11 +1,11 @@
 # trading/health.py
+import json
 import threading
 import time
-from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Callable
+from collections.abc import Callable
 from dataclasses import dataclass, field
+from datetime import datetime
 from enum import Enum
-import json
 
 try:
     import psutil
@@ -13,12 +13,12 @@ try:
 except ImportError:
     HAS_PSUTIL = False
 
-from config import CONFIG
-from core.types import SystemStatus
-from core.events import EVENT_BUS, EventType, Event
-from utils.logger import get_logger
-from pathlib import Path
 import os
+from pathlib import Path
+
+from config import CONFIG
+from core.events import EVENT_BUS, Event, EventType
+from utils.logger import get_logger
 
 log = get_logger(__name__)
 
@@ -47,7 +47,7 @@ class ComponentHealth:
     last_error: str = ""
     error_count: int = 0
     latency_ms: float = 0.0
-    details: Dict = field(default_factory=dict)
+    details: dict = field(default_factory=dict)
 
     def __post_init__(self):
         if not self.last_check:
@@ -57,7 +57,7 @@ class ComponentHealth:
 class SystemHealth:
     """Overall system health"""
     status: HealthStatus = HealthStatus.HEALTHY
-    components: Dict[str, ComponentHealth] = field(default_factory=dict)
+    components: dict[str, ComponentHealth] = field(default_factory=dict)
 
     cpu_percent: float = 0.0
     memory_percent: float = 0.0
@@ -72,13 +72,13 @@ class SystemHealth:
     start_time: datetime = None
     uptime_seconds: float = 0.0
 
-    recent_errors: List[str] = field(default_factory=list)
+    recent_errors: list[str] = field(default_factory=list)
     slo_pass: bool = True
-    slo_violations: List[str] = field(default_factory=list)
+    slo_violations: list[str] = field(default_factory=list)
 
     timestamp: datetime = None
 
-    def to_dict(self) -> Dict:
+    def to_dict(self) -> dict:
         return {
             'status': self.status.value,
             'can_trade': self.can_trade,
@@ -127,12 +127,12 @@ class HealthMonitor:
     def __init__(self):
         self._lock = threading.RLock()
         self._running = False
-        self._thread: Optional[threading.Thread] = None
+        self._thread: threading.Thread | None = None
 
         self._start_time = datetime.now()
-        self._components: Dict[ComponentType, ComponentHealth] = {}
-        self._last_quote_time: Optional[datetime] = None
-        self._recent_errors: List[str] = []
+        self._components: dict[ComponentType, ComponentHealth] = {}
+        self._last_quote_time: datetime | None = None
+        self._recent_errors: list[str] = []
         self._max_errors = 100
         self._broker = None
         self._prev_degraded = False
@@ -156,9 +156,9 @@ class HealthMonitor:
             "max_component_unhealthy": 0,
         }
 
-        self._on_status_change: List[Callable] = []
-        self._on_degraded: List[Callable] = []
-        self._last_status: Optional[HealthStatus] = None
+        self._on_status_change: list[Callable] = []
+        self._on_degraded: list[Callable] = []
+        self._last_status: HealthStatus | None = None
 
         self._init_components()
 
@@ -414,7 +414,7 @@ class HealthMonitor:
 
     def _evaluate_slos(self, health: SystemHealth):
         """Evaluate lightweight operational SLOs for runbook-style monitoring."""
-        violations: List[str] = []
+        violations: list[str] = []
 
         if health.quote_delay_seconds > float(self._slo["max_quote_delay_seconds"]):
             violations.append(
@@ -522,7 +522,7 @@ class HealthMonitor:
         self._on_status_change.append(callback)
 
 # FIX: Module-level lock instead of globals() pattern
-_health_monitor: Optional[HealthMonitor] = None
+_health_monitor: HealthMonitor | None = None
 _health_lock = threading.Lock()
 
 def get_health_monitor() -> HealthMonitor:

@@ -4,10 +4,10 @@ import queue
 import threading
 import time
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from enum import Enum
-from typing import Callable, Dict, List, Optional, Set
 
 from config.settings import CONFIG
 from core.events import EVENT_BUS, BarEvent, TickEvent
@@ -29,7 +29,7 @@ class Subscription:
     symbol: str
     data_type: str  # 'tick', 'bar', 'quote'
     interval: int = 0
-    callback: Optional[Callable] = None
+    callback: Callable | None = None
     created_at: datetime = field(default_factory=datetime.now)
 
 class DataFeed(ABC):
@@ -39,10 +39,10 @@ class DataFeed(ABC):
 
     def __init__(self):
         self.status = FeedStatus.DISCONNECTED
-        self._subscriptions: Dict[str, Subscription] = {}
-        self._callbacks: List[Callable] = []
+        self._subscriptions: dict[str, Subscription] = {}
+        self._callbacks: list[Callable] = []
         self._running = False
-        self._thread: Optional[threading.Thread] = None
+        self._thread: threading.Thread | None = None
         self._lock = threading.RLock()
 
     @abstractmethod
@@ -89,8 +89,8 @@ class PollingFeed(DataFeed):
         super().__init__()
         self._interval = max(0.5, float(interval))
         self._fetcher = None
-        self._symbols: Set[str] = set()
-        self._last_quotes: Dict[str, object] = {}
+        self._symbols: set[str] = set()
+        self._last_quotes: dict[str, object] = {}
         self._quotes_lock = threading.RLock()
 
     def connect(self) -> bool:
@@ -186,9 +186,9 @@ class PollingFeed(DataFeed):
             else:
                 time.sleep(max(0.0, next_tick - now))
 
-    def _fetch_batch_quotes(self, symbols: List[str]) -> Dict[str, object]:
+    def _fetch_batch_quotes(self, symbols: list[str]) -> dict[str, object]:
         """Fetch quotes for all symbols with fallback chain."""
-        result: Dict[str, object] = {}
+        result: dict[str, object] = {}
         fetcher = self._get_fetcher()
 
         try:
@@ -240,11 +240,11 @@ class PollingFeed(DataFeed):
 
         return result
 
-    def get_quote(self, symbol: str) -> Optional[object]:
+    def get_quote(self, symbol: str) -> object | None:
         with self._quotes_lock:
             return self._last_quotes.get(symbol)
 
-    def get_all_quotes(self) -> Dict[str, object]:
+    def get_all_quotes(self) -> dict[str, object]:
         with self._quotes_lock:
             return self._last_quotes.copy()
 
@@ -262,10 +262,10 @@ class WebSocketFeed(DataFeed):
         self._reconnect_delay = 1
         self._max_reconnect_delay = 60
         self._reconnect_count = 0
-        self._last_message_time: Dict[str, datetime] = {}
+        self._last_message_time: dict[str, datetime] = {}
         self._staleness_threshold = timedelta(seconds=30)
         self._heartbeat_interval = 10
-        self._symbols: Set[str] = set()
+        self._symbols: set[str] = set()
         self._reconnect_semaphore = threading.Semaphore(
             self._MAX_RECONNECT_THREADS
         )
@@ -496,8 +496,8 @@ class AggregatedFeed(DataFeed):
 
     def __init__(self):
         super().__init__()
-        self._feeds: List[DataFeed] = []
-        self._primary_feed: Optional[DataFeed] = None
+        self._feeds: list[DataFeed] = []
+        self._primary_feed: DataFeed | None = None
         self._quote_queue: queue.Queue = queue.Queue()
 
     def add_feed(self, feed: DataFeed, primary: bool = False):
@@ -578,8 +578,8 @@ class BarAggregator:
     ):
         self._interval = max(1, int(interval_seconds))
         self._volume_mode = volume_mode
-        self._current_bars: Dict[str, Dict] = {}
-        self._callbacks: List[Callable] = []
+        self._current_bars: dict[str, dict] = {}
+        self._callbacks: list[Callable] = []
         self._lock = threading.RLock()
 
     def add_callback(self, callback: Callable):
@@ -643,7 +643,7 @@ class BarAggregator:
                 # FIXED: Emit partial bar for real-time chart updates
                 self._emit_bar(symbol, bar, final=False)
 
-    def _update_volume(self, bar: Dict, quote):
+    def _update_volume(self, bar: dict, quote):
         """Update bar volume based on configured mode."""
         raw_vol = getattr(quote, "volume", None)
         if raw_vol is None:
@@ -668,7 +668,7 @@ class BarAggregator:
         elif self._volume_mode == VolumeMode.DELTA:
             bar["volume"] += max(vol_value, 0)
 
-    def _new_bar(self, quote) -> Dict:
+    def _new_bar(self, quote) -> dict:
         """Create a new bar with proper time alignment."""
         ts = getattr(quote, "timestamp", None) or datetime.now()
 
@@ -704,7 +704,7 @@ class BarAggregator:
             self._interval = max(1, int(interval_seconds))
             self._current_bars.clear()
 
-    def _emit_bar(self, symbol: str, bar: Dict, final: bool = True):
+    def _emit_bar(self, symbol: str, bar: dict, final: bool = True):
         """
         Emit bar to callbacks.
 
@@ -732,6 +732,7 @@ class BarAggregator:
 
             try:
                 import pandas as pd
+
                 from data.database import get_database
 
                 db = get_database()
@@ -791,11 +792,11 @@ class FeedManager:
         if self._initialized:
             return
         self._initialized = True
-        self._feeds: Dict[str, DataFeed] = {}
-        self._active_feed: Optional[DataFeed] = None
-        self._subscriptions: Set[str] = set()
+        self._feeds: dict[str, DataFeed] = {}
+        self._active_feed: DataFeed | None = None
+        self._subscriptions: set[str] = set()
         self._bar_aggregator = BarAggregator()
-        self._last_quotes: Dict[str, object] = {}
+        self._last_quotes: dict[str, object] = {}
         self._quotes_lock = threading.RLock()
         self._lock = threading.RLock()
         self._initialized_runtime = False
@@ -835,7 +836,7 @@ class FeedManager:
         self._active_feed = active
 
         # Preserve existing bar callbacks across re-init
-        old_callbacks: List[Callable] = []
+        old_callbacks: list[Callable] = []
         with self._lock:
             if (
                 hasattr(self, "_bar_aggregator")
@@ -928,11 +929,11 @@ class FeedManager:
         except Exception:
             pass
 
-    def subscribe_many(self, symbols: List[str]):
+    def subscribe_many(self, symbols: list[str]):
         for symbol in symbols:
             self.subscribe(symbol)
 
-    def get_quote(self, symbol: str) -> Optional[object]:
+    def get_quote(self, symbol: str) -> object | None:
         with self._quotes_lock:
             q = self._last_quotes.get(str(symbol))
             if q:
@@ -942,7 +943,7 @@ class FeedManager:
             return self._active_feed.get_quote(symbol)
         return None
 
-    def get_last_quote_time(self, symbol: str) -> Optional[datetime]:
+    def get_last_quote_time(self, symbol: str) -> datetime | None:
         quote = self.get_quote(symbol)
         if quote and hasattr(quote, "timestamp"):
             return quote.timestamp
@@ -975,7 +976,7 @@ class FeedManager:
 
 # Module-level singleton accessor
 
-_feed_manager: Optional[FeedManager] = None
+_feed_manager: FeedManager | None = None
 _feed_lock = threading.Lock()
 
 def get_feed_manager(

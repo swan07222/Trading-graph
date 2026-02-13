@@ -1,24 +1,40 @@
 # tests/conftest.py
-import pytest
-import sys
 import os
+import sys
 from pathlib import Path
+
+import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 @pytest.fixture(autouse=True)
-def reset_cache():
+def reset_cache(tmp_path):
     """Reset cache before each test"""
     if os.environ.get("TRADING_SKIP_TEST_CACHE_CLEAR", "0") == "1":
         yield
         return
+
+    import data.cache as cache_module
+    from config.settings import CONFIG
+
     old_manual = os.environ.get("TRADING_MANUAL_CACHE_DELETE")
+    old_cache_dir = CONFIG._cache_dir_cached
+    old_cache = cache_module._cache
+
+    test_cache_dir = tmp_path / "cache"
+    test_cache_dir.mkdir(parents=True, exist_ok=True)
+    CONFIG._cache_dir_cached = test_cache_dir
+    cache_module._cache = None
+
     os.environ["TRADING_MANUAL_CACHE_DELETE"] = "1"
-    from data.cache import get_cache
-    cache = get_cache()
+    cache = cache_module.get_cache()
     cache.clear()
     yield
     cache.clear()
+
+    cache_module._cache = old_cache
+    CONFIG._cache_dir_cached = old_cache_dir
+
     if old_manual is None:
         os.environ.pop("TRADING_MANUAL_CACHE_DELETE", None)
     else:
@@ -28,7 +44,6 @@ def reset_cache():
 def temp_model_dir(tmp_path):
     """Temporary directory for model saves (cache-safe)."""
     from config.settings import CONFIG
-    old = str(CONFIG.model_dir)
     CONFIG.set_model_dir(str(tmp_path))
     yield tmp_path
     CONFIG.set_model_dir("")  

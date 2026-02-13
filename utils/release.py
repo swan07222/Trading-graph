@@ -5,7 +5,6 @@ import hmac
 import json
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, List
 
 
 def sha256_file(path: Path) -> str:
@@ -16,7 +15,7 @@ def sha256_file(path: Path) -> str:
     return h.hexdigest()
 
 
-def build_release_manifest(artifacts: List[Path], version: str) -> Dict:
+def build_release_manifest(artifacts: list[Path], version: str) -> dict:
     rows = []
     for p in sorted(artifacts, key=lambda x: x.name):
         rows.append(
@@ -34,7 +33,7 @@ def build_release_manifest(artifacts: List[Path], version: str) -> Dict:
     }
 
 
-def sign_manifest_hmac(manifest: Dict, secret: str) -> Dict:
+def sign_manifest_hmac(manifest: dict, secret: str) -> dict:
     payload = json.dumps(manifest, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
     sig = hmac.new(secret.encode("utf-8"), payload.encode("utf-8"), hashlib.sha256).hexdigest()
     out = dict(manifest)

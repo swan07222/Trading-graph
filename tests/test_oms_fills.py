@@ -1,7 +1,8 @@
 def test_fill_dedup_with_broker_fill_id_allows_same_second_multi_fills(tmp_path):
-    from trading.oms import get_oms, reset_oms
-    from core.types import Order, OrderSide, OrderType, Fill
     from datetime import datetime
+
+    from core.types import Fill, Order, OrderSide, OrderType
+    from trading.oms import get_oms, reset_oms
 
     db_path = tmp_path / "orders.db"
     reset_oms()
@@ -31,9 +32,10 @@ def test_fill_dedup_with_broker_fill_id_allows_same_second_multi_fills(tmp_path)
 
 
 def test_order_timeline_records_submit_and_fill(tmp_path):
-    from trading.oms import get_oms, reset_oms
-    from core.types import Order, OrderSide, OrderType, Fill
     from datetime import datetime
+
+    from core.types import Fill, Order, OrderSide, OrderType
+    from trading.oms import get_oms, reset_oms
 
     db_path = tmp_path / "orders.db"
     reset_oms()

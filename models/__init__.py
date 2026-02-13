@@ -1,22 +1,22 @@
 """
 Models Module
 """
+from .ensemble import EnsembleModel, EnsemblePrediction
 from .layers import (
+    AttentionPooling,
+    LSTMBlock,
     MultiHeadAttention,
     PositionalEncoding,
-    LSTMBlock,
-    TransformerBlock,
     TemporalConvBlock,
-    AttentionPooling,
+    TransformerBlock,
 )
 from .networks import (
-    LSTMModel,
-    TransformerModel,
     GRUModel,
-    TCNModel,
     HybridModel,
+    LSTMModel,
+    TCNModel,
+    TransformerModel,
 )
-from .ensemble import EnsembleModel, EnsemblePrediction
 from .trainer import Trainer
 
 try:

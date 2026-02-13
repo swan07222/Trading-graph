@@ -4,9 +4,10 @@ import json
 import logging
 import os
 import threading
+from collections.abc import Callable
 from datetime import UTC, date, datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import Any, Callable, Dict, Optional
+from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 from utils.metrics import get_metrics
@@ -14,7 +15,7 @@ from utils.metrics import get_metrics
 log = logging.getLogger(__name__)
 
 _SNAPSHOT_LOCK = threading.RLock()
-_SNAPSHOT_PROVIDERS: Dict[str, Callable[[], Any]] = {}
+_SNAPSHOT_PROVIDERS: dict[str, Callable[[], Any]] = {}
 
 
 def register_snapshot_provider(name: str, provider: Callable[[], Any]) -> None:
@@ -47,10 +48,10 @@ def _normalize_json(value: Any) -> Any:
     if isinstance(value, (datetime, date)):
         return value.isoformat()
 
-    if hasattr(value, "value") and isinstance(getattr(value, "value"), str):
-        return getattr(value, "value")
+    if hasattr(value, "value") and isinstance(value.value, str):
+        return value.value
 
-    if hasattr(value, "to_dict") and callable(getattr(value, "to_dict")):
+    if hasattr(value, "to_dict") and callable(value.to_dict):
         return _normalize_json(value.to_dict())
 
     if isinstance(value, dict):
@@ -62,7 +63,7 @@ def _normalize_json(value: Any) -> Any:
     return str(value)
 
 
-def _build_runtime_snapshot(limit: int = 20) -> Dict[str, Any]:
+def _build_runtime_snapshot(limit: int = 20) -> dict[str, Any]:
     """Best-effort runtime snapshot from OMS for lightweight dashboards."""
     try:
         from trading.oms import get_oms
@@ -108,7 +109,7 @@ class MetricsHandler(BaseHTTPRequestHandler):
     def _api_key(self) -> str:
         return os.environ.get("TRADING_HTTP_API_KEY", "").strip()
 
-    def _is_api_authorized(self, query: Dict[str, list[str]]) -> bool:
+    def _is_api_authorized(self, query: dict[str, list[str]]) -> bool:
         expected = self._api_key()
         if not expected:
             return True
@@ -135,7 +136,7 @@ class MetricsHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(encoded)
 
-    def _send_json(self, code: int, payload: Dict[str, Any]) -> None:
+    def _send_json(self, code: int, payload: dict[str, Any]) -> None:
         body = json.dumps(payload, ensure_ascii=True, separators=(",", ":"))
         self._send_text(code, body + "\n", content_type="application/json")
 
@@ -169,7 +170,7 @@ class MetricsHandler(BaseHTTPRequestHandler):
 
         self._send_text(404, "Not Found\n")
 
-    def _handle_api(self, path: str, query: Dict[str, list[str]]) -> None:
+    def _handle_api(self, path: str, query: dict[str, list[str]]) -> None:
         if path == "/api/v1/providers":
             self._send_json(
                 200,
@@ -210,7 +211,7 @@ class MetricsHandler(BaseHTTPRequestHandler):
 
         if path == "/api/v1/dashboard":
             try:
-                limit = int((query.get("limit", ["20"])[0] or "20"))
+                limit = int(query.get("limit", ["20"])[0] or "20")
             except ValueError:
                 limit = 20
             self._send_json(
@@ -246,8 +247,8 @@ class MetricsServer:
     def __init__(self, port: int = 8000, host: str = "127.0.0.1") -> None:
         self._host = host
         self._port = port
-        self._server: Optional[ThreadingHTTPServer] = None
-        self._thread: Optional[threading.Thread] = None
+        self._server: ThreadingHTTPServer | None = None
+        self._thread: threading.Thread | None = None
         self._started = False
 
     def start(self) -> None:

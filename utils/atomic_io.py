@@ -9,7 +9,7 @@ import threading
 import time
 from collections import OrderedDict
 from pathlib import Path
-from typing import Any, Optional, Union
+from typing import Any
 
 try:
     import torch
@@ -143,7 +143,7 @@ def _safe_replace(src: Path, dst: Path, max_retries: int = 3) -> None:
                 raise
 
 def atomic_write_bytes(
-    path: Union[str, Path],
+    path: str | Path,
     data: bytes,
     use_lock: bool = True,
 ) -> None:
@@ -186,7 +186,7 @@ def atomic_write_bytes(
             lock.release()
 
 def atomic_write_text(
-    path: Union[str, Path],
+    path: str | Path,
     text: str,
     encoding: str = "utf-8",
     use_lock: bool = True,
@@ -205,7 +205,7 @@ def atomic_write_text(
     atomic_write_bytes(path, text.encode(encoding), use_lock=use_lock)
 
 def atomic_write_json(
-    path: Union[str, Path],
+    path: str | Path,
     obj: Any,
     indent: int = 2,
     ensure_ascii: bool = False,
@@ -228,9 +228,9 @@ def atomic_write_json(
     atomic_write_bytes(path, json_str.encode("utf-8"), use_lock=use_lock)
 
 def atomic_pickle_dump(
-    path: Union[str, Path],
+    path: str | Path,
     obj: Any,
-    protocol: Optional[int] = None,
+    protocol: int | None = None,
     use_lock: bool = True,
 ) -> None:
     """
@@ -251,7 +251,7 @@ def atomic_pickle_dump(
     atomic_write_bytes(path, data, use_lock=use_lock)
 
 def atomic_torch_save(
-    path: Union[str, Path],
+    path: str | Path,
     obj: Any,
     use_lock: bool = True,
 ) -> None:
@@ -298,7 +298,7 @@ def atomic_torch_save(
 
 _DEFAULT_MAX_PICKLE_BYTES = 500 * 1024 * 1024  # 500 MB
 
-def read_bytes(path: Union[str, Path]) -> bytes:
+def read_bytes(path: str | Path) -> bytes:
     """
     Read entire file contents as bytes.
 
@@ -319,7 +319,7 @@ def read_bytes(path: Union[str, Path]) -> bytes:
         return f.read()
 
 def read_text(
-    path: Union[str, Path],
+    path: str | Path,
     encoding: str = "utf-8",
 ) -> str:
     """
@@ -334,7 +334,7 @@ def read_text(
     """
     return read_bytes(path).decode(encoding)
 
-def read_json(path: Union[str, Path]) -> Any:
+def read_json(path: str | Path) -> Any:
     """
     Read and parse a JSON file.
 
@@ -350,7 +350,7 @@ def read_json(path: Union[str, Path]) -> Any:
     return json.loads(read_text(path))
 
 def pickle_load(
-    path: Union[str, Path],
+    path: str | Path,
     max_bytes: int = _DEFAULT_MAX_PICKLE_BYTES,
 ) -> Any:
     """
@@ -383,8 +383,8 @@ def pickle_load(
     return pickle.loads(read_bytes(path))
 
 def torch_load(
-    path: Union[str, Path],
-    map_location: Optional[str] = None,
+    path: str | Path,
+    map_location: str | None = None,
     weights_only: bool = True,
 ) -> Any:
     """
@@ -412,7 +412,7 @@ def torch_load(
         weights_only=weights_only,
     )
 
-def safe_remove(path: Union[str, Path]) -> bool:
+def safe_remove(path: str | Path) -> bool:
     """
     Remove a file, returning False instead of raising if it fails.
 
@@ -428,7 +428,7 @@ def safe_remove(path: Union[str, Path]) -> bool:
     except OSError:
         return False
 
-def ensure_parent_dir(path: Union[str, Path]) -> Path:
+def ensure_parent_dir(path: str | Path) -> Path:
     """
     Ensure the parent directory of a path exists.
 

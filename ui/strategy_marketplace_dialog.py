@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from typing import Dict, List
-
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
     QDialog,
@@ -38,7 +36,7 @@ class StrategyMarketplaceDialog(QDialog):
         self.setMinimumSize(980, 560)
         self.resize(1100, 650)
         self._marketplace = StrategyMarketplace()
-        self._rows: List[Dict] = []
+        self._rows: list[dict] = []
         self._setup_ui()
         self._reload()
 
@@ -145,7 +143,7 @@ class StrategyMarketplaceDialog(QDialog):
                 item.setCheckState(Qt.CheckState.Unchecked)
 
     def _save(self) -> None:
-        enabled_ids: List[str] = []
+        enabled_ids: list[str] = []
         for row, entry in enumerate(self._rows):
             integrity = str(entry.get("integrity", "")).lower()
             if integrity in ("mismatch", "missing", "error"):

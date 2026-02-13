@@ -5,7 +5,7 @@ import threading
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from config.settings import CONFIG
 from utils.logger import get_logger
@@ -18,7 +18,7 @@ class PolicyDecision:
     allowed: bool
     reason: str
     policy_version: str = "unknown"
-    metadata: Optional[Dict[str, Any]] = None
+    metadata: dict[str, Any] | None = None
 
 
 class TradePolicyEngine:
@@ -28,19 +28,19 @@ class TradePolicyEngine:
     Default policy file: config/security_policy.json
     """
 
-    def __init__(self, policy_path: Optional[Path] = None):
+    def __init__(self, policy_path: Path | None = None):
         base = Path(getattr(CONFIG, "base_dir", Path(".")))
         self._path = Path(policy_path) if policy_path else (base / "config" / "security_policy.json")
         self._lock = threading.RLock()
-        self._mtime_ns: Optional[int] = None
-        self._policy: Dict[str, Any] = {}
+        self._mtime_ns: int | None = None
+        self._policy: dict[str, Any] = {}
         self._reload_if_needed(force=True)
 
     @property
     def path(self) -> Path:
         return self._path
 
-    def _default_policy(self) -> Dict[str, Any]:
+    def _default_policy(self) -> dict[str, Any]:
         return {
             "version": "1.0",
             "enabled": True,
@@ -131,7 +131,7 @@ class TradePolicyEngine:
         return PolicyDecision(True, "allowed", version, {"evaluated_at": datetime.now().isoformat()})
 
 
-_engine: Optional[TradePolicyEngine] = None
+_engine: TradePolicyEngine | None = None
 _engine_lock = threading.Lock()
 
 
