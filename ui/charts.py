@@ -303,6 +303,7 @@ class StockChart(QWidget):
             # Render the full loaded window (7-day bars are prepared in app layer).
             # Keep a high cap for safety on very large inputs.
             render_bars = self._bars[-3000:]
+            recent_range_pcts: list[float] = []
             for b in render_bars:
                 try:
                     o = float(b.get("open", 0) or 0)
@@ -375,6 +376,35 @@ class StockChart(QWidget):
                         l_val = max(l_val, bot - wick_cap)
                         if h < l_val:
                             h, l_val = l_val, h
+
+                    # Adaptive outlier trim based on recent candle ranges.
+                    # This suppresses occasional feed spikes without flattening
+                    # genuinely volatile symbols.
+                    rng_pct = (h - l_val) / max(c, 1e-8)
+                    if recent_range_pcts:
+                        med = float(np.median(recent_range_pcts[-80:]))
+                        if iv == "1m":
+                            floor = 0.006
+                        elif iv == "5m":
+                            floor = 0.010
+                        elif iv in ("15m", "30m", "60m", "1h"):
+                            floor = 0.018
+                        else:
+                            floor = 0.035
+                        outlier_cap = max(floor, med * 3.6)
+                        target_cap = max(floor * 0.85, med * 2.2)
+                        if rng_pct > outlier_cap:
+                            top = max(o, c)
+                            bot = min(o, c)
+                            body = max(0.0, top - bot)
+                            allow = max(0.0, (target_cap * max(c, 1e-8)) - body)
+                            h = min(h, top + (allow * 0.5))
+                            l_val = max(l_val, bot - (allow * 0.5))
+                            if h < l_val:
+                                h, l_val = l_val, h
+                            rng_pct = (h - l_val) / max(c, 1e-8)
+                    if np.isfinite(rng_pct) and rng_pct > 0:
+                        recent_range_pcts.append(float(min(rng_pct, 1.0)))
 
                     x_pos = len(closes)
                     ohlc.append((x_pos, o, c, l_val, h))

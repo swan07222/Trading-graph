@@ -201,14 +201,17 @@ class AutoLearnWorker(QThread):
             if self._learner is not None:
                 self._learner.start(**kwargs)
                 # AutoLearner.start() spawns its own thread and returns immediately.
-                # Join that internal thread so this worker doesn't finish early.
+                # Wait on that internal thread with short joins so cancellation
+                # can interrupt quickly.
                 t = getattr(self._learner, "_thread", None)
                 if t is not None:
-                    try:
-                        t.join()
-                        return
-                    except Exception:
-                        pass
+                    while (
+                        self.running
+                        and not self.token.is_cancelled
+                        and t.is_alive()
+                    ):
+                        t.join(timeout=0.2)
+                    return
 
                 # Fallback: wait on progress flag if internal thread not exposed.
                 while self.running and not self.token.is_cancelled:
@@ -228,13 +231,16 @@ class AutoLearnWorker(QThread):
         if self._learner is not None:
             try:
                 if hasattr(self._learner, 'stop'):
-                    self._learner.stop()
+                    try:
+                        self._learner.stop(join_timeout=6.0)
+                    except TypeError:
+                        self._learner.stop()
             except Exception as e:
                 log.debug(f"Learner stop error: {e}")
 
         if self._learner_thread is not None:
             try:
-                self._learner_thread.join(timeout=35)
+                self._learner_thread.join(timeout=8)
                 if self._learner_thread.is_alive():
                     log.info("Learner thread still finalizing after stop request")
             except Exception:
@@ -381,6 +387,21 @@ class TargetedLearnWorker(QThread):
         try:
             if self._learner is not None:
                 self._learner.start_targeted(**kwargs)
+                # start_targeted() also spawns an internal learner thread.
+                t = getattr(self._learner, "_thread", None)
+                if t is not None:
+                    while (
+                        self.running
+                        and not self.token.is_cancelled
+                        and t.is_alive()
+                    ):
+                        t.join(timeout=0.2)
+                    return
+
+                while self.running and not self.token.is_cancelled:
+                    if not getattr(self._learner.progress, "is_running", False):
+                        break
+                    time.sleep(0.2)
         except Exception as e:
             log.error(f"Targeted learner thread error: {e}")
             log.debug(traceback.format_exc())
@@ -394,13 +415,16 @@ class TargetedLearnWorker(QThread):
         if self._learner is not None:
             try:
                 if hasattr(self._learner, 'stop'):
-                    self._learner.stop()
+                    try:
+                        self._learner.stop(join_timeout=6.0)
+                    except TypeError:
+                        self._learner.stop()
             except Exception as e:
                 log.debug(f"Targeted learner stop error: {e}")
 
         if self._learner_thread is not None:
             try:
-                self._learner_thread.join(timeout=35)
+                self._learner_thread.join(timeout=8)
                 if self._learner_thread.is_alive():
                     log.info("Targeted learner thread still finalizing after stop request")
             except Exception:
@@ -1233,15 +1257,14 @@ class AutoLearnDialog(QDialog):
 
         if self.worker:
             self.worker.stop()
-            if not self.worker.wait(30000):
-                self._log(
-                    "Stop requested. Finalizing current training step...",
-                    "info",
-                )
-                return
-            self.worker = None
+            self._log(
+                "Stop requested. Finalizing current training step...",
+                "info",
+            )
+            # Non-blocking stop: keep UI responsive and let worker emit
+            # final stopped status through _on_auto_finished.
+            return
 
-        self._log("Auto-learning stopped by user", "warning")
         self._set_running(False)
 
     # =========================================================================
@@ -1330,15 +1353,13 @@ class AutoLearnDialog(QDialog):
 
         if self.targeted_worker:
             self.targeted_worker.stop()
-            if not self.targeted_worker.wait(30000):
-                self._log(
-                    "Stop requested. Finalizing current training step...",
-                    "info"
-                )
-                return
-            self.targeted_worker = None
+            self._log(
+                "Stop requested. Finalizing current training step...",
+                "info"
+            )
+            # Non-blocking stop: completion is handled by _on_targeted_finished.
+            return
 
-        self._log("Targeted training stopped by user", "warning")
         self._set_running(False)
 
     # =========================================================================

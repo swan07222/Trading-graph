@@ -1006,14 +1006,19 @@ class ParallelFetcher:
         workers = min(self._max_workers, max_concurrent, len(codes))
         workers = max(1, workers)
 
-        with ThreadPoolExecutor(max_workers=workers) as executor:
-            futures = {
-                executor.submit(fetch_one, code): code
-                for code in codes
-            }
-
-            for future in as_completed(futures):
+        executor = ThreadPoolExecutor(max_workers=workers)
+        futures: dict = {}
+        cancelled_early = False
+        try:
+            for code in codes:
                 if stop_check():
+                    cancelled_early = True
+                    break
+                futures[executor.submit(fetch_one, code)] = code
+
+            for future in as_completed(list(futures.keys())):
+                if stop_check():
+                    cancelled_early = True
                     break
 
                 try:
@@ -1033,6 +1038,19 @@ class ParallelFetcher:
                     f"Fetched {completed}/{len(codes)} stocks",
                     completed,
                 )
+        finally:
+            if cancelled_early:
+                for f in list(futures.keys()):
+                    try:
+                        f.cancel()
+                    except Exception:
+                        pass
+                try:
+                    executor.shutdown(wait=False, cancel_futures=True)
+                except TypeError:
+                    executor.shutdown(wait=False)
+            else:
+                executor.shutdown(wait=True)
 
         return ok_codes, failed_codes
 
@@ -1222,11 +1240,15 @@ class ContinuousLearner:
             self._thread.join()
         return self.progress
 
-    def stop(self):
+    def stop(self, join_timeout: float = 30.0):
         log.info("Stopping learning...")
         self._cancel_token.cancel()
-        if self._thread:
-            self._thread.join(timeout=30)
+        thread = self._thread
+        if thread and thread is not threading.current_thread():
+            timeout = max(0.5, float(join_timeout))
+            thread.join(timeout=timeout)
+            if thread.is_alive():
+                log.info("Learning thread still finalizing after stop request")
         self._save_state()
         self.progress.is_running = False
         self._notify()
@@ -1518,11 +1540,13 @@ class ContinuousLearner:
             self._notify()
 
     def _interruptible_sleep(self, seconds: int):
-        """Sleep for up to `seconds`, checking cancellation each second."""
-        for _ in range(seconds):
-            if self._should_stop():
+        """Sleep for up to `seconds`, checking cancellation frequently."""
+        deadline = time.monotonic() + max(0.0, float(seconds))
+        while not self._should_stop():
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
                 break
-            time.sleep(1)
+            time.sleep(min(0.2, remaining))
 
     def _handle_plateau(
         self, plateau: dict, current_epochs: int, incremental: bool,
@@ -1570,6 +1594,8 @@ class ContinuousLearner:
 
             # === 2. Setup holdout ===
             self._ensure_holdout(eff_interval, eff_lookback, min_bars, cycle_number)
+            if self._should_stop():
+                raise CancelledException()
 
             # === 3. Discover new stocks ===
             self._update(stage="discovering", progress=2.0, message="Discovering stocks...")
@@ -1578,6 +1604,8 @@ class ContinuousLearner:
                 stop_check=self._should_stop,
                 progress_cb=lambda msg, cnt: self._update(message=msg, stocks_found=cnt),
             )
+            if self._should_stop():
+                raise CancelledException()
 
             holdout_set = self._get_holdout_set()
             new_codes = [c for c in new_codes if c not in holdout_set]
@@ -1615,6 +1643,8 @@ class ContinuousLearner:
                         message=msg, stocks_found=cnt,
                     ),
                 )
+                if self._should_stop():
+                    raise CancelledException()
                 holdout_set = self._get_holdout_set()
                 new_codes = [c for c in new_codes if c not in holdout_set]
 
@@ -1680,6 +1710,8 @@ class ContinuousLearner:
                     progress=10.0 + 30.0 * (cnt / max(len(codes), 1)),
                 ),
             )
+            if self._should_stop():
+                raise CancelledException()
 
             min_ok = max(3, int(len(codes) * 0.05))
             try:
@@ -1707,6 +1739,8 @@ class ContinuousLearner:
                         progress=36.0 + 4.0 * (cnt / max(len(retry_codes), 1)),
                     ),
                 )
+                if self._should_stop():
+                    raise CancelledException()
                 ok_set = set(ok_codes)
                 for code in retry_ok:
                     if code not in ok_set:
@@ -1732,6 +1766,8 @@ class ContinuousLearner:
             # === 6. Backup model ===
             self._update(stage="backup", progress=42.0, message="Backing up current model...")
             self._guardian.backup_current(eff_interval, eff_horizon)
+            if self._should_stop():
+                raise CancelledException()
 
             # === 7. Pre-training validation ===
             pre_val = None
@@ -1742,6 +1778,8 @@ class ContinuousLearner:
                     eff_interval, eff_horizon, holdout_snapshot, eff_lookback,
                 )
                 log.info(f"Pre-validation: {pre_val}")
+                if self._should_stop():
+                    raise CancelledException()
 
             # === 8. Train ===
             lr = self._lr_scheduler.get_lr(cycle_number, incremental)
@@ -1818,6 +1856,8 @@ class ContinuousLearner:
 
             # === 2. Setup holdout ===
             self._ensure_holdout(eff_interval, eff_lookback, min_bars, cycle_number)
+            if self._should_stop():
+                raise CancelledException()
 
             holdout_set = self._get_holdout_set()
             train_codes = [c for c in stock_codes if c not in holdout_set]
@@ -1854,6 +1894,8 @@ class ContinuousLearner:
                     progress=10.0 + 30.0 * (cnt / max(len(train_codes), 1)),
                 ),
             )
+            if self._should_stop():
+                raise CancelledException()
 
             if not ok_codes and failed_codes and not self._should_stop():
                 relaxed_min_bars = max(CONFIG.SEQUENCE_LENGTH + 20, int(min_bars * 0.7))
@@ -1874,6 +1916,8 @@ class ContinuousLearner:
                         progress=36.0 + 4.0 * (cnt / max(len(retry_codes), 1)),
                     ),
                 )
+                if self._should_stop():
+                    raise CancelledException()
                 ok_codes = retry_ok or ok_codes
                 failed_codes = retry_failed + [c for c in failed_codes if c not in retry_codes]
 
@@ -1903,6 +1947,8 @@ class ContinuousLearner:
                 message="Backing up current model...",
             )
             self._guardian.backup_current(eff_interval, eff_horizon)
+            if self._should_stop():
+                raise CancelledException()
 
             # === 5. Pre-training validation ===
             pre_val = None
@@ -1913,6 +1959,8 @@ class ContinuousLearner:
                     eff_interval, eff_horizon, holdout_snapshot, eff_lookback,
                 )
                 log.info(f"Pre-validation: {pre_val}")
+                if self._should_stop():
+                    raise CancelledException()
 
             # === 6. Train ===
             lr = self._lr_scheduler.get_lr(cycle_number, incremental)
@@ -2103,7 +2151,7 @@ class ContinuousLearner:
             if len(new_holdout) >= target_holdout:  # Use target, not self._holdout_size
                 break
             if self._should_stop():
-                break
+                raise CancelledException()
             try:
                 df = fetcher.get_history(
                     code, interval=interval, bars=lookback, use_cache=True,
@@ -2112,6 +2160,9 @@ class ContinuousLearner:
                     new_holdout.append(code)
             except Exception:
                 continue
+
+        if self._should_stop():
+            raise CancelledException()
 
         if len(new_holdout) < min_required:
             log.warning("Failed to build new holdout set 鈥?keeping existing")

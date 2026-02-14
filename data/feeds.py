@@ -1,4 +1,5 @@
 # data/feeds.py
+import importlib.util
 import json
 import queue
 import threading
@@ -92,6 +93,8 @@ class PollingFeed(DataFeed):
         self._symbols: set[str] = set()
         self._last_quotes: dict[str, object] = {}
         self._quotes_lock = threading.RLock()
+        self._consecutive_errors: int = 0
+        self._last_error_log_ts: float = 0.0
 
     def connect(self) -> bool:
         if self._running:
@@ -174,8 +177,21 @@ class PollingFeed(DataFeed):
                                     source=self.name,
                                 )
                             )
+                self._consecutive_errors = 0
             except Exception as e:
-                log.error(f"Polling loop error: {e}")
+                self._consecutive_errors = int(self._consecutive_errors) + 1
+                now_log = time.monotonic()
+                if (
+                    self._consecutive_errors <= 2
+                    or (now_log - self._last_error_log_ts) >= 12.0
+                ):
+                    log.warning(f"Polling loop error: {e}")
+                    self._last_error_log_ts = now_log
+                backoff = min(
+                    5.0,
+                    self._interval * (1.5 ** min(5, self._consecutive_errors)),
+                )
+                next_tick = max(next_tick, time.monotonic() + backoff)
 
             # Smooth back-pressure
             now = time.monotonic()
@@ -255,10 +271,15 @@ class WebSocketFeed(DataFeed):
 
     _MAX_RECONNECT_THREADS = 1
     _MAX_RECONNECT_ATTEMPTS = 50
+    _DNS_FAILURE_DISABLE_THRESHOLD = 6
+    _DNS_DISABLE_COOLDOWN_SECONDS = 15 * 60
+    _ERROR_LOG_COOLDOWN_SECONDS = 15.0
 
     def __init__(self):
         super().__init__()
         self._ws = None
+        self._ws_client_installed = importlib.util.find_spec("websocket") is not None
+        self._missing_dependency_logged = False
         self._reconnect_delay = 1
         self._max_reconnect_delay = 60
         self._reconnect_count = 0
@@ -269,8 +290,65 @@ class WebSocketFeed(DataFeed):
         self._reconnect_semaphore = threading.Semaphore(
             self._MAX_RECONNECT_THREADS
         )
+        self._consecutive_dns_failures = 0
+        self._ws_disabled_until_ts = 0.0
+        self._ws_disabled_reason = ""
+        self._last_ws_error_log_ts = 0.0
+
+    def supports_websocket(self) -> bool:
+        if not self._ws_client_installed:
+            return False
+        return time.monotonic() >= float(self._ws_disabled_until_ts)
+
+    def _is_dns_error(self, error: object) -> bool:
+        txt = str(error or "").strip().lower()
+        if not txt:
+            return False
+        patterns = (
+            "getaddrinfo",
+            "name or service not known",
+            "temporary failure in name resolution",
+            "nodename nor servname",
+            "11001",
+            "11004",
+        )
+        return any(p in txt for p in patterns)
+
+    def _temporarily_disable(self, reason: str, cooldown_s: float | None = None):
+        duration = max(60.0, float(cooldown_s or self._DNS_DISABLE_COOLDOWN_SECONDS))
+        until = time.monotonic() + duration
+        self._ws_disabled_until_ts = max(float(self._ws_disabled_until_ts), until)
+        self._ws_disabled_reason = str(reason or "unavailable")
+        self._running = False
+        self.status = FeedStatus.ERROR
+        self._reconnect_count = 0
+        self._reconnect_delay = 1
+        ws = self._ws
+        self._ws = None
+        if ws is not None:
+            try:
+                ws.close()
+            except Exception:
+                pass
+        mins = max(1, int(round(duration / 60.0)))
+        log.warning(
+            f"WebSocket temporarily disabled for {mins}m "
+            f"({self._ws_disabled_reason}); using polling"
+        )
 
     def connect(self) -> bool:
+        if not self._ws_client_installed:
+            if not self._missing_dependency_logged:
+                log.warning(
+                    "websocket-client not installed, using polling "
+                    "(install with: pip install websocket-client)"
+                )
+                self._missing_dependency_logged = True
+            return False
+
+        if not self.supports_websocket():
+            return False
+
         try:
             import websocket
 
@@ -282,6 +360,10 @@ class WebSocketFeed(DataFeed):
                 on_close=self._on_close,
                 on_open=self._on_open,
             )
+            self._ws_disabled_reason = ""
+            if not self._running:
+                self._reconnect_delay = 1
+                self._reconnect_count = 0
             self._running = True
             self._thread = threading.Thread(
                 target=self._ws.run_forever,
@@ -293,7 +375,13 @@ class WebSocketFeed(DataFeed):
             return True
 
         except ImportError:
-            log.warning("websocket-client not installed, using polling")
+            self._ws_client_installed = False
+            if not self._missing_dependency_logged:
+                log.warning(
+                    "websocket-client not installed, using polling "
+                    "(install with: pip install websocket-client)"
+                )
+                self._missing_dependency_logged = True
             return False
         except Exception as e:
             log.error(f"WebSocket connection failed: {e}")
@@ -348,6 +436,7 @@ class WebSocketFeed(DataFeed):
         self.status = FeedStatus.CONNECTED
         self._reconnect_delay = 1
         self._reconnect_count = 0
+        self._consecutive_dns_failures = 0
         log.info("WebSocket connected")
 
         with self._lock:
@@ -416,10 +505,45 @@ class WebSocketFeed(DataFeed):
             log.debug(f"Message parse error: {e}")
 
     def _on_error(self, ws, error):
-        log.error(f"WebSocket error: {error}")
+        is_dns = self._is_dns_error(error)
+        if is_dns:
+            self._consecutive_dns_failures += 1
+        else:
+            self._consecutive_dns_failures = 0
+
+        now = time.monotonic()
+        should_log = (
+            self._consecutive_dns_failures <= 2
+            or (now - self._last_ws_error_log_ts) >= self._ERROR_LOG_COOLDOWN_SECONDS
+        )
+        if should_log:
+            log.warning(f"WebSocket error: {error}")
+            self._last_ws_error_log_ts = now
+
+        if (
+            is_dns
+            and self._consecutive_dns_failures >= self._DNS_FAILURE_DISABLE_THRESHOLD
+        ):
+            self._temporarily_disable(reason="DNS resolution failures")
+            return
+
         self.status = FeedStatus.ERROR
+        if not self._running:
+            return
+        try:
+            if ws is not None:
+                ws.close()
+        except Exception:
+            pass
 
     def _on_close(self, ws, close_status_code, close_msg):
+        if (
+            not self._running
+            and time.monotonic() < float(self._ws_disabled_until_ts)
+        ):
+            self.status = FeedStatus.ERROR
+            return
+
         if not self._running:
             self.status = FeedStatus.DISCONNECTED
             return
@@ -581,6 +705,8 @@ class BarAggregator:
         self._current_bars: dict[str, dict] = {}
         self._callbacks: list[Callable] = []
         self._lock = threading.RLock()
+        self._last_partial_emit_ts: dict[str, float] = {}
+        self._min_partial_emit_interval_s: float = 0.20
 
     def add_callback(self, callback: Callable):
         with self._lock:
@@ -639,9 +765,14 @@ class BarAggregator:
                 # Bar complete - emit as final and start new bar
                 self._emit_bar(symbol, bar, final=True)
                 self._current_bars[symbol] = self._new_bar(quote)
+                self._last_partial_emit_ts.pop(symbol, None)
             else:
                 # FIXED: Emit partial bar for real-time chart updates
-                self._emit_bar(symbol, bar, final=False)
+                now_ts = time.monotonic()
+                last_emit = float(self._last_partial_emit_ts.get(symbol, 0.0))
+                if (now_ts - last_emit) >= self._min_partial_emit_interval_s:
+                    self._emit_bar(symbol, bar, final=False)
+                    self._last_partial_emit_ts[symbol] = now_ts
 
     def _update_volume(self, bar: dict, quote):
         """Update bar volume based on configured mode."""
@@ -703,6 +834,7 @@ class BarAggregator:
         with self._lock:
             self._interval = max(1, int(interval_seconds))
             self._current_bars.clear()
+            self._last_partial_emit_ts.clear()
 
     def _emit_bar(self, symbol: str, bar: dict, final: bool = True):
         """
@@ -795,77 +927,288 @@ class FeedManager:
         self._feeds: dict[str, DataFeed] = {}
         self._active_feed: DataFeed | None = None
         self._subscriptions: set[str] = set()
+        self._tick_callbacks: list[Callable] = []
         self._bar_aggregator = BarAggregator()
         self._last_quotes: dict[str, object] = {}
         self._quotes_lock = threading.RLock()
         self._lock = threading.RLock()
         self._initialized_runtime = False
+        self._health_thread: threading.Thread | None = None
+        self._health_running: bool = False
+        self._health_poll_interval_s: float = 3.0
+        self._last_feed_switch_ts: float = 0.0
+        self._feed_switch_cooldown_s: float = 8.0
+        self._health_generation: int = 0
 
     def initialize(self, force: bool = False):
         """Initialize feeds. Idempotent unless force=True."""
         with self._lock:
             if self._initialized_runtime and not force:
                 return
-            self._initialized_runtime = True
 
-        interval = float(CONFIG.data.poll_interval_seconds)
-
-        polling = PollingFeed(interval=interval)
-        self._feeds["polling"] = polling
-
-        active = None
-        try:
-            ws = WebSocketFeed()
-            if ws.connect():
-                self._feeds["websocket"] = ws
-                active = ws
-                log.info("Using WebSocket feed as primary")
-            else:
-                try:
-                    ws.disconnect()
-                except Exception:
-                    pass
-        except Exception:
-            active = None
-
-        if active is None:
-            polling.connect()
-            active = polling
-            log.info("Using polling feed as primary")
-
-        self._active_feed = active
-
-        # Preserve existing bar callbacks across re-init
-        old_callbacks: list[Callable] = []
-        with self._lock:
+            old_feeds = list(self._feeds.values()) if force else []
+            old_callbacks: list[Callable] = []
             if (
                 hasattr(self, "_bar_aggregator")
                 and self._bar_aggregator
             ):
                 with self._bar_aggregator._lock:
                     old_callbacks = self._bar_aggregator._callbacks.copy()
+            self._initialized_runtime = True
+            self._feeds = {}
+            self._active_feed = None
 
+        self._stop_health_watchdog()
+        for feed in old_feeds:
+            try:
+                feed.disconnect()
+            except Exception:
+                pass
+
+        interval = float(CONFIG.data.poll_interval_seconds)
         bar_seconds = 60
-        self._bar_aggregator = BarAggregator(
-            interval_seconds=bar_seconds
-        )
-        for cb in old_callbacks:
-            self._bar_aggregator.add_callback(cb)
 
+        polling = PollingFeed(interval=interval)
+        polling_ok = False
         try:
-            self._active_feed.add_callback(self._cache_quote)
-        except Exception:
-            pass
-        try:
-            self._active_feed.add_callback(self._bar_aggregator.on_tick)
-        except Exception:
-            pass
+            polling_ok = bool(polling.connect())
+        except Exception as e:
+            log.warning(f"Polling feed connect failed: {e}")
+        self._feeds["polling"] = polling
 
+        ws_ok = False
+        ws = WebSocketFeed()
+        self._feeds["websocket"] = ws
+        try:
+            ws_ok = bool(ws.connect())
+        except Exception as e:
+            log.warning(f"WebSocket feed connect failed: {e}")
+
+        with self._lock:
+            self._bar_aggregator = BarAggregator(
+                interval_seconds=bar_seconds
+            )
+            for cb in old_callbacks:
+                self._bar_aggregator.add_callback(cb)
+
+            if ws_ok:
+                self._active_feed = ws
+            else:
+                self._active_feed = polling if polling_ok else None
+            self._last_feed_switch_ts = time.monotonic()
+
+        self._attach_active_callbacks()
+        self._resubscribe_active()
+        self._start_health_watchdog()
+
+        active_name = self._active_feed.name if self._active_feed else "none"
         log.info(
             f"Feed manager initialized "
-            f"(primary={self._active_feed.name}, "
-            f"poll={interval}s, bar={bar_seconds}s)"
+            f"(primary={active_name}, poll={interval}s, bar={bar_seconds}s)"
         )
+
+    def _attach_active_callbacks(self) -> None:
+        """Bind cache/tick/bar callbacks to the currently active feed only."""
+        for feed in list(self._feeds.values()):
+            try:
+                feed.remove_callback(self._cache_quote)
+            except Exception:
+                pass
+            try:
+                feed.remove_callback(self._bar_aggregator.on_tick)
+            except Exception:
+                pass
+            for cb in list(self._tick_callbacks):
+                try:
+                    feed.remove_callback(cb)
+                except Exception:
+                    pass
+
+        feed = self._active_feed
+        if feed is None:
+            return
+        try:
+            feed.add_callback(self._cache_quote)
+        except Exception:
+            pass
+        try:
+            feed.add_callback(self._bar_aggregator.on_tick)
+        except Exception:
+            pass
+        for cb in list(self._tick_callbacks):
+            try:
+                feed.add_callback(cb)
+            except Exception:
+                pass
+
+    def _resubscribe_active(self) -> None:
+        feed = self._active_feed
+        if feed is None:
+            return
+        with self._lock:
+            symbols = list(self._subscriptions)
+        for sym in symbols:
+            try:
+                feed.subscribe(sym)
+            except Exception:
+                continue
+
+    def _is_feed_healthy(self, feed: DataFeed | None) -> bool:
+        if feed is None:
+            return False
+        if isinstance(feed, PollingFeed):
+            return bool(feed.status == FeedStatus.CONNECTED and feed._running)
+        if isinstance(feed, WebSocketFeed):
+            if feed.status != FeedStatus.CONNECTED or not feed._running:
+                return False
+            with self._lock:
+                symbols = list(self._subscriptions)
+            if not symbols:
+                return True
+            risk = getattr(CONFIG, "risk", None)
+            stale_max = float(
+                getattr(risk, "quote_staleness_seconds", 8.0) or 8.0
+            )
+            stale_limit = max(6.0, min(30.0, stale_max * 1.6))
+            sample = symbols[: min(12, len(symbols))]
+            stale = 0
+            for sym in sample:
+                try:
+                    age = float(feed.get_staleness(sym))
+                except Exception:
+                    age = float("inf")
+                if age > stale_limit:
+                    stale += 1
+            return (stale / max(1, len(sample))) < 0.60
+        return feed.status == FeedStatus.CONNECTED
+
+    def _activate_feed(
+        self, name: str, reason: str = "", ignore_cooldown: bool = False
+    ) -> bool:
+        with self._lock:
+            target = self._feeds.get(str(name))
+            current = self._active_feed
+            if target is None:
+                return False
+            if current is target:
+                return True
+            now = time.monotonic()
+            if (
+                (not ignore_cooldown)
+                and (now - self._last_feed_switch_ts) < self._feed_switch_cooldown_s
+            ):
+                return False
+
+        if target.status != FeedStatus.CONNECTED:
+            try:
+                if not target.connect():
+                    return False
+            except Exception:
+                return False
+
+        with self._lock:
+            self._active_feed = target
+            self._last_feed_switch_ts = time.monotonic()
+        self._attach_active_callbacks()
+        self._resubscribe_active()
+        msg = f"Feed failover: active={target.name}"
+        if reason:
+            msg += f" ({reason})"
+        log.info(msg)
+        return True
+
+    def _start_health_watchdog(self) -> None:
+        with self._lock:
+            if (
+                self._health_running
+                and self._health_thread is not None
+                and self._health_thread.is_alive()
+            ):
+                return
+            self._health_generation += 1
+            generation = int(self._health_generation)
+            self._health_running = True
+            t = threading.Thread(
+                target=self._health_loop,
+                args=(generation,),
+                daemon=True,
+                name="feed_health_watchdog",
+            )
+            self._health_thread = t
+        t.start()
+
+    def _stop_health_watchdog(self) -> None:
+        with self._lock:
+            self._health_running = False
+            self._health_generation += 1
+            t = self._health_thread
+            self._health_thread = None
+        if t is not None:
+            try:
+                t.join(timeout=max(2.0, float(self._health_poll_interval_s) + 1.0))
+            except Exception:
+                pass
+
+    def _health_loop(self, generation: int) -> None:
+        """Monitor feed health and switch between websocket/polling as needed."""
+        while True:
+            with self._lock:
+                if (
+                    not self._health_running
+                    or generation != int(self._health_generation)
+                ):
+                    return
+                active = self._active_feed
+                ws = self._feeds.get("websocket")
+                polling = self._feeds.get("polling")
+
+            try:
+                if isinstance(active, WebSocketFeed):
+                    if (not self._is_feed_healthy(active)) and polling is not None:
+                        self._activate_feed(
+                            "polling",
+                            reason="websocket stale/unhealthy",
+                            ignore_cooldown=True,
+                        )
+                elif isinstance(active, PollingFeed):
+                    if isinstance(ws, WebSocketFeed):
+                        if (
+                            ws.status != FeedStatus.CONNECTED
+                            and not ws._running
+                            and ws.supports_websocket()
+                        ):
+                            try:
+                                ws.connect()
+                            except Exception:
+                                pass
+                        cooldown_ok = (
+                            time.monotonic() - self._last_feed_switch_ts
+                        ) >= (self._feed_switch_cooldown_s * 2.0)
+                        if cooldown_ok and self._is_feed_healthy(ws):
+                            self._activate_feed("websocket", reason="websocket healthy")
+                else:
+                    if polling is not None and self._is_feed_healthy(polling):
+                        self._activate_feed(
+                            "polling",
+                            reason="no active feed",
+                            ignore_cooldown=True,
+                        )
+            except Exception as e:
+                log.debug(f"Feed health watchdog error: {e}")
+
+            sleep_for = max(1.0, float(self._health_poll_interval_s))
+            deadline = time.monotonic() + sleep_for
+            while True:
+                with self._lock:
+                    if (
+                        not self._health_running
+                        or generation != int(self._health_generation)
+                    ):
+                        return
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                time.sleep(min(0.25, remaining))
 
     def set_bar_interval_seconds(self, seconds: int):
         """Change bar aggregation interval."""
@@ -894,23 +1237,52 @@ class FeedManager:
             self.initialize()
 
     def subscribe(self, symbol: str) -> bool:
+        sym = str(symbol)
         with self._lock:
-            if symbol in self._subscriptions:
+            if sym in self._subscriptions:
                 return True
-            if (
-                self._active_feed
-                and self._active_feed.subscribe(symbol)
-            ):
-                self._subscriptions.add(symbol)
-                return True
-            return False
+            self._subscriptions.add(sym)
+            active = self._active_feed
+
+        ok = False
+        if active is not None:
+            try:
+                ok = bool(active.subscribe(sym))
+            except Exception:
+                ok = False
+
+        if not ok:
+            with self._lock:
+                backups = [
+                    f for f in self._feeds.values()
+                    if f is not active
+                ]
+            for feed in backups:
+                try:
+                    if feed.subscribe(sym):
+                        ok = True
+                        break
+                except Exception:
+                    continue
+
+        if not ok:
+            with self._lock:
+                self._subscriptions.discard(sym)
+        return ok
 
     def unsubscribe(self, symbol: str):
+        sym = str(symbol)
         with self._lock:
-            if symbol in self._subscriptions:
-                if self._active_feed:
-                    self._active_feed.unsubscribe(symbol)
-                self._subscriptions.discard(symbol)
+            if sym not in self._subscriptions:
+                return
+            self._subscriptions.discard(sym)
+            feeds = list(self._feeds.values())
+
+        for feed in feeds:
+            try:
+                feed.unsubscribe(sym)
+            except Exception:
+                continue
 
     def _cache_quote(self, data):
         """Thread-safe quote caching."""
@@ -934,13 +1306,20 @@ class FeedManager:
             self.subscribe(symbol)
 
     def get_quote(self, symbol: str) -> object | None:
+        sym = str(symbol)
         with self._quotes_lock:
-            q = self._last_quotes.get(str(symbol))
+            q = self._last_quotes.get(sym)
             if q:
                 return q
 
-        if isinstance(self._active_feed, PollingFeed):
-            return self._active_feed.get_quote(symbol)
+        active = self._active_feed
+        if isinstance(active, PollingFeed):
+            q = active.get_quote(sym)
+            if q is not None:
+                return q
+        poll = self._feeds.get("polling")
+        if isinstance(poll, PollingFeed):
+            return poll.get_quote(sym)
         return None
 
     def get_last_quote_time(self, symbol: str) -> datetime | None:
@@ -950,15 +1329,25 @@ class FeedManager:
         return None
 
     def add_tick_callback(self, callback: Callable):
-        if self._active_feed:
-            self._active_feed.add_callback(callback)
+        with self._lock:
+            if callback not in self._tick_callbacks:
+                self._tick_callbacks.append(callback)
+            active = self._active_feed
+        if active:
+            try:
+                active.add_callback(callback)
+            except Exception:
+                pass
 
     def add_bar_callback(self, callback: Callable):
         self._bar_aggregator.add_callback(callback)
 
     def shutdown(self):
         """Shutdown all feeds and reset state."""
-        for feed in self._feeds.values():
+        self._stop_health_watchdog()
+
+        feeds = list(self._feeds.values())
+        for feed in feeds:
             try:
                 feed.disconnect()
             except Exception:

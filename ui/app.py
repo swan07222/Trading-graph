@@ -333,6 +333,9 @@ class MainApp(QMainWindow):
         self._live_price_series: dict[str, list[float]] = {}
         self._price_series_lock = threading.Lock()
         self._last_session_cache_write_ts: dict[str, float] = {}
+        self._watchlist_row_by_code: dict[str, int] = {}
+        self._last_watchlist_price_ui: dict[str, tuple[float, float]] = {}
+        self._last_quote_ui_emit: dict[str, tuple[float, float]] = {}
         self._guess_profit_notional_shares: int = max(
             1, int(getattr(CONFIG, "LOT_SIZE", 100) or 100)
         )
@@ -681,6 +684,17 @@ class MainApp(QMainWindow):
             symbol = self._ui_norm(getattr(quote, "code", ""))
             price = float(getattr(quote, "price", 0) or 0)
             if symbol and price > 0:
+                now = time.monotonic()
+                prev = self._last_quote_ui_emit.get(symbol)
+                if prev is not None:
+                    prev_ts, prev_px = float(prev[0]), float(prev[1])
+                    if (
+                        (now - prev_ts) < 0.08
+                        and abs(price - prev_px)
+                        <= max(0.001, abs(prev_px) * 0.00005)
+                    ):
+                        return
+                self._last_quote_ui_emit[symbol] = (now, price)
                 self.quote_received.emit(symbol, price)
         except Exception:
             pass
@@ -721,16 +735,24 @@ class MainApp(QMainWindow):
             low = float(bar.get("low", c) or c)
         except Exception:
             return
-        if c <= 0:
+
+        ref_close = None
+        if arr:
+            try:
+                ref_close = float(arr[-1].get("close", 0) or 0)
+            except Exception:
+                ref_close = None
+        sanitized = self._sanitize_ohlc(
+            o,
+            h,
+            low,
+            c,
+            interval=interval,
+            ref_close=ref_close,
+        )
+        if sanitized is None:
             return
-        if o <= 0:
-            o = c
-        if h <= 0:
-            h = max(o, c)
-        if low <= 0:
-            low = min(o, c)
-        if h < low:
-            h, low = low, h
+        o, h, low, c = sanitized
 
         is_final = bool(bar.get("final", True))
         norm_bar: dict[str, Any] = {
@@ -753,7 +775,7 @@ class MainApp(QMainWindow):
         if arr:
             try:
                 ref = float(arr[-1].get("close", c) or c)
-                if self._is_outlier_tick(ref, c):
+                if self._is_outlier_tick(ref, c, interval=interval):
                     log.debug(
                         f"Skip outlier bar for {symbol}: prev={ref:.2f} new={c:.2f}"
                     )
@@ -1762,6 +1784,42 @@ class MainApp(QMainWindow):
             str(text or ""),
         )
 
+    def _pin_watchlist_symbol(self, code: str) -> None:
+        """Ensure symbol is present and visible in watchlist (move to top)."""
+        normalized = self._ui_norm(code)
+        if not normalized:
+            return
+
+        changed = False
+        if normalized in self.watch_list:
+            if self.watch_list and self.watch_list[0] != normalized:
+                self.watch_list.remove(normalized)
+                self.watch_list.insert(0, normalized)
+                changed = True
+        else:
+            if len(self.watch_list) >= self.MAX_WATCHLIST_SIZE:
+                self.watch_list = self.watch_list[: self.MAX_WATCHLIST_SIZE - 1]
+            self.watch_list.insert(0, normalized)
+            changed = True
+
+        if changed:
+            self._update_watchlist()
+            if self.executor and self.executor.auto_trader:
+                try:
+                    self.executor.auto_trader.update_watchlist(self.watch_list)
+                except Exception:
+                    pass
+
+        # Keep selection aligned with the active symbol.
+        try:
+            for row in range(self.watchlist.rowCount()):
+                item = self.watchlist.item(row, 0)
+                if item and self._ui_norm(item.text()) == normalized:
+                    self.watchlist.setCurrentCell(row, 0)
+                    break
+        except Exception:
+            pass
+
     def _on_trained_stock_activated(self, item):
         """Load selected trained stock from right-panel list."""
         if item is None:
@@ -1769,7 +1827,12 @@ class MainApp(QMainWindow):
         code = self._ui_norm(item.text())
         if not code:
             return
+        self._pin_watchlist_symbol(code)
         self.stock_input.setText(code)
+        try:
+            self._ensure_feed_subscription(code)
+        except Exception:
+            pass
         self._on_watchlist_click(-1, -1, code_override=code)
 
     def _refresh_trained_stock_list(
@@ -1947,7 +2010,7 @@ class MainApp(QMainWindow):
         return max(120, bars)
 
     def _ts_to_epoch(self, ts_raw: Any) -> float:
-        """Normalize timestamp-like values to epoch seconds (UTC)."""
+        """Normalize timestamp-like values to epoch seconds."""
         if ts_raw is None:
             return float(time.time())
 
@@ -1970,7 +2033,12 @@ class MainApp(QMainWindow):
                     return float(time.time())
                 dt = datetime.fromisoformat(txt.replace("Z", "+00:00"))
             if dt.tzinfo is None:
-                dt = dt.replace(tzinfo=timezone.utc)
+                # Most provider timestamps without tz are China local time.
+                try:
+                    from zoneinfo import ZoneInfo
+                    dt = dt.replace(tzinfo=ZoneInfo("Asia/Shanghai"))
+                except Exception:
+                    dt = dt.replace(tzinfo=timezone.utc)
             return float(dt.timestamp())
         except Exception:
             return float(time.time())
@@ -2051,22 +2119,41 @@ class MainApp(QMainWindow):
             )
         )
 
-        # Drop remaining abrupt jumps that usually come from bad partial bars.
-        jump_cap = 0.035 if iv == "1m" else (0.07 if iv == "5m" else 0.20)
+        # Final pass: sanitize OHLC and drop abrupt jumps.
         cleaned: list[dict[str, Any]] = []
         prev_close: float | None = None
         for row in out:
             try:
                 c = float(row.get("close", 0) or 0)
+                o = float(row.get("open", c) or c)
+                h = float(row.get("high", c) or c)
+                low = float(row.get("low", c) or c)
             except Exception:
                 continue
-            if c <= 0:
+
+            sanitized = self._sanitize_ohlc(
+                o,
+                h,
+                low,
+                c,
+                interval=iv,
+                ref_close=prev_close,
+            )
+            if sanitized is None:
                 continue
-            if prev_close and prev_close > 0:
-                jump = abs(c / prev_close - 1.0)
-                if jump > jump_cap:
+
+            o, h, low, c = sanitized
+            if prev_close and prev_close > 0 and self._is_outlier_tick(
+                prev_close, c, interval=iv
+            ):
                     continue
-            cleaned.append(row)
+
+            row_out = dict(row)
+            row_out["open"] = o
+            row_out["high"] = h
+            row_out["low"] = low
+            row_out["close"] = c
+            cleaned.append(row_out)
             prev_close = c
 
         keep = self._history_window_bars(interval)
@@ -2203,17 +2290,98 @@ class MainApp(QMainWindow):
                 out.append(b)
         return out
 
-    def _is_outlier_tick(self, prev_price: float, new_price: float) -> bool:
+    def _bar_safety_caps(self, interval: str) -> tuple[float, float]:
+        """
+        Return (max_jump_pct, max_range_pct) for bar sanitization.
+        Values are intentionally conservative for intraday feeds.
+        """
+        iv = str(interval or "1m").strip().lower()
+        if iv == "1m":
+            return 0.12, 0.045
+        if iv == "5m":
+            return 0.14, 0.075
+        if iv in ("15m", "30m"):
+            return 0.18, 0.12
+        if iv in ("60m", "1h"):
+            return 0.24, 0.18
+        if iv in ("1d", "1wk", "1mo"):
+            return 0.45, 0.35
+        return 0.20, 0.15
+
+    def _sanitize_ohlc(
+        self,
+        o: float,
+        h: float,
+        low: float,
+        c: float,
+        interval: str,
+        ref_close: float | None = None,
+    ) -> tuple[float, float, float, float] | None:
+        """
+        Normalize and clamp OHLC values to avoid malformed long candles
+        from bad ticks/partial bars.
+        """
+        try:
+            o = float(o or 0.0)
+            h = float(h or 0.0)
+            low = float(low or 0.0)
+            c = float(c or 0.0)
+        except Exception:
+            return None
+        if c <= 0:
+            return None
+
+        if o <= 0:
+            o = c
+        if h <= 0:
+            h = max(o, c)
+        if low <= 0:
+            low = min(o, c)
+        if h < low:
+            h, low = low, h
+
+        jump_cap, range_cap = self._bar_safety_caps(interval)
+        ref = float(ref_close or 0.0)
+        if ref > 0:
+            jump = abs(c / ref - 1.0)
+            if jump > jump_cap:
+                return None
+
+        # Clamp abnormal wick/range while preserving candle body orientation.
+        top = max(o, c)
+        bot = min(o, c)
+        base = max(abs(c), abs(top), abs(bot), ref if ref > 0 else 0.0)
+        if base <= 0:
+            base = c
+        max_range = float(base) * float(range_cap)
+        curr_range = max(0.0, h - low)
+        if curr_range > max_range and max_range > 0:
+            body = max(0.0, top - bot)
+            wick_allow = max(0.0, max_range - body)
+            # Keep body, trim excessive tails around it.
+            h = min(h, top + (wick_allow * 0.5))
+            low = max(low, bot - (wick_allow * 0.5))
+            if h < low:
+                h, low = low, h
+
+        o = min(max(o, low), h)
+        c = min(max(c, low), h)
+        return o, h, low, c
+
+    def _is_outlier_tick(
+        self, prev_price: float, new_price: float, interval: str = "1m"
+    ) -> bool:
         """
         Guard against bad ticks creating abnormal long candles.
-        20% jump on a single tick is treated as suspicious and ignored.
+        Uses interval-aware thresholds to avoid rejecting valid fast moves.
         """
         prev = float(prev_price or 0.0)
         new = float(new_price or 0.0)
         if prev <= 0 or new <= 0:
             return False
+        jump_cap, _ = self._bar_safety_caps(interval)
         jump_pct = abs(new / prev - 1.0)
-        return jump_pct > 0.20
+        return jump_pct > float(jump_cap)
 
         # =========================================================================
         # REAL-TIME MONITORING
@@ -2383,13 +2551,40 @@ class MainApp(QMainWindow):
         if not code or price <= 0:
             return
 
-        for row in range(self.watchlist.rowCount()):
-            item = self.watchlist.item(row, 0)
-            if item and self._ui_norm(item.text()) == code:
-                self.watchlist.setItem(
-                    row, 1, QTableWidgetItem(f"¥{price:.2f}")
-                )
-                break
+        row = self._watchlist_row_by_code.get(code)
+        if row is None:
+            # Lazy rebuild if row map was invalidated by table reset.
+            for r in range(self.watchlist.rowCount()):
+                item = self.watchlist.item(r, 0)
+                if not item:
+                    continue
+                mapped = self._ui_norm(item.text())
+                if not mapped:
+                    continue
+                self._watchlist_row_by_code[mapped] = int(r)
+            row = self._watchlist_row_by_code.get(code)
+
+        if row is not None:
+            now_ui = time.monotonic()
+            prev_ui = self._last_watchlist_price_ui.get(code)
+            refresh_price = True
+            if prev_ui is not None:
+                prev_ts, prev_px = float(prev_ui[0]), float(prev_ui[1])
+                if (
+                    (now_ui - prev_ts) < 0.12
+                    and abs(price - prev_px)
+                    <= max(0.001, abs(prev_px) * 0.00004)
+                ):
+                    refresh_price = False
+
+            if refresh_price:
+                text = f"¥{price:.2f}"
+                cell = self.watchlist.item(int(row), 1)
+                if cell is None:
+                    self.watchlist.setItem(int(row), 1, QTableWidgetItem(text))
+                elif cell.text() != text:
+                    cell.setText(text)
+                self._last_watchlist_price_ui[code] = (now_ui, price)
 
         self._refresh_guess_rows_for_symbol(code, price)
 
@@ -2415,6 +2610,44 @@ class MainApp(QMainWindow):
             and feed_age <= max(2.0, float(interval_s) * 1.2)
         )
         if has_recent_feed_bar:
+            if arr:
+                try:
+                    last = arr[-1]
+                    prev_ref = float(
+                        arr[-2].get("close", price) or price
+                    ) if len(arr) >= 2 else float(last.get("close", price) or price)
+                    if not self._is_outlier_tick(
+                        prev_ref, price, interval=interval
+                    ):
+                        now_bucket = self._bar_bucket_epoch(now_ts, interval)
+                        last_bucket = self._bar_bucket_epoch(
+                            last.get(
+                                "_ts_epoch",
+                                last.get("timestamp", now_bucket),
+                            ),
+                            interval,
+                        )
+                        if int(last_bucket) == int(now_bucket):
+                            s = self._sanitize_ohlc(
+                                float(last.get("open", price) or price),
+                                max(float(last.get("high", price) or price), price),
+                                min(float(last.get("low", price) or price), price),
+                                price,
+                                interval=interval,
+                                ref_close=prev_ref,
+                            )
+                            if s is not None:
+                                o, h, low, c = s
+                                last["open"] = o
+                                last["high"] = h
+                                last["low"] = low
+                                last["close"] = c
+                                last["final"] = False
+                                last["_ts_epoch"] = float(last_bucket)
+                                last["timestamp"] = self._epoch_to_iso(last_bucket)
+                except Exception:
+                    pass
+
             if current_code == code and arr:
                 predicted = []
                 if (
@@ -2457,7 +2690,7 @@ class MainApp(QMainWindow):
             if arr and len(arr) > 0:
                 last = arr[-1]
                 prev_close = float(last.get("close", price) or price)
-                if self._is_outlier_tick(prev_close, price):
+                if self._is_outlier_tick(prev_close, price, interval=interval):
                     log.debug(
                         f"Skip outlier tick for {code}: prev={prev_close:.2f} new={price:.2f}"
                     )
@@ -2487,9 +2720,21 @@ class MainApp(QMainWindow):
                 else:
                     if float(last.get("open", 0) or 0) <= 0:
                         last["open"] = price
-                    last["close"] = price
-                    last["high"] = max(float(last.get("high", price) or price), price)
-                    last["low"] = min(float(last.get("low", price) or price), price)
+                    s = self._sanitize_ohlc(
+                        float(last.get("open", price) or price),
+                        max(float(last.get("high", price) or price), price),
+                        min(float(last.get("low", price) or price), price),
+                        price,
+                        interval=interval,
+                        ref_close=prev_close,
+                    )
+                    if s is None:
+                        return
+                    o, h, low, c = s
+                    last["open"] = o
+                    last["close"] = c
+                    last["high"] = h
+                    last["low"] = low
                     last["final"] = False
                     last["timestamp"] = bucket_iso
                     last["_ts_epoch"] = bucket_epoch
@@ -2685,16 +2930,40 @@ class MainApp(QMainWindow):
         if current_count != len(self.watch_list):
             self.watchlist.setRowCount(len(self.watch_list))
 
+        row_map: dict[str, int] = {}
         for row, code in enumerate(self.watch_list):
+            norm_code = self._ui_norm(str(code))
+            if norm_code:
+                row_map[norm_code] = int(row)
             current_code = self.watchlist.item(row, 0)
             if current_code is None or current_code.text() != code:
                 self.watchlist.setItem(row, 0, QTableWidgetItem(code))
 
             for col in range(1, 4):
-                if self.watchlist.item(row, col) is None:
-                    self.watchlist.setItem(
-                        row, col, QTableWidgetItem("--")
-                    )
+                cell = self.watchlist.item(row, col)
+                if cell is None:
+                    cell = QTableWidgetItem("--")
+                    self.watchlist.setItem(row, col, cell)
+                elif not cell.text():
+                    cell.setText("--")
+
+        self._watchlist_row_by_code = row_map
+        if self._last_watchlist_price_ui:
+            active = set(row_map.keys())
+            stale = [
+                k for k in self._last_watchlist_price_ui.keys()
+                if k not in active
+            ]
+            for k in stale:
+                self._last_watchlist_price_ui.pop(k, None)
+        if self._last_quote_ui_emit:
+            active = set(row_map.keys())
+            stale_quotes = [
+                k for k in self._last_quote_ui_emit.keys()
+                if k not in active
+            ]
+            for k in stale_quotes:
+                self._last_quote_ui_emit.pop(k, None)
 
     def _on_watchlist_click(
         self, row: int, col: int, code_override: str | None = None
@@ -2885,8 +3154,17 @@ class MainApp(QMainWindow):
                     o = float(row.get("open", c) or c)
                     h = float(row.get("high", c) or c)
                     low = float(row.get("low", c) or c)
-                    if h < low:
-                        h, low = low, h
+                    sanitized = self._sanitize_ohlc(
+                        o,
+                        h,
+                        low,
+                        c,
+                        interval=norm_iv,
+                        ref_close=None,
+                    )
+                    if sanitized is None:
+                        continue
+                    o, h, low, c = sanitized
                     ts_obj = row.get("datetime", idx)
                     epoch = self._bar_bucket_epoch(ts_obj, norm_iv)
                     out.append(
@@ -2915,8 +3193,17 @@ class MainApp(QMainWindow):
                         o = float(row.get("open", c) or c)
                         h = float(row.get("high", c) or c)
                         low = float(row.get("low", c) or c)
-                        if h < low:
-                            h, low = low, h
+                        sanitized = self._sanitize_ohlc(
+                            o,
+                            h,
+                            low,
+                            c,
+                            interval=norm_iv,
+                            ref_close=None,
+                        )
+                        if sanitized is None:
+                            continue
+                        o, h, low, c = sanitized
                         epoch = self._bar_bucket_epoch(idx, norm_iv)
                         is_final = bool(row.get("is_final", True))
                         if (
@@ -3052,20 +3339,35 @@ class MainApp(QMainWindow):
                         prev_ref = float(
                             arr[-2].get("close", current_price) or current_price
                         )
-                        if self._is_outlier_tick(prev_ref, current_price):
+                        if self._is_outlier_tick(
+                            prev_ref, current_price, interval=interval
+                        ):
                             update_last = False
                     except Exception:
                         update_last = True
                 if update_last:
-                    arr[-1]["close"] = current_price
-                    arr[-1]["high"] = max(
-                        float(arr[-1].get("high", current_price) or current_price),
+                    s = self._sanitize_ohlc(
+                        float(arr[-1].get("open", current_price) or current_price),
+                        max(
+                            float(arr[-1].get("high", current_price) or current_price),
+                            current_price,
+                        ),
+                        min(
+                            float(arr[-1].get("low", current_price) or current_price),
+                            current_price,
+                        ),
                         current_price,
+                        interval=interval,
+                        ref_close=float(
+                            arr[-2].get("close", current_price) or current_price
+                        ) if len(arr) >= 2 else None,
                     )
-                    arr[-1]["low"] = min(
-                        float(arr[-1].get("low", current_price) or current_price),
-                        current_price,
-                    )
+                    if s is not None:
+                        o, h, low, c = s
+                        arr[-1]["open"] = o
+                        arr[-1]["high"] = h
+                        arr[-1]["low"] = low
+                        arr[-1]["close"] = c
                     arr[-1]["final"] = False
                     if "_ts_epoch" not in arr[-1]:
                         arr[-1]["_ts_epoch"] = self._bar_bucket_epoch(
