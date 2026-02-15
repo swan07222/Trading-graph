@@ -1,5 +1,6 @@
 
 import argparse
+import json
 import sys
 from importlib.util import find_spec
 from pathlib import Path
@@ -64,6 +65,7 @@ def main():
     parser.add_argument('--auto-learn', action='store_true', help='Auto-discover and train')
     parser.add_argument('--predict', type=str, help='Predict stock')
     parser.add_argument('--backtest', action='store_true', help='Run backtest')
+    parser.add_argument('--backtest-optimize', action='store_true', help='Optimize backtest parameters')
     parser.add_argument('--replay-file', type=str, help='Replay market data file (csv/jsonl)')
     parser.add_argument('--replay-speed', type=float, default=20.0, help='Replay speed multiplier')
     parser.add_argument('--health', action='store_true', help='Show system health')
@@ -72,15 +74,20 @@ def main():
     parser.add_argument('--continuous', action='store_true', help='Continuous learning mode')
     parser.add_argument('--cli', action='store_true', help='CLI mode')
     parser.add_argument('--recovery-drill', action='store_true', help='Run crash recovery drill')
+    parser.add_argument('--doctor', action='store_true', help='Run system diagnostics')
+    parser.add_argument('--opt-train-months', type=str, default='6,9,12,18', help='Backtest optimization train months list')
+    parser.add_argument('--opt-test-months', type=str, default='1,2,3', help='Backtest optimization test months list')
+    parser.add_argument('--opt-min-confidence', type=str, default='0.55,0.60,0.65,0.70', help='Backtest optimization confidence list')
+    parser.add_argument('--opt-top-k', type=int, default=5, help='Backtest optimization top-k results')
 
     args = parser.parse_args()
 
     require_gui = not any([
-        args.train, args.auto_learn, args.predict, args.backtest, args.replay_file,
-        args.health, args.cli, args.recovery_drill,
+        args.train, args.auto_learn, args.predict, args.backtest, args.backtest_optimize, args.replay_file,
+        args.health, args.cli, args.recovery_drill, args.doctor,
     ])
     require_ml = any([
-        args.train, args.auto_learn, args.predict, args.backtest, args.replay_file,
+        args.train, args.auto_learn, args.predict, args.backtest, args.backtest_optimize, args.replay_file,
     ])
 
     if not check_dependencies(require_gui=require_gui, require_ml=require_ml):
@@ -124,6 +131,9 @@ def main():
             monitor = get_health_monitor()
             print(monitor.get_health_json())
 
+        elif args.doctor:
+            run_system_doctor()
+
         elif args.train:
             from models.trainer import Trainer
             trainer = Trainer()
@@ -149,6 +159,46 @@ def main():
             print(f"Signal: {result.signal.value}")
             print(f"Confidence: {result.confidence:.0%}")
             print(f"Price: {result.current_price:.2f}")
+
+        elif args.backtest_optimize:
+            from analysis.backtest import Backtester
+
+            def _parse_int_list(raw: str) -> list[int]:
+                out: list[int] = []
+                for p in str(raw or "").split(","):
+                    t = p.strip()
+                    if not t:
+                        continue
+                    try:
+                        v = int(t)
+                    except ValueError:
+                        continue
+                    if v > 0:
+                        out.append(v)
+                return out
+
+            def _parse_float_list(raw: str) -> list[float]:
+                out: list[float] = []
+                for p in str(raw or "").split(","):
+                    t = p.strip()
+                    if not t:
+                        continue
+                    try:
+                        v = float(t)
+                    except ValueError:
+                        continue
+                    if 0.0 < v <= 1.0:
+                        out.append(v)
+                return out
+
+            bt = Backtester()
+            summary = bt.optimize(
+                train_months_options=_parse_int_list(args.opt_train_months),
+                test_months_options=_parse_int_list(args.opt_test_months),
+                min_confidence_options=_parse_float_list(args.opt_min_confidence),
+                top_k=int(args.opt_top_k),
+            )
+            print(json.dumps(summary, indent=2, ensure_ascii=False))
 
         elif args.backtest:
             from analysis.backtest import Backtester
@@ -185,8 +235,8 @@ def main():
         if metrics_server is not None:
             try:
                 metrics_server.stop()
-            except Exception:
-                pass
+            except Exception as e:
+                log.warning(f"Failed to stop metrics server cleanly: {e}")
         EVENT_BUS.stop()
         from utils.security import get_audit_log
         get_audit_log().close()
@@ -231,6 +281,58 @@ def run_recovery_drill():
 
     assert len(fills_after) == len(fills_before), "Fill count changed after restart (dedup broken)"
     print("[DRILL] PASS: fill dedup + recovery OK")
+
+
+def run_system_doctor() -> None:
+    """One-shot system diagnostics for setup and runtime readiness."""
+    import os
+    from datetime import datetime
+
+    from config.settings import CONFIG
+
+    modules = [
+        "psutil",
+        "numpy",
+        "pandas",
+        "sklearn",
+        "torch",
+        "akshare",
+        "yfinance",
+        "PyQt6",
+        "websocket",
+        "requests",
+    ]
+    deps = {m: bool(_module_exists(m)) for m in modules}
+
+    CONFIG.ensure_dirs()
+    paths = {
+        "data_dir": CONFIG.data_dir,
+        "model_dir": CONFIG.model_dir,
+        "log_dir": CONFIG.log_dir,
+        "cache_dir": CONFIG.cache_dir,
+        "audit_dir": CONFIG.audit_dir,
+    }
+    path_report = {}
+    for name, p in paths.items():
+        path_report[name] = {
+            "path": str(p),
+            "exists": p.exists(),
+            "writable": os.access(str(p), os.W_OK) if p.exists() else False,
+        }
+
+    model_dir = CONFIG.model_dir
+    report = {
+        "timestamp": datetime.now().isoformat(),
+        "dependencies": deps,
+        "paths": path_report,
+        "models": {
+            "ensembles": len(list(model_dir.glob("ensemble_*.pt"))),
+            "forecasters": len(list(model_dir.glob("forecast_*.pt"))),
+            "scalers": len(list(model_dir.glob("scaler_*.pkl"))),
+        },
+        "config_validation_warnings": list(CONFIG.validation_warnings),
+    }
+    print(json.dumps(report, indent=2, ensure_ascii=False))
 
 if __name__ == "__main__":
     main()

@@ -96,6 +96,8 @@ class TradingConfig:
     enable_multi_venue: bool = False
     venue_priority: list[str] = field(default_factory=list)
     venue_failover_cooldown_seconds: int = 30
+    broker_plugin: str = ""
+    broker_plugin_kwargs: dict[str, Any] = field(default_factory=dict)
 
 @dataclass
 class RiskConfig:
@@ -129,6 +131,7 @@ class SecurityConfig:
     audit_logging: bool = True
     audit_hash_chain: bool = True
     require_2fa_for_live: bool = True
+    two_factor_ttl_minutes: int = 30
     require_live_trade_permission: bool = True
     strict_live_governance: bool = False
     min_live_approvals: int = 2
@@ -273,13 +276,12 @@ def _safe_dataclass_from_dict(dc_instance, data: dict) -> list[str]:
         try:
             # FIX: Check bool BEFORE int (since bool is subclass of int)
             if isinstance(current_value, bool):
-                if isinstance(value, bool):
-                    setattr(dc_instance, key, value)
-                elif isinstance(value, (int, str)):
-                    setattr(dc_instance, key, bool(value))
+                ok, parsed = _coerce_bool(value)
+                if ok:
+                    setattr(dc_instance, key, parsed)
                 else:
                     warnings_list.append(
-                        f"Bad type for bool field '{key}': {type(value).__name__}"
+                        f"Bad value for bool field '{key}': {value!r}"
                     )
             elif isinstance(current_value, int) and isinstance(value, (int, float)):
                 setattr(dc_instance, key, int(value))
@@ -288,6 +290,8 @@ def _safe_dataclass_from_dict(dc_instance, data: dict) -> list[str]:
             elif isinstance(current_value, str) and isinstance(value, str):
                 setattr(dc_instance, key, value)
             elif isinstance(current_value, list) and isinstance(value, list):
+                setattr(dc_instance, key, value)
+            elif isinstance(current_value, dict) and isinstance(value, dict):
                 setattr(dc_instance, key, value)
             elif isinstance(current_value, time) and isinstance(value, str):
                 # Parse "HH:MM" or "HH:MM:SS"
@@ -303,6 +307,36 @@ def _safe_dataclass_from_dict(dc_instance, data: dict) -> list[str]:
             warnings_list.append(f"Bad value for '{key}': {value!r} — {e}")
 
     return warnings_list
+
+
+def _coerce_bool(value: Any) -> tuple[bool, bool]:
+    """
+    Coerce common bool representations.
+
+    Returns (ok, parsed_value). When ok is False, parsed_value is undefined.
+    """
+    if isinstance(value, bool):
+        return True, value
+
+    if isinstance(value, int):
+        if value in (0, 1):
+            return True, bool(value)
+        return False, False
+
+    if isinstance(value, float):
+        if value in (0.0, 1.0):
+            return True, bool(int(value))
+        return False, False
+
+    if isinstance(value, str):
+        v = value.strip().lower()
+        if v in ("1", "true", "yes", "on", "y"):
+            return True, True
+        if v in ("0", "false", "no", "off", "n"):
+            return True, False
+        return False, False
+
+    return False, False
 
 def _dataclass_to_dict(dc_instance) -> dict:
     """Serialize a dataclass to dict, handling special types."""
@@ -639,6 +673,12 @@ class Config:
 
     def _load_from_env(self) -> None:
         """Load from environment variables."""
+        def _env_bool(raw: str) -> bool:
+            ok, parsed = _coerce_bool(raw)
+            if not ok:
+                raise ValueError(f"invalid boolean value: {raw!r}")
+            return parsed
+
         env_mappings = {
             "CAPITAL": ("capital", float),
             "TRADING_MODE": (
@@ -653,11 +693,11 @@ class Config:
             "MAX_DAILY_LOSS_PCT": ("risk.max_daily_loss_pct", float),
             "AUTO_TRADE_ENABLED": (
                 "auto_trade.enabled",
-                lambda x: x.lower() in ("true", "1", "yes"),
+                _env_bool,
             ),
             "RUNTIME_LEASE_ENABLED": (
                 "security.enable_runtime_lease",
-                lambda x: x.lower() in ("true", "1", "yes"),
+                _env_bool,
             ),
             "RUNTIME_LEASE_BACKEND": ("security.runtime_lease_backend", str),
             "RUNTIME_LEASE_CLUSTER": ("security.runtime_lease_cluster", str),
@@ -709,6 +749,7 @@ class Config:
             "security": self.security,
             "alerts": self.alerts,
             "auto_trade": self.auto_trade,
+            "precision": self.precision,
         }
 
         for key, value in data.items():
@@ -754,8 +795,16 @@ class Config:
                 current = getattr(self, key)
                 try:
                     # FIX: Check bool before int (bool is subclass of int)
-                    if isinstance(current, bool) and isinstance(value, (bool, int)):
-                        setattr(self, key, bool(value))
+                    if isinstance(current, bool):
+                        ok, parsed = _coerce_bool(value)
+                        if ok:
+                            setattr(self, key, parsed)
+                        else:
+                            _log.warning(
+                                "Bad value for bool '%s': %r",
+                                key,
+                                value,
+                            )
                     elif isinstance(current, float) and isinstance(
                         value, (int, float)
                     ):

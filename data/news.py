@@ -1,4 +1,4 @@
-# data/news.py
+﻿# data/news.py
 import json
 import math
 import re
@@ -19,41 +19,72 @@ _NEWS_CACHE_TTL: int = 300          # 5 minutes
 _NEWS_BUFFER_SIZE: int = 200        # Rolling buffer max items
 _DEDUP_PREFIX_LEN: int = 40         # Title prefix length for dedup
 _FETCH_TIMEOUT: int = 5             # HTTP timeout for news fetchers
-_SENTIMENT_NEUTRAL_BAND: float = 0.2  # |score| < this → neutral
+_SENTIMENT_NEUTRAL_BAND: float = 0.2  # |score| below this is neutral
 
-# Positive keywords (Chinese financial)
+# Positive keywords (Chinese financial, Unicode-escaped to avoid encoding drift)
 POSITIVE_WORDS: dict[str, float] = {
-    "涨停": 2.0, "大涨": 1.8, "暴涨": 1.8, "创新高": 1.5, "突破": 1.3,
-    "利好": 1.5, "重大利好": 2.0, "超预期": 1.5, "业绩大增": 1.8,
-    "净利润增长": 1.3, "营收增长": 1.2, "盈利": 1.0, "扭亏": 1.5,
-    "分红": 1.0, "回购": 1.2, "增持": 1.3, "大股东增持": 1.5,
-    "机构买入": 1.3, "北向资金流入": 1.2, "外资增持": 1.2,
-    "上涨": 0.8, "走高": 0.8, "反弹": 0.7, "回升": 0.7,
-    "利率下调": 0.8, "降准": 1.0, "降息": 1.0, "宽松": 0.8,
-    "刺激": 0.7, "支持": 0.6, "鼓励": 0.6, "扶持": 0.7,
-    "中标": 1.0, "签约": 0.8, "合作": 0.6, "战略合作": 0.8,
-    "新产品": 0.7, "技术突破": 1.0, "专利": 0.7, "创新": 0.6,
-    "产能扩张": 0.8, "订单增长": 1.0, "市场份额提升": 0.9,
-    "减税": 1.0, "补贴": 0.8, "政策支持": 1.0, "国家战略": 0.9,
-    "改革": 0.5, "开放": 0.5, "自贸区": 0.7, "新基建": 0.8,
-    "数字经济": 0.7, "碳中和": 0.6, "新能源": 0.6,
+    "\u6da8\u505c": 2.0,
+    "\u5927\u6da8": 1.8,
+    "\u66b4\u6da8": 1.8,
+    "\u521b\u65b0\u9ad8": 1.5,
+    "\u7a81\u7834": 1.3,
+    "\u5229\u597d": 1.5,
+    "\u91cd\u5927\u5229\u597d": 2.0,
+    "\u8d85\u9884\u671f": 1.5,
+    "\u4e1a\u7ee9\u5927\u589e": 1.8,
+    "\u51c0\u5229\u6da6\u589e\u957f": 1.3,
+    "\u8425\u6536\u589e\u957f": 1.2,
+    "\u76c8\u5229": 1.0,
+    "\u626d\u4e8f": 1.5,
+    "\u56de\u8d2d": 1.2,
+    "\u589e\u6301": 1.3,
+    "\u673a\u6784\u4e70\u5165": 1.3,
+    "\u5317\u5411\u8d44\u91d1\u6d41\u5165": 1.2,
+    "\u4e0a\u6da8": 0.8,
+    "\u53cd\u5f39": 0.7,
+    "\u964d\u606f": 1.0,
+    "\u652f\u6301": 0.6,
+    "\u4e2d\u6807": 1.0,
+    "\u5408\u4f5c": 0.6,
+    "\u6280\u672f\u7a81\u7834": 1.0,
+    "\u8ba2\u5355\u589e\u957f": 1.0,
+    "\u653f\u7b56\u652f\u6301": 1.0,
+    "\u65b0\u80fd\u6e90": 0.6,
 }
 
 NEGATIVE_WORDS: dict[str, float] = {
-    "跌停": -2.0, "大跌": -1.8, "暴跌": -1.8, "崩盘": -2.0,
-    "利空": -1.5, "重大利空": -2.0, "爆雷": -2.0, "违规": -1.5,
-    "处罚": -1.5, "罚款": -1.3, "退市": -2.0, "ST": -1.5,
-    "亏损": -1.3, "业绩下滑": -1.5, "净利润下降": -1.3,
-    "减持": -1.3, "大股东减持": -1.5, "高管减持": -1.2,
-    "质押": -0.8, "爆仓": -1.8, "违约": -1.5,
-    "下跌": -0.8, "走低": -0.8, "回调": -0.5, "下探": -0.7,
-    "加息": -0.8, "收紧": -0.8, "监管": -0.6, "审查": -0.7,
-    "限制": -0.6, "禁止": -0.8, "制裁": -1.0, "贸易战": -1.0,
-    "疫情": -0.7, "停产": -1.0, "停工": -0.8, "召回": -0.8,
-    "诉讼": -0.7, "仲裁": -0.6, "调查": -0.7,
-    "风险": -0.5, "警告": -0.6, "预警": -0.6, "泡沫": -0.8,
-    "过热": -0.6, "通胀": -0.5, "滞涨": -0.7,
-    "北向资金流出": -1.0, "外资减持": -1.0,
+    "\u8dcc\u505c": -2.0,
+    "\u5927\u8dcc": -1.8,
+    "\u66b4\u8dcc": -1.8,
+    "\u5d29\u76d8": -2.0,
+    "\u5229\u7a7a": -1.5,
+    "\u91cd\u5927\u5229\u7a7a": -2.0,
+    "\u7206\u96f7": -2.0,
+    "\u8fdd\u89c4": -1.5,
+    "\u5904\u7f5a": -1.5,
+    "\u9000\u5e02": -2.0,
+    "\u4e8f\u635f": -1.3,
+    "\u4e1a\u7ee9\u4e0b\u6ed1": -1.5,
+    "\u51c0\u5229\u6da6\u4e0b\u964d": -1.3,
+    "\u51cf\u6301": -1.3,
+    "\u8d28\u62bc": -0.8,
+    "\u7206\u4ed3": -1.8,
+    "\u8fdd\u7ea6": -1.5,
+    "\u4e0b\u8dcc": -0.8,
+    "\u56de\u8c03": -0.5,
+    "\u52a0\u606f": -0.8,
+    "\u76d1\u7ba1": -0.6,
+    "\u9650\u5236": -0.6,
+    "\u5236\u88c1": -1.0,
+    "\u8d38\u6613\u6218": -1.0,
+    "\u505c\u4ea7": -1.0,
+    "\u8bc9\u8bbc": -0.7,
+    "\u8c03\u67e5": -0.7,
+    "\u98ce\u9669": -0.5,
+    "\u8b66\u544a": -0.6,
+    "\u6ce1\u6cab": -0.8,
+    "\u901a\u80c0": -0.5,
+    "\u5317\u5411\u8d44\u91d1\u6d41\u51fa": -1.0,
 }
 
 # Max times a single keyword is counted (prevents spam amplification)
@@ -66,7 +97,7 @@ def analyze_sentiment(text: str) -> tuple[float, str]:
     - Counts each keyword up to _MAX_KEYWORD_COUNT times
     - Normalizes by total absolute weight contribution
     - Applies tanh to produce smooth [-1, 1] output
-    - Returns (score, label) where label ∈ {positive, negative, neutral}
+    - Returns (score, label) where label 鈭?{positive, negative, neutral}
     """
     if not text:
         return 0.0, "neutral"
@@ -112,9 +143,9 @@ class NewsItem:
     publish_time: datetime = field(default_factory=datetime.now)
     stock_codes: list[str] = field(default_factory=list)
     category: str = ""  # policy, earnings, market, industry, company
-    sentiment_score: float = 0.0  # -1.0 … +1.0
+    sentiment_score: float = 0.0  # -1.0 鈥?+1.0
     sentiment_label: str = "neutral"  # positive, negative, neutral
-    importance: float = 0.5  # 0.0 … 1.0
+    importance: float = 0.5  # 0.0 鈥?1.0
     keywords: list[str] = field(default_factory=list)
 
     def __post_init__(self):
@@ -415,8 +446,14 @@ class TencentNewsFetcher(_BaseNewsFetcher):
             return []
 
 _POLICY_KEYWORDS: tuple[str, ...] = (
-    "央行", "证监会", "财政部", "国务院",
-    "政策", "监管", "改革", "法规",
+    "\u592e\u884c",
+    "\u8bc1\u76d1\u4f1a",
+    "\u8d22\u653f\u90e8",
+    "\u56fd\u52a1\u9662",
+    "\u653f\u7b56",
+    "\u76d1\u7ba1",
+    "\u6539\u9769",
+    "\u6cd5\u89c4",
 )
 
 class NewsAggregator:
@@ -516,6 +553,24 @@ class NewsAggregator:
         rate = ok_calls / float(total)
         return float(min(1.3, max(0.5, 0.6 + 0.9 * rate)))
 
+    @staticmethod
+    def _norm_code(value: str) -> str:
+        digits = "".join(ch for ch in str(value or "") if ch.isdigit())
+        return digits.zfill(6) if digits else ""
+
+    def _item_mentions_code(self, item: NewsItem, code6: str) -> bool:
+        code6 = self._norm_code(code6)
+        if not code6:
+            return False
+        title = str(getattr(item, "title", "") or "")
+        content = str(getattr(item, "content", "") or "")
+        if code6 in title or code6 in content:
+            return True
+        for v in list(getattr(item, "stock_codes", []) or []):
+            if self._norm_code(str(v)) == code6:
+                return True
+        return False
+
     # -- market news ---------------------------------------------------------
 
     def get_market_news(
@@ -532,9 +587,15 @@ class NewsAggregator:
         env = get_network_env()
 
         all_items: list[NewsItem] = []
+        should_try_tencent = bool(env.tencent_ok) or (not env.is_china_direct)
+        should_try_sina = bool(env.is_china_direct) or bool(env.eastmoney_ok)
+        should_try_eastmoney_policy = bool(env.eastmoney_ok) or bool(env.is_china_direct)
 
-        # Tencent always works (China or VPN)
-        if env.tencent_ok:
+        # If detector is stale/incorrect, still do one best-effort Tencent fetch.
+        if not (should_try_tencent or should_try_sina or should_try_eastmoney_policy):
+            should_try_tencent = True
+
+        if should_try_tencent:
             try:
                 fetched = self._tencent.fetch_market_news(count)
                 all_items.extend(fetched)
@@ -542,8 +603,7 @@ class NewsAggregator:
             except Exception as exc:
                 self._record_source_result("tencent", False, error=str(exc))
 
-        # China direct: use Sina + Eastmoney
-        if env.is_china_direct:
+        if should_try_sina:
             try:
                 fetched = self._sina.fetch_market_news(count)
                 all_items.extend(fetched)
@@ -551,17 +611,13 @@ class NewsAggregator:
             except Exception as exc:
                 self._record_source_result("sina", False, error=str(exc))
 
-            if env.eastmoney_ok:
-                try:
-                    fetched = self._eastmoney.fetch_policy_news(count)
-                    all_items.extend(fetched)
-                    self._record_source_result(
-                        "eastmoney_policy", True, len(fetched)
-                    )
-                except Exception as exc:
-                    self._record_source_result(
-                        "eastmoney_policy", False, error=str(exc)
-                    )
+        if should_try_eastmoney_policy:
+            try:
+                fetched = self._eastmoney.fetch_policy_news(count)
+                all_items.extend(fetched)
+                self._record_source_result("eastmoney_policy", True, len(fetched))
+            except Exception as exc:
+                self._record_source_result("eastmoney_policy", False, error=str(exc))
 
         unique = self._deduplicate(all_items)
         unique.sort(key=lambda x: x.publish_time, reverse=True)
@@ -596,7 +652,9 @@ class NewsAggregator:
         force_refresh: bool = False,
     ) -> list[NewsItem]:
         """Get news for a specific stock."""
-        code6 = str(stock_code).zfill(6)
+        code6 = self._norm_code(stock_code)
+        if not code6:
+            return []
         cache_key = f"stock_{code6}_{count}"
 
         with self._lock:
@@ -608,8 +666,10 @@ class NewsAggregator:
 
         all_items: list[NewsItem] = []
 
-        # China direct: full access
-        if env.is_china_direct:
+        should_try_sina = bool(env.is_china_direct) or bool(env.tencent_ok) or bool(env.eastmoney_ok)
+        should_try_eastmoney = bool(env.eastmoney_ok) or bool(env.is_china_direct)
+
+        if should_try_sina:
             try:
                 fetched = self._sina.fetch_stock_news(code6, count)
                 all_items.extend(fetched)
@@ -617,26 +677,44 @@ class NewsAggregator:
             except Exception as exc:
                 self._record_source_result("sina", False, error=str(exc))
 
-            if env.eastmoney_ok:
-                try:
-                    fetched = self._eastmoney.fetch_stock_news(code6, count)
-                    all_items.extend(fetched)
-                    self._record_source_result(
-                        "eastmoney_stock", True, len(fetched)
-                    )
-                except Exception as exc:
-                    self._record_source_result(
-                        "eastmoney_stock", False, error=str(exc)
-                    )
+        if should_try_eastmoney:
+            try:
+                fetched = self._eastmoney.fetch_stock_news(code6, count)
+                all_items.extend(fetched)
+                self._record_source_result("eastmoney_stock", True, len(fetched))
+            except Exception as exc:
+                self._record_source_result("eastmoney_stock", False, error=str(exc))
 
         with self._lock:
             for item in self._all_news:
-                if code6 in item.title or code6 in str(item.stock_codes):
+                if self._item_mentions_code(item, code6):
+                    all_items.append(item)
+
+        # Final fallback path: derive stock-specific headlines from market stream
+        # so UI still shows relevant news when provider-specific stock APIs fail.
+        if not all_items:
+            market_pool = self.get_market_news(
+                count=max(50, int(count) * 4),
+                force_refresh=force_refresh,
+            )
+            for item in market_pool:
+                if self._item_mentions_code(item, code6):
                     all_items.append(item)
 
         unique = self._deduplicate(all_items)
         unique.sort(key=lambda x: x.publish_time, reverse=True)
         unique = unique[:count]
+
+        # Same stale-cache guard as market path.
+        if not unique:
+            with self._lock:
+                stale = list(self._cache.get(cache_key, []))
+            if stale:
+                log.warning(
+                    "Stock news providers returned no items; serving stale cache "
+                    f"for {code6} ({len(stale)} items)"
+                )
+                return stale[:count]
 
         for item in unique:
             if code6 not in item.stock_codes:
@@ -812,7 +890,7 @@ class NewsAggregator:
             ),
             "news_positive_ratio": round(positive / total, 4),
             "news_negative_ratio": round(negative / total, 4),
-            "news_volume": min(total / 20.0, 1.0),  # Normalized 0–1
+            "news_volume": min(total / 20.0, 1.0),  # Normalized 0鈥?
             "news_importance_avg": round(float(np.mean(importances)), 4),
             "news_recency_score": round(weighted_sentiment, 4),
             "policy_sentiment": round(policy_sentiment, 4),
@@ -928,3 +1006,5 @@ def get_news_aggregator() -> NewsAggregator:
             if _aggregator is None:
                 _aggregator = NewsAggregator()
     return _aggregator
+
+

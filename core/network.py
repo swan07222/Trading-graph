@@ -56,17 +56,18 @@ class NetworkDetector:
         self._ttl: float = 120.0  # Re-detect every 2 minutes
         self._probe_lock = threading.Lock()
 
+    def _has_fresh_cache_unlocked(self, now: float | None = None) -> bool:
+        """Check cache freshness. Caller should hold _probe_lock."""
+        if self._env is None:
+            return False
+        t_now = float(time.time() if now is None else now)
+        return (t_now - float(self._env_time)) < float(self._ttl)
+
     def get_env(self, force_refresh: bool = False) -> NetworkEnv:
         """Get current network environment (cached)."""
-        now = time.time()
-
-        if not force_refresh and self._env is not None and (now - self._env_time) < self._ttl:
-            return self._env
-
         with self._probe_lock:
-            # Double-check after acquiring lock
-            if not force_refresh and self._env is not None and (now - self._env_time) < self._ttl:
-                return self._env
+            if not force_refresh and self._has_fresh_cache_unlocked():
+                return self._env  # type: ignore[return-value]
 
             env = self._detect()
             self._env = env
@@ -75,8 +76,19 @@ class NetworkDetector:
 
     def invalidate(self):
         """Force re-detection on next call."""
-        self._env = None
-        self._env_time = 0.0
+        with self._probe_lock:
+            self._env = None
+            self._env_time = 0.0
+
+    def peek_env(self) -> NetworkEnv | None:
+        """
+        Return cached environment without probing.
+        Returns None when cache is missing/stale.
+        """
+        with self._probe_lock:
+            if not self._has_fresh_cache_unlocked():
+                return None
+            return self._env
 
     def _detect(self) -> NetworkEnv:
         """Probe endpoints concurrently and determine network environment."""
@@ -101,15 +113,18 @@ class NetworkDetector:
             "csindex_ok": ("https://www.csindex.com.cn/", 3),
         }
 
-        # FIX REUSE: Create fresh session per detection to avoid stale connections
-        session = requests.Session()
-        session.headers.update({
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-        })
+        # Avoid sharing requests.Session across threads.
+        # requests.Session is not thread-safe for concurrent get() calls.
+        default_headers = {
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36"
+            )
+        }
 
         def run_probe(url, timeout):
             try:
-                r = session.get(url, timeout=timeout)
+                r = requests.get(url, timeout=timeout, headers=default_headers)
                 return r.status_code == 200
             except Exception:
                 return False
@@ -128,9 +143,6 @@ class NetworkDetector:
                         setattr(env, k, False)
         except Exception as e:
             log.debug(f"Network detection thread pool error: {e}")
-        finally:
-            session.close()
-
         if env.eastmoney_ok and not env.yahoo_ok:
             env.is_china_direct = True
             env.is_vpn_active = False
@@ -188,6 +200,10 @@ _detector = NetworkDetector()
 def get_network_env(force_refresh: bool = False) -> NetworkEnv:
     """Get current network environment."""
     return _detector.get_env(force_refresh=force_refresh)
+
+def peek_network_env() -> NetworkEnv | None:
+    """Get cached network environment without triggering probe."""
+    return _detector.peek_env()
 
 def invalidate_network_cache():
     """Force re-detection on next call."""

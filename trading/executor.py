@@ -805,6 +805,7 @@ class ExecutionEngine:
     _RUNTIME_STATE_FILE: str = "execution_runtime_state.json"
     _RUNTIME_LEASE_FILE: str = "execution_runtime_lease.json"
     _RUNTIME_LEASE_DB_FILE: str = "execution_runtime_lease.db"
+    _SYNTHETIC_EXITS_FILE: str = "synthetic_exits_state.json"
 
     def __init__(self, mode: TradingMode = None):
         self.mode = mode or CONFIG.trading_mode
@@ -848,6 +849,11 @@ class ExecutionEngine:
         }
         self._last_watchdog_warning_ts: float = 0.0
         self._runtime_state_path = Path(CONFIG.data_dir) / self._RUNTIME_STATE_FILE
+        self._synthetic_exit_state_path = (
+            Path(CONFIG.data_dir) / self._SYNTHETIC_EXITS_FILE
+        )
+        self._last_synthetic_persist_ts: float = 0.0
+        self._synthetic_persist_min_interval_s: float = 1.0
         sec_cfg = getattr(CONFIG, "security", None)
         self._runtime_lease_backend = str(
             getattr(sec_cfg, "runtime_lease_backend", "sqlite") or "sqlite"
@@ -893,6 +899,7 @@ class ExecutionEngine:
         self.auto_trader: AutoTrader | None = None
         self._snapshot_provider_name = "execution_engine"
         self._restore_runtime_state()
+        self._restore_synthetic_exits()
 
     # -----------------------------------------------------------------
     # Auto-trade public API
@@ -1098,6 +1105,133 @@ class ExecutionEngine:
             log.warning(f"Could not load processed fills: {e}")
             return set()
 
+    @staticmethod
+    def _normalize_synthetic_exit_plan(plan: dict[str, Any]) -> dict[str, Any] | None:
+        """Validate/normalize one synthetic exit plan row from disk/runtime."""
+        if not isinstance(plan, dict):
+            return None
+        try:
+            plan_id = str(plan.get("plan_id", "") or "").strip()
+            source_order_id = str(plan.get("source_order_id", "") or plan_id).strip()
+            symbol = str(plan.get("symbol", "") or "").strip()
+            if not plan_id or not symbol:
+                return None
+
+            open_qty = int(plan.get("open_qty", 0) or 0)
+            if open_qty <= 0:
+                return None
+
+            stop_loss = max(0.0, float(plan.get("stop_loss", 0.0) or 0.0))
+            take_profit = max(0.0, float(plan.get("take_profit", 0.0) or 0.0))
+            trailing_stop_pct = max(
+                0.0, float(plan.get("trailing_stop_pct", 0.0) or 0.0)
+            )
+            if stop_loss <= 0 and take_profit <= 0 and trailing_stop_pct <= 0:
+                return None
+
+            highest_price = max(
+                0.0,
+                float(plan.get("highest_price", 0.0) or 0.0),
+            )
+            armed_at = str(plan.get("armed_at", "") or "").strip()
+            if not armed_at:
+                armed_at = datetime.now().isoformat()
+
+            return {
+                "plan_id": plan_id,
+                "source_order_id": source_order_id or plan_id,
+                "symbol": symbol,
+                "side": str(plan.get("side", "long") or "long"),
+                "open_qty": open_qty,
+                "stop_loss": stop_loss,
+                "take_profit": take_profit,
+                "trailing_stop_pct": trailing_stop_pct,
+                "highest_price": highest_price,
+                "armed_at": armed_at,
+            }
+        except Exception:
+            return None
+
+    def _persist_synthetic_exits(self, force: bool = False) -> None:
+        """
+        Persist synthetic exit plans atomically.
+
+        This makes synthetic brackets/OCO plans recoverable after restarts.
+        """
+        path_attr = getattr(self, "_synthetic_exit_state_path", None)
+        if path_attr is None:
+            return
+        path = Path(path_attr)
+
+        now = time.time()
+        min_interval = float(
+            getattr(self, "_synthetic_persist_min_interval_s", 1.0) or 1.0
+        )
+        last_ts = float(getattr(self, "_last_synthetic_persist_ts", 0.0) or 0.0)
+        if not force and (now - last_ts) < max(0.2, min_interval):
+            return
+
+        lock = getattr(self, "_synthetic_exit_lock", None)
+        plans: list[dict[str, Any]]
+        if lock is None:
+            raw = list(getattr(self, "_synthetic_exits", {}).values())
+        else:
+            with lock:
+                raw = list(getattr(self, "_synthetic_exits", {}).values())
+
+        plans = []
+        for p in raw:
+            norm = self._normalize_synthetic_exit_plan(p)
+            if norm is not None:
+                plans.append(norm)
+
+        payload = {
+            "ts": datetime.now().isoformat(),
+            "plans": plans,
+        }
+        try:
+            atomic_write_json(path, payload, indent=2)
+            self._last_synthetic_persist_ts = now
+        except Exception as e:
+            log.debug(f"Synthetic exit state persist failed: {e}")
+
+    def _restore_synthetic_exits(self) -> None:
+        """Best-effort restore synthetic exit plans from prior session."""
+        path_attr = getattr(self, "_synthetic_exit_state_path", None)
+        if path_attr is None:
+            return
+        path = Path(path_attr)
+        if not path.exists():
+            return
+        try:
+            payload = read_json(path)
+            raw_plans = []
+            if isinstance(payload, dict):
+                raw_plans = list(payload.get("plans", []) or [])
+
+            restored: dict[str, dict[str, Any]] = {}
+            for row in raw_plans:
+                norm = self._normalize_synthetic_exit_plan(row)
+                if norm is None:
+                    continue
+                restored[str(norm["plan_id"])] = norm
+
+            lock = getattr(self, "_synthetic_exit_lock", None)
+            if lock is None:
+                self._synthetic_exits = restored
+            else:
+                with lock:
+                    self._synthetic_exits = restored
+
+            if restored:
+                log.warning(
+                    "Recovered %d synthetic exit plan(s) from %s",
+                    len(restored),
+                    path.name,
+                )
+        except Exception as e:
+            log.debug(f"Synthetic exit state restore failed: {e}")
+
     def _resolve_price(self, symbol: str, hinted_price: float = 0.0) -> float:
         """
         Resolve one authoritative price for this submission.
@@ -1195,6 +1329,7 @@ class ExecutionEngine:
                 unregister_snapshot_provider(self._snapshot_provider_name)
             except Exception:
                 pass
+        self._persist_synthetic_exits(force=True)
         self._persist_runtime_state(clean_shutdown=True)
         self._release_runtime_lease()
 
@@ -1268,6 +1403,9 @@ class ExecutionEngine:
                 snapshot["synthetic_exits"] = {
                     "active_plans": int(len(self._synthetic_exits)),
                     "plans": list(self._synthetic_exits.values())[:50],
+                    "state_file": str(
+                        getattr(self, "_synthetic_exit_state_path", "")
+                    ),
                 }
         except Exception:
             pass
@@ -2333,6 +2471,7 @@ class ExecutionEngine:
         if stop_loss <= 0 and take_profit <= 0 and trailing_pct <= 0:
             return
 
+        changed = False
         with self._synthetic_exit_lock:
             plan = self._synthetic_exits.get(order.id)
             if plan is None:
@@ -2349,21 +2488,33 @@ class ExecutionEngine:
                     "armed_at": datetime.now().isoformat(),
                 }
                 self._synthetic_exits[order.id] = plan
-            plan["open_qty"] = int(plan.get("open_qty", 0)) + int(fill.quantity)
+                changed = True
+            prev_qty = int(plan.get("open_qty", 0) or 0)
+            prev_high = float(plan.get("highest_price", 0.0) or 0.0)
+            plan["open_qty"] = prev_qty + int(fill.quantity)
             plan["highest_price"] = max(
                 float(plan.get("highest_price", 0.0) or 0.0),
                 float(fill.price),
             )
+            if plan["open_qty"] != prev_qty or plan["highest_price"] != prev_high:
+                changed = True
             if trailing_pct > 0:
                 dyn_stop = float(plan["highest_price"]) * (1.0 - trailing_pct / 100.0)
                 cur_stop = float(plan.get("stop_loss", 0.0) or 0.0)
-                plan["stop_loss"] = max(cur_stop, dyn_stop) if cur_stop > 0 else dyn_stop
+                new_stop = max(cur_stop, dyn_stop) if cur_stop > 0 else dyn_stop
+                if float(new_stop) != float(cur_stop):
+                    changed = True
+                plan["stop_loss"] = new_stop
+
+        if changed:
+            self._persist_synthetic_exits(force=False)
 
     def _evaluate_synthetic_exits(self) -> None:
         with self._synthetic_exit_lock:
             plans = list(self._synthetic_exits.values())
 
         for plan in plans:
+            persist_needed = False
             symbol = str(plan.get("symbol", "") or "").strip()
             qty = int(plan.get("open_qty", 0) or 0)
             if not symbol or qty <= 0:
@@ -2378,6 +2529,8 @@ class ExecutionEngine:
                 with self._synthetic_exit_lock:
                     cur = self._synthetic_exits.get(str(plan.get("plan_id", "")))
                     if cur is not None:
+                        old_high = float(cur.get("highest_price", 0.0) or 0.0)
+                        old_stop = float(cur.get("stop_loss", 0.0) or 0.0)
                         cur["highest_price"] = max(
                             float(cur.get("highest_price", 0.0) or 0.0),
                             float(px),
@@ -2387,6 +2540,11 @@ class ExecutionEngine:
                         )
                         cur_stop = float(cur.get("stop_loss", 0.0) or 0.0)
                         cur["stop_loss"] = max(cur_stop, dyn_stop) if cur_stop > 0 else dyn_stop
+                        if (
+                            float(cur.get("highest_price", 0.0) or 0.0) != old_high
+                            or float(cur.get("stop_loss", 0.0) or 0.0) != old_stop
+                        ):
+                            persist_needed = True
                         plan = dict(cur)
 
             take_profit = float(plan.get("take_profit", 0.0) or 0.0)
@@ -2397,11 +2555,17 @@ class ExecutionEngine:
             elif stop_loss > 0 and px <= stop_loss:
                 reason = "stop_loss"
             if not reason:
+                if persist_needed:
+                    self._persist_synthetic_exits(force=False)
                 continue
 
             if self._submit_synthetic_exit(plan, trigger_price=float(px), reason=reason):
                 with self._synthetic_exit_lock:
-                    self._synthetic_exits.pop(str(plan.get("plan_id", "")), None)
+                    removed = self._synthetic_exits.pop(str(plan.get("plan_id", "")), None)
+                    if removed is not None:
+                        persist_needed = True
+            if persist_needed:
+                self._persist_synthetic_exits(force=True)
 
     def _submit_synthetic_exit(
         self,

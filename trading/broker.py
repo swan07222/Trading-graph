@@ -1,14 +1,14 @@
-# trading/broker.py
+﻿# trading/broker.py
 """
 Unified Broker Interface - Production Grade with Full Fill Sync
 
 Supports:
 - Paper Trading (Simulator)
-- 同花顺 (THS)
-- 华泰证券 (HT)
-- 招商证券 (ZSZQ)
-- 国金证券 (GJ)
-- 银河证券 (YH)
+- 鍚岃姳椤?(THS)
+- 鍗庢嘲璇佸埜 (HT)
+- 鎷涘晢璇佸埜 (ZSZQ)
+- 鍥介噾璇佸埜 (GJ)
+- 閾舵渤璇佸埜 (YH)
 
 """
 import hashlib
@@ -16,7 +16,7 @@ import threading
 import time
 import uuid
 from abc import ABC, abstractmethod
-from collections import OrderedDict
+from collections import OrderedDict, deque
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime
@@ -32,7 +32,7 @@ log = get_logger(__name__)
 # FIX(6): Prevents unbounded growth of order ID maps
 
 class BoundedOrderedDict(OrderedDict):
-    """OrderedDict with max size — evicts oldest on overflow."""
+    """OrderedDict with max size 鈥?evicts oldest on overflow."""
 
     def __init__(self, maxsize: int = 10000, *args, **kwargs):
         self._maxsize = maxsize
@@ -86,24 +86,70 @@ def make_fill_uid(
 # FIX(3): Single function instead of duplicated methods
 
 def parse_broker_status(status_str: str) -> OrderStatus:
-    """Parse Chinese broker status string to OrderStatus enum."""
-    s = str(status_str).lower()
+    """
+    Parse broker/native status strings into internal OrderStatus.
 
-    if '全部成交' in s or '已成' in s:
-        return OrderStatus.FILLED
-    if '部分成交' in s:
+    Handles both English keywords and common Chinese statuses.
+    Unicode escapes are used for Chinese terms to avoid source-encoding drift.
+    """
+    s = str(status_str or "").strip().lower()
+    if not s:
+        return OrderStatus.SUBMITTED
+
+    def _has_any(*tokens: str) -> bool:
+        return any(t and (t in s) for t in tokens)
+
+    if _has_any(
+        "partial",
+        "partially filled",
+        "\u90e8\u5206\u6210\u4ea4",  # 部分成交
+    ):
         return OrderStatus.PARTIAL
-    if '已报' in s or '已委托' in s:
+
+    if (
+        s == "filled"
+        or _has_any(
+            "fully filled",
+            "all traded",
+            "\u5168\u90e8\u6210\u4ea4",  # 全部成交
+            "\u5df2\u6210",              # 已成
+        )
+    ):
+        return OrderStatus.FILLED
+
+    if _has_any(
+        "accepted",
+        "submitted",
+        "pending",
+        "new",
+        "\u5df2\u62a5",              # 已报
+        "\u5df2\u59d4\u6258",        # 已委托
+    ):
         return OrderStatus.ACCEPTED
-    if '已撤' in s or '撤单' in s:
+
+    if _has_any(
+        "cancelled",
+        "canceled",
+        "cancelled by user",
+        "\u5df2\u64a4",              # 已撤
+        "\u64a4\u5355",              # 撤单
+    ):
         return OrderStatus.CANCELLED
-    if '废单' in s or '拒绝' in s:
+
+    if _has_any(
+        "rejected",
+        "reject",
+        "invalid",
+        "\u5e9f\u5355",              # 废单
+        "\u62d2\u7edd",              # 拒绝
+    ):
         return OrderStatus.REJECTED
+
     return OrderStatus.SUBMITTED
 
 class BrokerInterface(ABC):
     """
-    Abstract broker interface — all brokers must implement this.
+    Abstract broker interface 鈥?all brokers must implement this.
     Thread-safe design with callbacks for order updates.
     """
 
@@ -299,7 +345,7 @@ class SimulatorBroker(BrokerInterface):
             self._connected = True
             log.info(
                 f"Simulator connected with "
-                f"¥{self._initial_capital:,.2f}"
+                f"CNY {self._initial_capital:,.2f}"
             )
             return True
 
@@ -511,8 +557,8 @@ class SimulatorBroker(BrokerInterface):
             total = est_value + commission
             if total > self._cash:
                 return False, (
-                    f"Insufficient funds: need ¥{total:,.2f}, "
-                    f"have ¥{self._cash:,.2f}"
+                    f"Insufficient funds: need CNY {total:,.2f}, "
+                    f"have CNY {self._cash:,.2f}"
                 )
 
             existing_value = 0.0
@@ -827,7 +873,7 @@ class SimulatorBroker(BrokerInterface):
         if not is_trading_day(today):
             return
 
-        # It's a new trading day — settle all positions
+        # It's a new trading day 鈥?settle all positions
         for _symbol, pos in self._positions.items():
             pos.available_qty = pos.quantity
         self._last_settlement_date = today
@@ -988,18 +1034,24 @@ class EasytraderBroker(BrokerInterface):
             positions = self.get_positions()
 
             cash = float(
-                balance.get('资金余额')
-                or balance.get('总资产')
-                or balance.get('可用资金')
+                balance.get("\u8d44\u91d1\u4f59\u989d")  # 资金余额
+                or balance.get("\u603b\u8d44\u4ea7")  # 总资产
+                or balance.get("\u53ef\u7528\u8d44\u91d1")  # 可用资金
+                or balance.get("cash")
                 or 0
             )
             available = float(
-                balance.get('可用金额')
-                or balance.get('可用资金')
-                or balance.get('可取资金')
+                balance.get("\u53ef\u7528\u91d1\u989d")  # 可用金额
+                or balance.get("\u53ef\u7528\u8d44\u91d1")  # 可用资金
+                or balance.get("\u53ef\u53d6\u8d44\u91d1")  # 可取资金
+                or balance.get("available")
                 or cash
             )
-            frozen = float(balance.get('冻结金额', 0) or 0)
+            frozen = float(
+                balance.get("\u51bb\u7ed3\u91d1\u989d")  # 冻结金额
+                or balance.get("frozen")
+                or 0
+            )
 
             return Account(
                 broker_name=self.name,
@@ -1023,43 +1075,43 @@ class EasytraderBroker(BrokerInterface):
 
             for p in raw:
                 code = str(
-                    p.get('证券代码')
-                    or p.get('股票代码')
-                    or ''
+                    p.get("\u8bc1\u5238\u4ee3\u7801")  # 证券代码
+                    or p.get("\u80a1\u7968\u4ee3\u7801")  # 股票代码
+                    or ""
                 ).zfill(6)
 
-                if not code or code == '000000':
+                if not code or code == "000000":
                     continue
 
                 positions[code] = Position(
                     symbol=code,
                     name=(
-                        p.get('证券名称')
-                        or p.get('股票名称')
-                        or ''
+                        p.get("\u8bc1\u5238\u540d\u79f0")  # 证券名称
+                        or p.get("\u80a1\u7968\u540d\u79f0")  # 股票名称
+                        or ""
                     ),
                     quantity=int(
-                        p.get('股票余额')
-                        or p.get('持仓数量')
-                        or p.get('当前持仓')
+                        p.get("\u80a1\u7968\u4f59\u989d")  # 股票余额
+                        or p.get("\u6301\u4ed3\u6570\u91cf")  # 持仓数量
+                        or p.get("\u5f53\u524d\u6301\u4ed3")  # 当前持仓
                         or 0
                     ),
                     available_qty=int(
-                        p.get('可卖余额')
-                        or p.get('可用余额')
-                        or p.get('可卖数量')
+                        p.get("\u53ef\u5356\u4f59\u989d")  # 可卖余额
+                        or p.get("\u53ef\u7528\u4f59\u989d")  # 可用余额
+                        or p.get("\u53ef\u5356\u6570\u91cf")  # 可卖数量
                         or 0
                     ),
                     avg_cost=float(
-                        p.get('成本价')
-                        or p.get('买入成本')
-                        or p.get('参考成本价')
+                        p.get("\u6210\u672c\u4ef7")  # 成本价
+                        or p.get("\u4e70\u5165\u6210\u672c")  # 买入成本
+                        or p.get("\u53c2\u8003\u6210\u672c\u4ef7")  # 参考成本价
                         or 0
                     ),
                     current_price=float(
-                        p.get('当前价')
-                        or p.get('最新价')
-                        or p.get('市价')
+                        p.get("\u5f53\u524d\u4ef7")  # 当前价
+                        or p.get("\u6700\u65b0\u4ef7")  # 最新价
+                        or p.get("\u5e02\u4ef7")  # 市价
                         or 0
                     ),
                 )
@@ -1104,7 +1156,7 @@ class EasytraderBroker(BrokerInterface):
 
             if result and isinstance(result, dict):
                 entrust_no = (
-                    result.get('委托编号')
+                    result.get('濮旀墭缂栧彿')
                     or result.get('entrust_no')
                     or result.get('order_id')
                 )
@@ -1142,7 +1194,7 @@ class EasytraderBroker(BrokerInterface):
             return order
 
     def get_fills(self, since: datetime = None) -> list[Fill]:
-        """Get fills from broker — deduplicates by broker_fill_id."""
+        """Get fills from broker 鈥?deduplicates by broker_fill_id."""
         if not self.is_connected:
             return []
 
@@ -1152,7 +1204,7 @@ class EasytraderBroker(BrokerInterface):
 
             for trade in trades:
                 broker_fill_id = str(
-                    trade.get("成交编号", "") or ""
+                    trade.get("\u6210\u4ea4\u7f16\u53f7", "") or ""  # 成交编号
                 ).strip()
                 if not broker_fill_id:
                     continue
@@ -1161,7 +1213,7 @@ class EasytraderBroker(BrokerInterface):
                     continue
 
                 ts = (
-                    trade.get("成交时间")
+                    trade.get("\u6210\u4ea4\u65f6\u95f4")  # 成交时间
                     or trade.get("time")
                     or None
                 )
@@ -1186,7 +1238,7 @@ class EasytraderBroker(BrokerInterface):
                     continue
 
                 broker_entrust = str(
-                    trade.get("委托编号", "") or ""
+                    trade.get("\u59d4\u6258\u7f16\u53f7", "") or ""  # 委托编号
                 ).strip()
                 our_order_id = self.get_order_id(broker_entrust)
                 if not our_order_id:
@@ -1198,21 +1250,21 @@ class EasytraderBroker(BrokerInterface):
                 self._seen_fill_ids.add(broker_fill_id)
 
                 trade_side = trade.get(
-                    "买卖标志", trade.get("操作", ""),
+                    "\u4e70\u5356\u6807\u5fd7", trade.get("\u64cd\u4f5c", ""),  # 买卖标志 / 操作
                 )
                 side = (
                     OrderSide.BUY
-                    if "买" in str(trade_side)
+                    if "\u4e70" in str(trade_side)  # 买
                     else OrderSide.SELL
                 )
 
                 symbol = str(
-                    trade.get("证券代码", "") or ""
+                    trade.get("\u8bc1\u5238\u4ee3\u7801", "") or ""  # 证券代码
                 ).zfill(6)
-                qty = int(trade.get("成交数量", 0) or 0)
-                price = float(trade.get("成交价格", 0) or 0.0)
-                comm = float(trade.get("手续费", 0) or 0.0)
-                tax = float(trade.get("印花税", 0) or 0.0)
+                qty = int(trade.get("\u6210\u4ea4\u6570\u91cf", 0) or 0)  # 成交数量
+                price = float(trade.get("\u6210\u4ea4\u4ef7\u683c", 0) or 0.0)  # 成交价格
+                comm = float(trade.get("\u624b\u7eed\u8d39", 0) or 0.0)  # 手续费
+                tax = float(trade.get("\u5370\u82b1\u7a0e", 0) or 0.0)  # 印花税
 
                 fid = make_fill_uid(
                     self.name, broker_fill_id, symbol,
@@ -1251,9 +1303,10 @@ class EasytraderBroker(BrokerInterface):
             entrusts = self._client.today_entrusts
 
             for entrust in entrusts:
-                if str(entrust.get('委托编号', '')) == broker_id:
+                if str(entrust.get("\u59d4\u6258\u7f16\u53f7", "")) == broker_id:
                     status_str = entrust.get(
-                        '委托状态', entrust.get('状态', ''),
+                        "\u59d4\u6258\u72b6\u6001",  # 委托状态
+                        entrust.get("\u72b6\u6001", ""),  # 状态
                     )
                     # FIX(3): Use shared parser
                     return parse_broker_status(status_str)
@@ -1276,18 +1329,18 @@ class EasytraderBroker(BrokerInterface):
             entrusts = self._client.today_entrusts
 
             for entrust in entrusts:
-                if str(entrust.get('委托编号', '')) == broker_id:
+                if str(entrust.get("\u59d4\u6258\u7f16\u53f7", "")) == broker_id:
                     # FIX(3): Use shared parser
                     order.status = parse_broker_status(
-                        entrust.get('委托状态', ''),
+                        entrust.get("\u59d4\u6258\u72b6\u6001", ""),  # 委托状态
                     )
                     order.filled_qty = int(
-                        entrust.get('成交数量', 0) or 0
+                        entrust.get("\u6210\u4ea4\u6570\u91cf", 0) or 0  # 成交数量
                     )
 
                     avg_price = entrust.get(
-                        '成交均价',
-                        entrust.get('成交价格', 0),
+                        "\u6210\u4ea4\u5747\u4ef7",  # 成交均价
+                        entrust.get("\u6210\u4ea4\u4ef7\u683c", 0),  # 成交价格
                     )
                     if avg_price:
                         order.avg_price = float(avg_price)
@@ -1335,19 +1388,19 @@ class EasytraderBroker(BrokerInterface):
             self._fetcher = get_fetcher()
         return self._fetcher
 
-# FIX(11): Thin subclasses — all shared logic is in base
+# FIX(11): Thin subclasses 鈥?all shared logic is in base
 
 class THSBroker(EasytraderBroker):
-    """同花顺 / 华泰 / 国金 / 银河 broker via easytrader."""
+    """THS/HT/GJ/YH broker via easytrader."""
 
     BROKER_TYPES = {
-        'ths': '同花顺',
-        'ht': '华泰证券',
-        'gj': '国金证券',
-        'yh': '银河证券',
+        "ths": "THS",
+        "ht": "HT",
+        "gj": "GJ",
+        "yh": "YH",
     }
 
-    def __init__(self, broker_type: str = 'ths'):
+    def __init__(self, broker_type: str = "ths"):
         self._broker_type = broker_type
         super().__init__()
 
@@ -1361,11 +1414,11 @@ class THSBroker(EasytraderBroker):
         return self._broker_type
 
 class ZSZQBroker(EasytraderBroker):
-    """招商证券 broker via easytrader (universal mode)."""
+    """鎷涘晢璇佸埜 broker via easytrader (universal mode)."""
 
     @property
     def name(self) -> str:
-        return "招商证券"
+        return "鎷涘晢璇佸埜"
 
     def _get_easytrader_type(self) -> str:
         return 'universal'
@@ -1388,6 +1441,12 @@ class MultiVenueBroker(BrokerInterface):
         self._last_fail_ts: dict[int, float] = {}
         self._fail_counts: dict[str, int] = {}
         self._submit_counts: dict[str, int] = {}
+        self._read_counts: dict[str, int] = {}
+        self._failure_events: dict[int, deque[float]] = {}
+        self._read_latency_ms: dict[str, deque[float]] = {}
+        self._last_errors: dict[str, str] = {}
+        self._latency_samples_max: int = 200
+        self._recent_failure_window_seconds: float = 300.0
         self._order_venue_idx: dict[str, int] = {}
         if not self._venues:
             raise ValueError("MultiVenueBroker requires at least one venue")
@@ -1438,10 +1497,11 @@ class MultiVenueBroker(BrokerInterface):
         eligible = self._eligible_indices()
         if not eligible:
             return []
-        if self._active_idx in eligible:
-            start = eligible.index(self._active_idx)
-            return eligible[start:] + eligible[:start]
-        return eligible
+        return sorted(
+            eligible,
+            key=lambda i: self._venue_score(i),
+            reverse=True,
+        )
 
     def _connected_indices(self) -> list[int]:
         out: list[int] = []
@@ -1468,12 +1528,100 @@ class MultiVenueBroker(BrokerInterface):
     def _mark_failure(self, idx: int, exc: Exception) -> None:
         self._last_fail_ts[idx] = time.time()
         venue = self._venues[idx]
-        self._fail_counts[venue.name] = self._fail_counts.get(venue.name, 0) + 1
+        name = str(venue.name)
+        self._fail_counts[name] = self._fail_counts.get(name, 0) + 1
+        bucket = self._failure_events.get(idx)
+        if bucket is None:
+            bucket = deque()
+            self._failure_events[idx] = bucket
+        now = time.time()
+        bucket.append(now)
+        cutoff = now - float(self._recent_failure_window_seconds)
+        while bucket and float(bucket[0]) < cutoff:
+            bucket.popleft()
+        self._last_errors[name] = str(exc)[:300]
         log.warning("Venue failure (%s): %s", venue.name, exc)
 
     def _mark_submit(self, idx: int) -> None:
         venue = self._venues[idx]
         self._submit_counts[venue.name] = self._submit_counts.get(venue.name, 0) + 1
+
+    def _mark_read(self, idx: int, latency_ms: float | None = None) -> None:
+        venue = self._venues[idx]
+        name = str(venue.name)
+        self._read_counts[name] = self._read_counts.get(name, 0) + 1
+        if latency_ms is not None and latency_ms >= 0:
+            hist = self._read_latency_ms.get(name)
+            if hist is None:
+                hist = deque(maxlen=self._latency_samples_max)
+                self._read_latency_ms[name] = hist
+            hist.append(float(latency_ms))
+
+    def _recent_failures(self, idx: int, window_seconds: float | None = None) -> int:
+        bucket = self._failure_events.get(int(idx))
+        if not bucket:
+            return 0
+        window = float(window_seconds or self._recent_failure_window_seconds)
+        cutoff = time.time() - max(1.0, window)
+        while bucket and float(bucket[0]) < cutoff:
+            bucket.popleft()
+        return int(len(bucket))
+
+    def _avg_read_latency_ms(self, idx: int) -> float:
+        if not (0 <= idx < len(self._venues)):
+            return 0.0
+        name = str(self._venues[idx].name)
+        vals = self._read_latency_ms.get(name)
+        if not vals:
+            return 0.0
+        return float(sum(vals) / max(1, len(vals)))
+
+    def _venue_score(self, idx: int) -> float:
+        """
+        Adaptive routing score.
+
+        Higher is better:
+        - rewards venues with successful submits/reads
+        - penalizes recent failures and active cooldown
+        - slight preference for current active venue to reduce thrash
+        """
+        if not (0 <= idx < len(self._venues)):
+            return -1.0
+
+        venue = self._venues[idx]
+        name = str(venue.name)
+        fails = float(self._fail_counts.get(name, 0))
+        submits = float(self._submit_counts.get(name, 0))
+        reads = float(self._read_counts.get(name, 0))
+        total_ops = submits + reads
+        reliability = (total_ops + 1.0) / (total_ops + fails + 1.0)
+
+        now = time.time()
+        last_fail = float(self._last_fail_ts.get(idx, 0.0))
+        cooldown_penalty = 0.0
+        if last_fail > 0:
+            elapsed = now - last_fail
+            remain = max(0.0, float(self._cooldown_seconds) - elapsed)
+            cooldown_penalty = min(0.5, remain / max(1.0, float(self._cooldown_seconds)))
+
+        recent_failures = float(self._recent_failures(idx, window_seconds=300.0))
+        recent_fail_penalty = min(0.40, recent_failures * 0.06)
+
+        latency_ms = float(self._avg_read_latency_ms(idx))
+        latency_penalty = 0.0
+        if latency_ms > 120.0:
+            latency_penalty = min(0.25, (latency_ms - 120.0) / 1200.0)
+
+        read_bonus = min(0.04, reads / 600.0)
+        active_bonus = 0.03 if idx == self._active_idx else 0.0
+        return float(
+            reliability
+            + read_bonus
+            + active_bonus
+            - cooldown_penalty
+            - recent_fail_penalty
+            - latency_penalty
+        )
 
     @staticmethod
     def _is_transient_reject(order: Order) -> bool:
@@ -1508,9 +1656,12 @@ class MultiVenueBroker(BrokerInterface):
         for idx in self._ordered_indices():
             venue = self._venues[idx]
             try:
+                t0 = time.time()
                 fn = getattr(venue, fn_name)
                 out = fn(*args, **kwargs)
                 self._active_idx = idx
+                latency_ms = (time.time() - t0) * 1000.0
+                self._mark_read(idx, latency_ms=latency_ms)
                 return out
             except Exception as e:
                 self._mark_failure(idx, e)
@@ -1571,7 +1722,9 @@ class MultiVenueBroker(BrokerInterface):
         for idx in self._connected_indices():
             venue = self._venues[idx]
             try:
+                t0 = time.time()
                 rows = venue.get_orders(active_only)
+                self._mark_read(idx, latency_ms=(time.time() - t0) * 1000.0)
             except Exception as e:
                 self._mark_failure(idx, e)
                 continue
@@ -1596,7 +1749,9 @@ class MultiVenueBroker(BrokerInterface):
         for idx in self._connected_indices():
             venue = self._venues[idx]
             try:
+                t0 = time.time()
                 rows = venue.get_fills(since)
+                self._mark_read(idx, latency_ms=(time.time() - t0) * 1000.0)
             except Exception as e:
                 self._mark_failure(idx, e)
                 continue
@@ -1624,7 +1779,9 @@ class MultiVenueBroker(BrokerInterface):
         for idx in self._preferred_indices_for_order(order_id):
             venue = self._venues[idx]
             try:
+                t0 = time.time()
                 status = venue.get_order_status(order_id)
+                self._mark_read(idx, latency_ms=(time.time() - t0) * 1000.0)
                 self._active_idx = idx
                 if status is not None:
                     self._order_venue_idx[str(order_id)] = idx
@@ -1638,7 +1795,9 @@ class MultiVenueBroker(BrokerInterface):
         for idx in self._preferred_indices_for_order(order_id):
             venue = self._venues[idx]
             try:
+                t0 = time.time()
                 synced = venue.sync_order(order)
+                self._mark_read(idx, latency_ms=(time.time() - t0) * 1000.0)
                 self._active_idx = idx
                 if order_id:
                     self._order_venue_idx[order_id] = idx
@@ -1668,6 +1827,13 @@ class MultiVenueBroker(BrokerInterface):
                     "connected": bool(venue.is_connected),
                     "fail_count": int(self._fail_counts.get(venue.name, 0)),
                     "submit_count": int(self._submit_counts.get(venue.name, 0)),
+                    "read_count": int(self._read_counts.get(venue.name, 0)),
+                    "avg_read_latency_ms": round(
+                        float(self._avg_read_latency_ms(idx)), 3
+                    ),
+                    "recent_failures_5m": int(self._recent_failures(idx, window_seconds=300.0)),
+                    "last_error": str(self._last_errors.get(str(venue.name), "")),
+                    "score": round(float(self._venue_score(idx)), 4),
                     "cooldown_until": cooldown_until,
                 }
             )
@@ -1681,7 +1847,7 @@ class MultiVenueBroker(BrokerInterface):
 
 def _create_live_broker_by_type(broker_type: str) -> BrokerInterface:
     broker_type = str(broker_type or "ths").lower()
-    if broker_type in ('zszq', 'zhaoshang', '招商'):
+    if broker_type in ('zszq', 'zhaoshang', '鎷涘晢'):
         return ZSZQBroker()
     if broker_type in ('ths', 'ht', 'gj', 'yh'):
         return THSBroker(broker_type=broker_type)
@@ -1742,10 +1908,12 @@ def create_broker(
         return _create_live_broker_by_type(kwargs.get('broker_type', 'ths'))
     elif mode in ('ths', 'ht', 'gj', 'yh'):
         return THSBroker(broker_type=mode)
-    elif mode in ('zszq', 'zhaoshang', '招商'):
+    elif mode in ('zszq', 'zhaoshang', '鎷涘晢'):
         return ZSZQBroker()
     else:
         log.warning(
             f"Unknown broker mode: {mode}, using simulator"
         )
         return SimulatorBroker()
+
+

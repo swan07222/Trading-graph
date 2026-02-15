@@ -148,6 +148,133 @@ class TestEnsemble:
         assert len(history['lstm']['val_acc']) >= 1
         assert len(history['lstm']['val_acc']) <= 2
 
+    def test_partial_weight_update_preserves_untrained_mass(
+        self, sample_data
+    ):
+        """Partial training updates should not fabricate scores for untrained models."""
+        from models.ensemble import EnsembleModel
+
+        X, _y = sample_data
+        input_size = X.shape[2]
+        ensemble = EnsembleModel(
+            input_size, model_names=["lstm", "gru", "tcn"]
+        )
+
+        ensemble.weights = {"lstm": 0.2, "gru": 0.5, "tcn": 0.3}
+        ensemble._update_weights({"lstm": 0.90})
+
+        assert abs(sum(ensemble.weights.values()) - 1.0) < 1e-9
+        assert ensemble.weights["gru"] > 0.0
+        assert ensemble.weights["tcn"] > 0.0
+        # Untrained models should keep substantial share, not be overwritten by placeholders.
+        assert (ensemble.weights["gru"] + ensemble.weights["tcn"]) >= 0.50
+
+    def test_full_weight_update_reflects_validation_ranking(
+        self, sample_data
+    ):
+        """When all models are trained, higher validation accuracy should dominate."""
+        from models.ensemble import EnsembleModel
+
+        X, _y = sample_data
+        input_size = X.shape[2]
+        ensemble = EnsembleModel(
+            input_size, model_names=["lstm", "gru", "tcn"]
+        )
+
+        ensemble._update_weights({"lstm": 0.55, "gru": 0.75, "tcn": 0.65})
+
+        assert abs(sum(ensemble.weights.values()) - 1.0) < 1e-9
+        assert ensemble.weights["gru"] > ensemble.weights["tcn"]
+        assert ensemble.weights["tcn"] > ensemble.weights["lstm"]
+
+    def test_train_skips_calibration_when_stop_requested(
+        self, monkeypatch
+    ):
+        """If stop is requested before training, calibration must be skipped."""
+        from models.ensemble import EnsembleModel
+
+        input_size = 35
+        ensemble = EnsembleModel(input_size, model_names=["lstm"])
+
+        X_train = np.random.randn(64, CONFIG.SEQUENCE_LENGTH, input_size).astype(
+            np.float32
+        )
+        y_train = np.random.randint(0, 3, 64).astype(np.int64)
+        X_val = np.random.randn(160, CONFIG.SEQUENCE_LENGTH, input_size).astype(
+            np.float32
+        )
+        y_val = np.random.randint(0, 3, 160).astype(np.int64)
+
+        calls = {"calibrate": 0}
+
+        def _fake_calibrate(*_args, **_kwargs):
+            calls["calibrate"] += 1
+
+        monkeypatch.setattr(ensemble, "calibrate", _fake_calibrate, raising=True)
+
+        class _Stop:
+            is_cancelled = True
+
+        hist = ensemble.train(
+            X_train,
+            y_train,
+            X_val,
+            y_val,
+            epochs=1,
+            stop_flag=_Stop(),
+        )
+
+        assert hist == {}
+        assert calls["calibrate"] == 0
+
+    def test_train_skips_calibration_after_midcycle_stop(
+        self, monkeypatch
+    ):
+        """If stop is triggered during a cycle, calibration must be skipped."""
+        from models.ensemble import EnsembleModel
+
+        input_size = 35
+        ensemble = EnsembleModel(input_size, model_names=["lstm"])
+
+        X_train = np.random.randn(96, CONFIG.SEQUENCE_LENGTH, input_size).astype(
+            np.float32
+        )
+        y_train = np.random.randint(0, 3, 96).astype(np.int64)
+        X_val = np.random.randn(160, CONFIG.SEQUENCE_LENGTH, input_size).astype(
+            np.float32
+        )
+        y_val = np.random.randint(0, 3, 160).astype(np.int64)
+
+        calls = {"calibrate": 0}
+
+        def _fake_calibrate(*_args, **_kwargs):
+            calls["calibrate"] += 1
+
+        monkeypatch.setattr(ensemble, "calibrate", _fake_calibrate, raising=True)
+
+        class _ToggleStop:
+            def __init__(self):
+                self.calls = 0
+
+            def __call__(self):
+                self.calls += 1
+                return self.calls >= 3
+
+        stop = _ToggleStop()
+        hist = ensemble.train(
+            X_train,
+            y_train,
+            X_val,
+            y_val,
+            epochs=2,
+            batch_size=32,
+            stop_flag=stop,
+        )
+
+        assert "lstm" in hist
+        assert stop.calls >= 3
+        assert calls["calibrate"] == 0
+
     def test_ensemble_save_load_preserves_trained_stock_codes(
         self, sample_data, tmp_path
     ):

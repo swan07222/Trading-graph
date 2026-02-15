@@ -1,7 +1,9 @@
 # data/feeds.py
 import importlib.util
 import json
+import os
 import queue
+import socket
 import threading
 import time
 from abc import ABC, abstractmethod
@@ -273,13 +275,25 @@ class WebSocketFeed(DataFeed):
     _MAX_RECONNECT_ATTEMPTS = 50
     _DNS_FAILURE_DISABLE_THRESHOLD = 6
     _DNS_DISABLE_COOLDOWN_SECONDS = 15 * 60
+    _NETWORK_DISABLE_COOLDOWN_SECONDS = 5 * 60
     _ERROR_LOG_COOLDOWN_SECONDS = 15.0
+    _DNS_PRECHECK_TIMEOUT_SECONDS = 1.0
+    _DNS_PRECHECK_CACHE_SECONDS = 30.0
 
     def __init__(self):
         super().__init__()
         self._ws = None
         self._ws_client_installed = importlib.util.find_spec("websocket") is not None
         self._missing_dependency_logged = False
+        self._ws_force_disabled = str(
+            os.environ.get("TRADING_DISABLE_WEBSOCKET", "0")
+        ).strip().lower() in ("1", "true", "yes", "on")
+        self._ws_force_disable_logged = False
+        self._allow_ws_on_vpn = str(
+            os.environ.get("TRADING_ALLOW_WEBSOCKET_ON_VPN", "0")
+        ).strip().lower() in ("1", "true", "yes", "on")
+        self._network_block_logged = False
+        self._ws_host = "push.sina.cn"
         self._reconnect_delay = 1
         self._max_reconnect_delay = 60
         self._reconnect_count = 0
@@ -294,8 +308,13 @@ class WebSocketFeed(DataFeed):
         self._ws_disabled_until_ts = 0.0
         self._ws_disabled_reason = ""
         self._last_ws_error_log_ts = 0.0
+        self._last_dns_probe_host = ""
+        self._last_dns_probe_ok = True
+        self._last_dns_probe_ts = 0.0
 
     def supports_websocket(self) -> bool:
+        if self._ws_force_disabled:
+            return False
         if not self._ws_client_installed:
             return False
         return time.monotonic() >= float(self._ws_disabled_until_ts)
@@ -316,8 +335,10 @@ class WebSocketFeed(DataFeed):
 
     def _temporarily_disable(self, reason: str, cooldown_s: float | None = None):
         duration = max(60.0, float(cooldown_s or self._DNS_DISABLE_COOLDOWN_SECONDS))
-        until = time.monotonic() + duration
-        self._ws_disabled_until_ts = max(float(self._ws_disabled_until_ts), until)
+        now = time.monotonic()
+        until = now + duration
+        prev_until = float(self._ws_disabled_until_ts)
+        self._ws_disabled_until_ts = max(prev_until, until)
         self._ws_disabled_reason = str(reason or "unavailable")
         self._running = False
         self.status = FeedStatus.ERROR
@@ -330,13 +351,112 @@ class WebSocketFeed(DataFeed):
                 ws.close()
             except Exception:
                 pass
-        mins = max(1, int(round(duration / 60.0)))
-        log.warning(
-            f"WebSocket temporarily disabled for {mins}m "
-            f"({self._ws_disabled_reason}); using polling"
+        if (prev_until - now) <= 1.0:
+            mins = max(1, int(round(duration / 60.0)))
+            log.warning(
+                f"WebSocket temporarily disabled for {mins}m "
+                f"({self._ws_disabled_reason}); using polling"
+            )
+
+    def _network_allows_websocket(self) -> tuple[bool, str]:
+        """Check whether current network mode is compatible with WS endpoint."""
+        if self._allow_ws_on_vpn:
+            return True, ""
+        try:
+            from core.network import peek_network_env
+
+            env = peek_network_env()
+            if env is None:
+                return True, ""
+            if bool(getattr(env, "is_vpn_active", False)):
+                return False, "network mode VPN_FOREIGN"
+        except Exception:
+            # If detector fails, do not block WS preemptively.
+            return True, ""
+        return True, ""
+
+    @staticmethod
+    def _resolve_host_with_timeout(host: str, timeout_s: float) -> bool | None:
+        """
+        Resolve host with a hard timeout.
+
+        Returns:
+            True/False when resolution completes within timeout,
+            None when probe timed out (unknown).
+        """
+        result: dict[str, bool] = {"done": False, "ok": False}
+
+        def _probe():
+            try:
+                socket.getaddrinfo(host, 443)
+                result["ok"] = True
+            except Exception:
+                result["ok"] = False
+            finally:
+                result["done"] = True
+
+        t = threading.Thread(target=_probe, daemon=True, name="ws_dns_probe")
+        t.start()
+        t.join(timeout=max(0.05, float(timeout_s)))
+        if not bool(result.get("done", False)):
+            return None
+        return bool(result.get("ok", False))
+
+    def _host_resolves(self, host: str) -> bool:
+        """
+        Best-effort DNS pre-check to avoid WS spin on invalid host.
+
+        Timeout path returns True (unknown) to avoid startup/UI stalls; actual
+        connect path will still fail over to polling if endpoint is unreachable.
+        """
+        now = time.monotonic()
+        if (
+            str(host) == self._last_dns_probe_host
+            and (now - float(self._last_dns_probe_ts)) <= float(self._DNS_PRECHECK_CACHE_SECONDS)
+        ):
+            return bool(self._last_dns_probe_ok)
+
+        probe = self._resolve_host_with_timeout(
+            str(host),
+            timeout_s=float(self._DNS_PRECHECK_TIMEOUT_SECONDS),
         )
+        if probe is None:
+            log.debug("WebSocket DNS pre-check timed out for host=%s", host)
+            return True
+
+        self._last_dns_probe_host = str(host)
+        self._last_dns_probe_ok = bool(probe)
+        self._last_dns_probe_ts = now
+        return bool(probe)
 
     def connect(self) -> bool:
+        if self._ws_force_disabled:
+            if not self._ws_force_disable_logged:
+                log.info("WebSocket disabled by TRADING_DISABLE_WEBSOCKET; using polling")
+                self._ws_force_disable_logged = True
+            return False
+
+        allowed, reason = self._network_allows_websocket()
+        if not allowed:
+            if not self._network_block_logged:
+                log.info(
+                    f"WebSocket disabled for current network ({reason}); using polling"
+                )
+                self._network_block_logged = True
+            self._temporarily_disable(
+                reason=reason,
+                cooldown_s=self._NETWORK_DISABLE_COOLDOWN_SECONDS,
+            )
+            return False
+        self._network_block_logged = False
+
+        if not self._host_resolves(self._ws_host):
+            self._temporarily_disable(
+                reason=f"dns failed for {self._ws_host}",
+                cooldown_s=self._NETWORK_DISABLE_COOLDOWN_SECONDS,
+            )
+            return False
+
         if not self._ws_client_installed:
             if not self._missing_dependency_logged:
                 log.warning(
@@ -352,7 +472,7 @@ class WebSocketFeed(DataFeed):
         try:
             import websocket
 
-            ws_url = "wss://push.sina.cn/ws"
+            ws_url = f"wss://{self._ws_host}/ws"
             self._ws = websocket.WebSocketApp(
                 ws_url,
                 on_message=self._on_message,
@@ -505,13 +625,24 @@ class WebSocketFeed(DataFeed):
             log.debug(f"Message parse error: {e}")
 
     def _on_error(self, ws, error):
+        now = time.monotonic()
+        if not self._running:
+            # When feed is intentionally stopped/disabled, callbacks may still
+            # arrive briefly from the previous socket/thread. Ignore to avoid
+            # log spam and accidental reconnect state churn.
+            if now < float(self._ws_disabled_until_ts):
+                return
+            if (now - self._last_ws_error_log_ts) >= self._ERROR_LOG_COOLDOWN_SECONDS:
+                log.debug(f"WebSocket error while inactive: {error}")
+                self._last_ws_error_log_ts = now
+            return
+
         is_dns = self._is_dns_error(error)
         if is_dns:
             self._consecutive_dns_failures += 1
         else:
             self._consecutive_dns_failures = 0
 
-        now = time.monotonic()
         should_log = (
             self._consecutive_dns_failures <= 2
             or (now - self._last_ws_error_log_ts) >= self._ERROR_LOG_COOLDOWN_SECONDS
@@ -551,12 +682,13 @@ class WebSocketFeed(DataFeed):
         self._reconnect_count += 1
 
         if self._reconnect_count > self._MAX_RECONNECT_ATTEMPTS:
-            log.error(
-                f"Max reconnect attempts ({self._MAX_RECONNECT_ATTEMPTS}) "
-                f"exceeded. Giving up."
+            self._temporarily_disable(
+                reason=(
+                    f"reconnect attempts exceeded "
+                    f"({self._MAX_RECONNECT_ATTEMPTS})"
+                ),
+                cooldown_s=self._DNS_DISABLE_COOLDOWN_SECONDS,
             )
-            self.status = FeedStatus.ERROR
-            self._running = False
             return
 
         self.status = FeedStatus.RECONNECTING

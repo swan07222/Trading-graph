@@ -778,6 +778,7 @@ class AccessControl:
         self._session_started_at = datetime.now()
         self._session_ip: str = ""
         self._two_factor_verified = False
+        self._two_factor_verified_at: datetime | None = None
         self._audit: AuditLog | None = None
         self._logging_access = False  # FIX #10: Recursion guard
 
@@ -819,6 +820,28 @@ class AccessControl:
     def mark_2fa_verified(self, verified: bool = True) -> None:
         with self._lock:
             self._two_factor_verified = bool(verified)
+            if self._two_factor_verified:
+                self._two_factor_verified_at = datetime.now()
+            else:
+                self._two_factor_verified_at = None
+
+    def _is_2fa_valid(self) -> bool:
+        with self._lock:
+            if not self._two_factor_verified:
+                return False
+            verified_at = self._two_factor_verified_at
+            if verified_at is None:
+                return False
+
+            sec = getattr(CONFIG, "security", None)
+            ttl_minutes = int(getattr(sec, "two_factor_ttl_minutes", 30) or 30)
+            ttl_minutes = max(1, ttl_minutes)
+            age = datetime.now() - verified_at
+            if age.total_seconds() > float(ttl_minutes * 60):
+                self._two_factor_verified = False
+                self._two_factor_verified_at = None
+                return False
+            return True
 
     def create_role(self, role: str, permissions: list[str]) -> None:
         if not isinstance(role, str) or not role.strip():
@@ -892,7 +915,7 @@ class AccessControl:
                 if not ok:
                     allowed = False
                 elif bool(getattr(CONFIG.security, "require_2fa_for_live", True)):
-                    allowed = allowed and self._two_factor_verified
+                    allowed = allowed and self._is_2fa_valid()
 
         # FIX #10: Recursion guard — audit.log_access might trigger check()
         if not self._logging_access:

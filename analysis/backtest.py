@@ -2,6 +2,7 @@
 from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime
+from itertools import product
 
 import numpy as np
 import pandas as pd
@@ -49,6 +50,48 @@ class SlippageModel:
         slippage = self.base_slippage + self.volume_impact * order_pct
 
         return min(slippage, 0.05)
+
+@dataclass
+class SpreadModel:
+    """
+    Deterministic spread estimator used by backtest execution.
+
+    Spread widens during higher intraday volatility and thinner volume.
+    Returned value is decimal (e.g. 0.0008 = 8 bps full spread).
+    """
+    base_spread_bps: float = 6.0
+    vol_widen_bps: float = 220.0
+    max_spread_bps: float = 45.0
+
+    def estimate(
+        self,
+        open_price: float,
+        close_price: float,
+        daily_volume: float,
+    ) -> float:
+        if open_price <= 0 or close_price <= 0:
+            return self.base_spread_bps / 10000.0
+
+        intraday_move = abs(close_price - open_price) / max(open_price, 1e-9)
+        vol_component = min(
+            self.vol_widen_bps,
+            intraday_move * self.vol_widen_bps * 8.0,
+        )
+
+        liq_component = 0.0
+        if daily_volume > 0:
+            if daily_volume < 5e5:
+                liq_component = 14.0
+            elif daily_volume < 1.5e6:
+                liq_component = 8.0
+            elif daily_volume < 5e6:
+                liq_component = 3.0
+
+        spread_bps = min(
+            self.max_spread_bps,
+            self.base_spread_bps + vol_component + liq_component,
+        )
+        return float(spread_bps / 10000.0)
 
 @dataclass
 class BacktestResult:
@@ -125,6 +168,23 @@ class BacktestResult:
 {'=' * 70}
 """
 
+
+@dataclass
+class BacktestOptimizationTrial:
+    """Single parameter-set evaluation from optimization sweep."""
+
+    train_months: int
+    test_months: int
+    min_confidence: float
+    score: float
+    total_return: float = 0.0
+    excess_return: float = 0.0
+    sharpe_ratio: float = 0.0
+    max_drawdown_pct: float = 0.0
+    win_rate: float = 0.0
+    trades: int = 0
+    error: str = ""
+
 class Backtester:
     """Walk-Forward Backtesting with proper methodology."""
 
@@ -147,7 +207,7 @@ class Backtester:
         log.info("Starting walk-forward backtest:")
         log.info(f"  Stocks to test: {stocks}")
         log.info(f"  Train: {train_months} months, Test: {test_months} months")
-        log.info(f"  Capital: ¥{capital:,.2f}")
+        log.info(f"  Capital: CNY {capital:,.2f}")
 
         all_data = self._collect_data(stocks, min_data_days)
 
@@ -170,6 +230,25 @@ class Backtester:
                 f"  Available date range: {min_date.date()} to {max_date.date()}\n"
                 f"  Required: {train_months + test_months} months minimum\n"
                 f"  Try reducing train_months or test_months, or use more historical data."
+            )
+
+        seq_length, label_horizon, min_train_rows = self._backtest_train_row_requirement(
+            interval="1d"
+        )
+        has_train_capacity, max_rows_observed = self._has_train_window_capacity(
+            all_data=all_data,
+            folds=folds,
+            min_train_rows=min_train_rows,
+        )
+        if not has_train_capacity:
+            approx_months = max(1, int(np.ceil(float(min_train_rows) / 21.0)))
+            raise ValueError(
+                "Backtest train window too short for configured model context.\n"
+                f"  sequence_length={seq_length}, horizon={label_horizon}, "
+                f"required_rows>={min_train_rows}\n"
+                f"  max_rows_observed_per_fold={max_rows_observed}\n"
+                f"  Try train_months >= {approx_months}, or reduce "
+                "sequence_length/prediction_horizon."
             )
 
         log.info(f"  Folds: {len(folds)}")
@@ -240,6 +319,164 @@ class Backtester:
 
         return result
 
+    @staticmethod
+    def _score_result(result: BacktestResult) -> float:
+        """
+        Composite optimization score.
+        Higher is better; penalizes deep drawdown and low signal quality.
+        """
+        score = 0.0
+        score += float(result.excess_return) * 0.35
+        score += float(result.sharpe_ratio) * 12.0
+        score += float(result.sortino_ratio) * 6.0
+        score += float(result.win_rate) * 25.0
+        score += float(result.profit_factor) * 3.0
+        score += float(result.avg_fold_accuracy) * 20.0
+        score -= float(result.max_drawdown_pct) * 0.60
+        if float(result.total_trades) < 8:
+            score -= (8.0 - float(result.total_trades)) * 0.8
+        return float(score)
+
+    def optimize(
+        self,
+        stock_codes: list[str] | None = None,
+        train_months_options: list[int] | None = None,
+        test_months_options: list[int] | None = None,
+        min_confidence_options: list[float] | None = None,
+        min_data_days: int = 500,
+        initial_capital: float | None = None,
+        top_k: int = 5,
+    ) -> dict:
+        """
+        Parameter sweep over walk-forward settings and confidence thresholds.
+        """
+        train_opts = sorted(
+            {int(x) for x in (train_months_options or [6, 9, 12, 18]) if int(x) > 0}
+        )
+        test_opts = sorted(
+            {int(x) for x in (test_months_options or [1, 2, 3]) if int(x) > 0}
+        )
+        conf_opts = sorted(
+            {
+                float(x)
+                for x in (min_confidence_options or [0.55, 0.60, 0.65, 0.70])
+                if 0.0 < float(x) <= 1.0
+            }
+        )
+        if not train_opts or not test_opts or not conf_opts:
+            raise ValueError("Optimization options cannot be empty")
+
+        combos = list(product(train_opts, test_opts, conf_opts))
+        trials: list[BacktestOptimizationTrial] = []
+        old_conf = float(getattr(CONFIG.model, "min_confidence", 0.60))
+
+        log.info(
+            "Starting backtest optimization: %d combinations "
+            "(train=%s, test=%s, conf=%s)",
+            len(combos),
+            train_opts,
+            test_opts,
+            conf_opts,
+        )
+
+        try:
+            for idx, (train_m, test_m, conf) in enumerate(combos, start=1):
+                log.info(
+                    "Optimization trial %d/%d: train=%dm test=%dm conf=%.2f",
+                    idx,
+                    len(combos),
+                    train_m,
+                    test_m,
+                    conf,
+                )
+                CONFIG.model.min_confidence = float(conf)
+                try:
+                    result = self.run(
+                        stock_codes=stock_codes,
+                        train_months=int(train_m),
+                        test_months=int(test_m),
+                        min_data_days=int(min_data_days),
+                        initial_capital=initial_capital,
+                    )
+                    score = self._score_result(result)
+                    trials.append(
+                        BacktestOptimizationTrial(
+                            train_months=int(train_m),
+                            test_months=int(test_m),
+                            min_confidence=float(conf),
+                            score=float(score),
+                            total_return=float(result.total_return),
+                            excess_return=float(result.excess_return),
+                            sharpe_ratio=float(result.sharpe_ratio),
+                            max_drawdown_pct=float(result.max_drawdown_pct),
+                            win_rate=float(result.win_rate),
+                            trades=int(result.total_trades),
+                            error="",
+                        )
+                    )
+                except Exception as exc:
+                    trials.append(
+                        BacktestOptimizationTrial(
+                            train_months=int(train_m),
+                            test_months=int(test_m),
+                            min_confidence=float(conf),
+                            score=float("-inf"),
+                            error=str(exc),
+                        )
+                    )
+        finally:
+            CONFIG.model.min_confidence = old_conf
+
+        successful = [t for t in trials if not t.error]
+        successful.sort(key=lambda x: x.score, reverse=True)
+        failed = [t for t in trials if t.error]
+
+        if not successful:
+            return {
+                "status": "failed",
+                "trials": len(trials),
+                "successful": 0,
+                "failed": len(failed),
+                "errors": [t.error for t in failed[:10]],
+            }
+
+        k = max(1, int(top_k or 5))
+        top_trials = successful[:k]
+        best = top_trials[0]
+        return {
+            "status": "ok",
+            "trials": len(trials),
+            "successful": len(successful),
+            "failed": len(failed),
+            "best": {
+                "train_months": best.train_months,
+                "test_months": best.test_months,
+                "min_confidence": best.min_confidence,
+                "score": best.score,
+                "total_return": best.total_return,
+                "excess_return": best.excess_return,
+                "sharpe_ratio": best.sharpe_ratio,
+                "max_drawdown_pct": best.max_drawdown_pct,
+                "win_rate": best.win_rate,
+                "trades": best.trades,
+            },
+            "top_trials": [
+                {
+                    "train_months": t.train_months,
+                    "test_months": t.test_months,
+                    "min_confidence": t.min_confidence,
+                    "score": t.score,
+                    "total_return": t.total_return,
+                    "excess_return": t.excess_return,
+                    "sharpe_ratio": t.sharpe_ratio,
+                    "max_drawdown_pct": t.max_drawdown_pct,
+                    "win_rate": t.win_rate,
+                    "trades": t.trades,
+                }
+                for t in top_trials
+            ],
+        }
+
     def _get_stock_list(self, stock_codes: list[str] | None) -> list[str]:
         """Get stock list with fallbacks"""
         if stock_codes:
@@ -263,6 +500,59 @@ class Backtester:
         ]
         log.warning(f"No stock pool configured, using default stocks: {default_stocks}")
         return default_stocks
+
+    def _resolve_backtest_horizon(self, interval: str = "1d") -> int:
+        """
+        Resolve label/trading horizon for backtest interval.
+
+        Daily backtests should not inherit long intraday horizons unchanged
+        (e.g. 30 bars from 1m mode), otherwise fold training can become empty.
+        """
+        try:
+            base = int(getattr(CONFIG.model, "prediction_horizon", 1) or 1)
+        except Exception:
+            base = 1
+        base = max(1, base)
+
+        iv = str(interval or "1d").lower()
+        if iv == "1d" and base > 5:
+            return 1
+        return base
+
+    def _backtest_train_row_requirement(self, interval: str = "1d") -> tuple[int, int, int]:
+        """
+        Return (sequence_length, label_horizon, min_train_rows) for backtest.
+        """
+        seq_length = int(getattr(getattr(CONFIG, "model", None), "sequence_length", 60))
+        seq_length = max(5, seq_length)
+        label_horizon = self._resolve_backtest_horizon(interval=interval)
+        min_train_rows = max(
+            seq_length + label_horizon + 30,
+            seq_length + 20,
+        )
+        return seq_length, label_horizon, min_train_rows
+
+    def _has_train_window_capacity(
+        self,
+        all_data: dict[str, pd.DataFrame],
+        folds: list[tuple],
+        min_train_rows: int,
+    ) -> tuple[bool, int]:
+        """
+        Check whether at least one fold has enough train rows to build sequences.
+        """
+        best_rows_seen = 0
+        for train_start, train_end, _, _ in folds:
+            fold_best = 0
+            for raw in all_data.values():
+                rows = len(raw.loc[(raw.index >= train_start) & (raw.index < train_end)])
+                if rows > fold_best:
+                    fold_best = rows
+            if fold_best > best_rows_seen:
+                best_rows_seen = fold_best
+            if fold_best >= int(min_train_rows):
+                return True, best_rows_seen
+        return False, best_rows_seen
 
     def _collect_data(self, stocks: list[str], min_days: int) -> dict[str, pd.DataFrame]:
         """Collect RAW OHLCV only (NO features here to avoid fold leakage)."""
@@ -293,7 +583,7 @@ class Backtester:
 
                 # Keep RAW; fold will compute features within split
                 all_data[code] = df.sort_index()
-                log.info(f"    ✓ {code}: {len(df)} raw rows ready")
+                log.info(f"    OK {code}: {len(df)} raw rows ready")
 
             except Exception as e:
                 errors.append(f"{code}: Exception - {str(e)}")
@@ -374,7 +664,9 @@ class Backtester:
         processor = DataProcessor()
         feature_cols = self.feature_engine.get_feature_columns()
 
-        seq_length = int(getattr(getattr(CONFIG, "model", None), "sequence_length", 60))
+        seq_length, label_horizon, min_train_rows = self._backtest_train_row_requirement(
+            interval="1d"
+        )
         feature_lookback = int(getattr(getattr(CONFIG, "data", None), "feature_lookback", 60))
 
         # -------------------------
@@ -385,11 +677,14 @@ class Backtester:
 
         for code, raw in all_data.items():
             raw_train = raw.loc[(raw.index >= train_start) & (raw.index < train_end)].copy()
-            if len(raw_train) < (seq_length + feature_lookback + 10):
+            if len(raw_train) < min_train_rows:
                 continue
 
             feat_train = self.feature_engine.create_features(raw_train)
-            feat_train = processor.create_labels(feat_train)  # uses CONFIG horizon/thresholds
+            feat_train = processor.create_labels(
+                feat_train,
+                horizon=label_horizon,
+            )
 
             valid = feat_train["label"].notna()
             if valid.sum() <= 10:
@@ -427,14 +722,23 @@ class Backtester:
         # -------------------------
         # 3) Train model
         # -------------------------
+        if len(X_train) < 2:
+            log.warning("Not enough training sequences for stable train/val split")
+            return None
+
         input_size = int(X_train.shape[2])
         model = EnsembleModel(input_size, model_names=["lstm", "gru", "tcn"])
+        backtest_epochs = int(
+            getattr(getattr(CONFIG, "model", None), "backtest_epochs", 8) or 8
+        )
+        backtest_epochs = max(1, backtest_epochs)
 
         split = int(len(X_train) * 0.85)
+        split = max(1, min(len(X_train) - 1, split))
         model.train(
             X_train[:split], y_train[:split],
             X_train[split:], y_train[split:],
-            epochs=30
+            epochs=backtest_epochs,
         )
 
         # -------------------------
@@ -450,7 +754,7 @@ class Backtester:
         prepared = {}
 
         # Need enough context so rolling features can warm up BEFORE test_start
-        ctx_days = int((seq_length + feature_lookback + 10) * 2)
+        ctx_days = int((seq_length + feature_lookback + label_horizon + 10) * 2)
 
         for code, raw in all_data.items():
             ctx_start = test_start - pd.Timedelta(days=ctx_days)
@@ -459,7 +763,10 @@ class Backtester:
                 continue
 
             feat = self.feature_engine.create_features(raw_ctx)
-            feat = processor.create_labels(feat)
+            feat = processor.create_labels(
+                feat,
+                horizon=label_horizon,
+            )
 
             X, y, returns, idx = processor.prepare_sequences(
                 feat, feature_cols, fit_scaler=False, return_index=True
@@ -508,6 +815,7 @@ class Backtester:
                 stock_code=code,
                 capital=cap_slice,
                 preds=preds,
+                horizon=label_horizon,
             )
 
             trades.extend(code_trades)
@@ -553,9 +861,11 @@ class Backtester:
         stock_code: str,
         capital: float,
         preds: list | None = None,
+        horizon: int | None = None,
     ) -> tuple[list[BacktestTrade], dict, dict]:
         """Simulate trading with realistic costs"""
         slippage_model = SlippageModel()
+        spread_model = SpreadModel()
         lot = int(get_lot_size(stock_code))
 
         trades: list[BacktestTrade] = []
@@ -569,22 +879,31 @@ class Backtester:
         daily_portfolio_values: dict[pd.Timestamp, float] = {}
         daily_benchmark_values: dict[pd.Timestamp, float] = {}
 
-        horizon = 5
+        local_horizon = int(horizon or 5)
         min_confidence = 0.6
         commission_rate = 0.0003
         stamp_tax_rate = 0.001
+        max_participation = 0.03
 
         if hasattr(CONFIG, 'model'):
-            if hasattr(CONFIG.model, 'prediction_horizon'):
-                horizon = CONFIG.model.prediction_horizon
+            if local_horizon <= 0 and hasattr(CONFIG.model, 'prediction_horizon'):
+                local_horizon = int(CONFIG.model.prediction_horizon)
             if hasattr(CONFIG.model, 'min_confidence'):
                 min_confidence = CONFIG.model.min_confidence
+
+        local_horizon = max(1, int(local_horizon))
 
         if hasattr(CONFIG, 'trading'):
             if hasattr(CONFIG.trading, 'commission'):
                 commission_rate = CONFIG.trading.commission
             if hasattr(CONFIG.trading, 'stamp_tax'):
                 stamp_tax_rate = CONFIG.trading.stamp_tax
+        if hasattr(CONFIG, "risk"):
+            max_participation = float(
+                getattr(CONFIG.risk, "backtest_max_volume_participation", max_participation)
+                or max_participation
+            )
+        max_participation = max(0.001, min(0.25, float(max_participation)))
 
         limit_pct = float(get_price_limit(stock_code))
         commission_min = 5.0
@@ -634,10 +953,17 @@ class Backtester:
                     if not is_limit_up(prev_close, open_t):
                         invest = cash * 0.95
                         vol = float(volumes[t]) if not np.isnan(volumes[t]) and volumes[t] > 0 else 1e6
+                        spread = spread_model.estimate(
+                            open_price=open_t,
+                            close_price=close_t,
+                            daily_volume=vol,
+                        )
                         slip = slippage_model.calculate(invest, vol, open_t)
-                        buy_px = open_t * (1.0 + slip)
+                        buy_px = open_t * (1.0 + slip + 0.5 * spread)
 
-                        qty = int(invest / buy_px / lot) * lot
+                        qty_by_cash = int(invest / max(1e-9, buy_px) / lot) * lot
+                        max_qty_by_liq = int((vol * max_participation) / lot) * lot
+                        qty = min(qty_by_cash, max_qty_by_liq) if max_qty_by_liq > 0 else 0
                         if qty > 0:
                             notional = qty * buy_px
                             fee = commission(notional) + transfer_fee(notional)
@@ -666,8 +992,14 @@ class Backtester:
                         if not is_limit_down(prev_close, open_t):
                             notional = shares * open_t
                             vol = float(volumes[t]) if not np.isnan(volumes[t]) and volumes[t] > 0 else 1e6
+                            spread = spread_model.estimate(
+                                open_price=open_t,
+                                close_price=close_t,
+                                daily_volume=vol,
+                            )
                             slip = slippage_model.calculate(notional, vol, open_t)
-                            sell_px = open_t * (1.0 - slip)
+                            sell_px = open_t * (1.0 - slip - 0.5 * spread)
+                            sell_px = max(0.01, sell_px)
 
                             proceeds = shares * sell_px
                             fee = commission(proceeds) + transfer_fee(proceeds)
@@ -710,7 +1042,7 @@ class Backtester:
                 elif shares > 0:
                     holding_bars = (t - entry_exec_i) if entry_exec_i is not None else 0
                     should_exit = (
-                        holding_bars >= horizon or
+                        holding_bars >= local_horizon or
                         (pred.predicted_class == 0 and pred.confidence >= min_confidence)
                     )
                     if should_exit:
@@ -720,27 +1052,38 @@ class Backtester:
             dt = dates[n - 1]
             close_t = float(close_prices[n - 1])
             if not np.isnan(close_t) and close_t > 0:
-                proceeds = shares * close_t
+                vol = (
+                    float(volumes[n - 1])
+                    if len(volumes) >= n and not np.isnan(volumes[n - 1]) and volumes[n - 1] > 0
+                    else 1e6
+                )
+                spread = spread_model.estimate(
+                    open_price=close_t,
+                    close_price=close_t,
+                    daily_volume=vol,
+                )
+                liq_px = max(0.01, close_t * (1.0 - 0.5 * spread))
+                proceeds = shares * liq_px
                 fee = commission(proceeds) + transfer_fee(proceeds)
                 tax = proceeds * stamp_tax_rate
                 net = proceeds - fee - tax
                 cash += net
 
                 holding_bars = ((n - 1) - entry_exec_i) if entry_exec_i is not None else 0
-                gross_pnl = (close_t - entry_price) * shares
+                gross_pnl = (liq_px - entry_price) * shares
 
                 buy_notional = entry_price * shares
-                sell_notional = close_t * shares
+                sell_notional = liq_px * shares
                 costs = (
                     commission(buy_notional) + transfer_fee(buy_notional) +
                     commission(sell_notional) + transfer_fee(sell_notional) +
                     sell_notional * stamp_tax_rate
                 )
                 net_pnl = gross_pnl - costs
-                pnl_pct = (close_t / entry_price - 1.0) * 100.0 - (costs / max(1e-8, buy_notional)) * 100.0
+                pnl_pct = (liq_px / entry_price - 1.0) * 100.0 - (costs / max(1e-8, buy_notional)) * 100.0
 
                 trades[-1].exit_date = dt
-                trades[-1].exit_price = close_t
+                trades[-1].exit_price = liq_px
                 trades[-1].pnl = float(net_pnl)
                 trades[-1].pnl_pct = float(pnl_pct)
                 trades[-1].holding_days = int(holding_bars)
@@ -761,18 +1104,35 @@ class Backtester:
         fold_results: list[dict]
     ) -> BacktestResult:
         """Calculate comprehensive backtest metrics"""
+        safe_capital = float(capital)
+        if not np.isfinite(safe_capital) or safe_capital <= 0:
+            safe_capital = 1.0
 
-        equity = [capital]
+        daily_returns = np.asarray(daily_returns, dtype=float).reshape(-1)
+        benchmark_daily = np.asarray(benchmark_daily, dtype=float).reshape(-1)
+        daily_returns = np.nan_to_num(daily_returns, nan=0.0, posinf=0.0, neginf=0.0)
+        benchmark_daily = np.nan_to_num(benchmark_daily, nan=0.0, posinf=0.0, neginf=0.0)
+
+        aligned_dates = list(dates) if dates is not None else []
+        if len(daily_returns) != len(benchmark_daily):
+            n = min(len(daily_returns), len(benchmark_daily))
+            daily_returns = daily_returns[:n]
+            benchmark_daily = benchmark_daily[:n]
+            aligned_dates = aligned_dates[:n]
+        elif len(aligned_dates) != len(daily_returns):
+            aligned_dates = aligned_dates[: len(daily_returns)]
+
+        equity = [safe_capital]
         for ret in daily_returns:
             equity.append(equity[-1] * (1 + ret / 100))
         equity = np.array(equity[1:])
 
-        total_return = (equity[-1] / capital - 1) * 100 if len(equity) > 0 else 0
+        total_return = (equity[-1] / safe_capital - 1) * 100 if len(equity) > 0 else 0
 
-        benchmark_equity = [capital]
+        benchmark_equity = [safe_capital]
         for ret in benchmark_daily:
             benchmark_equity.append(benchmark_equity[-1] * (1 + ret / 100))
-        benchmark_return = (benchmark_equity[-1] / capital - 1) * 100 if len(benchmark_equity) > 1 else 0
+        benchmark_return = (benchmark_equity[-1] / safe_capital - 1) * 100 if len(benchmark_equity) > 1 else 0
 
         if len(daily_returns) > 1 and np.std(daily_returns) > 0:
             sharpe = np.mean(daily_returns) / np.std(daily_returns) * np.sqrt(252)
@@ -869,5 +1229,5 @@ class Backtester:
             avg_fold_accuracy=np.mean(fold_accuracies) if fold_accuracies else 0,
             fold_results=fold_results,
             equity_curve=equity.tolist(),
-            dates=[d for d in dates]
+            dates=[d for d in aligned_dates]
         )

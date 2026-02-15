@@ -182,3 +182,19 @@ def test_multi_venue_cancel_prefers_order_affinity_venue():
     assert router.cancel_order(order.id) is True
     assert secondary.cancel_calls == 1
     assert primary.cancel_calls == 0
+
+
+def test_multi_venue_snapshot_includes_score_and_read_count():
+    primary = _DummyVenue("primary", fail_submit=False)
+    secondary = _DummyVenue("secondary", fail_submit=False)
+    router = MultiVenueBroker([primary, secondary], failover_cooldown_seconds=60)
+
+    _ = router.get_quote("600519")
+    snap = router.get_health_snapshot()
+    assert "venues" in snap
+    first = snap["venues"][0]
+    assert "score" in first
+    assert "read_count" in first
+    assert "avg_read_latency_ms" in first
+    assert "recent_failures_5m" in first
+    assert "last_error" in first

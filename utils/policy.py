@@ -40,6 +40,25 @@ class TradePolicyEngine:
     def path(self) -> Path:
         return self._path
 
+    @staticmethod
+    def _normalize_symbol(symbol: str) -> str:
+        digits = "".join(ch for ch in str(symbol or "").strip() if ch.isdigit())
+        return digits.zfill(6) if digits else ""
+
+    @staticmethod
+    def _to_int(value: Any, default: int = 0) -> int:
+        try:
+            return int(value)
+        except Exception:
+            return int(default)
+
+    @staticmethod
+    def _to_float(value: Any, default: float = 0.0) -> float:
+        try:
+            return float(value)
+        except Exception:
+            return float(default)
+
     def _default_policy(self) -> dict[str, Any]:
         return {
             "version": "1.0",
@@ -63,6 +82,7 @@ class TradePolicyEngine:
             try:
                 if not self._path.exists():
                     self._policy = self._default_policy()
+                    self._mtime_ns = None
                     return
 
                 mtime_ns = self._path.stat().st_mtime_ns
@@ -78,6 +98,7 @@ class TradePolicyEngine:
             except Exception as e:
                 log.warning("Failed to load policy file %s: %s", self._path, e)
                 self._policy = self._default_policy()
+                self._mtime_ns = None
 
     def evaluate_live_trade(self, signal: Any) -> PolicyDecision:
         self._reload_if_needed(force=False)
@@ -89,17 +110,38 @@ class TradePolicyEngine:
 
         lp = dict(p.get("live_trade") or {})
         symbol = str(getattr(signal, "symbol", "") or "").strip()
+        symbol_norm = self._normalize_symbol(symbol)
         side = str(getattr(getattr(signal, "side", ""), "value", getattr(signal, "side", "")) or "").strip().lower()
         order_type = str(getattr(signal, "order_type", "limit") or "limit").strip().lower()
-        qty = int(getattr(signal, "quantity", 0) or 0)
-        px = float(getattr(signal, "price", 0.0) or 0.0)
+        qty = self._to_int(getattr(signal, "quantity", 0) or 0)
+        px = self._to_float(getattr(signal, "price", 0.0) or 0.0)
         notional = float(max(0.0, qty * px))
         strategy = str(getattr(signal, "strategy", "") or "").strip().lower()
         auto_generated = bool(getattr(signal, "auto_generated", False))
 
-        blocked = {str(x).strip() for x in list(lp.get("blocked_symbols", []) or []) if str(x).strip()}
-        if symbol and symbol in blocked:
+        blocked = {
+            str(x).strip()
+            for x in list(lp.get("blocked_symbols", []) or [])
+            if str(x).strip()
+        }
+        blocked_norm = {self._normalize_symbol(x) for x in blocked}
+        if (symbol and symbol in blocked) or (symbol_norm and symbol_norm in blocked_norm):
             return PolicyDecision(False, f"policy blocked symbol: {symbol}", version, {"symbol": symbol})
+
+        if qty <= 0:
+            return PolicyDecision(
+                False,
+                "policy rejected non-positive quantity",
+                version,
+                {"quantity": qty},
+            )
+        if order_type == "limit" and px <= 0:
+            return PolicyDecision(
+                False,
+                "policy rejected non-positive limit price",
+                version,
+                {"price": px},
+            )
 
         allowed_sides = {str(x).strip().lower() for x in list(lp.get("allowed_sides", ["buy", "sell"]))}
         if side and side not in allowed_sides:

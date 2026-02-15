@@ -56,3 +56,25 @@ def test_metrics_http_api_key_guard(monkeypatch):
     finally:
         server.stop()
         metrics_http.unregister_snapshot_provider("secure_test")
+
+
+def test_metrics_http_operational_snapshots():
+    server = metrics_http.MetricsServer(port=0, host="127.0.0.1")
+    server.start()
+    try:
+        status, alerts = _fetch_json(f"{server.url}/api/v1/alerts/stats")
+        assert status == 200
+        assert "snapshot" in alerts
+        assert alerts["snapshot"]["status"] in {"ok", "unavailable"}
+
+        status, policy = _fetch_json(f"{server.url}/api/v1/governance/policy")
+        assert status == 200
+        assert "snapshot" in policy
+        assert policy["snapshot"]["status"] in {"ok", "unavailable"}
+
+        status, marketplace = _fetch_json(f"{server.url}/api/v1/strategy/marketplace")
+        assert status == 200
+        assert "snapshot" in marketplace
+        assert marketplace["snapshot"]["status"] in {"ok", "unavailable"}
+    finally:
+        server.stop()

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import math
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
@@ -39,6 +40,7 @@ class SessionBarCache:
         self._root = base
         self._root.mkdir(parents=True, exist_ok=True)
         self._locks: dict[str, threading.Lock] = {}
+        self._last_row_fingerprint: dict[str, tuple[str, float, bool]] = {}
         self._global_lock = threading.Lock()
 
     @property
@@ -81,32 +83,54 @@ class SessionBarCache:
             return dt.isoformat()
         return datetime.now(timezone.utc).isoformat()
 
+    @staticmethod
+    def _safe_float(value, default: float = 0.0) -> float:
+        try:
+            out = float(value)
+        except Exception:
+            return float(default)
+        if not math.isfinite(out):
+            return float(default)
+        return float(out)
+
     def append_bar(self, symbol: str, interval: str, bar: dict) -> bool:
         sym = _norm_symbol(symbol)
         iv = str(interval or "1m").lower()
         if not sym or not isinstance(bar, dict):
             return False
 
-        try:
-            close = float(bar.get("close", 0) or 0)
-        except Exception:
-            close = 0.0
+        close = self._safe_float(bar.get("close", 0), 0.0)
         if close <= 0:
             return False
 
+        open_px = self._safe_float(bar.get("open", close), close)
+        high_px = self._safe_float(bar.get("high", close), close)
+        low_px = self._safe_float(bar.get("low", close), close)
+        volume = self._safe_float(bar.get("volume", 0), 0.0)
+        amount = self._safe_float(bar.get("amount", 0), 0.0)
+        high_px = max(high_px, open_px, close)
+        low_px = min(low_px, open_px, close)
+
         row = {
             "timestamp": self._extract_timestamp(bar),
-            "open": float(bar.get("open", close) or close),
-            "high": float(bar.get("high", close) or close),
-            "low": float(bar.get("low", close) or close),
+            "open": open_px,
+            "high": high_px,
+            "low": low_px,
             "close": close,
-            "volume": float(bar.get("volume", 0) or 0),
-            "amount": float(bar.get("amount", 0) or 0),
+            "volume": volume,
+            "amount": amount,
             "is_final": bool(bar.get("final", True)),
         }
         path = self._path(sym, iv)
         lock = self._lock_for(path.name)
         with lock:
+            fingerprint = (
+                str(row["timestamp"]),
+                float(row["close"]),
+                bool(row["is_final"]),
+            )
+            if self._last_row_fingerprint.get(path.name) == fingerprint:
+                return False
             write_header = not path.exists()
             with path.open("a", newline="", encoding="utf-8") as f:
                 writer = csv.DictWriter(
@@ -119,6 +143,7 @@ class SessionBarCache:
                 if write_header:
                     writer.writeheader()
                 writer.writerow(row)
+            self._last_row_fingerprint[path.name] = fingerprint
         return True
 
     def read_history(

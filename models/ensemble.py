@@ -136,7 +136,7 @@ class EnsembleModel:
         self._lock = threading.RLock()  # reentrant for nested calls
         self.temperature: float = 1.0
 
-        # Metadata — updated by train() and load()
+        # Metadata - updated by train() and load()
         self.interval: str = "1d"
         self.prediction_horizon: int = int(CONFIG.model.prediction_horizon)
         self.trained_stock_codes: list[str] = []
@@ -216,7 +216,7 @@ class EnsembleModel:
         if total > 0:
             self.weights = {k: v / total for k, v in self.weights.items()}
         else:
-            # All weights are zero — set uniform
+            # All weights are zero - set uniform
             n = len(self.weights)
             if n > 0:
                 self.weights = {k: 1.0 / n for k in self.weights}
@@ -254,7 +254,7 @@ class EnsembleModel:
     ):
         """Temperature-scale the ensemble's weighted logits on a held-out set."""
         if len(X_val) == 0 or len(y_val) == 0:
-            log.warning("Empty validation data for calibration — skipping")
+            log.warning("Empty validation data for calibration - skipping")
             return
 
         dataset = TensorDataset(torch.FloatTensor(X_val), torch.LongTensor(y_val))
@@ -412,7 +412,7 @@ class EnsembleModel:
                 log.info("Training cancelled")
                 break
 
-            log.info(f"Training {name} …")
+            log.info(f"Training {name} ...")
             model_hist, best_acc = self._train_single_model(
                 model=model,
                 name=name,
@@ -429,7 +429,8 @@ class EnsembleModel:
 
         self._update_weights(val_accuracies)
 
-        if len(X_val) >= 128:
+        # Skip expensive calibration when stop was requested or no model ran.
+        if val_accuracies and len(X_val) >= 128 and not self._should_stop(stop_flag):
             self.calibrate(X_val, y_val)
 
         if self.device == "cuda":
@@ -542,7 +543,12 @@ class EnsembleModel:
                 total = 0
 
                 with torch.inference_mode():
-                    for batch_X, batch_y in val_loader:
+                    for batch_idx, (batch_X, batch_y) in enumerate(val_loader):
+                        if batch_idx % _STOP_CHECK_INTERVAL == 0 and batch_idx > 0:
+                            if self._should_stop(stop_flag):
+                                cancelled = True
+                                break
+
                         batch_X = batch_X.to(self.device, non_blocking=True)
                         batch_y = batch_y.to(self.device, non_blocking=True)
 
@@ -554,6 +560,9 @@ class EnsembleModel:
                         preds = logits.argmax(dim=-1)
                         correct += int((preds == batch_y).sum())
                         total += len(batch_y)
+
+                if cancelled:
+                    break
 
                 train_loss = float(np.mean(train_losses)) if train_losses else 0.0
                 val_loss = float(np.mean(val_losses)) if val_losses else 0.0
@@ -593,36 +602,103 @@ class EnsembleModel:
                 log.info(f"{name}: restored best state before cancellation (acc={best_val_acc:.2%})")
             raise
 
-        # Normal completion — restore best weights
+        # Normal completion - restore best weights
         if best_state is not None:
             model.load_state_dict(best_state)
             model.to(self.device)
 
-        log.info(f"{name} done — best val acc: {best_val_acc:.2%}")
+        log.info(f"{name} done - best val acc: {best_val_acc:.2%}")
         return history, best_val_acc
 
     def _update_weights(self, val_accuracies: dict[str, float]):
-        """Softmax-weighted ensemble based on validation accuracy."""
+        """
+        Update ensemble weights from validation accuracies.
+
+        If training is partial (e.g., cancelled mid-cycle), only the trained
+        models are reweighted while untrained models retain their prior mass.
+        This avoids artificially boosting untrained models with placeholder
+        scores.
+        """
         if not val_accuracies:
             return
 
-        names = list(self.models.keys())
-        accs = np.array([val_accuracies.get(n, 0.5) for n in names])
+        with self._lock:
+            names_all = list(self.models.keys())
+            current = {
+                n: float(self.weights.get(n, 0.0))
+                for n in names_all
+            }
 
-        # Guard against all-identical accuracies (would make exp uniform anyway)
-        if len(accs) == 0:
+        trained_names = [n for n in names_all if n in val_accuracies]
+        if not trained_names:
             return
 
+        accs = np.array(
+            [float(val_accuracies[n]) for n in trained_names],
+            dtype=np.float64,
+        )
+        if accs.size == 0:
+            return
+        accs = np.nan_to_num(accs, nan=0.0, posinf=1.0, neginf=0.0)
+
         temperature = 0.5
-        # Numerical stability: subtract max before exp
         shifted = (accs - np.max(accs)) / temperature
         exp_w = np.exp(shifted)
-        exp_w /= exp_w.sum()
+        exp_sum = float(exp_w.sum())
+        if not np.isfinite(exp_sum) or exp_sum <= 0.0:
+            trained_dist = np.full(accs.size, 1.0 / float(accs.size))
+        else:
+            trained_dist = exp_w / exp_sum
+
+        if len(trained_names) == len(names_all):
+            new_weights = {
+                n: float(w)
+                for n, w in zip(trained_names, trained_dist, strict=False)
+            }
+        else:
+            untrained_names = [n for n in names_all if n not in trained_names]
+            untrained_raw = np.array(
+                [max(0.0, current.get(n, 0.0)) for n in untrained_names],
+                dtype=np.float64,
+            )
+            untrained_mass = float(np.sum(untrained_raw))
+            if not np.isfinite(untrained_mass):
+                untrained_mass = 0.0
+
+            # Keep room for newly trained models even when stale mass is large.
+            untrained_mass = min(max(0.0, untrained_mass), 0.85)
+            trained_mass = max(0.15, 1.0 - untrained_mass)
+            if trained_mass > 1.0:
+                trained_mass = 1.0
+            untrained_mass = 1.0 - trained_mass
+
+            if untrained_names:
+                raw_sum = float(untrained_raw.sum())
+                if raw_sum > 0:
+                    untrained_dist = untrained_raw / raw_sum
+                else:
+                    untrained_dist = np.full(
+                        len(untrained_names),
+                        1.0 / float(len(untrained_names)),
+                    )
+            else:
+                untrained_dist = np.array([], dtype=np.float64)
+
+            new_weights = {}
+            for n, w in zip(trained_names, trained_dist, strict=False):
+                new_weights[n] = float(w * trained_mass)
+            for n, w in zip(untrained_names, untrained_dist, strict=False):
+                new_weights[n] = float(w * untrained_mass)
+
+        total = float(sum(new_weights.values()))
+        if not np.isfinite(total) or total <= 0.0:
+            uniform = 1.0 / float(max(1, len(names_all)))
+            new_weights = {n: uniform for n in names_all}
+        else:
+            new_weights = {n: float(v / total) for n, v in new_weights.items()}
 
         with self._lock:
-            self.weights = {
-                n: float(w) for n, w in zip(names, exp_w, strict=False)
-            }
+            self.weights = new_weights
 
         log.info(f"Ensemble weights: {self.weights}")
 
@@ -652,7 +728,7 @@ class EnsembleModel:
             )
         results = self.predict_batch(X, batch_size=1)
         if not results:
-            raise RuntimeError("Prediction failed — no models available")
+            raise RuntimeError("Prediction failed - no models available")
         return results[0]
 
     def predict_batch(
@@ -859,7 +935,7 @@ class EnsembleModel:
             with open(manifest_path, 'w') as f:
                 json.dump(manifest, f, indent=2)
 
-        log.info(f"Ensemble saved → {path}")
+        log.info(f"Ensemble saved -> {path}")
 
     def load(self, path: str | None = None) -> bool:
         """

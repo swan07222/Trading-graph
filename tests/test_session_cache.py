@@ -74,3 +74,48 @@ def test_session_cache_epoch_seconds_timestamp(tmp_path):
     df = cache.read_history("600519", "1m", bars=10)
     assert not df.empty
     assert df.index[-1].year == 2023
+
+
+def test_session_cache_skips_immediate_duplicate_rows(tmp_path):
+    cache = SessionBarCache(root=tmp_path / "session_bars")
+    bar = {
+        "timestamp": "2026-02-12T09:30:00+00:00",
+        "open": 100,
+        "high": 101,
+        "low": 99,
+        "close": 100.5,
+        "volume": 1000,
+        "final": True,
+    }
+    assert cache.append_bar("600519", "1m", bar) is True
+    assert cache.append_bar("600519", "1m", bar) is False
+
+    df = cache.read_history("600519", "1m", bars=10)
+    assert len(df) == 1
+
+
+def test_session_cache_normalizes_bad_numeric_inputs(tmp_path):
+    cache = SessionBarCache(root=tmp_path / "session_bars")
+    ok = cache.append_bar(
+        "600519",
+        "1m",
+        {
+            "timestamp": "2026-02-12T09:35:00+00:00",
+            "open": "oops",
+            "high": None,
+            "low": "nan",
+            "close": "10.5",
+            "volume": "nan",
+            "amount": "inf",
+            "final": True,
+        },
+    )
+    assert ok is True
+
+    df = cache.read_history("600519", "1m", bars=10)
+    assert not df.empty
+    row = df.iloc[-1]
+    assert row["close"] == 10.5
+    assert row["open"] == 10.5
+    assert row["high"] >= row["close"]
+    assert row["low"] <= row["close"]

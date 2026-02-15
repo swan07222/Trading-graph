@@ -101,6 +101,7 @@ class Predictor:
     """
 
     _CACHE_TTL: float = 5.0
+    _CACHE_TTL_REALTIME: float = 1.2
     _MAX_CACHE_SIZE: int = 200
 
     def __init__(
@@ -244,7 +245,7 @@ class Predictor:
                     self.processor.load_scaler(str(legacy))
                 else:
                     log.warning(
-                        "No scaler found — predictions may be inaccurate"
+                        "No scaler found - predictions may be inaccurate"
                     )
 
             self.ensemble = None
@@ -546,7 +547,7 @@ class Predictor:
             )
 
         except ImportError:
-            log.debug("TCNModel not available — forecaster disabled")
+            log.debug("TCNModel not available - forecaster disabled")
             self.forecaster = None
             self._forecaster_horizon = 0
         except Exception as e:
@@ -588,10 +589,19 @@ class Predictor:
             )
 
             code = self._clean_code(stock_code)
-            cache_key = f"{code}:{interval}:{horizon}"
+            cache_key = (
+                f"{code}:{interval}:{horizon}:"
+                f"{'rt' if bool(use_realtime_price) else 'hist'}"
+            )
+            cache_ttl = self._get_cache_ttl(
+                use_realtime=bool(use_realtime_price),
+                interval=interval,
+            )
 
             if not skip_cache:
-                cached = self._get_cached_prediction(cache_key)
+                cached = self._get_cached_prediction(
+                    cache_key, ttl=cache_ttl
+                )
                 if cached is not None:
                     return cached
 
@@ -683,6 +693,7 @@ class Predictor:
             )
 
             predictions: list[Prediction] = []
+            prepared: list[tuple[Prediction, np.ndarray]] = []
 
             for stock_code in stock_codes:
                 try:
@@ -718,16 +729,61 @@ class Predictor:
                     X = self.processor.prepare_inference_sequence(
                         df, self._feature_cols
                     )
-
-                    if self.ensemble:
-                        self._apply_ensemble_prediction(X, pred)
-
-                    predictions.append(pred)
+                    prepared.append((pred, X))
 
                 except Exception as e:
                     log.debug(
                         f"Quick prediction failed for {stock_code}: {e}"
                     )
+
+            if not prepared:
+                return predictions
+
+            if self.ensemble:
+                try:
+                    X_batch = np.concatenate(
+                        [np.asarray(X, dtype=np.float32) for _, X in prepared],
+                        axis=0,
+                    )
+                    ensemble_results = self.ensemble.predict_batch(
+                        X_batch,
+                        batch_size=max(8, min(256, len(prepared))),
+                    )
+                    if len(ensemble_results) == len(prepared):
+                        for (pred, _), ens_pred in zip(
+                            prepared,
+                            ensemble_results,
+                            strict=False,
+                        ):
+                            try:
+                                self._apply_ensemble_result(ens_pred, pred)
+                            except Exception as e:
+                                log.debug(
+                                    "Quick batch ensemble apply failed "
+                                    f"for {pred.stock_code}: {e}"
+                                )
+                            predictions.append(pred)
+                        return predictions
+                    log.debug(
+                        "Quick batch ensemble size mismatch: "
+                        f"got {len(ensemble_results)}, expected {len(prepared)}"
+                    )
+                except Exception as e:
+                    log.debug(
+                        "Quick batch ensemble inference failed; "
+                        f"falling back to single predict: {e}"
+                    )
+
+            # Fallback path: per-symbol predict.
+            for pred, X in prepared:
+                if self.ensemble:
+                    try:
+                        self._apply_ensemble_prediction(X, pred)
+                    except Exception as e:
+                        log.debug(
+                            f"Quick single fallback failed for {pred.stock_code}: {e}"
+                        )
+                predictions.append(pred)
 
             return predictions
 
@@ -857,8 +913,17 @@ class Predictor:
     ):
         """Apply ensemble prediction with bounds checking."""
         ensemble_pred = self.ensemble.predict(X)
+        self._apply_ensemble_result(ensemble_pred, pred)
 
-        probs = ensemble_pred.probabilities
+    def _apply_ensemble_result(
+        self, ensemble_pred, pred: Prediction
+    ):
+        """Apply a precomputed ensemble result to a prediction object."""
+
+        probs = np.asarray(
+            getattr(ensemble_pred, "probabilities", [0.33, 0.34, 0.33]),
+            dtype=float,
+        ).reshape(-1)
         n_classes = len(probs)
 
         pred.prob_down = float(probs[0]) if n_classes > 0 else 0.33
@@ -868,6 +933,17 @@ class Predictor:
         pred.prob_down = max(0.0, min(1.0, pred.prob_down))
         pred.prob_neutral = max(0.0, min(1.0, pred.prob_neutral))
         pred.prob_up = max(0.0, min(1.0, pred.prob_up))
+        p_sum = pred.prob_down + pred.prob_neutral + pred.prob_up
+        if p_sum > 0:
+            pred.prob_down /= p_sum
+            pred.prob_neutral /= p_sum
+            pred.prob_up /= p_sum
+        else:
+            pred.prob_down, pred.prob_neutral, pred.prob_up = (
+                0.33,
+                0.34,
+                0.33,
+            )
 
         pred.confidence = float(
             max(0.0, min(1.0, ensemble_pred.confidence))
@@ -934,13 +1010,29 @@ class Predictor:
     # =========================================================================
     # =========================================================================
 
-    def _get_cached_prediction(self, cache_key: str) -> Prediction | None:
+    def _get_cache_ttl(self, use_realtime: bool, interval: str) -> float:
+        """
+        Adaptive cache TTL.
+        Real-time paths get shorter TTL to reduce stale guesses.
+        """
+        base = float(self._CACHE_TTL)
+        if not use_realtime:
+            return base
+        intraday = str(interval).lower() in {"1m", "3m", "5m", "15m", "30m", "60m"}
+        if intraday:
+            return float(max(0.2, min(base, self._CACHE_TTL_REALTIME)))
+        return float(max(0.2, min(base, 2.0)))
+
+    def _get_cached_prediction(
+        self, cache_key: str, ttl: float | None = None
+    ) -> Prediction | None:
         """Get cached prediction if still valid."""
+        ttl_s = float(self._CACHE_TTL if ttl is None else ttl)
         with self._cache_lock:
             entry = self._pred_cache.get(cache_key)
             if entry is not None:
                 ts, pred = entry
-                if (time.time() - ts) < self._CACHE_TTL:
+                if (time.time() - ts) < ttl_s:
                     return copy.deepcopy(pred)
                 del self._pred_cache[cache_key]
         return None

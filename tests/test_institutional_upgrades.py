@@ -109,3 +109,37 @@ def test_news_aggregator_institutional_snapshot_shape(monkeypatch):
     assert "sentiment" in snap
     assert "features" in snap
     assert "source_health" in snap
+
+
+def test_news_aggregator_stock_fallback_from_market_pool(monkeypatch):
+    agg = NewsAggregator()
+
+    class _Env:
+        tencent_ok = False
+        is_china_direct = False
+        eastmoney_ok = False
+
+    now = datetime.now()
+    market_items = [
+        NewsItem(
+            title="600519 gains after policy support",
+            source="cache",
+            publish_time=now - timedelta(minutes=3),
+            category="market",
+        ),
+        NewsItem(
+            title="macro headline",
+            source="cache",
+            publish_time=now - timedelta(minutes=6),
+            category="market",
+        ),
+    ]
+
+    monkeypatch.setattr("core.network.get_network_env", lambda: _Env())
+    monkeypatch.setattr(agg, "get_market_news", lambda *a, **k: market_items)
+    monkeypatch.setattr(agg._sina, "fetch_stock_news", lambda *a, **k: [])
+    monkeypatch.setattr(agg._eastmoney, "fetch_stock_news", lambda *a, **k: [])
+
+    out = agg.get_stock_news("600519", count=5, force_refresh=True)
+    assert len(out) == 1
+    assert "600519" in out[0].title

@@ -874,7 +874,7 @@ class OrderManagementSystem:
         self._reconstruct_reservations()
         self._process_settlement()
 
-        log.info(f"OMS initialized: equity=¥{self._account.equity:,.2f}")
+        log.info(f"OMS initialized: equity=CNY {self._account.equity:,.2f}")
 
     def _recover_or_init(self, initial_capital: float = None) -> Account:
         """Recover from database or initialize new account."""
@@ -942,7 +942,7 @@ class OrderManagementSystem:
             log.info(
                 f"Reconstructed reservations: "
                 f"{len(active_orders)} active orders, "
-                f"¥{total_cash_reserved:,.2f} cash reserved, "
+                f"CNY {total_cash_reserved:,.2f} cash reserved, "
                 f"{len(frozen_by_symbol)} symbols with frozen shares"
             )
 
@@ -1074,7 +1074,7 @@ class OrderManagementSystem:
 
             log.info(
                 f"Order submitted: {order.id} {order.side.value} "
-                f"{order.quantity} {order.symbol} @ ¥{order.price:.2f}"
+                f"{order.quantity} {order.symbol} @ CNY {order.price:.2f}"
             )
             return order
 
@@ -1111,8 +1111,8 @@ class OrderManagementSystem:
 
         if reserved_total > float(self._account.available):
             raise InsufficientFundsError(
-                f"Insufficient funds: need ¥{reserved_total:,.2f}, "
-                f"have ¥{self._account.available:,.2f}"
+                f"Insufficient funds: need CNY {reserved_total:,.2f}, "
+                f"have CNY {self._account.available:,.2f}"
             )
 
         # Concentration limits are enforced in the risk manager/broker layer.
@@ -1481,8 +1481,8 @@ class OrderManagementSystem:
 
             log.info(
                 f"Fill: {order.side.value.upper()} {fill.quantity} "
-                f"{order.symbol} @ ¥{fill.price:.2f} "
-                f"(commission: ¥{fill.commission:.2f})"
+                f"{order.symbol} @ CNY {fill.price:.2f} "
+                f"(commission: CNY {fill.commission:.2f})"
             )
 
     def _update_account_on_fill(
@@ -1519,8 +1519,8 @@ class OrderManagementSystem:
         if self._account.cash < -0.01:
             log.warning(
                 f"Cash went negative after buy fill: "
-                f"¥{self._account.cash:,.2f} "
-                f"(cost ¥{total_cost:,.2f})"
+                f"CNY {self._account.cash:,.2f} "
+                f"(cost CNY {total_cost:,.2f})"
             )
         self._account.commission_paid += fees
 
@@ -1790,7 +1790,7 @@ class OrderManagementSystem:
             })
 
             log.info(
-                f"Synced from broker: cash=¥{broker_cash:,.2f}, "
+                f"Synced from broker: cash=CNY {broker_cash:,.2f}, "
                 f"positions={len(broker_positions)}"
             )
 

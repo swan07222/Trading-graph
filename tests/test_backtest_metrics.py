@@ -53,3 +53,27 @@ def test_backtest_metrics_handle_flat_benchmark():
 
     assert result.beta == 0.0
     assert np.isfinite(result.alpha)
+
+
+def test_backtest_metrics_sanitize_non_finite_and_alignment():
+    bt = Backtester.__new__(Backtester)
+    daily = np.array([0.1, np.nan, np.inf, -np.inf, 0.2], dtype=float)
+    bench = np.array([0.0, 0.05], dtype=float)
+
+    result = bt._calculate_metrics(
+        trades=[],
+        daily_returns=daily,
+        benchmark_daily=bench,
+        dates=_build_dates(len(daily)),
+        capital=0.0,
+        num_folds=1,
+        fold_accuracies=[0.5],
+        fold_results=[],
+    )
+
+    assert np.isfinite(result.total_return)
+    assert np.isfinite(result.excess_return)
+    assert np.isfinite(result.sharpe_ratio)
+    assert np.isfinite(result.max_drawdown_pct)
+    assert len(result.equity_curve) == len(bench)
+    assert len(result.dates) == len(bench)

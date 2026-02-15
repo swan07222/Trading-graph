@@ -51,6 +51,26 @@ class StrategyMarketplace:
                 h.update(chunk)
         return h.hexdigest()
 
+    def _resolve_strategy_file(self, file_name: str) -> Path | None:
+        """Resolve a manifest file entry to a safe python script path."""
+        raw = str(file_name or "").strip()
+        if not raw:
+            return None
+
+        candidate = Path(raw)
+        if candidate.is_absolute():
+            return None
+        if candidate.suffix.lower() != ".py":
+            return None
+
+        try:
+            root = self._dir.resolve()
+            resolved = (self._dir / candidate).resolve()
+            resolved.relative_to(root)
+        except Exception:
+            return None
+        return resolved
+
     def list_entries(self) -> list[dict]:
         raw = self._read_json(self._manifest_path, {"strategies": []})
         items = list(raw.get("strategies", []) or [])
@@ -62,11 +82,13 @@ class StrategyMarketplace:
             file_name = str(entry.get("file", "")).strip()
             if not sid or not file_name:
                 continue
-            file_path = self._dir / file_name
-            installed = file_path.exists()
+            file_path = self._resolve_strategy_file(file_name)
+            installed = bool(file_path and file_path.exists() and file_path.is_file())
             expected_hash = str(entry.get("sha256", "")).strip().lower()
             integrity = "unknown"
-            if installed:
+            if file_path is None:
+                integrity = "error"
+            elif installed:
                 if expected_hash:
                     try:
                         integrity = "ok" if self._file_hash(file_path) == expected_hash else "mismatch"
@@ -90,7 +112,15 @@ class StrategyMarketplace:
         data = self._read_json(self._enabled_path, {})
         enabled = data.get("enabled")
         if isinstance(enabled, list):
-            return [str(x).strip() for x in enabled if str(x).strip()]
+            out: list[str] = []
+            seen: set[str] = set()
+            for x in enabled:
+                sid = str(x).strip()
+                if not sid or sid in seen:
+                    continue
+                seen.add(sid)
+                out.append(sid)
+            return out
 
         # Fallback to defaults from manifest
         defaults: list[str] = []
@@ -122,14 +152,21 @@ class StrategyMarketplace:
     def get_enabled_files(self) -> list[Path]:
         enabled = set(self.get_enabled_ids())
         files: list[Path] = []
+        seen_paths: set[str] = set()
         for item in self.list_entries():
             if item["id"] not in enabled:
                 continue
-            if not item.get("installed", False):
+            integrity = str(item.get("integrity", "")).lower()
+            if integrity not in ("ok", "unverified"):
                 continue
-            if item.get("integrity") == "mismatch":
+            file_path = self._resolve_strategy_file(str(item.get("file", "")))
+            if file_path is None or not file_path.exists() or not file_path.is_file():
                 continue
-            files.append(self._dir / str(item["file"]))
+            key = str(file_path)
+            if key in seen_paths:
+                continue
+            seen_paths.add(key)
+            files.append(file_path)
         return files
 
     def get_integrity_summary(self) -> dict[str, int]:

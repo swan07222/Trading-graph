@@ -158,3 +158,34 @@ def test_synthetic_exit_plan_triggers_and_clears():
     eng._evaluate_synthetic_exits()
     assert calls, "synthetic exit should submit when TP is crossed"
     assert order.id not in eng._synthetic_exits
+
+
+def test_synthetic_exit_state_roundtrip(tmp_path):
+    eng = ExecutionEngine.__new__(ExecutionEngine)
+    eng._synthetic_exit_lock = threading.RLock()
+    eng._synthetic_exits = {
+        "ORD_X": {
+            "plan_id": "ORD_X",
+            "source_order_id": "ORD_X",
+            "symbol": "600519",
+            "side": "long",
+            "open_qty": 100,
+            "stop_loss": 9.5,
+            "take_profit": 11.2,
+            "trailing_stop_pct": 1.5,
+            "highest_price": 10.2,
+            "armed_at": "2026-01-01T09:30:00",
+        }
+    }
+    eng._synthetic_exit_state_path = tmp_path / "synthetic_exits_state.json"
+    eng._last_synthetic_persist_ts = 0.0
+    eng._synthetic_persist_min_interval_s = 0.0
+
+    eng._persist_synthetic_exits(force=True)
+    eng._synthetic_exits = {}
+    eng._restore_synthetic_exits()
+
+    assert "ORD_X" in eng._synthetic_exits
+    restored = eng._synthetic_exits["ORD_X"]
+    assert restored["symbol"] == "600519"
+    assert int(restored["open_qty"]) == 100

@@ -22,6 +22,22 @@ CN_SUFFIXES = (".SS", ".SZ", ".BJ", ".ss", ".sz", ".bj")
 HK_SUFFIXES = (".HK", ".hk")
 US_SUFFIXES = ()  # keep empty; US tickers rarely have suffix in user input
 
+_OCC_OPTION_RE = re.compile(
+    r"^([A-Z]{1,6})(\d{2})(\d{2})(\d{2})([CP])(\d{8})$"
+)
+_CN_FUTURE_RE = re.compile(r"^([A-Z]{1,3})(\d{3,4})$")
+_US_FUTURE_RE = re.compile(r"^/?([A-Z]{1,3})([FGHJKMNQUVXZ])(\d{1,2})$")
+_FX_PAIR_RE = re.compile(r"^([A-Z]{3})[/-]?([A-Z]{3})$")
+_KNOWN_CCY = {
+    "USD", "EUR", "GBP", "JPY", "CHF", "AUD", "NZD", "CAD",
+    "CNH", "CNY", "HKD", "SGD",
+}
+_CN_FUTURE_PREFIXES = {
+    "IF", "IH", "IC", "IM", "TF", "T", "TS", "TL",
+    "CU", "AL", "ZN", "AU", "AG", "RB", "HC", "I", "J", "JM",
+    "M", "Y", "P", "A", "C", "SR", "CF", "TA", "MA", "RU",
+}
+
 def _strip_prefixes(s: str, prefixes) -> str:
     for p in prefixes:
         if s.startswith(p):
@@ -44,6 +60,99 @@ def _is_us_ticker(s: str) -> bool:
     # Basic ticker check: 1-6 letters/numbers/dot (e.g., BRK.B)
     # Keep it permissive; broker may accept more.
     return bool(re.fullmatch(r"[A-Z0-9]{1,6}(\.[A-Z])?", s))
+
+def _parse_occ_option(s_upper: str) -> dict[str, Any] | None:
+    """
+    Parse OCC-style US option symbols.
+
+    Format:
+      <ROOT><YY><MM><DD><C|P><STRIKE*1000:8d>
+    Example:
+      AAPL250117C00150000
+    """
+    m = _OCC_OPTION_RE.fullmatch(s_upper.strip())
+    if not m:
+        return None
+    root, yy, mm, dd, cp, strike_raw = m.groups()
+    expiry = f"20{yy}-{mm}-{dd}"
+    strike = int(strike_raw) / 1000.0
+    return {
+        "market": "US",
+        "asset": "OPTION",
+        "symbol": s_upper.strip(),
+        "currency": "USD",
+        "yahoo": "",
+        "raw": s_upper,
+        "vendor": {
+            "underlying": root,
+            "expiry": expiry,
+            "option_type": "call" if cp == "C" else "put",
+            "strike": strike,
+        },
+    }
+
+def _parse_cn_future(s_upper: str, raw: str) -> dict[str, Any] | None:
+    m = _CN_FUTURE_RE.fullmatch(s_upper.strip())
+    if not m:
+        return None
+    root, ym = m.groups()
+    if root not in _CN_FUTURE_PREFIXES:
+        return None
+    if len(ym) not in (3, 4):
+        return None
+    norm = f"{root}{ym}"
+    return {
+        "market": "CN",
+        "asset": "FUTURE",
+        "symbol": norm,
+        "currency": "CNY",
+        "yahoo": "",
+        "raw": raw,
+        "vendor": {
+            "root": root,
+            "contract_ym": ym,
+        },
+    }
+
+def _parse_us_future(s_upper: str, raw: str) -> dict[str, Any] | None:
+    m = _US_FUTURE_RE.fullmatch(s_upper.strip())
+    if not m:
+        return None
+    root, month_code, year = m.groups()
+    norm = f"{root}{month_code}{year}"
+    return {
+        "market": "US",
+        "asset": "FUTURE",
+        "symbol": norm,
+        "currency": "USD",
+        "yahoo": "",
+        "raw": raw,
+        "vendor": {
+            "root": root,
+            "month_code": month_code,
+            "year": year,
+        },
+    }
+
+def _parse_fx_pair(raw_upper: str, raw: str) -> dict[str, Any] | None:
+    m = _FX_PAIR_RE.fullmatch(raw_upper.strip())
+    if not m:
+        return None
+    base, quote = m.groups()
+    if base not in _KNOWN_CCY or quote not in _KNOWN_CCY:
+        return None
+    return {
+        "market": "FX",
+        "asset": "FOREX",
+        "symbol": f"{base}{quote}",
+        "currency": quote,
+        "yahoo": f"{base}{quote}=X",
+        "raw": raw,
+        "vendor": {
+            "base": base,
+            "quote": quote,
+        },
+    }
 
 def _cn_yahoo_suffix(code6: str) -> str:
     """
@@ -101,6 +210,20 @@ def parse_instrument(code: str) -> dict[str, Any]:
             "vendor": {},
         }
 
+    # Preserve an uppercase canonical string for non-equity pattern parsing.
+    raw_upper = raw.upper().strip().replace(" ", "")
+    # OCC options are unambiguous and should be detected early.
+    occ = _parse_occ_option(raw_upper)
+    if occ is not None:
+        return occ
+    # Futures-like roots are non-numeric so they won't clash with CN equity digits.
+    cn_future = _parse_cn_future(raw_upper, raw)
+    if cn_future is not None:
+        return cn_future
+    us_future = _parse_us_future(raw_upper, raw)
+    if us_future is not None:
+        return us_future
+
     # Keep a case-preserving copy for suffix detection
     s_upper = s.upper()
 
@@ -113,8 +236,15 @@ def parse_instrument(code: str) -> dict[str, Any]:
     # -------------------------
     # If it contains common crypto quote tokens, treat as crypto.
     # Accept formats: BTCUSD, BTCUSDT, BTC/USD, BTC-USDT, BTC-USD
-    crypto_hint = any(tok in s_upper for tok in ("USDT", "BTC", "ETH", "USD")) and (
-        "/" in raw or "-" in raw or s_upper.endswith(("USDT", "USD"))
+    crypto_norm = s_upper.replace("/", "")
+    crypto_bases = (
+        "BTC", "ETH", "SOL", "XRP", "DOGE", "ADA", "BNB",
+        "LTC", "TRX", "AVAX",
+    )
+    has_crypto_base = any(crypto_norm.startswith(base) for base in crypto_bases)
+    has_crypto_quote = crypto_norm.endswith(("USDT", "USDC", "BUSD", "USD", "BTC", "ETH"))
+    crypto_hint = has_crypto_base and (
+        "/" in raw or "-" in raw or has_crypto_quote
     )
     if crypto_hint:
         sym = raw.upper().replace("/", "").replace("-", "")
@@ -128,6 +258,10 @@ def parse_instrument(code: str) -> dict[str, Any]:
             "raw": raw,
             "vendor": {},
         }
+
+    fx = _parse_fx_pair(raw_upper, raw)
+    if fx is not None:
+        return fx
 
     # -------------------------
     # HK equities (explicit only)

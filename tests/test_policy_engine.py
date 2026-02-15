@@ -149,3 +149,45 @@ def test_policy_engine_enforces_strategy_and_justification(tmp_path):
         )
     )
     assert d3.allowed is True
+
+
+def test_policy_engine_normalizes_symbol_and_order_sanity(tmp_path):
+    policy_path = tmp_path / "security_policy.json"
+    policy_path.write_text(
+        json.dumps(
+            {
+                "version": "9.5",
+                "enabled": True,
+                "live_trade": {
+                    "min_approvals": 1,
+                    "blocked_symbols": ["600519"],
+                    "allowed_sides": ["buy", "sell"],
+                    "allowed_order_types": ["limit", "market"],
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    eng = TradePolicyEngine(policy_path=policy_path)
+
+    d1 = eng.evaluate_live_trade(_signal(symbol="sh600519", approvals_count=1))
+    assert d1.allowed is False
+    assert "blocked symbol" in d1.reason.lower()
+
+    d2 = eng.evaluate_live_trade(
+        _signal(symbol="000001", quantity=0, price=10.0, approvals_count=1)
+    )
+    assert d2.allowed is False
+    assert "quantity" in d2.reason.lower()
+
+    d3 = eng.evaluate_live_trade(
+        _signal(
+            symbol="000001",
+            quantity=10,
+            price=0.0,
+            order_type="limit",
+            approvals_count=1,
+        )
+    )
+    assert d3.allowed is False
+    assert "limit price" in d3.reason.lower()

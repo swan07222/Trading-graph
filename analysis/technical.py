@@ -59,17 +59,20 @@ class TechnicalAnalyzer:
 
     def __init__(self):
         self.min_data_points = 60
+        self._required_columns = ("open", "high", "low", "close", "volume")
         self._indicator_names = (
             "sma_5", "sma_10", "sma_20", "sma_50", "sma_200",
             "ema_9", "ema_21", "ema_55", "ema_100", "ema_200",
             "macd", "macd_signal", "macd_hist", "macd_hist_prev",
+            "ppo", "ppo_signal", "ppo_hist", "trix",
             "rsi_14", "rsi_7", "rsi_21", "stoch_k", "stoch_d", "stoch_rsi",
+            "uo", "tsi", "kama",
             "bb_upper", "bb_middle", "bb_lower", "bb_pct", "bb_width",
             "keltner_upper", "keltner_middle", "keltner_lower",
             "donchian_upper", "donchian_middle", "donchian_lower",
             "ichimoku_conv", "ichimoku_base", "ichimoku_a", "ichimoku_b",
             "adx", "di_plus", "di_minus",
-            "atr_14", "mfi", "cci", "williams_r",
+            "atr_14", "mfi", "cci", "williams_r", "cmf", "force_index",
             "roc_10", "obv", "vwap",
             "volatility_20", "atr_pct", "momentum_20",
             "volume_ratio", "close", "prev_close", "change_pct",
@@ -79,8 +82,32 @@ class TechnicalAnalyzer:
         """Return a stable list of supported indicator names."""
         return list(self._indicator_names)
 
+    def _prepare_dataframe(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Validate and sanitize OHLCV input before indicator computation."""
+        if not isinstance(df, pd.DataFrame):
+            raise TypeError("Input data must be a pandas DataFrame")
+
+        missing = [c for c in self._required_columns if c not in df.columns]
+        if missing:
+            raise ValueError(f"Missing required columns: {missing}")
+
+        out = df.copy()
+        for col in self._required_columns:
+            out[col] = pd.to_numeric(out[col], errors="coerce")
+
+        out = out.replace([np.inf, -np.inf], np.nan)
+        out["open"] = out["open"].fillna(out["close"])
+        out = out.dropna(subset=["high", "low", "close", "volume"])
+        if out.empty:
+            raise ValueError("No valid OHLCV rows after sanitization")
+
+        if not out.index.is_monotonic_increasing:
+            out = out.sort_index()
+        return out
+
     def analyze(self, df: pd.DataFrame) -> TechnicalSummary:
         """Perform complete technical analysis"""
+        df = self._prepare_dataframe(df)
         if len(df) < self.min_data_points:
             raise ValueError(f"Need at least {self.min_data_points} data points")
 
@@ -137,6 +164,10 @@ class TechnicalAnalyzer:
         indicators['macd_signal'] = safe_last(macd.macd_signal())
         indicators['macd_hist'] = safe_last(macd_diff)
         indicators['macd_hist_prev'] = float(macd_diff.iloc[-2]) if len(macd_diff) > 1 and pd.notna(macd_diff.iloc[-2]) else 0.0
+        indicators['ppo'] = safe_last(ta.momentum.ppo(close))
+        indicators['ppo_signal'] = safe_last(ta.momentum.ppo_signal(close))
+        indicators['ppo_hist'] = safe_last(ta.momentum.ppo_hist(close))
+        indicators['trix'] = safe_last(ta.trend.trix(close))
 
         indicators['rsi_14'] = safe_last(ta.momentum.rsi(close, window=14))
         indicators['rsi_7'] = safe_last(ta.momentum.rsi(close, window=7))
@@ -146,6 +177,12 @@ class TechnicalAnalyzer:
         indicators['stoch_k'] = safe_last(stoch.stoch())
         indicators['stoch_d'] = safe_last(stoch.stoch_signal())
         indicators['stoch_rsi'] = safe_last(ta.momentum.stochrsi(close, window=14, smooth1=3, smooth2=3))
+        indicators['uo'] = safe_last(ta.momentum.ultimate_oscillator(high, low, close))
+        indicators['tsi'] = safe_last(ta.momentum.tsi(close))
+        try:
+            indicators['kama'] = safe_last(ta.momentum.kama(close))
+        except Exception:
+            indicators['kama'] = 0.0
 
         bb = ta.volatility.BollingerBands(close)
         indicators['bb_upper'] = safe_last(bb.bollinger_hband())
@@ -181,6 +218,8 @@ class TechnicalAnalyzer:
         indicators['volume_ratio'] = float(volume.iloc[-1] / vol_ma20) if vol_ma20 > 0 else 1.0
 
         indicators['mfi'] = safe_last(ta.volume.money_flow_index(high, low, close, volume))
+        indicators['cmf'] = safe_last(ta.volume.chaikin_money_flow(high, low, close, volume))
+        indicators['force_index'] = safe_last(ta.volume.force_index(close, volume))
 
         indicators['cci'] = safe_last(ta.trend.cci(high, low, close))
         indicators['williams_r'] = safe_last(ta.momentum.williams_r(
@@ -206,7 +245,10 @@ class TechnicalAnalyzer:
         )
 
         for key, value in indicators.items():
-            if pd.isna(value):
+            try:
+                if pd.isna(value) or not np.isfinite(float(value)):
+                    indicators[key] = 0.0
+            except Exception:
                 indicators[key] = 0.0
 
         return indicators
@@ -230,6 +272,11 @@ class TechnicalAnalyzer:
         else:
             strength = SignalStrength.STRONG if ind['macd_hist'] < ind['macd_hist_prev'] else SignalStrength.MODERATE
             signals.append(TechnicalSignal("MACD", "sell", strength, ind['macd'], "MACD below signal"))
+
+        if ind['ppo'] > ind['ppo_signal']:
+            signals.append(TechnicalSignal("PPO", "buy", SignalStrength.WEAK, ind['ppo'], "PPO above signal"))
+        elif ind['ppo'] < ind['ppo_signal']:
+            signals.append(TechnicalSignal("PPO", "sell", SignalStrength.WEAK, ind['ppo'], "PPO below signal"))
 
         if close > ind['sma_20']:
             signals.append(TechnicalSignal("SMA", "buy", SignalStrength.MODERATE, ind['sma_20'], "Price above SMA 20"))
@@ -264,6 +311,16 @@ class TechnicalAnalyzer:
             signals.append(TechnicalSignal("MFI", "buy", SignalStrength.MODERATE, ind['mfi'], "Money flow oversold"))
         elif ind['mfi'] > 80:
             signals.append(TechnicalSignal("MFI", "sell", SignalStrength.MODERATE, ind['mfi'], "Money flow overbought"))
+
+        if ind['cmf'] > 0.1:
+            signals.append(TechnicalSignal("CMF", "buy", SignalStrength.WEAK, ind['cmf'], "Positive money flow"))
+        elif ind['cmf'] < -0.1:
+            signals.append(TechnicalSignal("CMF", "sell", SignalStrength.WEAK, ind['cmf'], "Negative money flow"))
+
+        if ind['uo'] < 30:
+            signals.append(TechnicalSignal("Ultimate Osc", "buy", SignalStrength.WEAK, ind['uo'], "Ultimate oscillator oversold"))
+        elif ind['uo'] > 70:
+            signals.append(TechnicalSignal("Ultimate Osc", "sell", SignalStrength.WEAK, ind['uo'], "Ultimate oscillator overbought"))
 
         if ind['cci'] < -100:
             signals.append(TechnicalSignal("CCI", "buy", SignalStrength.WEAK, ind['cci'], "CCI oversold"))

@@ -150,7 +150,9 @@ class StockChart(QWidget):
         self.overlay_enabled: dict[str, bool] = {
             "sma20": True,
             "sma50": True,
+            "sma200": False,
             "ema21": True,
+            "ema55": False,
             "bb_upper": True,
             "bb_lower": True,
             "vwap20": True,
@@ -219,9 +221,17 @@ class StockChart(QWidget):
                 pen=pg.mkPen(color="#d2a8ff", width=1, style=Qt.PenStyle.DashLine),
                 name="SMA50",
             ),
+            "sma200": self.plot_widget.plot(
+                pen=pg.mkPen(color="#c9d1d9", width=1, style=Qt.PenStyle.DashLine),
+                name="SMA200",
+            ),
             "ema21": self.plot_widget.plot(
                 pen=pg.mkPen(color="#ffa657", width=1.2, style=Qt.PenStyle.DotLine),
                 name="EMA21",
+            ),
+            "ema55": self.plot_widget.plot(
+                pen=pg.mkPen(color="#f2cc60", width=1, style=Qt.PenStyle.DotLine),
+                name="EMA55",
             ),
             "bb_upper": self.plot_widget.plot(
                 pen=pg.mkPen(color="#8b949e", width=1, style=Qt.PenStyle.DashLine),
@@ -303,7 +313,6 @@ class StockChart(QWidget):
             # Render the full loaded window (7-day bars are prepared in app layer).
             # Keep a high cap for safety on very large inputs.
             render_bars = self._bars[-3000:]
-            recent_range_pcts: list[float] = []
             for b in render_bars:
                 try:
                     o = float(b.get("open", 0) or 0)
@@ -314,11 +323,13 @@ class StockChart(QWidget):
                     if c <= 0:
                         continue
 
-                    # Drop impossible jumps between consecutive candles
-                    # to prevent broken spikes from corrupting the chart.
+                    # App layer already sanitizes OHLC heavily. Keep only a
+                    # very wide sanity guard here to avoid corrupt bars.
+                    iv = str(b.get("interval", default_iv) or default_iv).lower()
                     if prev_close and prev_close > 0:
                         jump = abs(c / prev_close - 1.0)
-                        if jump > 0.20:
+                        jump_cap = 0.45 if iv in ("1d", "1wk", "1mo") else 0.22
+                        if jump > jump_cap:
                             continue
 
                     # Fix missing OHLC values
@@ -329,82 +340,15 @@ class StockChart(QWidget):
                     if l_val <= 0:
                         l_val = min(o, c)
 
-                    # Ensure high >= low
+                    # Preserve valid candle body/wicks and only enforce OHLC coherence.
+                    top = max(o, c)
+                    bot = min(o, c)
+                    if h < top:
+                        h = top
+                    if l_val > bot:
+                        l_val = bot
                     if h < l_val:
                         h, l_val = l_val, h
-
-                    # Clamp obvious outlier candle ranges to avoid visual spikes
-                    # from bad ticks or malformed bars.
-                    iv = str(b.get("interval", default_iv) or default_iv).lower()
-                    if iv == "1m":
-                        max_move = 0.012
-                        body_cap_pct = 0.004
-                        wick_cap_pct = 0.008
-                    elif iv == "5m":
-                        max_move = 0.025
-                        body_cap_pct = 0.009
-                        wick_cap_pct = 0.016
-                    elif iv in ("15m", "30m", "60m", "1h"):
-                        max_move = 0.045
-                        body_cap_pct = 0.015
-                        wick_cap_pct = 0.03
-                    else:
-                        max_move = 0.12
-                        body_cap_pct = 0.04
-                        wick_cap_pct = 0.08
-                    ref = prev_close if (prev_close and prev_close > 0) else c
-                    if ref > 0:
-                        hi_cap = ref * (1.0 + max_move)
-                        lo_cap = ref * (1.0 - max_move)
-                        h = min(h, hi_cap)
-                        l_val = max(l_val, lo_cap)
-                        o = min(max(o, lo_cap), hi_cap)
-                        c = min(max(c, lo_cap), hi_cap)
-                        # Prevent oversized candle bodies from stale/replayed partial bars.
-                        body_cap = max(ref * body_cap_pct, 1e-8)
-                        body = c - o
-                        if abs(body) > body_cap:
-                            if body > 0:
-                                o = c - body_cap
-                            else:
-                                o = c + body_cap
-
-                        top = max(o, c)
-                        bot = min(o, c)
-                        wick_cap = max(ref * wick_cap_pct, body_cap * 1.25)
-                        h = min(h, top + wick_cap)
-                        l_val = max(l_val, bot - wick_cap)
-                        if h < l_val:
-                            h, l_val = l_val, h
-
-                    # Adaptive outlier trim based on recent candle ranges.
-                    # This suppresses occasional feed spikes without flattening
-                    # genuinely volatile symbols.
-                    rng_pct = (h - l_val) / max(c, 1e-8)
-                    if recent_range_pcts:
-                        med = float(np.median(recent_range_pcts[-80:]))
-                        if iv == "1m":
-                            floor = 0.006
-                        elif iv == "5m":
-                            floor = 0.010
-                        elif iv in ("15m", "30m", "60m", "1h"):
-                            floor = 0.018
-                        else:
-                            floor = 0.035
-                        outlier_cap = max(floor, med * 3.6)
-                        target_cap = max(floor * 0.85, med * 2.2)
-                        if rng_pct > outlier_cap:
-                            top = max(o, c)
-                            bot = min(o, c)
-                            body = max(0.0, top - bot)
-                            allow = max(0.0, (target_cap * max(c, 1e-8)) - body)
-                            h = min(h, top + (allow * 0.5))
-                            l_val = max(l_val, bot - (allow * 0.5))
-                            if h < l_val:
-                                h, l_val = l_val, h
-                            rng_pct = (h - l_val) / max(c, 1e-8)
-                    if np.isfinite(rng_pct) and rng_pct > 0:
-                        recent_range_pcts.append(float(min(rng_pct, 1.0)))
 
                     x_pos = len(closes)
                     ohlc.append((x_pos, o, c, l_val, h))
@@ -563,7 +507,9 @@ class StockChart(QWidget):
         arr = np.array(closes, dtype=float)
         self._plot_series("sma20", self._rolling_mean(arr, 20))
         self._plot_series("sma50", self._rolling_mean(arr, 50))
+        self._plot_series("sma200", self._rolling_mean(arr, 200))
         self._plot_series("ema21", self._ema(arr, 21))
+        self._plot_series("ema55", self._ema(arr, 55))
         bb_mid = self._rolling_mean(arr, 20)
         bb_std = np.full(len(arr), np.nan)
         if len(arr) >= 20:
@@ -626,7 +572,9 @@ class StockChart(QWidget):
         for key, name in (
             ("sma20", "SMA20"),
             ("sma50", "SMA50"),
+            ("sma200", "SMA200"),
             ("ema21", "EMA21"),
+            ("ema55", "EMA55"),
             ("bb_upper", "Bollinger"),
             ("vwap20", "VWAP20"),
         ):

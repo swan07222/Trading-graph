@@ -981,6 +981,8 @@ class DataFetcher:
         self._last_source_fail_warn_global_ts: float = 0.0
         self._source_fail_warn_global_cooldown_s: float = 8.0
         self._last_network_mode: tuple[bool, bool, bool] | None = None
+        self._last_network_force_refresh_ts: float = 0.0
+        self._network_force_refresh_cooldown_s: float = 20.0
         self._init_sources()
 
     def _init_sources(self) -> None:
@@ -1201,25 +1203,72 @@ class DataFetcher:
 
         result: dict[str, Quote] = {}
 
-        # Try batch-capable sources first
-        for source in self._get_active_sources():
+        # Try batch-capable sources first. Merge partial responses across sources.
+        sources = self._get_active_sources()
+        for source in sources:
             fn = getattr(source, "get_realtime_batch", None)
-            if callable(fn):
-                try:
-                    out = fn(cleaned)
-                    if isinstance(out, dict) and out:
-                        result.update(out)
-                        break
-                except Exception:
-                    continue
+            if not callable(fn):
+                continue
+            remaining = [c for c in cleaned if c not in result]
+            if not remaining:
+                break
+            try:
+                out = fn(remaining)
+                if isinstance(out, dict) and out:
+                    for code, q in out.items():
+                        code6 = self.clean_code(code)
+                        if not code6 or code6 not in remaining:
+                            continue
+                        if q and float(getattr(q, "price", 0.0) or 0.0) > 0:
+                            result[code6] = q
+            except Exception:
+                continue
 
         missing = [c for c in cleaned if c not in result]
         if missing:
             self._fill_from_spot_cache(missing, result)
 
+        # Non-batch fallback path for remaining symbols.
+        missing = [c for c in cleaned if c not in result]
+        if missing:
+            self._fill_from_single_source_quotes(missing, result, sources)
+
+        # Connectivity can flip (VPN toggles, transient routing). Force one refresh and retry.
+        missing = [c for c in cleaned if c not in result]
+        if missing and self._maybe_force_network_refresh():
+            retry_sources = self._get_active_sources()
+            for source in retry_sources:
+                fn = getattr(source, "get_realtime_batch", None)
+                if not callable(fn):
+                    continue
+                remaining = [c for c in cleaned if c not in result]
+                if not remaining:
+                    break
+                try:
+                    out = fn(remaining)
+                    if isinstance(out, dict) and out:
+                        for code, q in out.items():
+                            code6 = self.clean_code(code)
+                            if not code6 or code6 not in remaining:
+                                continue
+                            if q and float(getattr(q, "price", 0.0) or 0.0) > 0:
+                                result[code6] = q
+                except Exception:
+                    continue
+            missing = [c for c in cleaned if c not in result]
+            if missing:
+                self._fill_from_spot_cache(missing, result)
+                self._fill_from_single_source_quotes(
+                    [c for c in cleaned if c not in result], result, retry_sources
+                )
+
         # Last-good fallback
         if not result:
             result = self._fallback_last_good(cleaned)
+
+        # Local DB fallback for symbols still missing all real-time providers.
+        if not result:
+            result = self._fallback_last_close_from_db(cleaned)
 
         # Update last-good store
         if result:
@@ -1264,6 +1313,38 @@ class DataFetcher:
         except Exception:
             pass
 
+    def _fill_from_single_source_quotes(
+        self,
+        missing: list[str],
+        result: dict[str, Quote],
+        sources: list[DataSource],
+    ) -> None:
+        """Fill missing symbols using per-symbol source APIs."""
+        if not missing:
+            return
+        remaining = list(dict.fromkeys(self.clean_code(c) for c in missing if c))
+        if not remaining:
+            return
+
+        for source in sources:
+            if not remaining:
+                break
+            fn = getattr(source, "get_realtime_batch", None)
+            # Skip sources already tried via batch path.
+            if callable(fn):
+                continue
+            next_remaining: list[str] = []
+            for code6 in remaining:
+                try:
+                    q = source.get_realtime(code6)
+                    if q and float(getattr(q, "price", 0.0) or 0.0) > 0:
+                        result[code6] = q
+                    else:
+                        next_remaining.append(code6)
+                except Exception:
+                    next_remaining.append(code6)
+            remaining = next_remaining
+
     def _fallback_last_good(self, codes: list[str]) -> dict[str, Quote]:
         """Return last-good quotes if they are recent enough."""
         result: dict[str, Quote] = {}
@@ -1277,6 +1358,67 @@ class DataFetcher:
                     if age <= _LAST_GOOD_MAX_AGE:
                         result[c] = q
         return result
+
+    def _fallback_last_close_from_db(self, codes: list[str]) -> dict[str, Quote]:
+        """
+        Fallback quote from local DB (last close).
+        Delayed-safe value used only when all live providers are unavailable.
+        """
+        out: dict[str, Quote] = {}
+        for code in codes:
+            code6 = self.clean_code(code)
+            if not code6:
+                continue
+            try:
+                df = self._db.get_bars(code6, limit=1)
+                if df is None or df.empty:
+                    continue
+                row = df.iloc[-1]
+                px = float(row.get("close", 0.0) or 0.0)
+                if px <= 0:
+                    continue
+                ts = None
+                try:
+                    ts = df.index[-1].to_pydatetime()
+                except Exception:
+                    ts = datetime.now()
+                out[code6] = Quote(
+                    code=code6,
+                    name="",
+                    price=px,
+                    open=float(row.get("open", px) or px),
+                    high=float(row.get("high", px) or px),
+                    low=float(row.get("low", px) or px),
+                    close=px,
+                    volume=int(row.get("volume", 0) or 0),
+                    amount=float(row.get("amount", 0.0) or 0.0),
+                    change=0.0,
+                    change_pct=0.0,
+                    source="localdb_last_close",
+                    is_delayed=True,
+                    latency_ms=0.0,
+                    timestamp=ts,
+                )
+            except Exception:
+                continue
+        return out
+
+    def _maybe_force_network_refresh(self) -> bool:
+        """Force network redetection at most once per cooldown window."""
+        now = time.time()
+        if (
+            now - float(self._last_network_force_refresh_ts)
+            < self._network_force_refresh_cooldown_s
+        ):
+            return False
+        self._last_network_force_refresh_ts = now
+        try:
+            from core.network import get_network_env
+
+            _ = get_network_env(force_refresh=True)
+            return True
+        except Exception:
+            return False
 
     def _fetch_from_sources_instrument(
         self, inst: dict, days: int, interval: str = "1d"
@@ -1547,12 +1689,18 @@ class DataFetcher:
             ttl = min(float(CONFIG.data.cache_ttl_hours), 1.0 / 120.0)
 
         cache_key = f"history:{key}:{interval}:{count}"
+        stale_cached_df = pd.DataFrame()
 
         if use_cache:
             cached_df = self._cache.get(cache_key, ttl)
             if isinstance(cached_df, pd.DataFrame) and not cached_df.empty:
                 cached_df = self._clean_dataframe(cached_df)
+                stale_cached_df = cached_df
                 if len(cached_df) >= min(count, 100):
+                    return cached_df.tail(count)
+                if offline and len(cached_df) >= max(20, min(count, 80)):
+                    # Offline safety: allow partially short cache windows instead
+                    # of returning empty and breaking chart/backtest workflows.
                     return cached_df.tail(count)
 
         session_df = self._get_session_history(
@@ -1560,7 +1708,12 @@ class DataFetcher:
             interval=interval,
             bars=count,
         )
-        if not session_df.empty and len(session_df) >= min(count, 60):
+        if (
+            interval in _INTRADAY_INTERVALS
+            and not session_df.empty
+            and count <= 500
+            and len(session_df) >= count
+        ):
             return self._cache_tail(cache_key, session_df, count)
 
         is_cn_equity = (
@@ -1579,11 +1732,12 @@ class DataFetcher:
 
         # Non-CN instrument
         if offline:
-            return pd.DataFrame()
-        df = self._clean_dataframe(
-            self._fetch_from_sources_instrument(
-                inst, days=fetch_days, interval=interval
-            )
+            return stale_cached_df.tail(count) if not stale_cached_df.empty else pd.DataFrame()
+        df = self._fetch_history_with_depth_retry(
+            inst=inst,
+            interval=interval,
+            requested_count=count,
+            base_fetch_days=fetch_days,
         )
         if df.empty:
             return pd.DataFrame()
@@ -1617,6 +1771,43 @@ class DataFetcher:
         max_bars = int(INTERVAL_MAX_DAYS.get(iv, 365) * max(1.0, bpd))
         return max(1, min(approx, max_bars))
 
+    def _fetch_history_with_depth_retry(
+        self,
+        inst: dict,
+        interval: str,
+        requested_count: int,
+        base_fetch_days: int,
+    ) -> pd.DataFrame:
+        """
+        Fetch history with adaptive depth retries.
+        Useful when a provider returns a short window under transient limits.
+        """
+        iv = str(interval or "1d").lower()
+        max_days = int(INTERVAL_MAX_DAYS.get(iv, 10_000))
+        base = max(1, int(base_fetch_days))
+        candidates = [base, int(base * 1.8), int(base * 2.6)]
+
+        tried: set[int] = set()
+        best = pd.DataFrame()
+        # Accept slightly short windows for very long requests.
+        target = max(60, int(min(requested_count, 1200)))
+
+        for days in candidates:
+            d = max(1, min(int(days), max_days))
+            if d in tried:
+                continue
+            tried.add(d)
+            df = self._clean_dataframe(
+                self._fetch_from_sources_instrument(
+                    inst, days=d, interval=iv
+                )
+            )
+            if not df.empty and len(df) > len(best):
+                best = df
+            if len(best) >= target:
+                break
+        return best
+
     def _get_history_cn_intraday(
         self,
         inst: dict,
@@ -1639,10 +1830,11 @@ class DataFetcher:
 
         online_df = pd.DataFrame()
         if not offline:
-            online_df = self._clean_dataframe(
-                self._fetch_from_sources_instrument(
-                    inst, days=fetch_days, interval=interval
-                )
+            online_df = self._fetch_history_with_depth_retry(
+                inst=inst,
+                interval=interval,
+                requested_count=count,
+                base_fetch_days=fetch_days,
             )
 
         if offline:
@@ -1688,10 +1880,11 @@ class DataFetcher:
             merged_offline = self._merge_parts(db_df, session_df)
             return merged_offline.tail(count) if not merged_offline.empty else pd.DataFrame()
 
-        online_df = self._clean_dataframe(
-            self._fetch_from_sources_instrument(
-                inst, days=fetch_days, interval="1d"
-            )
+        online_df = self._fetch_history_with_depth_retry(
+            inst=inst,
+            interval="1d",
+            requested_count=count,
+            base_fetch_days=fetch_days,
         )
         merged = self._merge_parts(db_df, session_df, online_df)
         if merged.empty:

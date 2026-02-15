@@ -1,5 +1,6 @@
 # ui/app.py
 import os
+import signal
 import sys
 import threading
 import time
@@ -42,6 +43,7 @@ from PyQt6.QtWidgets import (
 )
 
 from config.settings import CONFIG, TradingMode
+from core.constants import get_lot_size
 from core.types import (
     AutoTradeAction,
     AutoTradeMode,
@@ -86,6 +88,36 @@ def _normalize_stock_code(text: str) -> str:
     text = "".join(c for c in text if c.isdigit())
     return text.zfill(6) if text else ""
 
+
+def _sanitize_watch_list(
+    codes: list[str] | tuple[str, ...] | str | None,
+    max_size: int = 50,
+) -> list[str]:
+    """Normalize, validate, de-duplicate, and cap watchlist symbols."""
+    if not codes:
+        return []
+    if isinstance(codes, str):
+        iterable = [codes]
+    else:
+        iterable = list(codes)
+
+    cap = max(1, int(max_size or 50))
+    out: list[str] = []
+    seen: set[str] = set()
+
+    for raw in iterable:
+        code = _normalize_stock_code(str(raw or ""))
+        if not code or not _validate_stock_code(code):
+            continue
+        if code in seen:
+            continue
+        seen.add(code)
+        out.append(code)
+        if len(out) >= cap:
+            break
+
+    return out
+
 # REAL-TIME MONITORING THREAD
 
 class RealTimeMonitor(QThread):
@@ -117,14 +149,18 @@ class RealTimeMonitor(QThread):
     ):
         super().__init__()
         self.predictor = predictor
-        self.watch_list = list(watch_list)[:self.MAX_WATCHLIST_SIZE]
+        raw_watch = list(watch_list or [])
+        self.watch_list = _sanitize_watch_list(
+            raw_watch,
+            max_size=self.MAX_WATCHLIST_SIZE,
+        )
         self.running = False
         self._stop_event = threading.Event()
 
-        if len(watch_list) > self.MAX_WATCHLIST_SIZE:
+        if len(raw_watch) > len(self.watch_list):
             log.warning(
-                f"Watchlist truncated from {len(watch_list)} "
-                f"to {self.MAX_WATCHLIST_SIZE}"
+                f"Watchlist sanitized from {len(raw_watch)} "
+                f"to {len(self.watch_list)} symbols"
             )
 
         self.scan_interval = 30  # seconds between scan cycles
@@ -325,7 +361,10 @@ class MainApp(QMainWindow):
         self.workers: dict[str, WorkerThread] = {}
         self._active_workers: set[WorkerThread] = set()
         self.monitor: RealTimeMonitor | None = None
-        self.watch_list: list[str] = CONFIG.STOCK_POOL[:10]
+        self.watch_list: list[str] = _sanitize_watch_list(
+            list(getattr(CONFIG, "STOCK_POOL", [])[:10]),
+            max_size=self.MAX_WATCHLIST_SIZE,
+        )
 
         # Real-time state with thread safety
         self._last_forecast_refresh_ts: float = 0.0
@@ -2925,6 +2964,13 @@ class MainApp(QMainWindow):
 
     def _update_watchlist(self):
         """Update watchlist display"""
+        sanitized = _sanitize_watch_list(
+            self.watch_list,
+            max_size=self.MAX_WATCHLIST_SIZE,
+        )
+        if sanitized != self.watch_list:
+            self.watch_list = sanitized
+
         current_count = self.watchlist.rowCount()
 
         if current_count != len(self.watch_list):
@@ -3022,8 +3068,13 @@ class MainApp(QMainWindow):
 
         if normalized not in self.watch_list:
             self.watch_list.append(normalized)
+            self.watch_list = _sanitize_watch_list(
+                self.watch_list,
+                max_size=self.MAX_WATCHLIST_SIZE,
+            )
             self._update_watchlist()
             self.log(f"Added {normalized} to watchlist", "info")
+            self._ensure_feed_subscription(normalized)
 
             # Sync with auto-trader
             if self.executor and self.executor.auto_trader:
@@ -4105,14 +4156,19 @@ class MainApp(QMainWindow):
             self.log("Invalid chart price", "warning")
             return
 
+        try:
+            lot = max(1, int(get_lot_size(symbol)))
+        except Exception:
+            lot = 1
+
         qty, ok = QInputDialog.getInt(
             self,
             "Chart Quick Trade",
-            f"{side.upper()} {symbol} @ {price:.2f}\nQuantity:",
-            100,
-            1,
+            f"{side.upper()} {symbol} @ {price:.2f}\nQuantity (lot {lot}):",
+            lot,
+            lot,
             5_000_000,
-            1,
+            lot,
         )
         if not ok:
             return
@@ -4129,10 +4185,27 @@ class MainApp(QMainWindow):
     ) -> None:
         if self.executor is None:
             return
+        try:
+            lot = max(1, int(get_lot_size(symbol)))
+        except Exception:
+            lot = 1
+
+        requested_qty = max(1, int(qty))
+        normalized_qty = max(lot, requested_qty)
+        if normalized_qty % lot != 0:
+            normalized_qty = (normalized_qty // lot) * lot
+            if normalized_qty <= 0:
+                normalized_qty = lot
+        if normalized_qty != requested_qty:
+            self.log(
+                f"Adjusted quantity {requested_qty} -> {normalized_qty} (lot {lot})",
+                "info",
+            )
+
         signal = TradeSignal(
             symbol=symbol,
             side=side,
-            quantity=max(1, int(qty)),
+            quantity=normalized_qty,
             price=max(0.0, float(price)),
             strategy="chart_manual",
             reasons=["Manual chart quick-trade"],
@@ -4142,7 +4215,7 @@ class MainApp(QMainWindow):
             ok = self.executor.submit(signal)
             if ok:
                 self.log(
-                    f"Chart trade submitted: {side.value.upper()} {qty} {symbol} @ {price:.2f}",
+                    f"Chart trade submitted: {side.value.upper()} {normalized_qty} {symbol} @ {price:.2f}",
                     "success",
                 )
             else:
@@ -5135,8 +5208,13 @@ class MainApp(QMainWindow):
         """Save application state for next session"""
         try:
             import json
+            safe_watch_list = _sanitize_watch_list(
+                self.watch_list,
+                max_size=self.MAX_WATCHLIST_SIZE,
+            )
+            self.watch_list = safe_watch_list
             state = {
-                'watch_list': self.watch_list,
+                'watch_list': safe_watch_list,
                 'interval': self.interval_combo.currentText(),
                 'forecast': self.forecast_spin.value(),
                 'lookback': self.lookback_spin.value(),
@@ -5165,12 +5243,10 @@ class MainApp(QMainWindow):
 
                 if 'watch_list' in state:
                     loaded = state['watch_list']
-                    validated = [
-                        c for c in loaded
-                        if _validate_stock_code(c)
-                    ][:self.MAX_WATCHLIST_SIZE]
-                    if validated:
-                        self.watch_list = validated
+                    self.watch_list = _sanitize_watch_list(
+                        loaded,
+                        max_size=self.MAX_WATCHLIST_SIZE,
+                    )
                 if 'interval' in state:
                     self.interval_combo.setCurrentText(state['interval'])
                 if 'forecast' in state:
@@ -5222,7 +5298,47 @@ def run_app():
     window = MainApp()
     window.show()
 
-    sys.exit(app.exec())
+    # Keep Python signal handling responsive while Qt loop is running.
+    heartbeat = QTimer()
+    heartbeat.setInterval(200)
+    heartbeat.timeout.connect(lambda: None)
+    heartbeat.start()
+
+    previous_sigint = _install_sigint_handler(app)
+    exit_code = 0
+    try:
+        exit_code = int(app.exec())
+    except KeyboardInterrupt:
+        log.info("UI interrupted by user")
+    finally:
+        try:
+            heartbeat.stop()
+        except Exception:
+            pass
+        _restore_sigint_handler(previous_sigint)
+
+    sys.exit(exit_code)
+
+
+def _install_sigint_handler(app: QApplication):
+    """Route Ctrl+C to Qt quit for graceful terminal shutdown."""
+    try:
+        previous = signal.getsignal(signal.SIGINT)
+        signal.signal(signal.SIGINT, lambda *_: app.quit())
+        return previous
+    except Exception as e:
+        log.debug(f"SIGINT handler install failed: {e}")
+        return None
+
+
+def _restore_sigint_handler(previous_handler) -> None:
+    """Restore previous SIGINT handler after app loop exits."""
+    if previous_handler is None:
+        return
+    try:
+        signal.signal(signal.SIGINT, previous_handler)
+    except Exception:
+        pass
 
 if __name__ == "__main__":
     run_app()

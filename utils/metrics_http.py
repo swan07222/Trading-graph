@@ -98,6 +98,61 @@ def _build_runtime_snapshot(limit: int = 20) -> dict[str, Any]:
     }
 
 
+def _build_alert_snapshot(limit: int = 20) -> dict[str, Any]:
+    """Best-effort alert pipeline snapshot."""
+    try:
+        from trading.alerts import get_alert_manager
+
+        mgr = get_alert_manager()
+        pending = mgr.get_pending()
+        history = mgr.get_history(limit=max(1, min(int(limit), 200)))
+        stats = mgr.get_alert_stats()
+    except Exception as exc:
+        return {"status": "unavailable", "reason": str(exc)}
+
+    return {
+        "status": "ok",
+        "pending": _normalize_json(pending),
+        "history": _normalize_json(history),
+        "stats": _normalize_json(stats),
+    }
+
+
+def _build_policy_snapshot() -> dict[str, Any]:
+    """Best-effort governance policy snapshot."""
+    try:
+        from utils.policy import get_trade_policy_engine
+
+        engine = get_trade_policy_engine()
+        raw = getattr(engine, "_policy", {}) or {}
+        return {
+            "status": "ok",
+            "policy_path": str(getattr(engine, "path", "")),
+            "policy": _normalize_json(raw),
+        }
+    except Exception as exc:
+        return {"status": "unavailable", "reason": str(exc)}
+
+
+def _build_strategy_marketplace_snapshot() -> dict[str, Any]:
+    """Best-effort strategy marketplace status."""
+    try:
+        from analysis.strategy_marketplace import StrategyMarketplace
+
+        marketplace = StrategyMarketplace()
+        entries = marketplace.list_entries()
+        enabled = marketplace.get_enabled_ids()
+        summary = marketplace.get_integrity_summary()
+        return {
+            "status": "ok",
+            "entries": _normalize_json(entries),
+            "enabled_ids": _normalize_json(enabled),
+            "integrity": _normalize_json(summary),
+        }
+    except Exception as exc:
+        return {"status": "unavailable", "reason": str(exc)}
+
+
 class MetricsHandler(BaseHTTPRequestHandler):
     """HTTP handler for metrics, health, and lightweight JSON snapshots."""
 
@@ -218,6 +273,40 @@ class MetricsHandler(BaseHTTPRequestHandler):
                 200,
                 {
                     "snapshot": _build_runtime_snapshot(limit=limit),
+                    "generated_at": datetime.now(UTC).isoformat(),
+                },
+            )
+            return
+
+        if path == "/api/v1/alerts/stats":
+            try:
+                limit = int(query.get("limit", ["20"])[0] or "20")
+            except ValueError:
+                limit = 20
+            self._send_json(
+                200,
+                {
+                    "snapshot": _build_alert_snapshot(limit=limit),
+                    "generated_at": datetime.now(UTC).isoformat(),
+                },
+            )
+            return
+
+        if path == "/api/v1/governance/policy":
+            self._send_json(
+                200,
+                {
+                    "snapshot": _build_policy_snapshot(),
+                    "generated_at": datetime.now(UTC).isoformat(),
+                },
+            )
+            return
+
+        if path == "/api/v1/strategy/marketplace":
+            self._send_json(
+                200,
+                {
+                    "snapshot": _build_strategy_marketplace_snapshot(),
                     "generated_at": datetime.now(UTC).isoformat(),
                 },
             )

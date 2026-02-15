@@ -28,3 +28,16 @@ def test_access_control_custom_role_grants():
     ac.set_role("qa")
     assert ac.check("view") is True
     assert ac.check("analyze") is True
+
+
+def test_access_control_2fa_ttl_expiry_blocks_live():
+    old_ttl = int(getattr(CONFIG.security, "two_factor_ttl_minutes", 30))
+    try:
+        CONFIG.security.two_factor_ttl_minutes = 1
+        ac = AccessControl()
+        ac.set_role("live_trader")
+        ac.mark_2fa_verified(True)
+        ac._two_factor_verified_at = datetime.now() - timedelta(minutes=2)
+        assert ac.check("trade_live") is False
+    finally:
+        CONFIG.security.two_factor_ttl_minutes = old_ttl
