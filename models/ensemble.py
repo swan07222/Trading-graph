@@ -40,11 +40,11 @@ def _get_effective_learning_rate() -> float:
     """
     try:
         from models.auto_learner import get_effective_learning_rate
-        return get_effective_learning_rate()
+        return float(get_effective_learning_rate())
     except ImportError:
         pass
 
-    return CONFIG.model.learning_rate
+    return float(CONFIG.model.learning_rate)
 
 @dataclass
 class EnsemblePrediction:
@@ -74,7 +74,7 @@ class EnsemblePrediction:
 
     @property
     def is_confident(self) -> bool:
-        return self.confidence >= CONFIG.model.min_confidence
+        return bool(self.confidence >= float(CONFIG.model.min_confidence))
 
 def _build_amp_context(device: str):
     """Return (context_factory, GradScaler_or_None) compatible with torch >= 1.9."""
@@ -484,7 +484,7 @@ class EnsembleModel:
         amp_ctx, scaler = _build_amp_context(self.device)
         use_amp = scaler is not None
 
-        history = {"train_loss": [], "val_loss": [], "val_acc": []}
+        history: dict[str, list[float]] = {"train_loss": [], "val_loss": [], "val_acc": []}
         best_val_acc = 0.0
         patience_counter = 0
         best_state: dict | None = None
@@ -851,7 +851,7 @@ class EnsembleModel:
     # ------------------------------------------------------------------
     # ------------------------------------------------------------------
 
-    def save(self, path: str | None = None):
+    def save(self, path: str | Path | None = None):
         """
         Save ensemble atomically.
 
@@ -876,9 +876,10 @@ class EnsembleModel:
             if path is None:
                 save_dir = Path(CONFIG.model_dir)
                 save_dir.mkdir(parents=True, exist_ok=True)
-                path = save_dir / f"ensemble_{interval}_{horizon}.pt"
-            path = Path(path)
-            path.parent.mkdir(parents=True, exist_ok=True)
+                path_obj = save_dir / f"ensemble_{interval}_{horizon}.pt"
+            else:
+                path_obj = Path(path)
+            path_obj.parent.mkdir(parents=True, exist_ok=True)
 
             # FIX SAVE: Copy state dicts under lock to prevent mutation
             model_states = {}
@@ -908,14 +909,14 @@ class EnsembleModel:
 
         # Save outside lock (I/O bound)
         if atomic_torch_save is not None:
-            atomic_torch_save(path, state)
+            atomic_torch_save(path_obj, state)
         else:
-            torch.save(state, path)
+            torch.save(state, path_obj)
 
         manifest = {
             "version": datetime.now().strftime("%Y%m%d_%H%M%S"),
             "saved_at": datetime.now().isoformat(),
-            "ensemble_path": path.name,
+            "ensemble_path": path_obj.name,
             "scaler_path": f"scaler_{interval}_{horizon}.pkl",
             "input_size": self.input_size,
             "num_models": len(model_states),
@@ -926,7 +927,7 @@ class EnsembleModel:
             "trained_stock_codes": list(self.trained_stock_codes),
         }
 
-        manifest_path = path.parent / f"model_manifest_{path.stem}.json"
+        manifest_path = path_obj.parent / f"model_manifest_{path_obj.stem}.json"
 
         if atomic_write_json is not None:
             atomic_write_json(manifest_path, manifest)
@@ -935,9 +936,9 @@ class EnsembleModel:
             with open(manifest_path, 'w') as f:
                 json.dump(manifest, f, indent=2)
 
-        log.info(f"Ensemble saved -> {path}")
+        log.info(f"Ensemble saved -> {path_obj}")
 
-    def load(self, path: str | None = None) -> bool:
+    def load(self, path: str | Path | None = None) -> bool:
         """
         Load ensemble from file.
 
@@ -947,16 +948,13 @@ class EnsembleModel:
         Returns:
             True if load succeeded, False otherwise
         """
-        if path is None:
-            path = str(CONFIG.model_dir / "ensemble_1d_5.pt")
-
-        path = Path(path)
-        if not path.exists():
-            log.warning(f"No saved model at {path}")
+        path_obj = Path(path) if path is not None else (Path(CONFIG.model_dir) / "ensemble_1d_5.pt")
+        if not path_obj.exists():
+            log.warning(f"No saved model at {path_obj}")
             return False
 
         try:
-            state = torch.load(path, map_location=self.device, weights_only=False)
+            state = torch.load(path_obj, map_location=self.device, weights_only=False)
 
             with self._lock:
                 self.input_size = int(state["input_size"])
@@ -1015,7 +1013,7 @@ class EnsembleModel:
                 self.temperature = float(state.get("temperature", 1.0))
 
             if not self.models:
-                log.error(f"No models successfully loaded from {path}")
+                log.error(f"No models successfully loaded from {path_obj}")
                 return False
 
             log.info(
@@ -1025,7 +1023,7 @@ class EnsembleModel:
             return True
 
         except Exception as e:
-            log.error(f"Failed to load ensemble from {path}: {e}", exc_info=True)
+            log.error(f"Failed to load ensemble from {path_obj}: {e}", exc_info=True)
             return False
 
     # ------------------------------------------------------------------

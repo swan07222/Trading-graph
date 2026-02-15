@@ -119,3 +119,44 @@ def test_session_cache_normalizes_bad_numeric_inputs(tmp_path):
     assert row["open"] == 10.5
     assert row["high"] >= row["close"]
     assert row["low"] <= row["close"]
+
+
+def test_session_cache_read_history_scrubs_outlier_jumps(tmp_path):
+    cache = SessionBarCache(root=tmp_path / "session_bars")
+    symbol = "600519"
+    interval = "1m"
+
+    bars = [
+        {
+            "timestamp": "2026-02-12T09:30:00+00:00",
+            "open": 100.0,
+            "high": 101.0,
+            "low": 99.0,
+            "close": 100.0,
+            "final": True,
+        },
+        {
+            "timestamp": "2026-02-12T09:31:00+00:00",
+            "open": 250.0,
+            "high": 255.0,
+            "low": 245.0,
+            "close": 250.0,
+            "final": True,
+        },
+        {
+            "timestamp": "2026-02-12T09:32:00+00:00",
+            "open": 100.5,
+            "high": 101.5,
+            "low": 100.0,
+            "close": 101.0,
+            "final": True,
+        },
+    ]
+
+    for row in bars:
+        assert cache.append_bar(symbol, interval, row) is True
+
+    df = cache.read_history(symbol, interval, bars=10)
+    assert not df.empty
+    assert len(df) == 2
+    assert float(df["close"].max()) < 200.0

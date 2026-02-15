@@ -313,12 +313,13 @@ class AlertManager:
             from_addr = CONFIG.alerts.from_email or CONFIG.alerts.smtp_username or "trading-system@localhost"
             msg["From"] = f"Trading System <{from_addr}>"
             msg["To"] = ", ".join(CONFIG.alerts.email_recipients)
+            created_at = alert.created_at or datetime.now()
             body = (
                 "Trading System Alert\n"
                 "====================\n\n"
                 f"Category: {alert.category.value}\n"
                 f"Priority: {alert.priority.name}\n"
-                f"Time: {alert.created_at.isoformat()}\n\n"
+                f"Time: {created_at.isoformat()}\n\n"
                 f"{alert.message}\n\n"
                 "Details:\n"
                 f"{json.dumps(alert.details, indent=2)}\n"
@@ -391,7 +392,7 @@ class AlertManager:
             alerts = [a for a in alerts if a.priority == priority]
         return alerts[-limit:]
 
-    def get_alert_stats(self) -> dict[str, dict]:
+    def get_alert_stats(self) -> dict[str, Any]:
         with self._lock:
             total = len(self._history)
             acked = sum(1 for a in self._history if a.acknowledged_at is not None)
@@ -400,15 +401,16 @@ class AlertManager:
             for alert in self._history:
                 by_priority[alert.priority.name] += 1
                 by_category[alert.category.value] += 1
-            top_repeats = sorted(
-                (
-                    {"key": k, "count": int(v)}
-                    for k, v in self._repeat_counter.items()
-                    if int(v) > 1
-                ),
-                key=lambda x: x["count"],
-                reverse=True,
-            )[:10]
+            repeat_pairs = [
+                (k, int(v))
+                for k, v in self._repeat_counter.items()
+                if int(v) > 1
+            ]
+            repeat_pairs.sort(key=lambda item: item[1], reverse=True)
+            top_repeats = [
+                {"key": key, "count": count}
+                for key, count in repeat_pairs[:10]
+            ]
             return {
                 "total": total,
                 "acknowledged": acked,

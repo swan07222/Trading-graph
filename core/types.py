@@ -479,6 +479,8 @@ class TradeSignal:
     auto_trade_action_id: str = ""
     approvals_count: int = 0
     approved_by: list[str] = field(default_factory=list)
+    change_ticket: str = ""
+    business_justification: str = ""
     order_type: str = "limit"
     time_in_force: str = "day"
     strict_time_in_force: bool = False

@@ -71,6 +71,11 @@ The correct way is scenario-based expectation with strict risk limits.
 pip install -r requirements.txt
 ```
 
+Development/tooling deps (ruff, pytest, mypy):
+```bash
+pip install -r requirements-dev.txt
+```
+
 Optional GPU example (CUDA 11.8):
 ```bash
 pip3 install torch torchvision --index-url https://download.pytorch.org/whl/cu118
@@ -335,7 +340,70 @@ python scripts/generate_release_manifest.py --dist-dir dist --version v1.2.3 --o
 Optional manifest signature:
 - Set env var `RELEASE_MANIFEST_SECRET` in GitHub secrets for HMAC signature embedding.
 
-## 18) Multi-Provider Sentiment Fusion
+## 18) Operations Playbook (Deploy / Rollback / Observability)
+
+Operational runbook:
+- `docs/OPERATIONS_PLAYBOOK.md`
+
+Pre-deploy strict checks:
+```bash
+python scripts/release_preflight.py --observability-url http://127.0.0.1:9090
+```
+
+Regulated readiness gate:
+```bash
+python scripts/regulatory_readiness.py
+```
+
+HA/DR lease-fencing drill:
+```bash
+python scripts/ha_dr_drill.py --backend sqlite --ttl-seconds 5
+```
+
+Create deployment snapshot:
+```bash
+python scripts/deployment_snapshot.py create --snapshot-dir backups
+```
+
+Rollback (dry-run first, then confirm):
+```bash
+python scripts/deployment_snapshot.py restore --archive backups/snapshot_<tag>.tar.gz --dry-run
+python scripts/deployment_snapshot.py restore --archive backups/snapshot_<tag>.tar.gz --confirm
+```
+
+Observability endpoint probe:
+```bash
+python scripts/observability_probe.py --base-url http://127.0.0.1:9090
+```
+
+Typecheck gate (CI and local):
+```bash
+python scripts/typecheck_gate.py
+```
+
+Refresh type baseline intentionally:
+```bash
+python scripts/typecheck_gate.py --write-baseline
+```
+
+## 19) End-to-End Soak Testing
+
+Paper/simulation soak:
+```bash
+python scripts/soak_broker_e2e.py --mode paper --duration-minutes 120 --poll-seconds 5 --symbols 600519,000001
+```
+
+Live-condition soak (explicit safety switch required):
+```bash
+python scripts/soak_broker_e2e.py --mode live --allow-live --duration-minutes 120 --poll-seconds 5 --symbols 600519,000001
+```
+
+Optional probe order path (extra risk; explicitly gated):
+```bash
+python scripts/soak_broker_e2e.py --mode live --allow-live --place-probe-order --allow-live-orders --probe-symbol 600519
+```
+
+## 20) Multi-Provider Sentiment Fusion
 
 `analysis/sentiment.py` now supports:
 - built-in providers: `sina`, `eastmoney`

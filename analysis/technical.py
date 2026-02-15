@@ -416,13 +416,13 @@ class TechnicalAnalyzer:
 
     def _calculate_overall(self, signals: list[TechnicalSignal], trend: TrendDirection) -> tuple[float, str]:
         """Calculate overall score and signal"""
-        score = 0
+        score = 0.0
 
-        for signal in signals:
-            weight = signal.strength.value
-            if signal.signal == "buy":
+        for technical_signal in signals:
+            weight = technical_signal.strength.value
+            if technical_signal.signal == "buy":
                 score += weight * 10
-            elif signal.signal == "sell":
+            elif technical_signal.signal == "sell":
                 score -= weight * 10
 
         trend_scores = {
@@ -437,10 +437,10 @@ class TechnicalAnalyzer:
         score = max(-100, min(100, score))
 
         if score >= 30:
-            signal = "buy"
+            overall_signal = "buy"
         elif score <= -30:
-            signal = "sell"
+            overall_signal = "sell"
         else:
-            signal = "neutral"
+            overall_signal = "neutral"
 
-        return score, signal
+        return float(score), overall_signal

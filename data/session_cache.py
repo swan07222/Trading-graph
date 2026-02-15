@@ -29,6 +29,22 @@ def _parse_epoch_timestamp(value: float) -> datetime:
     return datetime.fromtimestamp(v, tz=timezone.utc)
 
 
+def _interval_safety_caps(interval: str) -> tuple[float, float]:
+    """Return (max_jump_pct, max_range_pct) used for cached bar scrubbing."""
+    iv = str(interval or "1m").strip().lower()
+    if iv == "1m":
+        return 0.12, 0.045
+    if iv == "5m":
+        return 0.14, 0.075
+    if iv in ("15m", "30m"):
+        return 0.18, 0.12
+    if iv in ("60m", "1h"):
+        return 0.24, 0.18
+    if iv in ("1d", "1wk", "1mo"):
+        return 0.45, 0.35
+    return 0.20, 0.15
+
+
 class SessionBarCache:
     """
     Persists bars captured during a UI session so auto-learning can reuse
@@ -111,23 +127,25 @@ class SessionBarCache:
         high_px = max(high_px, open_px, close)
         low_px = min(low_px, open_px, close)
 
+        timestamp = self._extract_timestamp(bar)
+        is_final = bool(bar.get("final", True))
         row = {
-            "timestamp": self._extract_timestamp(bar),
+            "timestamp": timestamp,
             "open": open_px,
             "high": high_px,
             "low": low_px,
             "close": close,
             "volume": volume,
             "amount": amount,
-            "is_final": bool(bar.get("final", True)),
+            "is_final": is_final,
         }
         path = self._path(sym, iv)
         lock = self._lock_for(path.name)
         with lock:
             fingerprint = (
-                str(row["timestamp"]),
-                float(row["close"]),
-                bool(row["is_final"]),
+                timestamp,
+                close,
+                is_final,
             )
             if self._last_row_fingerprint.get(path.name) == fingerprint:
                 return False
@@ -208,6 +226,89 @@ class SessionBarCache:
             df = df[df["close"] > 0].copy()
             if df.empty:
                 return pd.DataFrame()
+
+            # Scrub malformed cached bars to avoid rendering spikes after restart.
+            jump_cap, range_cap = _interval_safety_caps(iv)
+            keep_idx = []
+            fixed: dict = {}
+            prev_close: float | None = None
+            for idx, row in df.sort_index().iterrows():
+                c = self._safe_float(row.get("close", 0), 0.0)
+                if c <= 0:
+                    continue
+                o = self._safe_float(row.get("open", c), c)
+                h = self._safe_float(row.get("high", c), c)
+                low = self._safe_float(row.get("low", c), c)
+
+                if o <= 0:
+                    o = c
+                if h <= 0:
+                    h = max(o, c)
+                if low <= 0:
+                    low = min(o, c)
+                if h < low:
+                    h, low = low, h
+
+                if prev_close and prev_close > 0:
+                    jump = abs(c / prev_close - 1.0)
+                    if jump > jump_cap:
+                        continue
+
+                anchor = float(prev_close if prev_close and prev_close > 0 else c)
+                if prev_close and prev_close > 0:
+                    effective_range_cap = float(range_cap)
+                else:
+                    bootstrap_cap = 0.60 if iv in ("1d", "1wk", "1mo") else 0.25
+                    effective_range_cap = float(max(range_cap, bootstrap_cap))
+
+                max_body = float(anchor) * float(max(jump_cap * 1.25, effective_range_cap * 0.9))
+                if max_body > 0 and abs(o - c) > max_body:
+                    if prev_close and prev_close > 0 and abs(c / prev_close - 1.0) <= jump_cap:
+                        o = float(prev_close)
+                    else:
+                        o = c
+
+                top = max(o, c)
+                bot = min(o, c)
+                if h < top:
+                    h = top
+                if low > bot:
+                    low = bot
+                if h < low:
+                    h, low = low, h
+
+                max_range = float(anchor) * float(effective_range_cap)
+                curr_range = max(0.0, h - low)
+                if max_range > 0 and curr_range > max_range:
+                    body = max(0.0, top - bot)
+                    if body > max_range:
+                        o = c
+                        top = c
+                        bot = c
+                        body = 0.0
+                    wick_allow = max(0.0, max_range - body)
+                    h = min(h, top + (wick_allow * 0.5))
+                    low = max(low, bot - (wick_allow * 0.5))
+                    if h < low:
+                        h, low = low, h
+
+                if anchor > 0 and (h - low) > (float(anchor) * float(effective_range_cap) * 1.05):
+                    continue
+
+                keep_idx.append(idx)
+                fixed[idx] = (o, h, low, c)
+                prev_close = c
+
+            if not keep_idx:
+                return pd.DataFrame()
+
+            df = df.loc[keep_idx].copy()
+            for idx, (o, h, low, c) in fixed.items():
+                df.at[idx, "open"] = float(o)
+                df.at[idx, "high"] = float(h)
+                df.at[idx, "low"] = float(low)
+                df.at[idx, "close"] = float(c)
+
             return df.tail(max(1, int(bars)))
         except Exception as e:
             log.debug("Session cache read failed (%s): %s", path.name, e)

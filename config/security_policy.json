@@ -19,7 +19,7 @@
     ],
     "blocked_strategies": [],
     "require_manual_for_live": false,
-    "require_change_ticket": false,
-    "require_business_justification": false
+    "require_change_ticket": true,
+    "require_business_justification": true
   }
 }

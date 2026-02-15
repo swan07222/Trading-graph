@@ -133,7 +133,7 @@ class SecurityConfig:
     require_2fa_for_live: bool = True
     two_factor_ttl_minutes: int = 30
     require_live_trade_permission: bool = True
-    strict_live_governance: bool = False
+    strict_live_governance: bool = True
     min_live_approvals: int = 2
     block_trading_when_unhealthy: bool = True
     block_trading_when_degraded: bool = False

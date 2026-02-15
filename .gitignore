@@ -25,6 +25,7 @@ data/session_bars/
 data/*.db
 data/*.db-shm
 data/*.db-wal
+backups/
 
 # Local OS/editor files
 .DS_Store

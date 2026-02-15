@@ -250,7 +250,7 @@ def get_holidays() -> frozenset:
     """
     return frozenset(_HOLIDAYS_BUILTIN) | _load_external_holidays()
 
-def get_price_limit(code: str, name: str = None) -> float:
+def get_price_limit(code: str, name: str | None = None) -> float:
     """
     Get price limit for stock.
 

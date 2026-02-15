@@ -13,7 +13,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import IO, Any
 
 from config.settings import CONFIG
 from utils.logger import get_logger
@@ -50,7 +50,7 @@ class SecureStorage:
         self._closed = False
         self._load()
 
-    def _init_cipher(self):
+    def _init_cipher(self) -> Any | None:
         """Initialize encryption cipher."""
         if not CRYPTO_AVAILABLE:
             return None
@@ -86,7 +86,8 @@ class SecureStorage:
     def _encrypt(self, data: str) -> bytes:
         """Encrypt data."""
         if self._cipher:
-            return self._cipher.encrypt(data.encode("utf-8"))
+            encrypted = self._cipher.encrypt(data.encode("utf-8"))
+            return bytes(encrypted)
         else:
             import base64
 
@@ -95,7 +96,8 @@ class SecureStorage:
     def _decrypt(self, data: bytes) -> str:
         """Decrypt data."""
         if self._cipher:
-            return self._cipher.decrypt(data).decode("utf-8")
+            decrypted = self._cipher.decrypt(data)
+            return bytes(decrypted).decode("utf-8")
         else:
             import base64
 
@@ -238,7 +240,7 @@ class AuditLog:
     def __init__(self) -> None:
         self._log_dir = CONFIG.audit_dir
         self._log_dir.mkdir(parents=True, exist_ok=True)
-        self._current_file = None
+        self._current_file: IO[str] | None = None
         self._current_date: date | None = None
         self._lock = threading.RLock()
         self._buffer: list[AuditRecord] = []
@@ -254,7 +256,7 @@ class AuditLog:
         self._atexit_ref = weakref.ref(self)
         atexit.register(_atexit_close_audit, self._atexit_ref)
 
-    def _get_file(self):
+    def _get_file(self) -> IO[str] | None:
         """Get current log file, rotating daily."""
         today = date.today()
 

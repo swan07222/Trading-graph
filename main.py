@@ -245,6 +245,15 @@ def _doctor_gate_violations(report: dict) -> list[str]:
     elif config_warnings is None:
         violations.append("config_validation_warnings_missing")
 
+    institutional = report.get("institutional_readiness")
+    if isinstance(institutional, dict):
+        if not bool(institutional.get("pass", False)):
+            failed = institutional.get("failed_required_controls", [])
+            failed_count = len(failed) if isinstance(failed, list) else 0
+            violations.append(f"institutional_readiness_failed={failed_count}")
+    else:
+        violations.append("institutional_readiness_missing")
+
     return violations
 
 
@@ -370,11 +379,11 @@ def main():
         elif args.predict:
             from models.predictor import Predictor
             predictor = Predictor()
-            result = predictor.predict(args.predict)
-            print(f"\n{result.stock_code} - {result.stock_name}")
-            print(f"Signal: {result.signal.value}")
-            print(f"Confidence: {result.confidence:.0%}")
-            print(f"Price: {result.current_price:.2f}")
+            prediction_result = predictor.predict(args.predict)
+            print(f"\n{prediction_result.stock_code} - {prediction_result.stock_name}")
+            print(f"Signal: {prediction_result.signal.value}")
+            print(f"Confidence: {prediction_result.confidence:.0%}")
+            print(f"Price: {prediction_result.current_price:.2f}")
 
         elif args.backtest_optimize:
             train_months_options = _parse_positive_int_csv(
@@ -431,8 +440,8 @@ def main():
         elif args.backtest:
             from analysis.backtest import Backtester
             bt = Backtester()
-            result = bt.run()
-            print(result.summary())
+            backtest_result = bt.run()
+            print(backtest_result.summary())
 
         elif args.replay_file:
             from analysis.replay import MarketReplay
@@ -517,6 +526,7 @@ def run_system_doctor() -> dict:
     from datetime import datetime
 
     from config.settings import CONFIG
+    from utils.institutional import collect_institutional_readiness
 
     modules = [
         "psutil",
@@ -559,6 +569,7 @@ def run_system_doctor() -> dict:
             "scalers": len(list(model_dir.glob("scaler_*.pkl"))),
         },
         "config_validation_warnings": list(CONFIG.validation_warnings),
+        "institutional_readiness": collect_institutional_readiness(),
     }
     print(json.dumps(report, indent=2, ensure_ascii=False))
     return report

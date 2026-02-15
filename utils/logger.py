@@ -95,6 +95,7 @@ class LoggerManager:
 
     _instance: LoggerManager | None = None
     _instance_lock = threading.Lock()
+    _initialized: bool
 
     def __new__(cls) -> LoggerManager:
         if cls._instance is None:

@@ -41,6 +41,24 @@ def test_model_pair_prefers_exact_interval_and_horizon(tmp_path):
     assert scl.name == "scaler_1m_120.pkl"
 
 
+def test_model_pair_intraday_request_prefers_intraday_fallback(tmp_path):
+    _touch(tmp_path / "ensemble_1d_5.pt")
+    _touch(tmp_path / "scaler_1d_5.pkl")
+    _touch(tmp_path / "ensemble_1m_30.pt")
+    _touch(tmp_path / "scaler_1m_30.pkl")
+
+    predictor = Predictor.__new__(Predictor)
+    predictor.interval = "5m"
+    predictor.horizon = 30
+
+    ens, scl = predictor._find_best_model_pair(tmp_path)
+
+    assert ens is not None
+    assert ens.name == "ensemble_1m_30.pt"
+    assert scl is not None
+    assert scl.name == "scaler_1m_30.pkl"
+
+
 def test_trained_stock_fallback_uses_matching_learner_state(tmp_path):
     import json
 

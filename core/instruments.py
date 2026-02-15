@@ -2,13 +2,17 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 from typing import Any
 
+_get_exchange: Callable[[str], str] | None
 try:
     # Safe import: constants does not import instruments -> no circular
-    from core.constants import get_exchange
+    from core.constants import get_exchange as _get_exchange
 except Exception:
-    get_exchange = None
+    _get_exchange = None
+
+get_exchange: Callable[[str], str] | None = _get_exchange
 
 CN_PREFIXES = (
     "sh.", "sz.", "bj.", "SH.", "SZ.", "BJ.",
@@ -159,7 +163,7 @@ def _cn_yahoo_suffix(code6: str) -> str:
     Best-effort mapping of CN code -> Yahoo suffix.
     If get_exchange is available, use it; else fall back on prefix heuristics.
     """
-    if get_exchange:
+    if get_exchange is not None:
         ex = get_exchange(code6)
         if ex == "SSE":
             return ".SS"

@@ -1916,6 +1916,8 @@ class ExecutionEngine:
             if mode_is_live and strict_live and not signal.auto_generated:
                 approvals = int(getattr(signal, "approvals_count", 0) or 0)
                 approver_ids = getattr(signal, "approver_ids", None)
+                if not isinstance(approver_ids, list):
+                    approver_ids = getattr(signal, "approved_by", None)
                 if isinstance(approver_ids, list):
                     approvals = max(
                         approvals,

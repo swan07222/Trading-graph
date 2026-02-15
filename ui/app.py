@@ -1,4 +1,5 @@
 # ui/app.py
+import math
 import os
 import signal
 import sys
@@ -461,6 +462,7 @@ class MainApp(QMainWindow):
         self,
         requested_interval: str | None = None,
         requested_horizon: int | None = None,
+        preserve_requested_interval: bool = False,
     ) -> tuple[str, int]:
         """
         Align UI controls to the actual loaded model metadata.
@@ -480,8 +482,11 @@ class MainApp(QMainWindow):
             str(self.interval_combo.itemText(i)).strip().lower()
             for i in range(self.interval_combo.count())
         ]
-        if model_iv not in items:
-            model_iv = str(requested_interval or self.interval_combo.currentText()).strip().lower()
+        ui_iv = model_iv
+        if preserve_requested_interval and requested_interval is not None:
+            ui_iv = self._model_interval_to_ui_token(str(requested_interval).strip().lower())
+        if ui_iv not in items:
+            ui_iv = str(requested_interval or self.interval_combo.currentText()).strip().lower()
 
         try:
             model_h = int(
@@ -501,11 +506,16 @@ class MainApp(QMainWindow):
 
         self.interval_combo.blockSignals(True)
         try:
-            self.interval_combo.setCurrentText(model_iv)
+            self.interval_combo.setCurrentText(ui_iv)
         finally:
             self.interval_combo.blockSignals(False)
         self.forecast_spin.setValue(model_h)
-        self.model_info.setText(f"Interval: {model_iv}, Horizon: {model_h}")
+        if ui_iv != model_iv:
+            self.model_info.setText(
+                f"Interval: {ui_iv}, Horizon: {model_h} (model: {model_iv}/{model_h})"
+            )
+        else:
+            self.model_info.setText(f"Interval: {ui_iv}, Horizon: {model_h}")
 
         if requested_interval is not None and requested_horizon is not None:
             req_iv = str(requested_interval).strip().lower()
@@ -516,7 +526,7 @@ class MainApp(QMainWindow):
                     "warning",
                 )
 
-        return model_iv, model_h
+        return ui_iv, model_h
 
     # =========================================================================
     # =========================================================================
@@ -1998,7 +2008,9 @@ class MainApp(QMainWindow):
                 )
                 if self.predictor.ensemble:
                     active_iv, active_h = self._sync_ui_to_loaded_model(
-                        interval, horizon
+                        interval,
+                        horizon,
+                        preserve_requested_interval=True,
                     )
                     self.log(
                         f"Model reloaded for {active_iv} interval, horizon {active_h}",
@@ -2367,8 +2379,14 @@ class MainApp(QMainWindow):
             c = float(c or 0.0)
         except Exception:
             return None
+        if not all(math.isfinite(v) for v in (o, h, low, c)):
+            return None
         if c <= 0:
             return None
+
+        ref = float(ref_close or 0.0)
+        if not math.isfinite(ref) or ref <= 0:
+            ref = 0.0
 
         if o <= 0:
             o = c
@@ -2380,24 +2398,48 @@ class MainApp(QMainWindow):
             h, low = low, h
 
         jump_cap, range_cap = self._bar_safety_caps(interval)
-        ref = float(ref_close or 0.0)
+        iv = str(interval or "1m").strip().lower()
+        if ref > 0:
+            effective_range_cap = float(range_cap)
+        else:
+            bootstrap_cap = 0.60 if iv in ("1d", "1wk", "1mo") else 0.25
+            effective_range_cap = float(max(range_cap, bootstrap_cap))
         if ref > 0:
             jump = abs(c / ref - 1.0)
             if jump > jump_cap:
                 return None
 
-        # Clamp abnormal wick/range while preserving candle body orientation.
+        # Keep malformed opens from inflating body/range caps.
+        anchor = ref if ref > 0 else c
+        if anchor <= 0:
+            anchor = c
+        max_body = float(anchor) * float(max(jump_cap * 1.25, effective_range_cap * 0.9))
+        if max_body > 0 and abs(o - c) > max_body:
+            if ref > 0 and abs(c / ref - 1.0) <= jump_cap:
+                o = ref
+            else:
+                o = c
+
         top = max(o, c)
         bot = min(o, c)
-        base = max(abs(c), abs(top), abs(bot), ref if ref > 0 else 0.0)
-        if base <= 0:
-            base = c
-        max_range = float(base) * float(range_cap)
+        if h < top:
+            h = top
+        if low > bot:
+            low = bot
+        if h < low:
+            h, low = low, h
+
+        max_range = float(anchor) * float(effective_range_cap)
         curr_range = max(0.0, h - low)
-        if curr_range > max_range and max_range > 0:
+        if max_range > 0 and curr_range > max_range:
             body = max(0.0, top - bot)
+            if body > max_range:
+                # Body this large is likely a corrupt open/close pair.
+                o = c
+                top = c
+                bot = c
+                body = 0.0
             wick_allow = max(0.0, max_range - body)
-            # Keep body, trim excessive tails around it.
             h = min(h, top + (wick_allow * 0.5))
             low = max(low, bot - (wick_allow * 0.5))
             if h < low:
@@ -2405,6 +2447,11 @@ class MainApp(QMainWindow):
 
         o = min(max(o, low), h)
         c = min(max(c, low), h)
+
+        # Final hard-stop: drop anything still outside allowed envelope.
+        if anchor > 0 and (h - low) > (float(anchor) * float(effective_range_cap) * 1.05):
+            return None
+
         return o, h, low, c
 
     def _is_outlier_tick(
@@ -3196,6 +3243,7 @@ class MainApp(QMainWindow):
                     update_db=True,
                 )
             out: list[dict[str, Any]] = []
+            prev_close: float | None = None
 
             if df is not None and not df.empty:
                 for idx, row in df.tail(lookback).iterrows():
@@ -3211,7 +3259,7 @@ class MainApp(QMainWindow):
                         low,
                         c,
                         interval=norm_iv,
-                        ref_close=None,
+                        ref_close=prev_close,
                     )
                     if sanitized is None:
                         continue
@@ -3230,6 +3278,7 @@ class MainApp(QMainWindow):
                             "interval": norm_iv,
                         }
                     )
+                    prev_close = c
 
             # Include session-persisted bars so refresh/restart keeps data continuity.
             if self._session_bar_cache is not None:
@@ -3250,7 +3299,7 @@ class MainApp(QMainWindow):
                             low,
                             c,
                             interval=norm_iv,
-                            ref_close=None,
+                            ref_close=prev_close,
                         )
                         if sanitized is None:
                             continue
@@ -3279,6 +3328,7 @@ class MainApp(QMainWindow):
                                 "interval": norm_iv,
                             }
                         )
+                        prev_close = c
 
             out = self._filter_bars_to_market_session(out, norm_iv)
 

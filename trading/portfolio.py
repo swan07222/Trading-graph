@@ -7,6 +7,7 @@ import uuid
 from dataclasses import asdict, dataclass
 from datetime import date, datetime, timedelta
 from pathlib import Path
+from typing import cast
 
 import numpy as np
 import pandas as pd
@@ -151,12 +152,12 @@ class Portfolio:
     @property
     def positions_value(self) -> float:
         with self._lock:
-            return sum(p.market_value for p in self.positions.values())
+            return float(sum(float(p.market_value) for p in self.positions.values()))
 
     @property
     def equity(self) -> float:
         with self._lock:
-            return self.cash + sum(p.market_value for p in self.positions.values())
+            return float(self.cash + sum(float(p.market_value) for p in self.positions.values()))
 
     @property
     def total_pnl(self) -> float:
@@ -498,7 +499,7 @@ class Portfolio:
         Returns empty array when fewer than 2 distinct trading days exist.
         """
         if len(self.equity_history) < 2:
-            return np.array([], dtype=np.float64)
+            return cast(np.ndarray, np.array([], dtype=np.float64))
 
         series = pd.Series(
             [eq for _, eq in self.equity_history],
@@ -507,14 +508,14 @@ class Portfolio:
 
         daily = series.resample("1D").last().dropna()
         if len(daily) < 2:
-            return np.array([], dtype=np.float64)
+            return cast(np.ndarray, np.array([], dtype=np.float64))
 
         # Filter out zero-equity days to avoid division by zero
         daily = daily[daily > 0]
         if len(daily) < 2:
-            return np.array([], dtype=np.float64)
+            return cast(np.ndarray, np.array([], dtype=np.float64))
 
-        return daily.pct_change().dropna().to_numpy(dtype=np.float64)
+        return cast(np.ndarray, daily.pct_change().dropna().to_numpy(dtype=np.float64))
 
     def _get_equity_at_date(self, target_date: date) -> float:
         """
@@ -533,7 +534,7 @@ class Portfolio:
 
     @staticmethod
     def _save_path() -> Path:
-        return CONFIG.DATA_DIR / "portfolio.json"
+        return Path(CONFIG.data_dir) / "portfolio.json"
 
     def _save_unlocked(self) -> None:
         """

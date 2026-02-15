@@ -4,6 +4,7 @@ from __future__ import annotations
 import re
 import threading
 import time
+from typing import Any
 
 from utils.logger import get_logger
 
@@ -185,16 +186,17 @@ class MetricsRegistry:
             self._histograms.pop(key, None)
             self._histogram_buckets.pop(key, None)
 
-    def get_all(self) -> dict:
+    def get_all(self) -> dict[str, Any]:
         """Get all metrics as a dict."""
         with self._lock:
-            result = {
+            histogram_summary: dict[str, dict[str, float | int]] = {}
+            result: dict[str, Any] = {
                 "counters": dict(self._counters),
                 "gauges": dict(self._gauges),
-                "histograms": {},
+                "histograms": histogram_summary,
             }
             for k, v in self._histograms.items():
-                result["histograms"][k] = {
+                histogram_summary[k] = {
                     "count": len(v),
                     "sum": sum(v),
                     "avg": sum(v) / len(v) if v else 0,
@@ -293,8 +295,9 @@ def set_gauge(
     name: str,
     value: float,
     labels: dict[str, str] | None = None,
+    help_text: str = "",
 ) -> None:
-    _metrics.set_gauge(name, value, labels)
+    _metrics.set_gauge(name, value, labels, help_text=help_text)
 
 def observe(
     name: str,

@@ -96,8 +96,8 @@ class TradePolicyEngine:
                 ],
                 "blocked_strategies": [],
                 "require_manual_for_live": False,
-                "require_change_ticket": False,
-                "require_business_justification": False,
+                "require_change_ticket": True,
+                "require_business_justification": True,
             },
         }
 
@@ -245,6 +245,8 @@ class TradePolicyEngine:
         min_approvals = int(lp.get("min_approvals", 0) or 0)
         approvals_count = int(getattr(signal, "approvals_count", 0) or 0)
         approver_ids = getattr(signal, "approver_ids", None)
+        if not isinstance(approver_ids, list):
+            approver_ids = getattr(signal, "approved_by", None)
         if isinstance(approver_ids, list):
             distinct = {str(x).strip().lower() for x in approver_ids if str(x).strip()}
             approvals_count = max(approvals_count, len(distinct))

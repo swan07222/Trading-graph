@@ -5,7 +5,7 @@ import logging
 import os
 import threading
 from collections.abc import Callable
-from datetime import UTC, date, datetime
+from datetime import date, datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 from urllib.parse import parse_qs, urlparse
@@ -267,7 +267,7 @@ def _api_index_payload() -> dict[str, Any]:
             "/api/v1/health",
             "/api/v1/sentiment",
         ],
-        "generated_at": datetime.now(UTC).isoformat(),
+        "generated_at": datetime.now(timezone.utc).isoformat(),
     }
 
 
@@ -353,7 +353,7 @@ class MetricsHandler(BaseHTTPRequestHandler):
                 200,
                 {
                     "providers": list_snapshot_providers(),
-                    "generated_at": datetime.now(UTC).isoformat(),
+                    "generated_at": datetime.now(timezone.utc).isoformat(),
                 },
             )
             return
@@ -376,7 +376,7 @@ class MetricsHandler(BaseHTTPRequestHandler):
                     {
                         "provider": name,
                         "snapshot": payload,
-                        "generated_at": datetime.now(UTC).isoformat(),
+                        "generated_at": datetime.now(timezone.utc).isoformat(),
                     },
                 )
             except Exception as exc:
@@ -392,7 +392,7 @@ class MetricsHandler(BaseHTTPRequestHandler):
                 200,
                 {
                     "snapshot": _build_runtime_snapshot(limit=limit),
-                    "generated_at": datetime.now(UTC).isoformat(),
+                    "generated_at": datetime.now(timezone.utc).isoformat(),
                 },
             )
             return
@@ -400,9 +400,9 @@ class MetricsHandler(BaseHTTPRequestHandler):
         if path == "/api/v1/dashboard/full":
             limit = _parse_int_query(query, key="limit", default=20, minimum=1, maximum=200)
             hours = _parse_int_query(query, key="hours", default=24, minimum=1, maximum=168)
-            symbol = (query.get("symbol", [""])[0] or "").strip()
-            if not symbol:
-                symbol = None
+            dashboard_symbol: str | None = (query.get("symbol", [""])[0] or "").strip()
+            if not dashboard_symbol:
+                dashboard_symbol = None
             self._send_json(
                 200,
                 {
@@ -416,11 +416,11 @@ class MetricsHandler(BaseHTTPRequestHandler):
                         "risk": _build_risk_snapshot(),
                         "health": _build_health_snapshot(),
                         "sentiment": _build_sentiment_snapshot(
-                            stock_code=symbol,
+                            stock_code=dashboard_symbol,
                             hours_lookback=hours,
                         ),
                     },
-                    "generated_at": datetime.now(UTC).isoformat(),
+                    "generated_at": datetime.now(timezone.utc).isoformat(),
                 },
             )
             return
@@ -431,7 +431,7 @@ class MetricsHandler(BaseHTTPRequestHandler):
                 200,
                 {
                     "snapshot": _build_alert_snapshot(limit=limit),
-                    "generated_at": datetime.now(UTC).isoformat(),
+                    "generated_at": datetime.now(timezone.utc).isoformat(),
                 },
             )
             return
@@ -441,7 +441,7 @@ class MetricsHandler(BaseHTTPRequestHandler):
                 200,
                 {
                     "snapshot": _build_execution_engine_snapshot(),
-                    "generated_at": datetime.now(UTC).isoformat(),
+                    "generated_at": datetime.now(timezone.utc).isoformat(),
                 },
             )
             return
@@ -451,7 +451,7 @@ class MetricsHandler(BaseHTTPRequestHandler):
                 200,
                 {
                     "snapshot": _build_execution_quality_snapshot(),
-                    "generated_at": datetime.now(UTC).isoformat(),
+                    "generated_at": datetime.now(timezone.utc).isoformat(),
                 },
             )
             return
@@ -461,7 +461,7 @@ class MetricsHandler(BaseHTTPRequestHandler):
                 200,
                 {
                     "snapshot": _build_risk_snapshot(),
-                    "generated_at": datetime.now(UTC).isoformat(),
+                    "generated_at": datetime.now(timezone.utc).isoformat(),
                 },
             )
             return
@@ -471,26 +471,26 @@ class MetricsHandler(BaseHTTPRequestHandler):
                 200,
                 {
                     "snapshot": _build_health_snapshot(),
-                    "generated_at": datetime.now(UTC).isoformat(),
+                    "generated_at": datetime.now(timezone.utc).isoformat(),
                 },
             )
             return
 
         if path == "/api/v1/sentiment":
             hours = _parse_int_query(query, key="hours", default=24, minimum=1, maximum=168)
-            symbol = (query.get("symbol", [""])[0] or "").strip()
-            if not symbol:
-                symbol = None
+            sentiment_symbol: str | None = (query.get("symbol", [""])[0] or "").strip()
+            if not sentiment_symbol:
+                sentiment_symbol = None
             self._send_json(
                 200,
                 {
-                    "scope": symbol or "market",
+                    "scope": sentiment_symbol or "market",
                     "hours_lookback": hours,
                     "snapshot": _build_sentiment_snapshot(
-                        stock_code=symbol,
+                        stock_code=sentiment_symbol,
                         hours_lookback=hours,
                     ),
-                    "generated_at": datetime.now(UTC).isoformat(),
+                    "generated_at": datetime.now(timezone.utc).isoformat(),
                 },
             )
             return
@@ -500,7 +500,7 @@ class MetricsHandler(BaseHTTPRequestHandler):
                 200,
                 {
                     "snapshot": _build_policy_snapshot(),
-                    "generated_at": datetime.now(UTC).isoformat(),
+                    "generated_at": datetime.now(timezone.utc).isoformat(),
                 },
             )
             return
@@ -510,7 +510,7 @@ class MetricsHandler(BaseHTTPRequestHandler):
                 200,
                 {
                     "snapshot": _build_strategy_marketplace_snapshot(),
-                    "generated_at": datetime.now(UTC).isoformat(),
+                    "generated_at": datetime.now(timezone.utc).isoformat(),
                 },
             )
             return

@@ -5,7 +5,7 @@ import numpy as np
 import pandas as pd
 import torch
 
-from models.predictor import Prediction, Predictor
+from models.predictor import Prediction, Predictor, Signal
 
 
 def _touch(path):
@@ -337,3 +337,41 @@ def test_apply_ensemble_result_clips_and_normalizes_probabilities():
     assert 0.0 <= pred.prob_neutral <= 1.0
     assert 0.0 <= pred.prob_up <= 1.0
     assert abs((pred.prob_down + pred.prob_neutral + pred.prob_up) - 1.0) < 1e-9
+
+
+def test_determine_signal_requires_edge_in_sideways_regime():
+    predictor = Predictor.__new__(Predictor)
+    pred = Prediction(
+        stock_code="600519",
+        trend="SIDEWAYS",
+        prob_up=0.41,
+        prob_down=0.37,
+    )
+    ensemble_pred = SimpleNamespace(
+        confidence=0.95,
+        predicted_class=2,
+    )
+
+    out = predictor._determine_signal(ensemble_pred, pred)
+    assert out == Signal.HOLD
+
+
+def test_generate_reasons_keeps_existing_gate_warnings():
+    predictor = Predictor.__new__(Predictor)
+    pred = Prediction(
+        stock_code="600519",
+        signal=Signal.HOLD,
+        confidence=0.50,
+        prob_up=0.40,
+        prob_down=0.35,
+        model_agreement=0.55,
+        entropy=0.82,
+    )
+    pred.warnings.append("Runtime quality gate filtered signal BUY -> HOLD")
+
+    predictor._generate_reasons(pred)
+
+    assert any(
+        "Runtime quality gate filtered signal" in item
+        for item in pred.warnings
+    )

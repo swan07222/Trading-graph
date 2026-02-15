@@ -343,13 +343,64 @@ class Predictor:
             _delta, _mtime_neg, ep, sp = same_interval[0]
             return ep, sp
 
-        # Fallback 2: common default
+        # Fallback 2: prefer same regime (intraday vs higher timeframe).
+        intraday_tokens = {"1m", "3m", "5m", "15m", "30m", "60m", "1h"}
+
+        def _token_minutes(token: str) -> int | None:
+            t = str(token or "").strip().lower()
+            mapping = {
+                "1m": 1,
+                "3m": 3,
+                "5m": 5,
+                "15m": 15,
+                "30m": 30,
+                "60m": 60,
+                "1h": 60,
+                "1d": 1440,
+                "1wk": 10080,
+                "1mo": 43200,
+            }
+            return mapping.get(t)
+
+        req_iv = str(self.interval or "1d").strip().lower()
+        req_is_intraday = req_iv in intraday_tokens
+        req_minutes = _token_minutes(req_iv)
+
+        same_regime: list[tuple[int, int, float, Path, Path]] = []
+        for ep in model_dir.glob("ensemble_*_*.pt"):
+            parts = ep.stem.split("_", 2)
+            if len(parts) != 3:
+                continue
+            cand_iv = str(parts[1]).strip().lower()
+            try:
+                cand_h = int(parts[2])
+            except Exception:
+                continue
+            sp = model_dir / f"scaler_{cand_iv}_{cand_h}.pkl"
+            if not sp.exists():
+                continue
+            if (cand_iv in intraday_tokens) != req_is_intraday:
+                continue
+            cand_minutes = _token_minutes(cand_iv)
+            if req_minutes is None or cand_minutes is None:
+                iv_delta = 0 if cand_iv == req_iv else 10_000
+            else:
+                iv_delta = abs(int(cand_minutes) - int(req_minutes))
+            hz_delta = abs(cand_h - int(self.horizon))
+            same_regime.append((iv_delta, hz_delta, -ep.stat().st_mtime, ep, sp))
+
+        if same_regime:
+            same_regime.sort(key=lambda x: (x[0], x[1], x[2]))
+            _iv_delta, _hz_delta, _mtime_neg, ep, sp = same_regime[0]
+            return ep, sp
+
+        # Fallback 3: common default
         fb_ens = model_dir / "ensemble_1d_5.pt"
         fb_scl = model_dir / "scaler_1d_5.pkl"
         if fb_ens.exists():
             return fb_ens, fb_scl if fb_scl.exists() else None
 
-        # Fallback 3: any available ensemble, prefer matching scaler
+        # Fallback 4: any available ensemble, prefer matching scaler
         ensembles = sorted(
             model_dir.glob("ensemble_*.pt"),
             key=lambda p: p.stat().st_mtime,
@@ -946,7 +997,7 @@ class Predictor:
             )
 
         pred.confidence = float(
-            max(0.0, min(1.0, ensemble_pred.confidence))
+            max(0.0, min(1.0, getattr(ensemble_pred, "confidence", 0.0)))
         )
 
         pred.model_agreement = float(
@@ -961,6 +1012,7 @@ class Predictor:
             ensemble_pred, pred
         )
         self._apply_high_precision_gate(pred)
+        self._apply_runtime_signal_quality_gate(pred)
 
     def _apply_high_precision_gate(self, pred: Prediction) -> None:
         """Optionally downgrade weak actionable predictions to HOLD."""
@@ -1004,6 +1056,59 @@ class Predictor:
         pred.signal_strength = min(float(pred.signal_strength), 0.49)
         pred.warnings.append(
             "High Precision Mode filtered signal "
+            f"{old_signal} -> HOLD ({'; '.join(reasons[:3])})"
+        )
+
+    def _apply_runtime_signal_quality_gate(self, pred: Prediction) -> None:
+        """
+        Always-on runtime guard to reduce low-quality actionable signals.
+        This improves precision by preferring HOLD when edge quality is weak.
+        """
+        if pred.signal == Signal.HOLD:
+            return
+
+        reasons: list[str] = []
+        conf = float(np.clip(pred.confidence, 0.0, 1.0))
+        agreement = float(np.clip(pred.model_agreement, 0.0, 1.0))
+        entropy = float(np.clip(pred.entropy, 0.0, 1.0))
+        edge = float(pred.prob_up) - float(pred.prob_down)
+        trend = str(pred.trend).upper()
+
+        if pred.signal in (Signal.BUY, Signal.STRONG_BUY) and edge < 0.03:
+            reasons.append(f"edge {edge:.2f} too weak for long")
+        if pred.signal in (Signal.SELL, Signal.STRONG_SELL) and edge > -0.03:
+            reasons.append(f"edge {edge:.2f} too weak for short")
+        if agreement < 0.50 and conf < 0.78:
+            reasons.append(
+                f"agreement/conf weak ({agreement:.2f}/{conf:.2f})"
+            )
+        if entropy > 0.78 and conf < 0.80:
+            reasons.append(f"high entropy {entropy:.2f}")
+        if trend == "SIDEWAYS" and conf < 0.72:
+            reasons.append("sideways regime with low confidence")
+        if (
+            trend == "UPTREND"
+            and pred.signal in (Signal.SELL, Signal.STRONG_SELL)
+            and conf < 0.86
+        ):
+            reasons.append("counter-trend short lacks conviction")
+        if (
+            trend == "DOWNTREND"
+            and pred.signal in (Signal.BUY, Signal.STRONG_BUY)
+            and conf < 0.86
+        ):
+            reasons.append("counter-trend long lacks conviction")
+        if pred.atr_pct_value >= 0.04 and conf < 0.76:
+            reasons.append("high volatility requires stronger confidence")
+
+        if not reasons:
+            return
+
+        old_signal = pred.signal.value
+        pred.signal = Signal.HOLD
+        pred.signal_strength = min(float(pred.signal_strength), 0.49)
+        pred.warnings.append(
+            "Runtime quality gate filtered signal "
             f"{old_signal} -> HOLD ({'; '.join(reasons[:3])})"
         )
 
@@ -1155,6 +1260,8 @@ class Predictor:
             return []
         horizon = max(1, int(horizon))
         direction_hint = 0.0
+        hint_confidence = 0.5
+        hint_entropy = 0.5
         if self.ensemble is not None:
             try:
                 hint_pred = self.ensemble.predict(X)
@@ -1163,8 +1270,24 @@ class Predictor:
                     direction_hint = (
                         float(probs_hint[2]) - float(probs_hint[0])
                     )
+                hint_confidence = float(
+                    np.clip(getattr(hint_pred, "confidence", 0.5), 0.0, 1.0)
+                )
+                hint_entropy = float(
+                    np.clip(getattr(hint_pred, "entropy", 0.5), 0.0, 1.0)
+                )
             except Exception:
                 direction_hint = 0.0
+                hint_confidence = 0.5
+                hint_entropy = 0.5
+
+        quality_scale = float(
+            np.clip(
+                (0.35 + (0.65 * hint_confidence)) * (1.0 - (0.55 * hint_entropy)),
+                0.35,
+                1.0,
+            )
+        )
 
         if self.forecaster is not None:
             try:
@@ -1212,6 +1335,10 @@ class Predictor:
                         step_cap_pct,
                         float(max(float(atr_pct) * 70.0, 0.35)),
                     )
+                step_cap_pct = max(
+                    step_cap_pct * quality_scale,
+                    0.12 if neutral_mode else 0.20,
+                )
 
                 # Deterministic symbol-specific residual to avoid template-like tails.
                 seed = (
@@ -1239,7 +1366,8 @@ class Predictor:
                     else:
                         r_val = (r_val * 0.84) + (recent_mu_pct * 0.16)
 
-                    eps_scale = step_cap_pct * (0.06 if neutral_mode else 0.10)
+                    noise_scale = 0.55 + (0.45 * quality_scale)
+                    eps_scale = step_cap_pct * (0.06 if neutral_mode else 0.10) * noise_scale
                     eps = (0.62 * prev_eps) + float(rng.normal(0.0, eps_scale))
                     prev_eps = eps
                     r_val += eps
@@ -1281,9 +1409,18 @@ class Predictor:
                     (float(probs[2]) if len(probs) > 2 else 0.33)
                     - (float(probs[0]) if len(probs) > 0 else 0.33)
                 )
+                confidence = float(np.clip(getattr(pred, "confidence", 0.5), 0.0, 1.0))
+                entropy = float(np.clip(getattr(pred, "entropy", 0.5), 0.0, 1.0))
+                quality_scale = float(
+                    np.clip(
+                        (0.35 + (0.65 * confidence)) * (1.0 - (0.55 * entropy)),
+                        0.35,
+                        1.0,
+                    )
+                )
                 neutral_mode = abs(direction) < 0.10
 
-                volatility = max(float(atr_pct), 0.005)
+                volatility = max(float(atr_pct), 0.005) * quality_scale
                 if neutral_mode:
                     volatility = min(volatility, 0.012)
 
@@ -1307,6 +1444,8 @@ class Predictor:
                 if neutral_mode:
                     ret_mu *= 0.35
                     ret_sigma = max(ret_sigma * 0.55, 0.0004)
+                else:
+                    ret_sigma *= (0.70 + (0.30 * quality_scale))
 
                 prices = []
                 price = current_price
@@ -1372,15 +1511,27 @@ class Predictor:
         """Determine trading signal from prediction."""
         confidence = float(ensemble_pred.confidence)
         predicted_class = int(ensemble_pred.predicted_class)
+        edge = float(np.clip(pred.prob_up - pred.prob_down, -1.0, 1.0))
+        is_sideways = str(pred.trend).upper() == "SIDEWAYS"
+        edge_floor = 0.06 if is_sideways else 0.04
+        strong_edge_floor = max(0.12, edge_floor * 2.0)
 
         if predicted_class == 2:  # UP
+            if edge < edge_floor:
+                return Signal.HOLD
             if confidence >= CONFIG.STRONG_BUY_THRESHOLD:
-                return Signal.STRONG_BUY
+                if edge >= strong_edge_floor:
+                    return Signal.STRONG_BUY
+                return Signal.BUY
             elif confidence >= CONFIG.BUY_THRESHOLD:
                 return Signal.BUY
         elif predicted_class == 0:  # DOWN
+            if edge > -edge_floor:
+                return Signal.HOLD
             if confidence >= CONFIG.STRONG_SELL_THRESHOLD:
-                return Signal.STRONG_SELL
+                if edge <= -strong_edge_floor:
+                    return Signal.STRONG_SELL
+                return Signal.SELL
             elif confidence >= CONFIG.SELL_THRESHOLD:
                 return Signal.SELL
 
@@ -1638,6 +1789,8 @@ class Predictor:
 
     def _generate_reasons(self, pred: Prediction):
         """Generate analysis reasons and warnings."""
+        existing_reasons = list(pred.reasons or [])
+        existing_warnings = list(pred.warnings or [])
         reasons = []
         warnings = []
 
@@ -1701,8 +1854,12 @@ class Predictor:
                 f"(entropy: {pred.entropy:.2f})"
             )
 
-        pred.reasons = reasons
-        pred.warnings = warnings
+        pred.reasons = existing_reasons + [
+            msg for msg in reasons if msg not in existing_reasons
+        ]
+        pred.warnings = existing_warnings + [
+            msg for msg in warnings if msg not in existing_warnings
+        ]
 
     # =========================================================================
     # =========================================================================

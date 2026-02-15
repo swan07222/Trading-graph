@@ -74,3 +74,40 @@ def test_high_precision_enabled_keeps_strong_signal():
     p._apply_high_precision_gate(pred)
     assert pred.signal == Signal.STRONG_BUY
 
+
+def test_runtime_quality_gate_filters_weak_signal():
+    p = _make_predictor({"enabled": 0.0})
+    pred = Prediction(
+        stock_code="600519",
+        signal=Signal.BUY,
+        signal_strength=0.74,
+        confidence=0.62,
+        prob_up=0.43,
+        prob_down=0.39,
+        model_agreement=0.44,
+        entropy=0.82,
+        trend="SIDEWAYS",
+        atr_pct_value=0.046,
+    )
+    p._apply_runtime_signal_quality_gate(pred)
+    assert pred.signal == Signal.HOLD
+    assert pred.signal_strength <= 0.49
+    assert any("Runtime quality gate filtered signal" in w for w in pred.warnings)
+
+
+def test_runtime_quality_gate_keeps_strong_aligned_signal():
+    p = _make_predictor({"enabled": 0.0})
+    pred = Prediction(
+        stock_code="600519",
+        signal=Signal.STRONG_BUY,
+        signal_strength=0.93,
+        confidence=0.90,
+        prob_up=0.86,
+        prob_down=0.07,
+        model_agreement=0.89,
+        entropy=0.20,
+        trend="UPTREND",
+        atr_pct_value=0.021,
+    )
+    p._apply_runtime_signal_quality_gate(pred)
+    assert pred.signal == Signal.STRONG_BUY

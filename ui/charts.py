@@ -1,4 +1,5 @@
 # ui/charts.py
+import math
 
 import numpy as np
 from PyQt6.QtCore import Qt, pyqtSignal
@@ -313,6 +314,21 @@ class StockChart(QWidget):
             # Render the full loaded window (7-day bars are prepared in app layer).
             # Keep a high cap for safety on very large inputs.
             render_bars = self._bars[-3000:]
+
+            def _caps(iv_token: str) -> tuple[float, float]:
+                token = str(iv_token or "1m").strip().lower()
+                if token == "1m":
+                    return 0.12, 0.045
+                if token == "5m":
+                    return 0.14, 0.075
+                if token in ("15m", "30m"):
+                    return 0.18, 0.12
+                if token in ("60m", "1h"):
+                    return 0.24, 0.18
+                if token in ("1d", "1wk", "1mo"):
+                    return 0.45, 0.35
+                return 0.20, 0.15
+
             for b in render_bars:
                 try:
                     o = float(b.get("open", 0) or 0)
@@ -320,15 +336,15 @@ class StockChart(QWidget):
                     l_val = float(b.get("low", 0) or 0)
                     c = float(b.get("close", 0) or 0)
 
+                    if not all(math.isfinite(v) for v in (o, h, l_val, c)):
+                        continue
                     if c <= 0:
                         continue
 
-                    # App layer already sanitizes OHLC heavily. Keep only a
-                    # very wide sanity guard here to avoid corrupt bars.
                     iv = str(b.get("interval", default_iv) or default_iv).lower()
+                    jump_cap, range_cap = _caps(iv)
                     if prev_close and prev_close > 0:
                         jump = abs(c / prev_close - 1.0)
-                        jump_cap = 0.45 if iv in ("1d", "1wk", "1mo") else 0.22
                         if jump > jump_cap:
                             continue
 
@@ -340,7 +356,20 @@ class StockChart(QWidget):
                     if l_val <= 0:
                         l_val = min(o, c)
 
-                    # Preserve valid candle body/wicks and only enforce OHLC coherence.
+                    anchor = float(prev_close if prev_close and prev_close > 0 else c)
+                    if prev_close and prev_close > 0:
+                        effective_range_cap = float(range_cap)
+                    else:
+                        bootstrap_cap = 0.60 if iv in ("1d", "1wk", "1mo") else 0.25
+                        effective_range_cap = float(max(range_cap, bootstrap_cap))
+
+                    max_body = float(anchor) * float(max(jump_cap * 1.25, effective_range_cap * 0.9))
+                    if max_body > 0 and abs(o - c) > max_body:
+                        if prev_close and prev_close > 0 and abs(c / prev_close - 1.0) <= jump_cap:
+                            o = float(prev_close)
+                        else:
+                            o = c
+
                     top = max(o, c)
                     bot = min(o, c)
                     if h < top:
@@ -349,6 +378,24 @@ class StockChart(QWidget):
                         l_val = bot
                     if h < l_val:
                         h, l_val = l_val, h
+
+                    max_range = float(anchor) * float(effective_range_cap)
+                    curr_range = max(0.0, h - l_val)
+                    if max_range > 0 and curr_range > max_range:
+                        body = max(0.0, top - bot)
+                        if body > max_range:
+                            o = c
+                            top = c
+                            bot = c
+                            body = 0.0
+                        wick_allow = max(0.0, max_range - body)
+                        h = min(h, top + (wick_allow * 0.5))
+                        l_val = max(l_val, bot - (wick_allow * 0.5))
+                        if h < l_val:
+                            h, l_val = l_val, h
+
+                    if anchor > 0 and (h - l_val) > (float(anchor) * float(effective_range_cap) * 1.05):
+                        continue
 
                     x_pos = len(closes)
                     ohlc.append((x_pos, o, c, l_val, h))

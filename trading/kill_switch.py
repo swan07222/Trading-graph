@@ -134,7 +134,7 @@ class KillSwitch:
     def deactivate(
         self,
         deactivated_by: str = "system",
-        override_code: str = None,
+        override_code: str | None = None,
     ) -> bool:
         with self._lock:
             if not self._active:

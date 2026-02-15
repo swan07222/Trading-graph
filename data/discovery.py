@@ -8,6 +8,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
+from types import SimpleNamespace
 
 import pandas as pd
 
@@ -148,7 +149,7 @@ class UniversalStockDiscovery:
         self._timeout: int = _DEFAULT_TIMEOUT
 
         # Network environment (cached once per instance)
-        self._net_env = None  # lazy
+        self._net_env: SimpleNamespace | object | None = None  # lazy
 
         try:
             import akshare as ak  # type: ignore
