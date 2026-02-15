@@ -143,3 +143,51 @@ def test_strategy_engine_supports_batch_signals_and_weights(tmp_path: Path):
     )
     assert bias > 0
     assert any("weighted buy" in r.lower() for r in reasons)
+
+
+def test_strategy_engine_passes_marketplace_params_and_weight(tmp_path: Path):
+    (tmp_path / "param_rule.py").write_text(
+        "\n".join(
+            [
+                "def generate_signal(df, indicators, context, params):",
+                "    sid = context.get('strategy_id', 'missing')",
+                "    score = float(params.get('score', 0.1))",
+                "    return {'action': 'buy', 'score': score, 'reason': f'{sid}:{score:.2f}'}",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / "marketplace.json").write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "strategies": [
+                    {
+                        "id": "param_rule",
+                        "name": "Param Rule",
+                        "version": "1.0",
+                        "file": "param_rule.py",
+                        "enabled_by_default": True,
+                        "weight": 2.0,
+                        "params": {"score": 0.4},
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / "enabled.json").write_text(
+        json.dumps({"enabled": ["param_rule"]}),
+        encoding="utf-8",
+    )
+
+    engine = StrategyScriptEngine(strategies_dir=tmp_path)
+    bias, reasons = engine.evaluate(
+        df=_make_df(),
+        indicators={"rsi_14": 45.0},
+        symbol="600519",
+    )
+
+    # score(0.4) * 15 * combined_weight(2.0) = 12.0
+    assert bias >= 11.5
+    assert any("param_rule:0.40" in r for r in reasons)

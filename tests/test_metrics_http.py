@@ -78,3 +78,59 @@ def test_metrics_http_operational_snapshots():
         assert marketplace["snapshot"]["status"] in {"ok", "unavailable"}
     finally:
         server.stop()
+
+
+def test_metrics_http_extended_telemetry_endpoints(monkeypatch):
+    monkeypatch.setattr(
+        metrics_http,
+        "_build_sentiment_snapshot",
+        lambda stock_code=None, hours_lookback=24: {  # noqa: ARG005
+            "status": "ok",
+            "snapshot": {"scope": stock_code or "market", "hours": hours_lookback},
+        },
+    )
+
+    server = metrics_http.MetricsServer(port=0, host="127.0.0.1")
+    server.start()
+    try:
+        status, api_index = _fetch_json(f"{server.url}/api/v1")
+        assert status == 200
+        assert "/api/v1/execution" in api_index["routes"]
+        assert "/api/v1/risk/metrics" in api_index["routes"]
+        assert "/api/v1/sentiment" in api_index["routes"]
+
+        status, execution = _fetch_json(f"{server.url}/api/v1/execution")
+        assert status == 200
+        assert "snapshot" in execution
+        assert execution["snapshot"]["status"] in {"ok", "unavailable"}
+
+        status, execution_quality = _fetch_json(f"{server.url}/api/v1/execution/quality")
+        assert status == 200
+        assert "snapshot" in execution_quality
+        assert execution_quality["snapshot"]["status"] in {"ok", "unavailable"}
+
+        status, risk = _fetch_json(f"{server.url}/api/v1/risk/metrics")
+        assert status == 200
+        assert "snapshot" in risk
+        assert risk["snapshot"]["status"] in {"ok", "unavailable"}
+
+        status, health = _fetch_json(f"{server.url}/api/v1/health")
+        assert status == 200
+        assert "snapshot" in health
+        assert health["snapshot"]["status"] in {"ok", "unavailable"}
+
+        status, sentiment = _fetch_json(f"{server.url}/api/v1/sentiment?symbol=600519&hours=12")
+        assert status == 200
+        assert sentiment["scope"] == "600519"
+        assert sentiment["hours_lookback"] == 12
+        assert sentiment["snapshot"]["status"] == "ok"
+
+        status, full = _fetch_json(f"{server.url}/api/v1/dashboard/full?limit=5&hours=8")
+        assert status == 200
+        assert "snapshot" in full
+        assert "execution" in full["snapshot"]
+        assert "risk" in full["snapshot"]
+        assert "health" in full["snapshot"]
+        assert "sentiment" in full["snapshot"]
+    finally:
+        server.stop()

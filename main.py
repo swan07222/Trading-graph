@@ -26,7 +26,7 @@ def check_dependencies(require_gui: bool = False, require_ml: bool = False) -> b
     required = [("psutil", "psutil")]
     if require_ml:
         required.extend([
-            ("torch", "pytorch"),
+            ("torch", "torch"),
             ("numpy", "numpy"),
             ("pandas", "pandas"),
             ("sklearn", "scikit-learn"),
@@ -55,6 +55,206 @@ def check_dependencies(require_gui: bool = False, require_ml: bool = False) -> b
 
     return True
 
+def _parse_positive_int_csv(raw: str, arg_name: str) -> list[int]:
+    """Parse comma-separated positive integers with strict validation."""
+    values: list[int] = []
+    invalid_tokens: list[str] = []
+    for piece in str(raw or "").split(","):
+        token = piece.strip()
+        if not token:
+            continue
+        try:
+            value = int(token)
+        except ValueError:
+            invalid_tokens.append(token)
+            continue
+        if value <= 0:
+            invalid_tokens.append(token)
+            continue
+        values.append(value)
+
+    deduped = sorted(set(values))
+    if deduped:
+        if invalid_tokens:
+            raise ValueError(
+                f"{arg_name} contains invalid values: {', '.join(invalid_tokens)}"
+            )
+        return deduped
+
+    raise ValueError(
+        f"{arg_name} must contain at least one positive integer"
+    )
+
+
+def _parse_probability_csv(raw: str, arg_name: str) -> list[float]:
+    """Parse comma-separated probabilities (0, 1] with strict validation."""
+    values: list[float] = []
+    invalid_tokens: list[str] = []
+    for piece in str(raw or "").split(","):
+        token = piece.strip()
+        if not token:
+            continue
+        try:
+            value = float(token)
+        except ValueError:
+            invalid_tokens.append(token)
+            continue
+        if not (0.0 < value <= 1.0):
+            invalid_tokens.append(token)
+            continue
+        values.append(value)
+
+    deduped = sorted(set(values))
+    if deduped:
+        if invalid_tokens:
+            raise ValueError(
+                f"{arg_name} contains invalid values: {', '.join(invalid_tokens)}"
+            )
+        return deduped
+
+    raise ValueError(
+        f"{arg_name} must contain at least one value in the range (0, 1]"
+    )
+
+
+def _parse_float_csv(
+    raw: str,
+    arg_name: str,
+    *,
+    min_value: float = 0.0,
+    allow_equal_min: bool = True,
+) -> list[float]:
+    """Parse comma-separated floats with lower-bound validation."""
+    values: list[float] = []
+    invalid_tokens: list[str] = []
+    for piece in str(raw or "").split(","):
+        token = piece.strip()
+        if not token:
+            continue
+        try:
+            value = float(token)
+        except ValueError:
+            invalid_tokens.append(token)
+            continue
+        if allow_equal_min:
+            ok = value >= float(min_value)
+        else:
+            ok = value > float(min_value)
+        if not ok:
+            invalid_tokens.append(token)
+            continue
+        values.append(value)
+
+    deduped = sorted(set(values))
+    if deduped:
+        if invalid_tokens:
+            raise ValueError(
+                f"{arg_name} contains invalid values: {', '.join(invalid_tokens)}"
+            )
+        return deduped
+
+    bound = (
+        f">={min_value}" if allow_equal_min else f">{min_value}"
+    )
+    raise ValueError(
+        f"{arg_name} must contain at least one value {bound}"
+    )
+
+
+def _require_positive_int(value: int, arg_name: str) -> int:
+    """Validate that an integer argument is positive."""
+    parsed = int(value)
+    if parsed <= 0:
+        raise ValueError(f"{arg_name} must be a positive integer")
+    return parsed
+
+
+def _ensure_backtest_optimize_success(summary: dict) -> None:
+    """Raise if optimization did not produce a successful result."""
+    status = str(summary.get("status", "")).strip().lower()
+    if status in {"ok", "success"}:
+        return
+
+    errors = summary.get("errors")
+    if isinstance(errors, list) and errors:
+        raise RuntimeError(f"Backtest optimization failed: {errors[0]}")
+    raise RuntimeError("Backtest optimization failed")
+
+
+def _health_gate_violations(report: dict) -> list[str]:
+    """Return health gate violations for production readiness checks."""
+    violations: list[str] = []
+    status = str(report.get("status", "")).strip().lower()
+    if status != "healthy":
+        violations.append(f"status={status or 'unknown'}")
+    if not bool(report.get("can_trade", False)):
+        violations.append("can_trade=false")
+    if bool(report.get("degraded_mode", False)):
+        violations.append("degraded_mode=true")
+    if report.get("slo_pass") is False:
+        violations.append("slo_pass=false")
+    return violations
+
+
+def _ensure_health_gate_from_json(raw_health_json: str) -> None:
+    """Raise if health JSON does not pass production gate checks."""
+    try:
+        payload = json.loads(raw_health_json)
+    except Exception as exc:
+        raise RuntimeError(f"Health output is not valid JSON: {exc}") from exc
+    if not isinstance(payload, dict):
+        raise RuntimeError("Health output JSON must be an object")
+
+    violations = _health_gate_violations(payload)
+    if violations:
+        raise RuntimeError(f"Health gate failed: {', '.join(violations)}")
+
+
+def _doctor_gate_violations(report: dict) -> list[str]:
+    """Return doctor gate violations for production readiness checks."""
+    violations: list[str] = []
+
+    deps = report.get("dependencies")
+    if isinstance(deps, dict):
+        required_modules = ("psutil", "numpy", "pandas", "sklearn", "requests")
+        missing = [name for name in required_modules if not bool(deps.get(name, False))]
+        if missing:
+            violations.append(f"missing_dependencies={','.join(missing)}")
+    else:
+        violations.append("dependencies_report_missing")
+
+    paths = report.get("paths")
+    if isinstance(paths, dict):
+        bad_paths: list[str] = []
+        for name, info in paths.items():
+            if not isinstance(info, dict):
+                bad_paths.append(f"{name}:invalid")
+                continue
+            if not bool(info.get("exists", False)):
+                bad_paths.append(f"{name}:missing")
+            elif not bool(info.get("writable", False)):
+                bad_paths.append(f"{name}:readonly")
+        if bad_paths:
+            violations.append(f"path_issues={';'.join(bad_paths)}")
+    else:
+        violations.append("paths_report_missing")
+
+    config_warnings = report.get("config_validation_warnings")
+    if isinstance(config_warnings, list) and config_warnings:
+        violations.append(f"config_warnings={len(config_warnings)}")
+    elif config_warnings is None:
+        violations.append("config_validation_warnings_missing")
+
+    return violations
+
+
+def _ensure_doctor_gate(report: dict) -> None:
+    """Raise if doctor report fails production readiness gate checks."""
+    violations = _doctor_gate_violations(report)
+    if violations:
+        raise RuntimeError(f"Doctor gate failed: {', '.join(violations)}")
+
+
 def main():
     """Main entry point"""
     import os
@@ -69,18 +269,29 @@ def main():
     parser.add_argument('--replay-file', type=str, help='Replay market data file (csv/jsonl)')
     parser.add_argument('--replay-speed', type=float, default=20.0, help='Replay speed multiplier')
     parser.add_argument('--health', action='store_true', help='Show system health')
+    parser.add_argument('--health-strict', action='store_true', help='Fail when health gate is not fully healthy (use with --health)')
     parser.add_argument('--epochs', type=int, default=100, help='Training epochs')
     parser.add_argument('--max-stocks', type=int, default=200, help='Max stocks for training')
     parser.add_argument('--continuous', action='store_true', help='Continuous learning mode')
     parser.add_argument('--cli', action='store_true', help='CLI mode')
     parser.add_argument('--recovery-drill', action='store_true', help='Run crash recovery drill')
     parser.add_argument('--doctor', action='store_true', help='Run system diagnostics')
+    parser.add_argument('--doctor-strict', action='store_true', help='Fail when doctor readiness gate is not met (use with --doctor)')
     parser.add_argument('--opt-train-months', type=str, default='6,9,12,18', help='Backtest optimization train months list')
     parser.add_argument('--opt-test-months', type=str, default='1,2,3', help='Backtest optimization test months list')
     parser.add_argument('--opt-min-confidence', type=str, default='0.55,0.60,0.65,0.70', help='Backtest optimization confidence list')
+    parser.add_argument('--opt-trade-horizon', type=str, default='3,5,8', help='Backtest optimization holding horizon (bars) list')
+    parser.add_argument('--opt-max-participation', type=str, default='0.02,0.03,0.05', help='Backtest optimization max volume participation list')
+    parser.add_argument('--opt-slippage-bps', type=str, default='8,12,18', help='Backtest optimization slippage assumptions in bps')
+    parser.add_argument('--opt-commission-bps', type=str, default='2.0,2.5,3.0', help='Backtest optimization commission assumptions in bps')
     parser.add_argument('--opt-top-k', type=int, default=5, help='Backtest optimization top-k results')
 
     args = parser.parse_args()
+
+    if args.health_strict and not args.health:
+        parser.error("--health-strict requires --health")
+    if args.doctor_strict and not args.doctor:
+        parser.error("--doctor-strict requires --doctor")
 
     require_gui = not any([
         args.train, args.auto_learn, args.predict, args.backtest, args.backtest_optimize, args.replay_file,
@@ -129,10 +340,15 @@ def main():
         if args.health:
             from trading.health import get_health_monitor
             monitor = get_health_monitor()
-            print(monitor.get_health_json())
+            health_json = monitor.get_health_json()
+            print(health_json)
+            if args.health_strict:
+                _ensure_health_gate_from_json(health_json)
 
         elif args.doctor:
-            run_system_doctor()
+            report = run_system_doctor()
+            if args.doctor_strict:
+                _ensure_doctor_gate(report)
 
         elif args.train:
             from models.trainer import Trainer
@@ -161,44 +377,56 @@ def main():
             print(f"Price: {result.current_price:.2f}")
 
         elif args.backtest_optimize:
+            train_months_options = _parse_positive_int_csv(
+                args.opt_train_months,
+                "--opt-train-months",
+            )
+            test_months_options = _parse_positive_int_csv(
+                args.opt_test_months,
+                "--opt-test-months",
+            )
+            min_confidence_options = _parse_probability_csv(
+                args.opt_min_confidence,
+                "--opt-min-confidence",
+            )
+            trade_horizon_options = _parse_positive_int_csv(
+                args.opt_trade_horizon,
+                "--opt-trade-horizon",
+            )
+            max_participation_options = _parse_float_csv(
+                args.opt_max_participation,
+                "--opt-max-participation",
+                min_value=0.0,
+                allow_equal_min=False,
+            )
+            slippage_bps_options = _parse_float_csv(
+                args.opt_slippage_bps,
+                "--opt-slippage-bps",
+                min_value=0.0,
+                allow_equal_min=True,
+            )
+            commission_bps_options = _parse_float_csv(
+                args.opt_commission_bps,
+                "--opt-commission-bps",
+                min_value=0.0,
+                allow_equal_min=True,
+            )
+            top_k = _require_positive_int(args.opt_top_k, "--opt-top-k")
+
             from analysis.backtest import Backtester
-
-            def _parse_int_list(raw: str) -> list[int]:
-                out: list[int] = []
-                for p in str(raw or "").split(","):
-                    t = p.strip()
-                    if not t:
-                        continue
-                    try:
-                        v = int(t)
-                    except ValueError:
-                        continue
-                    if v > 0:
-                        out.append(v)
-                return out
-
-            def _parse_float_list(raw: str) -> list[float]:
-                out: list[float] = []
-                for p in str(raw or "").split(","):
-                    t = p.strip()
-                    if not t:
-                        continue
-                    try:
-                        v = float(t)
-                    except ValueError:
-                        continue
-                    if 0.0 < v <= 1.0:
-                        out.append(v)
-                return out
-
             bt = Backtester()
             summary = bt.optimize(
-                train_months_options=_parse_int_list(args.opt_train_months),
-                test_months_options=_parse_int_list(args.opt_test_months),
-                min_confidence_options=_parse_float_list(args.opt_min_confidence),
-                top_k=int(args.opt_top_k),
+                train_months_options=train_months_options,
+                test_months_options=test_months_options,
+                min_confidence_options=min_confidence_options,
+                trade_horizon_options=trade_horizon_options,
+                max_participation_options=max_participation_options,
+                slippage_bps_options=slippage_bps_options,
+                commission_bps_options=commission_bps_options,
+                top_k=top_k,
             )
             print(json.dumps(summary, indent=2, ensure_ascii=False))
+            _ensure_backtest_optimize_success(summary)
 
         elif args.backtest:
             from analysis.backtest import Backtester
@@ -283,7 +511,7 @@ def run_recovery_drill():
     print("[DRILL] PASS: fill dedup + recovery OK")
 
 
-def run_system_doctor() -> None:
+def run_system_doctor() -> dict:
     """One-shot system diagnostics for setup and runtime readiness."""
     import os
     from datetime import datetime
@@ -333,6 +561,7 @@ def run_system_doctor() -> None:
         "config_validation_warnings": list(CONFIG.validation_warnings),
     }
     print(json.dumps(report, indent=2, ensure_ascii=False))
+    return report
 
 if __name__ == "__main__":
     main()

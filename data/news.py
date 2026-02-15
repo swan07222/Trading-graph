@@ -753,7 +753,22 @@ class NewsAggregator:
         if not news:
             return {
                 "overall_sentiment": 0.0,
+                "simple_sentiment": 0.0,
+                "importance_weighted_sentiment": 0.0,
                 "label": "neutral",
+                "confidence": 0.0,
+                "weighted": True,
+                "fusion_version": "2.1",
+                "recency_half_life_hours": 18.0,
+                "source_diversity": 0.0,
+                "source_entropy": 0.0,
+                "source_concentration_hhi": 0.0,
+                "disagreement_index": 0.0,
+                "novelty_score": 0.0,
+                "average_age_hours": 0.0,
+                "sentiment_momentum_6h": 0.0,
+                "source_mix": {},
+                "source_contributions": {},
                 "positive_count": 0,
                 "negative_count": 0,
                 "neutral_count": 0,
@@ -768,6 +783,20 @@ class NewsAggregator:
 
         weighted_total = 0.0
         weight_sum = 0.0
+        source_weighted: dict[str, float] = {}
+        source_weight_sum: dict[str, float] = {}
+        source_scores: dict[str, list[float]] = {}
+        source_counts: dict[str, int] = {}
+        source_weight_mass: dict[str, float] = {}
+        headline_seen: dict[tuple[str, str], int] = {}
+        recency_half_life_hours = 18.0
+        novelty_values: list[float] = []
+        weighted_age_hours = 0.0
+        importance_weighted_total = 0.0
+        importance_weight_sum = 0.0
+        scores_recent_6h: list[float] = []
+        scores_older_6h: list[float] = []
+
         for n in news:
             score = float(getattr(n, "sentiment_score", 0.0) or 0.0)
             importance = float(getattr(n, "importance", 0.5) or 0.5)
@@ -775,35 +804,151 @@ class NewsAggregator:
                 0.0,
                 (now - getattr(n, "publish_time", now)).total_seconds() / 3600.0,
             )
-            recency_w = 1.0 / (1.0 + age_h / 24.0)
+            recency_w = float(0.5 ** (age_h / recency_half_life_hours))
             src = str(getattr(n, "source", "") or "").strip().lower()
             src_w = self._source_reliability_weight(src)
-            w = max(0.05, recency_w * src_w * max(0.1, importance))
+            title_norm = str(getattr(n, "title", "") or "").strip().lower()
+            novelty_key = (src or "unknown", title_norm[:_DEDUP_PREFIX_LEN])
+            repeat = int(headline_seen.get(novelty_key, 0))
+            headline_seen[novelty_key] = repeat + 1
+            novelty_w = 1.0 / (1.0 + 0.35 * repeat)
+            novelty_values.append(float(novelty_w))
+
+            w = max(
+                0.03,
+                recency_w * src_w * max(0.1, importance) * novelty_w,
+            )
+            weighted_age_hours += age_h * w
+            importance_w = max(0.1, importance)
+            importance_weighted_total += score * importance_w
+            importance_weight_sum += importance_w
+            if age_h <= 6.0:
+                scores_recent_6h.append(score)
+            else:
+                scores_older_6h.append(score)
+
             weighted_total += score * w
             weight_sum += w
+            source_weighted[src] = float(source_weighted.get(src, 0.0) + (score * w))
+            source_weight_sum[src] = float(source_weight_sum.get(src, 0.0) + w)
+            source_weight_mass[src] = float(source_weight_mass.get(src, 0.0) + w)
+            source_scores.setdefault(src, []).append(score)
+            source_counts[src] = int(source_counts.get(src, 0) + 1)
+
         overall = (weighted_total / weight_sum) if weight_sum > 0 else simple_avg
+        importance_weighted = (
+            importance_weighted_total / importance_weight_sum
+            if importance_weight_sum > 0
+            else overall
+        )
 
         positive = [n for n in news if n.sentiment_label == "positive"]
         negative = [n for n in news if n.sentiment_label == "negative"]
         neutral = [n for n in news if n.sentiment_label == "neutral"]
 
+        source_diversity = float(len(source_scores) / max(1, len(news)))
+        source_probs = [
+            float(cnt) / max(1.0, float(len(news)))
+            for cnt in source_counts.values()
+            if cnt > 0
+        ]
+        entropy_raw = -sum((p * math.log(p)) for p in source_probs if p > 0.0)
+        entropy_norm = (
+            entropy_raw / math.log(len(source_probs))
+            if len(source_probs) > 1
+            else 0.0
+        )
+        source_concentration_hhi = sum((p * p) for p in source_probs)
+        centroid_scores = [
+            float(np.mean(vals))
+            for vals in source_scores.values()
+            if vals
+        ]
+        disagreement = (
+            float(np.std(np.asarray(centroid_scores, dtype=float)))
+            if len(centroid_scores) > 1
+            else 0.0
+        )
+        novelty_score = (
+            float(np.mean(novelty_values))
+            if novelty_values
+            else 0.0
+        )
+        avg_age_hours = (
+            weighted_age_hours / weight_sum
+            if weight_sum > 0
+            else 0.0
+        )
+        if scores_recent_6h and scores_older_6h:
+            momentum_6h = float(np.mean(scores_recent_6h) - np.mean(scores_older_6h))
+        elif scores_recent_6h:
+            momentum_6h = float(np.mean(scores_recent_6h) - overall)
+        else:
+            momentum_6h = 0.0
+
+        coverage = min(1.0, len(news) / 30.0)
+        strength = min(1.0, abs(float(overall)))
+        source_coverage = min(1.0, len(source_scores) / 4.0)
+        diversity_quality = min(1.0, (0.6 * source_coverage) + (0.4 * entropy_norm))
+
+        confidence = (
+            (0.40 * coverage)
+            + (0.30 * strength)
+            + (0.20 * diversity_quality)
+            + (0.10 * novelty_score)
+        )
+        confidence *= max(0.0, 1.0 - (0.35 * min(1.0, disagreement * 2.5)))
         confidence = min(
             1.0,
             max(
                 0.0,
-                (len(news) / 25.0) * (0.6 + 0.4 * min(1.0, abs(float(overall)))),
+                confidence,
             ),
         )
+
+        source_contributions = {
+            src: round(
+                float(source_weighted.get(src, 0.0))
+                / max(1e-9, float(source_weight_sum.get(src, 0.0))),
+                4,
+            )
+            for src in sorted(source_weighted.keys())
+        }
+        source_mix = {
+            src: round(float(cnt) / max(1.0, float(len(news))), 4)
+            for src, cnt in sorted(
+                source_counts.items(), key=lambda kv: kv[1], reverse=True
+            )
+        }
+        source_weight_mix = {
+            src: round(float(w) / max(1e-9, float(weight_sum)), 4)
+            for src, w in sorted(
+                source_weight_mass.items(), key=lambda kv: kv[1], reverse=True
+            )
+        }
 
         return {
             "overall_sentiment": round(overall, 3),
             "simple_sentiment": round(simple_avg, 3),
+            "importance_weighted_sentiment": round(float(importance_weighted), 3),
             "label": (
                 "positive" if overall > 0.1
                 else ("negative" if overall < -0.1 else "neutral")
             ),
             "confidence": round(float(confidence), 3),
             "weighted": True,
+            "fusion_version": "2.1",
+            "recency_half_life_hours": recency_half_life_hours,
+            "source_diversity": round(float(source_diversity), 3),
+            "source_entropy": round(float(entropy_norm), 3),
+            "source_concentration_hhi": round(float(source_concentration_hhi), 3),
+            "disagreement_index": round(float(disagreement), 3),
+            "novelty_score": round(float(novelty_score), 3),
+            "average_age_hours": round(float(avg_age_hours), 3),
+            "sentiment_momentum_6h": round(float(momentum_6h), 3),
+            "source_mix": source_mix,
+            "source_weight_mix": source_weight_mix,
+            "source_contributions": source_contributions,
             "positive_count": len(positive),
             "negative_count": len(negative),
             "neutral_count": len(neutral),
@@ -844,11 +989,23 @@ class NewsAggregator:
             return {
                 "news_sentiment_avg": 0.0,
                 "news_sentiment_std": 0.0,
+                "news_weighted_sentiment": 0.0,
+                "news_sentiment_disagreement": 0.0,
                 "news_positive_ratio": 0.0,
                 "news_negative_ratio": 0.0,
                 "news_volume": 0.0,
                 "news_importance_avg": 0.5,
                 "news_recency_score": 0.0,
+                "news_source_diversity": 0.0,
+                "news_sentiment_confidence": 0.0,
+                "news_source_entropy": 0.0,
+                "news_source_concentration_hhi": 0.0,
+                "news_novelty_score": 0.0,
+                "news_recent_momentum": 0.0,
+                "news_importance_weighted_sentiment": 0.0,
+                "news_weighted_vs_simple_gap": 0.0,
+                "news_average_age_hours": 0.0,
+                "news_disagreement_penalty": 1.0,
                 "policy_sentiment": 0.0,
             }
 
@@ -873,6 +1030,31 @@ class NewsAggregator:
             else 0.0
         )
 
+        source_groups: dict[str, list[float]] = {}
+        fused_w_sum = 0.0
+        fused_s_sum = 0.0
+        for n in recent:
+            src = str(getattr(n, "source", "") or "").strip().lower()
+            source_groups.setdefault(src, []).append(float(n.sentiment_score))
+            src_w = self._source_reliability_weight(src)
+            age_h = max(
+                0.0,
+                (datetime.now() - n.publish_time).total_seconds() / 3600.0,
+            )
+            rec_w = float(0.5 ** (age_h / 18.0))
+            imp_w = max(0.1, float(getattr(n, "importance", 0.5) or 0.5))
+            w = max(0.03, src_w * rec_w * imp_w)
+            fused_w_sum += w
+            fused_s_sum += float(n.sentiment_score) * w
+
+        fused_sentiment = fused_s_sum / fused_w_sum if fused_w_sum > 0 else weighted_sentiment
+        source_disagreement = (
+            float(np.std([float(np.mean(v)) for v in source_groups.values() if v]))
+            if len(source_groups) > 1
+            else 0.0
+        )
+        source_diversity = float(len(source_groups) / max(1, len(recent)))
+
         # Policy-specific sentiment
         policy_items = [n for n in recent if n.category == "policy"]
         policy_sentiment = (
@@ -882,17 +1064,34 @@ class NewsAggregator:
         )
 
         importances = [n.importance for n in recent]
+        summary = self.get_sentiment_summary(stock_code=stock_code)
+        summary_overall = float(summary.get("overall_sentiment", 0.0) or 0.0)
+        summary_simple = float(summary.get("simple_sentiment", 0.0) or 0.0)
+        summary_disagreement = float(summary.get("disagreement_index", 0.0) or 0.0)
+        disagreement_penalty = max(0.0, 1.0 - min(1.0, summary_disagreement * 2.0))
 
         return {
             "news_sentiment_avg": round(float(np.mean(scores)), 4),
             "news_sentiment_std": (
                 round(float(np.std(scores)), 4) if len(scores) > 1 else 0.0
             ),
+            "news_weighted_sentiment": round(float(fused_sentiment), 4),
+            "news_sentiment_disagreement": round(float(source_disagreement), 4),
             "news_positive_ratio": round(positive / total, 4),
             "news_negative_ratio": round(negative / total, 4),
             "news_volume": min(total / 20.0, 1.0),  # Normalized 0鈥?
             "news_importance_avg": round(float(np.mean(importances)), 4),
             "news_recency_score": round(weighted_sentiment, 4),
+            "news_source_diversity": round(float(source_diversity), 4),
+            "news_sentiment_confidence": round(float(summary.get("confidence", 0.0) or 0.0), 4),
+            "news_source_entropy": round(float(summary.get("source_entropy", 0.0) or 0.0), 4),
+            "news_source_concentration_hhi": round(float(summary.get("source_concentration_hhi", 0.0) or 0.0), 4),
+            "news_novelty_score": round(float(summary.get("novelty_score", 0.0) or 0.0), 4),
+            "news_recent_momentum": round(float(summary.get("sentiment_momentum_6h", 0.0) or 0.0), 4),
+            "news_importance_weighted_sentiment": round(float(summary.get("importance_weighted_sentiment", 0.0) or 0.0), 4),
+            "news_weighted_vs_simple_gap": round(float(summary_overall - summary_simple), 4),
+            "news_average_age_hours": round(float(summary.get("average_age_hours", 0.0) or 0.0), 4),
+            "news_disagreement_penalty": round(float(disagreement_penalty), 4),
             "policy_sentiment": round(policy_sentiment, 4),
         }
 

@@ -116,6 +116,87 @@ def test_backtest_optimize_returns_best_and_restores_confidence(monkeypatch):
     assert abs(float(CONFIG.model.min_confidence) - old_conf) < 1e-9
 
 
+def test_backtest_optimize_extended_parameters_and_restore(monkeypatch):
+    bt = Backtester.__new__(Backtester)
+
+    old_conf = float(getattr(CONFIG.model, "min_confidence", 0.6) or 0.6)
+    old_h_present = hasattr(CONFIG.model, "backtest_trade_horizon")
+    old_h = int(getattr(CONFIG.model, "backtest_trade_horizon", 0) or 0)
+    old_part_present = hasattr(CONFIG.risk, "backtest_max_volume_participation")
+    old_part = float(getattr(CONFIG.risk, "backtest_max_volume_participation", 0.03) or 0.03)
+    old_slip = float(getattr(CONFIG.trading, "slippage", 0.001) or 0.001)
+    old_comm = float(getattr(CONFIG.trading, "commission", 0.00025) or 0.00025)
+
+    def fake_run(
+        self,  # noqa: ARG001
+        stock_codes=None,  # noqa: ARG001
+        train_months=12,  # noqa: ARG001
+        test_months=1,  # noqa: ARG001
+        min_data_days=500,  # noqa: ARG001
+        initial_capital=None,  # noqa: ARG001
+    ):
+        conf = float(getattr(CONFIG.model, "min_confidence", 0.6) or 0.6)
+        horizon = int(getattr(CONFIG.model, "backtest_trade_horizon", 5) or 5)
+        part = float(getattr(CONFIG.risk, "backtest_max_volume_participation", 0.03) or 0.03)
+        slip = float(getattr(CONFIG.trading, "slippage", 0.001) or 0.001)
+        comm = float(getattr(CONFIG.trading, "commission", 0.00025) or 0.00025)
+
+        quality = (
+            (conf * 60.0)
+            + (horizon * 0.8)
+            + (part * 100.0)
+            - (slip * 2000.0)
+            - (comm * 1500.0)
+        )
+        return _mk_result(
+            total_return=quality,
+            excess_return=quality - 5.0,
+            sharpe=max(0.1, quality / 20.0),
+            sortino=max(0.1, quality / 18.0),
+            max_dd_pct=max(1.0, 18.0 - quality / 4.0),
+            win_rate=min(0.9, max(0.3, quality / 80.0)),
+            profit_factor=min(3.0, max(1.0, quality / 35.0)),
+            trades=24,
+            fold_acc=min(0.95, max(0.4, quality / 90.0)),
+        )
+
+    monkeypatch.setattr(Backtester, "run", fake_run, raising=True)
+
+    summary = Backtester.optimize(
+        bt,
+        train_months_options=[9],
+        test_months_options=[1],
+        min_confidence_options=[0.61],
+        trade_horizon_options=[7],
+        max_participation_options=[0.04],
+        slippage_bps_options=[11.0],
+        commission_bps_options=[2.2],
+        top_k=1,
+    )
+
+    assert summary["status"] == "ok"
+    assert summary["best"]["trade_horizon"] == 7
+    assert abs(float(summary["best"]["max_participation"]) - 0.04) < 1e-9
+    assert abs(float(summary["best"]["slippage_bps"]) - 11.0) < 1e-9
+    assert abs(float(summary["best"]["commission_bps"]) - 2.2) < 1e-9
+    assert summary["search_space"]["trade_horizon"] == [7]
+    assert summary["search_space"]["max_participation"] == [0.04]
+    assert summary["search_space"]["slippage_bps"] == [11.0]
+    assert summary["search_space"]["commission_bps"] == [2.2]
+
+    assert abs(float(CONFIG.model.min_confidence) - old_conf) < 1e-9
+    assert abs(float(CONFIG.trading.slippage) - old_slip) < 1e-12
+    assert abs(float(CONFIG.trading.commission) - old_comm) < 1e-12
+    if old_h_present:
+        assert int(CONFIG.model.backtest_trade_horizon) == old_h
+    else:
+        assert not hasattr(CONFIG.model, "backtest_trade_horizon")
+    if old_part_present:
+        assert abs(float(CONFIG.risk.backtest_max_volume_participation) - old_part) < 1e-9
+    else:
+        assert not hasattr(CONFIG.risk, "backtest_max_volume_participation")
+
+
 def test_backtest_resolve_horizon_falls_back_for_daily_interval():
     bt = Backtester.__new__(Backtester)
 

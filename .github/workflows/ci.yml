@@ -70,7 +70,13 @@ jobs:
 
       - name: Run tests with coverage
         run: |
-          pytest -q --maxfail=1 --cov=analysis --cov=config --cov=core --cov=data --cov=models --cov=trading --cov=utils --cov-report=xml --cov-report=term-missing
+          pytest -q --maxfail=1 --cov=analysis --cov=config --cov=core --cov=data --cov=models --cov=trading --cov=utils --cov-report=xml --cov-report=term-missing --cov-fail-under=60
+
+      - name: Runtime health gate smoke
+        if: matrix.python-version == '3.11'
+        run: |
+          python main.py --health --health-strict
+          python main.py --doctor --doctor-strict
 
       - name: Upload coverage XML
         if: matrix.python-version == '3.11'

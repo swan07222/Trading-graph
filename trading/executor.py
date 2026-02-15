@@ -2187,6 +2187,19 @@ class ExecutionEngine:
             requested_order_type = str(
                 getattr(signal, "order_type", "limit") or "limit"
             ).strip().lower()
+            order_type_alias = {
+                "trailing": "trail_market",
+                "trailing_market": "trail_market",
+                "trailing_stop": "trail_market",
+                "trailing_limit": "trail_limit",
+                "market_ioc": "ioc",
+                "market_fok": "fok",
+                "stop_loss": "stop",
+            }
+            requested_order_type = order_type_alias.get(
+                requested_order_type.replace("-", "_"),
+                requested_order_type,
+            )
             requested_enum = OrderType.LIMIT
             try:
                 requested_enum = OrderType(requested_order_type)
@@ -2194,13 +2207,43 @@ class ExecutionEngine:
                 requested_enum = OrderType.LIMIT
 
             broker_order_type = requested_enum
-            if requested_enum == OrderType.STOP:
-                # Emulate stop behavior via runtime exits; submit market.
-                broker_order_type = OrderType.MARKET
-            elif requested_enum == OrderType.STOP_LIMIT:
-                broker_order_type = OrderType.LIMIT
-                if order.price <= 0:
-                    order.price = float(signal.price or 0.0)
+            emulation_reason = ""
+            if requested_enum in {
+                OrderType.STOP,
+                OrderType.STOP_LIMIT,
+                OrderType.IOC,
+                OrderType.FOK,
+                OrderType.TRAIL_MARKET,
+                OrderType.TRAIL_LIMIT,
+            }:
+                # Broker abstraction is market/limit centric; advanced types are
+                # represented in tags and handled by runtime guardrails/simulator.
+                if requested_enum in {
+                    OrderType.STOP,
+                    OrderType.IOC,
+                    OrderType.FOK,
+                    OrderType.TRAIL_MARKET,
+                }:
+                    broker_order_type = OrderType.MARKET
+                else:
+                    broker_order_type = OrderType.LIMIT
+                emulation_reason = (
+                    f"{requested_enum.value}_as_{broker_order_type.value}"
+                )
+
+            trigger_px = float(getattr(signal, "trigger_price", 0.0) or 0.0)
+            if trigger_px <= 0 and requested_enum in {OrderType.STOP, OrderType.STOP_LIMIT}:
+                trigger_px = float(signal.price or 0.0)
+
+            if broker_order_type == OrderType.LIMIT and order.price <= 0:
+                fallback_px = float(signal.price or 0.0)
+                if fallback_px <= 0 and trigger_px > 0:
+                    fallback_px = trigger_px
+                order.price = fallback_px
+
+            if trigger_px > 0:
+                order.stop_price = float(trigger_px)
+
             order.order_type = broker_order_type
 
             # Tag auto-trade orders for audit
@@ -2213,14 +2256,38 @@ class ExecutionEngine:
             order.tags["order_type_emulated"] = bool(
                 broker_order_type != requested_enum
             )
+            if emulation_reason:
+                order.tags["order_type_emulation_reason"] = emulation_reason
+            if trigger_px > 0:
+                order.tags["trigger_price"] = float(trigger_px)
+
+            tif = str(getattr(signal, "time_in_force", "day") or "day").strip().lower()
+            tif = tif.replace("-", "_")
+            if requested_enum in {OrderType.IOC, OrderType.FOK}:
+                tif = requested_enum.value
+            if tif not in {"day", "gtc", "ioc", "fok"}:
+                tif = "day"
+            order.tags["time_in_force"] = tif
+            if tif in {"ioc", "fok"}:
+                order.tags["strict_time_in_force"] = True
+
             order.tags["bracket_enabled"] = bool(
                 getattr(signal, "bracket", False)
                 or order.stop_loss > 0
                 or order.take_profit > 0
             )
             trailing_pct = float(getattr(signal, "trailing_stop_pct", 0.0) or 0.0)
+            if requested_enum in {OrderType.TRAIL_MARKET, OrderType.TRAIL_LIMIT} and trailing_pct <= 0:
+                trailing_pct = float(
+                    getattr(getattr(CONFIG, "auto_trade", None), "trailing_stop_pct", 0.0) or 0.0
+                )
             if trailing_pct > 0:
                 order.tags["trailing_stop_pct"] = trailing_pct
+            trail_limit_offset_pct = float(
+                getattr(signal, "trail_limit_offset_pct", 0.0) or 0.0
+            )
+            if trail_limit_offset_pct > 0:
+                order.tags["trail_limit_offset_pct"] = trail_limit_offset_pct
 
             order = oms.submit_order(order)
 

@@ -176,10 +176,18 @@ class BacktestOptimizationTrial:
     train_months: int
     test_months: int
     min_confidence: float
-    score: float
+    trade_horizon: int = 5
+    max_participation: float = 0.03
+    slippage_bps: float = 10.0
+    commission_bps: float = 2.5
+    score: float = 0.0
     total_return: float = 0.0
     excess_return: float = 0.0
     sharpe_ratio: float = 0.0
+    sortino_ratio: float = 0.0
+    information_ratio: float = 0.0
+    calmar_ratio: float = 0.0
+    volatility: float = 0.0
     max_drawdown_pct: float = 0.0
     win_rate: float = 0.0
     trades: int = 0
@@ -327,12 +335,16 @@ class Backtester:
         """
         score = 0.0
         score += float(result.excess_return) * 0.35
+        score += float(result.total_return) * 0.10
         score += float(result.sharpe_ratio) * 12.0
         score += float(result.sortino_ratio) * 6.0
+        score += float(result.information_ratio) * 4.0
+        score += float(result.calmar_ratio) * 5.0
         score += float(result.win_rate) * 25.0
         score += float(result.profit_factor) * 3.0
         score += float(result.avg_fold_accuracy) * 20.0
         score -= float(result.max_drawdown_pct) * 0.60
+        score -= max(0.0, float(result.volatility) - 45.0) * 0.05
         if float(result.total_trades) < 8:
             score -= (8.0 - float(result.total_trades)) * 0.8
         return float(score)
@@ -343,12 +355,16 @@ class Backtester:
         train_months_options: list[int] | None = None,
         test_months_options: list[int] | None = None,
         min_confidence_options: list[float] | None = None,
+        trade_horizon_options: list[int] | None = None,
+        max_participation_options: list[float] | None = None,
+        slippage_bps_options: list[float] | None = None,
+        commission_bps_options: list[float] | None = None,
         min_data_days: int = 500,
         initial_capital: float | None = None,
         top_k: int = 5,
     ) -> dict:
         """
-        Parameter sweep over walk-forward settings and confidence thresholds.
+        Parameter sweep over walk-forward settings and execution assumptions.
         """
         train_opts = sorted(
             {int(x) for x in (train_months_options or [6, 9, 12, 18]) if int(x) > 0}
@@ -363,33 +379,105 @@ class Backtester:
                 if 0.0 < float(x) <= 1.0
             }
         )
-        if not train_opts or not test_opts or not conf_opts:
+        horizon_opts = sorted(
+            {int(x) for x in (trade_horizon_options or [3, 5, 8]) if int(x) > 0}
+        )
+        part_opts = sorted(
+            {
+                float(x)
+                for x in (max_participation_options or [0.02, 0.03, 0.05])
+                if 0.0 < float(x) <= 0.50
+            }
+        )
+        slippage_opts = sorted(
+            {
+                float(x)
+                for x in (slippage_bps_options or [8.0, 12.0, 18.0])
+                if float(x) >= 0.0
+            }
+        )
+        commission_opts = sorted(
+            {
+                float(x)
+                for x in (commission_bps_options or [2.0, 2.5, 3.0])
+                if float(x) >= 0.0
+            }
+        )
+        if (
+            not train_opts
+            or not test_opts
+            or not conf_opts
+            or not horizon_opts
+            or not part_opts
+            or not slippage_opts
+            or not commission_opts
+        ):
             raise ValueError("Optimization options cannot be empty")
 
-        combos = list(product(train_opts, test_opts, conf_opts))
+        combos = list(
+            product(
+                train_opts,
+                test_opts,
+                conf_opts,
+                horizon_opts,
+                part_opts,
+                slippage_opts,
+                commission_opts,
+            )
+        )
         trials: list[BacktestOptimizationTrial] = []
         old_conf = float(getattr(CONFIG.model, "min_confidence", 0.60))
+        old_trade_horizon_present = hasattr(CONFIG.model, "backtest_trade_horizon")
+        old_trade_horizon = int(
+            getattr(CONFIG.model, "backtest_trade_horizon", 0) or 0
+        )
+        old_participation_present = hasattr(CONFIG.risk, "backtest_max_volume_participation")
+        old_participation = float(
+            getattr(CONFIG.risk, "backtest_max_volume_participation", 0.03) or 0.03
+        )
+        old_slippage = float(getattr(CONFIG.trading, "slippage", 0.001) or 0.001)
+        old_commission = float(getattr(CONFIG.trading, "commission", 0.00025) or 0.00025)
 
         log.info(
             "Starting backtest optimization: %d combinations "
-            "(train=%s, test=%s, conf=%s)",
+            "(train=%s, test=%s, conf=%s, horizon=%s, participation=%s, slippage_bps=%s, commission_bps=%s)",
             len(combos),
             train_opts,
             test_opts,
             conf_opts,
+            horizon_opts,
+            part_opts,
+            slippage_opts,
+            commission_opts,
         )
 
         try:
-            for idx, (train_m, test_m, conf) in enumerate(combos, start=1):
+            for idx, (
+                train_m,
+                test_m,
+                conf,
+                trade_h,
+                participation,
+                slippage_bps,
+                commission_bps,
+            ) in enumerate(combos, start=1):
                 log.info(
-                    "Optimization trial %d/%d: train=%dm test=%dm conf=%.2f",
+                    "Optimization trial %d/%d: train=%dm test=%dm conf=%.2f horizon=%d part=%.3f slip=%.1fbps comm=%.1fbps",
                     idx,
                     len(combos),
                     train_m,
                     test_m,
                     conf,
+                    trade_h,
+                    participation,
+                    slippage_bps,
+                    commission_bps,
                 )
                 CONFIG.model.min_confidence = float(conf)
+                CONFIG.model.backtest_trade_horizon = int(trade_h)
+                CONFIG.risk.backtest_max_volume_participation = float(participation)
+                CONFIG.trading.slippage = float(slippage_bps) / 10000.0
+                CONFIG.trading.commission = float(commission_bps) / 10000.0
                 try:
                     result = self.run(
                         stock_codes=stock_codes,
@@ -404,10 +492,18 @@ class Backtester:
                             train_months=int(train_m),
                             test_months=int(test_m),
                             min_confidence=float(conf),
+                            trade_horizon=int(trade_h),
+                            max_participation=float(participation),
+                            slippage_bps=float(slippage_bps),
+                            commission_bps=float(commission_bps),
                             score=float(score),
                             total_return=float(result.total_return),
                             excess_return=float(result.excess_return),
                             sharpe_ratio=float(result.sharpe_ratio),
+                            sortino_ratio=float(result.sortino_ratio),
+                            information_ratio=float(result.information_ratio),
+                            calmar_ratio=float(result.calmar_ratio),
+                            volatility=float(result.volatility),
                             max_drawdown_pct=float(result.max_drawdown_pct),
                             win_rate=float(result.win_rate),
                             trades=int(result.total_trades),
@@ -420,12 +516,32 @@ class Backtester:
                             train_months=int(train_m),
                             test_months=int(test_m),
                             min_confidence=float(conf),
+                            trade_horizon=int(trade_h),
+                            max_participation=float(participation),
+                            slippage_bps=float(slippage_bps),
+                            commission_bps=float(commission_bps),
                             score=float("-inf"),
                             error=str(exc),
                         )
                     )
         finally:
             CONFIG.model.min_confidence = old_conf
+            if old_trade_horizon_present:
+                CONFIG.model.backtest_trade_horizon = old_trade_horizon
+            else:
+                try:
+                    delattr(CONFIG.model, "backtest_trade_horizon")
+                except Exception:
+                    pass
+            if old_participation_present:
+                CONFIG.risk.backtest_max_volume_participation = old_participation
+            else:
+                try:
+                    delattr(CONFIG.risk, "backtest_max_volume_participation")
+                except Exception:
+                    pass
+            CONFIG.trading.slippage = old_slippage
+            CONFIG.trading.commission = old_commission
 
         successful = [t for t in trials if not t.error]
         successful.sort(key=lambda x: x.score, reverse=True)
@@ -452,23 +568,48 @@ class Backtester:
                 "train_months": best.train_months,
                 "test_months": best.test_months,
                 "min_confidence": best.min_confidence,
+                "trade_horizon": best.trade_horizon,
+                "max_participation": best.max_participation,
+                "slippage_bps": best.slippage_bps,
+                "commission_bps": best.commission_bps,
                 "score": best.score,
                 "total_return": best.total_return,
                 "excess_return": best.excess_return,
                 "sharpe_ratio": best.sharpe_ratio,
+                "sortino_ratio": best.sortino_ratio,
+                "information_ratio": best.information_ratio,
+                "calmar_ratio": best.calmar_ratio,
+                "volatility": best.volatility,
                 "max_drawdown_pct": best.max_drawdown_pct,
                 "win_rate": best.win_rate,
                 "trades": best.trades,
+            },
+            "search_space": {
+                "train_months": train_opts,
+                "test_months": test_opts,
+                "min_confidence": conf_opts,
+                "trade_horizon": horizon_opts,
+                "max_participation": part_opts,
+                "slippage_bps": slippage_opts,
+                "commission_bps": commission_opts,
             },
             "top_trials": [
                 {
                     "train_months": t.train_months,
                     "test_months": t.test_months,
                     "min_confidence": t.min_confidence,
+                    "trade_horizon": t.trade_horizon,
+                    "max_participation": t.max_participation,
+                    "slippage_bps": t.slippage_bps,
+                    "commission_bps": t.commission_bps,
                     "score": t.score,
                     "total_return": t.total_return,
                     "excess_return": t.excess_return,
                     "sharpe_ratio": t.sharpe_ratio,
+                    "sortino_ratio": t.sortino_ratio,
+                    "information_ratio": t.information_ratio,
+                    "calmar_ratio": t.calmar_ratio,
+                    "volatility": t.volatility,
                     "max_drawdown_pct": t.max_drawdown_pct,
                     "win_rate": t.win_rate,
                     "trades": t.trades,
@@ -888,6 +1029,10 @@ class Backtester:
         if hasattr(CONFIG, 'model'):
             if local_horizon <= 0 and hasattr(CONFIG.model, 'prediction_horizon'):
                 local_horizon = int(CONFIG.model.prediction_horizon)
+            if hasattr(CONFIG.model, "backtest_trade_horizon"):
+                cfg_h = int(getattr(CONFIG.model, "backtest_trade_horizon", 0) or 0)
+                if cfg_h > 0:
+                    local_horizon = cfg_h
             if hasattr(CONFIG.model, 'min_confidence'):
                 min_confidence = CONFIG.model.min_confidence
 
@@ -898,6 +1043,13 @@ class Backtester:
                 commission_rate = CONFIG.trading.commission
             if hasattr(CONFIG.trading, 'stamp_tax'):
                 stamp_tax_rate = CONFIG.trading.stamp_tax
+            if hasattr(CONFIG.trading, "slippage"):
+                try:
+                    slippage_model.base_slippage = max(
+                        0.0, float(CONFIG.trading.slippage)
+                    )
+                except Exception:
+                    pass
         if hasattr(CONFIG, "risk"):
             max_participation = float(
                 getattr(CONFIG.risk, "backtest_max_volume_participation", max_participation)

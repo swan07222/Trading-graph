@@ -25,6 +25,10 @@ class OrderType(Enum):
     LIMIT = "limit"
     STOP = "stop"
     STOP_LIMIT = "stop_limit"
+    IOC = "ioc"
+    FOK = "fok"
+    TRAIL_MARKET = "trail_market"
+    TRAIL_LIMIT = "trail_limit"
 
 class PositionSide(Enum):
     LONG = "long"
@@ -476,7 +480,11 @@ class TradeSignal:
     approvals_count: int = 0
     approved_by: list[str] = field(default_factory=list)
     order_type: str = "limit"
+    time_in_force: str = "day"
+    strict_time_in_force: bool = False
+    trigger_price: float = 0.0
     trailing_stop_pct: float = 0.0
+    trail_limit_offset_pct: float = 0.0
     oco_group: str = ""
     bracket: bool = False
 

@@ -7,7 +7,16 @@
     "max_order_notional": 250000.0,
     "blocked_symbols": [],
     "allowed_sides": ["buy", "sell"],
-    "allowed_order_types": ["limit", "market"],
+    "allowed_order_types": [
+      "limit",
+      "market",
+      "stop",
+      "stop_limit",
+      "ioc",
+      "fok",
+      "trail_market",
+      "trail_limit"
+    ],
     "blocked_strategies": [],
     "require_manual_for_live": false,
     "require_change_ticket": false,

@@ -59,6 +59,21 @@ class TradePolicyEngine:
         except Exception:
             return float(default)
 
+    @staticmethod
+    def _normalize_order_type(value: Any) -> str:
+        raw = str(value or "limit").strip().lower().replace("-", "_")
+        alias = {
+            "trailing": "trail_market",
+            "trailing_market": "trail_market",
+            "trailing_stop": "trail_market",
+            "trailing_limit": "trail_limit",
+            "stoploss": "stop",
+            "stop_loss": "stop",
+            "market_ioc": "ioc",
+            "market_fok": "fok",
+        }
+        return alias.get(raw, raw)
+
     def _default_policy(self) -> dict[str, Any]:
         return {
             "version": "1.0",
@@ -69,7 +84,16 @@ class TradePolicyEngine:
                 "max_order_notional": 250000.0,
                 "blocked_symbols": [],
                 "allowed_sides": ["buy", "sell"],
-                "allowed_order_types": ["limit", "market"],
+                "allowed_order_types": [
+                    "limit",
+                    "market",
+                    "stop",
+                    "stop_limit",
+                    "ioc",
+                    "fok",
+                    "trail_market",
+                    "trail_limit",
+                ],
                 "blocked_strategies": [],
                 "require_manual_for_live": False,
                 "require_change_ticket": False,
@@ -112,7 +136,9 @@ class TradePolicyEngine:
         symbol = str(getattr(signal, "symbol", "") or "").strip()
         symbol_norm = self._normalize_symbol(symbol)
         side = str(getattr(getattr(signal, "side", ""), "value", getattr(signal, "side", "")) or "").strip().lower()
-        order_type = str(getattr(signal, "order_type", "limit") or "limit").strip().lower()
+        order_type = self._normalize_order_type(
+            getattr(signal, "order_type", "limit")
+        )
         qty = self._to_int(getattr(signal, "quantity", 0) or 0)
         px = self._to_float(getattr(signal, "price", 0.0) or 0.0)
         notional = float(max(0.0, qty * px))
@@ -135,7 +161,7 @@ class TradePolicyEngine:
                 version,
                 {"quantity": qty},
             )
-        if order_type == "limit" and px <= 0:
+        if order_type in {"limit", "stop_limit", "trail_limit"} and px <= 0:
             return PolicyDecision(
                 False,
                 "policy rejected non-positive limit price",
@@ -148,7 +174,7 @@ class TradePolicyEngine:
             return PolicyDecision(False, f"side not allowed by policy: {side}", version, {"side": side})
 
         allowed_order_types = {
-            str(x).strip().lower()
+            self._normalize_order_type(x)
             for x in list(lp.get("allowed_order_types", ["limit", "market"]))
             if str(x).strip()
         }

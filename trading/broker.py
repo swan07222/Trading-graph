@@ -532,6 +532,13 @@ class SimulatorBroker(BrokerInterface):
     def _validate_order(
         self, order: Order, price: float,
     ) -> tuple[bool, str]:
+        requested_type = str(
+            order.tags.get("requested_order_type", order.order_type.value)
+            if isinstance(order.tags, dict)
+            else order.order_type.value
+        ).strip().lower()
+        requested_type = requested_type.replace("-", "_")
+
         if order.quantity <= 0:
             return False, "Quantity must be positive"
 
@@ -541,10 +548,16 @@ class SimulatorBroker(BrokerInterface):
         if order.quantity % lot_size != 0:
             return False, f"Quantity must be multiple of {lot_size}"
 
-        # FIX(9): Allow price=0 for MARKET orders
-        if order.order_type == OrderType.LIMIT and price <= 0:
+        # FIX(9): Allow price=0 for market-style orders.
+        if order.order_type in {OrderType.LIMIT, OrderType.STOP_LIMIT, OrderType.TRAIL_LIMIT} and price <= 0:
             return False, "Limit order requires positive price"
-        if price <= 0 and order.order_type != OrderType.MARKET:
+        if price <= 0 and order.order_type not in {
+            OrderType.MARKET,
+            OrderType.STOP,
+            OrderType.IOC,
+            OrderType.FOK,
+            OrderType.TRAIL_MARKET,
+        }:
             return False, "Invalid price"
 
         # FIX(5): Use CONFIG.trading.commission consistently
@@ -622,6 +635,19 @@ class SimulatorBroker(BrokerInterface):
         """Execute order with realistic simulation."""
         import random
 
+        requested_type = str(
+            order.tags.get("requested_order_type", order.order_type.value)
+            if isinstance(order.tags, dict)
+            else order.order_type.value
+        ).strip().lower().replace("-", "_")
+        tif = str(
+            order.tags.get("time_in_force", "day")
+            if isinstance(order.tags, dict)
+            else "day"
+        ).strip().lower().replace("-", "_")
+        if requested_type in {"ioc", "fok"}:
+            tif = requested_type
+
         prev_close = float(market_price)
         try:
             fetcher = self._get_fetcher()
@@ -642,7 +668,12 @@ class SimulatorBroker(BrokerInterface):
             self._emit('order_update', order)
             return
 
-        if order.order_type == OrderType.LIMIT:
+        is_limit_style = order.order_type in {
+            OrderType.LIMIT,
+            OrderType.STOP_LIMIT,
+            OrderType.TRAIL_LIMIT,
+        }
+        if is_limit_style:
             if order.price <= 0:
                 order.status = OrderStatus.REJECTED
                 order.message = "Limit order requires positive price"
@@ -654,11 +685,18 @@ class SimulatorBroker(BrokerInterface):
                 order.side == OrderSide.BUY
                 and float(market_price) > float(order.price)
             ):
-                order.status = OrderStatus.REJECTED
-                order.message = (
-                    f"Limit BUY not marketable: market "
-                    f"{market_price:.2f} > limit {order.price:.2f}"
-                )
+                if tif in {"ioc", "fok"}:
+                    order.status = OrderStatus.CANCELLED
+                    order.message = (
+                        f"{tif.upper()} BUY not marketable: market "
+                        f"{market_price:.2f} > limit {order.price:.2f}"
+                    )
+                else:
+                    order.status = OrderStatus.REJECTED
+                    order.message = (
+                        f"Limit BUY not marketable: market "
+                        f"{market_price:.2f} > limit {order.price:.2f}"
+                    )
                 order.updated_at = datetime.now()
                 self._emit('order_update', order)
                 return
@@ -667,11 +705,18 @@ class SimulatorBroker(BrokerInterface):
                 order.side == OrderSide.SELL
                 and float(market_price) < float(order.price)
             ):
-                order.status = OrderStatus.REJECTED
-                order.message = (
-                    f"Limit SELL not marketable: market "
-                    f"{market_price:.2f} < limit {order.price:.2f}"
-                )
+                if tif in {"ioc", "fok"}:
+                    order.status = OrderStatus.CANCELLED
+                    order.message = (
+                        f"{tif.upper()} SELL not marketable: market "
+                        f"{market_price:.2f} < limit {order.price:.2f}"
+                    )
+                else:
+                    order.status = OrderStatus.REJECTED
+                    order.message = (
+                        f"Limit SELL not marketable: market "
+                        f"{market_price:.2f} < limit {order.price:.2f}"
+                    )
                 order.updated_at = datetime.now()
                 self._emit('order_update', order)
                 return
@@ -701,9 +746,34 @@ class SimulatorBroker(BrokerInterface):
         lot = int(get_lot_size(order.symbol))
 
         fill_qty = remaining
-        if remaining >= 2 * lot and random.random() < 0.25:
+        if tif != "fok" and remaining >= 2 * lot and random.random() < 0.25:
             half = max(lot, (remaining // 2 // lot) * lot)
             fill_qty = min(half, remaining)
+
+        max_immediate_ratio = 1.0
+        if isinstance(order.tags, dict):
+            try:
+                max_immediate_ratio = float(
+                    order.tags.get("max_immediate_fill_ratio", 1.0) or 1.0
+                )
+            except Exception:
+                max_immediate_ratio = 1.0
+        max_immediate_ratio = max(0.05, min(1.0, max_immediate_ratio))
+        max_immediate_qty = max(
+            lot,
+            int((remaining * max_immediate_ratio) // lot) * lot,
+        )
+        fill_qty = min(fill_qty, max_immediate_qty)
+
+        if tif == "fok" and fill_qty < remaining:
+            order.status = OrderStatus.CANCELLED
+            order.message = (
+                f"FOK cancelled: only {fill_qty}/{remaining} shares "
+                "immediately available"
+            )
+            order.updated_at = datetime.now()
+            self._emit('order_update', order)
+            return
 
         trade_value = fill_qty * fill_price
         commission = max(trade_value * commission_rate, commission_min)
@@ -760,6 +830,12 @@ class SimulatorBroker(BrokerInterface):
             if order.filled_qty >= order.quantity
             else OrderStatus.PARTIAL
         )
+        if tif == "ioc" and order.filled_qty < order.quantity:
+            order.status = OrderStatus.CANCELLED
+            remainder = max(0, int(order.quantity - order.filled_qty))
+            order.message = (
+                f"IOC remainder cancelled: {remainder} shares"
+            )
         order.filled_at = datetime.now()
 
         prev_value = (order.filled_qty - fill_qty) * order.avg_price
@@ -794,7 +870,7 @@ class SimulatorBroker(BrokerInterface):
         log.info(
             f"[SIM] {order.side.value.upper()} {fill_qty} "
             f"{order.symbol} @ {fill_price:.2f} "
-            f"(cost: {total_cost:.2f}, status: {order.status.value})"
+            f"(cost: {total_cost:.2f}, status: {order.status.value}, tif={tif})"
         )
         self._emit('trade', order, fill)
 

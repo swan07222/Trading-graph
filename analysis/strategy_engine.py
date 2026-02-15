@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 from dataclasses import dataclass
 from datetime import datetime
 from importlib.util import module_from_spec, spec_from_file_location
@@ -20,6 +21,9 @@ class StrategySignal:
     score: float  # 0..1 confidence
     weight: float = 1.0
     reason: str = ""
+    cooldown_seconds: int = 0
+    tags: dict[str, Any] | None = None
+    metadata: dict[str, Any] | None = None
 
 
 class StrategyScriptEngine:
@@ -78,7 +82,34 @@ class StrategyScriptEngine:
         if isinstance(context, dict):
             script_context.update(context)
 
+        strategy_meta_by_path: dict[str, dict[str, Any]] = {}
+        try:
+            for row in self._marketplace.get_enabled_entries():
+                resolved = Path(str(row.get("_resolved_file", "")))
+                if not resolved:
+                    continue
+                strategy_meta_by_path[str(resolved.resolve())] = dict(row)
+        except Exception:
+            strategy_meta_by_path = {}
+
         for path in self.list_strategy_files():
+            entry = strategy_meta_by_path.get(str(path.resolve()), {})
+            configured_params = entry.get("params")
+            if not isinstance(configured_params, dict):
+                configured_params = entry.get("config")
+            if not isinstance(configured_params, dict):
+                configured_params = {}
+            try:
+                base_weight = float(entry.get("weight", 1.0) or 1.0)
+            except Exception:
+                base_weight = 1.0
+            base_weight = max(0.1, min(5.0, base_weight))
+
+            strategy_context = dict(script_context)
+            strategy_context["strategy_id"] = str(entry.get("id") or path.stem)
+            strategy_context["strategy_name"] = str(entry.get("name") or path.stem)
+            strategy_context["strategy_params"] = dict(configured_params)
+
             if hasattr(df, "copy"):
                 try:
                     df_for_script = df.copy(deep=True)
@@ -90,7 +121,9 @@ class StrategyScriptEngine:
                 path,
                 df_for_script,
                 dict(indicator_map),
-                dict(script_context),
+                dict(strategy_context),
+                params=dict(configured_params),
+                base_weight=base_weight,
             )
             if not signals:
                 continue
@@ -115,6 +148,8 @@ class StrategyScriptEngine:
         df,
         indicators: dict[str, float],
         context: dict[str, Any],
+        params: dict[str, Any] | None = None,
+        base_weight: float = 1.0,
     ) -> list[StrategySignal]:
         out: list[StrategySignal] = []
         try:
@@ -125,12 +160,61 @@ class StrategyScriptEngine:
             module = module_from_spec(spec)
             spec.loader.exec_module(module)
 
+            effective_params: dict[str, Any] = {}
+            if isinstance(params, dict):
+                effective_params.update(params)
+
+            declared_params = getattr(module, "STRATEGY_DEFAULT_PARAMS", None)
+            if isinstance(declared_params, dict):
+                for k, v in declared_params.items():
+                    effective_params.setdefault(str(k), v)
+
+            raw_strategy_params = getattr(module, "strategy_params", None)
+            if callable(raw_strategy_params):
+                try:
+                    suggested = raw_strategy_params()
+                    if isinstance(suggested, dict):
+                        for k, v in suggested.items():
+                            effective_params.setdefault(str(k), v)
+                except Exception:
+                    pass
+            elif isinstance(raw_strategy_params, dict):
+                for k, v in raw_strategy_params.items():
+                    effective_params.setdefault(str(k), v)
+
+            runtime_context = dict(context)
+            runtime_context["strategy_params"] = dict(effective_params)
+
+            meta = {}
+            raw_meta = getattr(module, "strategy_meta", None)
+            if callable(raw_meta):
+                try:
+                    m = raw_meta()
+                    if isinstance(m, dict):
+                        meta = dict(m)
+                except Exception:
+                    meta = {}
+
+            meta_weight = float(meta.get("weight", 1.0) or 1.0) if isinstance(meta, dict) else 1.0
+            meta_weight = max(0.1, min(3.0, meta_weight))
+            combined_base_weight = max(0.1, min(8.0, float(base_weight) * meta_weight))
+
             fn_batch = getattr(module, "generate_signals", None)
             fn_single = getattr(module, "generate_signal", None)
+
+            def _invoke(fn):
+                try:
+                    sig = inspect.signature(fn)
+                    if len(sig.parameters) >= 4:
+                        return fn(df, indicators, runtime_context, effective_params)
+                except Exception:
+                    pass
+                return fn(df, indicators, runtime_context)
+
             if callable(fn_batch):
-                raw_any = fn_batch(df, indicators, context)
+                raw_any = _invoke(fn_batch)
             elif callable(fn_single):
-                raw_any = fn_single(df, indicators, context)
+                raw_any = _invoke(fn_single)
             else:
                 return out
 
@@ -163,10 +247,27 @@ class StrategyScriptEngine:
                     weight = 1.0
                 if not (weight > 0):
                     weight = 1.0
+                weight *= combined_base_weight
 
                 reason = str(raw.get("reason", "") or "").strip()
                 if len(reason) > 320:
                     reason = reason[:317].rstrip() + "..."
+
+                cooldown_seconds = 0
+                try:
+                    cooldown_seconds = int(raw.get("cooldown_seconds", 0) or 0)
+                except Exception:
+                    cooldown_seconds = 0
+                cooldown_seconds = max(0, min(86400, cooldown_seconds))
+
+                tags = raw.get("tags")
+                if not isinstance(tags, dict):
+                    tags = {}
+                metadata = raw.get("metadata")
+                if not isinstance(metadata, dict):
+                    metadata = {}
+                if meta:
+                    metadata.setdefault("strategy_meta", dict(meta))
 
                 out.append(
                     StrategySignal(
@@ -175,6 +276,9 @@ class StrategyScriptEngine:
                         score=score,
                         weight=weight,
                         reason=reason,
+                        cooldown_seconds=cooldown_seconds,
+                        tags=tags,
+                        metadata=metadata,
                     )
                 )
             return out

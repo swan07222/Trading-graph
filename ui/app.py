@@ -20,7 +20,6 @@ from PyQt6.QtWidgets import (
     QGroupBox,
     QHBoxLayout,
     QHeaderView,
-    QInputDialog,
     QLabel,
     QLineEdit,
     QListWidget,
@@ -48,6 +47,7 @@ from core.types import (
     AutoTradeAction,
     AutoTradeMode,
     OrderSide,
+    OrderType,
     TradeSignal,
 )
 from utils.logger import get_logger
@@ -4161,20 +4161,194 @@ class MainApp(QMainWindow):
         except Exception:
             lot = 1
 
-        qty, ok = QInputDialog.getInt(
-            self,
-            "Chart Quick Trade",
-            f"{side.upper()} {symbol} @ {price:.2f}\nQuantity (lot {lot}):",
-            lot,
-            lot,
-            5_000_000,
-            lot,
+        order_params = self._show_chart_trade_dialog(
+            symbol=symbol,
+            side=side,
+            clicked_price=float(price),
+            lot=lot,
         )
-        if not ok:
+        if not order_params:
             return
 
         order_side = OrderSide.BUY if str(side).lower() == "buy" else OrderSide.SELL
-        self._submit_chart_order(symbol=symbol, side=order_side, qty=int(qty), price=float(price))
+        self._submit_chart_order(
+            symbol=symbol,
+            side=order_side,
+            qty=int(order_params["qty"]),
+            price=float(order_params["price"]),
+            order_type=str(order_params["order_type"]),
+            time_in_force=str(order_params["time_in_force"]),
+            trigger_price=float(order_params["trigger_price"]),
+            trailing_stop_pct=float(order_params["trailing_stop_pct"]),
+            trail_limit_offset_pct=float(order_params["trail_limit_offset_pct"]),
+            strict_time_in_force=bool(order_params["strict_time_in_force"]),
+            stop_loss=float(order_params["stop_loss"]),
+            take_profit=float(order_params["take_profit"]),
+            bracket=bool(order_params["bracket"]),
+        )
+
+    def _show_chart_trade_dialog(
+        self,
+        symbol: str,
+        side: str,
+        clicked_price: float,
+        lot: int,
+    ) -> dict[str, float | int | str | bool] | None:
+        """Collect advanced chart trade parameters from user."""
+        from PyQt6.QtWidgets import QDialog, QDialogButtonBox, QFormLayout
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Chart Quick Trade")
+        dialog.setMinimumWidth(420)
+
+        layout = QVBoxLayout(dialog)
+        heading = QLabel(
+            f"{str(side).upper()} {symbol} | Chart Price: {clicked_price:.2f}"
+        )
+        heading.setStyleSheet("font-weight: bold;")
+        layout.addWidget(heading)
+
+        form = QFormLayout()
+        layout.addLayout(form)
+
+        qty_spin = QSpinBox()
+        qty_spin.setRange(max(1, lot), 5_000_000)
+        qty_spin.setSingleStep(max(1, lot))
+        qty_spin.setValue(max(1, lot))
+        qty_spin.setSuffix(f" (lot {lot})")
+        form.addRow("Quantity:", qty_spin)
+
+        order_type_combo = QComboBox()
+        order_types = [
+            ("Limit", OrderType.LIMIT.value),
+            ("Market", OrderType.MARKET.value),
+            ("Stop", OrderType.STOP.value),
+            ("Stop Limit", OrderType.STOP_LIMIT.value),
+            ("IOC", OrderType.IOC.value),
+            ("FOK", OrderType.FOK.value),
+            ("Trailing Market", OrderType.TRAIL_MARKET.value),
+            ("Trailing Limit", OrderType.TRAIL_LIMIT.value),
+        ]
+        for label, value in order_types:
+            order_type_combo.addItem(label, value)
+        form.addRow("Order Type:", order_type_combo)
+
+        tif_combo = QComboBox()
+        for label, value in (
+            ("DAY", "day"),
+            ("GTC", "gtc"),
+            ("IOC", "ioc"),
+            ("FOK", "fok"),
+        ):
+            tif_combo.addItem(label, value)
+        form.addRow("Time In Force:", tif_combo)
+
+        strict_tif = QCheckBox("Strict TIF (cancel if unsupported)")
+        form.addRow("", strict_tif)
+
+        price_spin = QDoubleSpinBox()
+        price_spin.setRange(0.01, 1_000_000.0)
+        price_spin.setDecimals(3)
+        price_spin.setValue(max(0.01, float(clicked_price)))
+        price_spin.setSingleStep(max(0.01, float(clicked_price) * 0.002))
+        form.addRow("Order Price:", price_spin)
+
+        trigger_spin = QDoubleSpinBox()
+        trigger_spin.setRange(0.0, 1_000_000.0)
+        trigger_spin.setDecimals(3)
+        trigger_spin.setValue(max(0.0, float(clicked_price)))
+        trigger_spin.setSingleStep(max(0.01, float(clicked_price) * 0.002))
+        form.addRow("Trigger Price:", trigger_spin)
+
+        trailing_spin = QDoubleSpinBox()
+        trailing_spin.setRange(0.0, 20.0)
+        trailing_spin.setDecimals(2)
+        trailing_spin.setSingleStep(0.1)
+        trailing_spin.setSuffix(" %")
+        trailing_spin.setValue(0.8)
+        form.addRow("Trailing Stop:", trailing_spin)
+
+        trail_limit_offset_spin = QDoubleSpinBox()
+        trail_limit_offset_spin.setRange(0.0, 10.0)
+        trail_limit_offset_spin.setDecimals(2)
+        trail_limit_offset_spin.setSingleStep(0.05)
+        trail_limit_offset_spin.setSuffix(" %")
+        trail_limit_offset_spin.setValue(0.15)
+        form.addRow("Trail Limit Offset:", trail_limit_offset_spin)
+
+        bracket_check = QCheckBox("Attach stop-loss / take-profit")
+        form.addRow("", bracket_check)
+
+        stop_loss_spin = QDoubleSpinBox()
+        stop_loss_spin.setRange(0.0, 1_000_000.0)
+        stop_loss_spin.setDecimals(3)
+        stop_loss_spin.setValue(0.0)
+        form.addRow("Stop-Loss:", stop_loss_spin)
+
+        take_profit_spin = QDoubleSpinBox()
+        take_profit_spin.setRange(0.0, 1_000_000.0)
+        take_profit_spin.setDecimals(3)
+        take_profit_spin.setValue(0.0)
+        form.addRow("Take-Profit:", take_profit_spin)
+
+        def _sync_widgets():
+            ot = str(order_type_combo.currentData() or "limit")
+            is_market_like = ot in {
+                OrderType.MARKET.value,
+                OrderType.IOC.value,
+                OrderType.FOK.value,
+                OrderType.TRAIL_MARKET.value,
+            }
+            needs_trigger = ot in {
+                OrderType.STOP.value,
+                OrderType.STOP_LIMIT.value,
+                OrderType.TRAIL_MARKET.value,
+                OrderType.TRAIL_LIMIT.value,
+            }
+            needs_trailing = ot in {
+                OrderType.TRAIL_MARKET.value,
+                OrderType.TRAIL_LIMIT.value,
+            }
+            needs_trail_limit_offset = ot == OrderType.TRAIL_LIMIT.value
+
+            price_spin.setEnabled(not is_market_like or ot == OrderType.TRAIL_LIMIT.value)
+            trigger_spin.setEnabled(needs_trigger)
+            trailing_spin.setEnabled(needs_trailing)
+            trail_limit_offset_spin.setEnabled(needs_trail_limit_offset)
+
+            if ot in (OrderType.IOC.value, OrderType.FOK.value):
+                forced = "ioc" if ot == OrderType.IOC.value else "fok"
+                idx = tif_combo.findData(forced)
+                if idx >= 0:
+                    tif_combo.setCurrentIndex(idx)
+
+        order_type_combo.currentIndexChanged.connect(_sync_widgets)
+        _sync_widgets()
+
+        btns = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok
+            | QDialogButtonBox.StandardButton.Cancel
+        )
+        btns.accepted.connect(dialog.accept)
+        btns.rejected.connect(dialog.reject)
+        layout.addWidget(btns)
+
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return None
+
+        return {
+            "qty": int(qty_spin.value()),
+            "price": float(price_spin.value()),
+            "order_type": str(order_type_combo.currentData() or "limit"),
+            "time_in_force": str(tif_combo.currentData() or "day"),
+            "trigger_price": float(trigger_spin.value()),
+            "trailing_stop_pct": float(trailing_spin.value() / 100.0),
+            "trail_limit_offset_pct": float(trail_limit_offset_spin.value() / 100.0),
+            "strict_time_in_force": bool(strict_tif.isChecked()),
+            "bracket": bool(bracket_check.isChecked()),
+            "stop_loss": float(stop_loss_spin.value()),
+            "take_profit": float(take_profit_spin.value()),
+        }
 
     def _submit_chart_order(
         self,
@@ -4182,6 +4356,15 @@ class MainApp(QMainWindow):
         side: OrderSide,
         qty: int,
         price: float,
+        order_type: str = "limit",
+        time_in_force: str = "day",
+        trigger_price: float = 0.0,
+        trailing_stop_pct: float = 0.0,
+        trail_limit_offset_pct: float = 0.0,
+        strict_time_in_force: bool = False,
+        stop_loss: float = 0.0,
+        take_profit: float = 0.0,
+        bracket: bool = False,
     ) -> None:
         if self.executor is None:
             return
@@ -4202,20 +4385,102 @@ class MainApp(QMainWindow):
                 "info",
             )
 
+        normalized_order_type = str(order_type or "limit").strip().lower().replace("-", "_")
+        valid_order_types = {
+            OrderType.LIMIT.value,
+            OrderType.MARKET.value,
+            OrderType.STOP.value,
+            OrderType.STOP_LIMIT.value,
+            OrderType.IOC.value,
+            OrderType.FOK.value,
+            OrderType.TRAIL_MARKET.value,
+            OrderType.TRAIL_LIMIT.value,
+        }
+        if normalized_order_type not in valid_order_types:
+            normalized_order_type = OrderType.LIMIT.value
+
+        normalized_tif = str(time_in_force or "day").strip().lower()
+        if normalized_tif not in {"day", "gtc", "ioc", "fok"}:
+            normalized_tif = "day"
+        if normalized_order_type in {OrderType.IOC.value, OrderType.FOK.value}:
+            normalized_tif = normalized_order_type
+
+        normalized_price = max(0.0, float(price))
+        if normalized_order_type in {
+            OrderType.MARKET.value,
+            OrderType.IOC.value,
+            OrderType.FOK.value,
+            OrderType.TRAIL_MARKET.value,
+        } and normalized_price <= 0:
+            normalized_price = 0.01
+
+        normalized_trigger = max(0.0, float(trigger_price))
+        if normalized_order_type in {
+            OrderType.STOP.value,
+            OrderType.STOP_LIMIT.value,
+            OrderType.TRAIL_MARKET.value,
+            OrderType.TRAIL_LIMIT.value,
+        } and normalized_trigger <= 0:
+            normalized_trigger = normalized_price
+        if normalized_order_type not in {
+            OrderType.STOP.value,
+            OrderType.STOP_LIMIT.value,
+            OrderType.TRAIL_MARKET.value,
+            OrderType.TRAIL_LIMIT.value,
+        }:
+            normalized_trigger = 0.0
+
+        normalized_trailing_stop = max(0.0, float(trailing_stop_pct))
+        if normalized_order_type not in {
+            OrderType.TRAIL_MARKET.value,
+            OrderType.TRAIL_LIMIT.value,
+        }:
+            normalized_trailing_stop = 0.0
+
+        normalized_trail_limit_offset = max(0.0, float(trail_limit_offset_pct))
+        if normalized_order_type != OrderType.TRAIL_LIMIT.value:
+            normalized_trail_limit_offset = 0.0
+
+        normalized_stop_loss = max(0.0, float(stop_loss))
+        normalized_take_profit = max(0.0, float(take_profit))
+        use_bracket = bool(bracket) and (
+            normalized_stop_loss > 0 or normalized_take_profit > 0
+        )
+
         signal = TradeSignal(
             symbol=symbol,
             side=side,
             quantity=normalized_qty,
-            price=max(0.0, float(price)),
+            price=normalized_price,
             strategy="chart_manual",
-            reasons=["Manual chart quick-trade"],
+            reasons=[
+                "Manual chart quick-trade",
+                f"order_type={normalized_order_type}",
+                f"tif={normalized_tif}",
+            ],
             confidence=1.0,
+            order_type=normalized_order_type,
+            time_in_force=normalized_tif,
+            trigger_price=normalized_trigger,
+            trailing_stop_pct=normalized_trailing_stop,
+            trail_limit_offset_pct=normalized_trail_limit_offset,
+            stop_loss=normalized_stop_loss if use_bracket else 0.0,
+            take_profit=normalized_take_profit if use_bracket else 0.0,
+            bracket=use_bracket,
         )
+        signal.strict_time_in_force = bool(strict_time_in_force)
         try:
             ok = self.executor.submit(signal)
             if ok:
+                price_text = (
+                    f"{normalized_price:.2f}"
+                    if normalized_price > 0
+                    else "MKT"
+                )
                 self.log(
-                    f"Chart trade submitted: {side.value.upper()} {normalized_qty} {symbol} @ {price:.2f}",
+                    "Chart trade submitted: "
+                    f"{side.value.upper()} {normalized_qty} {symbol} "
+                    f"@ {price_text} ({normalized_order_type}, {normalized_tif})",
                     "success",
                 )
             else:

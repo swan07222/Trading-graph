@@ -150,8 +150,19 @@ class StrategyMarketplace:
         self._write_json(self._enabled_path, {"enabled": clean})
 
     def get_enabled_files(self) -> list[Path]:
+        return [
+            p
+            for p in (
+                Path(str(item.get("_resolved_file")))
+                for item in self.get_enabled_entries()
+            )
+            if p.exists() and p.is_file()
+        ]
+
+    def get_enabled_entries(self) -> list[dict]:
+        """Enabled strategy entries with resolved file paths and metadata."""
         enabled = set(self.get_enabled_ids())
-        files: list[Path] = []
+        out: list[dict] = []
         seen_paths: set[str] = set()
         for item in self.list_entries():
             if item["id"] not in enabled:
@@ -166,8 +177,10 @@ class StrategyMarketplace:
             if key in seen_paths:
                 continue
             seen_paths.add(key)
-            files.append(file_path)
-        return files
+            row = dict(item)
+            row["_resolved_file"] = str(file_path)
+            out.append(row)
+        return out
 
     def get_integrity_summary(self) -> dict[str, int]:
         summary: dict[str, int] = {

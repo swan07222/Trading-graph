@@ -63,6 +63,20 @@ def _normalize_json(value: Any) -> Any:
     return str(value)
 
 
+def _parse_int_query(
+    query: dict[str, list[str]],
+    key: str,
+    default: int,
+    minimum: int,
+    maximum: int,
+) -> int:
+    try:
+        raw = int(query.get(key, [str(default)])[0] or str(default))
+    except (TypeError, ValueError):
+        raw = int(default)
+    return max(int(minimum), min(int(maximum), int(raw)))
+
+
 def _build_runtime_snapshot(limit: int = 20) -> dict[str, Any]:
     """Best-effort runtime snapshot from OMS for lightweight dashboards."""
     try:
@@ -153,6 +167,110 @@ def _build_strategy_marketplace_snapshot() -> dict[str, Any]:
         return {"status": "unavailable", "reason": str(exc)}
 
 
+def _build_execution_engine_snapshot() -> dict[str, Any]:
+    """Best-effort execution engine snapshot via registered provider."""
+    provider = None
+    with _SNAPSHOT_LOCK:
+        provider = _SNAPSHOT_PROVIDERS.get("execution_engine")
+    if provider is None:
+        return {
+            "status": "unavailable",
+            "reason": "provider_not_registered",
+            "provider": "execution_engine",
+        }
+    try:
+        return {
+            "status": "ok",
+            "provider": "execution_engine",
+            "snapshot": _normalize_json(provider()),
+        }
+    except Exception as exc:
+        return {
+            "status": "unavailable",
+            "reason": str(exc),
+            "provider": "execution_engine",
+        }
+
+
+def _build_execution_quality_snapshot() -> dict[str, Any]:
+    """Extract execution quality block from execution snapshot."""
+    execution = _build_execution_engine_snapshot()
+    if execution.get("status") != "ok":
+        return execution
+    snap = execution.get("snapshot")
+    if not isinstance(snap, dict):
+        return {"status": "unavailable", "reason": "invalid_execution_snapshot"}
+    quality = snap.get("execution_quality")
+    if not isinstance(quality, dict):
+        return {"status": "unavailable", "reason": "missing_execution_quality"}
+    return {"status": "ok", "snapshot": _normalize_json(quality)}
+
+
+def _build_risk_snapshot() -> dict[str, Any]:
+    """Best-effort live risk metrics."""
+    try:
+        from trading.risk import get_risk_manager
+
+        mgr = get_risk_manager()
+        metrics = mgr.get_metrics()
+        payload = getattr(metrics, "__dict__", metrics)
+        return {"status": "ok", "snapshot": _normalize_json(payload)}
+    except Exception as exc:
+        return {"status": "unavailable", "reason": str(exc)}
+
+
+def _build_health_snapshot() -> dict[str, Any]:
+    """Best-effort system health snapshot."""
+    try:
+        from trading.health import get_health_monitor
+
+        monitor = get_health_monitor()
+        health = monitor.get_health()
+        payload = health.to_dict() if hasattr(health, "to_dict") else health
+        return {"status": "ok", "snapshot": _normalize_json(payload)}
+    except Exception as exc:
+        return {"status": "unavailable", "reason": str(exc)}
+
+
+def _build_sentiment_snapshot(
+    stock_code: str | None = None,
+    hours_lookback: int = 24,
+) -> dict[str, Any]:
+    """Best-effort weighted sentiment/news snapshot."""
+    try:
+        from data.news import get_news_aggregator
+
+        agg = get_news_aggregator()
+        snapshot = agg.get_institutional_snapshot(
+            stock_code=stock_code,
+            hours_lookback=max(1, min(int(hours_lookback), 168)),
+        )
+        return {"status": "ok", "snapshot": _normalize_json(snapshot)}
+    except Exception as exc:
+        return {"status": "unavailable", "reason": str(exc)}
+
+
+def _api_index_payload() -> dict[str, Any]:
+    return {
+        "version": "v1",
+        "routes": [
+            "/api/v1/providers",
+            "/api/v1/snapshot/{name}",
+            "/api/v1/dashboard",
+            "/api/v1/dashboard/full",
+            "/api/v1/alerts/stats",
+            "/api/v1/governance/policy",
+            "/api/v1/strategy/marketplace",
+            "/api/v1/execution",
+            "/api/v1/execution/quality",
+            "/api/v1/risk/metrics",
+            "/api/v1/health",
+            "/api/v1/sentiment",
+        ],
+        "generated_at": datetime.now(UTC).isoformat(),
+    }
+
+
 class MetricsHandler(BaseHTTPRequestHandler):
     """HTTP handler for metrics, health, and lightweight JSON snapshots."""
 
@@ -213,7 +331,7 @@ class MetricsHandler(BaseHTTPRequestHandler):
             )
             return
 
-        if path.startswith("/api/v1/"):
+        if path == "/api/v1" or path.startswith("/api/v1/"):
             if not self._is_api_authorized(query):
                 self._send_json(
                     401,
@@ -226,6 +344,10 @@ class MetricsHandler(BaseHTTPRequestHandler):
         self._send_text(404, "Not Found\n")
 
     def _handle_api(self, path: str, query: dict[str, list[str]]) -> None:
+        if path in ("/api/v1", "/api/v1/"):
+            self._send_json(200, _api_index_payload())
+            return
+
         if path == "/api/v1/providers":
             self._send_json(
                 200,
@@ -265,10 +387,7 @@ class MetricsHandler(BaseHTTPRequestHandler):
             return
 
         if path == "/api/v1/dashboard":
-            try:
-                limit = int(query.get("limit", ["20"])[0] or "20")
-            except ValueError:
-                limit = 20
+            limit = _parse_int_query(query, key="limit", default=20, minimum=1, maximum=200)
             self._send_json(
                 200,
                 {
@@ -278,15 +397,99 @@ class MetricsHandler(BaseHTTPRequestHandler):
             )
             return
 
+        if path == "/api/v1/dashboard/full":
+            limit = _parse_int_query(query, key="limit", default=20, minimum=1, maximum=200)
+            hours = _parse_int_query(query, key="hours", default=24, minimum=1, maximum=168)
+            symbol = (query.get("symbol", [""])[0] or "").strip()
+            if not symbol:
+                symbol = None
+            self._send_json(
+                200,
+                {
+                    "snapshot": {
+                        "runtime": _build_runtime_snapshot(limit=limit),
+                        "alerts": _build_alert_snapshot(limit=limit),
+                        "policy": _build_policy_snapshot(),
+                        "strategy_marketplace": _build_strategy_marketplace_snapshot(),
+                        "execution": _build_execution_engine_snapshot(),
+                        "execution_quality": _build_execution_quality_snapshot(),
+                        "risk": _build_risk_snapshot(),
+                        "health": _build_health_snapshot(),
+                        "sentiment": _build_sentiment_snapshot(
+                            stock_code=symbol,
+                            hours_lookback=hours,
+                        ),
+                    },
+                    "generated_at": datetime.now(UTC).isoformat(),
+                },
+            )
+            return
+
         if path == "/api/v1/alerts/stats":
-            try:
-                limit = int(query.get("limit", ["20"])[0] or "20")
-            except ValueError:
-                limit = 20
+            limit = _parse_int_query(query, key="limit", default=20, minimum=1, maximum=200)
             self._send_json(
                 200,
                 {
                     "snapshot": _build_alert_snapshot(limit=limit),
+                    "generated_at": datetime.now(UTC).isoformat(),
+                },
+            )
+            return
+
+        if path == "/api/v1/execution":
+            self._send_json(
+                200,
+                {
+                    "snapshot": _build_execution_engine_snapshot(),
+                    "generated_at": datetime.now(UTC).isoformat(),
+                },
+            )
+            return
+
+        if path == "/api/v1/execution/quality":
+            self._send_json(
+                200,
+                {
+                    "snapshot": _build_execution_quality_snapshot(),
+                    "generated_at": datetime.now(UTC).isoformat(),
+                },
+            )
+            return
+
+        if path == "/api/v1/risk/metrics":
+            self._send_json(
+                200,
+                {
+                    "snapshot": _build_risk_snapshot(),
+                    "generated_at": datetime.now(UTC).isoformat(),
+                },
+            )
+            return
+
+        if path == "/api/v1/health":
+            self._send_json(
+                200,
+                {
+                    "snapshot": _build_health_snapshot(),
+                    "generated_at": datetime.now(UTC).isoformat(),
+                },
+            )
+            return
+
+        if path == "/api/v1/sentiment":
+            hours = _parse_int_query(query, key="hours", default=24, minimum=1, maximum=168)
+            symbol = (query.get("symbol", [""])[0] or "").strip()
+            if not symbol:
+                symbol = None
+            self._send_json(
+                200,
+                {
+                    "scope": symbol or "market",
+                    "hours_lookback": hours,
+                    "snapshot": _build_sentiment_snapshot(
+                        stock_code=symbol,
+                        hours_lookback=hours,
+                    ),
                     "generated_at": datetime.now(UTC).isoformat(),
                 },
             )
