@@ -1090,28 +1090,42 @@ class BarAggregator:
             )
 
             try:
-                import pandas as pd
+                from data.session_cache import get_session_bar_cache
 
-                from data.database import get_database
-
-                db = get_database()
-                df = pd.DataFrame(
-                    [{
-                        "open": float(bar["open"]),
-                        "high": float(bar["high"]),
-                        "low": float(bar["low"]),
-                        "close": float(bar["close"]),
-                        "volume": int(bar["volume"]),
-                        "amount": 0.0,
-                    }],
-                    index=pd.DatetimeIndex([bar["timestamp"]]),
+                cache_bar = dict(bar_copy)
+                get_session_bar_cache().append_bar(
+                    symbol,
+                    interval_label,
+                    cache_bar,
                 )
-
-                db.upsert_intraday_bars(symbol, interval_label, df)
-            except ImportError:
-                pass
             except Exception as e:
-                log.debug(f"Bar DB persist failed for {symbol}: {e}")
+                log.debug(f"Bar session persist failed for {symbol}: {e}")
+
+            should_persist_db = not bool(CONFIG.is_market_open())
+            if should_persist_db:
+                try:
+                    import pandas as pd
+
+                    from data.database import get_database
+
+                    db = get_database()
+                    df = pd.DataFrame(
+                        [{
+                            "open": float(bar["open"]),
+                            "high": float(bar["high"]),
+                            "low": float(bar["low"]),
+                            "close": float(bar["close"]),
+                            "volume": int(bar["volume"]),
+                            "amount": 0.0,
+                        }],
+                        index=pd.DatetimeIndex([bar["timestamp"]]),
+                    )
+
+                    db.upsert_intraday_bars(symbol, interval_label, df)
+                except ImportError:
+                    pass
+                except Exception as e:
+                    log.debug(f"Bar DB persist failed for {symbol}: {e}")
 
         with self._lock:
             callbacks = self._callbacks.copy()

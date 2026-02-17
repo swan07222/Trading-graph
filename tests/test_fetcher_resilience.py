@@ -236,6 +236,146 @@ def test_get_history_session_shortcut_only_for_small_intraday_windows():
     assert called["intraday"] == 1
 
 
+def test_get_history_post_close_exact_refresh_bypasses_session_shortcut():
+    fetcher = DataFetcher.__new__(DataFetcher)
+    fetcher._cache = _DummyCache()
+
+    idx = pd.date_range("2026-02-12 09:30:00", periods=800, freq="min")
+    session_df = pd.DataFrame(
+        {
+            "open": [10.0] * 800,
+            "high": [10.0] * 800,
+            "low": [10.0] * 800,
+            "close": [10.0] * 800,
+            "volume": [1] * 800,
+        },
+        index=idx,
+    )
+
+    fetcher._get_session_history = lambda symbol, interval, bars: session_df.tail(bars)  # noqa: ARG005
+    fetcher._should_refresh_intraday_exact = lambda **kwargs: True
+
+    called = {"exact": 0, "intraday": 0}
+
+    def _fake_exact(inst, count, fetch_days, interval, cache_key, offline):  # noqa: ARG001
+        called["exact"] += 1
+        return session_df.tail(count)
+
+    def _fake_intraday(inst, count, fetch_days, interval, cache_key, offline, session):  # noqa: ARG001
+        called["intraday"] += 1
+        return session.tail(count)
+
+    fetcher._get_history_cn_intraday_exact = _fake_exact
+    fetcher._get_history_cn_intraday = _fake_intraday
+
+    out = fetcher.get_history(
+        "600519",
+        bars=200,
+        interval="1m",
+        instrument={"market": "CN", "asset": "EQUITY", "symbol": "600519"},
+        refresh_intraday_after_close=True,
+    )
+
+    assert not out.empty
+    assert len(out) == 200
+    assert called["exact"] == 1
+    assert called["intraday"] == 0
+
+
+def test_get_history_intraday_market_open_skips_db_persist(monkeypatch):
+    fetcher = DataFetcher.__new__(DataFetcher)
+    fetcher._cache = _DummyCache()
+    fetcher._get_session_history = lambda symbol, interval, bars: pd.DataFrame()  # noqa: ARG005
+    fetcher._should_refresh_intraday_exact = lambda **kwargs: False
+
+    captured = {"persist": None}
+
+    def _fake_intraday(
+        inst,  # noqa: ARG001
+        count,  # noqa: ARG001
+        fetch_days,  # noqa: ARG001
+        interval,  # noqa: ARG001
+        cache_key,  # noqa: ARG001
+        offline,  # noqa: ARG001
+        session,  # noqa: ARG001
+        *,
+        persist_intraday_db=True,
+    ):
+        captured["persist"] = bool(persist_intraday_db)
+        idx = pd.date_range("2026-02-12 10:00:00", periods=30, freq="min")
+        return pd.DataFrame(
+            {
+                "open": [10.0] * 30,
+                "high": [10.0] * 30,
+                "low": [10.0] * 30,
+                "close": [10.0] * 30,
+                "volume": [1] * 30,
+            },
+            index=idx,
+        )
+
+    fetcher._get_history_cn_intraday = _fake_intraday
+    monkeypatch.setattr("data.fetcher.CONFIG.is_market_open", lambda: True)
+
+    out = fetcher.get_history(
+        "600519",
+        bars=30,
+        interval="1m",
+        update_db=True,
+        instrument={"market": "CN", "asset": "EQUITY", "symbol": "600519"},
+    )
+
+    assert not out.empty
+    assert captured["persist"] is False
+
+
+def test_get_history_intraday_market_closed_allows_db_persist(monkeypatch):
+    fetcher = DataFetcher.__new__(DataFetcher)
+    fetcher._cache = _DummyCache()
+    fetcher._get_session_history = lambda symbol, interval, bars: pd.DataFrame()  # noqa: ARG005
+    fetcher._should_refresh_intraday_exact = lambda **kwargs: False
+
+    captured = {"persist": None}
+
+    def _fake_intraday(
+        inst,  # noqa: ARG001
+        count,  # noqa: ARG001
+        fetch_days,  # noqa: ARG001
+        interval,  # noqa: ARG001
+        cache_key,  # noqa: ARG001
+        offline,  # noqa: ARG001
+        session,  # noqa: ARG001
+        *,
+        persist_intraday_db=True,
+    ):
+        captured["persist"] = bool(persist_intraday_db)
+        idx = pd.date_range("2026-02-12 10:00:00", periods=30, freq="min")
+        return pd.DataFrame(
+            {
+                "open": [10.0] * 30,
+                "high": [10.0] * 30,
+                "low": [10.0] * 30,
+                "close": [10.0] * 30,
+                "volume": [1] * 30,
+            },
+            index=idx,
+        )
+
+    fetcher._get_history_cn_intraday = _fake_intraday
+    monkeypatch.setattr("data.fetcher.CONFIG.is_market_open", lambda: False)
+
+    out = fetcher.get_history(
+        "600519",
+        bars=30,
+        interval="1m",
+        update_db=True,
+        instrument={"market": "CN", "asset": "EQUITY", "symbol": "600519"},
+    )
+
+    assert not out.empty
+    assert captured["persist"] is True
+
+
 def test_get_history_normalizes_interval_alias_before_source_routing():
     fetcher = DataFetcher.__new__(DataFetcher)
     fetcher._cache = _DummyCache()

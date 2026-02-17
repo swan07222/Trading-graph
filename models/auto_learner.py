@@ -81,6 +81,8 @@ class LearningProgress:
     old_stock_accuracy: float = 0.0
     old_stock_confidence: float = 0.0
     model_was_rejected: bool = False
+    consecutive_rejections: int = 0
+    full_retrain_cycles_remaining: int = 0
 
     accuracy_trend: str = "stable"  # improving, stable, degrading
     plateau_count: int = 0
@@ -111,6 +113,8 @@ class LearningProgress:
         self.errors = []
         self.warnings = []
         self.model_was_rejected = False
+        self.consecutive_rejections = 0
+        self.full_retrain_cycles_remaining = 0
         self.training_mode = "auto"
         self.targeted_stocks = []
 
@@ -142,6 +146,8 @@ class LearningProgress:
             'accuracy_trend': self.accuracy_trend,
             'plateau_count': self.plateau_count,
             'model_was_rejected': self.model_was_rejected,
+            'consecutive_rejections': self.consecutive_rejections,
+            'full_retrain_cycles_remaining': self.full_retrain_cycles_remaining,
             'training_mode': self.training_mode,
             'targeted_stocks': self.targeted_stocks[:20],
             'errors': self.errors[-10:],  # Last 10 for UI
@@ -628,9 +634,20 @@ class ModelGuardian:
 
             for code in validation_codes:
                 try:
-                    df = fetcher.get_history(
-                        code, interval=interval, bars=lookback_bars, use_cache=True,
-                    )
+                    try:
+                        df = fetcher.get_history(
+                            code,
+                            interval=interval,
+                            bars=lookback_bars,
+                            use_cache=True,
+                            update_db=True,
+                            allow_online=True,
+                            refresh_intraday_after_close=True,
+                        )
+                    except TypeError:
+                        df = fetcher.get_history(
+                            code, interval=interval, bars=lookback_bars, use_cache=True,
+                        )
                     if df is None or len(df) < CONFIG.SEQUENCE_LENGTH + horizon + 10:
                         continue
 
@@ -1100,13 +1117,24 @@ class ParallelFetcher:
             with semaphore:
                 time.sleep(delay)
                 try:
-                    df = fetcher.get_history(
-                        code,
-                        interval=interval,
-                        bars=max(int(lookback), int(min_cache_bars)),
-                        use_cache=True,
-                        update_db=True,
-                    )
+                    try:
+                        df = fetcher.get_history(
+                            code,
+                            interval=interval,
+                            bars=max(int(lookback), int(min_cache_bars)),
+                            use_cache=True,
+                            update_db=True,
+                            allow_online=True,
+                            refresh_intraday_after_close=True,
+                        )
+                    except TypeError:
+                        df = fetcher.get_history(
+                            code,
+                            interval=interval,
+                            bars=max(int(lookback), int(min_cache_bars)),
+                            use_cache=True,
+                            update_db=True,
+                        )
                     if df is not None and not df.empty and len(df) >= min_bars:
                         return code, True
                     return code, False
@@ -1206,6 +1234,13 @@ class ContinuousLearner:
     # FIX VAL: Minimum holdout predictions for reliable comparison
     _MIN_HOLDOUT_PREDICTIONS = 3
     _MIN_TUNED_TRADES = 3
+    _MIN_1M_LOOKBACK_BARS = 10080
+    _FULL_RETRAIN_EVERY_CYCLES = 6
+    _FORCE_FULL_RETRAIN_CYCLES = 2
+    _FORCE_FULL_RETRAIN_AFTER_REJECTIONS = 2
+    _REJECTION_COOLDOWN_AFTER_STREAK = 4
+    _MIN_REJECTION_COOLDOWN_SECONDS = 600
+    _MAX_REJECTION_COOLDOWN_SECONDS = 3600
 
     def __init__(self):
         self.progress = LearningProgress()
@@ -1352,6 +1387,8 @@ class ContinuousLearner:
         is_intraday = iv in ("1m", "2m", "5m", "15m", "30m", "60m", "1h")
         target_days = min(int(max_d), 7) if is_intraday else min(int(max_d), 365)
         bars = int(max(1, round(float(bpd) * float(target_days))))
+        if str(iv) == "1m":
+            return int(max(self._MIN_1M_LOOKBACK_BARS, bars))
         if is_intraday:
             return max(120, bars)
         return min(max(200, bars), 3000)
@@ -1698,9 +1735,20 @@ class ContinuousLearner:
                 300,
                 int(self._compute_lookback_bars(interval)),
             )
-            df = fetcher.get_history(
-                code, interval=interval, bars=bars_for_interval, use_cache=True,
-            )
+            try:
+                df = fetcher.get_history(
+                    code,
+                    interval=interval,
+                    bars=bars_for_interval,
+                    use_cache=True,
+                    update_db=True,
+                    allow_online=True,
+                    refresh_intraday_after_close=True,
+                )
+            except TypeError:
+                df = fetcher.get_history(
+                    code, interval=interval, bars=bars_for_interval, use_cache=True,
+                )
 
             if df is None or df.empty:
                 return {
@@ -1752,6 +1800,9 @@ class ContinuousLearner:
     ):
         cycle = 0
         current_epochs = epochs
+        base_incremental = bool(incremental)
+        current_incremental = bool(incremental)
+        forced_full_retrain_cycles = 0
 
         try:
             while not self._should_stop():
@@ -1775,20 +1826,105 @@ class ContinuousLearner:
 
                 plateau = self._metrics.get_plateau_response()
                 if plateau['action'] != 'none':
-                    current_epochs, incremental = self._handle_plateau(
-                        plateau, current_epochs, incremental
+                    current_epochs, current_incremental = self._handle_plateau(
+                        plateau, current_epochs, current_incremental
+                    )
+
+                cycle_incremental = bool(current_incremental)
+                force_reason = ""
+                if forced_full_retrain_cycles > 0:
+                    cycle_incremental = False
+                    forced_full_retrain_cycles = max(
+                        0, int(forced_full_retrain_cycles) - 1
+                    )
+                    force_reason = "safety_forced_full_retrain"
+                elif (
+                    base_incremental
+                    and int(self._FULL_RETRAIN_EVERY_CYCLES) > 0
+                    and cycle > 1
+                    and (cycle % int(self._FULL_RETRAIN_EVERY_CYCLES) == 0)
+                ):
+                    cycle_incremental = False
+                    force_reason = "periodic_full_retrain"
+
+                self.progress.full_retrain_cycles_remaining = int(
+                    max(0, forced_full_retrain_cycles)
+                )
+                if force_reason:
+                    self._update(
+                        message=(
+                            f"Cycle {cycle}: using full retrain path "
+                            f"({force_reason})"
+                        ),
                     )
 
                 success = self._run_cycle(
                     max_stocks=max_stocks, epochs=current_epochs,
                     min_market_cap=min_market_cap, interval=interval,
                     horizon=horizon, lookback=lookback,
-                    incremental=incremental, cycle_number=cycle,
+                    incremental=cycle_incremental, cycle_number=cycle,
                     priority_stock_codes=priority_stock_codes,
                 )
 
                 if success:
                     self.progress.total_training_sessions += 1
+                    self.progress.consecutive_rejections = 0
+                    current_incremental = bool(base_incremental)
+                else:
+                    streak = int(
+                        max(0, self.progress.consecutive_rejections)
+                    )
+                    if (
+                        streak
+                        >= int(self._FORCE_FULL_RETRAIN_AFTER_REJECTIONS)
+                    ):
+                        forced_full_retrain_cycles = max(
+                            int(forced_full_retrain_cycles),
+                            int(self._FORCE_FULL_RETRAIN_CYCLES),
+                        )
+                        self.progress.full_retrain_cycles_remaining = int(
+                            forced_full_retrain_cycles
+                        )
+                        current_incremental = False
+                        current_epochs = min(
+                            200,
+                            max(int(epochs), int(current_epochs)) + 2,
+                        )
+                        warn_msg = (
+                            "Model safety guard: repeated rejections "
+                            f"(streak={streak}) forcing "
+                            f"{forced_full_retrain_cycles} full retrain cycle(s)"
+                        )
+                        self.progress.add_warning(warn_msg)
+                        self._update(
+                            stage="risk_guard",
+                            message=warn_msg,
+                            progress=100.0,
+                        )
+                    if (
+                        continuous
+                        and streak >= int(self._REJECTION_COOLDOWN_AFTER_STREAK)
+                    ):
+                        cooldown_seconds = int(
+                            min(
+                                int(self._MAX_REJECTION_COOLDOWN_SECONDS),
+                                max(
+                                    int(self._MIN_REJECTION_COOLDOWN_SECONDS),
+                                    int(cycle_seconds) * 2,
+                                ),
+                            )
+                        )
+                        cooldown_msg = (
+                            "Model safety cooldown after repeated rejections "
+                            f"(streak={streak}) for {cooldown_seconds}s"
+                        )
+                        self.progress.add_warning(cooldown_msg)
+                        self._update(
+                            stage="cooldown",
+                            message=cooldown_msg,
+                            progress=100.0,
+                        )
+                        self._interruptible_sleep(cooldown_seconds)
                 self._save_state()
 
                 if not continuous:
@@ -2081,11 +2217,12 @@ class ContinuousLearner:
             if self._should_stop():
                 raise CancelledException()
 
-            min_ok = max(3, int(len(codes) * 0.05))
+            batch_size = max(1, int(len(codes)))
+            min_ok = min(batch_size, max(3, int(batch_size * 0.05)))
             try:
                 from core.network import get_network_env
                 if get_network_env().is_vpn_active:
-                    min_ok = max(2, int(len(codes) * 0.03))
+                    min_ok = min(batch_size, max(2, int(batch_size * 0.03)))
             except Exception:
                 pass
             if len(ok_codes) < min_ok and failed_codes and not self._should_stop():
@@ -2173,6 +2310,19 @@ class ContinuousLearner:
             self.progress.training_accuracy = acc
             self._metrics.record(acc)
             self.progress.accuracy_trend = self._metrics.trend
+
+            deployable, deploy_reason = self._trainer_result_is_deployable(result)
+            if not deployable:
+                log.warning("REJECTED before holdout: %s", deploy_reason)
+                self.progress.add_warning(f"Rejected: {deploy_reason}")
+                self.progress.model_was_rejected = True
+                self._guardian.restore_backup(eff_interval, eff_horizon)
+                self._finalize_cycle(
+                    False, ok_codes, new_batch, replay_batch,
+                    eff_interval, eff_horizon, eff_lookback,
+                    acc, cycle_number, start_time,
+                )
+                return False
 
             # === 9. Post-training validation ===
             self._update(
@@ -2364,6 +2514,19 @@ class ContinuousLearner:
             self._metrics.record(acc)
             self.progress.accuracy_trend = self._metrics.trend
 
+            deployable, deploy_reason = self._trainer_result_is_deployable(result)
+            if not deployable:
+                log.warning("REJECTED before holdout: %s", deploy_reason)
+                self.progress.add_warning(f"Rejected: {deploy_reason}")
+                self.progress.model_was_rejected = True
+                self._guardian.restore_backup(eff_interval, eff_horizon)
+                self._finalize_cycle(
+                    False, ok_codes, ok_codes, [],
+                    eff_interval, eff_horizon, eff_lookback,
+                    acc, cycle_number, start_time,
+                )
+                return False
+
             # === 7. Post-training validation ===
             self._update(
                 stage="validating",
@@ -2408,6 +2571,8 @@ class ContinuousLearner:
         mode = self.progress.training_mode
 
         if accepted:
+            self.progress.model_was_rejected = False
+            self.progress.consecutive_rejections = 0
             self._replay.add(ok_codes, confidence=acc)
             if mode == "auto":
                 self._rotator.mark_processed(new_batch)
@@ -2444,12 +2609,16 @@ class ContinuousLearner:
             )
         else:
             self.progress.model_was_rejected = True
+            self.progress.consecutive_rejections = (
+                int(max(0, self.progress.consecutive_rejections)) + 1
+            )
             label = "Targeted " if mode == "targeted" else ""
             self._update(
                 stage="complete", progress=100.0,
                 message=(
-                    f"鈿狅笍 {label}Cycle {cycle_number}: acc={acc:.1%} | "
-                    f"REJECTED 鈥?previous model restored"
+                    f"REJECTED {label}cycle {cycle_number}: acc={acc:.1%} | "
+                    f"streak={self.progress.consecutive_rejections} | "
+                    f"previous model restored"
                 ),
             )
 
@@ -2479,7 +2648,11 @@ class ContinuousLearner:
 
         bpd = BARS_PER_DAY.get(eff_interval, 1)
         max_avail = int(INTERVAL_MAX_DAYS.get(eff_interval, 500) * bpd)
+        if eff_interval == "1m":
+            max_avail = max(max_avail, int(self._MIN_1M_LOOKBACK_BARS))
         eff_lookback = min(lookback, max_avail)
+        if eff_interval == "1m":
+            eff_lookback = max(int(eff_lookback), int(self._MIN_1M_LOOKBACK_BARS))
 
         if eff_interval in ("1m", "2m", "5m"):
             min_bars = max(CONFIG.SEQUENCE_LENGTH + 20, 80)
@@ -2529,9 +2702,20 @@ class ContinuousLearner:
             if self._should_stop():
                 raise CancelledException()
             try:
-                df = fetcher.get_history(
-                    code, interval=interval, bars=lookback, use_cache=True,
-                )
+                try:
+                    df = fetcher.get_history(
+                        code,
+                        interval=interval,
+                        bars=lookback,
+                        use_cache=True,
+                        update_db=True,
+                        allow_online=True,
+                        refresh_intraday_after_close=True,
+                    )
+                except TypeError:
+                    df = fetcher.get_history(
+                        code, interval=interval, bars=lookback, use_cache=True,
+                    )
                 if df is not None and len(df) >= min_bars:
                     new_holdout.append(code)
             except Exception:
@@ -2554,6 +2738,39 @@ class ContinuousLearner:
 
         self._guardian.set_holdout(new_holdout)
         log.info(f"Holdout set: {len(new_holdout)} stocks (30% of {pool_size})")
+
+    @staticmethod
+    def _trainer_result_is_deployable(
+        result: dict[str, Any] | None,
+    ) -> tuple[bool, str]:
+        """Require trainer quality gate and artifact deployment success."""
+        payload = result if isinstance(result, dict) else {}
+
+        quality_gate = payload.get("quality_gate", {})
+        if isinstance(quality_gate, dict) and quality_gate:
+            if not bool(quality_gate.get("passed", False)):
+                action = str(
+                    quality_gate.get(
+                        "recommended_action",
+                        "shadow_mode_recommended",
+                    )
+                )
+                reasons = ",".join(
+                    str(x)
+                    for x in list(quality_gate.get("failed_reasons", []) or [])
+                    if str(x).strip()
+                )
+                if reasons:
+                    return False, f"trainer_quality_gate_failed:{action}:{reasons}"
+                return False, f"trainer_quality_gate_failed:{action}"
+
+        deployment = payload.get("deployment", {})
+        if isinstance(deployment, dict) and deployment:
+            if not bool(deployment.get("deployed", False)):
+                reason = str(deployment.get("reason", "not_deployed"))
+                return False, f"trainer_artifact_not_deployed:{reason}"
+
+        return True, "ok"
 
     def _train(
         self, ok_codes, epochs, interval, horizon, lookback, incremental, lr,
@@ -2903,9 +3120,20 @@ class ContinuousLearner:
 
             for code in codes[:30]:
                 try:
-                    df = fetcher.get_history(
-                        code, interval=interval, bars=lookback, use_cache=True,
-                    )
+                    try:
+                        df = fetcher.get_history(
+                            code,
+                            interval=interval,
+                            bars=lookback,
+                            use_cache=True,
+                            update_db=True,
+                            allow_online=True,
+                            refresh_intraday_after_close=True,
+                        )
+                    except TypeError:
+                        df = fetcher.get_history(
+                            code, interval=interval, bars=lookback, use_cache=True,
+                        )
                     if df is None or len(df) < CONFIG.SEQUENCE_LENGTH + 20:
                         continue
                     df = feature_engine.create_features(df)
@@ -2959,11 +3187,15 @@ class ContinuousLearner:
     def _save_state(self):
         """Persist learner state atomically."""
         state = {
-            'version': 3,
+            'version': 4,
             'total_sessions': self.progress.total_training_sessions,
             'total_stocks': self.progress.total_stocks_learned,
             'total_hours': self.progress.total_training_hours,
             'best_accuracy': self.progress.best_accuracy_ever,
+            'consecutive_rejections': self.progress.consecutive_rejections,
+            'full_retrain_cycles_remaining': (
+                self.progress.full_retrain_cycles_remaining
+            ),
             'rotator': self._rotator.to_dict(),
             'replay': self._replay.to_dict(),
             'metrics': self._metrics.to_dict(),
@@ -3035,6 +3267,12 @@ class ContinuousLearner:
             self.progress.total_stocks_learned = state.get('total_stocks', 0)
             self.progress.total_training_hours = state.get('total_hours', 0.0)
             self.progress.best_accuracy_ever = state.get('best_accuracy', 0.0)
+            self.progress.consecutive_rejections = int(
+                max(0, state.get('consecutive_rejections', 0) or 0)
+            )
+            self.progress.full_retrain_cycles_remaining = int(
+                max(0, state.get('full_retrain_cycles_remaining', 0) or 0)
+            )
             last_interval = str(state.get('last_interval', '1m')).strip().lower()
             if last_interval != "1m":
                 log.info(
@@ -3084,7 +3322,8 @@ class ContinuousLearner:
                 f"best={self.progress.best_accuracy_ever:.1%}, "
                 f"replay={len(self._replay)}, "
                 f"processed={self._rotator.processed_count}, "
-                f"holdout={len(self._holdout_codes)}"
+                f"holdout={len(self._holdout_codes)}, "
+                f"reject_streak={self.progress.consecutive_rejections}"
             )
         except Exception as e:
             log.warning(f"State load failed: {e}")
@@ -3134,6 +3373,10 @@ class ContinuousLearner:
             'old_accuracy': self.progress.old_stock_accuracy,
             'old_confidence': self.progress.old_stock_confidence,
             'rejected': self.progress.model_was_rejected,
+            'consecutive_rejections': self.progress.consecutive_rejections,
+            'full_retrain_cycles_remaining': (
+                self.progress.full_retrain_cycles_remaining
+            ),
             'training_mode': self.progress.training_mode,
             'targeted_stocks': self.progress.targeted_stocks,
             'errors': self.progress.errors[-10:],

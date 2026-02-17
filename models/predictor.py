@@ -58,6 +58,7 @@ class Prediction:
     signal: Signal = Signal.HOLD
     signal_strength: float = 0.0
     confidence: float = 0.0
+    raw_confidence: float = 0.0
 
     prob_up: float = 0.33
     prob_neutral: float = 0.34
@@ -84,9 +85,17 @@ class Prediction:
     # Extra fields for UI/signal generator
     model_agreement: float = 1.0
     entropy: float = 0.0
+    model_margin: float = 0.0
+    brier_score: float = 0.0
+    uncertainty_score: float = 0.5
+    tail_risk_score: float = 0.5
 
     # ATR from features (used internally for levels)
     atr_pct_value: float = 0.02
+
+    # Forecast uncertainty bands (same length as predicted_prices)
+    predicted_prices_low: list[float] = field(default_factory=list)
+    predicted_prices_high: list[float] = field(default_factory=list)
 
     # News-aware context (used by UI/details and forecast tilt)
     news_sentiment: float = 0.0
@@ -683,6 +692,8 @@ class Predictor:
                     self._apply_ensemble_prediction(X, pred)
 
                 news_bias = self._apply_news_influence(pred, code, interval)
+                self._refresh_prediction_uncertainty(pred)
+                self._apply_tail_risk_guard(pred)
 
                 try:
                     pred.predicted_prices = self._generate_forecast(
@@ -706,6 +717,7 @@ class Predictor:
                         seed_context=f"{code}:{interval}",
                         recent_prices=df["close"].tail(min(560, len(df))).tolist(),
                     )
+                self._build_prediction_bands(pred)
                 pred.levels = self._calculate_levels(pred)
                 pred.position = self._calculate_position(pred)
                 self._generate_reasons(pred)
@@ -844,6 +856,16 @@ class Predictor:
         pred.confidence = float(
             np.clip(0.36 + (0.24 * depth_ratio) + (0.28 * abs(direction)), 0.36, 0.78)
         )
+        pred.raw_confidence = float(pred.confidence)
+        pred.model_agreement = float(np.clip(0.52 + (0.35 * depth_ratio), 0.0, 1.0))
+        pred.entropy = float(
+            np.clip(
+                0.62 - (0.35 * abs(direction)) + (0.25 * max(0.0, vol - 0.02)),
+                0.05,
+                0.95,
+            )
+        )
+        pred.model_margin = float(np.clip(abs(direction) * 0.32, 0.01, 0.25))
 
         neutral = float(
             np.clip(
@@ -897,6 +919,10 @@ class Predictor:
             step_ret = float(np.clip(step_ret + wave, -0.04, 0.04))
             px = max(0.01, float(px) * (1.0 + step_ret))
             pred.predicted_prices.append(float(px))
+
+        self._refresh_prediction_uncertainty(pred)
+        self._apply_tail_risk_guard(pred)
+        self._build_prediction_bands(pred)
 
         try:
             pred.levels = self._calculate_levels(pred)
@@ -1343,6 +1369,19 @@ class Predictor:
         pred.confidence = float(
             max(0.0, min(1.0, getattr(ensemble_pred, "confidence", 0.0)))
         )
+        pred.raw_confidence = float(
+            max(
+                0.0,
+                min(
+                    1.0,
+                    getattr(
+                        ensemble_pred,
+                        "raw_confidence",
+                        getattr(ensemble_pred, "confidence", 0.0),
+                    ),
+                ),
+            )
+        )
 
         pred.model_agreement = float(
             getattr(ensemble_pred, "agreement", 1.0)
@@ -1350,13 +1389,189 @@ class Predictor:
         pred.entropy = float(
             getattr(ensemble_pred, "entropy", 0.0)
         )
+        pred.model_margin = float(
+            getattr(ensemble_pred, "margin", 0.10)
+        )
+        pred.brier_score = float(
+            max(0.0, getattr(ensemble_pred, "brier_score", 0.0))
+        )
 
         pred.signal = self._determine_signal(ensemble_pred, pred)
         pred.signal_strength = self._calculate_signal_strength(
             ensemble_pred, pred
         )
+        self._refresh_prediction_uncertainty(pred)
         self._apply_high_precision_gate(pred)
         self._apply_runtime_signal_quality_gate(pred)
+        self._apply_tail_risk_guard(pred)
+
+    @staticmethod
+    def _append_warning_once(pred: Prediction, message: str) -> None:
+        """Append warning only once to avoid noisy duplicates."""
+        text = str(message).strip()
+        if not text:
+            return
+        existing = [str(x) for x in list(pred.warnings or [])]
+        if text in existing:
+            return
+        pred.warnings.append(text)
+
+    def _refresh_prediction_uncertainty(self, pred: Prediction) -> None:
+        """
+        Derive uncertainty and tail-risk from signal quality metrics.
+
+        Also moderates confidence when entropy/adverse-risk is high to avoid
+        over-confident chart narratives.
+        """
+        conf = float(np.clip(getattr(pred, "confidence", 0.0), 0.0, 1.0))
+        raw_conf = float(np.clip(getattr(pred, "raw_confidence", conf), 0.0, 1.0))
+        agreement = float(np.clip(getattr(pred, "model_agreement", 1.0), 0.0, 1.0))
+        entropy = float(np.clip(getattr(pred, "entropy", 0.0), 0.0, 1.0))
+        margin = float(np.clip(getattr(pred, "model_margin", 0.10), 0.0, 1.0))
+        edge = float(abs(float(pred.prob_up) - float(pred.prob_down)))
+
+        atr = float(np.nan_to_num(getattr(pred, "atr_pct_value", 0.02), nan=0.02))
+        atr = float(np.clip(atr, 0.003, 0.12))
+        vol_scale = float(np.clip(atr / 0.030, 0.0, 2.0))
+
+        if pred.signal in (Signal.BUY, Signal.STRONG_BUY):
+            adverse_prob = float(np.clip(pred.prob_down, 0.0, 1.0))
+        elif pred.signal in (Signal.SELL, Signal.STRONG_SELL):
+            adverse_prob = float(np.clip(pred.prob_up, 0.0, 1.0))
+        else:
+            adverse_prob = float(
+                np.clip(max(pred.prob_up, pred.prob_down), 0.0, 1.0)
+            )
+
+        quality = (
+            (0.46 * conf)
+            + (0.22 * agreement)
+            + (0.20 * (1.0 - entropy))
+            + (0.12 * margin)
+        )
+        uncertainty = float(
+            np.clip(
+                (1.0 - quality)
+                + (0.18 * (1.0 - edge))
+                + (0.14 * vol_scale),
+                0.0,
+                1.0,
+            )
+        )
+        tail_risk = float(
+            np.clip(
+                (0.58 * adverse_prob)
+                + (0.24 * entropy)
+                + (0.18 * max(0.0, vol_scale - 1.0)),
+                0.0,
+                1.0,
+            )
+        )
+
+        # Confidence moderation only when risk is materially elevated.
+        penalty = (
+            (max(0.0, entropy - 0.62) * 0.35)
+            + (max(0.0, tail_risk - 0.58) * 0.30)
+            + (max(0.0, 0.55 - agreement) * 0.28)
+        )
+        if margin < 0.04:
+            penalty += 0.05
+        if penalty > 0.0:
+            old_conf = conf
+            conf = float(np.clip(conf - penalty, 0.0, 1.0))
+            pred.confidence = conf
+            if (old_conf - conf) >= 0.08:
+                self._append_warning_once(
+                    pred,
+                    "Confidence moderated due to uncertainty/tail-risk conditions",
+                )
+
+        if raw_conf > 0 and conf > raw_conf:
+            pred.confidence = raw_conf
+
+        pred.uncertainty_score = float(uncertainty)
+        pred.tail_risk_score = float(tail_risk)
+
+    def _apply_tail_risk_guard(self, pred: Prediction) -> None:
+        """
+        Block actionable signals when adverse-tail probability is too high.
+        """
+        if pred.signal == Signal.HOLD:
+            return
+        conf = float(np.clip(getattr(pred, "confidence", 0.0), 0.0, 1.0))
+        tail_risk = float(np.clip(getattr(pred, "tail_risk_score", 0.0), 0.0, 1.0))
+        uncertainty = float(
+            np.clip(getattr(pred, "uncertainty_score", 0.0), 0.0, 1.0)
+        )
+
+        reasons: list[str] = []
+        if tail_risk >= 0.72 and conf < 0.88:
+            reasons.append(f"tail_risk {tail_risk:.2f}")
+        if uncertainty >= 0.82 and conf < 0.86:
+            reasons.append(f"uncertainty {uncertainty:.2f}")
+
+        if not reasons:
+            return
+
+        old_signal = pred.signal.value
+        pred.signal = Signal.HOLD
+        pred.signal_strength = min(float(pred.signal_strength), 0.49)
+        self._append_warning_once(
+            pred,
+            "Tail-risk guard filtered signal "
+            f"{old_signal} -> HOLD ({'; '.join(reasons[:2])})",
+        )
+
+    def _build_prediction_bands(self, pred: Prediction) -> None:
+        """
+        Build per-step prediction intervals to visualize uncertainty.
+        """
+        values = [
+            float(v)
+            for v in list(getattr(pred, "predicted_prices", []) or [])
+            if float(v) > 0 and np.isfinite(float(v))
+        ]
+        if not values:
+            pred.predicted_prices_low = []
+            pred.predicted_prices_high = []
+            return
+
+        uncertainty = float(
+            np.clip(getattr(pred, "uncertainty_score", 0.5), 0.0, 1.0)
+        )
+        tail_risk = float(np.clip(getattr(pred, "tail_risk_score", 0.5), 0.0, 1.0))
+        conf = float(np.clip(getattr(pred, "confidence", 0.0), 0.0, 1.0))
+        atr = float(
+            np.clip(
+                np.nan_to_num(getattr(pred, "atr_pct_value", 0.02), nan=0.02),
+                0.003,
+                0.12,
+            )
+        )
+        n = max(1, len(values))
+
+        base_width = float(
+            np.clip(
+                atr
+                * (0.60 + (1.10 * uncertainty) + (0.75 * tail_risk))
+                * (1.05 + (0.35 * (1.0 - conf))),
+                0.004,
+                0.30,
+            )
+        )
+
+        lows: list[float] = []
+        highs: list[float] = []
+        for i, px in enumerate(values, start=1):
+            growth = 1.0 + (float(i) / float(n)) * (0.85 + (0.65 * uncertainty))
+            width = float(np.clip(base_width * growth, 0.004, 0.35))
+            lo = max(0.01, float(px) * (1.0 - width))
+            hi = max(lo + 1e-6, float(px) * (1.0 + width))
+            lows.append(float(lo))
+            highs.append(float(hi))
+
+        pred.predicted_prices_low = lows
+        pred.predicted_prices_high = highs
 
     def _apply_high_precision_gate(self, pred: Prediction) -> None:
         """Optionally downgrade weak actionable predictions to HOLD."""
@@ -2837,6 +3052,37 @@ class Predictor:
                 f"High prediction uncertainty "
                 f"(entropy: {pred.entropy:.2f})"
             )
+
+        uncertainty = float(np.clip(getattr(pred, "uncertainty_score", 0.5), 0.0, 1.0))
+        tail_risk = float(np.clip(getattr(pred, "tail_risk_score", 0.5), 0.0, 1.0))
+        if uncertainty >= 0.70:
+            warnings.append(f"Wide uncertainty regime (score: {uncertainty:.2f})")
+        else:
+            reasons.append(f"Uncertainty score: {uncertainty:.2f}")
+
+        if tail_risk >= 0.60:
+            warnings.append(f"Elevated tail-event risk ({tail_risk:.2f})")
+        else:
+            reasons.append(f"Tail-event risk: {tail_risk:.2f}")
+
+        low_band = list(getattr(pred, "predicted_prices_low", []) or [])
+        high_band = list(getattr(pred, "predicted_prices_high", []) or [])
+        if low_band and high_band and len(low_band) == len(high_band):
+            try:
+                lo_last = float(low_band[-1])
+                hi_last = float(high_band[-1])
+                ref = max(float(pred.current_price), 1e-8)
+                spread_pct = float((hi_last - lo_last) / ref * 100.0)
+                if spread_pct >= 6.0:
+                    warnings.append(
+                        f"Forecast interval is wide ({spread_pct:.1f}% at horizon)"
+                    )
+                else:
+                    reasons.append(
+                        f"Forecast interval width: {spread_pct:.1f}% at horizon"
+                    )
+            except Exception:
+                pass
 
         pred.reasons = existing_reasons + [
             msg for msg in reasons if msg not in existing_reasons

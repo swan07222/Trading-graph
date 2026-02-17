@@ -96,6 +96,38 @@ def test_session_cache_skips_immediate_duplicate_rows(tmp_path):
     assert len(df) == 1
 
 
+def test_session_cache_keeps_same_close_ohlc_refinement(tmp_path):
+    cache = SessionBarCache(root=tmp_path / "session_bars")
+    symbol = "600519"
+    interval = "1m"
+    first = {
+        "timestamp": "2026-02-12T09:31:00+00:00",
+        "open": 100.0,
+        "high": 100.1,
+        "low": 99.9,
+        "close": 100.0,
+        "volume": 1000,
+        "final": False,
+    }
+    refined = {
+        "timestamp": "2026-02-12T09:31:00+00:00",
+        "open": 100.0,
+        "high": 100.6,
+        "low": 99.4,
+        "close": 100.0,
+        "volume": 1200,
+        "final": False,
+    }
+    assert cache.append_bar(symbol, interval, first) is True
+    assert cache.append_bar(symbol, interval, refined) is True
+
+    df = cache.read_history(symbol, interval, bars=10, final_only=False)
+    assert len(df) == 1
+    row = df.iloc[-1]
+    assert float(row["high"]) == 100.6
+    assert float(row["low"]) == 99.4
+
+
 def test_session_cache_normalizes_bad_numeric_inputs(tmp_path):
     cache = SessionBarCache(root=tmp_path / "session_bars")
     ok = cache.append_bar(

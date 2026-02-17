@@ -1969,6 +1969,7 @@ class DataFetcher:
         interval: str = "1d",
         max_age_hours: float | None = None,
         allow_online: bool = True,
+        refresh_intraday_after_close: bool = False,
     ) -> pd.DataFrame:
         """
         Unified history fetcher.
@@ -1981,6 +1982,14 @@ class DataFetcher:
         key = instrument_key(inst)
         interval = self._normalize_interval_token(interval)
         offline = _is_offline() or (not bool(allow_online))
+        force_exact_intraday = bool(
+            refresh_intraday_after_close
+            and self._should_refresh_intraday_exact(
+                interval=interval,
+                update_db=bool(update_db),
+                allow_online=bool(allow_online),
+            )
+        )
         is_cn_equity = (
             inst.get("market") == "CN" and inst.get("asset") == "EQUITY"
         )
@@ -1999,7 +2008,7 @@ class DataFetcher:
         cache_key = f"history:{key}:{interval}:{count}"
         stale_cached_df = pd.DataFrame()
 
-        if use_cache:
+        if use_cache and (not force_exact_intraday):
             cached_df = self._cache.get(cache_key, ttl)
             if isinstance(cached_df, pd.DataFrame) and not cached_df.empty:
                 cached_df = self._clean_dataframe(
@@ -2021,12 +2030,16 @@ class DataFetcher:
                     # of returning empty and breaking chart/backtest workflows.
                     return cached_df.tail(count)
 
-        session_df = self._get_session_history(
-            symbol=str(inst.get("symbol", code)),
-            interval=interval,
-            bars=count,
-        )
+        session_df = pd.DataFrame()
+        if not force_exact_intraday:
+            session_df = self._get_session_history(
+                symbol=str(inst.get("symbol", code)),
+                interval=interval,
+                bars=count,
+            )
         if (
+            not force_exact_intraday
+            and
             interval in _INTRADAY_INTERVALS
             and not session_df.empty
             and count <= 500
@@ -2035,9 +2048,32 @@ class DataFetcher:
             return self._cache_tail(cache_key, session_df, count)
 
         if is_cn_equity and interval != "1d":
-            return self._get_history_cn_intraday(
-                inst, count, fetch_days, interval, cache_key, offline, session_df
-            )
+            if force_exact_intraday:
+                return self._get_history_cn_intraday_exact(
+                    inst,
+                    count,
+                    fetch_days,
+                    interval,
+                    cache_key,
+                    offline,
+                )
+            persist_intraday_db = bool(update_db) and (not bool(CONFIG.is_market_open()))
+            try:
+                return self._get_history_cn_intraday(
+                    inst,
+                    count,
+                    fetch_days,
+                    interval,
+                    cache_key,
+                    offline,
+                    session_df,
+                    persist_intraday_db=persist_intraday_db,
+                )
+            except TypeError:
+                # Backward compatibility for tests/mocks with legacy signature.
+                return self._get_history_cn_intraday(
+                    inst, count, fetch_days, interval, cache_key, offline, session_df
+                )
 
         if is_cn_equity and interval == "1d":
             return self._get_history_cn_daily(
@@ -2058,6 +2094,56 @@ class DataFetcher:
         out = self._merge_parts(df, session_df, interval=interval).tail(count)
         self._cache.set(cache_key, out)
         return out
+
+    def _should_refresh_intraday_exact(
+        self,
+        *,
+        interval: str,
+        update_db: bool,
+        allow_online: bool,
+    ) -> bool:
+        """Whether this call should force exact post-close intraday refresh."""
+        iv = self._normalize_interval_token(interval)
+        if iv in {"1d", "1wk", "1mo"}:
+            return False
+        if (not bool(update_db)) or (not bool(allow_online)):
+            return False
+        if _is_offline():
+            return False
+        return bool(self._is_post_close_or_preopen_window())
+
+    @staticmethod
+    def _is_post_close_or_preopen_window() -> bool:
+        """
+        True when market session has ended (or before next open), excluding
+        midday lunch break where the same trading day is still in progress.
+        """
+        try:
+            from zoneinfo import ZoneInfo
+
+            now = datetime.now(tz=ZoneInfo("Asia/Shanghai"))
+        except Exception:
+            now = datetime.now()
+
+        if now.weekday() >= 5:
+            return True
+
+        try:
+            from core.constants import is_trading_day
+
+            if not is_trading_day(now.date()):
+                return True
+        except Exception:
+            pass
+
+        t = CONFIG.trading
+        cur = now.time()
+        morning = t.market_open_am <= cur <= t.market_close_am
+        afternoon = t.market_open_pm <= cur <= t.market_close_pm
+        lunch_break = t.market_close_am < cur < t.market_open_pm
+        if morning or afternoon or lunch_break:
+            return False
+        return True
 
     @staticmethod
     def _resolve_requested_bar_count(
@@ -2145,6 +2231,8 @@ class DataFetcher:
         cache_key: str,
         offline: bool,
         session_df: pd.DataFrame | None = None,
+        *,
+        persist_intraday_db: bool = True,
     ) -> pd.DataFrame:
         """Handle CN equity intraday intervals."""
         code6 = str(inst["symbol"]).zfill(6)
@@ -2181,6 +2269,65 @@ class DataFetcher:
             )
         merged = self._filter_cn_intraday_session(merged, interval)
 
+        if merged.empty:
+            return pd.DataFrame()
+
+        out = self._cache_tail(cache_key, merged, count)
+        if bool(persist_intraday_db):
+            try:
+                self._db.upsert_intraday_bars(code6, interval, out)
+            except Exception:
+                pass
+        return out
+
+    def _get_history_cn_intraday_exact(
+        self,
+        inst: dict,
+        count: int,
+        fetch_days: int,
+        interval: str,
+        cache_key: str,
+        offline: bool,
+    ) -> pd.DataFrame:
+        """
+        Post-close exact mode for intraday history:
+        - prefer online bars as source of truth
+        - ignore session cache bars
+        - update local DB with refreshed bars
+        """
+        code6 = str(inst["symbol"]).zfill(6)
+        online_df = pd.DataFrame()
+        if not offline:
+            online_df = self._fetch_history_with_depth_retry(
+                inst=inst,
+                interval=interval,
+                requested_count=count,
+                base_fetch_days=fetch_days,
+            )
+            online_df = self._filter_cn_intraday_session(online_df, interval)
+
+        db_df = pd.DataFrame()
+        db_limit = int(max(count * 3, count + 600))
+        try:
+            db_df = self._clean_dataframe(
+                self._db.get_intraday_bars(
+                    code6,
+                    interval=interval,
+                    limit=db_limit,
+                ),
+                interval=interval,
+            )
+            db_df = self._filter_cn_intraday_session(db_df, interval)
+        except Exception:
+            db_df = pd.DataFrame()
+
+        if online_df is None or online_df.empty:
+            if db_df is None or db_df.empty:
+                return pd.DataFrame()
+            return self._cache_tail(cache_key, db_df, count)
+
+        merged = self._merge_parts(db_df, online_df, interval=interval)
+        merged = self._filter_cn_intraday_session(merged, interval)
         if merged.empty:
             return pd.DataFrame()
 

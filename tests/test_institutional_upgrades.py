@@ -42,6 +42,60 @@ def test_auto_trader_precision_quality_gate():
         CONFIG.precision.min_edge = old_min_edge
 
 
+def test_auto_trader_caps_buy_quantity_with_risk_manager():
+    from models.predictor import Signal
+
+    quick_pred = SimpleNamespace(
+        stock_code="600519",
+        signal=Signal.STRONG_BUY,
+        confidence=0.92,
+        signal_strength=0.88,
+        model_agreement=0.90,
+    )
+    full_pred = SimpleNamespace(
+        stock_code="600519",
+        stock_name="Kweichow Moutai",
+        signal=Signal.STRONG_BUY,
+        confidence=0.93,
+        signal_strength=0.90,
+        model_agreement=0.91,
+        current_price=100.0,
+        position=SimpleNamespace(shares=1000),
+        levels=SimpleNamespace(stop_loss=97.0),
+        atr_pct_value=0.02,
+        entropy=0.08,
+        prob_up=0.82,
+        prob_down=0.10,
+    )
+
+    class _Predictor:
+        ensemble = object()
+
+        def predict_quick_batch(self, *args, **kwargs):  # noqa: ARG002
+            return [quick_pred]
+
+        def predict(self, *args, **kwargs):  # noqa: ARG002
+            return full_pred
+
+    account = SimpleNamespace(positions={}, equity=1_000_000.0)
+    engine = SimpleNamespace(
+        get_account=lambda: account,
+        risk_manager=SimpleNamespace(
+            calculate_position_size=lambda **_k: 200
+        ),
+    )
+
+    at = AutoTrader(engine=engine, predictor=_Predictor(), watch_list=["600519"])
+    at.state.mode = AutoTradeMode.SEMI_AUTO
+
+    at._run_scan_cycle()
+
+    assert len(at.state.pending_approvals) == 1
+    pending = at.state.pending_approvals[0]
+    assert pending.stock_code == "600519"
+    assert pending.quantity == 200
+
+
 def test_news_aggregator_stale_cache_fallback_and_source_health(monkeypatch):
     agg = NewsAggregator()
     stale_item = NewsItem(

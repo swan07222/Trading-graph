@@ -159,12 +159,16 @@ class StockChart(QWidget):
         self._bars: list[dict] = []
         self._actual_prices: list[float] = []
         self._predicted_prices: list[float] = []
+        self._predicted_prices_low: list[float] = []
+        self._predicted_prices_high: list[float] = []
         self._levels: dict[str, float] = {}
 
         self.plot_widget = None
         self.candles = None           # Layer 3: Candlesticks (top)
         self.actual_line = None       # Layer 2: Price line (middle)
         self.predicted_line = None    # Layer 1: Prediction (bottom)
+        self.predicted_low_line = None
+        self.predicted_high_line = None
         self.level_lines: dict[str, object] = {}
         self.overlay_lines: dict[str, object] = {}
         self.overlay_enabled: dict[str, bool] = {
@@ -191,6 +195,16 @@ class StockChart(QWidget):
             self._setup_pyqtgraph()
         else:
             self._setup_fallback()
+
+    @staticmethod
+    def _coerce_list(values):
+        """Convert optional iterable values to a list safely."""
+        if values is None:
+            return []
+        try:
+            return list(values)
+        except Exception:
+            return []
 
     def _dbg_log(
         self,
@@ -243,6 +257,22 @@ class StockChart(QWidget):
                 style=Qt.PenStyle.DashLine
             ),
             name='AI Prediction'
+        )
+        self.predicted_low_line = self.plot_widget.plot(
+            pen=pg.mkPen(
+                color='#d29922',
+                width=1,
+                style=Qt.PenStyle.DotLine,
+            ),
+            name='Forecast Low',
+        )
+        self.predicted_high_line = self.plot_widget.plot(
+            pen=pg.mkPen(
+                color='#d29922',
+                width=1,
+                style=Qt.PenStyle.DotLine,
+            ),
+            name='Forecast High',
         )
 
         # === Layer 2 (MIDDLE): Price line - solid blue ===
@@ -321,6 +351,8 @@ class StockChart(QWidget):
         self,
         bars: list[dict],
         predicted_prices: list[float] = None,
+        predicted_prices_low: list[float] = None,
+        predicted_prices_high: list[float] = None,
         levels: dict[str, float] = None,
     ):
         """
@@ -332,10 +364,14 @@ class StockChart(QWidget):
         Args:
             bars: List of OHLCV dicts with keys: open, high, low, close
             predicted_prices: AI forecast prices (the "guessed graph")
+            predicted_prices_low: Lower uncertainty envelope for forecast
+            predicted_prices_high: Upper uncertainty envelope for forecast
             levels: Trading levels dict (stop_loss, target_1, etc.)
         """
-        self._bars = list(bars) if bars else []
-        self._predicted_prices = list(predicted_prices) if predicted_prices else []
+        self._bars = self._coerce_list(bars)
+        self._predicted_prices = self._coerce_list(predicted_prices)
+        self._predicted_prices_low = self._coerce_list(predicted_prices_low)
+        self._predicted_prices_high = self._coerce_list(predicted_prices_high)
         self._levels = levels or {}
 
         if not HAS_PYQTGRAPH:
@@ -710,6 +746,27 @@ class StockChart(QWidget):
                         dtype=float
                     )
                     self.predicted_line.setData(x_pred, y_pred)
+                    if (
+                        self.predicted_low_line is not None
+                        and self.predicted_high_line is not None
+                        and len(self._predicted_prices_low) == len(self._predicted_prices)
+                        and len(self._predicted_prices_high) == len(self._predicted_prices)
+                    ):
+                        y_low = np.array(
+                            [closes[-1]] + list(self._predicted_prices_low),
+                            dtype=float,
+                        )
+                        y_high = np.array(
+                            [closes[-1]] + list(self._predicted_prices_high),
+                            dtype=float,
+                        )
+                        self.predicted_low_line.setData(x_pred, y_low)
+                        self.predicted_high_line.setData(x_pred, y_high)
+                    else:
+                        if self.predicted_low_line is not None:
+                            self.predicted_low_line.clear()
+                        if self.predicted_high_line is not None:
+                            self.predicted_high_line.clear()
                     try:
                         p = y_pred[1:] if y_pred.size > 1 else y_pred
                         if p.size > 0:
@@ -753,6 +810,10 @@ class StockChart(QWidget):
                         pass
                 else:
                     self.predicted_line.clear()
+                    if self.predicted_low_line is not None:
+                        self.predicted_low_line.clear()
+                    if self.predicted_high_line is not None:
+                        self.predicted_high_line.clear()
 
             self._actual_prices = closes
 
@@ -802,6 +863,8 @@ class StockChart(QWidget):
         self,
         bars: list[dict],
         predicted_prices: list[float] = None,
+        predicted_prices_low: list[float] = None,
+        predicted_prices_high: list[float] = None,
         levels: dict[str, float] = None,
     ):
         """
@@ -810,12 +873,20 @@ class StockChart(QWidget):
         BACKWARD COMPATIBLE: This now delegates to update_chart()
         so all three layers are drawn together.
         """
-        self.update_chart(bars, predicted_prices, levels)
+        self.update_chart(
+            bars,
+            predicted_prices,
+            predicted_prices_low,
+            predicted_prices_high,
+            levels,
+        )
 
     def update_data(
         self,
         actual_prices: list[float],
         predicted_prices: list[float] = None,
+        predicted_prices_low: list[float] = None,
+        predicted_prices_high: list[float] = None,
         levels: dict[str, float] = None
     ):
         """
@@ -838,7 +909,13 @@ class StockChart(QWidget):
             except (ValueError, TypeError):
                 continue
 
-        self.update_chart(bars, predicted_prices, levels)
+        self.update_chart(
+            bars,
+            predicted_prices,
+            predicted_prices_low,
+            predicted_prices_high,
+            levels,
+        )
 
     # =========================================================================
     # =========================================================================
@@ -852,6 +929,10 @@ class StockChart(QWidget):
                 self.actual_line.clear()
             if self.predicted_line is not None:
                 self.predicted_line.clear()
+            if self.predicted_low_line is not None:
+                self.predicted_low_line.clear()
+            if self.predicted_high_line is not None:
+                self.predicted_high_line.clear()
             for line in self.overlay_lines.values():
                 try:
                     line.clear()
@@ -1065,6 +1146,8 @@ class StockChart(QWidget):
         self._bars = []
         self._actual_prices = []
         self._predicted_prices = []
+        self._predicted_prices_low = []
+        self._predicted_prices_high = []
         self._levels = {}
         self._clear_all()
 
@@ -1170,7 +1253,13 @@ class MiniChart(QWidget):
 
     def update_data(self, prices: list[float]):
         """Update mini chart."""
-        self._prices = list(prices) if prices else []
+        if prices is None:
+            self._prices = []
+        else:
+            try:
+                self._prices = list(prices)
+            except Exception:
+                self._prices = []
 
         if not HAS_PYQTGRAPH or not self._prices or self.line is None:
             return

@@ -249,11 +249,15 @@ class SignalPanel(QFrame):
             self._safe_float(pred, "agreement", 1.0)
         )
         strength = self._safe_float(pred, "signal_strength")
+        uncertainty = self._safe_float(pred, "uncertainty_score", 0.5)
+        tail_risk = self._safe_float(pred, "tail_risk_score", 0.5)
 
         self.conf_label.setText(
             f"Confidence: {confidence:.0%} | "
             f"Model Agreement: {agreement:.0%} | "
-            f"Signal Strength: {strength:.0%}"
+            f"Signal Strength: {strength:.0%} | "
+            f"Uncertainty: {uncertainty:.2f} | "
+            f"Tail Risk: {tail_risk:.2f}"
         )
 
         if Signal is not None:

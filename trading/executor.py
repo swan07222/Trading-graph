@@ -201,6 +201,67 @@ class AutoTrader:
 
         return True, ""
 
+    def _cap_buy_shares_by_risk(
+        self,
+        pred,
+        shares: int,
+        price: float,
+    ) -> tuple[int, str]:
+        """
+        Cap model-proposed BUY size using RiskManager position sizing.
+
+        Keeps the model quantity as an upper bound and never increases size.
+        """
+        shares_i = int(shares)
+        price_f = float(price)
+        if shares_i <= 0:
+            return shares_i, ""
+        if price_f <= 0:
+            return 0, "No valid position size"
+
+        risk_mgr = getattr(self._engine, "risk_manager", None)
+        if risk_mgr is None:
+            return shares_i, ""
+
+        stop_loss = 0.0
+        levels = getattr(pred, "levels", None)
+        if levels is not None:
+            try:
+                stop_loss = float(getattr(levels, "stop_loss", 0.0) or 0.0)
+            except Exception:
+                stop_loss = 0.0
+
+        if not (0.0 < stop_loss < price_f):
+            atr_pct = float(getattr(pred, "atr_pct_value", 0.0) or 0.0)
+            fallback_pct = (atr_pct * 1.5) if atr_pct > 0 else 0.02
+            fallback_pct = max(0.01, min(0.08, float(fallback_pct)))
+            stop_loss = price_f * (1.0 - fallback_pct)
+
+        try:
+            capped = int(
+                risk_mgr.calculate_position_size(
+                    symbol=str(getattr(pred, "stock_code", "") or ""),
+                    entry_price=price_f,
+                    stop_loss=float(stop_loss),
+                    confidence=float(getattr(pred, "confidence", 0.0) or 0.0),
+                    signal_strength=float(
+                        getattr(pred, "signal_strength", 1.0) or 1.0
+                    ),
+                )
+            )
+        except Exception as e:
+            log.debug(
+                "Risk size cap failed for %s: %s",
+                getattr(pred, "stock_code", "?"),
+                e,
+            )
+            return shares_i, ""
+
+        if capped <= 0:
+            return 0, "Risk sizing blocked position"
+
+        return min(shares_i, int(capped)), ""
+
     def approve_pending(self, action_id: str) -> bool:
         """Approve a pending auto-trade action (SEMI_AUTO mode)."""
         with self._lock:
@@ -529,9 +590,28 @@ class AutoTrader:
                     self._record_skip(full_pred, Signal, reason)
                 continue
 
+            if full_sig in (Signal.STRONG_BUY, Signal.BUY):
+                side = OrderSide.BUY
+            elif full_sig in (Signal.STRONG_SELL, Signal.SELL):
+                side = OrderSide.SELL
+            else:
+                continue
+
             price = getattr(full_pred, 'current_price', 0.0)
             position = getattr(full_pred, 'position', None)
             shares = getattr(position, 'shares', 0) if position else 0
+            if side == OrderSide.BUY and int(shares) > 0:
+                shares, risk_msg = self._cap_buy_shares_by_risk(
+                    full_pred, shares, price
+                )
+                if shares <= 0:
+                    with self._lock:
+                        self._record_skip(
+                            full_pred,
+                            Signal,
+                            risk_msg or "Risk sizing blocked position",
+                        )
+                    continue
             order_value = shares * price if (shares > 0 and price > 0) else 0
 
             if order_value > cfg.max_auto_order_value:
@@ -562,13 +642,6 @@ class AutoTrader:
                             f"High volatility (ATR {atr_pct*100:.1f}%)"
                         )
                     continue
-
-            if full_sig in (Signal.STRONG_BUY, Signal.BUY):
-                side = OrderSide.BUY
-            elif full_sig in (Signal.STRONG_SELL, Signal.SELL):
-                side = OrderSide.SELL
-            else:
-                continue
 
             # Auto-trade position limit (separate from risk manager)
             if side == OrderSide.BUY:

@@ -815,3 +815,62 @@ def test_generate_reasons_keeps_existing_gate_warnings():
         "Runtime quality gate filtered signal" in item
         for item in pred.warnings
     )
+
+
+def test_uncertainty_profile_builds_prediction_bands():
+    predictor = Predictor.__new__(Predictor)
+    pred = Prediction(
+        stock_code="600519",
+        signal=Signal.BUY,
+        confidence=0.66,
+        raw_confidence=0.74,
+        prob_up=0.52,
+        prob_neutral=0.21,
+        prob_down=0.27,
+        model_agreement=0.58,
+        entropy=0.66,
+        model_margin=0.04,
+        atr_pct_value=0.03,
+        predicted_prices=[100.0 + (0.12 * i) for i in range(20)],
+        signal_strength=0.62,
+    )
+
+    predictor._refresh_prediction_uncertainty(pred)
+    predictor._build_prediction_bands(pred)
+
+    assert 0.0 <= float(pred.uncertainty_score) <= 1.0
+    assert 0.0 <= float(pred.tail_risk_score) <= 1.0
+    assert len(pred.predicted_prices_low) == len(pred.predicted_prices)
+    assert len(pred.predicted_prices_high) == len(pred.predicted_prices)
+    assert all(
+        float(lo) < float(px) < float(hi)
+        for lo, px, hi in zip(
+            pred.predicted_prices_low,
+            pred.predicted_prices,
+            pred.predicted_prices_high,
+            strict=False,
+        )
+    )
+
+
+def test_tail_risk_guard_filters_fragile_actionable_signal():
+    predictor = Predictor.__new__(Predictor)
+    pred = Prediction(
+        stock_code="600519",
+        signal=Signal.BUY,
+        signal_strength=0.78,
+        confidence=0.62,
+        prob_up=0.34,
+        prob_neutral=0.20,
+        prob_down=0.46,
+        model_agreement=0.48,
+        entropy=0.82,
+        model_margin=0.02,
+        atr_pct_value=0.055,
+    )
+
+    predictor._refresh_prediction_uncertainty(pred)
+    predictor._apply_tail_risk_guard(pred)
+
+    assert pred.signal == Signal.HOLD
+    assert any("Tail-risk guard filtered signal" in x for x in pred.warnings)

@@ -108,12 +108,9 @@ class AutoLearnWorker(QThread):
             interval = "1m"
             horizon = 30
             try:
-                from data.fetcher import BARS_PER_DAY
-                lookback_bars = int(
-                    max(120, round(7 * float(BARS_PER_DAY.get("1m", 240))))
-                )
+                lookback_bars = 10080
             except Exception:
-                lookback_bars = 1680
+                lookback_bars = 10080
             cycle_interval_seconds = 900
 
             def on_progress(p):

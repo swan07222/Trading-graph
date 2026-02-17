@@ -39,3 +39,65 @@ def test_emit_bar_attaches_canonical_interval_for_sixty_minutes():
     out = seen[-1]
     assert out["interval"] == "60m"
     assert int(out["interval_seconds"]) == 3600
+
+
+def test_emit_bar_market_open_writes_session_only(monkeypatch):
+    agg = BarAggregator(interval_seconds=60)
+
+    class _Cache:
+        def __init__(self):
+            self.calls = 0
+
+        def append_bar(self, symbol, interval, bar):  # noqa: ARG002
+            self.calls += 1
+            return True
+
+    class _DB:
+        def __init__(self):
+            self.calls = 0
+
+        def upsert_intraday_bars(self, symbol, interval, df):  # noqa: ARG002
+            self.calls += 1
+
+    cache = _Cache()
+    db = _DB()
+
+    monkeypatch.setattr("data.feeds.CONFIG.is_market_open", lambda: True)
+    monkeypatch.setattr("data.session_cache.get_session_bar_cache", lambda: cache)
+    monkeypatch.setattr("data.database.get_database", lambda: db)
+
+    agg._emit_bar("000001", _sample_bar(datetime(2026, 2, 16, 10, 0, 0)), final=True)
+
+    assert cache.calls == 1
+    assert db.calls == 0
+
+
+def test_emit_bar_market_closed_persists_to_db(monkeypatch):
+    agg = BarAggregator(interval_seconds=60)
+
+    class _Cache:
+        def __init__(self):
+            self.calls = 0
+
+        def append_bar(self, symbol, interval, bar):  # noqa: ARG002
+            self.calls += 1
+            return True
+
+    class _DB:
+        def __init__(self):
+            self.calls = 0
+
+        def upsert_intraday_bars(self, symbol, interval, df):  # noqa: ARG002
+            self.calls += 1
+
+    cache = _Cache()
+    db = _DB()
+
+    monkeypatch.setattr("data.feeds.CONFIG.is_market_open", lambda: False)
+    monkeypatch.setattr("data.session_cache.get_session_bar_cache", lambda: cache)
+    monkeypatch.setattr("data.database.get_database", lambda: db)
+
+    agg._emit_bar("000001", _sample_bar(datetime(2026, 2, 16, 15, 1, 0)), final=True)
+
+    assert cache.calls == 1
+    assert db.calls == 1

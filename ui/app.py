@@ -10,6 +10,7 @@ from importlib import import_module
 from statistics import median
 from typing import Any
 
+import numpy as np
 from PyQt6.QtCore import QSize, Qt, QThread, QTimer, pyqtSignal
 from PyQt6.QtGui import QAction, QActionGroup, QColor, QFont
 from PyQt6.QtWidgets import (
@@ -475,6 +476,16 @@ class MainApp(QMainWindow):
         """Normalize stock code for UI comparison."""
         return _normalize_stock_code(text)
 
+    @staticmethod
+    def _safe_list(values: Any) -> list[Any]:
+        """Convert optional iterables to list without truthiness checks."""
+        if values is None:
+            return []
+        try:
+            return list(values)
+        except Exception:
+            return []
+
     def _set_initial_window_geometry(self) -> None:
         """Fit initial window to available screen so bottom controls remain visible."""
         try:
@@ -724,8 +735,8 @@ class MainApp(QMainWindow):
         context: str = "chart",
     ) -> None:
         """Emit compact chart diagnostics for rapid bug triage."""
-        arr = list(bars or [])
-        preds = list(predicted_prices or [])
+        arr = self._safe_list(bars)
+        preds = self._safe_list(predicted_prices)
         if not arr:
             self._debug_console(
                 f"chart_state:{context}:{self._ui_norm(symbol)}:{self._normalize_interval_token(interval)}",
@@ -791,7 +802,7 @@ class MainApp(QMainWindow):
         if not bool(getattr(self, "_debug_console_enabled", False)):
             return
 
-        arr = list(bars or [])
+        arr = self._safe_list(bars)
         if not arr:
             return
 
@@ -929,7 +940,7 @@ class MainApp(QMainWindow):
         iv_chart = self._normalize_interval_token(chart_interval)
         iv_src = self._normalize_interval_token(source_interval, fallback=iv_chart)
         vals: list[float] = []
-        for v in list(predicted_prices or []):
+        for v in self._safe_list(predicted_prices):
             try:
                 fv = float(v)
             except Exception:
@@ -1045,7 +1056,7 @@ class MainApp(QMainWindow):
         - When model interval != chart interval, project a smooth path to avoid
           abrupt vertical zig-zags on intraday charts.
         """
-        raw_vals = list(predicted_prices or [])
+        raw_vals = self._safe_list(predicted_prices)
         cleaned: list[float] = []
         for v in raw_vals:
             try:
@@ -1222,6 +1233,102 @@ class MainApp(QMainWindow):
                 out = out2
         return out
 
+    def _chart_prediction_uncertainty_profile(
+        self,
+        symbol: str,
+    ) -> tuple[float, float, float]:
+        """
+        Resolve (uncertainty, tail_risk, confidence) for chart forecast bands.
+        """
+        uncertainty = 0.55
+        tail_risk = 0.55
+        confidence = 0.45
+
+        pred = getattr(self, "current_prediction", None)
+        if pred and self._ui_norm(getattr(pred, "stock_code", "")) == self._ui_norm(symbol):
+            try:
+                uncertainty = float(
+                    np.clip(getattr(pred, "uncertainty_score", uncertainty), 0.0, 1.0)
+                )
+            except Exception:
+                pass
+            try:
+                tail_risk = float(
+                    np.clip(getattr(pred, "tail_risk_score", tail_risk), 0.0, 1.0)
+                )
+            except Exception:
+                pass
+            try:
+                confidence = float(
+                    np.clip(getattr(pred, "confidence", confidence), 0.0, 1.0)
+                )
+            except Exception:
+                pass
+
+        return uncertainty, tail_risk, confidence
+
+    def _build_chart_prediction_bands(
+        self,
+        *,
+        symbol: str,
+        predicted_prices: list[float] | None,
+        anchor_price: float | None,
+    ) -> tuple[list[float], list[float]]:
+        """Build chart uncertainty envelope around predicted prices."""
+        vals = []
+        for v in self._safe_list(predicted_prices):
+            try:
+                fv = float(v)
+            except Exception:
+                continue
+            if fv > 0 and math.isfinite(fv):
+                vals.append(float(fv))
+        if not vals:
+            return [], []
+
+        try:
+            anchor = float(anchor_price or 0.0)
+        except Exception:
+            anchor = 0.0
+        if anchor <= 0:
+            anchor = float(vals[0])
+
+        uncertainty, tail_risk, confidence = self._chart_prediction_uncertainty_profile(
+            symbol
+        )
+        base_width = float(
+            np.clip(
+                0.004
+                + (0.020 * uncertainty)
+                + (0.015 * tail_risk)
+                + (0.012 * (1.0 - confidence)),
+                0.004,
+                0.24,
+            )
+        )
+
+        n = max(1, len(vals))
+        lows: list[float] = []
+        highs: list[float] = []
+        for i, px in enumerate(vals, start=1):
+            growth = 1.0 + (float(i) / float(n)) * (0.90 + (0.70 * uncertainty))
+            width = float(np.clip(base_width * growth, 0.004, 0.32))
+
+            lo = max(0.01, float(px) * (1.0 - width))
+            hi = max(lo + 1e-6, float(px) * (1.0 + width))
+
+            # Keep envelope centered on plausible anchor neighborhood.
+            if anchor > 0:
+                lo = max(lo, anchor * 0.50)
+                hi = min(hi, anchor * 1.50)
+                if hi <= lo:
+                    hi = lo + max(1e-6, abs(lo) * 0.002)
+
+            lows.append(float(lo))
+            highs.append(float(hi))
+
+        return lows, highs
+
     def _resolve_chart_prediction_series(
         self,
         *,
@@ -1237,7 +1344,7 @@ class MainApp(QMainWindow):
             fallback=iv_fallback,
         )
         if predicted_prices is not None:
-            return list(predicted_prices or []), iv_source
+            return self._safe_list(predicted_prices), iv_source
 
         if (
             self.current_prediction
@@ -1274,7 +1381,7 @@ class MainApp(QMainWindow):
         Unified chart rendering path used by bar/tick/analysis updates.
         """
         iv = self._normalize_interval_token(interval)
-        arr = list(bars or [])
+        arr = self._safe_list(bars)
 
         anchor_input: float | None = None
         if current_price is not None:
@@ -1334,6 +1441,11 @@ class MainApp(QMainWindow):
             current_price=anchor_for_pred,
             target_steps=steps,
         )
+        chart_predicted_low, chart_predicted_high = self._build_chart_prediction_bands(
+            symbol=symbol,
+            predicted_prices=chart_predicted,
+            anchor_price=anchor_for_pred,
+        )
         self._debug_forecast_quality(
             symbol=symbol,
             chart_interval=iv,
@@ -1358,6 +1470,8 @@ class MainApp(QMainWindow):
             self.chart.update_chart(
                 arr,
                 predicted_prices=chart_predicted,
+                predicted_prices_low=chart_predicted_low,
+                predicted_prices_high=chart_predicted_high,
                 levels=self._get_levels_dict(),
             )
             self._debug_chart_state(
@@ -1373,6 +1487,8 @@ class MainApp(QMainWindow):
             self.chart.update_candles(
                 arr,
                 predicted_prices=chart_predicted,
+                predicted_prices_low=chart_predicted_low,
+                predicted_prices_high=chart_predicted_high,
                 levels=self._get_levels_dict(),
             )
             self._chart_symbol = symbol
@@ -1875,7 +1991,7 @@ class MainApp(QMainWindow):
                 # Avoid excessive disk writes for partial updates.
                 min_gap = 0.9 if not is_final else 0.0
                 last_ts = float(self._last_session_cache_write_ts.get(key, 0.0))
-                if (now_ts - last_ts) >= min_gap:
+                if interval == "1m" and (now_ts - last_ts) >= min_gap:
                     self._session_bar_cache.append_bar(symbol, interval, norm_bar)
                     self._last_session_cache_write_ts[key] = now_ts
         except Exception as e:
@@ -2889,6 +3005,10 @@ class MainApp(QMainWindow):
             return
         try:
             iv = self._normalize_interval_token(interval)
+            # Persist session bars only in canonical 1m stream.
+            # Coarser intervals are display-only and must be derived from 1m.
+            if iv != "1m":
+                return
             now_ts = time.time()
             key = f"{symbol}:{iv}:{channel}"
             prev_ts = float(self._last_session_cache_write_ts.get(key, 0.0))
@@ -4410,6 +4530,104 @@ class MainApp(QMainWindow):
                                 last["final"] = False
                                 last["_ts_epoch"] = float(last_bucket)
                                 last["timestamp"] = self._epoch_to_iso(last_bucket)
+                        else:
+                            # Feed bars can arrive slightly late around bucket
+                            # boundaries. Roll to a synthetic new bucket so the
+                            # live candle and guessed graph do not freeze.
+                            last_close = float(last.get("close", bar_price) or bar_price)
+                            day_boundary = self._is_intraday_day_boundary(
+                                last_bucket,
+                                now_bucket,
+                                interval,
+                            )
+                            ref_close_new = (
+                                float(last_close)
+                                if (last_close > 0 and not day_boundary)
+                                else None
+                            )
+
+                            if not bool(last.get("final", False)):
+                                last["final"] = True
+                                finalized_bar = dict(last)
+                                finalized_bar["interval"] = interval
+                                finalized_bar["_ts_epoch"] = float(last_bucket)
+                                finalized_bar["timestamp"] = self._epoch_to_iso(last_bucket)
+                                self._persist_session_bar(
+                                    code,
+                                    interval,
+                                    finalized_bar,
+                                    channel="tick_final",
+                                    min_gap_seconds=0.0,
+                                )
+
+                            new_price = float(bar_price)
+                            if ref_close_new and ref_close_new > 0:
+                                clamp_cap_new = float(self._synthetic_tick_jump_cap(interval))
+                                raw_jump_new = abs(new_price / float(ref_close_new) - 1.0)
+                                if raw_jump_new > clamp_cap_new:
+                                    sign_new = (
+                                        1.0
+                                        if new_price >= float(ref_close_new)
+                                        else -1.0
+                                    )
+                                    new_price = float(ref_close_new) * (
+                                        1.0 + (sign_new * clamp_cap_new)
+                                    )
+
+                            if (
+                                (not ref_close_new)
+                                or (
+                                    not self._is_outlier_tick(
+                                        float(ref_close_new),
+                                        new_price,
+                                        interval=interval,
+                                    )
+                                )
+                            ):
+                                bucket_open = float(
+                                    ref_close_new
+                                    if ref_close_new and ref_close_new > 0
+                                    else new_price
+                                )
+                                s_new = self._sanitize_ohlc(
+                                    bucket_open,
+                                    max(bucket_open, new_price),
+                                    min(bucket_open, new_price),
+                                    new_price,
+                                    interval=interval,
+                                    ref_close=ref_close_new,
+                                )
+                                if s_new is None:
+                                    s_new = (
+                                        bucket_open,
+                                        bucket_open,
+                                        bucket_open,
+                                        bucket_open,
+                                    )
+                                o_new, h_new, low_new, c_new = s_new
+                                arr.append(
+                                    {
+                                        "open": o_new,
+                                        "high": h_new,
+                                        "low": low_new,
+                                        "close": c_new,
+                                        "timestamp": self._epoch_to_iso(now_bucket),
+                                        "final": False,
+                                        "interval": interval,
+                                        "_ts_epoch": float(now_bucket),
+                                    }
+                                )
+                                arr.sort(
+                                    key=lambda x: float(
+                                        x.get(
+                                            "_ts_epoch",
+                                            self._ts_to_epoch(x.get("timestamp", "")),
+                                        )
+                                    )
+                                )
+                                keep = self._history_window_bars(interval)
+                                if len(arr) > keep:
+                                    del arr[:-keep]
                 except Exception:
                     pass
 
@@ -4693,7 +4911,7 @@ class MainApp(QMainWindow):
 
                 stable_predicted = [
                     float(v)
-                    for v in list(predicted_prices or [])
+                    for v in self._safe_list(predicted_prices)
                     if float(v) > 0 and math.isfinite(float(v))
                 ]
                 if not stable_predicted:
@@ -4703,13 +4921,12 @@ class MainApp(QMainWindow):
                     ):
                         stable_predicted = [
                             float(v)
-                            for v in list(
+                            for v in self._safe_list(
                                 getattr(
                                     self.current_prediction,
                                     "predicted_prices",
                                     [],
                                 )
-                                or []
                             )
                             if float(v) > 0 and math.isfinite(float(v))
                         ]
@@ -4788,6 +5005,13 @@ class MainApp(QMainWindow):
                     and self.current_prediction.stock_code == code
                 ):
                     self.current_prediction.predicted_prices = display_predicted
+                    low_band, high_band = self._build_chart_prediction_bands(
+                        symbol=code,
+                        predicted_prices=display_predicted,
+                        anchor_price=display_current if display_current > 0 else None,
+                    )
+                    self.current_prediction.predicted_prices_low = low_band
+                    self.current_prediction.predicted_prices_high = high_band
 
                 arr = self._bars_by_symbol.get(code)
                 if arr:
@@ -5749,6 +5973,14 @@ class MainApp(QMainWindow):
             except Exception:
                 pass
 
+        try:
+            self._queue_history_refresh(
+                code,
+                self._normalize_interval_token(self.interval_combo.currentText()),
+            )
+        except Exception:
+            pass
+
         self._analyze_stock()
 
     def _add_to_watchlist(self):
@@ -5834,6 +6066,18 @@ class MainApp(QMainWindow):
             requested_horizon=int(self.forecast_spin.value()),
         )
         is_trained = self._is_trained_stock(normalized)
+        if is_trained:
+            existing = list(self._bars_by_symbol.get(normalized) or [])
+            same_interval = [
+                b
+                for b in existing
+                if self._normalize_interval_token(
+                    b.get("interval", interval),
+                    fallback=interval,
+                ) == interval
+            ]
+            if not same_interval:
+                self._queue_history_refresh(normalized, interval)
         if not is_trained:
             # Preserve user-selected interval even for non-trained symbols.
             if interval in {"1d", "1wk", "1mo"}:
@@ -6005,6 +6249,7 @@ class MainApp(QMainWindow):
                     use_cache=bool(use_cache),
                     update_db=bool(update_db),
                     allow_online=bool(allow_online),
+                    refresh_intraday_after_close=bool(force_refresh),
                 )
             except TypeError:
                 df = fetcher.get_history(
@@ -6034,6 +6279,7 @@ class MainApp(QMainWindow):
                         use_cache=False,
                         update_db=True,
                         allow_online=True,
+                        refresh_intraday_after_close=bool(force_refresh),
                     )
                 except TypeError:
                     df_online = fetcher.get_history(
@@ -6055,6 +6301,7 @@ class MainApp(QMainWindow):
                         use_cache=True,
                         update_db=False,
                         allow_online=bool(allow_online),
+                        refresh_intraday_after_close=bool(force_refresh),
                     )
                 except TypeError:
                     df = fetcher.get_history(
@@ -6609,6 +6856,12 @@ class MainApp(QMainWindow):
         prob_neutral = safe_get(pred, 'prob_neutral', 0.34)
         prob_down = safe_get(pred, 'prob_down', 0.33)
         signal_strength = safe_get(pred, 'signal_strength', 0)
+        confidence = safe_get(pred, 'confidence', 0)
+        agreement = safe_get(pred, 'model_agreement', 1.0)
+        entropy = safe_get(pred, 'entropy', 0.0)
+        margin = safe_get(pred, 'model_margin', 0.0)
+        uncertainty_score = safe_get(pred, 'uncertainty_score', 0.5)
+        tail_risk_score = safe_get(pred, 'tail_risk_score', 0.5)
         rsi = safe_get(pred, 'rsi', 50)
         macd_signal = safe_get(pred, 'macd_signal', 'N/A')
         trend = safe_get(pred, 'trend', 'N/A')
@@ -6728,6 +6981,20 @@ class MainApp(QMainWindow):
             <span class="negative">DOWN {prob_down:.0%}</span>
         </div>
 
+        <div class="section">
+            <span class="label">Model Quality: </span>
+            Confidence={confidence:.0%} |
+            Agreement={agreement:.0%} |
+            Entropy={entropy:.2f} |
+            Margin={margin:.2f}
+        </div>
+
+        <div class="section">
+            <span class="label">Uncertainty: </span>
+            Score={uncertainty_score:.2f} |
+            Tail Risk={tail_risk_score:.2f}
+        </div>
+
         {news_html}
 
         <div class="section">
@@ -6754,6 +7021,26 @@ class MainApp(QMainWindow):
                 Target 2: ¥{target_2:.2f} ({target_2_pct:+.1f}%)
             </div>
             """
+
+        low_band = list(getattr(pred, "predicted_prices_low", []) or [])
+        high_band = list(getattr(pred, "predicted_prices_high", []) or [])
+        if low_band and high_band and len(low_band) == len(high_band):
+            try:
+                lo_last = float(low_band[-1])
+                hi_last = float(high_band[-1])
+                spread_pct = (
+                    ((hi_last - lo_last) / max(float(getattr(pred, "current_price", 0.0) or 0.0), 1e-8))
+                    * 100.0
+                )
+                html += f"""
+                <div class="section">
+                    <span class="label">Forecast Interval:</span>
+                    ¥{lo_last:.2f} to ¥{hi_last:.2f}
+                    ({spread_pct:.1f}% width at horizon)
+                </div>
+                """
+            except Exception:
+                pass
 
         if position:
             shares = safe_get(position, 'shares', 0)
@@ -8711,6 +8998,3 @@ def _restore_sigint_handler(previous_handler) -> None:
 
 if __name__ == "__main__":
     run_app()
-
-
-

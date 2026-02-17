@@ -101,7 +101,10 @@ class SessionBarCache:
         self._root = base
         self._root.mkdir(parents=True, exist_ok=True)
         self._locks: dict[str, threading.Lock] = {}
-        self._last_row_fingerprint: dict[str, tuple[str, float, bool]] = {}
+        self._last_row_fingerprint: dict[
+            str,
+            tuple[str, float, float, float, float, bool],
+        ] = {}
         self._last_close_hint: dict[str, float] = {}
         self._global_lock = threading.Lock()
         self._cleanup_corrupt_files()
@@ -329,9 +332,14 @@ class SessionBarCache:
                         float(ratio),
                     )
                     return False
+            # Include OHLC envelope in dedupe key so same-close updates with
+            # refined high/low are not silently dropped.
             fingerprint = (
                 timestamp,
-                close,
+                round(float(open_px), 8),
+                round(float(high_px), 8),
+                round(float(low_px), 8),
+                round(float(close), 8),
                 is_final,
             )
             if self._last_row_fingerprint.get(path.name) == fingerprint:
