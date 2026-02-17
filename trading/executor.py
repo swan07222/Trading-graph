@@ -1037,9 +1037,65 @@ class ExecutionEngine:
     # -----------------------------------------------------------------
     # -----------------------------------------------------------------
 
+    def _evaluate_live_start_readiness(self) -> tuple[bool, str]:
+        """
+        Check institutional controls before enabling LIVE execution.
+
+        Returns:
+            (ok, message). message is empty when ok=True.
+        """
+        if self.mode != TradingMode.LIVE:
+            return True, ""
+
+        strict = bool(
+            getattr(getattr(CONFIG, "security", None), "strict_live_governance", False)
+        )
+        try:
+            from utils.institutional import collect_institutional_readiness
+
+            report = collect_institutional_readiness()
+            if bool(report.get("pass", False)):
+                return True, ""
+
+            failed = report.get("failed_required_controls", [])
+            if isinstance(failed, list):
+                failed_controls = [str(x).strip() for x in failed if str(x).strip()]
+            else:
+                failed_controls = []
+
+            if failed_controls:
+                preview = ", ".join(failed_controls[:6])
+                if len(failed_controls) > 6:
+                    preview += f", +{len(failed_controls) - 6} more"
+                msg = f"Institutional readiness failed: {preview}"
+            else:
+                msg = "Institutional readiness failed"
+
+            if strict:
+                return False, msg
+
+            log.warning("%s (strict_live_governance=False; continuing)", msg)
+            return True, msg
+        except Exception as e:
+            msg = f"Institutional readiness check error: {e}"
+            if strict:
+                return False, msg
+            log.warning("%s (strict_live_governance=False; continuing)", msg)
+            return True, msg
+
     def start(self) -> bool:
         if self._running:
             return True
+
+        ok_live, live_msg = self._evaluate_live_start_readiness()
+        if not ok_live:
+            log.error(live_msg)
+            self._health_monitor.report_component_health(
+                ComponentType.RISK_MANAGER,
+                HealthStatus.UNHEALTHY,
+                error=live_msg,
+            )
+            return False
 
         if not self._acquire_runtime_lease():
             owner = self._runtime_lease_owner_hint or {}

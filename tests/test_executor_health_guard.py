@@ -6,7 +6,7 @@ from types import SimpleNamespace
 from config.settings import CONFIG, TradingMode
 from core.types import AutoTradeMode, Fill, Order, OrderSide, OrderStatus, TradeSignal
 from trading.executor import ExecutionEngine
-from trading.health import HealthStatus
+from trading.health import ComponentType, HealthStatus
 
 
 def test_submit_blocks_when_unhealthy():
@@ -341,4 +341,80 @@ def test_market_fingerprint_ignores_price_noise():
         order_type="market",
     )
     assert ExecutionEngine._make_submit_fingerprint(s1) == ExecutionEngine._make_submit_fingerprint(s2)
+
+
+def test_live_readiness_check_skips_for_non_live_mode():
+    eng = ExecutionEngine.__new__(ExecutionEngine)
+    eng.mode = TradingMode.SIMULATION
+
+    ok, msg = eng._evaluate_live_start_readiness()
+    assert ok is True
+    assert msg == ""
+
+
+def test_live_readiness_non_strict_allows_start_check(monkeypatch):
+    import utils.institutional as institutional
+
+    eng = ExecutionEngine.__new__(ExecutionEngine)
+    eng.mode = TradingMode.LIVE
+
+    monkeypatch.setattr(
+        institutional,
+        "collect_institutional_readiness",
+        lambda: {
+            "pass": False,
+            "failed_required_controls": [
+                "strict_live_governance",
+                "runtime_lease_enabled",
+            ],
+        },
+    )
+    old_strict = bool(getattr(CONFIG.security, "strict_live_governance", False))
+    CONFIG.security.strict_live_governance = False
+    try:
+        ok, msg = eng._evaluate_live_start_readiness()
+    finally:
+        CONFIG.security.strict_live_governance = old_strict
+
+    assert ok is True
+    assert "Institutional readiness failed" in msg
+
+
+def test_start_blocks_when_live_readiness_fails_strict(monkeypatch):
+    import utils.institutional as institutional
+
+    eng = ExecutionEngine.__new__(ExecutionEngine)
+    eng._running = False
+    eng.mode = TradingMode.LIVE
+    health_reports: list[tuple[ComponentType, HealthStatus, str]] = []
+    eng._health_monitor = SimpleNamespace(
+        report_component_health=lambda comp, status, error="": health_reports.append(
+            (comp, status, str(error))
+        )
+    )
+    eng._acquire_runtime_lease = lambda: (_ for _ in ()).throw(
+        AssertionError("runtime lease must not be checked when readiness fails")
+    )
+
+    monkeypatch.setattr(
+        institutional,
+        "collect_institutional_readiness",
+        lambda: {
+            "pass": False,
+            "failed_required_controls": ["strict_live_governance"],
+        },
+    )
+    old_strict = bool(getattr(CONFIG.security, "strict_live_governance", False))
+    CONFIG.security.strict_live_governance = True
+    try:
+        ok = eng.start()
+    finally:
+        CONFIG.security.strict_live_governance = old_strict
+
+    assert ok is False
+    assert health_reports
+    comp, status, err = health_reports[0]
+    assert comp == ComponentType.RISK_MANAGER
+    assert status == HealthStatus.UNHEALTHY
+    assert "Institutional readiness failed" in err
 

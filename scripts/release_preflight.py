@@ -47,6 +47,86 @@ def _run_step(name: str, cmd: list[str]) -> dict[str, Any]:
         }
 
 
+def _is_runtime_artifact_path(path: str) -> bool:
+    normalized = str(path or "").strip().replace("\\", "/")
+    if not normalized:
+        return False
+    if normalized.startswith("venv/"):
+        return True
+    if normalized.startswith("__pycache__/") or "/__pycache__/" in normalized:
+        return True
+    if normalized.endswith((".pyc", ".pyo", ".pyd")):
+        return True
+    if normalized.endswith((".db", ".db-shm", ".db-wal")):
+        return True
+    return False
+
+
+def _tracked_runtime_artifacts_step(repo_root: Path) -> dict[str, Any]:
+    started = time.monotonic()
+    cmd = ["git", "ls-files"]
+    try:
+        proc = subprocess.run(
+            cmd,
+            cwd=str(repo_root),
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+        elapsed = time.monotonic() - started
+        if proc.returncode != 0:
+            return {
+                "name": "tracked_runtime_artifacts",
+                "command": cmd,
+                "exit_code": int(proc.returncode),
+                "duration_seconds": round(float(elapsed), 3),
+                "ok": False,
+                "stdout": proc.stdout,
+                "stderr": proc.stderr,
+            }
+
+        tracked = [
+            line.strip()
+            for line in proc.stdout.splitlines()
+            if _is_runtime_artifact_path(line)
+        ]
+        preview_limit = 200
+        preview = tracked[:preview_limit]
+        stdout = "\n".join(preview)
+        if len(tracked) > preview_limit:
+            stdout += (
+                ("\n" if stdout else "")
+                + f"... and {len(tracked) - preview_limit} more"
+            )
+        stderr = ""
+        if tracked:
+            stderr = (
+                "Tracked runtime artifacts found. Remove from index with "
+                "`git rm -r --cached -- <paths>` and commit."
+            )
+        return {
+            "name": "tracked_runtime_artifacts",
+            "command": cmd,
+            "exit_code": 0 if not tracked else 1,
+            "duration_seconds": round(float(elapsed), 3),
+            "ok": not tracked,
+            "stdout": stdout,
+            "stderr": stderr,
+        }
+    except Exception as exc:
+        elapsed = time.monotonic() - started
+        return {
+            "name": "tracked_runtime_artifacts",
+            "command": cmd,
+            "exit_code": 2,
+            "duration_seconds": round(float(elapsed), 3),
+            "ok": False,
+            "stdout": "",
+            "stderr": str(exc),
+        }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="Run deployment preflight checks (health/doctor/typecheck/observability)"
@@ -56,6 +136,11 @@ def main() -> int:
     parser.add_argument("--skip-health", action="store_true", help="Skip health strict check")
     parser.add_argument("--skip-doctor", action="store_true", help="Skip doctor strict check")
     parser.add_argument("--skip-typecheck", action="store_true", help="Skip typecheck gate")
+    parser.add_argument(
+        "--skip-artifact-guard",
+        action="store_true",
+        help="Skip tracked runtime artifact gate",
+    )
     parser.add_argument(
         "--skip-regulatory",
         action="store_true",
@@ -110,6 +195,8 @@ def main() -> int:
     py = sys.executable
     steps: list[dict[str, Any]] = []
 
+    if not args.skip_artifact_guard:
+        steps.append(_tracked_runtime_artifacts_step(repo_root))
     if not args.skip_lint:
         steps.append(
             _run_step(

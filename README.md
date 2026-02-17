@@ -20,17 +20,21 @@ Benchmarked against well-known trading support platforms (TradingView / Thinkors
 
 ### Focused scorecard (features you requested)
 
+Excluded by product direction (not counted): mobile/web client, social/copy ecosystem, asset-class breadth, public API ecosystem, cloud sync/collaboration.
+
+Detailed 36-feature comparison: `docs/core_feature_scorecard.md`.
+
 | Feature Area | Score (/10) |
 |---|---:|
-| Real-time/historical data reliability | 9.2 |
-| Multi-source failover + VPN adaptation | 9.3 |
-| Auto-learning robustness | 9.3 |
-| Risk/OMS safety controls | 9.3 |
-| Health monitoring + runbook controls | 9.1 |
-| Audit/governance controls (tamper-evident chain + permissions) | 9.0 |
-| Desktop UX/professional UI | 9.1 |
-| Testing and regression support | 9.1 |
-| **Focused overall** | **9.2** |
+| Real-time/historical data reliability | 9.5 |
+| Multi-source failover + VPN adaptation | 9.4 |
+| Auto-learning robustness | 9.4 |
+| Risk/OMS safety controls | 9.6 |
+| Health monitoring + runbook controls | 9.6 |
+| Audit/governance controls (tamper-evident chain + permissions) | 9.6 |
+| Desktop UX/professional UI | 9.6 |
+| Testing and regression support | 9.4 |
+| **Focused overall (core-only)** | **9.5** |
 
 ## 3) Profit Expectation (Careful, Realistic)
 

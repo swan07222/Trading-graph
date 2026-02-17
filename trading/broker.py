@@ -319,6 +319,17 @@ class SimulatorBroker(BrokerInterface):
         self._fetcher = None
 
         self._fill_counter = 0
+        self._max_no_quote_retries = 20
+
+        # Short-lived quote cache to smooth transient feed gaps.
+        staleness = float(
+            max(
+                5.0,
+                float(getattr(getattr(CONFIG, "risk", None), "quote_staleness_seconds", 5.0) or 5.0) * 2.0,
+            )
+        )
+        self._quote_cache_max_age_s: float = min(30.0, staleness)
+        self._quote_cache: dict[str, tuple[float, float]] = {}
 
         # FIX(10): Bounded thread pool
         self._exec_pool = ThreadPoolExecutor(
@@ -331,6 +342,75 @@ class SimulatorBroker(BrokerInterface):
             from data.fetcher import get_fetcher
             self._fetcher = get_fetcher()
         return self._fetcher
+
+    def _cache_quote(self, symbol: str, price: float) -> None:
+        if price <= 0:
+            return
+        self._quote_cache[str(symbol)] = (float(price), float(time.time()))
+
+    def _get_cached_quote(self, symbol: str) -> float | None:
+        rec = self._quote_cache.get(str(symbol))
+        if not rec:
+            return None
+        price, ts = rec
+        if float(time.time()) - float(ts) > float(self._quote_cache_max_age_s):
+            self._quote_cache.pop(str(symbol), None)
+            return None
+        if float(price) <= 0:
+            return None
+        return float(price)
+
+    def _get_history_fallback_quote(self, symbol: str) -> float | None:
+        fetcher = self._get_fetcher()
+        for interval, bars in (("1m", 2), ("1d", 2)):
+            try:
+                try:
+                    df = fetcher.get_history(
+                        symbol,
+                        interval=interval,
+                        bars=int(bars),
+                        use_cache=True,
+                        update_db=False,
+                        allow_online=False,
+                    )
+                except TypeError:
+                    df = fetcher.get_history(
+                        symbol,
+                        interval=interval,
+                        bars=int(bars),
+                        use_cache=True,
+                    )
+            except Exception:
+                df = None
+            if df is None or len(df) <= 0:
+                continue
+            try:
+                close = float(df["close"].iloc[-1])
+            except Exception:
+                close = 0.0
+            if close > 0:
+                return close
+        return None
+
+    @staticmethod
+    def _safe_tag_float(order: Order, key: str, default: float = 0.0) -> float:
+        if not isinstance(order.tags, dict):
+            return float(default)
+        try:
+            return float(order.tags.get(key, default) or default)
+        except Exception:
+            return float(default)
+
+    def _fallback_reference_price(self, order: Order) -> float:
+        refs = [
+            float(getattr(order, "price", 0.0) or 0.0),
+            float(getattr(order, "stop_price", 0.0) or 0.0),
+            self._safe_tag_float(order, "trigger_price", 0.0),
+        ]
+        for px in refs:
+            if px > 0:
+                return float(px)
+        return 0.0
 
     @property
     def name(self) -> str:
@@ -359,18 +439,40 @@ class SimulatorBroker(BrokerInterface):
             log.info("Simulator disconnected")
 
     def get_quote(self, symbol: str) -> float | None:
+        symbol = str(symbol or "").strip()
+        if not symbol:
+            return None
+
         try:
             from data.feeds import get_feed_manager
             fm = get_feed_manager(auto_init=False)
             q = fm.get_quote(symbol)
             if q and getattr(q, "price", 0) and float(q.price) > 0:
-                return float(q.price)
+                px = float(q.price)
+                self._cache_quote(symbol, px)
+                return px
         except Exception:
             pass
 
-        fetcher = self._get_fetcher()
-        quote = fetcher.get_realtime(symbol)
-        return float(quote.price) if quote and quote.price > 0 else None
+        try:
+            fetcher = self._get_fetcher()
+            quote = fetcher.get_realtime(symbol)
+            if quote and getattr(quote, "price", 0) and float(quote.price) > 0:
+                px = float(quote.price)
+                self._cache_quote(symbol, px)
+                return px
+        except Exception:
+            pass
+
+        cached = self._get_cached_quote(symbol)
+        if cached is not None:
+            return cached
+
+        fallback = self._get_history_fallback_quote(symbol)
+        if fallback is not None:
+            self._cache_quote(symbol, fallback)
+            return fallback
+        return None
 
     def get_account(self) -> Account:
         with self._lock:
@@ -455,9 +557,29 @@ class SimulatorBroker(BrokerInterface):
                     return
 
                 if market_price is None or market_price <= 0:
+                    retries = int(self._safe_tag_float(order, "_no_quote_retries", 0.0)) + 1
+                    if not isinstance(order.tags, dict):
+                        order.tags = {}
+                    order.tags["_no_quote_retries"] = retries
+                    max_retries = int(
+                        max(
+                            3,
+                            self._safe_tag_float(order, "max_no_quote_retries", float(self._max_no_quote_retries)),
+                        )
+                    )
+                    if retries < max_retries:
+                        if retries in {1, 3, 10}:
+                            order.message = (
+                                f"Waiting for market quote ({retries}/{max_retries})"
+                            )
+                            order.updated_at = datetime.now()
+                            self._emit("order_update", order)
+                        continue
+
                     order.status = OrderStatus.REJECTED
                     order.message = (
-                        "No market quote during async execution"
+                        f"No market quote during async execution "
+                        f"({retries}/{max_retries})"
                     )
                     order.updated_at = datetime.now()
                     self._emit("order_update", order)
@@ -492,10 +614,17 @@ class SimulatorBroker(BrokerInterface):
 
             current_price = self.get_quote(order.symbol)
             if current_price is None or current_price <= 0:
-                order.status = OrderStatus.REJECTED
-                order.message = "Cannot get market quote"
-                self._emit('order_update', order)
-                return order
+                fallback_price = self._fallback_reference_price(order)
+                if fallback_price > 0:
+                    current_price = float(fallback_price)
+                    if not isinstance(order.tags, dict):
+                        order.tags = {}
+                    order.tags["submitted_with_fallback_quote"] = True
+                else:
+                    order.status = OrderStatus.REJECTED
+                    order.message = "Cannot get market quote"
+                    self._emit('order_update', order)
+                    return order
 
             fetcher = self._get_fetcher()
             quote = fetcher.get_realtime(order.symbol)
@@ -549,8 +678,20 @@ class SimulatorBroker(BrokerInterface):
             return False, f"Quantity must be multiple of {lot_size}"
 
         # FIX(9): Allow price=0 for market-style orders.
-        if order.order_type in {OrderType.LIMIT, OrderType.STOP_LIMIT, OrderType.TRAIL_LIMIT} and price <= 0:
+        trail_limit_offset_pct = self._safe_tag_float(
+            order, "trail_limit_offset_pct", 0.0
+        )
+        if (
+            order.order_type in {OrderType.LIMIT, OrderType.STOP_LIMIT}
+            and price <= 0
+        ):
             return False, "Limit order requires positive price"
+        if (
+            order.order_type == OrderType.TRAIL_LIMIT
+            and price <= 0
+            and trail_limit_offset_pct <= 0
+        ):
+            return False, "Trailing limit requires price or trail_limit_offset_pct"
         if price <= 0 and order.order_type not in {
             OrderType.MARKET,
             OrderType.STOP,
@@ -559,6 +700,18 @@ class SimulatorBroker(BrokerInterface):
             OrderType.TRAIL_MARKET,
         }:
             return False, "Invalid price"
+
+        trigger_px = max(
+            float(getattr(order, "stop_price", 0.0) or 0.0),
+            self._safe_tag_float(order, "trigger_price", 0.0),
+        )
+        trailing_pct = self._safe_tag_float(order, "trailing_stop_pct", 0.0)
+        if requested_type in {"stop", "stop_limit"} and trigger_px <= 0:
+            trigger_px = float(order.price or 0.0)
+            if trigger_px <= 0:
+                return False, "Stop order requires trigger_price"
+        if requested_type in {"trail_market", "trail_limit"} and trailing_pct <= 0:
+            return False, "Trailing order requires trailing_stop_pct > 0"
 
         # FIX(5): Use CONFIG.trading.commission consistently
         commission_rate = float(CONFIG.trading.commission)
@@ -631,22 +784,101 @@ class SimulatorBroker(BrokerInterface):
 
         return True, "OK"
 
+    def _conditional_trigger_ready(
+        self,
+        order: Order,
+        market_price: float,
+        requested_type: str,
+    ) -> tuple[bool, str]:
+        if requested_type in {"stop", "stop_limit"}:
+            trigger_px = max(
+                float(getattr(order, "stop_price", 0.0) or 0.0),
+                self._safe_tag_float(order, "trigger_price", 0.0),
+                float(order.price or 0.0),
+            )
+            if trigger_px <= 0:
+                return False, "Waiting for stop trigger configuration"
+            if not isinstance(order.tags, dict):
+                order.tags = {}
+            order.tags["trigger_price"] = float(trigger_px)
+            hit = (
+                float(market_price) >= float(trigger_px)
+                if order.side == OrderSide.BUY
+                else float(market_price) <= float(trigger_px)
+            )
+            wait_msg = (
+                f"Waiting stop trigger @ {trigger_px:.2f} "
+                f"(mkt {float(market_price):.2f})"
+            )
+            return bool(hit), wait_msg
+
+        if requested_type in {"trail_market", "trail_limit"}:
+            trailing_pct = self._safe_tag_float(order, "trailing_stop_pct", 0.0)
+            if trailing_pct <= 0:
+                return False, "Waiting for trailing_stop_pct configuration"
+
+            if not isinstance(order.tags, dict):
+                order.tags = {}
+
+            px = float(market_price)
+            if order.side == OrderSide.SELL:
+                anchor = float(order.tags.get("trail_anchor_price", px) or px)
+                anchor = max(anchor, px)
+                trigger_px = anchor * (1.0 - float(trailing_pct) / 100.0)
+                hit = px <= trigger_px
+            else:
+                anchor = float(order.tags.get("trail_anchor_price", px) or px)
+                anchor = min(anchor, px)
+                trigger_px = anchor * (1.0 + float(trailing_pct) / 100.0)
+                hit = px >= trigger_px
+
+            order.tags["trail_anchor_price"] = float(anchor)
+            order.tags["trigger_price"] = float(trigger_px)
+            wait_msg = (
+                f"Waiting trailing trigger @ {trigger_px:.2f} "
+                f"(anchor {anchor:.2f}, mkt {px:.2f})"
+            )
+            return bool(hit), wait_msg
+
+        return True, ""
+
     def _execute_order(self, order: Order, market_price: float):
         """Execute order with realistic simulation."""
         import random
 
+        if not isinstance(order.tags, dict):
+            order.tags = {}
         requested_type = str(
             order.tags.get("requested_order_type", order.order_type.value)
-            if isinstance(order.tags, dict)
-            else order.order_type.value
         ).strip().lower().replace("-", "_")
         tif = str(
             order.tags.get("time_in_force", "day")
-            if isinstance(order.tags, dict)
-            else "day"
         ).strip().lower().replace("-", "_")
         if requested_type in {"ioc", "fok"}:
             tif = requested_type
+
+        if requested_type in {"stop", "stop_limit", "trail_market", "trail_limit"}:
+            triggered, wait_msg = self._conditional_trigger_ready(
+                order=order,
+                market_price=float(market_price),
+                requested_type=requested_type,
+            )
+            if not triggered:
+                order.status = OrderStatus.ACCEPTED
+                if order.message != wait_msg:
+                    order.message = wait_msg
+                    order.updated_at = datetime.now()
+                    self._emit("order_update", order)
+                return
+            if not bool(order.tags.get("_conditional_triggered", False)):
+                order.tags["_conditional_triggered"] = True
+                order.tags["triggered_at"] = datetime.now().isoformat()
+                order.message = (
+                    f"Trigger fired ({requested_type}) @ "
+                    f"{float(order.tags.get('trigger_price', market_price)):.2f}"
+                )
+                order.updated_at = datetime.now()
+                self._emit("order_update", order)
 
         prev_close = float(market_price)
         try:
@@ -673,8 +905,25 @@ class SimulatorBroker(BrokerInterface):
             OrderType.STOP_LIMIT,
             OrderType.TRAIL_LIMIT,
         }
+        working_limit_price = float(order.price or 0.0)
         if is_limit_style:
-            if order.price <= 0:
+            if order.order_type == OrderType.TRAIL_LIMIT and working_limit_price <= 0:
+                offset_pct = self._safe_tag_float(order, "trail_limit_offset_pct", 0.0)
+                if offset_pct <= 0:
+                    order.status = OrderStatus.REJECTED
+                    order.message = "Trailing limit requires price or trail_limit_offset_pct"
+                    order.updated_at = datetime.now()
+                    self._emit('order_update', order)
+                    return
+                if order.side == OrderSide.BUY:
+                    working_limit_price = float(market_price) * (1.0 + offset_pct / 100.0)
+                else:
+                    working_limit_price = float(market_price) * (1.0 - offset_pct / 100.0)
+                working_limit_price = max(0.01, working_limit_price)
+                order.price = round(float(working_limit_price), 2)
+            else:
+                working_limit_price = float(order.price or 0.0)
+            if working_limit_price <= 0:
                 order.status = OrderStatus.REJECTED
                 order.message = "Limit order requires positive price"
                 order.updated_at = datetime.now()
@@ -683,19 +932,19 @@ class SimulatorBroker(BrokerInterface):
 
             if (
                 order.side == OrderSide.BUY
-                and float(market_price) > float(order.price)
+                and float(market_price) > float(working_limit_price)
             ):
                 if tif in {"ioc", "fok"}:
                     order.status = OrderStatus.CANCELLED
                     order.message = (
                         f"{tif.upper()} BUY not marketable: market "
-                        f"{market_price:.2f} > limit {order.price:.2f}"
+                        f"{market_price:.2f} > limit {working_limit_price:.2f}"
                     )
                 else:
-                    order.status = OrderStatus.REJECTED
+                    order.status = OrderStatus.ACCEPTED
                     order.message = (
-                        f"Limit BUY not marketable: market "
-                        f"{market_price:.2f} > limit {order.price:.2f}"
+                        f"Waiting limit BUY: market "
+                        f"{market_price:.2f} > limit {working_limit_price:.2f}"
                     )
                 order.updated_at = datetime.now()
                 self._emit('order_update', order)
@@ -703,25 +952,25 @@ class SimulatorBroker(BrokerInterface):
 
             if (
                 order.side == OrderSide.SELL
-                and float(market_price) < float(order.price)
+                and float(market_price) < float(working_limit_price)
             ):
                 if tif in {"ioc", "fok"}:
                     order.status = OrderStatus.CANCELLED
                     order.message = (
                         f"{tif.upper()} SELL not marketable: market "
-                        f"{market_price:.2f} < limit {order.price:.2f}"
+                        f"{market_price:.2f} < limit {working_limit_price:.2f}"
                     )
                 else:
-                    order.status = OrderStatus.REJECTED
+                    order.status = OrderStatus.ACCEPTED
                     order.message = (
-                        f"Limit SELL not marketable: market "
-                        f"{market_price:.2f} < limit {order.price:.2f}"
+                        f"Waiting limit SELL: market "
+                        f"{market_price:.2f} < limit {working_limit_price:.2f}"
                     )
                 order.updated_at = datetime.now()
                 self._emit('order_update', order)
                 return
 
-            fill_price = float(order.price)
+            fill_price = float(working_limit_price)
         else:
             fill_price = float(market_price)
 
@@ -990,6 +1239,7 @@ class SimulatorBroker(BrokerInterface):
             self._last_settlement_date = date.today()
             self._order_id_to_broker_id.clear()
             self._broker_id_to_order_id.clear()
+            self._quote_cache.clear()
             log.info("Simulator reset to initial state")
 
     def reconcile(self) -> dict:

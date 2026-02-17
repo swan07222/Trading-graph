@@ -121,6 +121,28 @@ def _sanitize_watch_list(
 
     return out
 
+
+def _collect_live_readiness_failures() -> list[str]:
+    """
+    Return failed required institutional controls for LIVE mode.
+    Empty list means readiness checks passed or could not be evaluated.
+    """
+    try:
+        from utils.institutional import collect_institutional_readiness
+
+        report = collect_institutional_readiness()
+    except Exception:
+        return []
+
+    if bool(report.get("pass", False)):
+        return []
+
+    failed = report.get("failed_required_controls", [])
+    if not isinstance(failed, list):
+        return ["institutional_readiness_unknown"]
+    out = [str(x).strip() for x in failed if str(x).strip()]
+    return out
+
 # REAL-TIME MONITORING THREAD
 
 class RealTimeMonitor(QThread):
@@ -7434,6 +7456,45 @@ class MainApp(QMainWindow):
                         return
             except Exception:
                 pass
+
+            failed_controls = _collect_live_readiness_failures()
+            if failed_controls:
+                strict_live = bool(
+                    getattr(
+                        getattr(CONFIG, "security", None),
+                        "strict_live_governance",
+                        False,
+                    )
+                )
+                preview = "\n".join(f"- {x}" for x in failed_controls[:10])
+                more = ""
+                if len(failed_controls) > 10:
+                    more = f"\n... and {len(failed_controls) - 10} more"
+                msg = (
+                    "Institutional live-readiness checks failed.\n\n"
+                    f"{preview}{more}\n\n"
+                    "Run `python scripts/regulatory_readiness.py` for details."
+                )
+                if strict_live:
+                    QMessageBox.critical(
+                        self,
+                        "Live Readiness Failed",
+                        msg,
+                    )
+                    self.mode_combo.setCurrentIndex(0)
+                    return
+                reply = QMessageBox.warning(
+                    self,
+                    "Live Readiness Warning",
+                    msg + "\n\nContinue anyway?",
+                    QMessageBox.StandardButton.Yes
+                    | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.No,
+                )
+                if reply != QMessageBox.StandardButton.Yes:
+                    self.mode_combo.setCurrentIndex(0)
+                    return
+
             reply = QMessageBox.warning(
                 self, "Live Trading Warning",
                 "You are switching to LIVE TRADING mode!\n\n"

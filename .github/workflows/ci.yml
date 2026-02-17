@@ -20,6 +20,16 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Guard tracked runtime artifacts
+        run: |
+          BAD="$(git ls-files | grep -E '(^venv/)|(^|/)__pycache__/|\.py[cod]$|\.db$|\.db-shm$|\.db-wal$' || true)"
+          if [ -n "${BAD}" ]; then
+            echo "Tracked runtime artifacts are not allowed:"
+            echo "${BAD}" | head -n 200
+            echo "Remove them from index with git rm -r --cached -- <paths>."
+            exit 1
+          fi
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -51,6 +61,16 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Guard tracked runtime artifacts
+        run: |
+          BAD="$(git ls-files | grep -E '(^venv/)|(^|/)__pycache__/|\.py[cod]$|\.db$|\.db-shm$|\.db-wal$' || true)"
+          if [ -n "${BAD}" ]; then
+            echo "Tracked runtime artifacts are not allowed:"
+            echo "${BAD}" | head -n 200
+            echo "Remove them from index with git rm -r --cached -- <paths>."
+            exit 1
+          fi
 
       - name: Set up Python
         uses: actions/setup-python@v5
