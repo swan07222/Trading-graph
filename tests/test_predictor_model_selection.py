@@ -53,10 +53,9 @@ def test_model_pair_intraday_request_prefers_intraday_fallback(tmp_path):
 
     ens, scl = predictor._find_best_model_pair(tmp_path)
 
-    assert ens is not None
-    assert ens.name == "ensemble_1m_30.pt"
-    assert scl is not None
-    assert scl.name == "scaler_1m_30.pkl"
+    # Interval matching is strict: no cross-interval fallback.
+    assert ens is None
+    assert scl is None
 
 
 def test_trained_stock_fallback_uses_matching_learner_state(tmp_path):

@@ -462,7 +462,7 @@ class SignalGenerator:
                         if strength_val >= 2:
                             description = self._safe_get(sig, "description", "")
                             if description:
-                                reasons.append(f"📊 {description}")
+                                reasons.append(f"Technical: {description}")
                 except Exception:
                     pass
 
@@ -473,53 +473,95 @@ class SignalGenerator:
         return tech_score, tech_signal, trend, indicators
 
     def _analyze_sentiment(
-        self, 
-        stock_code: str, 
-        include_sentiment: bool, 
+        self,
+        stock_code: str,
+        include_sentiment: bool,
         reasons: list[str]
     ) -> tuple[float, str, int]:
         """
-        Analyze news sentiment for stock.
+        Analyze stock sentiment using both legacy and institutional sources.
 
-        Args:
-            stock_code: Stock ticker symbol
-            include_sentiment: Whether to include sentiment analysis
-            reasons: List to append reasons to
-
-        Returns:
-            Tuple of (score, label, news_count)
+        Blending strategy:
+        - Legacy scraper score (if available)
+        - Weighted institutional sentiment from the aggregated news engine
         """
         sentiment_score = 0.0
         sentiment_label = "neutral"
         news_count = 0
 
-        if not include_sentiment or self.news_scraper is None:
+        if not include_sentiment:
             return sentiment_score, sentiment_label, news_count
 
+        components: list[tuple[float, float]] = []
+        news_count_candidates: list[int] = []
+
+        # Legacy source score
+        if self.news_scraper is not None:
+            try:
+                sent_score, sent_conf = self.news_scraper.get_stock_sentiment(stock_code)
+                market_sent = self.news_scraper.get_market_sentiment()
+                sent_score = float(np.clip(float(sent_score), -1.0, 1.0))
+                sent_conf = float(np.clip(float(sent_conf), 0.0, 1.0))
+                legacy_weight = 0.45 + (0.65 * sent_conf)
+                components.append((sent_score, legacy_weight))
+                news_count_candidates.append(
+                    self._safe_int(market_sent.get("news_count", 0), 0)
+                )
+            except Exception as e:
+                log.debug(f"Legacy sentiment unavailable for {stock_code}: {e}")
+
+        # Institutional weighted score
         try:
-            # Get stock-specific sentiment
-            sent_score, _sent_conf = self.news_scraper.get_stock_sentiment(stock_code)
+            from data.news import get_news_aggregator
 
-            market_sent = self.news_scraper.get_market_sentiment()
+            agg = get_news_aggregator()
+            summary = agg.get_sentiment_summary(stock_code)
+            if isinstance(summary, dict):
+                inst_score = self._safe_float(summary.get("overall_sentiment"), 0.0)
+                inst_score = float(np.clip(inst_score, -1.0, 1.0))
+                inst_conf = float(
+                    np.clip(self._safe_float(summary.get("confidence"), 0.0), 0.0, 1.0)
+                )
+                source_div = float(
+                    np.clip(
+                        self._safe_float(summary.get("source_diversity"), 0.0),
+                        0.0,
+                        1.0,
+                    )
+                )
+                total_news = self._safe_int(summary.get("total", 0), 0)
+                inst_weight = 0.55 + (0.45 * inst_conf) + (0.20 * source_div)
+                components.append((inst_score, inst_weight))
+                news_count_candidates.append(total_news)
 
-            sentiment_score = float(sent_score) * 100.0
-            sentiment_score = float(np.clip(sentiment_score, -100.0, 100.0))
-
-            if sent_score > 0.15:
-                sentiment_label = "positive"
-            elif sent_score < -0.15:
-                sentiment_label = "negative"
-            else:
-                sentiment_label = "neutral"
-
-            news_count = self._safe_int(market_sent.get("news_count", 0), 0)
-
-            if abs(sent_score) > self.MIN_SENTIMENT_SIGNIFICANT:
-                direction = "positive" if sent_score > 0 else "negative"
-                reasons.append(f"📰 News sentiment: {direction} ({sent_score:+.2f})")
-
+                if total_news > 0:
+                    reasons.append(
+                        "News flow: "
+                        f"{str(summary.get('label', 'neutral')).lower()} "
+                        f"({inst_score:+.2f}, confidence {inst_conf:.0%})"
+                    )
         except Exception as e:
-            log.warning(f"Sentiment analysis failed: {e}")
+            log.debug(f"Institutional sentiment unavailable for {stock_code}: {e}")
+
+        if components:
+            weighted_sum = sum(score * weight for score, weight in components)
+            weight_sum = sum(weight for _, weight in components)
+            blended = weighted_sum / max(weight_sum, 1e-9)
+            sentiment_score = float(np.clip(blended * 100.0, -100.0, 100.0))
+        else:
+            sentiment_score = 0.0
+
+        news_count = max(news_count_candidates) if news_count_candidates else 0
+
+        if sentiment_score > 15.0:
+            sentiment_label = "positive"
+        elif sentiment_score < -15.0:
+            sentiment_label = "negative"
+        else:
+            sentiment_label = "neutral"
+
+        if abs(sentiment_score) >= (self.MIN_SENTIMENT_SIGNIFICANT * 100.0):
+            reasons.append(f"Sentiment edge: {sentiment_score:+.1f}")
 
         return sentiment_score, sentiment_label, news_count
 
@@ -626,36 +668,51 @@ class SignalGenerator:
 
         if "strong_down" in trend_lower or trend_lower == "strong_downtrend":
             if signal in (Signal.BUY, Signal.STRONG_BUY):
-                warnings.append("⚠️ Buying against strong downtrend")
+                warnings.append("Buying against strong downtrend")
 
         if "strong_up" in trend_lower or trend_lower == "strong_uptrend":
             if signal in (Signal.SELL, Signal.STRONG_SELL):
-                warnings.append("⚠️ Selling in strong uptrend")
+                warnings.append("Selling in strong uptrend")
 
     def scan_stocks(
         self,
         predictions: list[Prediction],
         min_signal_strength: float = 0.5,
-        signal_type: str = "all"
+        signal_type: str = "all",
+        min_ai_confidence: float | None = None,
+        max_warnings: int | None = None,
     ) -> list[TradingSignal]:
         """
-        Scan multiple stocks and filter by signal criteria.
+        Scan multiple stocks and filter by signal quality criteria.
 
         Args:
             predictions: List of AI predictions
             min_signal_strength: Minimum signal strength (0 to 1)
             signal_type: Filter type - "all", "buy", or "sell"
+            min_ai_confidence: Optional confidence floor override
+            max_warnings: Optional warning-count cap
 
         Returns:
-            Sorted list of TradingSignals matching criteria
+            Ranked list of TradingSignals matching criteria
         """
         signals: list[TradingSignal] = []
+
+        conf_floor = (
+            self._safe_float(min_ai_confidence, self._safe_float(CONFIG.MIN_CONFIDENCE, 0.55))
+            if min_ai_confidence is not None
+            else self._safe_float(CONFIG.MIN_CONFIDENCE, 0.55)
+        )
+        warning_cap = int(max_warnings) if max_warnings is not None else None
 
         for pred in predictions:
             try:
                 signal = self.generate(pred, include_sentiment=False)
 
                 if signal.signal_strength < min_signal_strength:
+                    continue
+                if float(signal.ai_confidence) < float(conf_floor):
+                    continue
+                if warning_cap is not None and len(signal.warnings) > warning_cap:
                     continue
 
                 if signal_type == "buy":
@@ -671,15 +728,18 @@ class SignalGenerator:
                 stock_code = self._safe_get(pred, "stock_code", "unknown")
                 log.warning(f"Signal generation failed for {stock_code}: {e}")
 
-        # Sort by: strong signals first, then by combined score, then by strength
-        signals.sort(
-            key=lambda s: (
-                s.signal in (Signal.STRONG_BUY.value, Signal.STRONG_SELL.value),
-                abs(s.combined_score),
-                s.signal_strength
-            ),
-            reverse=True
-        )
+        def _rank(s: TradingSignal) -> float:
+            rr = float(max(0.0, min(4.0, s.risk_reward_ratio)))
+            warning_penalty = float(min(5, len(s.warnings))) * 4.0
+            return float(
+                (abs(s.combined_score) * 1.15)
+                + (float(s.signal_strength) * 55.0)
+                + (float(s.ai_confidence) * 45.0)
+                + (rr * 6.0)
+                - warning_penalty
+            )
+
+        signals.sort(key=_rank, reverse=True)
 
         return signals
 
@@ -726,12 +786,12 @@ class SignalGenerator:
         """
         lines = [
             f"{'='*50}",
-            f"📈 {signal.stock_name} ({signal.stock_code})",
+            f"{signal.stock_name} ({signal.stock_code})",
             f"{'='*50}",
             "",
             f"Signal: {signal.signal} (Strength: {signal.signal_strength:.0%})",
             f"Confidence: {signal.confidence.value}",
-            f"Price: ¥{signal.current_price:.2f}",
+            f"Price: CNY {signal.current_price:.2f}",
             "",
             "--- Scores ---",
             f"Combined: {signal.combined_score:+.1f}",
@@ -745,12 +805,12 @@ class SignalGenerator:
         if signal.entry_price > 0:
             lines.extend([
                 "--- Trading Plan ---",
-                f"Entry: ¥{signal.entry_price:.2f}",
-                f"Stop Loss: ¥{signal.stop_loss:.2f}",
-                f"Target 1: ¥{signal.take_profit_1:.2f}",
-                f"Target 2: ¥{signal.take_profit_2:.2f}",
-                f"Position: {signal.position_size} shares (¥{signal.position_value:,.0f})",
-                f"Risk: ¥{signal.risk_amount:,.0f}",
+                f"Entry: CNY {signal.entry_price:.2f}",
+                f"Stop Loss: CNY {signal.stop_loss:.2f}",
+                f"Target 1: CNY {signal.take_profit_1:.2f}",
+                f"Target 2: CNY {signal.take_profit_2:.2f}",
+                f"Position: {signal.position_size} shares (CNY {signal.position_value:,.0f})",
+                f"Risk: CNY {signal.risk_amount:,.0f}",
                 f"R/R Ratio: {signal.risk_reward_ratio:.2f}",
                 "",
             ])
@@ -758,13 +818,13 @@ class SignalGenerator:
         if signal.reasons:
             lines.append("--- Reasons ---")
             for reason in signal.reasons:
-                lines.append(f"  ✓ {reason}")
+                lines.append(f"  - {reason}")
             lines.append("")
 
         if signal.warnings:
             lines.append("--- Warnings ---")
             for warning in signal.warnings:
-                lines.append(f"  ⚠ {warning}")
+                lines.append(f"  - {warning}")
             lines.append("")
 
         return "\n".join(lines)

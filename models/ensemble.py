@@ -943,12 +943,12 @@ class EnsembleModel:
         Load ensemble from file.
 
         Args:
-            path: Source file path (default: ensemble_1d_5.pt)
+            path: Source file path (default: ensemble_1m_30.pt)
 
         Returns:
             True if load succeeded, False otherwise
         """
-        path_obj = Path(path) if path is not None else (Path(CONFIG.model_dir) / "ensemble_1d_5.pt")
+        path_obj = Path(path) if path is not None else (Path(CONFIG.model_dir) / "ensemble_1m_30.pt")
         if not path_obj.exists():
             log.warning(f"No saved model at {path_obj}")
             return False
@@ -960,7 +960,7 @@ class EnsembleModel:
                 self.input_size = int(state["input_size"])
 
                 meta = state.get("meta", {})
-                self.interval = meta.get("interval", "1d")
+                self.interval = meta.get("interval", "1m")
                 self.prediction_horizon = int(
                     meta.get("prediction_horizon", CONFIG.model.prediction_horizon)
                 )

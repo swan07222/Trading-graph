@@ -81,11 +81,52 @@ class Trainer:
         self.history: dict = {}
         self.input_size: int = 0
 
-        self.interval: str = "1d"
+        self.interval: str = "1m"
         self.prediction_horizon: int = CONFIG.PREDICTION_HORIZON
 
         # Incremental training flag — set externally by auto_learner.
         self._skip_scaler_fit: bool = False
+
+    @staticmethod
+    def _default_lookback_bars(interval: str) -> int:
+        """
+        Default training lookback.
+        Intraday intervals use a strict 7-day window.
+        """
+        iv = str(interval or "1m").strip().lower()
+        try:
+            from data.fetcher import BARS_PER_DAY, INTERVAL_MAX_DAYS
+            bpd = float(BARS_PER_DAY.get(iv, 1.0))
+            max_days = int(INTERVAL_MAX_DAYS.get(iv, 7))
+        except Exception:
+            bpd = float({
+                "1m": 240.0,
+                "2m": 120.0,
+                "5m": 48.0,
+                "15m": 16.0,
+                "30m": 8.0,
+                "60m": 4.0,
+                "1h": 4.0,
+                "1d": 1.0,
+            }.get(iv, 1.0))
+            max_days = (
+                7
+                if iv in {"1m", "2m", "5m", "15m", "30m", "60m", "1h"}
+                else 500
+            )
+
+        if iv in {"1d", "1wk", "1mo"}:
+            annual_days = min(365, max_days)
+            return max(
+                200,
+                min(2400, int(round(float(annual_days) * max(1.0, bpd)))),
+            )
+
+        days = max(1, min(7, max_days))
+        return max(
+            int(CONFIG.SEQUENCE_LENGTH) + 20,
+            int(round(float(days) * max(1.0, bpd))),
+        )
 
     # =========================================================================
     # =========================================================================
@@ -391,7 +432,7 @@ class Trainer:
         stock_codes: list[str] = None,
         min_samples_per_stock: int = 100,
         verbose: bool = True,
-        interval: str = "1d",
+        interval: str = "1m",
         prediction_horizon: int = None,
         lookback_bars: int = None,
     ) -> tuple:
@@ -406,7 +447,11 @@ class Trainer:
         stocks = stock_codes or CONFIG.STOCK_POOL
         interval = str(interval).lower()
         horizon = int(prediction_horizon or CONFIG.PREDICTION_HORIZON)
-        bars = int(lookback_bars or 2000)
+        bars = int(
+            lookback_bars
+            if lookback_bars is not None
+            else self._default_lookback_bars(interval)
+        )
 
         self.interval = interval
         self.prediction_horizon = horizon
@@ -494,9 +539,9 @@ class Trainer:
         stop_flag: Any = None,
         save_model: bool = True,
         incremental: bool = False,
-        interval: str = "1d",
+        interval: str = "1m",
         prediction_horizon: int = None,
-        lookback_bars: int = 2400,
+        lookback_bars: int = None,
         learning_rate: float = None,
     ) -> dict:
         """
@@ -509,7 +554,11 @@ class Trainer:
         batch_size = int(batch_size or CONFIG.BATCH_SIZE)
         interval = str(interval).lower()
         horizon = int(prediction_horizon or CONFIG.PREDICTION_HORIZON)
-        lookback = int(lookback_bars)
+        lookback = int(
+            lookback_bars
+            if lookback_bars is not None
+            else self._default_lookback_bars(interval)
+        )
 
         self.interval = interval
         self.prediction_horizon = horizon

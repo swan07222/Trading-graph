@@ -7,6 +7,7 @@ import threading
 import time
 from datetime import datetime, timedelta, timezone
 from importlib import import_module
+from statistics import median
 from typing import Any
 
 from PyQt6.QtCore import QSize, Qt, QThread, QTimer, pyqtSignal
@@ -145,8 +146,9 @@ class RealTimeMonitor(QThread):
         predictor: Any,
         watch_list: list[str],
         interval: str = "1m",
-        forecast_minutes: int = 120,
-        lookback_bars: int = 1400
+        forecast_minutes: int = 30,
+        lookback_bars: int = 1680,
+        history_allow_online: bool = True,
     ):
         super().__init__()
         self.predictor = predictor
@@ -164,13 +166,30 @@ class RealTimeMonitor(QThread):
                 f"to {len(self.watch_list)} symbols"
             )
 
-        self.scan_interval = 30  # seconds between scan cycles
+        try:
+            cfg_interval = int(
+                getattr(getattr(CONFIG, "auto_trade", None), "scan_interval_seconds", 30)
+                or 30
+            )
+        except Exception:
+            cfg_interval = 30
+        # Keep UI monitoring responsive even when auto-trade scan interval is large.
+        self.scan_interval = max(8, min(30, int(cfg_interval)))
         self.data_interval = str(interval).lower()
         self.forecast_minutes = int(forecast_minutes)
         self.lookback_bars = int(lookback_bars)
+        self.history_allow_online = bool(history_allow_online)
+        intraday_tokens = {"1m", "2m", "3m", "5m", "15m", "30m", "60m", "1h"}
+        if self.data_interval in intraday_tokens:
+            # Quick scan should stay fast; full forecast still uses full window.
+            self._quick_lookback_bars = max(180, min(self.lookback_bars, 720))
+        else:
+            self._quick_lookback_bars = max(120, min(self.lookback_bars, 520))
 
         self._backoff = 1
         self._max_backoff = 60
+        self._last_full_emit: dict[str, tuple[str, int, int]] = {}
+        self._full_emit_cooldown_seconds: float = 6.0
 
     def run(self):
         """
@@ -202,7 +221,8 @@ class RealTimeMonitor(QThread):
                     self.watch_list,
                     use_realtime_price=True,
                     interval=self.data_interval,
-                    lookback_bars=self.lookback_bars
+                    lookback_bars=self._quick_lookback_bars,
+                    history_allow_online=self.history_allow_online,
                 )
 
                 for p in preds:
@@ -221,9 +241,9 @@ class RealTimeMonitor(QThread):
                     and p.confidence >= CONFIG.MIN_CONFIDENCE
                 ]
 
-                # Sort by confidence and cap at 2
+                # Sort by confidence and cap size for predictable latency.
                 strong.sort(key=lambda x: x.confidence, reverse=True)
-                strong = strong[:2]
+                strong = strong[:3]
 
                 # Full prediction for strong signals (includes forecast)
                 for p in strong:
@@ -231,14 +251,30 @@ class RealTimeMonitor(QThread):
                         break
 
                     try:
+                        now_key_ts = int(time.time())
+                        symbol = str(getattr(p, "stock_code", "") or "").strip()
+                        sig_name = str(
+                            getattr(getattr(p, "signal", None), "value", getattr(p, "signal", ""))
+                        )
+                        conf_bp = int(float(getattr(p, "confidence", 0.0) or 0.0) * 10000.0)
+                        quick_key = (sig_name, conf_bp, now_key_ts // int(self._full_emit_cooldown_seconds))
+                        prev_key = self._last_full_emit.get(symbol)
+                        if prev_key == quick_key:
+                            continue
+
                         full = self.predictor.predict(
                             p.stock_code,
                             use_realtime_price=True,
                             interval=self.data_interval,
                             forecast_minutes=self.forecast_minutes,
                             lookback_bars=self.lookback_bars,
-                            skip_cache=True
+                            skip_cache=True,
+                            history_allow_online=self.history_allow_online,
                         )
+                        full_signal = getattr(full, "signal", None)
+                        if full_signal == Signal.HOLD:
+                            continue
+                        self._last_full_emit[symbol] = quick_key
                         self.signal_detected.emit(full)
                     except Exception as e:
                         log.warning(
@@ -267,7 +303,10 @@ class RealTimeMonitor(QThread):
                 continue
 
             elapsed = time.time() - loop_start
-            remaining = max(0.0, self.scan_interval - elapsed)
+            target_interval = self.scan_interval
+            if strong:
+                target_interval = max(6, int(self.scan_interval * 0.66))
+            remaining = max(0.0, float(target_interval) - float(elapsed))
 
             for _ in range(int(remaining)):
                 if self._stop_event.is_set():
@@ -345,6 +384,8 @@ class MainApp(QMainWindow):
     - AI-generated price forecast curves
     """
     MAX_WATCHLIST_SIZE = 50
+    GUESS_FORECAST_BARS = 30
+    STARTUP_INTERVAL = "1m"
 
     bar_received = pyqtSignal(str, dict)
     quote_received = pyqtSignal(str, float)
@@ -373,6 +414,9 @@ class MainApp(QMainWindow):
         self._live_price_series: dict[str, list[float]] = {}
         self._price_series_lock = threading.Lock()
         self._last_session_cache_write_ts: dict[str, float] = {}
+        self._last_analyze_request: dict[str, Any] = {}
+        self._last_analysis_log: dict[str, Any] = {}
+        self._analysis_recovery_attempt_ts: dict[str, float] = {}
         self._watchlist_row_by_code: dict[str, int] = {}
         self._last_watchlist_price_ui: dict[str, tuple[float, float]] = {}
         self._last_quote_ui_emit: dict[str, tuple[float, float]] = {}
@@ -384,6 +428,11 @@ class MainApp(QMainWindow):
         self._trained_stock_codes_cache: list[str] = []
         self._last_bar_feed_ts: dict[str, float] = {}
         self._chart_symbol: str = ""
+        self._history_refresh_once: set[tuple[str, str]] = set()
+        self._debug_console_enabled: bool = str(
+            os.environ.get("TRADING_DEBUG_CONSOLE", "1")
+        ).strip().lower() in ("1", "true", "yes", "on")
+        self._debug_console_last_emit: dict[str, float] = {}
         self._syncing_mode_ui = False
         self._session_bar_cache = None
         try:
@@ -458,6 +507,53 @@ class MainApp(QMainWindow):
             return "60m"
         return iv
 
+    def _normalize_interval_token(
+        self,
+        interval: str | None,
+        *,
+        fallback: str = "1m",
+    ) -> str:
+        """Normalize interval aliases used across feed/cache/UI paths."""
+        iv = str(interval or "").strip().lower()
+        if not iv:
+            return str(fallback or "1m").strip().lower()
+
+        aliases = {
+            "1h": "60m",
+            "60min": "60m",
+            "60mins": "60m",
+            "1day": "1d",
+            "day": "1d",
+            "daily": "1d",
+            "1440m": "1d",
+        }
+        return aliases.get(iv, iv)
+
+    def _debug_console(
+        self,
+        key: str,
+        message: str,
+        *,
+        min_gap_seconds: float = 2.0,
+        level: str = "warning",
+    ) -> None:
+        """Throttled debug message to UI system-log + backend logger."""
+        if not bool(getattr(self, "_debug_console_enabled", False)):
+            return
+        try:
+            now = time.monotonic()
+            prev = float(self._debug_console_last_emit.get(key, 0.0))
+            if (now - prev) < float(max(0.0, min_gap_seconds)):
+                return
+            self._debug_console_last_emit[key] = now
+            txt = f"[DBG] {message}"
+            if hasattr(self, "log"):
+                self.log(txt, level=level)
+            else:
+                log.warning(txt)
+        except Exception:
+            pass
+
     def _sync_ui_to_loaded_model(
         self,
         requested_interval: str | None = None,
@@ -474,7 +570,15 @@ class MainApp(QMainWindow):
             return iv, h
 
         model_iv_raw = str(
-            getattr(self.predictor, "interval", requested_interval or self.interval_combo.currentText())
+            getattr(
+                self.predictor,
+                "_loaded_model_interval",
+                getattr(
+                    self.predictor,
+                    "interval",
+                    requested_interval or self.interval_combo.currentText(),
+                ),
+            )
         ).strip().lower()
         model_iv = self._model_interval_to_ui_token(model_iv_raw)
 
@@ -489,44 +593,804 @@ class MainApp(QMainWindow):
             ui_iv = str(requested_interval or self.interval_combo.currentText()).strip().lower()
 
         try:
-            model_h = int(
+            model_h_raw = int(
                 getattr(
                     self.predictor,
-                    "horizon",
-                    requested_horizon if requested_horizon is not None else self.forecast_spin.value(),
+                    "_loaded_model_horizon",
+                    getattr(
+                        self.predictor,
+                        "horizon",
+                        requested_horizon
+                        if requested_horizon is not None
+                        else self.forecast_spin.value(),
+                    ),
                 )
             )
         except Exception:
-            model_h = int(self.forecast_spin.value())
+            model_h_raw = int(self.forecast_spin.value())
 
         model_h = max(
             int(self.forecast_spin.minimum()),
-            min(int(self.forecast_spin.maximum()), int(model_h)),
+            min(int(self.forecast_spin.maximum()), int(model_h_raw)),
         )
+        ui_h = model_h
+        if preserve_requested_interval and requested_horizon is not None:
+            ui_h = max(
+                int(self.forecast_spin.minimum()),
+                min(int(self.forecast_spin.maximum()), int(requested_horizon)),
+            )
 
         self.interval_combo.blockSignals(True)
         try:
             self.interval_combo.setCurrentText(ui_iv)
         finally:
             self.interval_combo.blockSignals(False)
-        self.forecast_spin.setValue(model_h)
-        if ui_iv != model_iv:
+        self.forecast_spin.setValue(ui_h)
+        if ui_iv != model_iv or ui_h != model_h:
             self.model_info.setText(
-                f"Interval: {ui_iv}, Horizon: {model_h} (model: {model_iv}/{model_h})"
+                f"Interval: {ui_iv}, Horizon: {ui_h} (model: {model_iv}/{model_h})"
             )
         else:
-            self.model_info.setText(f"Interval: {ui_iv}, Horizon: {model_h}")
+            self.model_info.setText(f"Interval: {ui_iv}, Horizon: {ui_h}")
 
-        if requested_interval is not None and requested_horizon is not None:
+        if (
+            (not preserve_requested_interval)
+            and requested_interval is not None
+            and requested_horizon is not None
+        ):
             req_iv = str(requested_interval).strip().lower()
             req_h = int(requested_horizon)
-            if req_iv != model_iv or req_h != model_h:
+            if req_iv != ui_iv or req_h != ui_h:
                 self.log(
-                    f"Loaded model metadata applied: requested {req_iv}/{req_h} -> active {model_iv}/{model_h}",
+                    f"Loaded model metadata applied: requested {req_iv}/{req_h} -> active {ui_iv}/{ui_h}",
                     "warning",
                 )
 
-        return ui_iv, model_h
+        return ui_iv, ui_h
+
+    def _loaded_model_ui_meta(self) -> tuple[str, int]:
+        """Return loaded model metadata as (ui_interval_token, horizon)."""
+        if not self.predictor:
+            iv = self._normalize_interval_token(self.interval_combo.currentText())
+            hz = int(self.forecast_spin.value())
+            return iv, hz
+        raw_iv = str(
+            getattr(
+                self.predictor,
+                "_loaded_model_interval",
+                getattr(self.predictor, "interval", self.interval_combo.currentText()),
+            )
+        ).strip().lower()
+        iv = self._model_interval_to_ui_token(raw_iv)
+        try:
+            hz = int(
+                getattr(
+                    self.predictor,
+                    "_loaded_model_horizon",
+                    getattr(self.predictor, "horizon", self.forecast_spin.value()),
+                )
+            )
+        except Exception:
+            hz = int(self.forecast_spin.value())
+        return iv, max(1, hz)
+
+    def _has_exact_model_artifacts(self, interval: str, horizon: int) -> bool:
+        """Whether exact ensemble+scaler artifacts exist for interval+horizon."""
+        iv = self._normalize_interval_token(interval)
+        try:
+            hz = max(1, int(horizon))
+        except Exception:
+            hz = int(self.forecast_spin.value())
+        model_dir = CONFIG.MODEL_DIR
+        ens = model_dir / f"ensemble_{iv}_{hz}.pt"
+        scl = model_dir / f"scaler_{iv}_{hz}.pkl"
+        return bool(ens.exists() and scl.exists())
+
+    def _log_model_alignment_debug(
+        self,
+        *,
+        context: str,
+        requested_interval: str | None = None,
+        requested_horizon: int | None = None,
+    ) -> None:
+        """Verbose model/UI alignment diagnostics for bug hunting."""
+        ui_iv = self._normalize_interval_token(
+            requested_interval if requested_interval is not None else self.interval_combo.currentText()
+        )
+        try:
+            ui_h = int(requested_horizon if requested_horizon is not None else self.forecast_spin.value())
+        except Exception:
+            ui_h = int(self.forecast_spin.value())
+        model_iv, model_h = self._loaded_model_ui_meta()
+        exact = self._has_exact_model_artifacts(ui_iv, ui_h)
+        min_gap = 8.0 if str(context).strip().lower() == "analyze" else 0.8
+        self._debug_console(
+            f"model_align:{context}:{ui_iv}:{ui_h}",
+            (
+                f"model alignment [{context}] ui={ui_iv}/{ui_h} "
+                f"loaded={model_iv}/{model_h} exact_artifacts={int(exact)}"
+            ),
+            min_gap_seconds=min_gap,
+            level="info",
+        )
+
+    def _debug_chart_state(
+        self,
+        *,
+        symbol: str,
+        interval: str,
+        bars: list[dict[str, Any]] | None,
+        predicted_prices: list[float] | None = None,
+        context: str = "chart",
+    ) -> None:
+        """Emit compact chart diagnostics for rapid bug triage."""
+        arr = list(bars or [])
+        preds = list(predicted_prices or [])
+        if not arr:
+            self._debug_console(
+                f"chart_state:{context}:{self._ui_norm(symbol)}:{self._normalize_interval_token(interval)}",
+                (
+                    f"chart state [{context}] symbol={self._ui_norm(symbol)} "
+                    f"iv={self._normalize_interval_token(interval)} bars=0 preds={len(preds)}"
+                ),
+                min_gap_seconds=1.0,
+                level="info",
+            )
+            return
+
+        closes: list[float] = []
+        max_span_pct = 0.0
+        for row in arr[-min(220, len(arr)):]:
+            try:
+                c = float(row.get("close", 0) or 0)
+                h = float(row.get("high", c) or c)
+                low = float(row.get("low", c) or c)
+            except Exception:
+                continue
+            if c > 0 and math.isfinite(c):
+                closes.append(c)
+                span = abs(h - low) / max(c, 1e-8)
+                if math.isfinite(span):
+                    max_span_pct = max(max_span_pct, float(span))
+
+        last_close = float(closes[-1]) if closes else 0.0
+        med_close = float(median(closes)) if closes else 0.0
+        model_iv, model_h = self._loaded_model_ui_meta()
+        iv = self._normalize_interval_token(interval)
+        sym = self._ui_norm(symbol)
+        self._debug_console(
+            f"chart_state:{context}:{sym}:{iv}",
+            (
+                f"chart state [{context}] symbol={sym} iv={iv} bars={len(arr)} "
+                f"preds={len(preds)} last={last_close:.4f} med={med_close:.4f} "
+                f"max_span={max_span_pct:.2%} model={model_iv}/{model_h}"
+            ),
+            min_gap_seconds=1.0,
+            level="info",
+        )
+        if max_span_pct > 0.035:
+            self._debug_console(
+                f"chart_state_anom:{context}:{sym}:{iv}",
+                (
+                    f"chart anomaly [{context}] symbol={sym} iv={iv} "
+                    f"max_span={max_span_pct:.2%} bars={len(arr)} preds={len(preds)}"
+                ),
+                min_gap_seconds=0.6,
+                level="warning",
+            )
+
+    def _debug_candle_quality(
+        self,
+        *,
+        symbol: str,
+        interval: str,
+        bars: list[dict[str, Any]] | None,
+        context: str,
+    ) -> None:
+        """Detailed candle-shape diagnostics for malformed chart bars."""
+        if not bool(getattr(self, "_debug_console_enabled", False)):
+            return
+
+        arr = list(bars or [])
+        if not arr:
+            return
+
+        iv = self._normalize_interval_token(interval)
+        jump_cap, range_cap = self._bar_safety_caps(iv)
+        intraday = iv not in ("1d", "1wk", "1mo")
+        if intraday:
+            body_cap = float(max(range_cap * 1.35, 0.007))
+            span_cap = float(max(range_cap * 2.10, 0.012))
+            wick_cap = float(max(range_cap * 1.55, 0.008))
+        else:
+            body_cap = float(max(range_cap * 0.85, 0.045))
+            span_cap = float(max(range_cap * 1.75, 0.45))
+            wick_cap = float(max(range_cap * 1.25, 0.25))
+
+        parsed = 0
+        invalid = 0
+        duplicates = 0
+        doji_like = 0
+        extreme = 0
+        max_body = 0.0
+        max_span = 0.0
+        max_wick = 0.0
+        max_jump = 0.0
+        seen_ts: set[int] = set()
+        prev_close: float | None = None
+
+        for row in arr[-min(520, len(arr)):]:
+            try:
+                o = float(row.get("open", 0) or 0)
+                h = float(row.get("high", 0) or 0)
+                low = float(row.get("low", 0) or 0)
+                c = float(row.get("close", 0) or 0)
+            except Exception:
+                invalid += 1
+                continue
+            if (
+                c <= 0
+                or not all(math.isfinite(v) for v in (o, h, low, c))
+            ):
+                invalid += 1
+                continue
+            parsed += 1
+
+            ts_epoch = int(
+                self._bar_bucket_epoch(
+                    row.get("_ts_epoch", row.get("timestamp")),
+                    iv,
+                )
+            )
+            if ts_epoch in seen_ts:
+                duplicates += 1
+            else:
+                seen_ts.add(ts_epoch)
+
+            ref = float(prev_close if prev_close and prev_close > 0 else c)
+            if ref <= 0:
+                ref = float(c)
+            body = abs(o - c) / max(ref, 1e-8)
+            span = abs(h - low) / max(ref, 1e-8)
+            uw = max(0.0, h - max(o, c)) / max(ref, 1e-8)
+            lw = max(0.0, min(o, c) - low) / max(ref, 1e-8)
+            max_body = max(max_body, float(body))
+            max_span = max(max_span, float(span))
+            max_wick = max(max_wick, float(max(uw, lw)))
+            if prev_close and prev_close > 0:
+                jump = abs(c / max(prev_close, 1e-8) - 1.0)
+                max_jump = max(max_jump, float(jump))
+
+            if body <= 0.00012 and span <= 0.00120:
+                doji_like += 1
+            if (
+                body > body_cap
+                or span > span_cap
+                or uw > wick_cap
+                or lw > wick_cap
+            ):
+                extreme += 1
+
+            prev_close = float(c)
+
+        if parsed <= 0:
+            self._debug_console(
+                f"candle_q:{context}:{self._ui_norm(symbol)}:{iv}",
+                (
+                    f"candle quality [{context}] symbol={self._ui_norm(symbol)} "
+                    f"iv={iv} parsed=0 invalid={invalid}"
+                ),
+                min_gap_seconds=1.5,
+                level="warning",
+            )
+            return
+
+        doji_ratio = float(doji_like) / float(max(1, parsed))
+        extreme_ratio = float(extreme) / float(max(1, parsed))
+        self._debug_console(
+            f"candle_q:{context}:{self._ui_norm(symbol)}:{iv}",
+            (
+                f"candle quality [{context}] symbol={self._ui_norm(symbol)} "
+                f"iv={iv} bars={parsed} invalid={invalid} dup={duplicates} "
+                f"doji={doji_ratio:.1%} extreme={extreme_ratio:.1%} "
+                f"max_body={max_body:.2%} max_span={max_span:.2%} "
+                f"max_wick={max_wick:.2%} max_jump={max_jump:.2%} "
+                f"caps(body={body_cap:.2%},span={span_cap:.2%},wick={wick_cap:.2%},jump={jump_cap:.2%})"
+            ),
+            min_gap_seconds=1.5,
+            level="info",
+        )
+        if duplicates > 0 or extreme > 0 or doji_ratio >= 0.86:
+            self._debug_console(
+                f"candle_q_warn:{context}:{self._ui_norm(symbol)}:{iv}",
+                (
+                    f"candle anomaly [{context}] symbol={self._ui_norm(symbol)} "
+                    f"iv={iv} dup={duplicates} extreme={extreme}/{parsed} "
+                    f"doji={doji_like}/{parsed}"
+                ),
+                min_gap_seconds=0.8,
+                level="warning",
+            )
+
+    def _debug_forecast_quality(
+        self,
+        *,
+        symbol: str,
+        chart_interval: str,
+        source_interval: str,
+        predicted_prices: list[float] | None,
+        anchor_price: float | None,
+        context: str,
+    ) -> None:
+        """Detailed forecast-shape diagnostics for flat/erratic guessed graph."""
+        if not bool(getattr(self, "_debug_console_enabled", False)):
+            return
+
+        iv_chart = self._normalize_interval_token(chart_interval)
+        iv_src = self._normalize_interval_token(source_interval, fallback=iv_chart)
+        vals: list[float] = []
+        for v in list(predicted_prices or []):
+            try:
+                fv = float(v)
+            except Exception:
+                continue
+            if fv > 0 and math.isfinite(fv):
+                vals.append(fv)
+
+        sym = self._ui_norm(symbol)
+        if not vals:
+            self._debug_console(
+                f"forecast_q:{context}:{sym}:{iv_chart}",
+                (
+                    f"forecast quality [{context}] symbol={sym} chart={iv_chart} "
+                    f"source={iv_src} points=0"
+                ),
+                min_gap_seconds=1.5,
+                level="warning",
+            )
+            return
+
+        try:
+            anchor = float(anchor_price or 0.0)
+        except Exception:
+            anchor = 0.0
+        if not math.isfinite(anchor) or anchor <= 0:
+            anchor = float(vals[0])
+
+        max_step = 0.0
+        flips = 0
+        dirs: list[int] = []
+        for i in range(1, len(vals)):
+            prev = float(vals[i - 1])
+            cur = float(vals[i])
+            if prev > 0:
+                step = abs(cur / max(prev, 1e-8) - 1.0)
+                max_step = max(max_step, float(step))
+            dirs.append(1 if cur >= prev else -1)
+        for i in range(1, len(dirs)):
+            if dirs[i] != dirs[i - 1]:
+                flips += 1
+        flip_ratio = float(flips) / float(max(1, len(dirs) - 1)) if len(dirs) >= 2 else 0.0
+
+        vmin = min(vals)
+        vmax = max(vals)
+        span_pct = abs(vmax - vmin) / max(anchor, 1e-8)
+        net_pct = (float(vals[-1]) / max(anchor, 1e-8)) - 1.0
+        mean_v = float(sum(vals) / max(1, len(vals)))
+        var = 0.0
+        for v in vals:
+            var += (float(v) - mean_v) ** 2
+        std_pct = (math.sqrt(var / float(max(1, len(vals)))) / max(anchor, 1e-8))
+
+        _, cap_step = self._chart_prediction_caps(iv_chart)
+        flat_line = len(vals) >= 5 and (span_pct <= 0.0012 or std_pct <= 0.0005)
+        jagged = max_step > (cap_step * 1.80) or flip_ratio > 0.82
+
+        self._debug_console(
+            f"forecast_q:{context}:{sym}:{iv_chart}",
+            (
+                f"forecast quality [{context}] symbol={sym} chart={iv_chart} "
+                f"source={iv_src} points={len(vals)} span={span_pct:.2%} "
+                f"net={net_pct:+.2%} max_step={max_step:.2%} flips={flip_ratio:.2f} "
+                f"std={std_pct:.2%} step_cap={cap_step:.2%}"
+            ),
+            min_gap_seconds=1.5,
+            level="info",
+        )
+        if flat_line or jagged:
+            why = []
+            if flat_line:
+                why.append("flat_line")
+            if jagged:
+                why.append("jagged")
+            self._debug_console(
+                f"forecast_q_warn:{context}:{sym}:{iv_chart}",
+                (
+                    f"forecast anomaly [{context}] symbol={sym} chart={iv_chart} "
+                    f"source={iv_src} reason={','.join(why)} "
+                    f"span={span_pct:.2%} max_step={max_step:.2%} flips={flip_ratio:.2f}"
+                ),
+                min_gap_seconds=0.8,
+                level="warning",
+            )
+
+    def _chart_prediction_caps(self, interval: str) -> tuple[float, float]:
+        """Return (max_total_move, max_step_move) for display-only forecast shaping."""
+        iv = self._normalize_interval_token(interval)
+        if iv == "1m":
+            return 0.018, 0.0045
+        if iv == "5m":
+            return 0.030, 0.008
+        if iv in ("15m", "30m"):
+            return 0.050, 0.012
+        if iv in ("60m", "1h"):
+            return 0.090, 0.022
+        if iv in ("1d", "1wk", "1mo"):
+            return 0.140, 0.035
+        return 0.060, 0.020
+
+    def _prepare_chart_predicted_prices(
+        self,
+        *,
+        symbol: str,
+        chart_interval: str,
+        predicted_prices: list[float] | None,
+        source_interval: str | None = None,
+        current_price: float | None = None,
+        target_steps: int | None = None,
+    ) -> list[float]:
+        """
+        Shape forecast for chart display stability.
+        - Clamp implausible per-step spikes.
+        - When model interval != chart interval, project a smooth path to avoid
+          abrupt vertical zig-zags on intraday charts.
+        """
+        raw_vals = list(predicted_prices or [])
+        cleaned: list[float] = []
+        for v in raw_vals:
+            try:
+                fv = float(v)
+            except Exception:
+                continue
+            if fv > 0 and math.isfinite(fv):
+                cleaned.append(fv)
+        if not cleaned:
+            return []
+
+        iv_chart = self._normalize_interval_token(chart_interval)
+        iv_src = self._normalize_interval_token(source_interval, fallback=iv_chart)
+        try:
+            steps = int(target_steps if target_steps is not None else self.forecast_spin.value())
+        except Exception:
+            steps = len(cleaned)
+        steps = max(1, steps)
+
+        try:
+            anchor = float(current_price or 0.0)
+        except Exception:
+            anchor = 0.0
+        if not math.isfinite(anchor) or anchor <= 0:
+            anchor = float(cleaned[0])
+        if not math.isfinite(anchor) or anchor <= 0:
+            return []
+
+        max_total_move, max_step_move = self._chart_prediction_caps(iv_chart)
+
+        # Mismatch mode: preserve source-shape, then resample to chart steps.
+        if iv_src != iv_chart:
+            chart_sec = float(max(1, self._interval_seconds(iv_chart)))
+            src_sec = float(max(1, self._interval_seconds(iv_src)))
+            tf_ratio = float(src_sec / max(chart_sec, 1.0))
+            proj_total_cap = float(max_total_move)
+            proj_step_cap = float(max_step_move)
+            conservative_projection = False
+            if tf_ratio >= 8.0:
+                conservative_projection = True
+                if iv_chart == "1m":
+                    proj_total_cap = min(proj_total_cap, 0.008)
+                    proj_step_cap = min(proj_step_cap, 0.0025)
+                elif iv_chart == "5m":
+                    proj_total_cap = min(proj_total_cap, 0.012)
+                    proj_step_cap = min(proj_step_cap, 0.0040)
+                else:
+                    proj_total_cap = min(proj_total_cap, max_total_move * 0.72)
+                    proj_step_cap = min(proj_step_cap, max_step_move * 0.70)
+
+            src_curve: list[float] = [float(anchor)] + [float(v) for v in cleaned]
+            # Clamp total move while preserving path curvature.
+            raw_net = float(src_curve[-1] / max(anchor, 1e-8) - 1.0)
+            net_ret = float(max(-proj_total_cap, min(proj_total_cap, raw_net)))
+            if abs(raw_net) > 1e-8 and raw_net != net_ret:
+                scale = float(net_ret / raw_net)
+                for i in range(1, len(src_curve)):
+                    src_ret = float(src_curve[i] / max(anchor, 1e-8) - 1.0)
+                    src_curve[i] = float(anchor) * (1.0 + (src_ret * scale))
+            # Hard-clip every source point into chart-safe movement band.
+            lo_anchor = float(anchor) * (1.0 - proj_total_cap)
+            hi_anchor = float(anchor) * (1.0 + proj_total_cap)
+            for i in range(1, len(src_curve)):
+                src_curve[i] = float(max(lo_anchor, min(hi_anchor, src_curve[i])))
+            # Mild smoothing to suppress jagged daily->intraday interpolation artifacts.
+            if len(src_curve) >= 4:
+                smoothed = list(src_curve)
+                for i in range(1, len(src_curve) - 1):
+                    y0 = float(src_curve[i - 1])
+                    y1 = float(src_curve[i])
+                    y2 = float(src_curve[i + 1])
+                    val = (0.18 * y0) + (0.64 * y1) + (0.18 * y2)
+                    smoothed[i] = float(max(lo_anchor, min(hi_anchor, val)))
+                src_curve = smoothed
+
+            n_src = len(src_curve)
+            src_x: list[float] = [0.0]
+            if n_src <= 2:
+                src_x.append(float(steps))
+            else:
+                step_span = float(steps) / float(max(1, n_src - 1))
+                for i in range(1, n_src):
+                    src_x.append(float(i) * step_span)
+
+            out: list[float] = []
+            prev = float(anchor)
+            seg = 0
+            for i in range(1, steps + 1):
+                x = float(i)
+                while seg + 1 < len(src_x) and x > src_x[seg + 1]:
+                    seg += 1
+                if seg + 1 >= len(src_x):
+                    target_px = float(src_curve[-1])
+                else:
+                    x0 = float(src_x[seg])
+                    x1 = float(src_x[seg + 1])
+                    y0 = float(src_curve[seg])
+                    y1 = float(src_curve[seg + 1])
+                    if x1 <= x0:
+                        target_px = y1
+                    else:
+                        frac = (x - x0) / (x1 - x0)
+                        target_px = y0 + ((y1 - y0) * frac)
+                target_px = float(max(lo_anchor, min(hi_anchor, target_px)))
+
+                step_ret = float(target_px / max(prev, 1e-8) - 1.0)
+                if step_ret > proj_step_cap:
+                    target_px = float(prev) * (1.0 + proj_step_cap)
+                elif step_ret < -proj_step_cap:
+                    target_px = float(prev) * (1.0 - proj_step_cap)
+                target_px = float(max(lo_anchor, min(hi_anchor, target_px)))
+                out.append(float(target_px))
+                prev = float(target_px)
+            self._debug_console(
+                f"forecast_display_project:{self._ui_norm(symbol)}:{iv_chart}",
+                (
+                    f"forecast display projection for {self._ui_norm(symbol)}: "
+                    f"source={iv_src} chart={iv_chart} steps={steps} "
+                    f"src_points={len(cleaned)} net={net_ret:+.2%} "
+                    f"tf_ratio={tf_ratio:.1f} conservative={int(conservative_projection)}"
+                ),
+                min_gap_seconds=3.0,
+                level="info",
+            )
+            return out
+
+        # Same-interval mode: clamp step spikes, keep model shape.
+        out: list[float] = []
+        prev = float(anchor)
+        lo_anchor = float(anchor) * (1.0 - max_total_move)
+        hi_anchor = float(anchor) * (1.0 + max_total_move)
+        for p in cleaned[:steps]:
+            px = float(max(lo_anchor, min(hi_anchor, float(p))))
+            step_ret = float(px / max(prev, 1e-8) - 1.0)
+            if step_ret > max_step_move:
+                px = float(prev) * (1.0 + max_step_move)
+            elif step_ret < -max_step_move:
+                px = float(prev) * (1.0 - max_step_move)
+            px = float(max(lo_anchor, min(hi_anchor, px)))
+            out.append(float(px))
+            prev = float(px)
+
+        if len(out) >= 4:
+            dirs = [1 if out[i] >= out[i - 1] else -1 for i in range(1, len(out))]
+            flips = sum(1 for i in range(1, len(dirs)) if dirs[i] != dirs[i - 1])
+            flip_ratio = float(flips) / float(max(1, len(dirs) - 1))
+            raw_steps = [
+                abs(float(out[i]) / max(float(out[i - 1]), 1e-8) - 1.0)
+                for i in range(1, len(out))
+            ]
+            max_raw_step = max(raw_steps) if raw_steps else 0.0
+            if flip_ratio > 0.65 or max_raw_step > (max_step_move * 1.35):
+                smooth = list(out)
+                for i in range(1, len(out) - 1):
+                    val = (
+                        (0.22 * float(out[i - 1]))
+                        + (0.56 * float(out[i]))
+                        + (0.22 * float(out[i + 1]))
+                    )
+                    smooth[i] = float(max(lo_anchor, min(hi_anchor, val)))
+
+                out2: list[float] = []
+                prev2 = float(anchor)
+                for px in smooth:
+                    px2 = float(max(lo_anchor, min(hi_anchor, float(px))))
+                    step_ret2 = float(px2 / max(prev2, 1e-8) - 1.0)
+                    if step_ret2 > max_step_move:
+                        px2 = float(prev2) * (1.0 + max_step_move)
+                    elif step_ret2 < -max_step_move:
+                        px2 = float(prev2) * (1.0 - max_step_move)
+                    px2 = float(max(lo_anchor, min(hi_anchor, px2)))
+                    out2.append(float(px2))
+                    prev2 = float(px2)
+                out = out2
+        return out
+
+    def _resolve_chart_prediction_series(
+        self,
+        *,
+        symbol: str,
+        fallback_interval: str,
+        predicted_prices: list[float] | None = None,
+        source_interval: str | None = None,
+    ) -> tuple[list[float], str]:
+        """Resolve prediction series/source interval for chart rendering."""
+        iv_fallback = self._normalize_interval_token(fallback_interval)
+        iv_source = self._normalize_interval_token(
+            source_interval,
+            fallback=iv_fallback,
+        )
+        if predicted_prices is not None:
+            return list(predicted_prices or []), iv_source
+
+        if (
+            self.current_prediction
+            and getattr(self.current_prediction, "stock_code", "") == symbol
+        ):
+            vals = (
+                getattr(self.current_prediction, "predicted_prices", [])
+                or []
+            )
+            iv_source = self._normalize_interval_token(
+                getattr(self.current_prediction, "interval", iv_source),
+                fallback=iv_source,
+            )
+            return list(vals), iv_source
+        return [], iv_source
+
+    def _render_chart_state(
+        self,
+        *,
+        symbol: str,
+        interval: str,
+        bars: list[dict[str, Any]] | None,
+        context: str,
+        current_price: float | None = None,
+        predicted_prices: list[float] | None = None,
+        source_interval: str | None = None,
+        target_steps: int | None = None,
+        predicted_prepared: bool = False,
+        update_latest_label: bool = False,
+        allow_legacy_candles: bool = False,
+        reset_view_on_symbol_switch: bool = False,
+    ) -> list[dict[str, Any]]:
+        """
+        Unified chart rendering path used by bar/tick/analysis updates.
+        """
+        iv = self._normalize_interval_token(interval)
+        arr = list(bars or [])
+
+        anchor_input: float | None = None
+        if current_price is not None:
+            try:
+                px = float(current_price)
+                if px > 0 and math.isfinite(px):
+                    anchor_input = px
+            except Exception:
+                anchor_input = None
+
+        chart_anchor = self._effective_anchor_price(symbol, anchor_input)
+        arr = self._scrub_chart_bars(
+            arr,
+            iv,
+            symbol=symbol,
+            anchor_price=chart_anchor if chart_anchor > 0 else None,
+        )
+        arr = self._stabilize_chart_depth(symbol, iv, arr)
+        self._bars_by_symbol[symbol] = arr
+        self._debug_candle_quality(
+            symbol=symbol,
+            interval=iv,
+            bars=arr,
+            context=context,
+        )
+
+        pred_vals, pred_source_iv = self._resolve_chart_prediction_series(
+            symbol=symbol,
+            fallback_interval=iv,
+            predicted_prices=predicted_prices,
+            source_interval=source_interval,
+        )
+        try:
+            steps = int(
+                target_steps if target_steps is not None else self.forecast_spin.value()
+            )
+        except Exception:
+            steps = int(self.forecast_spin.value())
+
+        anchor_for_pred: float | None = None
+        if arr:
+            try:
+                last_close = float(arr[-1].get("close", 0) or 0)
+                if last_close > 0 and math.isfinite(last_close):
+                    anchor_for_pred = last_close
+            except Exception:
+                anchor_for_pred = None
+        if anchor_for_pred is None:
+            anchor_for_pred = anchor_input
+
+        source_iv_for_prepare = iv if predicted_prepared else pred_source_iv
+        chart_predicted = self._prepare_chart_predicted_prices(
+            symbol=symbol,
+            chart_interval=iv,
+            predicted_prices=pred_vals,
+            source_interval=source_iv_for_prepare,
+            current_price=anchor_for_pred,
+            target_steps=steps,
+        )
+        self._debug_forecast_quality(
+            symbol=symbol,
+            chart_interval=iv,
+            source_interval=pred_source_iv,
+            predicted_prices=chart_predicted,
+            anchor_price=anchor_for_pred,
+            context=context,
+        )
+
+        if (
+            reset_view_on_symbol_switch
+            and self._chart_symbol
+            and self._chart_symbol != symbol
+        ):
+            try:
+                self.chart.reset_view()
+            except Exception:
+                pass
+
+        rendered = False
+        if hasattr(self.chart, "update_chart"):
+            self.chart.update_chart(
+                arr,
+                predicted_prices=chart_predicted,
+                levels=self._get_levels_dict(),
+            )
+            self._debug_chart_state(
+                symbol=symbol,
+                interval=iv,
+                bars=arr,
+                predicted_prices=chart_predicted,
+                context=context,
+            )
+            self._chart_symbol = symbol
+            rendered = True
+        elif allow_legacy_candles and hasattr(self.chart, "update_candles"):
+            self.chart.update_candles(
+                arr,
+                predicted_prices=chart_predicted,
+                levels=self._get_levels_dict(),
+            )
+            self._chart_symbol = symbol
+            rendered = True
+
+        if update_latest_label:
+            label_price: float | None = None
+            if anchor_input is not None:
+                label_price = anchor_input
+            self._update_chart_latest_label(
+                symbol,
+                bar=arr[-1] if arr else None,
+                price=label_price,
+            )
+        if not rendered and not update_latest_label:
+            # Keep the return side-effect free when no renderer is available.
+            return arr
+        return arr
 
     # =========================================================================
     # =========================================================================
@@ -686,21 +1550,16 @@ class MainApp(QMainWindow):
     # =========================================================================
 
     def _ensure_feed_subscription(self, code: str):
-        """Subscribe symbol to realtime feed + ensure bar interval matches UI."""
+        """Subscribe symbol to realtime feed using 1m source bars."""
         if not CONFIG.is_market_open():
             return
         try:
             from data.feeds import get_feed_manager
             fm = get_feed_manager(auto_init=True, async_init=True)
 
-            interval = self.interval_combo.currentText().strip().lower()
-            bar_seconds_map = {
-                "1m": 60, "5m": 300, "15m": 900,
-                "30m": 1800, "60m": 3600, "1h": 3600, "1d": 86400,
-            }
-            bar_seconds = bar_seconds_map.get(interval, 60)
-
-            fm.set_bar_interval_seconds(bar_seconds)
+            # Keep data acquisition fixed at 1m. UI interval only controls
+            # display/aggregation, not upstream fetch cadence.
+            fm.set_bar_interval_seconds(60)
             fm.subscribe(code)
 
             if not getattr(self, "_bar_callback_attached", False):
@@ -721,7 +1580,14 @@ class MainApp(QMainWindow):
         if not CONFIG.is_market_open():
             return
         try:
-            self.bar_received.emit(str(symbol), dict(bar))
+            payload = dict(bar or {})
+            if not payload.get("interval"):
+                iv = self._interval_token_from_seconds(
+                    payload.get("interval_seconds")
+                )
+                if iv:
+                    payload["interval"] = iv
+            self.bar_received.emit(str(symbol), payload)
         except Exception:
             pass
 
@@ -763,9 +1629,56 @@ class MainApp(QMainWindow):
             arr = []
             self._bars_by_symbol[symbol] = arr
 
-        interval = str(
-            bar.get("interval") or self.interval_combo.currentText()
-        ).strip().lower()
+        ui_interval = self._normalize_interval_token(
+            self.interval_combo.currentText()
+        )
+        bar_interval_raw = bar.get("interval")
+        if (bar_interval_raw is None or str(bar_interval_raw).strip() == "") and (
+            "interval_seconds" in bar
+        ):
+            bar_interval_raw = self._interval_token_from_seconds(
+                bar.get("interval_seconds")
+            )
+        source_interval = self._normalize_interval_token(
+            bar_interval_raw,
+            fallback=ui_interval,
+        )
+        interval = source_interval
+        aggregate_to_ui = False
+        if source_interval != ui_interval:
+            try:
+                source_s = int(max(1, self._interval_seconds(source_interval)))
+                ui_s = int(max(1, self._interval_seconds(ui_interval)))
+                aggregate_to_ui = source_s < ui_s
+            except Exception:
+                aggregate_to_ui = False
+        # Drop stale/coarser bars from previous interval after interval switch.
+        if (
+            bar_interval_raw is not None
+            and str(bar_interval_raw).strip() != ""
+            and source_interval != ui_interval
+            and not aggregate_to_ui
+        ):
+            self._debug_console(
+                f"bar_iv_mismatch:{symbol}:{ui_interval}",
+                (
+                    f"drop feed bar {symbol}: feed_iv={source_interval} ui_iv={ui_interval} "
+                    f"raw_iv={bar_interval_raw} ts={bar.get('timestamp', bar.get('time', '--'))}"
+                ),
+                min_gap_seconds=1.0,
+            )
+            return
+        if aggregate_to_ui:
+            interval = ui_interval
+        if arr:
+            same_interval = [
+                b for b in arr
+                if self._normalize_interval_token(
+                    b.get("interval", interval), fallback=interval
+                ) == interval
+            ]
+            if len(same_interval) != len(arr):
+                arr[:] = same_interval
 
         ts_raw = bar.get("timestamp", bar.get("time"))
         if not self._is_market_session_timestamp(ts_raw, interval):
@@ -786,11 +1699,24 @@ class MainApp(QMainWindow):
             return
 
         ref_close = None
+        prev_epoch = None
         if arr:
             try:
                 ref_close = float(arr[-1].get("close", 0) or 0)
+                prev_epoch = self._bar_bucket_epoch(
+                    arr[-1].get("_ts_epoch", arr[-1].get("timestamp", ts_bucket)),
+                    interval,
+                )
             except Exception:
                 ref_close = None
+                prev_epoch = None
+        if (
+            ref_close
+            and float(ref_close) > 0
+            and prev_epoch is not None
+            and self._is_intraday_day_boundary(prev_epoch, ts_bucket, interval)
+        ):
+            ref_close = None
         sanitized = self._sanitize_ohlc(
             o,
             h,
@@ -800,10 +1726,31 @@ class MainApp(QMainWindow):
             ref_close=ref_close,
         )
         if sanitized is None:
+            self._debug_console(
+                f"bar_sanitize_drop:{symbol}:{interval}",
+                (
+                    f"sanitize drop {symbol} {interval}: "
+                    f"o={o:.4f} h={h:.4f} l={low:.4f} c={c:.4f} "
+                    f"ref={float(ref_close or 0.0):.4f}"
+                ),
+                min_gap_seconds=0.8,
+            )
             return
         o, h, low, c = sanitized
 
         is_final = bool(bar.get("final", True))
+        if aggregate_to_ui:
+            try:
+                source_bucket = self._bar_bucket_epoch(ts_epoch, source_interval)
+                source_step = int(max(1, self._interval_seconds(source_interval)))
+                next_target_bucket = self._bar_bucket_epoch(
+                    float(source_bucket) + float(source_step),
+                    interval,
+                )
+                # Finer source bar is final for target bucket only at boundary.
+                is_final = bool(is_final and int(next_target_bucket) != int(ts_bucket))
+            except Exception:
+                is_final = False
         norm_bar: dict[str, Any] = {
             "open": o,
             "high": h,
@@ -824,9 +1771,21 @@ class MainApp(QMainWindow):
         if arr:
             try:
                 ref = float(arr[-1].get("close", c) or c)
-                if self._is_outlier_tick(ref, c, interval=interval):
-                    log.debug(
-                        f"Skip outlier bar for {symbol}: prev={ref:.2f} new={c:.2f}"
+                ref_epoch = self._bar_bucket_epoch(
+                    arr[-1].get("_ts_epoch", arr[-1].get("timestamp", ts_bucket)),
+                    interval,
+                )
+                if self._is_intraday_day_boundary(ref_epoch, ts_bucket, interval):
+                    ref = 0.0
+                if ref > 0 and self._is_outlier_tick(ref, c, interval=interval):
+                    self._debug_console(
+                        f"bar_outlier:{symbol}:{interval}",
+                        (
+                            f"outlier drop {symbol} {interval}: "
+                            f"prev={ref:.4f} new={c:.4f} "
+                            f"jump={abs(c / ref - 1.0):.2%}"
+                        ),
+                        min_gap_seconds=0.6,
                     )
                     return
             except Exception:
@@ -844,13 +1803,59 @@ class MainApp(QMainWindow):
                 if int(arr_epoch) != ts_key:
                     continue
                 # Keep completed bars immutable; ignore stale partial rewrites.
-                if bool(arr[i].get("final", False)) and not is_final:
+                existing_final = bool(arr[i].get("final", False))
+                if existing_final and not is_final:
                     replaced = True
                     break
-                arr[i] = norm_bar
+                if aggregate_to_ui:
+                    existing = arr[i] if isinstance(arr[i], dict) else {}
+                    merged = dict(existing)
+                    try:
+                        e_open = float(existing.get("open", 0) or 0)
+                    except Exception:
+                        e_open = 0.0
+                    try:
+                        e_high = float(existing.get("high", c) or c)
+                    except Exception:
+                        e_high = c
+                    try:
+                        e_low = float(existing.get("low", c) or c)
+                    except Exception:
+                        e_low = c
+                    merged["open"] = e_open if e_open > 0 else o
+                    merged["high"] = float(max(e_high, h, o, c))
+                    merged["low"] = float(min(e_low, low, o, c))
+                    merged["close"] = float(c)
+                    merged["timestamp"] = ts
+                    merged["_ts_epoch"] = float(ts_bucket)
+                    merged["interval"] = interval
+                    merged["final"] = bool(existing_final or is_final)
+                    if ("volume" in norm_bar) or ("volume" in existing):
+                        try:
+                            e_vol = float(existing.get("volume", 0) or 0.0)
+                        except Exception:
+                            e_vol = 0.0
+                        try:
+                            n_vol = float(norm_bar.get("volume", 0) or 0.0)
+                        except Exception:
+                            n_vol = 0.0
+                        merged["volume"] = float(max(0.0, e_vol) + max(0.0, n_vol))
+                    arr[i] = merged
+                else:
+                    arr[i] = norm_bar
                 replaced = True
                 break
         if not replaced:
+            if arr:
+                try:
+                    prev_bucket = self._bar_bucket_epoch(
+                        arr[-1].get("_ts_epoch", arr[-1].get("timestamp", ts_bucket)),
+                        interval,
+                    )
+                    if int(prev_bucket) != ts_key and not bool(arr[-1].get("final", True)):
+                        arr[-1]["final"] = True
+                except Exception:
+                    pass
             arr.append(norm_bar)
 
         arr.sort(
@@ -880,33 +1885,26 @@ class MainApp(QMainWindow):
         if current_code != symbol:
             return
 
-        predicted = []
-        if (
-            self.current_prediction
-            and getattr(self.current_prediction, "stock_code", "") == symbol
-        ):
-            predicted = (
-                getattr(self.current_prediction, "predicted_prices", [])
-                or []
-            )
+        predicted, pred_source_interval = self._resolve_chart_prediction_series(
+            symbol=symbol,
+            fallback_interval=interval,
+        )
 
         # UNIFIED chart update - draws candles + line + prediction
         try:
-            if hasattr(self.chart, 'update_chart'):
-                self.chart.update_chart(
-                    arr,
-                    predicted_prices=predicted,
-                    levels=self._get_levels_dict()
-                )
-                self._chart_symbol = symbol
-            elif hasattr(self.chart, 'update_candles'):
-                self.chart.update_candles(
-                    arr,
-                    predicted_prices=predicted,
-                    levels=self._get_levels_dict()
-                )
-                self._chart_symbol = symbol
-            self._update_chart_latest_label(symbol, bar=arr[-1] if arr else None)
+            current_price = float(norm_bar.get("close", 0) or 0)
+            self._render_chart_state(
+                symbol=symbol,
+                interval=interval,
+                bars=arr,
+                context="bar_ui",
+                current_price=current_price if current_price > 0 else None,
+                predicted_prices=predicted,
+                source_interval=pred_source_interval,
+                target_steps=int(self.forecast_spin.value()),
+                update_latest_label=True,
+                allow_legacy_candles=True,
+            )
         except Exception as e:
             log.debug(f"Chart update failed: {e}")
 
@@ -1042,14 +2040,14 @@ class MainApp(QMainWindow):
 
         self.forecast_spin = QSpinBox()
         self.forecast_spin.setRange(5, 120)
-        self.forecast_spin.setValue(120)
+        self.forecast_spin.setValue(self.GUESS_FORECAST_BARS)
         self.forecast_spin.setSuffix(" min")
         self.forecast_spin.setToolTip("Minutes to forecast ahead")
         self._add_labeled(settings_layout, 4, "Forecast:", self.forecast_spin)
 
         self.lookback_spin = QSpinBox()
         self.lookback_spin.setRange(7, 5000)
-        self.lookback_spin.setValue(self._seven_day_lookback("1m"))
+        self.lookback_spin.setValue(self._recommended_lookback("1m"))
         self.lookback_spin.setSuffix(" bars")
         self.lookback_spin.setToolTip("Historical bars to use for analysis")
         self._add_labeled(settings_layout, 5, "Lookback:", self.lookback_spin)
@@ -1223,19 +2221,27 @@ class MainApp(QMainWindow):
         chart_actions.addWidget(self.zoom_out_btn)
         chart_actions.addWidget(self.zoom_reset_btn)
 
-        self.chart_bbands_chk = QCheckBox("BBands")
-        self.chart_bbands_chk.setChecked(True)
-        self.chart_bbands_chk.toggled.connect(
-            lambda v: self._set_chart_overlay("bbands", v)
-        )
-        chart_actions.addWidget(self.chart_bbands_chk)
-
-        self.chart_vwap_chk = QCheckBox("VWAP20")
-        self.chart_vwap_chk.setChecked(True)
-        self.chart_vwap_chk.toggled.connect(
-            lambda v: self._set_chart_overlay("vwap20", v)
-        )
-        chart_actions.addWidget(self.chart_vwap_chk)
+        overlay_specs = [
+            ("SMA20", "sma20", True),
+            ("SMA50", "sma50", True),
+            ("SMA200", "sma200", False),
+            ("EMA21", "ema21", True),
+            ("EMA55", "ema55", False),
+            ("BBands", "bbands", True),
+            ("VWAP20", "vwap20", True),
+        ]
+        self._chart_overlay_checks: dict[str, QCheckBox] = {}
+        for label, key, default_enabled in overlay_specs:
+            chk = QCheckBox(label)
+            chk.setChecked(bool(default_enabled))
+            chk.toggled.connect(
+                lambda v, overlay_key=key: self._set_chart_overlay(
+                    overlay_key,
+                    v,
+                )
+            )
+            self._chart_overlay_checks[key] = chk
+            chart_actions.addWidget(chk)
 
         chart_actions.addStretch(1)
         chart_layout.addLayout(chart_actions)
@@ -1758,8 +2764,16 @@ class MainApp(QMainWindow):
         try:
             Predictor = _lazy_get("models.predictor", "Predictor")
 
-            interval = self.interval_combo.currentText().strip()
-            horizon = self.forecast_spin.value()
+            interval = str(self.STARTUP_INTERVAL).strip().lower()
+            self.interval_combo.blockSignals(True)
+            try:
+                self.interval_combo.setCurrentText(interval)
+            finally:
+                self.interval_combo.blockSignals(False)
+            # Always start with 30-step guess horizon for live chart forecasting.
+            self.forecast_spin.setValue(int(self.GUESS_FORECAST_BARS))
+            self.lookback_spin.setValue(self._recommended_lookback(interval))
+            horizon = int(self.forecast_spin.value())
 
             self.predictor = Predictor(
                 capital=self.capital_spin.value(),
@@ -1773,7 +2787,16 @@ class MainApp(QMainWindow):
                     f"Model: Loaded ({num_models} networks)"
                 )
                 self.model_status.setStyleSheet("color: #4CAF50;")
-                self._sync_ui_to_loaded_model(interval, horizon)
+                self._sync_ui_to_loaded_model(
+                    interval,
+                    horizon,
+                    preserve_requested_interval=True,
+                )
+                self._log_model_alignment_debug(
+                    context="startup",
+                    requested_interval=interval,
+                    requested_horizon=horizon,
+                )
                 self._update_trained_stocks_ui()
                 self.log("AI model loaded successfully", "success")
             else:
@@ -1806,6 +2829,11 @@ class MainApp(QMainWindow):
             except Exception as e:
                 log.debug(f"Auto-start monitoring failed: {e}")
 
+        if self._debug_console_enabled:
+            self.log(
+                "Debug console enabled (set TRADING_DEBUG_CONSOLE=0 to disable)",
+                "warning",
+            )
         self.log("System initialized - Ready for trading", "info")
 
     def _get_trained_stock_codes(self) -> list[str]:
@@ -1825,6 +2853,54 @@ class MainApp(QMainWindow):
         except Exception:
             pass
         return []
+
+    def _get_trained_stock_set(self) -> set[str]:
+        """Normalized trained stock set from metadata cache/predictor."""
+        raw = list(getattr(self, "_trained_stock_codes_cache", []) or [])
+        if not raw and self.predictor is not None:
+            raw = self._get_trained_stock_codes()
+            if raw:
+                self._trained_stock_codes_cache = list(raw)
+        out: set[str] = set()
+        for item in raw:
+            code = self._ui_norm(item)
+            if code:
+                out.add(code)
+        return out
+
+    def _is_trained_stock(self, symbol: str) -> bool:
+        """Whether symbol is part of the currently loaded trained stock set."""
+        code = self._ui_norm(symbol)
+        if not code:
+            return False
+        return code in self._get_trained_stock_set()
+
+    def _persist_session_bar(
+        self,
+        symbol: str,
+        interval: str,
+        bar: dict[str, Any] | None,
+        *,
+        channel: str = "tick",
+        min_gap_seconds: float = 0.9,
+    ) -> None:
+        """Persist latest live bar snapshot to session cache."""
+        if self._session_bar_cache is None or not isinstance(bar, dict):
+            return
+        try:
+            iv = self._normalize_interval_token(interval)
+            now_ts = time.time()
+            key = f"{symbol}:{iv}:{channel}"
+            prev_ts = float(self._last_session_cache_write_ts.get(key, 0.0))
+            if (now_ts - prev_ts) < float(max(0.0, min_gap_seconds)):
+                return
+            payload = dict(bar)
+            payload["interval"] = iv
+            wrote = self._session_bar_cache.append_bar(symbol, iv, payload)
+            if wrote:
+                self._last_session_cache_write_ts[key] = now_ts
+        except Exception as e:
+            log.debug(f"Session cache persist failed for {symbol}: {e}")
 
     def _filter_trained_stocks_ui(self, text: str):
         """Filter right-panel trained stock list by search query."""
@@ -1876,6 +2952,19 @@ class MainApp(QMainWindow):
         code = self._ui_norm(item.text())
         if not code:
             return
+        interval = self._normalize_interval_token(
+            self.interval_combo.currentText()
+        )
+        try:
+            self._queue_history_refresh(code, interval)
+        except Exception:
+            pass
+        try:
+            target_lookback = int(self._recommended_lookback(interval))
+            if int(self.lookback_spin.value()) < target_lookback:
+                self.lookback_spin.setValue(target_lookback)
+        except Exception:
+            pass
         self._pin_watchlist_symbol(code)
         self.stock_input.setText(code)
         try:
@@ -1979,13 +3068,16 @@ class MainApp(QMainWindow):
 
     def _on_interval_changed(self, interval: str):
         """Handle interval change - reload model and restart monitor."""
+        interval = self._normalize_interval_token(interval)
         horizon = self.forecast_spin.value()
         self.model_info.setText(f"Interval: {interval}, Horizon: {horizon}")
         self._update_trained_stocks_ui([])
 
-        self.lookback_spin.setValue(self._seven_day_lookback(interval))
+        self.lookback_spin.setValue(self._recommended_lookback(interval))
         self._bars_by_symbol.clear()
+        self._last_bar_feed_ts.clear()
         self._chart_symbol = ""
+        self._queue_history_refresh(self.stock_input.text(), interval)
         try:
             if hasattr(self.chart, "clear"):
                 self.chart.clear()
@@ -2000,23 +3092,51 @@ class MainApp(QMainWindow):
 
         if self.predictor:
             try:
-                Predictor = _lazy_get("models.predictor", "Predictor")
-                self.predictor = Predictor(
-                    capital=self.capital_spin.value(),
-                    interval=interval,
-                    prediction_horizon=horizon
-                )
-                if self.predictor.ensemble:
-                    active_iv, active_h = self._sync_ui_to_loaded_model(
+                if self._has_exact_model_artifacts(interval, horizon):
+                    Predictor = _lazy_get("models.predictor", "Predictor")
+                    self.predictor = Predictor(
+                        capital=self.capital_spin.value(),
+                        interval=interval,
+                        prediction_horizon=horizon
+                    )
+                    if self.predictor.ensemble:
+                        active_iv, active_h = self._sync_ui_to_loaded_model(
+                            interval,
+                            horizon,
+                            preserve_requested_interval=True,
+                        )
+                        self.log(
+                            f"Model reloaded for {active_iv} interval, horizon {active_h}",
+                            "info",
+                        )
+                        self._update_trained_stocks_ui()
+                        self._log_model_alignment_debug(
+                            context="interval_reload",
+                            requested_interval=interval,
+                            requested_horizon=horizon,
+                        )
+                else:
+                    # Keep current model loaded but preserve user's selected
+                    # chart/analysis interval and show explicit mismatch status.
+                    self._sync_ui_to_loaded_model(
                         interval,
                         horizon,
                         preserve_requested_interval=True,
                     )
+                    model_iv, model_h = self._loaded_model_ui_meta()
                     self.log(
-                        f"Model reloaded for {active_iv} interval, horizon {active_h}",
-                        "info",
+                        (
+                            f"No exact model artifacts for {interval}/{horizon}; "
+                            f"using loaded model {model_iv}/{model_h} for signals"
+                        ),
+                        "warning",
                     )
                     self._update_trained_stocks_ui()
+                    self._log_model_alignment_debug(
+                        context="interval_keep_loaded",
+                        requested_interval=interval,
+                        requested_horizon=horizon,
+                    )
             except Exception as e:
                 self.log(f"Model reload failed: {e}", "warning")
 
@@ -2042,7 +3162,7 @@ class MainApp(QMainWindow):
 
     def _seven_day_lookback(self, interval: str) -> int:
         """Return lookback bars representing ~7 trading days for interval."""
-        iv = str(interval or "1m").strip().lower()
+        iv = self._normalize_interval_token(interval)
         try:
             from data.fetcher import BARS_PER_DAY
             bpd = float(BARS_PER_DAY.get(iv, 1.0))
@@ -2052,9 +3172,92 @@ class MainApp(QMainWindow):
         bars = int(max(7, round(7.0 * bpd)))
         return max(50, bars) if iv != "1d" else 7
 
+    def _recommended_lookback(self, interval: str) -> int:
+        """
+        Recommended lookback for analysis/forecast per interval.
+        Startup 1m uses a true 7-day 1m window; higher intervals keep a
+        minimum depth for feature generation stability.
+        """
+        iv = self._normalize_interval_token(interval)
+        base = int(self._seven_day_lookback(iv))
+        if iv in ("1d", "1wk", "1mo"):
+            return max(60, base)
+        return max(120, base)
+
+    def _queue_history_refresh(self, symbol: str, interval: str) -> None:
+        """Force next history load to bypass memory/session cache once."""
+        iv = self._normalize_interval_token(interval)
+        sym = self._ui_norm(symbol)
+        key = (sym if sym else "*", iv)
+        self._history_refresh_once.add(key)
+
+    def _consume_history_refresh(self, symbol: str, interval: str) -> bool:
+        """Consume one queued history refresh request for symbol/interval."""
+        iv = self._normalize_interval_token(interval)
+        sym = self._ui_norm(symbol)
+        direct = (sym, iv)
+        wildcard = ("*", iv)
+        if direct in self._history_refresh_once:
+            self._history_refresh_once.discard(direct)
+            return True
+        if wildcard in self._history_refresh_once:
+            self._history_refresh_once.discard(wildcard)
+            return True
+        return False
+
+    def _schedule_analysis_recovery(
+        self,
+        symbol: str,
+        interval: str,
+        warnings: list[str] | None = None,
+    ) -> None:
+        """
+        Retry analysis once with a forced history refresh when output is partial.
+        Throttled per symbol/interval to avoid retry loops.
+        """
+        sym = self._ui_norm(symbol)
+        if not sym:
+            return
+        iv = self._normalize_interval_token(interval)
+        key = f"{sym}:{iv}"
+        now_ts = time.monotonic()
+        last_ts = float(self._analysis_recovery_attempt_ts.get(key, 0.0) or 0.0)
+        if (now_ts - last_ts) < 25.0:
+            return
+        self._analysis_recovery_attempt_ts[key] = now_ts
+
+        self._queue_history_refresh(sym, iv)
+
+        reason = ""
+        warn_list = list(warnings or [])
+        if warn_list:
+            for item in warn_list:
+                txt = str(item).strip()
+                if txt:
+                    reason = txt
+                    break
+        if reason:
+            self.log(
+                f"Data warm-up retry for {sym}: {reason}",
+                "info",
+            )
+        else:
+            self.log(
+                f"Data warm-up retry for {sym}: refreshing history",
+                "info",
+            )
+
+        def _retry_once():
+            selected = self._ui_norm(self.stock_input.text())
+            if selected != sym:
+                return
+            self._analyze_stock()
+
+        QTimer.singleShot(1800, _retry_once)
+
     def _history_window_bars(self, interval: str) -> int:
         """Rolling chart/session window size (7-day equivalent)."""
-        iv = str(interval or "1m").strip().lower()
+        iv = self._normalize_interval_token(interval)
         bars = int(self._seven_day_lookback(iv))
         if iv == "1d":
             return max(7, bars)
@@ -2115,7 +3318,7 @@ class MainApp(QMainWindow):
     ) -> list[dict[str, Any]]:
         """Merge+deduplicate bars by timestamp and keep a 7-day rolling window."""
         merged: dict[int, dict[str, Any]] = {}
-        iv = str(interval or "1m").strip().lower()
+        iv = self._normalize_interval_token(interval)
 
         def _upsert(row_in: dict[str, Any]) -> None:
             epoch = self._bar_bucket_epoch(
@@ -2173,6 +3376,7 @@ class MainApp(QMainWindow):
         # Final pass: sanitize OHLC and drop abrupt jumps.
         cleaned: list[dict[str, Any]] = []
         prev_close: float | None = None
+        prev_epoch: float | None = None
         for row in out:
             try:
                 c = float(row.get("close", 0) or 0)
@@ -2181,6 +3385,18 @@ class MainApp(QMainWindow):
                 low = float(row.get("low", c) or c)
             except Exception:
                 continue
+            row_epoch = float(
+                self._bar_bucket_epoch(
+                    row.get("_ts_epoch", row.get("timestamp")),
+                    iv,
+                )
+            )
+            ref_close = prev_close
+            if (
+                prev_epoch is not None
+                and self._is_intraday_day_boundary(prev_epoch, row_epoch, iv)
+            ):
+                ref_close = None
 
             sanitized = self._sanitize_ohlc(
                 o,
@@ -2188,16 +3404,16 @@ class MainApp(QMainWindow):
                 low,
                 c,
                 interval=iv,
-                ref_close=prev_close,
+                ref_close=ref_close,
             )
             if sanitized is None:
                 continue
 
             o, h, low, c = sanitized
-            if prev_close and prev_close > 0 and self._is_outlier_tick(
-                prev_close, c, interval=iv
+            if ref_close and ref_close > 0 and self._is_outlier_tick(
+                ref_close, c, interval=iv
             ):
-                    continue
+                continue
 
             row_out = dict(row)
             row_out["open"] = o
@@ -2206,29 +3422,365 @@ class MainApp(QMainWindow):
             row_out["close"] = c
             cleaned.append(row_out)
             prev_close = c
+            prev_epoch = row_epoch
 
         keep = self._history_window_bars(interval)
         return cleaned[-keep:]
 
     def _interval_seconds(self, interval: str) -> int:
         """Map UI interval token to candle duration in seconds."""
-        iv = str(interval or "1m").strip().lower()
+        iv = self._normalize_interval_token(interval)
         mapping = {
             "1m": 60,
             "5m": 300,
             "15m": 900,
             "30m": 1800,
             "60m": 3600,
-            "1h": 3600,
             "1d": 86400,
         }
-        return int(mapping.get(iv, 60))
+        if iv in mapping:
+            return int(mapping[iv])
+        # Generic support for provider labels like "90m" / "30s".
+        try:
+            if iv.endswith("m"):
+                return max(1, int(float(iv[:-1])) * 60)
+            if iv.endswith("s"):
+                return max(1, int(float(iv[:-1])))
+        except Exception:
+            pass
+        return 60
+
+    def _interval_token_from_seconds(self, seconds: Any) -> str | None:
+        """Best-effort inverse mapping from seconds to interval token."""
+        try:
+            sec = max(1, int(float(seconds)))
+        except Exception:
+            return None
+        known = {
+            60: "1m",
+            300: "5m",
+            900: "15m",
+            1800: "30m",
+            3600: "60m",
+            86400: "1d",
+        }
+        if sec in known:
+            return known[sec]
+        if sec % 60 == 0:
+            return f"{int(sec // 60)}m"
+        return f"{sec}s"
+
+    def _bars_needed_from_base_interval(
+        self,
+        target_interval: str,
+        target_bars: int,
+        base_interval: str = "1m",
+    ) -> int:
+        """
+        Estimate how many base-interval bars are needed to render
+        `target_bars` in `target_interval`.
+        """
+        tgt = self._normalize_interval_token(target_interval)
+        base = self._normalize_interval_token(base_interval)
+        tgt_n = max(1, int(target_bars))
+
+        try:
+            src_sec = float(max(1, self._interval_seconds(base)))
+            tgt_sec = float(max(1, self._interval_seconds(tgt)))
+            factor = int(max(1, math.ceil(tgt_sec / src_sec)))
+        except Exception:
+            factor = 1
+
+        # CN market has about 240 one-minute bars per full session day.
+        if tgt == "1d":
+            factor = max(factor, 240)
+        elif tgt == "1wk":
+            factor = max(factor, 240 * 5)
+        elif tgt == "1mo":
+            factor = max(factor, 240 * 20)
+
+        return int(max(tgt_n, (tgt_n * factor) + factor))
+
+    def _resample_chart_bars(
+        self,
+        bars: list[dict[str, Any]],
+        source_interval: str,
+        target_interval: str,
+    ) -> list[dict[str, Any]]:
+        """
+        Aggregate OHLC bars from source interval to target interval.
+        Keeps candle integrity (open/close ordering, high/low envelope).
+        """
+        src = self._normalize_interval_token(source_interval)
+        tgt = self._normalize_interval_token(target_interval)
+        if src == tgt:
+            return list(bars or [])
+        if not bars:
+            return []
+
+        src_sec = int(max(1, self._interval_seconds(src)))
+        tgt_sec = int(max(1, self._interval_seconds(tgt)))
+        if tgt_sec <= src_sec:
+            return list(bars or [])
+
+        ranked = sorted(
+            list(bars or []),
+            key=lambda row: float(
+                self._ts_to_epoch(
+                    row.get("_ts_epoch", row.get("timestamp", row.get("time")))
+                )
+            ),
+        )
+
+        buckets: dict[str, dict[str, Any]] = {}
+        for row in ranked:
+            try:
+                ep = float(
+                    self._ts_to_epoch(
+                        row.get("_ts_epoch", row.get("timestamp", row.get("time")))
+                    )
+                )
+            except Exception:
+                continue
+            if not math.isfinite(ep):
+                continue
+
+            day_key = self._bar_trading_date(ep)
+            if tgt == "1d":
+                key = str(day_key) if day_key is not None else str(int(ep // 86400))
+            elif tgt == "1wk":
+                if day_key is None:
+                    key = f"week:{int(ep // (86400 * 7))}"
+                else:
+                    iso = day_key.isocalendar()
+                    key = f"week:{int(iso.year)}-{int(iso.week):02d}"
+            elif tgt == "1mo":
+                if day_key is None:
+                    dt = datetime.fromtimestamp(ep)
+                    key = f"month:{dt.year}-{dt.month:02d}"
+                else:
+                    key = f"month:{day_key.year}-{day_key.month:02d}"
+            else:
+                key = f"slot:{int(self._bar_bucket_epoch(ep, tgt))}"
+
+            try:
+                o = float(row.get("open", 0) or 0)
+                h = float(row.get("high", 0) or 0)
+                low = float(row.get("low", 0) or 0)
+                c = float(row.get("close", 0) or 0)
+            except Exception:
+                continue
+            if c <= 0 or not all(math.isfinite(v) for v in (o, h, low, c)):
+                continue
+
+            if key not in buckets:
+                try:
+                    vol = float(row.get("volume", 0) or 0.0)
+                except Exception:
+                    vol = 0.0
+                buckets[key] = {
+                    "open": o if o > 0 else c,
+                    "high": max(h, o, c),
+                    "low": min(low, o, c),
+                    "close": c,
+                    "volume": max(0.0, vol),
+                    "_ts_epoch": float(ep),
+                    "final": bool(row.get("final", True)),
+                    "interval": tgt,
+                }
+                continue
+
+            cur = buckets[key]
+            cur["high"] = float(max(float(cur["high"]), h, o, c))
+            cur["low"] = float(min(float(cur["low"]), low, o, c))
+            cur["close"] = float(c)
+            cur["_ts_epoch"] = float(max(float(cur["_ts_epoch"]), ep))
+            cur["final"] = bool(cur.get("final", True) and bool(row.get("final", True)))
+            try:
+                cur["volume"] = float(cur.get("volume", 0.0)) + max(
+                    0.0,
+                    float(row.get("volume", 0) or 0.0),
+                )
+            except Exception:
+                pass
+
+        out: list[dict[str, Any]] = []
+        for val in buckets.values():
+            row_out = dict(val)
+            row_out["timestamp"] = self._epoch_to_iso(float(row_out["_ts_epoch"]))
+            out.append(row_out)
+
+        out.sort(key=lambda row: float(row.get("_ts_epoch", 0.0)))
+        return self._merge_bars([], out, tgt)
+
+    def _dominant_bar_interval(
+        self,
+        bars: list[dict[str, Any]] | None,
+        fallback: str = "1m",
+    ) -> str:
+        """Most frequent interval token in bar list (best effort)."""
+        counts: dict[str, int] = {}
+        for row in (bars or []):
+            if not isinstance(row, dict):
+                continue
+            iv = self._normalize_interval_token(
+                row.get("interval"),
+                fallback="",
+            )
+            if not iv:
+                continue
+            counts[iv] = int(counts.get(iv, 0)) + 1
+        if not counts:
+            return self._normalize_interval_token(fallback)
+        best_iv = max(counts.items(), key=lambda kv: kv[1])[0]
+        return self._normalize_interval_token(best_iv, fallback=fallback)
+
+    def _effective_anchor_price(
+        self,
+        symbol: str,
+        candidate: float | None = None,
+    ) -> float:
+        """
+        Resolve a robust anchor price for chart scale repair.
+        Prefers live/watchlist quote when candidate is obviously off-scale.
+        """
+        sym = self._ui_norm(symbol)
+        try:
+            base = float(candidate or 0.0)
+        except Exception:
+            base = 0.0
+        if not math.isfinite(base) or base <= 0:
+            base = 0.0
+
+        alt = 0.0
+        try:
+            rec = self._last_watchlist_price_ui.get(sym)
+            if rec is not None:
+                alt = float(rec[1] or 0.0)
+        except Exception:
+            alt = 0.0
+        if not math.isfinite(alt) or alt <= 0:
+            alt = 0.0
+
+        # Try live quote only when needed to avoid excess calls.
+        if alt <= 0 and (base <= 0 or base < 5.0):
+            fetcher = None
+            try:
+                if self.predictor is not None:
+                    fetcher = getattr(self.predictor, "fetcher", None)
+            except Exception:
+                fetcher = None
+            if fetcher is not None and sym:
+                try:
+                    q = fetcher.get_realtime(sym)
+                    alt = float(getattr(q, "price", 0) or 0.0) if q is not None else 0.0
+                except Exception:
+                    alt = 0.0
+                if not math.isfinite(alt) or alt <= 0:
+                    alt = 0.0
+
+        if base > 0 and alt > 0:
+            ratio = max(base, alt) / max(min(base, alt), 1e-8)
+            # If candidate differs by 30x+, trust live/watchlist anchor.
+            if ratio >= 30.0:
+                return float(alt)
+            return float(base)
+        if alt > 0:
+            return float(alt)
+        return float(base)
+
+    def _stabilize_chart_depth(
+        self,
+        symbol: str,
+        interval: str,
+        candidate: list[dict[str, Any]] | None,
+    ) -> list[dict[str, Any]]:
+        """
+        Avoid replacing a healthy deep window with a transient tiny window.
+        """
+        cand = list(candidate or [])
+        if not cand:
+            return cand
+
+        sym = self._ui_norm(symbol)
+        iv = self._normalize_interval_token(interval)
+        existing_all = list(self._bars_by_symbol.get(sym) or [])
+        if not existing_all:
+            return cand
+        existing = [
+            b for b in existing_all
+            if self._normalize_interval_token(
+                b.get("interval", iv),
+                fallback=iv,
+            ) == iv
+        ]
+        if not existing:
+            return cand
+
+        old_len = len(existing)
+        new_len = len(cand)
+        # Protect even medium-depth windows (for example 20-40 bars) from
+        # being replaced by transient 1-5 bar snapshots.
+        if old_len < 12 or new_len >= max(6, int(old_len * 0.45)):
+            return cand
+
+        merged = self._merge_bars(existing, cand, iv)
+        if len(merged) >= max(new_len, int(old_len * 0.62)):
+            out = merged
+        else:
+            out = existing
+
+        self._debug_console(
+            f"chart_depth_stabilize:{sym}:{iv}",
+            (
+                f"depth stabilization for {sym} {iv}: "
+                f"new={new_len} old={old_len} final={len(out)}"
+            ),
+            min_gap_seconds=1.0,
+            level="info",
+        )
+        return out
 
     def _bar_bucket_epoch(self, ts_raw: Any, interval: str) -> float:
         """Floor any timestamp to the interval bucket start (epoch seconds)."""
         epoch = self._ts_to_epoch(ts_raw)
         step = float(max(1, self._interval_seconds(interval)))
         return float(int(epoch // step) * int(step))
+
+    def _bar_trading_date(self, ts_raw: Any) -> object | None:
+        """Best-effort Shanghai trading date for a timestamp-like value."""
+        try:
+            epoch = float(self._ts_to_epoch(ts_raw))
+        except Exception:
+            return None
+        try:
+            from zoneinfo import ZoneInfo
+            dt_val = datetime.fromtimestamp(epoch, tz=ZoneInfo("Asia/Shanghai"))
+        except Exception:
+            try:
+                dt_val = datetime.fromtimestamp(epoch)
+            except Exception:
+                return None
+        try:
+            return dt_val.date()
+        except Exception:
+            return None
+
+    def _is_intraday_day_boundary(
+        self,
+        prev_ts_raw: Any,
+        cur_ts_raw: Any,
+        interval: str,
+    ) -> bool:
+        """True when two intraday bars fall on different Shanghai trading dates."""
+        iv = self._normalize_interval_token(interval)
+        if iv in ("1d", "1wk", "1mo"):
+            return False
+        prev_day = self._bar_trading_date(prev_ts_raw)
+        cur_day = self._bar_trading_date(cur_ts_raw)
+        if prev_day is None or cur_day is None:
+            return False
+        return bool(cur_day != prev_day)
 
     def _shanghai_now(self) -> datetime:
         """Current time in Asia/Shanghai when zoneinfo is available."""
@@ -2304,7 +3856,7 @@ class MainApp(QMainWindow):
 
     def _is_market_session_timestamp(self, ts_raw: Any, interval: str) -> bool:
         """True when timestamp falls inside CN trading session for intraday intervals."""
-        iv = str(interval or "1m").strip().lower()
+        iv = self._normalize_interval_token(interval)
         if iv in ("1d", "1wk", "1mo"):
             return True
 
@@ -2330,7 +3882,7 @@ class MainApp(QMainWindow):
         interval: str,
     ) -> list[dict[str, Any]]:
         """Drop out-of-session intraday bars before chart rendering."""
-        iv = str(interval or "1m").strip().lower()
+        iv = self._normalize_interval_token(interval)
         if iv in ("1d", "1wk", "1mo"):
             return list(bars or [])
 
@@ -2346,18 +3898,36 @@ class MainApp(QMainWindow):
         Return (max_jump_pct, max_range_pct) for bar sanitization.
         Values are intentionally conservative for intraday feeds.
         """
-        iv = str(interval or "1m").strip().lower()
+        iv = self._normalize_interval_token(interval)
         if iv == "1m":
-            return 0.12, 0.045
+            return 0.08, 0.006
         if iv == "5m":
-            return 0.14, 0.075
+            return 0.10, 0.012
         if iv in ("15m", "30m"):
-            return 0.18, 0.12
+            return 0.14, 0.020
         if iv in ("60m", "1h"):
-            return 0.24, 0.18
+            return 0.18, 0.040
         if iv in ("1d", "1wk", "1mo"):
-            return 0.45, 0.35
+            return 0.24, 0.22
         return 0.20, 0.15
+
+    def _synthetic_tick_jump_cap(self, interval: str) -> float:
+        """
+        Stricter jump cap for tick-driven synthetic bar updates.
+        Prevents stale or spiky quotes from creating giant intraday bodies.
+        """
+        iv = self._normalize_interval_token(interval)
+        if iv == "1m":
+            return 0.012
+        if iv == "5m":
+            return 0.018
+        if iv in ("15m", "30m"):
+            return 0.028
+        if iv in ("60m", "1h"):
+            return 0.045
+        if iv in ("1d", "1wk", "1mo"):
+            return 0.12
+        return 0.03
 
     def _sanitize_ohlc(
         self,
@@ -2398,11 +3968,15 @@ class MainApp(QMainWindow):
             h, low = low, h
 
         jump_cap, range_cap = self._bar_safety_caps(interval)
-        iv = str(interval or "1m").strip().lower()
+        iv = self._normalize_interval_token(interval)
         if ref > 0:
             effective_range_cap = float(range_cap)
         else:
-            bootstrap_cap = 0.60 if iv in ("1d", "1wk", "1mo") else 0.25
+            bootstrap_cap = (
+                0.30
+                if iv in ("1d", "1wk", "1mo")
+                else float(max(0.008, min(0.020, range_cap * 2.0)))
+            )
             effective_range_cap = float(max(range_cap, bootstrap_cap))
         if ref > 0:
             jump = abs(c / ref - 1.0)
@@ -2490,12 +4064,39 @@ class MainApp(QMainWindow):
             self.monitor_action.setChecked(False)
             return
 
-        interval = self.interval_combo.currentText().strip()
-        forecast_bars = self.forecast_spin.value()
-        lookback = self._seven_day_lookback(interval)
-        self.lookback_spin.setValue(
-            max(int(self.lookback_spin.value()), int(lookback))
+        requested_interval = self._normalize_interval_token(
+            self.interval_combo.currentText()
         )
+        requested_horizon = int(self.forecast_spin.value())
+        lookback = max(
+            int(self.lookback_spin.value()),
+            int(self._recommended_lookback(requested_interval)),
+        )
+        monitor_interval = "1m"
+        monitor_horizon = int(requested_horizon)
+        monitor_lookback = int(
+            max(
+                self._recommended_lookback("1m"),
+                self._bars_needed_from_base_interval(
+                    requested_interval,
+                    int(lookback),
+                    base_interval="1m",
+                ),
+            )
+        )
+        monitor_history_allow_online = True
+        if not self._has_exact_model_artifacts(monitor_interval, requested_horizon):
+            self._debug_console(
+                f"monitor_model_fallback:{requested_interval}:{requested_horizon}",
+                (
+                    "monitor inference locked to 1m source stream: "
+                    f"ui={requested_interval}/{requested_horizon} "
+                    f"infer={monitor_interval}/{requested_horizon} "
+                    f"lookback={monitor_lookback} online=1"
+                ),
+                min_gap_seconds=2.0,
+                level="info",
+            )
 
         try:
             from data.feeds import get_feed_manager
@@ -2519,9 +4120,10 @@ class MainApp(QMainWindow):
         self.monitor = RealTimeMonitor(
             self.predictor,
             self.watch_list,
-            interval=interval,
-            forecast_minutes=forecast_bars,
-            lookback_bars=lookback
+            interval=monitor_interval,
+            forecast_minutes=monitor_horizon,
+            lookback_bars=monitor_lookback,
+            history_allow_online=monitor_history_allow_online,
         )
         self.monitor.signal_detected.connect(self._on_signal_detected)
         self.monitor.price_updated.connect(self._on_price_updated)
@@ -2539,11 +4141,24 @@ class MainApp(QMainWindow):
         )
         self.monitor_action.setText("Stop Monitoring")
 
-        self.log(
-            f"Monitoring started: {interval} interval, "
-            f"{forecast_bars} bar forecast",
-            "success"
-        )
+        if (
+            monitor_interval != requested_interval
+            or int(monitor_horizon) != int(requested_horizon)
+        ):
+            self.log(
+                (
+                    f"Monitoring started: {requested_interval} interval, "
+                    f"{requested_horizon} bar forecast "
+                    f"(compute={monitor_interval}/{monitor_horizon}, cache-first)"
+                ),
+                "success",
+            )
+        else:
+            self.log(
+                f"Monitoring started: {requested_interval} interval, "
+                f"{requested_horizon} bar forecast",
+                "success"
+            )
 
     def _stop_monitoring(self):
         """Stop real-time monitoring"""
@@ -2675,19 +4290,53 @@ class MainApp(QMainWindow):
         self._refresh_guess_rows_for_symbol(code, price)
 
         current_code = self._ui_norm(self.stock_input.text())
+        ui_interval = self._normalize_interval_token(
+            self.interval_combo.currentText()
+        )
+        inferred_interval = ui_interval
 
         # Update the last bar's close price for live candle display.
         arr = self._bars_by_symbol.get(code)
+        if arr and code == current_code:
+            same_interval = [
+                b for b in arr
+                if self._normalize_interval_token(
+                    b.get("interval", ui_interval), fallback=ui_interval
+                ) == ui_interval
+            ]
+            if same_interval and len(same_interval) != len(arr):
+                arr = same_interval
+                self._bars_by_symbol[code] = arr
+            elif not same_interval:
+                # Rebuild on UI interval instead of mutating stale bars from a
+                # different timeframe (can create giant synthetic candles).
+                inferred_interval = ui_interval
+                self._queue_history_refresh(code, ui_interval)
+                self._debug_console(
+                    f"tick_iv_rebuild:{code}:{ui_interval}",
+                    (
+                        f"rebuild bars on ui interval for {code}: "
+                        f"existing interval mismatch -> using {ui_interval}"
+                    ),
+                    min_gap_seconds=1.0,
+                    level="info",
+                )
         if arr and len(arr) > 1:
             arr.sort(
                 key=lambda x: float(
                     x.get("_ts_epoch", self._ts_to_epoch(x.get("timestamp", "")))
                 )
             )
-        interval = str(
-            (arr[-1].get("interval") if arr else None)
-            or self.interval_combo.currentText()
-        ).strip().lower()
+        if code == current_code:
+            if arr and inferred_interval != ui_interval:
+                interval = inferred_interval
+            else:
+                interval = ui_interval
+        else:
+            interval = self._normalize_interval_token(
+                (arr[-1].get("interval") if arr else None),
+                fallback=ui_interval,
+            )
         interval_s = self._interval_seconds(interval)
         now_ts = time.time()
         feed_age = now_ts - float(self._last_bar_feed_ts.get(code, 0.0))
@@ -2699,28 +4348,58 @@ class MainApp(QMainWindow):
             if arr:
                 try:
                     last = arr[-1]
-                    prev_ref = float(
-                        arr[-2].get("close", price) or price
-                    ) if len(arr) >= 2 else float(last.get("close", price) or price)
-                    if not self._is_outlier_tick(
-                        prev_ref, price, interval=interval
-                    ):
+                    last_bucket = self._bar_bucket_epoch(
+                        last.get("_ts_epoch", last.get("timestamp", now_ts)),
+                        interval,
+                    )
+                    prev_ref: float | None = None
+                    if len(arr) >= 2:
+                        try:
+                            prev_bar = arr[-2]
+                            prev_bucket = self._bar_bucket_epoch(
+                                prev_bar.get("_ts_epoch", prev_bar.get("timestamp", last_bucket)),
+                                interval,
+                            )
+                            if not self._is_intraday_day_boundary(
+                                prev_bucket,
+                                last_bucket,
+                                interval,
+                            ):
+                                prev_ref = float(prev_bar.get("close", price) or price)
+                        except Exception:
+                            prev_ref = None
+                    if prev_ref is None:
+                        prev_ref = float(last.get("close", price) or price)
+                    bar_price = float(price)
+                    if prev_ref and prev_ref > 0:
+                        clamp_cap = float(self._synthetic_tick_jump_cap(interval))
+                        raw_jump = abs(bar_price / float(prev_ref) - 1.0)
+                        if raw_jump > clamp_cap:
+                            sign = 1.0 if bar_price >= float(prev_ref) else -1.0
+                            clamped = float(prev_ref) * (1.0 + (sign * clamp_cap))
+                            self._debug_console(
+                                f"tick_clamp_recent:{code}:{interval}",
+                                (
+                                    f"clamped synthetic tick {code} {interval}: "
+                                    f"raw={bar_price:.4f} prev={float(prev_ref):.4f} "
+                                    f"jump={raw_jump:.2%} -> {clamped:.4f}"
+                                ),
+                                min_gap_seconds=1.0,
+                                level="warning",
+                            )
+                            bar_price = float(clamped)
+                    if (not prev_ref) or (not self._is_outlier_tick(
+                        float(prev_ref), bar_price, interval=interval
+                    )):
                         now_bucket = self._bar_bucket_epoch(now_ts, interval)
-                        last_bucket = self._bar_bucket_epoch(
-                            last.get(
-                                "_ts_epoch",
-                                last.get("timestamp", now_bucket),
-                            ),
-                            interval,
-                        )
                         if int(last_bucket) == int(now_bucket):
                             s = self._sanitize_ohlc(
                                 float(last.get("open", price) or price),
-                                max(float(last.get("high", price) or price), price),
-                                min(float(last.get("low", price) or price), price),
-                                price,
+                                max(float(last.get("high", bar_price) or bar_price), bar_price),
+                                min(float(last.get("low", bar_price) or bar_price), bar_price),
+                                bar_price,
                                 interval=interval,
-                                ref_close=prev_ref,
+                                ref_close=float(prev_ref) if prev_ref and prev_ref > 0 else None,
                             )
                             if s is not None:
                                 o, h, low, c = s
@@ -2735,26 +4414,33 @@ class MainApp(QMainWindow):
                     pass
 
             if current_code == code and arr:
-                predicted = []
-                if (
-                    self.current_prediction
-                    and getattr(self.current_prediction, "stock_code", "") == code
-                ):
-                    predicted = (
-                        getattr(self.current_prediction, "predicted_prices", [])
-                        or []
-                    )
                 try:
-                    if hasattr(self.chart, 'update_chart'):
-                        self.chart.update_chart(
-                            arr,
-                            predicted_prices=predicted,
-                            levels=self._get_levels_dict()
-                        )
-                        self._chart_symbol = code
-                    self._update_chart_latest_label(code, bar=arr[-1], price=price)
+                    arr = self._render_chart_state(
+                        symbol=code,
+                        interval=interval,
+                        bars=arr,
+                        context="tick_recent",
+                        current_price=price,
+                        update_latest_label=True,
+                    )
                 except Exception as e:
                     log.debug(f"Chart price refresh failed: {e}")
+                self._persist_session_bar(
+                    code,
+                    interval,
+                    arr[-1] if arr else None,
+                    channel="tick",
+                    min_gap_seconds=0.9,
+                )
+
+            if arr:
+                self._persist_session_bar(
+                    code,
+                    interval,
+                    arr[-1],
+                    channel="tick",
+                    min_gap_seconds=0.9,
+                )
 
         if not has_recent_feed_bar:
             bucket_s = float(max(interval_s, 1))
@@ -2776,24 +4462,76 @@ class MainApp(QMainWindow):
             if arr and len(arr) > 0:
                 last = arr[-1]
                 prev_close = float(last.get("close", price) or price)
-                if self._is_outlier_tick(prev_close, price, interval=interval):
-                    log.debug(
-                        f"Skip outlier tick for {code}: prev={prev_close:.2f} new={price:.2f}"
-                    )
-                    return
-
                 last_epoch = self._ts_to_epoch(
                     last.get("_ts_epoch", last.get("timestamp", bucket_iso))
                 )
                 last_bucket = float(int(last_epoch // bucket_s) * int(bucket_s))
+                day_boundary = self._is_intraday_day_boundary(
+                    last_bucket,
+                    bucket_epoch,
+                    interval,
+                )
+                ref_close = float(prev_close) if (prev_close > 0 and not day_boundary) else None
+                price_for_bar = float(price)
+                if ref_close and ref_close > 0:
+                    clamp_cap = float(self._synthetic_tick_jump_cap(interval))
+                    raw_jump = abs(price_for_bar / float(ref_close) - 1.0)
+                    if raw_jump > clamp_cap:
+                        sign = 1.0 if price_for_bar >= float(ref_close) else -1.0
+                        clamped = float(ref_close) * (1.0 + (sign * clamp_cap))
+                        self._debug_console(
+                            f"tick_clamp_bucket:{code}:{interval}",
+                            (
+                                f"clamped synthetic bucket tick {code} {interval}: "
+                                f"raw={price_for_bar:.4f} prev={float(ref_close):.4f} "
+                                f"jump={raw_jump:.2%} -> {clamped:.4f}"
+                            ),
+                            min_gap_seconds=1.0,
+                            level="warning",
+                        )
+                        price_for_bar = float(clamped)
+                if (
+                    ref_close
+                    and ref_close > 0
+                    and self._is_outlier_tick(ref_close, price_for_bar, interval=interval)
+                ):
+                    log.debug(
+                        f"Skip outlier tick for {code}: prev={float(ref_close):.2f} new={price_for_bar:.2f}"
+                    )
+                    return
+
                 if int(last_bucket) != int(bucket_epoch):
                     if not bool(last.get("final", False)):
                         last["final"] = True
+                    finalized_bar = dict(last)
+                    finalized_bar["interval"] = interval
+                    finalized_bar["_ts_epoch"] = float(last_bucket)
+                    finalized_bar["timestamp"] = self._epoch_to_iso(last_bucket)
+                    self._persist_session_bar(
+                        code,
+                        interval,
+                        finalized_bar,
+                        channel="tick_final",
+                        min_gap_seconds=0.0,
+                    )
+                    bucket_open = float(ref_close if ref_close and ref_close > 0 else price)
+                    s_new = self._sanitize_ohlc(
+                        bucket_open,
+                        max(bucket_open, price_for_bar),
+                        min(bucket_open, price_for_bar),
+                        price_for_bar,
+                        interval=interval,
+                        ref_close=ref_close,
+                    )
+                    if s_new is None:
+                        # Keep continuity when tick is still unusable after clamp.
+                        s_new = (bucket_open, bucket_open, bucket_open, bucket_open)
+                    o_new, h_new, l_new, c_new = s_new
                     last = {
-                        "open": price,
-                        "high": price,
-                        "low": price,
-                        "close": price,
+                        "open": o_new,
+                        "high": h_new,
+                        "low": l_new,
+                        "close": c_new,
                         "timestamp": bucket_iso,
                         "final": False,
                         "interval": interval,
@@ -2805,14 +4543,14 @@ class MainApp(QMainWindow):
                         del arr[:-keep]
                 else:
                     if float(last.get("open", 0) or 0) <= 0:
-                        last["open"] = price
+                        last["open"] = price_for_bar
                     s = self._sanitize_ohlc(
-                        float(last.get("open", price) or price),
-                        max(float(last.get("high", price) or price), price),
-                        min(float(last.get("low", price) or price), price),
-                        price,
+                        float(last.get("open", price_for_bar) or price_for_bar),
+                        max(float(last.get("high", price_for_bar) or price_for_bar), price_for_bar),
+                        min(float(last.get("low", price_for_bar) or price_for_bar), price_for_bar),
+                        price_for_bar,
                         interval=interval,
-                        ref_close=prev_close,
+                        ref_close=ref_close,
                     )
                     if s is None:
                         return
@@ -2836,36 +4574,25 @@ class MainApp(QMainWindow):
                 last = arr[-1]
 
                 if current_code == code:
-                    predicted = []
-                    if (
-                        self.current_prediction
-                        and getattr(self.current_prediction, "stock_code", "") == code
-                    ):
-                        predicted = (
-                            getattr(self.current_prediction, "predicted_prices", [])
-                            or []
-                        )
-
                     try:
-                        if hasattr(self.chart, 'update_chart'):
-                            self.chart.update_chart(
-                                arr,
-                                predicted_prices=predicted,
-                                levels=self._get_levels_dict()
-                            )
-                            self._chart_symbol = code
-                            self._update_chart_latest_label(code, bar=last, price=price)
+                        arr = self._render_chart_state(
+                            symbol=code,
+                            interval=interval,
+                            bars=arr,
+                            context="tick_bucket",
+                            current_price=price,
+                            update_latest_label=True,
+                        )
                     except Exception as e:
                         log.debug(f"Chart price update failed: {e}")
 
-                try:
-                    if self._session_bar_cache is not None:
-                        key = f"{code}:{interval}:tick"
-                        if (now_ts - float(self._last_session_cache_write_ts.get(key, 0.0))) >= 0.9:
-                            self._session_bar_cache.append_bar(code, interval, last)
-                            self._last_session_cache_write_ts[key] = now_ts
-                except Exception as e:
-                    log.debug(f"Session cache tick write failed: {e}")
+                self._persist_session_bar(
+                    code,
+                    interval,
+                    last,
+                    channel="tick",
+                    min_gap_seconds=0.9,
+                )
 
         # Only refresh guessed graph for the currently selected symbol.
         if current_code != code:
@@ -2878,29 +4605,59 @@ class MainApp(QMainWindow):
         if not self.predictor:
             return
 
+        ui_interval = self._normalize_interval_token(
+            self.interval_combo.currentText()
+        )
+        ui_horizon = int(self.forecast_spin.value())
+        exact_artifacts = self._has_exact_model_artifacts(ui_interval, ui_horizon)
+        refresh_gap = 1.0 if exact_artifacts else 2.2
         now = time.time()
-        if (now - self._last_forecast_refresh_ts) < 1.0:
+        if (now - self._last_forecast_refresh_ts) < float(refresh_gap):
             return
         self._last_forecast_refresh_ts = now
 
-        interval = self.interval_combo.currentText().strip().lower()
-        horizon = self.forecast_spin.value()
+        interval = ui_interval
+        horizon = int(ui_horizon)
         lookback = max(
             120,
             int(self.lookback_spin.value()),
-            int(self._seven_day_lookback(interval)),
+            int(self._recommended_lookback(interval)),
         )
-        lookback = min(3000, lookback)
         use_realtime = bool(CONFIG.is_market_open())
+        infer_interval = "1m"
+        infer_horizon = int(horizon)
+        infer_lookback = int(
+            max(
+                self._recommended_lookback("1m"),
+                self._bars_needed_from_base_interval(
+                    interval,
+                    int(lookback),
+                    base_interval="1m",
+                ),
+            )
+        )
+        history_allow_online = True
+        if not self._has_exact_model_artifacts(infer_interval, infer_horizon):
+            self._debug_console(
+                f"forecast_model_fallback:{code}:{interval}:{horizon}",
+                (
+                    f"forecast inference locked to 1m for {code}: "
+                    f"ui={interval}/{horizon} infer={infer_interval}/{infer_horizon} "
+                    f"lookback={infer_lookback} online=1"
+                ),
+                min_gap_seconds=2.0,
+                level="info",
+            )
 
         def do_forecast():
             if hasattr(self.predictor, "get_realtime_forecast_curve"):
                 return self.predictor.get_realtime_forecast_curve(
                     stock_code=code,
-                    interval=interval,
-                    horizon_steps=horizon,
-                    lookback_bars=lookback,
+                    interval=infer_interval,
+                    horizon_steps=infer_horizon,
+                    lookback_bars=infer_lookback,
                     use_realtime_price=use_realtime,
+                    history_allow_online=history_allow_online,
                 )
             return None
 
@@ -2922,27 +4679,147 @@ class MainApp(QMainWindow):
         def on_done(res):
             try:
                 if not res:
+                    self._debug_console(
+                        f"forecast_empty:{code}:{interval}",
+                        f"forecast worker returned empty for {code} {interval}",
+                        min_gap_seconds=1.0,
+                    )
                     return
                 actual_prices, predicted_prices = res
                 selected = self._ui_norm(self.stock_input.text())
                 if selected != code:
                     return
+                _ = actual_prices  # chart bars are maintained by feed/history path.
+
+                stable_predicted = [
+                    float(v)
+                    for v in list(predicted_prices or [])
+                    if float(v) > 0 and math.isfinite(float(v))
+                ]
+                if not stable_predicted:
+                    if (
+                        self.current_prediction
+                        and self.current_prediction.stock_code == code
+                    ):
+                        stable_predicted = [
+                            float(v)
+                            for v in list(
+                                getattr(
+                                    self.current_prediction,
+                                    "predicted_prices",
+                                    [],
+                                )
+                                or []
+                            )
+                            if float(v) > 0 and math.isfinite(float(v))
+                        ]
+                predicted_prices = stable_predicted
+
+                try:
+                    pvals = [
+                        float(v) for v in (predicted_prices or [])
+                        if float(v) > 0
+                    ]
+                except Exception:
+                    pvals = []
+                if pvals:
+                    diffs = []
+                    for i in range(1, len(pvals)):
+                        prev = float(pvals[i - 1])
+                        cur = float(pvals[i])
+                        if prev > 0:
+                            diffs.append(abs(cur / prev - 1.0))
+                    max_step = max(diffs) if diffs else 0.0
+                    flip_ratio = 0.0
+                    if len(diffs) >= 3:
+                        try:
+                            s = []
+                            for i in range(1, len(pvals)):
+                                s.append(1 if pvals[i] >= pvals[i - 1] else -1)
+                            flips = 0
+                            for i in range(1, len(s)):
+                                if s[i] != s[i - 1]:
+                                    flips += 1
+                            flip_ratio = float(flips) / float(max(1, len(s) - 1))
+                        except Exception:
+                            flip_ratio = 0.0
+
+                    if max_step > 0.02 or flip_ratio > 0.80:
+                        self._debug_console(
+                            f"forecast_shape:{code}:{infer_interval}",
+                            (
+                                f"forecast anomaly {code} {infer_interval}: len={len(pvals)} "
+                                f"max_step={max_step:.2%} flip_ratio={flip_ratio:.2f} "
+                                f"first={pvals[0]:.4f} last={pvals[-1]:.4f}"
+                            ),
+                            min_gap_seconds=1.0,
+                        )
+
+                display_current = 0.0
+                try:
+                    if (
+                        self.current_prediction
+                        and self.current_prediction.stock_code == code
+                    ):
+                        display_current = float(
+                            getattr(self.current_prediction, "current_price", 0.0) or 0.0
+                        )
+                except Exception:
+                    display_current = 0.0
+                if display_current <= 0:
+                    try:
+                        arr_tmp = self._bars_by_symbol.get(code) or []
+                        if arr_tmp:
+                            display_current = float(arr_tmp[-1].get("close", 0.0) or 0.0)
+                    except Exception:
+                        display_current = 0.0
+                display_predicted = self._prepare_chart_predicted_prices(
+                    symbol=code,
+                    chart_interval=interval,
+                    predicted_prices=predicted_prices,
+                    source_interval=infer_interval,
+                    current_price=display_current if display_current > 0 else None,
+                    target_steps=int(self.forecast_spin.value()),
+                )
 
                 # Update current_prediction with new forecast
                 if (
                     self.current_prediction
                     and self.current_prediction.stock_code == code
                 ):
-                    self.current_prediction.predicted_prices = predicted_prices
+                    self.current_prediction.predicted_prices = display_predicted
 
                 arr = self._bars_by_symbol.get(code)
-                if arr and hasattr(self.chart, 'update_chart'):
-                    self.chart.update_chart(
-                        arr,
-                        predicted_prices=predicted_prices,
-                        levels=self._get_levels_dict()
+                if arr:
+                    iv = self._normalize_interval_token(
+                        self.interval_combo.currentText()
                     )
-                    self._chart_symbol = code
+                    anchor_px = 0.0
+                    try:
+                        if (
+                            self.current_prediction
+                            and self.current_prediction.stock_code == code
+                        ):
+                            anchor_px = float(
+                                getattr(
+                                    self.current_prediction,
+                                    "current_price",
+                                    0.0,
+                                ) or 0.0
+                            )
+                    except Exception:
+                        anchor_px = 0.0
+                    arr = self._render_chart_state(
+                        symbol=code,
+                        interval=iv,
+                        bars=arr,
+                        context="forecast_refresh",
+                        current_price=anchor_px if anchor_px > 0 else None,
+                        predicted_prices=display_predicted,
+                        source_interval=iv,
+                        target_steps=int(self.forecast_spin.value()),
+                        predicted_prepared=True,
+                    )
             finally:
                 self.workers.pop("forecast_refresh", None)
                 if self._forecast_refresh_symbol == code:
@@ -2961,6 +4838,11 @@ class MainApp(QMainWindow):
         Periodic chart refresh for selected symbol.
         Ensures guessed graph updates in real time even with sparse feed ticks.
         """
+        analyze_worker = self.workers.get("analyze")
+        if analyze_worker and analyze_worker.isRunning():
+            # Avoid creating transient single-bar placeholders while a
+            # full history analysis for the selected symbol is in-flight.
+            return
         if not CONFIG.is_market_open():
             return
         if not self.predictor:
@@ -3000,6 +4882,781 @@ class MainApp(QMainWindow):
             "target_2": getattr(levels, 'target_2', 0),
             "target_3": getattr(levels, 'target_3', 0),
         }
+
+    def _scrub_chart_bars(
+        self,
+        bars: list[dict[str, Any]] | None,
+        interval: str,
+        *,
+        symbol: str = "",
+        anchor_price: float | None = None,
+    ) -> list[dict[str, Any]]:
+        """
+        Prepare bars for charting and never fall back to unsanitized rows.
+        """
+        arr_in = list(bars or [])
+        arr_out = self._prepare_chart_bars_for_interval(
+            arr_in,
+            interval,
+            symbol=symbol,
+        )
+        if arr_in and len(arr_in) >= 25 and len(arr_out) <= 2:
+            recovered = self._recover_chart_bars_from_close(
+                arr_in,
+                interval=interval,
+                symbol=symbol,
+                anchor_price=anchor_price,
+            )
+            if len(recovered) > len(arr_out):
+                arr_out = recovered
+        if arr_out:
+            arr_out = self._rescale_chart_bars_to_anchor(
+                arr_out,
+                anchor_price=anchor_price,
+                interval=interval,
+                symbol=symbol,
+            )
+        if arr_in and not arr_out:
+            recovered = self._recover_chart_bars_from_close(
+                arr_in,
+                interval=interval,
+                symbol=symbol,
+                anchor_price=anchor_price,
+            )
+            if recovered:
+                return recovered
+            iv = self._normalize_interval_token(interval)
+            sym = self._ui_norm(symbol)
+            self._debug_console(
+                f"chart_scrub_empty:{sym or 'active'}:{iv}",
+                (
+                    f"chart scrub removed all rows: symbol={sym or '--'} "
+                    f"iv={iv} raw={len(arr_in)}"
+                ),
+                min_gap_seconds=1.0,
+            )
+        return arr_out
+
+    def _rescale_chart_bars_to_anchor(
+        self,
+        bars: list[dict[str, Any]],
+        *,
+        anchor_price: float | None,
+        interval: str,
+        symbol: str = "",
+    ) -> list[dict[str, Any]]:
+        """
+        Repair obvious price-scale mismatches (e.g., 1.5 vs 1500) so bars
+        are not fully dropped by jump filters.
+        """
+        arr = list(bars or [])
+        if not arr:
+            return []
+        try:
+            anchor = float(anchor_price or 0.0)
+        except Exception:
+            anchor = 0.0
+        if not math.isfinite(anchor) or anchor <= 0:
+            return arr
+
+        closes: list[float] = []
+        for row in arr:
+            try:
+                c = float(row.get("close", 0) or 0)
+            except Exception:
+                c = 0.0
+            if c > 0 and math.isfinite(c):
+                closes.append(c)
+        if len(closes) < 5:
+            return arr
+
+        med = float(median(closes[-min(80, len(closes)):]))
+        if med <= 0 or not math.isfinite(med):
+            return arr
+
+        raw_ratio = anchor / med
+        if 0.2 <= raw_ratio <= 5.0:
+            return arr
+
+        candidates = [0.001, 0.01, 0.1, 1.0, 10.0, 100.0, 1000.0]
+        best_scale = 1.0
+        best_err = float("inf")
+        for s in candidates:
+            try:
+                ratio = (med * float(s)) / anchor
+                if ratio <= 0 or not math.isfinite(ratio):
+                    continue
+                err = abs(math.log(ratio))
+                if err < best_err:
+                    best_err = err
+                    best_scale = float(s)
+            except Exception:
+                continue
+
+        scaled_ratio = (med * best_scale) / anchor if anchor > 0 else 1.0
+        if not (0.2 <= scaled_ratio <= 5.0):
+            return arr
+        if abs(best_scale - 1.0) < 1e-9:
+            return arr
+
+        out: list[dict[str, Any]] = []
+        for row in arr:
+            item = dict(row)
+            for key in ("open", "high", "low", "close"):
+                try:
+                    v = float(item.get(key, 0) or 0)
+                except Exception:
+                    v = 0.0
+                if v > 0 and math.isfinite(v):
+                    item[key] = float(v * best_scale)
+            out.append(item)
+
+        iv = self._normalize_interval_token(interval)
+        sym = self._ui_norm(symbol)
+        self._debug_console(
+            f"chart_scale_fix:{sym or 'active'}:{iv}",
+            (
+                f"applied scale fix x{best_scale:g} for {sym or '--'} {iv}: "
+                f"median={med:.6f} anchor={anchor:.6f}"
+            ),
+            min_gap_seconds=1.0,
+            level="info",
+        )
+        return out
+
+    def _recover_chart_bars_from_close(
+        self,
+        bars: list[dict[str, Any]],
+        *,
+        interval: str,
+        symbol: str = "",
+        anchor_price: float | None = None,
+    ) -> list[dict[str, Any]]:
+        """
+        Minimal recovery path when strict scrub drops all bars.
+        Builds stable OHLC from close/prev-close so chart remains usable.
+        """
+        iv = self._normalize_interval_token(interval)
+        def _build(enforce_session: bool) -> list[dict[str, Any]]:
+            merged: dict[int, dict[str, Any]] = {}
+            prev_close: float | None = None
+            prev_epoch: float | None = None
+            for row in list(bars or []):
+                if not isinstance(row, dict):
+                    continue
+                row_iv = self._normalize_interval_token(
+                    row.get("interval", iv),
+                    fallback=iv,
+                )
+                if row_iv != iv:
+                    continue
+                epoch = self._bar_bucket_epoch(
+                    row.get("_ts_epoch", row.get("timestamp")),
+                    iv,
+                )
+                if enforce_session and (not self._is_market_session_timestamp(epoch, iv)):
+                    continue
+                ref_close = prev_close
+                if (
+                    prev_epoch is not None
+                    and self._is_intraday_day_boundary(prev_epoch, epoch, iv)
+                ):
+                    ref_close = None
+                try:
+                    c = float(
+                        row.get("close", row.get("price", 0)) or 0
+                    )
+                except Exception:
+                    c = 0.0
+                if c <= 0 or not math.isfinite(c):
+                    continue
+
+                try:
+                    o = float(row.get("open", 0) or 0)
+                except Exception:
+                    o = 0.0
+                if o <= 0 and ref_close and ref_close > 0:
+                    o = float(ref_close)
+                if o <= 0:
+                    o = c
+
+                try:
+                    h = float(row.get("high", max(o, c)) or max(o, c))
+                except Exception:
+                    h = max(o, c)
+                try:
+                    low = float(row.get("low", min(o, c)) or min(o, c))
+                except Exception:
+                    low = min(o, c)
+
+                s = self._sanitize_ohlc(
+                    o,
+                    h,
+                    low,
+                    c,
+                    interval=iv,
+                    ref_close=ref_close,
+                )
+                if s is None:
+                    continue
+                o, h, low, c = s
+
+                key = int(epoch)
+                item = {
+                    "open": o,
+                    "high": h,
+                    "low": low,
+                    "close": c,
+                    "_ts_epoch": float(epoch),
+                    "timestamp": self._epoch_to_iso(epoch),
+                    "final": bool(row.get("final", True)),
+                    "interval": iv,
+                }
+                existing = merged.get(key)
+                if existing is None:
+                    merged[key] = item
+                else:
+                    if bool(item.get("final", True)) and not bool(existing.get("final", True)):
+                        merged[key] = item
+                prev_close = c
+                prev_epoch = float(epoch)
+
+            out_local = list(merged.values())
+            out_local.sort(key=lambda x: float(x.get("_ts_epoch", 0.0)))
+            return out_local[-self._history_window_bars(iv):]
+
+        out = _build(enforce_session=True)
+        if not out:
+            out = _build(enforce_session=False)
+            if out:
+                sym = self._ui_norm(symbol)
+                self._debug_console(
+                    f"chart_recover_lenient:{sym or 'active'}:{iv}",
+                    (
+                        f"lenient timestamp recovery enabled for {sym or '--'} {iv}: "
+                        f"bars={len(out)}"
+                    ),
+                    min_gap_seconds=1.0,
+                    level="warning",
+                )
+
+        out = self._rescale_chart_bars_to_anchor(
+            out,
+            anchor_price=anchor_price,
+            interval=iv,
+            symbol=symbol,
+        )
+        if out:
+            sym = self._ui_norm(symbol)
+            self._debug_console(
+                f"chart_recover:{sym or 'active'}:{iv}",
+                (
+                    f"recovered chart bars from close-only path: "
+                    f"symbol={sym or '--'} iv={iv} bars={len(out)}"
+                ),
+                min_gap_seconds=1.0,
+                level="warning",
+            )
+        return out
+
+    def _prepare_chart_bars_for_interval(
+        self,
+        bars: list[dict[str, Any]] | None,
+        interval: str,
+        *,
+        symbol: str = "",
+    ) -> list[dict[str, Any]]:
+        """
+        Final chart-only scrub to enforce one interval and normalized buckets.
+        Prevents malformed/mixed bars from rendering giant candle bodies.
+        """
+        iv = self._normalize_interval_token(interval)
+        sym = self._ui_norm(symbol)
+        source_rows = list(bars or [])
+        raw_count = len(source_rows)
+        mixed_count = 0
+        aligned_rows: list[dict[str, Any]] = []
+        for row in source_rows:
+            if not isinstance(row, dict):
+                continue
+            row_iv = self._normalize_interval_token(
+                row.get("interval", iv),
+                fallback=iv,
+            )
+            if row_iv != iv:
+                mixed_count += 1
+                continue
+            aligned_rows.append(row)
+        if mixed_count > 0:
+            self._debug_console(
+                f"chart_mixed_iv:{sym or 'active'}:{iv}",
+                (
+                    f"chart scrub dropped mixed interval rows: "
+                    f"symbol={sym or '--'} target_iv={iv} "
+                    f"dropped={mixed_count}/{raw_count}"
+                ),
+                min_gap_seconds=1.0,
+            )
+
+        merged = self._merge_bars([], aligned_rows, iv)
+        merged = self._filter_bars_to_market_session(merged, iv)
+        out: list[dict[str, Any]] = []
+        for row in merged:
+            epoch = self._bar_bucket_epoch(
+                row.get("_ts_epoch", row.get("timestamp")),
+                iv,
+            )
+            item = dict(row)
+            item["_ts_epoch"] = float(epoch)
+            item["timestamp"] = self._epoch_to_iso(epoch)
+            item["interval"] = iv
+            out.append(item)
+        keep = self._history_window_bars(iv)
+        out = out[-keep:]
+
+        # Final intraday pass: drop malformed rows that can still slip through
+        # bootstrap sanitation (for example open=0 vendor rows around interval switches).
+        if out and iv not in ("1d", "1wk", "1mo"):
+            jump_cap, range_cap = self._bar_safety_caps(iv)
+            # Tighter intraday caps to suppress giant block candles.
+            body_cap = float(max(0.004, min(0.014, (range_cap * 0.92))))
+            span_cap = float(max(0.006, min(0.022, (range_cap * 1.10))))
+            wick_cap = float(max(0.004, min(0.013, (range_cap * 0.82))))
+            ref_jump_cap = float(max(0.018, min(0.090, jump_cap * 0.95)))
+            iv_s = float(max(1, self._interval_seconds(iv)))
+
+            filtered: list[dict[str, Any]] = []
+            recent_closes: list[float] = []
+            recent_body: list[float] = []
+            recent_span: list[float] = []
+            dropped_shape = 0
+            dropped_extreme_body = 0
+            repaired_shape = 0
+            repaired_gap = 0
+            processed_count = 0
+            allow_shape_rebuild = True
+            rebuild_disabled = False
+            prev_close: float | None = None
+            prev_epoch: float | None = None
+
+            for row in out:
+                try:
+                    c_raw = float(row.get("close", 0) or 0)
+                    o_raw = float(row.get("open", c_raw) or c_raw)
+                    h_raw = float(row.get("high", c_raw) or c_raw)
+                    l_raw = float(row.get("low", c_raw) or c_raw)
+                except Exception:
+                    dropped_shape += 1
+                    continue
+
+                row_epoch = float(
+                    self._bar_bucket_epoch(
+                        row.get("_ts_epoch", row.get("timestamp")),
+                        iv,
+                    )
+                )
+                day_boundary = bool(
+                    prev_epoch is not None
+                    and self._is_intraday_day_boundary(prev_epoch, row_epoch, iv)
+                )
+                ref_close = prev_close
+                if day_boundary:
+                    ref_close = None
+                    recent_closes.clear()
+                    recent_body.clear()
+                    recent_span.clear()
+
+                sanitized = self._sanitize_ohlc(
+                    o_raw,
+                    h_raw,
+                    l_raw,
+                    c_raw,
+                    interval=iv,
+                    ref_close=ref_close,
+                )
+                if sanitized is None:
+                    dropped_shape += 1
+                    continue
+                o, h, low, c = sanitized
+                processed_count += 1
+                if (
+                    allow_shape_rebuild
+                    and ref_close
+                    and float(ref_close) > 0
+                ):
+                    ref_prev = max(float(ref_close), float(c), 1e-8)
+                    body_prev = abs(o - c) / ref_prev
+                    span_prev = abs(h - low) / ref_prev
+                    jump_prev = abs(c / float(ref_close) - 1.0)
+                    # Many fallback sources emit close-only intraday bars
+                    # (open ~= close). Rebuild open from previous close so
+                    # candles are readable without inventing large moves.
+                    if (
+                        body_prev <= 0.00008
+                        and span_prev <= 0.004
+                        and jump_prev <= 0.004
+                    ):
+                        o = float(ref_close)
+                        top0 = max(o, c)
+                        bot0 = min(o, c)
+                        h = max(h, top0)
+                        low = min(low, bot0)
+                        repaired_shape += 1
+                        if (
+                            allow_shape_rebuild
+                            and processed_count >= 120
+                            and (float(repaired_shape) / float(max(1, processed_count))) > 0.45
+                        ):
+                            allow_shape_rebuild = False
+                            rebuild_disabled = True
+
+                ref_values = [
+                    float(v) for v in recent_closes[-32:]
+                    if float(v) > 0 and math.isfinite(float(v))
+                ]
+                if ref_values:
+                    ref = float(median(ref_values))
+                elif ref_close and float(ref_close) > 0:
+                    ref = float(ref_close)
+                else:
+                    ref = float(c)
+
+                if not math.isfinite(ref) or ref <= 0:
+                    ref = float(c)
+                if not math.isfinite(ref) or ref <= 0:
+                    dropped_shape += 1
+                    continue
+
+                body = abs(o - c) / ref
+                span = abs(h - low) / ref
+                top = max(o, c)
+                bot = min(o, c)
+                upper_wick = max(0.0, h - top) / ref
+                lower_wick = max(0.0, bot - low) / ref
+                ref_jump = abs(c / ref - 1.0)
+                eff_body_cap = float(body_cap)
+                eff_span_cap = float(span_cap)
+                eff_wick_cap = float(wick_cap)
+                if recent_body:
+                    med_body = float(median(recent_body[-48:]))
+                    if med_body > 0 and math.isfinite(med_body):
+                        eff_body_cap = min(
+                            eff_body_cap,
+                            float(max(0.0035, med_body * 6.0)),
+                        )
+                if recent_span:
+                    med_span = float(median(recent_span[-48:]))
+                    if med_span > 0 and math.isfinite(med_span):
+                        eff_span_cap = min(
+                            eff_span_cap,
+                            float(max(0.0050, med_span * 5.5)),
+                        )
+                        eff_wick_cap = min(
+                            eff_wick_cap,
+                            float(max(0.0035, med_span * 3.8)),
+                        )
+
+                if (
+                    ref_jump > ref_jump_cap
+                    or body > eff_body_cap
+                    or span > eff_span_cap
+                    or upper_wick > eff_wick_cap
+                    or lower_wick > eff_wick_cap
+                ):
+                    if body > eff_body_cap:
+                        dropped_extreme_body += 1
+                    dropped_shape += 1
+                    continue
+
+                if (
+                    ref_close
+                    and float(ref_close) > 0
+                    and self._is_outlier_tick(ref_close, c, interval=iv)
+                ):
+                    dropped_shape += 1
+                    continue
+
+                if prev_epoch is not None:
+                    gap = max(0.0, row_epoch - float(prev_epoch))
+                    if (not day_boundary) and gap > (iv_s * 3.0):
+                        # First bar after lunch/day gaps: repair extreme boundary bars
+                        # before deciding to drop them.
+                        boundary_body_cap = float(max(0.004, min(eff_body_cap, 0.008)))
+                        boundary_span_cap = float(max(0.006, min(eff_span_cap, 0.012)))
+                        boundary_wick_cap = float(max(0.004, min(eff_wick_cap, 0.008)))
+                        boundary_jump_cap = float(max(0.008, min(ref_jump_cap, 0.018)))
+                        if (
+                            span > boundary_span_cap
+                            or body > boundary_body_cap
+                            or ref_jump > boundary_jump_cap
+                        ):
+                            if ref_close and float(ref_close) > 0:
+                                o = float(ref_close)
+                                jump_now = abs(c / max(float(ref_close), 1e-8) - 1.0)
+                                if jump_now > boundary_jump_cap:
+                                    sign = 1.0 if c >= float(ref_close) else -1.0
+                                    c = float(ref_close) * (
+                                        1.0 + (sign * boundary_jump_cap)
+                                    )
+                                top = max(o, c)
+                                bot = min(o, c)
+                                ref_local = max(ref, c, o)
+                                wick_allow = float(ref_local) * float(boundary_wick_cap)
+                                h = min(max(h, top), top + wick_allow)
+                                low = max(min(low, bot), bot - wick_allow)
+                                if h < low:
+                                    h, low = low, h
+                                span = abs(h - low) / max(ref_local, 1e-8)
+                                upper_wick = max(0.0, h - top) / max(ref_local, 1e-8)
+                                lower_wick = max(0.0, bot - low) / max(ref_local, 1e-8)
+                                body = abs(o - c) / max(ref_local, 1e-8)
+                                ref_jump = abs(c / max(ref_local, 1e-8) - 1.0)
+                                repaired_gap += 1
+                            if (
+                                body > (boundary_body_cap * 1.45)
+                                or span > (boundary_span_cap * 1.45)
+                                or upper_wick > (boundary_wick_cap * 1.60)
+                                or lower_wick > (boundary_wick_cap * 1.60)
+                                or ref_jump > (boundary_jump_cap * 1.80)
+                            ):
+                                dropped_shape += 1
+                                continue
+
+                row_out = dict(row)
+                row_out["open"] = o
+                row_out["high"] = h
+                row_out["low"] = low
+                row_out["close"] = c
+                filtered.append(row_out)
+                recent_closes.append(float(c))
+                recent_body.append(float(body))
+                recent_span.append(float(span))
+                prev_close = float(c)
+                prev_epoch = float(row_epoch)
+
+            if dropped_shape > 0:
+                self._debug_console(
+                    f"chart_shape_drop:{sym or 'active'}:{iv}",
+                    (
+                        f"chart shape filter dropped {dropped_shape} bars: "
+                        f"symbol={sym or '--'} iv={iv} kept={len(filtered)} raw={len(out)}"
+                    ),
+                    min_gap_seconds=1.0,
+                )
+            if dropped_extreme_body > 0:
+                self._debug_console(
+                    f"chart_shape_body_drop:{sym or 'active'}:{iv}",
+                    (
+                        f"chart body outlier drop symbol={sym or '--'} iv={iv} "
+                        f"count={dropped_extreme_body} caps(body={body_cap:.2%},span={span_cap:.2%},wick={wick_cap:.2%})"
+                    ),
+                    min_gap_seconds=1.0,
+                    level="warning",
+                )
+            if repaired_shape > 0 or repaired_gap > 0:
+                self._debug_console(
+                    f"chart_shape_repair:{sym or 'active'}:{iv}",
+                    (
+                        f"chart shape repair symbol={sym or '--'} iv={iv} "
+                        f"repaired={repaired_shape} gap_repaired={repaired_gap} "
+                        f"kept={len(filtered)}"
+                    ),
+                    min_gap_seconds=1.0,
+                    level="info",
+                )
+            if rebuild_disabled:
+                self._debug_console(
+                    f"chart_shape_repair_disable:{sym or 'active'}:{iv}",
+                    (
+                        f"disabled close-only candle rebuild for {sym or '--'} {iv}: "
+                        f"repaired={repaired_shape} processed={processed_count}"
+                    ),
+                    min_gap_seconds=1.0,
+                    level="warning",
+                )
+            out = filtered[-keep:]
+
+        if out and iv in ("1d", "1wk", "1mo"):
+            if iv == "1d":
+                daily_jump_cap = 0.18
+                daily_body_cap = 0.12
+                daily_span_cap = 0.20
+                daily_wick_cap = 0.10
+            elif iv == "1wk":
+                daily_jump_cap = 0.26
+                daily_body_cap = 0.20
+                daily_span_cap = 0.34
+                daily_wick_cap = 0.18
+            else:
+                daily_jump_cap = 0.35
+                daily_body_cap = 0.28
+                daily_span_cap = 0.45
+                daily_wick_cap = 0.24
+
+            daily_filtered: list[dict[str, Any]] = []
+            recent_daily: list[float] = []
+            prev_close_daily: float | None = None
+            dropped_daily = 0
+            repaired_daily = 0
+
+            for row in out:
+                try:
+                    c_raw = float(row.get("close", 0) or 0)
+                    o_raw = float(row.get("open", c_raw) or c_raw)
+                    h_raw = float(row.get("high", c_raw) or c_raw)
+                    l_raw = float(row.get("low", c_raw) or c_raw)
+                except Exception:
+                    dropped_daily += 1
+                    continue
+
+                sanitized = self._sanitize_ohlc(
+                    o_raw,
+                    h_raw,
+                    l_raw,
+                    c_raw,
+                    interval=iv,
+                    ref_close=prev_close_daily,
+                )
+                if sanitized is None:
+                    dropped_daily += 1
+                    continue
+                o, h, low, c = sanitized
+
+                if recent_daily:
+                    ref = float(median(recent_daily[-24:]))
+                elif prev_close_daily and float(prev_close_daily) > 0:
+                    ref = float(prev_close_daily)
+                else:
+                    ref = float(c)
+                if not math.isfinite(ref) or ref <= 0:
+                    ref = float(c)
+                if not math.isfinite(ref) or ref <= 0:
+                    dropped_daily += 1
+                    continue
+
+                if prev_close_daily and float(prev_close_daily) > 0:
+                    jump_prev = abs(c / float(prev_close_daily) - 1.0)
+                    if jump_prev > daily_jump_cap:
+                        sign = 1.0 if c >= float(prev_close_daily) else -1.0
+                        c = float(prev_close_daily) * (1.0 + (sign * daily_jump_cap))
+                        o = float(prev_close_daily)
+                        repaired_daily += 1
+
+                top = max(o, c)
+                bot = min(o, c)
+                h = max(h, top)
+                low = min(low, bot)
+                body = abs(o - c) / max(ref, 1e-8)
+                span = abs(h - low) / max(ref, 1e-8)
+                upper_wick = max(0.0, h - top) / max(ref, 1e-8)
+                lower_wick = max(0.0, bot - low) / max(ref, 1e-8)
+
+                if (
+                    body > daily_body_cap
+                    or span > daily_span_cap
+                    or upper_wick > daily_wick_cap
+                    or lower_wick > daily_wick_cap
+                ):
+                    max_span_px = float(ref) * float(daily_span_cap)
+                    max_body_px = float(ref) * float(daily_body_cap)
+                    body_px = float(max(0.0, top - bot))
+                    if body_px > max_body_px:
+                        if c >= o:
+                            o = c - max_body_px
+                        else:
+                            o = c + max_body_px
+                        top = max(o, c)
+                        bot = min(o, c)
+                        body_px = float(max(0.0, top - bot))
+                    if body_px > max_span_px:
+                        o = c
+                        top = c
+                        bot = c
+                        body_px = 0.0
+                    wick_allow = max(0.0, max_span_px - body_px)
+                    h = min(h, top + (wick_allow * 0.60))
+                    low = max(low, bot - (wick_allow * 0.60))
+                    if h < low:
+                        h, low = low, h
+                    span = abs(h - low) / max(ref, 1e-8)
+                    body = abs(o - c) / max(ref, 1e-8)
+                    upper_wick = max(0.0, h - max(o, c)) / max(ref, 1e-8)
+                    lower_wick = max(0.0, min(o, c) - low) / max(ref, 1e-8)
+                    repaired_daily += 1
+                    if (
+                        body > (daily_body_cap * 1.35)
+                        or span > (daily_span_cap * 1.35)
+                        or upper_wick > (daily_wick_cap * 1.40)
+                        or lower_wick > (daily_wick_cap * 1.40)
+                    ):
+                        dropped_daily += 1
+                        continue
+
+                row_out = dict(row)
+                row_out["open"] = float(o)
+                row_out["high"] = float(h)
+                row_out["low"] = float(low)
+                row_out["close"] = float(c)
+                daily_filtered.append(row_out)
+                recent_daily.append(float(c))
+                prev_close_daily = float(c)
+
+            if dropped_daily > 0 or repaired_daily > 0:
+                self._debug_console(
+                    f"chart_daily_filter:{sym or 'active'}:{iv}",
+                    (
+                        f"daily filter symbol={sym or '--'} iv={iv} "
+                        f"repaired={repaired_daily} dropped={dropped_daily} "
+                        f"kept={len(daily_filtered)} raw={len(out)}"
+                    ),
+                    min_gap_seconds=1.0,
+                    level="info",
+                )
+            out = daily_filtered[-keep:]
+
+        if out:
+            max_body = 0.0
+            max_range = 0.0
+            for row in out:
+                try:
+                    c = float(row.get("close", 0) or 0)
+                    if c <= 0:
+                        continue
+                    o = float(row.get("open", c) or c)
+                    h = float(row.get("high", c) or c)
+                    low = float(row.get("low", c) or c)
+                    body = abs(o - c) / c
+                    span = abs(h - low) / c
+                    if body > max_body:
+                        max_body = body
+                    if span > max_range:
+                        max_range = span
+                except Exception:
+                    continue
+            if iv not in ("1d", "1wk", "1mo") and (
+                max_body > 0.08 or max_range > 0.12
+            ):
+                self._debug_console(
+                    f"chart_shape_anomaly:{sym or 'active'}:{iv}",
+                    (
+                        f"chart shape anomaly symbol={sym or '--'} iv={iv} "
+                        f"bars={len(out)} max_body={max_body:.2%} max_range={max_range:.2%}"
+                    ),
+                    min_gap_seconds=1.0,
+                )
+
+        drop_count = max(0, raw_count - len(out))
+        if raw_count > 0 and drop_count >= max(5, int(raw_count * 0.20)):
+            self._debug_console(
+                f"chart_drop_ratio:{sym or 'active'}:{iv}",
+                (
+                    f"chart scrub high drop ratio symbol={sym or '--'} "
+                    f"iv={iv} kept={len(out)} raw={raw_count}"
+                ),
+                min_gap_seconds=1.0,
+            )
+
+        return out
 
     def _quick_trade(self, pred):
         """Quick trade from signal"""
@@ -3168,13 +5825,90 @@ class MainApp(QMainWindow):
             )
             return
 
-        interval = self.interval_combo.currentText().strip()
-        forecast_bars = self.forecast_spin.value()
-        forecast_lookback = max(
-            int(self.lookback_spin.value()),
-            self._seven_day_lookback(interval),
+        interval = self._normalize_interval_token(
+            self.interval_combo.currentText()
         )
+        self._log_model_alignment_debug(
+            context="analyze",
+            requested_interval=interval,
+            requested_horizon=int(self.forecast_spin.value()),
+        )
+        is_trained = self._is_trained_stock(normalized)
+        if not is_trained:
+            # Preserve user-selected interval even for non-trained symbols.
+            if interval in {"1d", "1wk", "1mo"}:
+                target_lookback = max(
+                    60,
+                    int(self._recommended_lookback(interval)),
+                )
+            else:
+                target_lookback = max(
+                    120,
+                    int(self._seven_day_lookback(interval)),
+                )
+            self.lookback_spin.setValue(target_lookback)
+            self._queue_history_refresh(normalized, interval)
+            self._debug_console(
+                f"non_trained_policy:{normalized}",
+                (
+                    f"non-trained symbol policy (preserve interval): "
+                    f"symbol={normalized} iv={interval} lookback={target_lookback}"
+                ),
+                min_gap_seconds=1.0,
+                level="info",
+            )
+        forecast_bars = int(self.forecast_spin.value())
+        ui_lookback = max(
+            int(self.lookback_spin.value()),
+            int(self._recommended_lookback(interval)),
+        )
+        forecast_lookback = int(ui_lookback)
         use_realtime = bool(CONFIG.is_market_open())
+        infer_interval = "1m"
+        infer_horizon = int(forecast_bars)
+        infer_lookback = int(
+            max(
+                self._recommended_lookback("1m"),
+                self._bars_needed_from_base_interval(
+                    interval,
+                    int(forecast_lookback),
+                    base_interval="1m",
+                ),
+            )
+        )
+        history_allow_online = True
+        skip_cache = True
+        if not self._has_exact_model_artifacts(infer_interval, infer_horizon):
+            self._debug_console(
+                f"analyze_model_fallback:{normalized}:{interval}",
+                (
+                    f"analyze inference locked to 1m for {normalized}: "
+                    f"ui={interval}/{forecast_bars} infer={infer_interval}/{infer_horizon} "
+                    f"lookback={infer_lookback} online=1"
+                ),
+                min_gap_seconds=1.0,
+                level="warning",
+            )
+
+        request_key = (
+            f"{normalized}:{interval}:{forecast_bars}:"
+            f"{int(infer_lookback)}:{int(use_realtime)}:"
+            f"{infer_interval}:{int(infer_horizon)}:{int(history_allow_online)}"
+        )
+        req_now = time.monotonic()
+        last_req = dict(self._last_analyze_request or {})
+        if (
+            last_req.get("key") == request_key
+            and (req_now - float(last_req.get("ts", 0.0) or 0.0)) < 1.2
+        ):
+            self._debug_console(
+                f"analyze_dedup:{normalized}:{interval}",
+                f"Skipped duplicate analyze request for {normalized} ({interval})",
+                min_gap_seconds=8.0,
+                level="info",
+            )
+            return
+        self._last_analyze_request = {"key": request_key, "ts": req_now}
 
         self.analyze_action.setEnabled(False)
 
@@ -3193,10 +5927,11 @@ class MainApp(QMainWindow):
             return self.predictor.predict(
                 normalized,
                 use_realtime_price=use_realtime,
-                interval=interval,
-                forecast_minutes=forecast_bars,
-                lookback_bars=forecast_lookback,
-                skip_cache=True
+                interval=infer_interval,
+                forecast_minutes=infer_horizon,
+                lookback_bars=infer_lookback,
+                skip_cache=bool(skip_cache),
+                history_allow_online=history_allow_online,
             )
 
         worker = WorkerThread(analyze, timeout_seconds=120)
@@ -3219,53 +5954,153 @@ class MainApp(QMainWindow):
             fetcher = getattr(self.predictor, "fetcher", None)
             if fetcher is None:
                 return []
-            norm_iv = str(interval).strip().lower()
-            min_floor = 7 if norm_iv == "1d" else 120
-            lookback = max(min_floor, int(lookback_bars))
+            requested_iv = self._normalize_interval_token(interval)
+            source_iv = "1m"
+            norm_iv = requested_iv or source_iv
+            is_trained = self._is_trained_stock(symbol)
+            if is_trained:
+                target_floor = 7 if norm_iv == "1d" else 120
+                lookback = max(target_floor, int(lookback_bars))
+                refresh_requested = bool(
+                    self._consume_history_refresh(symbol, norm_iv)
+                )
+                force_refresh = bool(refresh_requested)
+                use_cache = not force_refresh
+                update_db = bool(force_refresh)
+                allow_online = bool(force_refresh)
+                fallback_allow_online = bool(force_refresh)
+            else:
+                if norm_iv in {"1d", "1wk", "1mo"}:
+                    lookback = max(7, int(min(max(lookback_bars, 7), 120)))
+                else:
+                    lookback = max(120, int(self._seven_day_lookback(norm_iv)))
+                refresh_requested = bool(
+                    self._consume_history_refresh(symbol, norm_iv)
+                )
+                force_refresh = bool(refresh_requested)
+                use_cache = not force_refresh
+                update_db = bool(force_refresh)
+                allow_online = bool(force_refresh)
+                fallback_allow_online = bool(force_refresh)
+
+            source_lookback = int(
+                max(
+                    self._recommended_lookback(source_iv),
+                    self._bars_needed_from_base_interval(
+                        norm_iv,
+                        int(lookback),
+                        base_interval=source_iv,
+                    ),
+                )
+            )
+            source_min_floor = int(self._recommended_lookback(source_iv))
             is_intraday = norm_iv not in ("1d", "1wk", "1mo")
             market_open = bool(CONFIG.is_market_open())
-            now_bucket = self._bar_bucket_epoch(time.time(), norm_iv)
-            df = fetcher.get_history(
-                symbol,
-                interval=norm_iv,
-                bars=lookback,
-                use_cache=True,
-                update_db=False,
-            )
-            if df is None or df.empty:
-                # For symbols opened from trained-list (not yet in watchlist/cache),
-                # force a one-time refresh so chart has bars to render.
+            now_bucket = self._bar_bucket_epoch(time.time(), source_iv)
+            try:
                 df = fetcher.get_history(
                     symbol,
-                    interval=norm_iv,
-                    bars=lookback,
-                    use_cache=True,
-                    update_db=True,
+                    interval=source_iv,
+                    bars=source_lookback,
+                    use_cache=bool(use_cache),
+                    update_db=bool(update_db),
+                    allow_online=bool(allow_online),
                 )
+            except TypeError:
+                df = fetcher.get_history(
+                    symbol,
+                    interval=source_iv,
+                    bars=source_lookback,
+                    use_cache=bool(use_cache),
+                    update_db=bool(update_db),
+                )
+            min_required = int(max(20, source_min_floor if is_trained else 20))
+            if source_lookback >= 200:
+                depth_ratio = 0.55 if is_trained else 0.40
+                min_required = max(
+                    min_required,
+                    int(max(120, float(source_lookback) * float(depth_ratio))),
+                )
+            if (
+                (df is None or df.empty or len(df) < min_required)
+                and bool(fallback_allow_online)
+            ):
+                try:
+                    df_online = fetcher.get_history(
+                        symbol,
+                        interval=source_iv,
+                        bars=source_lookback,
+                        # Bypass in-memory short windows when depth is too thin.
+                        use_cache=False,
+                        update_db=True,
+                        allow_online=True,
+                    )
+                except TypeError:
+                    df_online = fetcher.get_history(
+                        symbol,
+                        interval=source_iv,
+                        bars=source_lookback,
+                        use_cache=False,
+                        update_db=True,
+                    )
+                if df_online is not None and not df_online.empty:
+                    df = df_online
+            if df is None or df.empty:
+                # Fallback query path when primary history window is empty.
+                try:
+                    df = fetcher.get_history(
+                        symbol,
+                        interval=source_iv,
+                        bars=source_lookback,
+                        use_cache=True,
+                        update_db=False,
+                        allow_online=bool(allow_online),
+                    )
+                except TypeError:
+                    df = fetcher.get_history(
+                        symbol,
+                        interval=source_iv,
+                        bars=source_lookback,
+                        use_cache=True,
+                        update_db=False,
+                    )
             out: list[dict[str, Any]] = []
             prev_close: float | None = None
+            prev_epoch: float | None = None
 
             if df is not None and not df.empty:
-                for idx, row in df.tail(lookback).iterrows():
+                for idx, row in df.tail(source_lookback).iterrows():
                     c = float(row.get("close", 0) or 0)
                     if c <= 0:
                         continue
-                    o = float(row.get("open", c) or c)
-                    h = float(row.get("high", c) or c)
-                    low = float(row.get("low", c) or c)
+                    ts_obj = row.get("datetime", idx)
+                    epoch = self._bar_bucket_epoch(ts_obj, source_iv)
+                    ref_close = prev_close
+                    if (
+                        prev_epoch is not None
+                        and self._is_intraday_day_boundary(prev_epoch, epoch, source_iv)
+                    ):
+                        ref_close = None
+                    o_raw = row.get("open", None)
+                    try:
+                        o = float(o_raw or 0)
+                    except Exception:
+                        o = 0.0
+                    if o <= 0:
+                        o = float(ref_close if ref_close and ref_close > 0 else c)
+                    h = float(row.get("high", max(o, c)) or max(o, c))
+                    low = float(row.get("low", min(o, c)) or min(o, c))
                     sanitized = self._sanitize_ohlc(
                         o,
                         h,
                         low,
                         c,
-                        interval=norm_iv,
-                        ref_close=prev_close,
+                        interval=source_iv,
+                        ref_close=ref_close,
                     )
                     if sanitized is None:
                         continue
                     o, h, low, c = sanitized
-                    ts_obj = row.get("datetime", idx)
-                    epoch = self._bar_bucket_epoch(ts_obj, norm_iv)
                     out.append(
                         {
                             "open": o,
@@ -3275,36 +6110,49 @@ class MainApp(QMainWindow):
                             "timestamp": self._epoch_to_iso(epoch),
                             "_ts_epoch": float(epoch),
                             "final": True,
-                            "interval": norm_iv,
+                            "interval": source_iv,
                         }
                     )
                     prev_close = c
+                    prev_epoch = float(epoch)
 
             # Include session-persisted bars so refresh/restart keeps data continuity.
-            if self._session_bar_cache is not None:
+            if self._session_bar_cache is not None and not force_refresh:
                 sdf = self._session_bar_cache.read_history(
-                    symbol, norm_iv, bars=lookback, final_only=False
+                    symbol, source_iv, bars=source_lookback, final_only=False
                 )
                 if sdf is not None and not sdf.empty:
-                    for idx, row in sdf.tail(lookback).iterrows():
+                    for idx, row in sdf.tail(source_lookback).iterrows():
                         c = float(row.get("close", 0) or 0)
                         if c <= 0:
                             continue
-                        o = float(row.get("open", c) or c)
-                        h = float(row.get("high", c) or c)
-                        low = float(row.get("low", c) or c)
+                        epoch = self._bar_bucket_epoch(idx, source_iv)
+                        ref_close = prev_close
+                        if (
+                            prev_epoch is not None
+                            and self._is_intraday_day_boundary(prev_epoch, epoch, source_iv)
+                        ):
+                            ref_close = None
+                        o_raw = row.get("open", None)
+                        try:
+                            o = float(o_raw or 0)
+                        except Exception:
+                            o = 0.0
+                        if o <= 0:
+                            o = float(ref_close if ref_close and ref_close > 0 else c)
+                        h = float(row.get("high", max(o, c)) or max(o, c))
+                        low = float(row.get("low", min(o, c)) or min(o, c))
                         sanitized = self._sanitize_ohlc(
                             o,
                             h,
                             low,
                             c,
-                            interval=norm_iv,
-                            ref_close=prev_close,
+                            interval=source_iv,
+                            ref_close=ref_close,
                         )
                         if sanitized is None:
                             continue
                         o, h, low, c = sanitized
-                        epoch = self._bar_bucket_epoch(idx, norm_iv)
                         is_final = bool(row.get("is_final", True))
                         if (
                             is_intraday
@@ -3325,19 +6173,20 @@ class MainApp(QMainWindow):
                                 "timestamp": self._epoch_to_iso(epoch),
                                 "_ts_epoch": float(epoch),
                                 "final": is_final,
-                                "interval": norm_iv,
+                                "interval": source_iv,
                             }
                         )
                         prev_close = c
+                        prev_epoch = float(epoch)
 
-            out = self._filter_bars_to_market_session(out, norm_iv)
+            out = self._filter_bars_to_market_session(out, source_iv)
 
             # Deduplicate by normalized epoch and keep latest.
             merged: dict[int, dict[str, Any]] = {}
             for b in out:
                 epoch = self._bar_bucket_epoch(
                     b.get("_ts_epoch", b.get("timestamp", "")),
-                    norm_iv,
+                    source_iv,
                 )
                 row = dict(b)
                 row["_ts_epoch"] = float(epoch)
@@ -3373,7 +6222,84 @@ class MainApp(QMainWindow):
                     x.get("_ts_epoch", self._ts_to_epoch(x.get("timestamp", "")))
                 )
             )
+            # One more unified scrub pass to drop residual malformed bars.
+            out = self._merge_bars([], out, source_iv)
+            out = out[-source_lookback:]
+
+            # Chart intervals are display-only; source stream remains 1m.
+            if norm_iv != source_iv:
+                out = self._resample_chart_bars(
+                    out,
+                    source_interval=source_iv,
+                    target_interval=norm_iv,
+                )
             out = out[-lookback:]
+
+            if out and is_intraday and not force_refresh:
+                sample = out[-min(520, len(out)):]
+                total_q = 0
+                degenerate_q = 0
+                epochs: list[float] = []
+                for row in sample:
+                    try:
+                        c_q = float(row.get("close", 0) or 0)
+                        o_q = float(row.get("open", c_q) or c_q)
+                        h_q = float(row.get("high", c_q) or c_q)
+                        l_q = float(row.get("low", c_q) or c_q)
+                    except Exception:
+                        continue
+                    if c_q <= 0 or (not all(math.isfinite(v) for v in (o_q, h_q, l_q, c_q))):
+                        continue
+                    ref_q = max(c_q, 1e-8)
+                    body_q = abs(o_q - c_q) / ref_q
+                    span_q = abs(h_q - l_q) / ref_q
+                    if body_q <= 0.00012 and span_q <= 0.00120:
+                        degenerate_q += 1
+                    total_q += 1
+                    try:
+                        ep_q = float(
+                            self._bar_bucket_epoch(
+                                row.get("_ts_epoch", row.get("timestamp")),
+                                norm_iv,
+                            )
+                        )
+                        if math.isfinite(ep_q):
+                            epochs.append(ep_q)
+                    except Exception:
+                        pass
+
+                deg_ratio = (
+                    float(degenerate_q) / float(max(1, total_q))
+                    if total_q > 0
+                    else 0.0
+                )
+                med_step = 0.0
+                if len(epochs) >= 3:
+                    epochs = sorted(epochs)
+                    diffs = [
+                        float(epochs[i] - epochs[i - 1])
+                        for i in range(1, len(epochs))
+                        if float(epochs[i] - epochs[i - 1]) > 0
+                    ]
+                    if diffs:
+                        med_step = float(median(diffs))
+
+                expected_step = float(max(1, self._interval_seconds(norm_iv)))
+                bad_degenerate = total_q >= 180 and deg_ratio >= 0.50
+                bad_cadence = med_step > (expected_step * 3.5)
+                if bad_degenerate or bad_cadence:
+                    self._debug_console(
+                        f"chart_history_refresh:{self._ui_norm(symbol)}:{norm_iv}",
+                        (
+                            f"forcing one-shot online history refresh for {self._ui_norm(symbol)} {norm_iv}: "
+                            f"degenerate={deg_ratio:.1%} cadence={med_step:.0f}s expected={expected_step:.0f}s "
+                            f"bars={len(out)}"
+                        ),
+                        min_gap_seconds=1.0,
+                        level="warning",
+                    )
+                    self._queue_history_refresh(symbol, norm_iv)
+                    return self._load_chart_history_bars(symbol, norm_iv, lookback)
             return out
         except Exception as e:
             log.debug(f"Historical chart load failed for {symbol}: {e}")
@@ -3398,7 +6324,9 @@ class MainApp(QMainWindow):
             self.signal_panel.update_prediction(pred)
 
         current_price = float(getattr(pred, "current_price", 0) or 0)
-        interval = self.interval_combo.currentText().strip().lower()
+        interval = self._normalize_interval_token(
+            self.interval_combo.currentText()
+        )
         lookback = max(
             int(self.lookback_spin.value()),
             self._seven_day_lookback(interval),
@@ -3410,15 +6338,55 @@ class MainApp(QMainWindow):
             if existing:
                 existing_same_interval = [
                     b for b in existing
-                    if str(
-                        b.get("interval", interval)
-                        or interval
-                    ).strip().lower() == interval
+                    if self._normalize_interval_token(
+                        b.get("interval", interval),
+                        fallback=interval,
+                    ) == interval
                 ]
+                # Avoid re-injecting stale malformed bars from in-memory cache.
+                # Only merge the current live partial bucket while market is open.
+                if existing_same_interval and CONFIG.is_market_open():
+                    now_bucket = self._bar_bucket_epoch(time.time(), interval)
+                    live_partial: list[dict[str, Any]] = []
+                    for b in existing_same_interval:
+                        if bool(b.get("final", True)):
+                            continue
+                        b_bucket = self._bar_bucket_epoch(
+                            b.get("_ts_epoch", b.get("timestamp")),
+                            interval,
+                        )
+                        if int(b_bucket) == int(now_bucket):
+                            live_partial.append(b)
+                    if live_partial:
+                        arr = self._merge_bars(arr, live_partial, interval)
+
+                # If newly loaded chart depth is far smaller than the existing
+                # cached window, keep the deeper existing history to prevent
+                # oscillation between full chart and tiny placeholder blocks.
                 if existing_same_interval:
-                    arr = self._merge_bars(
-                        arr, existing_same_interval, interval
-                    )
+                    old_len = len(existing_same_interval)
+                    new_len = len(arr or [])
+                    if new_len <= 0:
+                        arr = list(existing_same_interval)
+                    elif old_len >= 12 and new_len < max(6, int(old_len * 0.45)):
+                        merged_depth = self._merge_bars(
+                            existing_same_interval,
+                            arr,
+                            interval,
+                        )
+                        if len(merged_depth) >= max(new_len, int(old_len * 0.62)):
+                            arr = merged_depth
+                        else:
+                            arr = list(existing_same_interval)
+                        self._debug_console(
+                            f"chart_depth_preserve:{symbol}:{interval}",
+                            (
+                                f"preserved deeper chart window for {symbol} {interval}: "
+                                f"new={new_len} old={old_len} final={len(arr)}"
+                            ),
+                            min_gap_seconds=1.0,
+                            level="info",
+                        )
             arr = self._filter_bars_to_market_session(arr, interval)
 
             if not arr and current_price > 0:
@@ -3435,13 +6403,33 @@ class MainApp(QMainWindow):
 
             if arr and current_price > 0:
                 update_last = True
+                prev_ref: float | None = None
                 if len(arr) >= 2:
                     try:
-                        prev_ref = float(
-                            arr[-2].get("close", current_price) or current_price
+                        prev_epoch = self._bar_bucket_epoch(
+                            arr[-2].get("_ts_epoch", arr[-2].get("timestamp")),
+                            interval,
                         )
-                        if self._is_outlier_tick(
-                            prev_ref, current_price, interval=interval
+                        last_epoch = self._bar_bucket_epoch(
+                            arr[-1].get("_ts_epoch", arr[-1].get("timestamp")),
+                            interval,
+                        )
+                        if not self._is_intraday_day_boundary(
+                            prev_epoch,
+                            last_epoch,
+                            interval,
+                        ):
+                            prev_ref = float(
+                                arr[-2].get("close", current_price) or current_price
+                            )
+                        if (
+                            prev_ref
+                            and prev_ref > 0
+                            and self._is_outlier_tick(
+                                prev_ref,
+                                current_price,
+                                interval=interval,
+                            )
                         ):
                             update_last = False
                     except Exception:
@@ -3459,9 +6447,7 @@ class MainApp(QMainWindow):
                         ),
                         current_price,
                         interval=interval,
-                        ref_close=float(
-                            arr[-2].get("close", current_price) or current_price
-                        ) if len(arr) >= 2 else None,
+                        ref_close=prev_ref if (prev_ref and prev_ref > 0) else None,
                     )
                     if s is not None:
                         o, h, low, c = s
@@ -3478,24 +6464,24 @@ class MainApp(QMainWindow):
                     arr[-1]["timestamp"] = self._epoch_to_iso(arr[-1]["_ts_epoch"])
 
             if arr:
-                self._bars_by_symbol[symbol] = arr
-                if hasattr(self.chart, "update_chart"):
-                    if self._chart_symbol and self._chart_symbol != symbol:
-                        try:
-                            self.chart.reset_view()
-                        except Exception:
-                            pass
-                    self.chart.update_chart(
-                        arr,
+                try:
+                    arr = self._render_chart_state(
+                        symbol=symbol,
+                        interval=interval,
+                        bars=arr,
+                        context="analysis_done",
+                        current_price=current_price if current_price > 0 else None,
                         predicted_prices=getattr(pred, "predicted_prices", []) or [],
-                        levels=self._get_levels_dict(),
+                        source_interval=self._normalize_interval_token(
+                            getattr(pred, "interval", interval),
+                            fallback=interval,
+                        ),
+                        target_steps=int(self.forecast_spin.value()),
+                        update_latest_label=True,
+                        reset_view_on_symbol_switch=True,
                     )
-                    self._chart_symbol = symbol
-                self._update_chart_latest_label(
-                    symbol,
-                    bar=arr[-1] if arr else None,
-                    price=current_price if current_price > 0 else None,
-                )
+                except Exception as e:
+                    log.debug(f"Chart update failed: {e}")
 
         # Update details (with news sentiment)
         self._update_details(pred)
@@ -3540,11 +6526,47 @@ class MainApp(QMainWindow):
             else str(pred.signal)
         )
         conf = getattr(pred, 'confidence', 0)
-        self.log(
-            f"Analysis complete: {pred.stock_code} - "
-            f"{signal_text} ({conf:.0%})",
-            "success"
+        warnings = list(getattr(pred, "warnings", []) or [])
+        pred_interval = self._normalize_interval_token(
+            getattr(pred, "interval", interval),
+            fallback=interval,
         )
+        insufficient_data = (
+            current_price <= 0
+            or any(
+                ("insufficient data" in str(w).lower())
+                or ("prediction error" in str(w).lower())
+                for w in warnings
+            )
+        )
+        log_key = f"{pred.stock_code}:{signal_text}:{float(conf):.4f}:{int(insufficient_data)}"
+        last_log = dict(self._last_analysis_log or {})
+        now_log_ts = time.monotonic()
+        should_log = True
+        if (
+            last_log.get("key") == log_key
+            and (now_log_ts - float(last_log.get("ts", 0.0) or 0.0)) < 2.5
+        ):
+            should_log = False
+        if should_log:
+            if insufficient_data:
+                self.log(
+                    f"Analysis partial: {pred.stock_code} - "
+                    f"{signal_text} ({conf:.0%}) | data not ready",
+                    "warning",
+                )
+                self._schedule_analysis_recovery(
+                    symbol=pred.stock_code,
+                    interval=pred_interval,
+                    warnings=warnings,
+                )
+            else:
+                self.log(
+                    f"Analysis complete: {pred.stock_code} - "
+                    f"{signal_text} ({conf:.0%})",
+                    "success",
+                )
+            self._last_analysis_log = {"key": log_key, "ts": now_log_ts}
 
         self.workers.pop('analyze', None)
 
@@ -3896,12 +6918,14 @@ class MainApp(QMainWindow):
     def _calculate_realtime_correct_guess_profit(self) -> dict[str, float]:
         """
         Aggregate real-time guess quality across history rows.
-        correct_profit sums only profitable (correct) directional guesses.
+        Reports both net and gross-correct directional P&L.
         """
         total = 0
         correct = 0
         wrong = 0
         correct_profit = 0.0
+        wrong_loss = 0.0
+        net_profit = 0.0
 
         for row in range(self.history_table.rowCount()):
             result_item = self.history_table.item(row, 5)
@@ -3914,7 +6938,9 @@ class MainApp(QMainWindow):
 
             entry = float(meta.get("entry_price", 0.0) or 0.0)
             mark = float(meta.get("mark_price", 0.0) or 0.0)
-            shares = int(meta.get("shares", self._guess_profit_notional_shares) or 1)
+            shares = int(
+                meta.get("shares", self._guess_profit_notional_shares) or 1
+            )
             pnl = self._compute_guess_profit(direction, entry, mark, shares)
 
             total += 1
@@ -3923,17 +6949,21 @@ class MainApp(QMainWindow):
                 correct_profit += pnl
             elif pnl < 0:
                 wrong += 1
+                wrong_loss += abs(pnl)
+            net_profit += pnl
 
         return {
             "total": float(total),
             "correct": float(correct),
             "wrong": float(wrong),
             "correct_profit": float(correct_profit),
+            "wrong_loss": float(wrong_loss),
+            "net_profit": float(net_profit),
             "hit_rate": (float(correct) / float(total)) if total > 0 else 0.0,
         }
 
     def _update_correct_guess_profit_ui(self):
-        """Display real-time correct-guess P&L and hit rate in UI."""
+        """Display real-time directional-guess P&L and hit rate in UI."""
         if not hasattr(self, "auto_trade_labels"):
             return
 
@@ -3941,10 +6971,19 @@ class MainApp(QMainWindow):
 
         label_profit = self.auto_trade_labels.get("guess_profit")
         if label_profit:
-            val = float(stats.get("correct_profit", 0.0) or 0.0)
-            label_profit.setText(f"¥{val:,.2f}")
+            net_val = float(stats.get("net_profit", 0.0) or 0.0)
+            gross_correct = float(stats.get("correct_profit", 0.0) or 0.0)
+            gross_wrong = float(stats.get("wrong_loss", 0.0) or 0.0)
+            label_profit.setText(f"CNY {net_val:+,.2f}")
+            color = "#3fb950" if net_val >= 0 else "#f85149"
             label_profit.setStyleSheet(
-                "color: #3fb950; font-size: 16px; font-weight: bold;"
+                f"color: {color}; font-size: 16px; font-weight: bold;"
+            )
+            label_profit.setToolTip(
+                "Directional guess P&L\n"
+                f"Net: CNY {net_val:+,.2f}\n"
+                f"Gross Correct: CNY {gross_correct:,.2f}\n"
+                f"Gross Wrong: CNY {gross_wrong:,.2f}"
             )
 
         label_rate = self.auto_trade_labels.get("guess_rate")
@@ -4392,8 +7431,9 @@ class MainApp(QMainWindow):
             "order_type": str(order_type_combo.currentData() or "limit"),
             "time_in_force": str(tif_combo.currentData() or "day"),
             "trigger_price": float(trigger_spin.value()),
-            "trailing_stop_pct": float(trailing_spin.value() / 100.0),
-            "trail_limit_offset_pct": float(trail_limit_offset_spin.value() / 100.0),
+            # Percent units (e.g., 0.8 means 0.8%).
+            "trailing_stop_pct": float(trailing_spin.value()),
+            "trail_limit_offset_pct": float(trail_limit_offset_spin.value()),
             "strict_time_in_force": bool(strict_tif.isChecked()),
             "bracket": bool(bracket_check.isChecked()),
             "stop_loss": float(stop_loss_spin.value()),
@@ -4481,6 +7521,10 @@ class MainApp(QMainWindow):
             normalized_trigger = 0.0
 
         normalized_trailing_stop = max(0.0, float(trailing_stop_pct))
+        # Backward compatibility: older UI path sent fractional units (0.008).
+        if 0.0 < normalized_trailing_stop < 0.05:
+            normalized_trailing_stop *= 100.0
+        normalized_trailing_stop = min(20.0, normalized_trailing_stop)
         if normalized_order_type not in {
             OrderType.TRAIL_MARKET.value,
             OrderType.TRAIL_LIMIT.value,
@@ -4488,6 +7532,9 @@ class MainApp(QMainWindow):
             normalized_trailing_stop = 0.0
 
         normalized_trail_limit_offset = max(0.0, float(trail_limit_offset_pct))
+        if 0.0 < normalized_trail_limit_offset < 0.05:
+            normalized_trail_limit_offset *= 100.0
+        normalized_trail_limit_offset = min(10.0, normalized_trail_limit_offset)
         if normalized_order_type != OrderType.TRAIL_LIMIT.value:
             normalized_trail_limit_offset = 0.0
 
@@ -4776,7 +7823,9 @@ class MainApp(QMainWindow):
             seed_codes: list[str] = []
             try:
                 if self._session_bar_cache is not None:
-                    interval = self.interval_combo.currentText().strip().lower()
+                    interval = self._normalize_interval_token(
+                        self.interval_combo.currentText()
+                    )
                     seed_codes = self._session_bar_cache.get_recent_symbols(
                         interval=interval, min_rows=10
                     )
@@ -5318,6 +8367,11 @@ class MainApp(QMainWindow):
             self.auto_trade_labels.get('trades', QLabel()).setText("0")
             self.auto_trade_labels.get('pnl', QLabel()).setText("--")
             self.auto_trade_labels.get('status', QLabel()).setText("--")
+            self.auto_pause_btn.setText("Pause Auto")
+            self.auto_pause_btn.setEnabled(False)
+            self.auto_approve_all_btn.setText("Approve All")
+            self.auto_approve_all_btn.setEnabled(False)
+            self.auto_reject_all_btn.setEnabled(False)
             return
 
         state = self.executor.auto_trader.get_state()
@@ -5384,9 +8438,13 @@ class MainApp(QMainWindow):
             self.auto_pause_btn.setText("Resume Auto")
         else:
             self.auto_pause_btn.setText("Pause Auto")
+        self.auto_pause_btn.setEnabled(state.mode != AutoTradeMode.MANUAL)
 
         pending_count = len(state.pending_approvals)
-        if pending_count > 0:
+        can_bulk_decide = (
+            state.mode == AutoTradeMode.SEMI_AUTO and pending_count > 0
+        )
+        if can_bulk_decide:
             self.auto_approve_all_btn.setText(
                 f"Approve All ({pending_count})"
             )
@@ -5394,9 +8452,8 @@ class MainApp(QMainWindow):
             self.auto_reject_all_btn.setEnabled(True)
         else:
             self.auto_approve_all_btn.setText("Approve All")
-            if self._auto_trade_mode != AutoTradeMode.SEMI_AUTO:
-                self.auto_approve_all_btn.setEnabled(False)
-                self.auto_reject_all_btn.setEnabled(False)
+            self.auto_approve_all_btn.setEnabled(False)
+            self.auto_reject_all_btn.setEnabled(False)
 
     # =========================================================================
     # =========================================================================
@@ -5562,12 +8619,17 @@ class MainApp(QMainWindow):
                         loaded,
                         max_size=self.MAX_WATCHLIST_SIZE,
                     )
-                if 'interval' in state:
-                    self.interval_combo.setCurrentText(state['interval'])
                 if 'forecast' in state:
                     self.forecast_spin.setValue(state['forecast'])
-                if 'lookback' in state:
-                    self.lookback_spin.setValue(state['lookback'])
+                # Startup should always begin on 1m with latest 7-day window.
+                self.interval_combo.blockSignals(True)
+                try:
+                    self.interval_combo.setCurrentText(self.STARTUP_INTERVAL)
+                finally:
+                    self.interval_combo.blockSignals(False)
+                self.lookback_spin.setValue(
+                    self._recommended_lookback(self.STARTUP_INTERVAL)
+                )
                 if 'capital' in state:
                     self.capital_spin.setValue(state['capital'])
                 if 'last_stock' in state:
@@ -5583,14 +8645,6 @@ class MainApp(QMainWindow):
                             self._auto_trade_mode = AutoTradeMode.MANUAL
                     except (ValueError, KeyError):
                         self._auto_trade_mode = AutoTradeMode.MANUAL
-
-                # Keep lookback at least 7 trading days.
-                min_lookback = self._seven_day_lookback(
-                    self.interval_combo.currentText()
-                )
-                self.lookback_spin.setValue(
-                    max(int(self.lookback_spin.value()), int(min_lookback))
-                )
 
                 log.debug("Application state restored")
         except Exception as e:

@@ -166,7 +166,7 @@ class DataProcessor:
         self._n_features: int | None = None
         self._fit_samples: int = 0
 
-        self._interval: str = "1d"
+        self._interval: str = "1m"
         self._horizon: int = CONFIG.PREDICTION_HORIZON
         self._scaler_version: str = ""
 
@@ -450,7 +450,7 @@ class DataProcessor:
         Only load scalers from trusted sources.
         """
         if path is None:
-            interval = interval or "1d"
+            interval = interval or "1m"
             horizon = horizon or CONFIG.PREDICTION_HORIZON
             path = str(
                 CONFIG.MODEL_DIR / f"scaler_{interval}_{horizon}.pkl"
@@ -479,7 +479,7 @@ class DataProcessor:
                 self._n_features = data.get("n_features")
                 self._fit_samples = data.get("fit_samples", 0)
                 self._fitted = data.get("fitted", True)
-                self._interval = data.get("interval", "1d")
+                self._interval = data.get("interval", "1m")
                 self._horizon = data.get(
                     "horizon", CONFIG.PREDICTION_HORIZON
                 )

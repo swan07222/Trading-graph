@@ -292,6 +292,30 @@ class MarketDatabase:
         work = work.sort_index()
         work = work[~work.index.duplicated(keep="last")]
 
+        # Defensive guard: keep CN intraday rows only within regular session
+        # so lunch/after-close bad bars do not pollute persisted cache.
+        if interval not in ("1d", "1wk", "1mo") and code.isdigit() and len(code) == 6:
+            try:
+                idx = work.index
+                idx_local = idx
+                if getattr(idx, "tz", None) is not None:
+                    try:
+                        from zoneinfo import ZoneInfo
+
+                        idx_local = idx.tz_convert(
+                            ZoneInfo("Asia/Shanghai")
+                        ).tz_localize(None)
+                    except Exception:
+                        idx_local = idx.tz_convert(None)
+                hhmm = (idx_local.hour * 100) + idx_local.minute
+                in_morning = (hhmm >= 930) & (hhmm <= 1130)
+                in_afternoon = (hhmm >= 1300) & (hhmm <= 1500)
+                weekday = idx_local.dayofweek < 5
+                mask = weekday & (in_morning | in_afternoon)
+                work = work.loc[mask]
+            except Exception:
+                pass
+
         if work.empty:
             return
 

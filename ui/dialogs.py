@@ -210,6 +210,8 @@ class TrainingDialog(QDialog):
 
         self.worker: TrainWorker | None = None
         self._is_training = False
+        self._epoch_by_model: dict[str, int] = {}
+        self._expected_model_count: int = 1
 
         layout = QVBoxLayout(self)
 
@@ -385,6 +387,13 @@ class TrainingDialog(QDialog):
         )
         self.status.setText("Training...")
         self.progress.setValue(0)
+        self._epoch_by_model = {}
+        model_tokens = [
+            x.strip()
+            for x in str(self.models_label.text() or "").split(",")
+            if x.strip()
+        ]
+        self._expected_model_count = max(1, len(model_tokens))
 
         self._is_training = True
         self.start_btn.setEnabled(False)
@@ -429,8 +438,28 @@ class TrainingDialog(QDialog):
         )
 
         epochs = int(self.epochs_spin.value())
-        pct = int(min(100, (epoch / max(1, epochs)) * 100))
+        key = str(model_name or "model")
+        prev = int(self._epoch_by_model.get(key, 0))
+        self._epoch_by_model[key] = max(prev, int(epoch))
+        observed_models = max(1, len(self._epoch_by_model))
+        total_models = max(int(self._expected_model_count), int(observed_models))
+        completed_epochs = sum(
+            min(int(epochs), int(v))
+            for v in self._epoch_by_model.values()
+        )
+        pct = int(
+            min(
+                99,
+                round(
+                    (completed_epochs / max(1.0, float(total_models * max(1, epochs))))
+                    * 100.0
+                ),
+            )
+        )
         self.progress.setValue(pct)
+        self.status.setText(
+            f"Training... {pct}% ({observed_models}/{total_models} models)"
+        )
 
     def _on_finished(self, results: dict):
         """Handle training completion."""
@@ -495,6 +524,8 @@ class TrainingDialog(QDialog):
         # Re-enable settings
         self.epochs_spin.setEnabled(True)
         self.stocks_list.setEnabled(True)
+        self._epoch_by_model = {}
+        self._expected_model_count = 1
 
         self.worker = None
 

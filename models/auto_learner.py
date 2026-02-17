@@ -72,8 +72,8 @@ class LearningProgress:
     total_stocks_learned: int = 0
     total_training_hours: float = 0.0
     best_accuracy_ever: float = 0.0
-    current_interval: str = "1d"
-    current_horizon: int = 5
+    current_interval: str = "1m"
+    current_horizon: int = 30
 
     processed_count: int = 0
     pool_size: int = 0
@@ -984,7 +984,8 @@ class ParallelFetcher:
             except ImportError:
                 bpd = 1.0
 
-            min_cache_bars = int(max(14 * bpd, 14))
+            # Keep warm cache aligned to the 7-day intraday training window.
+            min_cache_bars = int(max(7 * bpd, 7))
 
             with semaphore:
                 time.sleep(delay)
@@ -1183,6 +1184,13 @@ class ContinuousLearner:
         lookback_bars=None, cycle_interval_seconds=900, incremental=True,
         priority_stock_codes: list[str] | None = None,
     ):
+        requested_interval = str(interval or "1m").strip().lower()
+        interval = "1m"
+        if requested_interval != "1m":
+            log.info(
+                "Training interval locked to 1m (requested=%s)",
+                requested_interval,
+            )
         if self._thread and self._thread.is_alive():
             if self.progress.is_paused:
                 self.resume()
@@ -1230,8 +1238,223 @@ class ContinuousLearner:
         except ImportError:
             bpd = self._BARS_PER_DAY_FALLBACK.get(str(interval).lower(), 1)
             max_d = self._INTERVAL_MAX_DAYS_FALLBACK.get(str(interval).lower(), 500)
+        iv = str(interval).lower()
+        is_intraday = iv in ("1m", "2m", "5m", "15m", "30m", "60m", "1h")
+        target_days = min(int(max_d), 7) if is_intraday else min(int(max_d), 365)
+        bars = int(max(1, round(float(bpd) * float(target_days))))
+        if is_intraday:
+            return max(120, bars)
+        return min(max(200, bars), 3000)
 
-        return min(max(200, int(bpd * max_d * 0.7)), 3000)
+    @staticmethod
+    def _interval_seconds(interval: str) -> int:
+        """Map interval token to seconds for continuity checks."""
+        iv = str(interval or "1m").strip().lower()
+        mapping = {
+            "1m": 60,
+            "2m": 120,
+            "3m": 180,
+            "5m": 300,
+            "15m": 900,
+            "30m": 1800,
+            "60m": 3600,
+            "1h": 3600,
+            "1d": 86400,
+            "1wk": 604800,
+            "1mo": 2592000,
+        }
+        return int(mapping.get(iv, 60))
+
+    def _session_continuous_window_seconds(
+        self,
+        code: str,
+        interval: str,
+        max_bars: int = 5000,
+    ) -> float:
+        """
+        Longest continuous cached window for a symbol/interval in seconds.
+        Uses session bars captured during trading, including partial bars.
+        """
+        try:
+            from data.session_cache import get_session_bar_cache
+            cache = get_session_bar_cache()
+            df = cache.read_history(
+                symbol=code,
+                interval=interval,
+                bars=max(10, int(max_bars)),
+                final_only=False,
+            )
+        except Exception:
+            return 0.0
+
+        if df is None or df.empty:
+            return 0.0
+
+        step = float(max(1, self._interval_seconds(interval)))
+        buckets: list[int] = []
+        try:
+            for ts in df.index.tolist():
+                try:
+                    ep = float(ts.timestamp())
+                except Exception:
+                    continue
+                if not np.isfinite(ep):
+                    continue
+                buckets.append(int(ep // step))
+        except Exception:
+            return 0.0
+
+        if not buckets:
+            return 0.0
+
+        uniq = sorted(set(buckets))
+        run = 1
+        longest = 1
+        for i in range(1, len(uniq)):
+            if (uniq[i] - uniq[i - 1]) <= 1:
+                run += 1
+            else:
+                longest = max(longest, run)
+                run = 1
+        longest = max(longest, run)
+
+        return float(max(0, longest - 1) * step)
+
+    def _filter_priority_session_codes(
+        self,
+        codes: list[str],
+        interval: str,
+        min_seconds: float = 3600.0,
+    ) -> list[str]:
+        """
+        Keep only session-priority symbols with enough continuous captured data.
+        For intraday training this enforces >=1 hour of contiguous session bars.
+        """
+        iv = str(interval or "").strip().lower()
+        intraday = {"1m", "2m", "3m", "5m", "15m", "30m", "60m", "1h"}
+
+        dedup: list[str] = []
+        seen: set[str] = set()
+        for raw in (codes or []):
+            c = str(raw).strip()
+            if not c or c in seen:
+                continue
+            seen.add(c)
+            dedup.append(c)
+
+        if iv not in intraday:
+            return dedup
+
+        filtered: list[str] = []
+        dropped = 0
+        for c in dedup:
+            span_s = self._session_continuous_window_seconds(c, iv)
+            if span_s >= float(min_seconds):
+                filtered.append(c)
+            else:
+                dropped += 1
+
+        if dropped > 0:
+            self.progress.add_warning(
+                f"Skipped {dropped} session-priority stocks without >=1h continuous {iv} bars"
+            )
+        return filtered
+
+    @staticmethod
+    def _norm_code(raw: str) -> str:
+        code = "".join(c for c in str(raw or "").strip() if c.isdigit())
+        return code.zfill(6) if code else ""
+
+    def _prioritize_codes_by_news(
+        self,
+        codes: list[str],
+        interval: str,
+        max_probe: int = 16,
+    ) -> list[str]:
+        """
+        Reorder candidate symbols by fresh market/stock news relevance.
+        Keeps original order for ties and when news is unavailable.
+        """
+        ordered = [self._norm_code(c) for c in list(codes or [])]
+        ordered = [c for c in ordered if c]
+        if len(ordered) <= 1:
+            return ordered
+
+        try:
+            from data.news import get_news_aggregator
+            agg = get_news_aggregator()
+        except Exception:
+            return ordered
+
+        candidate_set = set(ordered)
+        scores: dict[str, float] = {c: 0.0 for c in ordered}
+        now = datetime.now()
+
+        try:
+            market_news = agg.get_market_news(count=80, force_refresh=False)
+        except Exception:
+            market_news = []
+
+        for item in list(market_news or []):
+            linked = {
+                self._norm_code(x)
+                for x in list(getattr(item, "stock_codes", []) or [])
+            }
+            linked = {c for c in linked if c and c in candidate_set}
+            if not linked:
+                continue
+            try:
+                age_h = max(
+                    0.0,
+                    (now - getattr(item, "publish_time", now)).total_seconds() / 3600.0,
+                )
+            except Exception:
+                age_h = 24.0
+            recency = 1.0 / (1.0 + (age_h / 10.0))
+            sentiment_mag = abs(float(getattr(item, "sentiment_score", 0.0) or 0.0))
+            importance = float(getattr(item, "importance", 0.5) or 0.5)
+            weight = recency * max(0.2, min(1.6, importance)) * (0.40 + sentiment_mag)
+            for code in linked:
+                scores[code] = float(scores.get(code, 0.0) + weight)
+
+        # Optional light probe for top unseen candidates to capture stock-specific headlines.
+        probed = 0
+        for code in ordered:
+            if self._should_stop():
+                break
+            if probed >= int(max(0, max_probe)):
+                break
+            if scores.get(code, 0.0) > 0.0:
+                continue
+            try:
+                summary = agg.get_sentiment_summary(code)
+            except Exception:
+                continue
+            count = int(summary.get("total", 0) or 0)
+            if count <= 0:
+                continue
+            conf = float(summary.get("confidence", 0.0) or 0.0)
+            sent = abs(float(summary.get("overall_sentiment", 0.0) or 0.0))
+            momentum = abs(float(summary.get("sentiment_momentum_6h", 0.0) or 0.0))
+            scores[code] = float((0.45 * sent + 0.25 * momentum + 0.30 * conf) * min(1.0, count / 12.0))
+            probed += 1
+
+        ranked = sorted(
+            enumerate(ordered),
+            key=lambda it: (-float(scores.get(it[1], 0.0)), it[0]),
+        )
+        out = [code for _, code in ranked]
+
+        moved = sum(1 for i, code in enumerate(out) if i < len(ordered) and code != ordered[i])
+        if moved > 0:
+            self._update(
+                message=(
+                    f"News-prioritized candidates: {sum(1 for v in scores.values() if v > 0):d} "
+                    f"stocks with signal"
+                ),
+                progress=max(3.0, float(self.progress.progress)),
+            )
+        return out
 
     def run(self, **kwargs):
         kwargs.setdefault('continuous', False)
@@ -1277,6 +1500,13 @@ class ContinuousLearner:
         cycle_interval_seconds: int = 900,
     ):
         """Train on specific user-selected stocks instead of random rotation."""
+        requested_interval = str(interval or "1m").strip().lower()
+        interval = "1m"
+        if requested_interval != "1m":
+            log.info(
+                "Targeted training interval locked to 1m (requested=%s)",
+                requested_interval,
+            )
         if not stock_codes:
             log.warning("No stock codes provided for targeted training")
             return
@@ -1342,7 +1572,7 @@ class ContinuousLearner:
     # =========================================================================
 
     def validate_stock_code(
-        self, code: str, interval: str = "1d"
+        self, code: str, interval: str = "1m"
     ) -> dict[str, Any]:
         """Validate that a stock code exists and has sufficient data."""
         code = str(code).strip()
@@ -1354,8 +1584,12 @@ class ContinuousLearner:
 
         try:
             fetcher = get_fetcher()
+            bars_for_interval = max(
+                300,
+                int(self._compute_lookback_bars(interval)),
+            )
             df = fetcher.get_history(
-                code, interval=interval, bars=300, use_cache=True,
+                code, interval=interval, bars=bars_for_interval, use_cache=True,
             )
 
             if df is None or df.empty:
@@ -1420,6 +1654,10 @@ class ContinuousLearner:
                         f"Trend: {self._metrics.trend} ==="
                     ),
                     progress=0.0,
+                    stocks_processed=0,
+                    training_epoch=0,
+                    training_total_epochs=max(1, int(current_epochs)),
+                    validation_accuracy=0.0,
                 )
 
                 if self._wait_if_paused():
@@ -1498,6 +1736,10 @@ class ContinuousLearner:
                         f"Best: {self.progress.best_accuracy_ever:.1%} ==="
                     ),
                     progress=0.0,
+                    stocks_processed=0,
+                    training_epoch=0,
+                    training_total_epochs=max(1, int(epochs)),
+                    validation_accuracy=0.0,
                 )
 
                 if self._wait_if_paused():
@@ -1611,9 +1853,14 @@ class ContinuousLearner:
             new_codes = [c for c in new_codes if c not in holdout_set]
 
             if priority_stock_codes:
+                usable_priority = self._filter_priority_session_codes(
+                    list(priority_stock_codes),
+                    eff_interval,
+                    min_seconds=3600.0,
+                )
                 prioritized = []
                 seen = set(new_codes)
-                for code in priority_stock_codes:
+                for code in usable_priority:
                     c = str(code).strip()
                     if not c or c in holdout_set or c in seen:
                         continue
@@ -1625,6 +1872,16 @@ class ContinuousLearner:
                         progress=4.0,
                     )
                     new_codes = prioritized + new_codes
+
+            if new_codes:
+                try:
+                    new_codes = self._prioritize_codes_by_news(
+                        new_codes,
+                        eff_interval,
+                        max_probe=min(16, int(max_stocks)),
+                    )
+                except Exception as e:
+                    log.debug("News prioritization skipped: %s", e)
 
             # Recovery: if holdout filters everything and replay is empty,
             # reset rotation/holdout once and re-discover.
@@ -1700,6 +1957,7 @@ class ContinuousLearner:
             self._update(
                 stage="downloading", progress=10.0,
                 message=f"Fetching {eff_interval} data...",
+                stocks_processed=0,
             )
 
             ok_codes, failed_codes = self._fetcher.fetch_batch(
@@ -1723,6 +1981,7 @@ class ContinuousLearner:
             if len(ok_codes) < min_ok and failed_codes and not self._should_stop():
                 relaxed_min_bars = max(CONFIG.SEQUENCE_LENGTH + 20, int(min_bars * 0.7))
                 retry_codes = failed_codes[: min(len(failed_codes), max(8, min_ok * 2))]
+                retry_base_processed = int(max(0, len(ok_codes)))
                 self._update(
                     message=(
                         f"Retrying {len(retry_codes)} failed stocks "
@@ -1735,7 +1994,10 @@ class ContinuousLearner:
                     stop_check=self._should_stop,
                     progress_cb=lambda msg, cnt: self._update(
                         message=f"Retry pass: {msg}",
-                        stocks_processed=cnt,
+                        stocks_processed=min(
+                            len(codes),
+                            retry_base_processed + int(cnt),
+                        ),
                         progress=36.0 + 4.0 * (cnt / max(len(retry_codes), 1)),
                     ),
                 )
@@ -1883,6 +2145,7 @@ class ContinuousLearner:
                 stage="downloading",
                 progress=10.0,
                 message=f"Fetching {eff_interval} data for {len(train_codes)} stocks...",
+                stocks_processed=0,
             )
 
             ok_codes, failed_codes = self._fetcher.fetch_batch(
@@ -1900,6 +2163,7 @@ class ContinuousLearner:
             if not ok_codes and failed_codes and not self._should_stop():
                 relaxed_min_bars = max(CONFIG.SEQUENCE_LENGTH + 20, int(min_bars * 0.7))
                 retry_codes = failed_codes[: min(len(failed_codes), 12)]
+                retry_base_processed = int(max(0, len(ok_codes)))
                 self._update(
                     message=(
                         f"Retrying targeted fetch for {len(retry_codes)} stocks "
@@ -1912,7 +2176,10 @@ class ContinuousLearner:
                     stop_check=self._should_stop,
                     progress_cb=lambda msg, cnt: self._update(
                         message=f"Retry pass: {msg}",
-                        stocks_processed=cnt,
+                        stocks_processed=min(
+                            len(train_codes),
+                            retry_base_processed + int(cnt),
+                        ),
                         progress=36.0 + 4.0 * (cnt / max(len(retry_codes), 1)),
                     ),
                 )
@@ -2091,18 +2358,17 @@ class ContinuousLearner:
             BARS_PER_DAY = self._BARS_PER_DAY_FALLBACK
             INTERVAL_MAX_DAYS = self._INTERVAL_MAX_DAYS_FALLBACK
 
-        eff_interval = interval
+        req_interval = str(interval or "1m").strip().lower()
+        eff_interval = "1m"
+        if req_interval != "1m":
+            log.info(
+                "Resolved training interval forced to 1m (requested=%s)",
+                req_interval,
+            )
         eff_horizon = horizon
-        is_intraday = interval in ("1m", "2m", "5m", "15m", "30m", "60m", "1h")
-
-        if is_intraday and not CONFIG.is_market_open():
-            eff_interval = "1d"
-            bpd = BARS_PER_DAY.get(interval, 240)
-            eff_horizon = max(1, int(np.ceil(horizon / bpd)))
-            log.info(f"Market closed: {interval}->1d, horizon {horizon}->{eff_horizon}")
 
         bpd = BARS_PER_DAY.get(eff_interval, 1)
-        max_avail = int(INTERVAL_MAX_DAYS.get(eff_interval, 500) * bpd * 0.8)
+        max_avail = int(INTERVAL_MAX_DAYS.get(eff_interval, 500) * bpd)
         eff_lookback = min(lookback, max_avail)
 
         if eff_interval in ("1m", "2m", "5m"):
@@ -2201,14 +2467,40 @@ class ContinuousLearner:
                     trainer._skip_scaler_fit = True
                     log.info("Existing scaler injected (no refit)")
 
+        model_epoch_map: dict[str, int] = {}
+        max_progress_seen = 50.0
+
         def cb(model_name, epoch_idx, val_acc):
+            nonlocal max_progress_seen
             if self._should_stop():
                 raise CancelledException()
-            self.progress.training_epoch = epoch_idx + 1
+
+            key = str(model_name or "model").strip().lower() or "model"
+            prev_epoch = int(model_epoch_map.get(key, 0) or 0)
+            model_epoch_map[key] = max(prev_epoch, int(epoch_idx + 1))
+
+            observed_models = max(1, len(model_epoch_map))
+            completed_epochs = sum(
+                min(max(1, int(epochs)), int(v))
+                for v in model_epoch_map.values()
+            )
+            aggregate_ratio = completed_epochs / float(
+                max(1, observed_models * max(1, int(epochs)))
+            )
+            progress_value = 50.0 + (35.0 * float(aggregate_ratio))
+            if progress_value < max_progress_seen:
+                progress_value = max_progress_seen
+            else:
+                max_progress_seen = progress_value
+
+            self.progress.training_epoch = int(max(model_epoch_map.values()))
             self.progress.validation_accuracy = float(val_acc)
             self._update(
-                message=f"Training {model_name}: {epoch_idx + 1}/{epochs}",
-                progress=50.0 + 35.0 * ((epoch_idx + 1) / max(1, epochs)),
+                message=(
+                    f"Training {model_name}: {epoch_idx + 1}/{epochs} "
+                    f"({observed_models} model(s))"
+                ),
+                progress=float(min(99.0, max(50.0, progress_value))),
             )
 
         set_thread_local_lr(lr)
@@ -2633,8 +2925,20 @@ class ContinuousLearner:
             self.progress.total_stocks_learned = state.get('total_stocks', 0)
             self.progress.total_training_hours = state.get('total_hours', 0.0)
             self.progress.best_accuracy_ever = state.get('best_accuracy', 0.0)
-            self.progress.current_interval = state.get('last_interval', '1d')
-            self.progress.current_horizon = state.get('last_horizon', 5)
+            last_interval = str(state.get('last_interval', '1m')).strip().lower()
+            if last_interval != "1m":
+                log.info(
+                    "Learner state interval %s ignored; using locked 1m",
+                    last_interval,
+                )
+            self.progress.current_interval = "1m"
+            try:
+                last_h = int(state.get('last_horizon', 30))
+            except Exception:
+                last_h = 30
+            self.progress.current_horizon = (
+                max(1, last_h) if last_interval == "1m" else 30
+            )
 
             rotator_data = state.get('rotator', {})
             if rotator_data:

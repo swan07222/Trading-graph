@@ -1771,13 +1771,36 @@ class ExecutionEngine:
         return self._require_fresh_quote(symbol, max_age_seconds=max_age)
 
     @staticmethod
+    def _normalize_requested_order_type(raw: object) -> str:
+        requested = str(raw or "limit").strip().lower().replace("-", "_")
+        alias = {
+            "trailing": "trail_market",
+            "trailing_market": "trail_market",
+            "trailing_stop": "trail_market",
+            "trailing_limit": "trail_limit",
+            "market_ioc": "ioc",
+            "market_fok": "fok",
+            "stop_loss": "stop",
+        }
+        requested = alias.get(requested, requested)
+        valid = {t.value for t in OrderType}
+        return requested if requested in valid else OrderType.LIMIT.value
+
+    @staticmethod
     def _make_submit_fingerprint(signal: TradeSignal) -> str:
         """Deterministic key for duplicate submission suppression."""
         sym = str(getattr(signal, "symbol", "") or "").strip()
         side = str(getattr(getattr(signal, "side", None), "value", "") or "").strip()
+        requested = ExecutionEngine._normalize_requested_order_type(
+            getattr(signal, "order_type", "limit")
+        )
         qty = int(getattr(signal, "quantity", 0) or 0)
         px = float(getattr(signal, "price", 0.0) or 0.0)
-        return f"{sym}:{side}:{qty}:{round(px, 4)}"
+        trigger = float(getattr(signal, "trigger_price", 0.0) or 0.0)
+        market_style = {"market", "ioc", "fok", "stop", "trail_market"}
+        price_key = "mkt" if requested in market_style else f"{round(px, 4):.4f}"
+        trigger_key = f"{round(trigger, 4):.4f}" if trigger > 0 else "0"
+        return f"{sym}:{side}:{requested}:{qty}:{price_key}:{trigger_key}"
 
     def _check_submission_guardrails(
         self, signal: TradeSignal
@@ -1857,6 +1880,11 @@ class ExecutionEngine:
             log.warning("Execution engine not running")
             return False
         hinted_price = float(getattr(signal, "price", 0.0) or 0.0)
+        requested_order_type = self._normalize_requested_order_type(
+            getattr(signal, "order_type", "limit")
+        )
+        market_style_types = {"market", "ioc", "fok", "stop", "trail_market"}
+        limit_style_types = {"limit", "stop_limit", "trail_limit"}
 
         # Operational guardrails: block/allow trading based on health status.
         try:
@@ -1990,10 +2018,32 @@ class ExecutionEngine:
             self._reject_signal(signal, msg)
             return False
 
+        trigger_price = float(getattr(signal, "trigger_price", 0.0) or 0.0)
+        if requested_order_type in {"stop", "stop_limit"} and trigger_price <= 0:
+            self._reject_signal(signal, "Missing trigger price for stop order")
+            return False
+        if requested_order_type in limit_style_types and hinted_price <= 0:
+            self._reject_signal(
+                signal,
+                f"{requested_order_type} order requires a positive limit price",
+            )
+            return False
+
+        execution_ref_price = hinted_price
+        if requested_order_type in market_style_types or execution_ref_price <= 0:
+            execution_ref_price = float(fresh_px)
+        if execution_ref_price <= 0:
+            self._reject_signal(signal, "No valid execution reference price")
+            return False
+
         # Best-execution sanity check: avoid large drift from hinted signal price.
         try:
             max_bps = float(getattr(CONFIG.risk, "max_quote_deviation_bps", 80.0))
-            if hinted_price > 0 and max_bps > 0:
+            if (
+                requested_order_type in market_style_types
+                and hinted_price > 0
+                and max_bps > 0
+            ):
                 dev_bps = abs((float(fresh_px) / hinted_price - 1.0) * 10000.0)
                 if dev_bps > max_bps:
                     self._reject_signal(
@@ -2017,7 +2067,12 @@ class ExecutionEngine:
         except Exception:
             pass
 
-        signal.price = float(fresh_px)
+        signal._arrival_price = float(fresh_px)
+        signal.price = (
+            float(execution_ref_price)
+            if requested_order_type in market_style_types
+            else float(hinted_price)
+        )
 
         guard_ok, guard_msg = self._check_submission_guardrails(signal)
         if not guard_ok:
@@ -2187,26 +2242,11 @@ class ExecutionEngine:
             )
 
             requested_order_type = str(
-                getattr(signal, "order_type", "limit") or "limit"
-            ).strip().lower()
-            order_type_alias = {
-                "trailing": "trail_market",
-                "trailing_market": "trail_market",
-                "trailing_stop": "trail_market",
-                "trailing_limit": "trail_limit",
-                "market_ioc": "ioc",
-                "market_fok": "fok",
-                "stop_loss": "stop",
-            }
-            requested_order_type = order_type_alias.get(
-                requested_order_type.replace("-", "_"),
-                requested_order_type,
+                self._normalize_requested_order_type(
+                    getattr(signal, "order_type", "limit")
+                )
             )
-            requested_enum = OrderType.LIMIT
-            try:
-                requested_enum = OrderType(requested_order_type)
-            except Exception:
-                requested_enum = OrderType.LIMIT
+            requested_enum = OrderType(requested_order_type)
 
             broker_order_type = requested_enum
             emulation_reason = ""
@@ -2253,7 +2293,10 @@ class ExecutionEngine:
                 order.tags["auto_trade"] = True
                 order.tags["auto_trade_action_id"] = signal.auto_trade_action_id
                 order.strategy = order.strategy or "auto_trade"
-            order.tags["arrival_price"] = float(signal.price or 0.0)
+            arrival_price = float(getattr(signal, "_arrival_price", 0.0) or 0.0)
+            if arrival_price <= 0:
+                arrival_price = float(signal.price or 0.0)
+            order.tags["arrival_price"] = arrival_price
             order.tags["requested_order_type"] = requested_enum.value
             order.tags["order_type_emulated"] = bool(
                 broker_order_type != requested_enum
@@ -2262,6 +2305,9 @@ class ExecutionEngine:
                 order.tags["order_type_emulation_reason"] = emulation_reason
             if trigger_px > 0:
                 order.tags["trigger_price"] = float(trigger_px)
+            oco_group = str(getattr(signal, "oco_group", "") or "").strip()
+            if oco_group:
+                order.tags["oco_group"] = oco_group
 
             tif = str(getattr(signal, "time_in_force", "day") or "day").strip().lower()
             tif = tif.replace("-", "_")
@@ -2424,6 +2470,7 @@ class ExecutionEngine:
                     oms.process_fill(order, fill)
                     self._record_execution_quality(order, fill)
                     self._maybe_register_synthetic_exit(order, fill)
+                    self._cancel_oco_siblings(oms, order, fill)
                     log.info(
                         f"Fill processed: {fill_id} for order {order.id}"
                     )
@@ -2475,6 +2522,80 @@ class ExecutionEngine:
                     action.fill_quantity += fill.quantity
                     action.order_id = order.id
                     break
+
+    def _cancel_oco_siblings(self, oms, filled_order: Order, fill: Fill) -> None:
+        tags = dict(getattr(filled_order, "tags", {}) or {})
+        oco_group = str(tags.get("oco_group", "") or "").strip()
+        if not oco_group or int(getattr(fill, "quantity", 0) or 0) <= 0:
+            return
+
+        try:
+            siblings = oms.get_orders(filled_order.symbol)
+        except Exception as e:
+            log.debug(f"OCO sibling scan failed for {filled_order.symbol}: {e}")
+            return
+
+        active_statuses = {
+            OrderStatus.PENDING,
+            OrderStatus.SUBMITTED,
+            OrderStatus.ACCEPTED,
+            OrderStatus.PARTIAL,
+        }
+        cancelled = 0
+        for sibling in siblings:
+            if sibling.id == filled_order.id:
+                continue
+            if sibling.status not in active_statuses:
+                continue
+            s_tags = dict(getattr(sibling, "tags", {}) or {})
+            sibling_group = str(s_tags.get("oco_group", "") or "").strip()
+            if sibling_group != oco_group:
+                continue
+
+            cancel_ok = False
+            broker_ids = [
+                str(getattr(sibling, "broker_id", "") or "").strip(),
+                str(getattr(sibling, "id", "") or "").strip(),
+            ]
+            for oid in broker_ids:
+                if not oid:
+                    continue
+                try:
+                    if bool(self.broker.cancel_order(oid)):
+                        cancel_ok = True
+                        break
+                except Exception:
+                    continue
+
+            if not cancel_ok and sibling.status == OrderStatus.PENDING:
+                cancel_ok = True
+
+            if not cancel_ok:
+                log.warning(
+                    "OCO sibling cancel failed: %s group=%s source_fill=%s",
+                    sibling.id,
+                    oco_group,
+                    filled_order.id,
+                )
+                continue
+
+            try:
+                oms.update_order_status(
+                    sibling.id,
+                    OrderStatus.CANCELLED,
+                    message=f"OCO cancelled after fill {filled_order.id}",
+                )
+                cancelled += 1
+            except Exception as e:
+                log.warning(f"OCO sibling OMS cancel update failed: {sibling.id}: {e}")
+
+        if cancelled > 0:
+            log.info(
+                "OCO siblings cancelled: group=%s symbol=%s count=%s",
+                oco_group,
+                filled_order.symbol,
+                cancelled,
+            )
 
     def _fill_sync_loop(self):
         """Poll broker for fills."""

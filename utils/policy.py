@@ -74,6 +74,13 @@ class TradePolicyEngine:
         }
         return alias.get(raw, raw)
 
+    @staticmethod
+    def _normalize_tif(value: Any) -> str:
+        raw = str(value or "day").strip().lower().replace("-", "_")
+        if raw in {"day", "gtc", "ioc", "fok"}:
+            return raw
+        return "day"
+
     def _default_policy(self) -> dict[str, Any]:
         return {
             "version": "1.0",
@@ -81,6 +88,8 @@ class TradePolicyEngine:
             "live_trade": {
                 "min_approvals": 2,
                 "require_distinct_approvers": True,
+                "min_order_quantity": 1,
+                "max_order_quantity": 0,
                 "max_order_notional": 250000.0,
                 "blocked_symbols": [],
                 "allowed_sides": ["buy", "sell"],
@@ -94,6 +103,7 @@ class TradePolicyEngine:
                     "trail_market",
                     "trail_limit",
                 ],
+                "allowed_time_in_force": ["day", "gtc", "ioc", "fok"],
                 "blocked_strategies": [],
                 "require_manual_for_live": False,
                 "require_change_ticket": True,
@@ -139,8 +149,16 @@ class TradePolicyEngine:
         order_type = self._normalize_order_type(
             getattr(signal, "order_type", "limit")
         )
+        time_in_force = self._normalize_tif(getattr(signal, "time_in_force", "day"))
         qty = self._to_int(getattr(signal, "quantity", 0) or 0)
         px = self._to_float(getattr(signal, "price", 0.0) or 0.0)
+        trigger_px = self._to_float(getattr(signal, "trigger_price", 0.0) or 0.0)
+        trailing_stop_pct = self._to_float(
+            getattr(signal, "trailing_stop_pct", 0.0) or 0.0
+        )
+        stop_loss = self._to_float(getattr(signal, "stop_loss", 0.0) or 0.0)
+        take_profit = self._to_float(getattr(signal, "take_profit", 0.0) or 0.0)
+        bracket = bool(getattr(signal, "bracket", False))
         notional = float(max(0.0, qty * px))
         strategy = str(getattr(signal, "strategy", "") or "").strip().lower()
         auto_generated = bool(getattr(signal, "auto_generated", False))
@@ -161,12 +179,49 @@ class TradePolicyEngine:
                 version,
                 {"quantity": qty},
             )
+        min_qty = int(lp.get("min_order_quantity", 1) or 1)
+        max_qty = int(lp.get("max_order_quantity", 0) or 0)
+        if qty < max(1, min_qty):
+            return PolicyDecision(
+                False,
+                f"policy rejected quantity below minimum ({qty} < {max(1, min_qty)})",
+                version,
+                {"quantity": qty, "min_order_quantity": max(1, min_qty)},
+            )
+        if max_qty > 0 and qty > max_qty:
+            return PolicyDecision(
+                False,
+                f"policy rejected quantity above maximum ({qty} > {max_qty})",
+                version,
+                {"quantity": qty, "max_order_quantity": max_qty},
+            )
         if order_type in {"limit", "stop_limit", "trail_limit"} and px <= 0:
             return PolicyDecision(
                 False,
                 "policy rejected non-positive limit price",
                 version,
                 {"price": px},
+            )
+        if order_type in {"stop", "stop_limit", "trail_market", "trail_limit"} and trigger_px <= 0:
+            return PolicyDecision(
+                False,
+                "policy rejected missing trigger price for conditional order",
+                version,
+                {"trigger_price": trigger_px, "order_type": order_type},
+            )
+        if order_type in {"trail_market", "trail_limit"} and trailing_stop_pct <= 0:
+            return PolicyDecision(
+                False,
+                "policy rejected missing trailing_stop_pct for trailing order",
+                version,
+                {"trailing_stop_pct": trailing_stop_pct, "order_type": order_type},
+            )
+        if bracket and stop_loss <= 0 and take_profit <= 0:
+            return PolicyDecision(
+                False,
+                "policy rejected bracket without stop_loss/take_profit",
+                version,
+                {"bracket": bracket},
             )
 
         allowed_sides = {str(x).strip().lower() for x in list(lp.get("allowed_sides", ["buy", "sell"]))}
@@ -184,6 +239,19 @@ class TradePolicyEngine:
                 f"order_type not allowed by policy: {order_type}",
                 version,
                 {"order_type": order_type},
+            )
+
+        allowed_tif = {
+            self._normalize_tif(x)
+            for x in list(lp.get("allowed_time_in_force", ["day", "gtc", "ioc", "fok"]))
+            if str(x).strip()
+        }
+        if time_in_force and allowed_tif and time_in_force not in allowed_tif:
+            return PolicyDecision(
+                False,
+                f"time_in_force not allowed by policy: {time_in_force}",
+                version,
+                {"time_in_force": time_in_force},
             )
 
         blocked_strategies = {

@@ -53,6 +53,26 @@ def test_generate_forecast_forecaster_path_matches_requested_horizon():
     assert all(float(v) > 0 for v in out)
 
 
+def test_generate_forecast_forecaster_tail_extension_is_not_flat():
+    predictor = Predictor.__new__(Predictor)
+    predictor.forecaster = _DummyForecaster()
+    predictor.ensemble = None
+
+    out = predictor._generate_forecast(
+        X=np.zeros((1, 60, 8), dtype=np.float32),
+        current_price=100.0,
+        horizon=24,
+        atr_pct=0.02,
+        sequence_signature=11.0,
+        seed_context="600519:1m",
+        recent_prices=[100.0 + (0.02 * i) for i in range(120)],
+    )
+
+    assert len(out) == 24
+    tail = np.array(out[6:], dtype=float)
+    assert np.std(tail) > 1e-5
+
+
 class _DummyEnsemble:
     def predict(self, _x):
         return SimpleNamespace(probabilities=[0.2, 0.3, 0.5])
@@ -78,6 +98,36 @@ def test_generate_forecast_fallback_uses_sequence_signature():
         horizon=16,
         atr_pct=0.02,
         sequence_signature=2.0,
+        recent_prices=recent,
+    )
+
+    assert len(out_a) == 16
+    assert len(out_b) == 16
+    assert not np.allclose(out_a, out_b)
+
+
+def test_generate_forecast_seed_context_differentiates_same_signature():
+    predictor = Predictor.__new__(Predictor)
+    predictor.forecaster = None
+    predictor.ensemble = _DummyEnsemble()
+
+    recent = [100.0 + (0.03 * i) for i in range(80)]
+    out_a = predictor._generate_forecast(
+        X=np.zeros((1, 60, 8), dtype=np.float32),
+        current_price=102.0,
+        horizon=16,
+        atr_pct=0.02,
+        sequence_signature=1.0,
+        seed_context="600519:1m",
+        recent_prices=recent,
+    )
+    out_b = predictor._generate_forecast(
+        X=np.zeros((1, 60, 8), dtype=np.float32),
+        current_price=102.0,
+        horizon=16,
+        atr_pct=0.02,
+        sequence_signature=1.0,
+        seed_context="000001:1m",
         recent_prices=recent,
     )
 
@@ -149,6 +199,63 @@ def test_generate_forecast_neutral_forecaster_avoids_one_way_tail():
         assert flip_ratio < 0.80
 
 
+def test_generate_forecast_news_bias_tilts_curve_direction():
+    predictor = Predictor.__new__(Predictor)
+    predictor.interval = "1m"
+    predictor.forecaster = None
+    predictor.ensemble = _NeutralEnsemble()
+
+    recent = [100.0 + np.sin(i / 8.0) * 0.2 for i in range(140)]
+    out_pos = predictor._generate_forecast(
+        X=np.zeros((1, 60, 8), dtype=np.float32),
+        current_price=100.0,
+        horizon=24,
+        atr_pct=0.02,
+        sequence_signature=9.0,
+        seed_context="600519:1m",
+        recent_prices=recent,
+        news_bias=0.12,
+    )
+    out_neg = predictor._generate_forecast(
+        X=np.zeros((1, 60, 8), dtype=np.float32),
+        current_price=100.0,
+        horizon=24,
+        atr_pct=0.02,
+        sequence_signature=9.0,
+        seed_context="600519:1m",
+        recent_prices=recent,
+        news_bias=-0.12,
+    )
+
+    assert len(out_pos) == 24
+    assert len(out_neg) == 24
+    assert float(out_pos[-1]) > float(out_neg[-1])
+
+
+def test_apply_news_influence_rebalances_probs_and_can_upgrade_hold():
+    predictor = Predictor.__new__(Predictor)
+    predictor.interval = "1m"
+    predictor._get_news_sentiment = lambda *_args, **_kwargs: (0.8, 0.9, 12)
+
+    pred = Prediction(
+        stock_code="600519",
+        signal=Signal.HOLD,
+        confidence=0.70,
+        prob_up=0.30,
+        prob_neutral=0.35,
+        prob_down=0.35,
+    )
+
+    news_bias = predictor._apply_news_influence(pred, "600519", "1m")
+
+    assert news_bias > 0
+    assert pred.news_count == 12
+    assert pred.prob_up > 0.30
+    assert pred.prob_down < 0.35
+    assert pred.signal in (Signal.BUY, Signal.STRONG_BUY)
+    assert abs((pred.prob_up + pred.prob_neutral + pred.prob_down) - 1.0) < 1e-9
+
+
 def test_prediction_cache_is_contextual_and_immutable():
     predictor = Predictor.__new__(Predictor)
     predictor._cache_lock = threading.Lock()
@@ -202,6 +309,63 @@ def test_cache_ttl_profile_prefers_short_realtime_window():
     assert predictor._get_cache_ttl(use_realtime=False, interval="1m") == 5.0
     assert predictor._get_cache_ttl(use_realtime=True, interval="1m") == 1.2
     assert predictor._get_cache_ttl(use_realtime=True, interval="1d") == 2.0
+
+
+def test_sanitize_history_df_repairs_zero_open_rows():
+    predictor = Predictor.__new__(Predictor)
+    idx = pd.to_datetime(
+        [
+            "2026-02-13 09:31:00",
+            "2026-02-13 09:32:00",
+            "2026-02-13 09:33:00",
+        ]
+    )
+    df = pd.DataFrame(
+        {
+            "open": [0.0, 0.0, 39.05],
+            "high": [39.10, 39.12, 39.08],
+            "low": [39.00, 39.02, 39.01],
+            "close": [39.04, 39.06, 39.03],
+            "volume": [100, 120, 110],
+        },
+        index=idx,
+    )
+
+    out = predictor._sanitize_history_df(df, "1m")
+
+    assert len(out) == 3
+    assert (out["open"] > 0).all()
+    assert (out["high"] >= out[["open", "close"]].max(axis=1)).all()
+    assert (out["low"] <= out[["open", "close"]].min(axis=1)).all()
+
+
+def test_sanitize_history_df_drops_non_session_intraday_rows():
+    predictor = Predictor.__new__(Predictor)
+    idx = pd.to_datetime(
+        [
+            "2026-02-13 08:59:00",  # pre-open
+            "2026-02-13 09:31:00",  # session
+            "2026-02-13 12:30:00",  # lunch break
+            "2026-02-13 13:15:00",  # session
+            "2026-02-13 15:10:00",  # after close
+            "2026-02-14 09:35:00",  # weekend
+        ]
+    )
+    base = pd.DataFrame(
+        {
+            "open": [39.0, 39.0, 39.0, 39.0, 39.0, 39.0],
+            "high": [39.1, 39.1, 39.1, 39.1, 39.1, 39.1],
+            "low": [38.9, 38.9, 38.9, 38.9, 38.9, 38.9],
+            "close": [39.0, 39.0, 39.0, 39.0, 39.0, 39.0],
+            "volume": [10, 10, 10, 10, 10, 10],
+        },
+        index=idx,
+    )
+
+    out = predictor._sanitize_history_df(base, "1m")
+
+    kept = [ts.strftime("%H:%M") for ts in out.index]
+    assert kept == ["09:31", "13:15"]
 
 
 class _BatchOnlyEnsemble:
@@ -294,6 +458,157 @@ def _mk_quick_predictor(ensemble) -> Predictor:
     return predictor
 
 
+def test_realtime_forecast_curve_defaults_to_30_on_latest_1680_bars(monkeypatch):
+    class _Fetcher:
+        def __init__(self):
+            self.last_bars = 0
+
+        def get_history(self, _code, interval, bars, use_cache=True, update_db=True):
+            self.last_bars = int(bars)
+            n = int(bars)
+            base = np.linspace(99.0, 101.0, n, dtype=float)
+            return pd.DataFrame(
+                {
+                    "open": base,
+                    "high": base + 0.3,
+                    "low": base - 0.3,
+                    "close": base,
+                    "volume": np.full(n, 1000.0, dtype=float),
+                    "interval": [interval] * n,
+                }
+            )
+
+        def get_realtime(self, _code):
+            return None
+
+    class _EmptyCache:
+        def read_history(self, symbol, interval, bars=500, final_only=True):  # noqa: ARG002
+            return pd.DataFrame()
+
+    monkeypatch.setattr(
+        "data.session_cache.get_session_bar_cache",
+        lambda: _EmptyCache(),
+        raising=True,
+    )
+
+    predictor = Predictor.__new__(Predictor)
+    predictor._predict_lock = threading.RLock()
+    predictor.interval = "1m"
+    predictor.horizon = 120
+    predictor._clean_code = lambda code: str(code).strip()
+    predictor.feature_engine = _DummyFeatureEngine()
+    predictor.processor = _DummyProcessor()
+    predictor._feature_cols = []
+    predictor.fetcher = _Fetcher()
+    predictor._get_atr_pct = lambda _df: 0.02
+
+    captured = {"horizon": 0, "recent_len": 0}
+
+    def _fake_generate(
+        X,
+        current_price,
+        horizon,
+        atr_pct=0.02,
+        sequence_signature=0.0,
+        seed_context="",
+        recent_prices=None,
+    ):
+        captured["horizon"] = int(horizon)
+        captured["recent_len"] = len(recent_prices or [])
+        return [float(current_price)] * int(horizon)
+
+    predictor._generate_forecast = _fake_generate
+
+    actual, predicted = predictor.get_realtime_forecast_curve(
+        stock_code="600519",
+        interval="1m",
+        horizon_steps=None,
+        lookback_bars=None,
+        use_realtime_price=False,
+    )
+
+    assert predictor.fetcher.last_bars == 1680
+    assert len(actual) == 1680
+    assert captured["horizon"] == 30
+    assert captured["recent_len"] == 1680
+    assert len(predicted) == 30
+
+
+def test_realtime_forecast_curve_merges_partial_session_bars(monkeypatch):
+    class _Fetcher:
+        def get_history(self, _code, interval, bars, use_cache=True, update_db=True):  # noqa: ARG002
+            n = int(bars)
+            idx = pd.date_range("2026-01-05 09:30:00", periods=n, freq="1min")
+            base = np.linspace(99.0, 100.0, n, dtype=float)
+            return pd.DataFrame(
+                {
+                    "open": base,
+                    "high": base + 0.2,
+                    "low": base - 0.2,
+                    "close": base,
+                    "volume": np.full(n, 1000.0, dtype=float),
+                    "interval": [interval] * n,
+                },
+                index=idx,
+            )
+
+        def get_realtime(self, _code):
+            return None
+
+    captured = {"final_only": True}
+
+    class _FakeCache:
+        def read_history(self, symbol, interval, bars=500, final_only=True):  # noqa: ARG002
+            captured["final_only"] = bool(final_only)
+            idx = pd.date_range("2026-01-05 09:30:00", periods=int(bars), freq="1min")
+            base = np.linspace(99.0, 100.0, int(bars), dtype=float)
+            if len(base) > 330:
+                # 15:00 is inside CN session for this synthetic stream.
+                base[330] = 101.0
+            return pd.DataFrame(
+                {
+                    "open": base,
+                    "high": base + 0.2,
+                    "low": base - 0.2,
+                    "close": base,
+                    "volume": np.full(int(bars), 1200.0, dtype=float),
+                    "is_final": [False] * int(bars),
+                },
+                index=idx,
+            )
+
+    monkeypatch.setattr(
+        "data.session_cache.get_session_bar_cache",
+        lambda: _FakeCache(),
+        raising=True,
+    )
+
+    predictor = Predictor.__new__(Predictor)
+    predictor._predict_lock = threading.RLock()
+    predictor.interval = "1m"
+    predictor.horizon = 30
+    predictor._clean_code = lambda code: str(code).strip()
+    predictor.feature_engine = _DummyFeatureEngine()
+    predictor.processor = _DummyProcessor()
+    predictor._feature_cols = []
+    predictor.fetcher = _Fetcher()
+    predictor._get_atr_pct = lambda _df: 0.02
+    predictor._generate_forecast = lambda *args, **kwargs: [100.0] * 30
+
+    actual, predicted = predictor.get_realtime_forecast_curve(
+        stock_code="600519",
+        interval="1m",
+        horizon_steps=30,
+        lookback_bars=560,
+        use_realtime_price=False,
+    )
+
+    assert captured["final_only"] is False
+    assert 200 <= len(actual) <= 560
+    assert abs(float(actual[-1]) - 101.0) < 1e-9
+    assert len(predicted) == 30
+
+
 def test_predict_quick_batch_uses_batched_ensemble_path():
     ensemble = _BatchOnlyEnsemble()
     predictor = _mk_quick_predictor(ensemble)
@@ -316,6 +631,131 @@ def test_predict_quick_batch_falls_back_to_single_predict():
     assert ensemble.batch_calls == 1
     assert ensemble.single_calls == 3
     assert all(float(p.confidence) > 0.7 for p in out)
+
+
+def test_predict_uses_short_history_bootstrap_when_intraday_history_is_short():
+    predictor = Predictor.__new__(Predictor)
+    predictor._predict_lock = threading.RLock()
+    predictor.interval = "1m"
+    predictor.horizon = 30
+    predictor._clean_code = lambda code: str(code).strip()
+    predictor.feature_engine = _DummyFeatureEngine()
+    predictor.processor = _DummyProcessor()
+    predictor._feature_cols = []
+    predictor.ensemble = None
+    predictor._extract_technicals = lambda _df, _pred: None
+    predictor._generate_forecast = (
+        lambda _X, current_price, horizon, *_args, **_kwargs:
+        [float(current_price)] * int(horizon)
+    )
+    predictor._calculate_levels = lambda pred: pred.levels
+    predictor._calculate_position = lambda pred: pred.position
+    predictor._generate_reasons = lambda _pred: None
+    predictor._sequence_signature = lambda _X: 0.0
+    predictor._set_cached_prediction = lambda *_args, **_kwargs: None
+    predictor.fetcher = SimpleNamespace(
+        get_realtime=lambda _code: SimpleNamespace(price=123.0, name="Demo")
+    )
+    predictor._get_stock_name = lambda _code, _df: "Demo"
+
+    calls = []
+
+    def _fake_fetch(code, interval, lookback, use_realtime, history_allow_online=True):  # noqa: ARG001
+        calls.append((str(interval), int(lookback), bool(use_realtime), bool(history_allow_online)))
+        return _mk_df(100.0).tail(20)  # intentionally insufficient for full path
+
+    predictor._fetch_data = _fake_fetch
+
+    pred = predictor.predict(
+        "300059",
+        use_realtime_price=True,
+        interval="1m",
+        forecast_minutes=12,
+        lookback_bars=560,
+        skip_cache=True,
+    )
+
+    assert len(calls) == 1
+    assert calls[0][0] == "1m"
+    assert pred.interval == "1m"
+    assert pred.current_price > 0
+    assert len(pred.predicted_prices) == 12
+    assert any("Short-history fallback used" in w for w in pred.warnings)
+    assert not any("Interval fallback applied" in w for w in pred.warnings)
+    assert not any("Insufficient data:" in w for w in pred.warnings)
+
+
+def test_predict_populates_minimal_snapshot_when_all_history_paths_are_short():
+    predictor = Predictor.__new__(Predictor)
+    predictor._predict_lock = threading.RLock()
+    predictor.interval = "1m"
+    predictor.horizon = 30
+    predictor._clean_code = lambda code: str(code).strip()
+    predictor.feature_engine = _DummyFeatureEngine()
+    predictor.processor = _DummyProcessor()
+    predictor._feature_cols = []
+    predictor.ensemble = None
+    predictor._set_cached_prediction = lambda *_args, **_kwargs: None
+    predictor.fetcher = SimpleNamespace(
+        get_realtime=lambda _code: SimpleNamespace(price=88.5, name="Demo"),
+        get_history=lambda *_args, **_kwargs: pd.DataFrame(),
+    )
+    predictor._get_stock_name = lambda _code, _df: ""
+    predictor._fetch_data = (
+        lambda _code, _interval, _lookback, _use_realtime, history_allow_online=True: _mk_df(100.0).tail(10)  # noqa: ARG005,E501
+    )
+
+    pred = predictor.predict(
+        "002594",
+        use_realtime_price=True,
+        interval="1m",
+        forecast_minutes=10,
+        lookback_bars=560,
+        skip_cache=True,
+    )
+
+    assert abs(float(pred.current_price) - 88.5) < 1e-9
+    assert pred.price_history == [88.5]
+    assert any("Insufficient data:" in w for w in pred.warnings)
+
+
+def test_predict_uses_short_history_bootstrap_before_minimal_snapshot():
+    predictor = Predictor.__new__(Predictor)
+    predictor._predict_lock = threading.RLock()
+    predictor.interval = "1m"
+    predictor.horizon = 30
+    predictor._clean_code = lambda code: str(code).strip()
+    predictor.feature_engine = _DummyFeatureEngine()
+    predictor.processor = _DummyProcessor()
+    predictor._feature_cols = []
+    predictor.ensemble = None
+    predictor._set_cached_prediction = lambda *_args, **_kwargs: None
+    predictor.fetcher = SimpleNamespace(
+        get_realtime=lambda _code: None,
+        get_history=lambda *_args, **_kwargs: pd.DataFrame(),
+    )
+    predictor._get_stock_name = lambda _code, _df: "Demo"
+    predictor._calculate_levels = lambda pred: pred.levels
+    predictor._calculate_position = lambda pred: pred.position
+    predictor._generate_reasons = lambda _pred: None
+    predictor._fetch_data = (
+        lambda _code, _interval, _lookback, _use_realtime, history_allow_online=True: _mk_df(100.0).tail(40)  # noqa: ARG005,E501
+    )
+
+    pred = predictor.predict(
+        "300059",
+        use_realtime_price=True,
+        interval="1m",
+        forecast_minutes=10,
+        lookback_bars=560,
+        skip_cache=True,
+    )
+
+    assert pred.current_price > 0
+    assert len(pred.predicted_prices) == 10
+    assert float(pred.confidence) > 0
+    assert any("Short-history fallback used:" in w for w in pred.warnings)
+    assert not any("Insufficient data:" in w for w in pred.warnings)
 
 
 def test_apply_ensemble_result_clips_and_normalizes_probabilities():

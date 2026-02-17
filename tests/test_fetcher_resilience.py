@@ -114,6 +114,48 @@ def test_realtime_batch_falls_back_to_localdb_last_close_when_live_unavailable(m
     assert out["600519"].is_delayed is True
 
 
+def test_realtime_batch_partial_missing_uses_last_good_then_localdb(monkeypatch):
+    monkeypatch.setenv("TRADING_OFFLINE", "0")
+    fetcher = _make_fetcher_for_realtime()
+
+    class _S1:
+        def get_realtime_batch(self, codes):
+            if "600519" in codes:
+                return {"600519": _mk_quote("600519", 101.0, "s1")}
+            return {}
+
+    class _DB:
+        def get_bars(self, code: str, limit: int = 1):  # noqa: ARG002
+            if str(code).zfill(6) != "000002":
+                return pd.DataFrame()
+            idx = pd.DatetimeIndex([pd.Timestamp("2026-02-10 15:00:00")])
+            return pd.DataFrame(
+                {
+                    "open": [10.0],
+                    "high": [10.2],
+                    "low": [9.8],
+                    "close": [10.1],
+                    "volume": [1000],
+                    "amount": [10100.0],
+                },
+                index=idx,
+            )
+
+    fetcher._db = _DB()
+    fetcher._get_active_sources = lambda: [_S1()]
+    fetcher._fill_from_spot_cache = lambda missing, result: None
+    fetcher._fill_from_single_source_quotes = lambda missing, result, sources: None
+    fetcher._maybe_force_network_refresh = lambda: False
+    fetcher._last_good_quotes = {"000001": _mk_quote("000001", 22.5, "last_good")}
+
+    out = fetcher.get_realtime_batch(["600519", "000001", "000002"])
+
+    assert set(out.keys()) == {"600519", "000001", "000002"}
+    assert out["600519"].source == "s1"
+    assert out["000001"].source == "last_good"
+    assert out["000002"].source == "localdb_last_close"
+
+
 def test_fetch_history_with_depth_retry_uses_larger_windows():
     fetcher = DataFetcher.__new__(DataFetcher)
 
@@ -192,6 +234,40 @@ def test_get_history_session_shortcut_only_for_small_intraday_windows():
     assert not out_large.empty
     assert len(out_large) == 700
     assert called["intraday"] == 1
+
+
+def test_get_history_normalizes_interval_alias_before_source_routing():
+    fetcher = DataFetcher.__new__(DataFetcher)
+    fetcher._cache = _DummyCache()
+    fetcher._get_session_history = lambda symbol, interval, bars: pd.DataFrame()  # noqa: ARG005
+
+    captured: dict[str, str] = {}
+
+    def _fake_intraday(inst, count, fetch_days, interval, cache_key, offline, session):  # noqa: ARG001
+        captured["interval"] = str(interval)
+        idx = pd.date_range("2026-02-12 10:00:00", periods=int(count), freq="h")
+        return pd.DataFrame(
+            {
+                "open": [10.0] * int(count),
+                "high": [10.0] * int(count),
+                "low": [10.0] * int(count),
+                "close": [10.0] * int(count),
+                "volume": [1] * int(count),
+            },
+            index=idx,
+        )
+
+    fetcher._get_history_cn_intraday = _fake_intraday
+
+    out = fetcher.get_history(
+        "600519",
+        bars=50,
+        interval="1h",
+        instrument={"market": "CN", "asset": "EQUITY", "symbol": "600519"},
+    )
+
+    assert not out.empty
+    assert captured.get("interval") == "60m"
 
 
 def test_network_force_refresh_is_rate_limited(monkeypatch):

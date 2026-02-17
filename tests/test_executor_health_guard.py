@@ -1,9 +1,10 @@
 import queue
 import threading
+from collections import deque
 from types import SimpleNamespace
 
 from config.settings import CONFIG, TradingMode
-from core.types import AutoTradeMode, Fill, Order, OrderSide, TradeSignal
+from core.types import AutoTradeMode, Fill, Order, OrderSide, OrderStatus, TradeSignal
 from trading.executor import ExecutionEngine
 from trading.health import HealthStatus
 
@@ -66,6 +67,9 @@ def test_submit_blocks_on_best_exec_quote_deviation():
     eng._alert_manager = SimpleNamespace(risk_alert=lambda *a, **k: None)
     eng._reject_signal = lambda sig, reason: setattr(sig, "_rejected_reason", reason)
     eng._require_fresh_quote = lambda symbol, max_age_seconds=15.0: (True, "OK", 12.0)
+    eng._recent_submit_keys = {}
+    eng._recent_submissions = {}
+    eng._recent_rejections = deque()
 
     old = getattr(CONFIG.risk, "max_quote_deviation_bps", 80.0)
     old_is_open = CONFIG.is_market_open
@@ -76,7 +80,13 @@ def test_submit_blocks_on_best_exec_quote_deviation():
     exec_mod.get_audit_log = lambda: SimpleNamespace(log_risk_event=lambda *a, **k: None)
     CONFIG.risk.max_quote_deviation_bps = 50.0
     try:
-        sig = TradeSignal(symbol="600519", side=OrderSide.BUY, quantity=100, price=10.0)
+        sig = TradeSignal(
+            symbol="600519",
+            side=OrderSide.BUY,
+            quantity=100,
+            price=10.0,
+            order_type="market",
+        )
         ok = eng.submit(sig)
         assert ok is False
         assert "deviation" in getattr(sig, "_rejected_reason", "").lower()
@@ -85,7 +95,6 @@ def test_submit_blocks_on_best_exec_quote_deviation():
         CONFIG.is_market_open = old_is_open
         exec_mod.get_access_control = old_access
         exec_mod.get_audit_log = old_audit
-
 
 def test_execution_snapshot_includes_broker_routing():
     eng = ExecutionEngine.__new__(ExecutionEngine)
@@ -189,3 +198,147 @@ def test_synthetic_exit_state_roundtrip(tmp_path):
     restored = eng._synthetic_exits["ORD_X"]
     assert restored["symbol"] == "600519"
     assert int(restored["open_qty"]) == 100
+
+
+def test_submit_limit_keeps_limit_price_and_tracks_arrival_quote():
+    import trading.executor as exec_mod
+
+    eng = ExecutionEngine.__new__(ExecutionEngine)
+    eng._running = True
+    eng.mode = TradingMode.SIMULATION
+    eng._health_monitor = SimpleNamespace(
+        get_health=lambda: SimpleNamespace(status=HealthStatus.HEALTHY)
+    )
+    eng._kill_switch = SimpleNamespace(can_trade=True)
+    eng.risk_manager = SimpleNamespace(check_order=lambda *a, **k: (True, ""))
+    eng._queue = queue.Queue()
+    eng._alert_manager = SimpleNamespace(risk_alert=lambda *a, **k: None)
+    eng._reject_signal = lambda sig, reason: setattr(sig, "_rejected_reason", reason)
+    eng._require_fresh_quote = lambda symbol, max_age_seconds=15.0: (True, "OK", 12.0)
+    eng._recent_submit_keys = {}
+    eng._recent_submissions = {}
+    eng._recent_rejections = deque()
+
+    old_is_open = CONFIG.is_market_open
+    old_access = exec_mod.get_access_control
+    old_audit = exec_mod.get_audit_log
+    CONFIG.is_market_open = lambda: True
+    exec_mod.get_access_control = lambda: SimpleNamespace(check=lambda *_a, **_k: True)
+    exec_mod.get_audit_log = lambda: SimpleNamespace(log_risk_event=lambda *a, **k: None)
+    try:
+        sig = TradeSignal(
+            symbol="600519",
+            side=OrderSide.BUY,
+            quantity=100,
+            price=10.0,
+            order_type="limit",
+        )
+        ok = eng.submit(sig)
+        assert ok is True
+        assert sig.price == 10.0
+        assert float(getattr(sig, "_arrival_price", 0.0)) == 12.0
+        queued = eng._queue.get_nowait()
+        assert queued is sig
+    finally:
+        CONFIG.is_market_open = old_is_open
+        exec_mod.get_access_control = old_access
+        exec_mod.get_audit_log = old_audit
+
+
+def test_submit_rejects_stop_order_without_trigger():
+    import trading.executor as exec_mod
+
+    eng = ExecutionEngine.__new__(ExecutionEngine)
+    eng._running = True
+    eng.mode = TradingMode.SIMULATION
+    eng._health_monitor = SimpleNamespace(
+        get_health=lambda: SimpleNamespace(status=HealthStatus.HEALTHY)
+    )
+    eng._kill_switch = SimpleNamespace(can_trade=True)
+    eng.risk_manager = SimpleNamespace(check_order=lambda *a, **k: (True, ""))
+    eng._queue = queue.Queue()
+    eng._alert_manager = SimpleNamespace(risk_alert=lambda *a, **k: None)
+    eng._reject_signal = lambda sig, reason: setattr(sig, "_rejected_reason", reason)
+    eng._require_fresh_quote = lambda symbol, max_age_seconds=15.0: (True, "OK", 12.0)
+    eng._recent_submit_keys = {}
+    eng._recent_submissions = {}
+    eng._recent_rejections = deque()
+
+    old_is_open = CONFIG.is_market_open
+    old_access = exec_mod.get_access_control
+    old_audit = exec_mod.get_audit_log
+    CONFIG.is_market_open = lambda: True
+    exec_mod.get_access_control = lambda: SimpleNamespace(check=lambda *_a, **_k: True)
+    exec_mod.get_audit_log = lambda: SimpleNamespace(log_risk_event=lambda *a, **k: None)
+    try:
+        sig = TradeSignal(
+            symbol="600519",
+            side=OrderSide.BUY,
+            quantity=100,
+            price=0.0,
+            order_type="stop",
+            trigger_price=0.0,
+        )
+        ok = eng.submit(sig)
+        assert ok is False
+        assert "trigger" in str(getattr(sig, "_rejected_reason", "")).lower()
+    finally:
+        CONFIG.is_market_open = old_is_open
+        exec_mod.get_access_control = old_access
+        exec_mod.get_audit_log = old_audit
+
+
+def test_oco_sibling_cancel_on_fill():
+    eng = ExecutionEngine.__new__(ExecutionEngine)
+    cancelled = []
+
+    def _cancel(order_id):
+        cancelled.append(order_id)
+        return True
+
+    eng.broker = SimpleNamespace(cancel_order=_cancel)
+
+    filled_order = Order(symbol="600519", side=OrderSide.BUY, quantity=100, price=10.0)
+    filled_order.status = OrderStatus.FILLED
+    filled_order.tags["oco_group"] = "G1"
+
+    sibling = Order(symbol="600519", side=OrderSide.SELL, quantity=100, price=11.0)
+    sibling.status = OrderStatus.ACCEPTED
+    sibling.broker_id = "BRK_1"
+    sibling.tags["oco_group"] = "G1"
+
+    other = Order(symbol="600519", side=OrderSide.SELL, quantity=100, price=12.0)
+    other.status = OrderStatus.ACCEPTED
+    other.tags["oco_group"] = "G2"
+
+    updates: list[tuple[str, OrderStatus, str]] = []
+    oms = SimpleNamespace(
+        get_orders=lambda symbol=None: [filled_order, sibling, other],
+        update_order_status=lambda oid, status, message="": updates.append((oid, status, message)),
+    )
+
+    fill = Fill(order_id=filled_order.id, symbol="600519", side=OrderSide.BUY, quantity=100, price=10.1)
+    eng._cancel_oco_siblings(oms, filled_order, fill)
+
+    assert "BRK_1" in cancelled or sibling.id in cancelled
+    assert any(u[0] == sibling.id and u[1] == OrderStatus.CANCELLED for u in updates)
+    assert all(u[0] != other.id for u in updates)
+
+
+def test_market_fingerprint_ignores_price_noise():
+    s1 = TradeSignal(
+        symbol="600519",
+        side=OrderSide.BUY,
+        quantity=100,
+        price=10.0,
+        order_type="market",
+    )
+    s2 = TradeSignal(
+        symbol="600519",
+        side=OrderSide.BUY,
+        quantity=100,
+        price=10.2,
+        order_type="market",
+    )
+    assert ExecutionEngine._make_submit_fingerprint(s1) == ExecutionEngine._make_submit_fingerprint(s2)
+

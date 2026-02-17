@@ -250,6 +250,136 @@ def _build_sentiment_snapshot(
         return {"status": "unavailable", "reason": str(exc)}
 
 
+def _build_cache_snapshot() -> dict[str, Any]:
+    """Best-effort cache health/efficiency snapshot."""
+    try:
+        from data.cache import get_cache
+
+        cache = get_cache()
+        stats = cache.get_stats()
+        l1 = getattr(cache, "_l1", None)
+        l1_items = len(l1) if l1 is not None and hasattr(l1, "__len__") else 0
+        l1_size_mb = (
+            float(getattr(l1, "size_mb", 0.0) or 0.0)
+            if l1 is not None
+            else 0.0
+        )
+        payload = {
+            "l1_items": int(l1_items),
+            "l1_size_mb": float(l1_size_mb),
+            "hits": int(getattr(stats, "total_hits", 0)),
+            "misses": int(getattr(stats, "total_misses", 0)),
+            "hit_rate": float(getattr(stats, "hit_rate", 0.0)),
+            "l1_hits": int(getattr(stats, "l1_hits", 0)),
+            "l2_hits": int(getattr(stats, "l2_hits", 0)),
+            "l3_hits": int(getattr(stats, "l3_hits", 0)),
+            "sets": int(getattr(stats, "total_sets", 0)),
+            "evictions": int(getattr(stats, "total_evictions", 0)),
+        }
+        return {"status": "ok", "snapshot": _normalize_json(payload)}
+    except Exception as exc:
+        return {"status": "unavailable", "reason": str(exc)}
+
+
+def _build_feed_snapshot() -> dict[str, Any]:
+    """Best-effort data-feed runtime snapshot."""
+    try:
+        from data.feeds import get_feed_manager
+
+        mgr = get_feed_manager(auto_init=False)
+        active = getattr(mgr, "_active_feed", None)
+        feeds = {}
+        for name, feed in dict(getattr(mgr, "_feeds", {}) or {}).items():
+            status_obj = getattr(feed, "status", None)
+            status_val = getattr(status_obj, "value", status_obj)
+            feeds[str(name)] = {
+                "status": str(status_val or "unknown"),
+                "running": bool(getattr(feed, "_running", False)),
+            }
+        payload = {
+            "active_feed": str(getattr(active, "name", "none") or "none"),
+            "subscriptions": int(len(getattr(mgr, "_subscriptions", set()) or set())),
+            "feeds": feeds,
+        }
+        return {"status": "ok", "snapshot": _normalize_json(payload)}
+    except Exception as exc:
+        return {"status": "unavailable", "reason": str(exc)}
+
+
+def _build_learning_snapshot() -> dict[str, Any]:
+    """Best-effort learner status from provider or persisted learner state."""
+    try:
+        provider = None
+        with _SNAPSHOT_LOCK:
+            provider = _SNAPSHOT_PROVIDERS.get("auto_learner")
+        if callable(provider):
+            return {"status": "ok", "snapshot": _normalize_json(provider())}
+    except Exception:
+        pass
+
+    try:
+        from config.settings import CONFIG
+
+        state_path = CONFIG.data_dir / "learner_state.json"
+        if not state_path.exists():
+            return {
+                "status": "unavailable",
+                "reason": "learner_state_not_found",
+            }
+        raw = json.loads(state_path.read_text(encoding="utf-8"))
+        data = raw.get("_data", raw) if isinstance(raw, dict) else {}
+        if not isinstance(data, dict):
+            return {"status": "unavailable", "reason": "invalid_learner_state"}
+        payload = {
+            "total_sessions": int(data.get("total_sessions", 0) or 0),
+            "total_stocks": int(data.get("total_stocks", 0) or 0),
+            "total_hours": float(data.get("total_hours", 0.0) or 0.0),
+            "best_accuracy": float(data.get("best_accuracy", 0.0) or 0.0),
+            "last_interval": str(data.get("last_interval", "") or ""),
+            "last_horizon": int(data.get("last_horizon", 0) or 0),
+            "holdout_size": int(len(data.get("holdout_codes", []) or [])),
+            "updated_at": str(data.get("saved_at", "") or ""),
+        }
+        return {"status": "ok", "snapshot": _normalize_json(payload)}
+    except Exception as exc:
+        return {"status": "unavailable", "reason": str(exc)}
+
+
+def _build_scanner_snapshot() -> dict[str, Any]:
+    """Best-effort scanner/auto-trade status snapshot."""
+    try:
+        from config.settings import CONFIG
+
+        execution = _build_execution_engine_snapshot()
+        auto_state: dict[str, Any] = {}
+        if execution.get("status") == "ok":
+            snap = execution.get("snapshot")
+            if isinstance(snap, dict):
+                auto_state = dict(snap.get("auto_trade_state") or {})
+        payload = {
+            "scan_interval_seconds": int(
+                getattr(getattr(CONFIG, "auto_trade", None), "scan_interval_seconds", 0)
+                or 0
+            ),
+            "min_confidence": float(
+                getattr(getattr(CONFIG, "auto_trade", None), "min_confidence", 0.0)
+                or 0.0
+            ),
+            "min_signal_strength": float(
+                getattr(
+                    getattr(CONFIG, "auto_trade", None),
+                    "min_signal_strength",
+                    0.0,
+                )
+                or 0.0
+            ),
+            "runtime": auto_state,
+        }
+        return {"status": "ok", "snapshot": _normalize_json(payload)}
+    except Exception as exc:
+        return {"status": "unavailable", "reason": str(exc)}
+
+
 def _api_index_payload() -> dict[str, Any]:
     return {
         "version": "v1",
@@ -266,6 +396,10 @@ def _api_index_payload() -> dict[str, Any]:
             "/api/v1/risk/metrics",
             "/api/v1/health",
             "/api/v1/sentiment",
+            "/api/v1/data/cache",
+            "/api/v1/data/feeds",
+            "/api/v1/learning/status",
+            "/api/v1/scanner/status",
         ],
         "generated_at": datetime.now(timezone.utc).isoformat(),
     }
@@ -419,6 +553,10 @@ class MetricsHandler(BaseHTTPRequestHandler):
                             stock_code=dashboard_symbol,
                             hours_lookback=hours,
                         ),
+                        "cache": _build_cache_snapshot(),
+                        "feeds": _build_feed_snapshot(),
+                        "learning": _build_learning_snapshot(),
+                        "scanner": _build_scanner_snapshot(),
                     },
                     "generated_at": datetime.now(timezone.utc).isoformat(),
                 },
@@ -490,6 +628,46 @@ class MetricsHandler(BaseHTTPRequestHandler):
                         stock_code=sentiment_symbol,
                         hours_lookback=hours,
                     ),
+                    "generated_at": datetime.now(timezone.utc).isoformat(),
+                },
+            )
+            return
+
+        if path == "/api/v1/data/cache":
+            self._send_json(
+                200,
+                {
+                    "snapshot": _build_cache_snapshot(),
+                    "generated_at": datetime.now(timezone.utc).isoformat(),
+                },
+            )
+            return
+
+        if path == "/api/v1/data/feeds":
+            self._send_json(
+                200,
+                {
+                    "snapshot": _build_feed_snapshot(),
+                    "generated_at": datetime.now(timezone.utc).isoformat(),
+                },
+            )
+            return
+
+        if path == "/api/v1/learning/status":
+            self._send_json(
+                200,
+                {
+                    "snapshot": _build_learning_snapshot(),
+                    "generated_at": datetime.now(timezone.utc).isoformat(),
+                },
+            )
+            return
+
+        if path == "/api/v1/scanner/status":
+            self._send_json(
+                200,
+                {
+                    "snapshot": _build_scanner_snapshot(),
                     "generated_at": datetime.now(timezone.utc).isoformat(),
                 },
             )

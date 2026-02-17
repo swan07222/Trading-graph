@@ -1,5 +1,8 @@
 # ui/charts.py
 import math
+import time
+from collections import Counter
+from datetime import datetime, timezone
 
 import numpy as np
 from PyQt6.QtCore import Qt, pyqtSignal
@@ -41,7 +44,23 @@ if HAS_PYQTGRAPH:
             """Generate QPicture for all candles."""
             pic = pg.QtGui.QPicture()
             p = pg.QtGui.QPainter(pic)
-            w = 0.6
+            w = 0.18
+            try:
+                xs = [float(d[0]) for d in self.data if len(d) >= 5]
+                if len(xs) >= 2:
+                    xs_sorted = sorted(xs)
+                    diffs = np.diff(np.array(xs_sorted, dtype=float))
+                    diffs = diffs[np.isfinite(diffs)]
+                    diffs = diffs[diffs > 0]
+                    if diffs.size > 0:
+                        step = float(np.median(diffs))
+                        # Keep body width proportional to local x spacing.
+                        w = max(step * 0.65, 1e-6)
+                elif len(xs) == 1:
+                    # Single-bar fallback should stay narrow; avoid giant blocks.
+                    w = 0.14
+            except Exception:
+                w = 0.18
 
             for item in self.data:
                 if len(item) < 5:
@@ -159,6 +178,7 @@ class StockChart(QWidget):
             "vwap20": True,
         }
         self._manual_zoom: bool = False
+        self._dbg_last_emit: dict[str, float] = {}
 
         self._setup_ui()
 
@@ -171,6 +191,29 @@ class StockChart(QWidget):
             self._setup_pyqtgraph()
         else:
             self._setup_fallback()
+
+    def _dbg_log(
+        self,
+        key: str,
+        message: str,
+        *,
+        min_gap_seconds: float = 1.5,
+        level: str = "info",
+    ) -> None:
+        """Throttled chart diagnostics to avoid log flooding."""
+        try:
+            now = time.monotonic()
+            prev = float(self._dbg_last_emit.get(key, 0.0))
+            if (now - prev) < float(max(0.0, min_gap_seconds)):
+                return
+            self._dbg_last_emit[key] = now
+            msg = f"[DBG] {message}"
+            if str(level).lower() == "warning":
+                log.warning(msg)
+            else:
+                log.info(msg)
+        except Exception:
+            pass
 
     def _setup_pyqtgraph(self):
         """Setup pyqtgraph chart with all three layers."""
@@ -307,27 +350,154 @@ class StockChart(QWidget):
             closes: list[float] = []
             ohlc: list[tuple] = []
             prev_close: float | None = None
-            default_iv = str(
+            prev_day: object | None = None
+            default_iv_raw = str(
                 self._bars[-1].get("interval", "1m") if self._bars else "1m"
             ).lower()
+            interval_aliases = {
+                "1h": "60m",
+                "60min": "60m",
+                "60mins": "60m",
+                "daily": "1d",
+                "1day": "1d",
+                "day": "1d",
+            }
+            default_iv = interval_aliases.get(default_iv_raw, default_iv_raw)
+            try:
+                iv_tokens = []
+                for row in self._bars:
+                    if not isinstance(row, dict):
+                        continue
+                    iv_raw = str(row.get("interval", "") or "").strip().lower()
+                    if not iv_raw:
+                        continue
+                    iv_tokens.append(interval_aliases.get(iv_raw, iv_raw))
+                if iv_tokens:
+                    default_iv = str(Counter(iv_tokens).most_common(1)[0][0])
+            except Exception:
+                pass
 
             # Render the full loaded window (7-day bars are prepared in app layer).
             # Keep a high cap for safety on very large inputs.
             render_bars = self._bars[-3000:]
+            diag = {
+                "rows_total": int(len(render_bars)),
+                "kept": 0,
+                "drop_nonfinite": 0,
+                "drop_interval": 0,
+                "drop_jump": 0,
+                "drop_shape": 0,
+                "drop_parse": 0,
+                "rebuild_shape": 0,
+                "clamp_shape": 0,
+            }
 
             def _caps(iv_token: str) -> tuple[float, float]:
                 token = str(iv_token or "1m").strip().lower()
                 if token == "1m":
-                    return 0.12, 0.045
+                    return 0.08, 0.006
                 if token == "5m":
-                    return 0.14, 0.075
+                    return 0.10, 0.012
                 if token in ("15m", "30m"):
-                    return 0.18, 0.12
+                    return 0.14, 0.020
                 if token in ("60m", "1h"):
-                    return 0.24, 0.18
+                    return 0.18, 0.040
                 if token in ("1d", "1wk", "1mo"):
-                    return 0.45, 0.35
+                    return 0.24, 0.22
                 return 0.20, 0.15
+
+            cap_iv = default_iv
+            if default_iv in ("1d", "1wk", "1mo") and len(render_bars) > 200:
+                # Only tighten to intraday caps when evidence of mixed intervals
+                # exists; do not punish legitimate long daily windows.
+                observed: list[str] = []
+                for row in render_bars[-min(600, len(render_bars)):]:
+                    if not isinstance(row, dict):
+                        continue
+                    raw_iv = str(row.get("interval", "") or "").strip().lower()
+                    if not raw_iv:
+                        continue
+                    observed.append(interval_aliases.get(raw_iv, raw_iv))
+                if observed:
+                    intraday_n = sum(
+                        1 for tok in observed if tok not in ("1d", "1wk", "1mo")
+                    )
+                    ratio = float(intraday_n) / float(max(1, len(observed)))
+                    if ratio >= 0.35:
+                        cap_iv = "1m"
+            jump_cap, range_cap = _caps(cap_iv)
+            intraday_mode = cap_iv not in ("1d", "1wk", "1mo")
+            if intraday_mode:
+                max_jump_guard = float(max(jump_cap * 1.20, 0.015))
+                body_guard = float(max(range_cap * 0.92, 0.0045))
+                span_guard = float(max(range_cap * 1.20, 0.0070))
+                wick_guard = float(max(range_cap * 0.86, 0.0055))
+            else:
+                max_jump_guard = float(max(jump_cap * 1.40, 0.05))
+                body_guard = float(max(range_cap * 0.85, 0.045))
+                span_guard = float(max(range_cap * 1.75, 0.45))
+                wick_guard = float(max(range_cap * 1.25, 0.25))
+
+            def _row_trading_day(row: dict) -> object | None:
+                ts_raw = row.get("_ts_epoch", row.get("timestamp", row.get("time")))
+                if ts_raw is None:
+                    return None
+                try:
+                    if isinstance(ts_raw, (int, float)):
+                        sec = float(ts_raw)
+                        if abs(sec) >= 1e11:
+                            sec = sec / 1000.0
+                        dt_val = datetime.fromtimestamp(sec, tz=timezone.utc)
+                    else:
+                        dt_val = datetime.fromisoformat(str(ts_raw).replace("Z", "+00:00"))
+                        if dt_val.tzinfo is None:
+                            dt_val = dt_val.replace(tzinfo=timezone.utc)
+                    try:
+                        from zoneinfo import ZoneInfo
+
+                        dt_val = dt_val.astimezone(ZoneInfo("Asia/Shanghai"))
+                    except Exception:
+                        pass
+                    return dt_val.date()
+                except Exception:
+                    return None
+
+            # Some fallback providers only give close-like OHLC bars
+            # (open/high/low ~= close), which renders as "line-form candles".
+            # Detect this pattern and reconstruct open from previous close.
+            flat_count = 0
+            flat_total = 0
+            for b in render_bars[-min(400, len(render_bars)):]:
+                if not isinstance(b, dict):
+                    continue
+                try:
+                    o0 = float(b.get("open", 0) or 0)
+                    h0 = float(b.get("high", 0) or 0)
+                    l0 = float(b.get("low", 0) or 0)
+                    c0 = float(b.get("close", 0) or 0)
+                except Exception:
+                    continue
+                if not all(math.isfinite(v) for v in (o0, h0, l0, c0)) or c0 <= 0:
+                    continue
+                if o0 <= 0:
+                    o0 = c0
+                if h0 <= 0:
+                    h0 = max(o0, c0)
+                if l0 <= 0:
+                    l0 = min(o0, c0)
+                ref0 = max(c0, 1e-8)
+                body0 = abs(o0 - c0) / ref0
+                span0 = abs(h0 - l0) / ref0
+                if body0 <= 0.00008 and span0 <= 0.00020:
+                    flat_count += 1
+                flat_total += 1
+            flat_ratio = (float(flat_count) / float(flat_total)) if flat_total > 0 else 0.0
+            reconstruct_degenerate = bool(
+                intraday_mode and (0.25 <= flat_ratio <= 0.75)
+            )
+            allow_degenerate_rebuild = bool(reconstruct_degenerate)
+            rebuild_count = 0
+            rows_kept = 0
 
             for b in render_bars:
                 try:
@@ -337,38 +507,76 @@ class StockChart(QWidget):
                     c = float(b.get("close", 0) or 0)
 
                     if not all(math.isfinite(v) for v in (o, h, l_val, c)):
+                        diag["drop_nonfinite"] += 1
                         continue
                     if c <= 0:
+                        diag["drop_nonfinite"] += 1
                         continue
 
-                    iv = str(b.get("interval", default_iv) or default_iv).lower()
-                    jump_cap, range_cap = _caps(iv)
-                    if prev_close and prev_close > 0:
-                        jump = abs(c / prev_close - 1.0)
-                        if jump > jump_cap:
+                    bar_iv_raw = str(
+                        b.get("interval", default_iv) or default_iv
+                    ).lower()
+                    bar_iv = interval_aliases.get(bar_iv_raw, bar_iv_raw)
+                    # Render only one interval at a time to avoid
+                    # outlier candles from mixed-frequency rows.
+                    if bar_iv != default_iv:
+                        diag["drop_interval"] += 1
+                        continue
+
+                    bar_day = _row_trading_day(b)
+                    day_boundary = bool(
+                        intraday_mode
+                        and prev_day is not None
+                        and bar_day is not None
+                        and bar_day != prev_day
+                    )
+                    ref_prev = prev_close
+                    if day_boundary:
+                        ref_prev = None
+
+                    if ref_prev and ref_prev > 0:
+                        jump = abs(c / ref_prev - 1.0)
+                        if jump > max_jump_guard:
+                            diag["drop_jump"] += 1
                             continue
 
                     # Fix missing OHLC values
                     if o <= 0:
-                        o = c
+                        o = float(ref_prev if ref_prev and ref_prev > 0 else c)
                     if h <= 0:
                         h = max(o, c)
                     if l_val <= 0:
                         l_val = min(o, c)
+                    if h < l_val:
+                        h, l_val = l_val, h
 
-                    anchor = float(prev_close if prev_close and prev_close > 0 else c)
-                    if prev_close and prev_close > 0:
-                        effective_range_cap = float(range_cap)
-                    else:
-                        bootstrap_cap = 0.60 if iv in ("1d", "1wk", "1mo") else 0.25
-                        effective_range_cap = float(max(range_cap, bootstrap_cap))
-
-                    max_body = float(anchor) * float(max(jump_cap * 1.25, effective_range_cap * 0.9))
-                    if max_body > 0 and abs(o - c) > max_body:
-                        if prev_close and prev_close > 0 and abs(c / prev_close - 1.0) <= jump_cap:
-                            o = float(prev_close)
-                        else:
-                            o = c
+                    if (
+                        allow_degenerate_rebuild
+                        and ref_prev
+                        and ref_prev > 0
+                    ):
+                        ref_local = max(float(c), float(ref_prev), 1e-8)
+                        body0 = abs(o - c) / ref_local
+                        span0 = abs(h - l_val) / ref_local
+                        jump0 = abs(c / ref_prev - 1.0)
+                        if (
+                            body0 <= 0.00008
+                            and span0 <= 0.0035
+                            and jump0 <= 0.0040
+                        ):
+                            # Rebuild candle body from prev close to avoid
+                            # a doji-only stream that looks like a line chart.
+                            o = float(ref_prev)
+                            top0 = max(o, c)
+                            bot0 = min(o, c)
+                            h = max(h, top0)
+                            l_val = min(l_val, bot0)
+                            diag["rebuild_shape"] += 1
+                            rebuild_count += 1
+                            if abs(h - l_val) / ref_local <= 0.00012:
+                                pad = float(ref_local * 0.00025)
+                                h = max(h, top0 + (pad * 0.40))
+                                l_val = min(l_val, bot0 - (pad * 0.40))
 
                     top = max(o, c)
                     bot = min(o, c)
@@ -376,35 +584,106 @@ class StockChart(QWidget):
                         h = top
                     if l_val > bot:
                         l_val = bot
-                    if h < l_val:
-                        h, l_val = l_val, h
 
-                    max_range = float(anchor) * float(effective_range_cap)
-                    curr_range = max(0.0, h - l_val)
-                    if max_range > 0 and curr_range > max_range:
-                        body = max(0.0, top - bot)
-                        if body > max_range:
+                    # Final shape guard relative to rolling local reference.
+                    ref = float(ref_prev if ref_prev and ref_prev > 0 else c)
+                    if (not day_boundary) and len(closes) >= 6:
+                        try:
+                            ref = float(
+                                np.median(
+                                    np.asarray(closes[-32:], dtype=float)
+                                )
+                            )
+                        except Exception:
+                            ref = float(ref_prev if ref_prev and ref_prev > 0 else c)
+                    if not np.isfinite(ref) or ref <= 0:
+                        ref = float(c)
+                    if ref <= 0:
+                        continue
+
+                    span = abs(h - l_val) / ref
+                    top = max(o, c)
+                    bot = min(o, c)
+                    body = abs(o - c) / ref
+                    upper_wick = max(0.0, h - top) / ref
+                    lower_wick = max(0.0, bot - l_val) / ref
+                    if (
+                        body > body_guard
+                        or span > span_guard
+                        or upper_wick > wick_guard
+                        or lower_wick > wick_guard
+                    ):
+                        # Clamp extreme shape instead of dropping whole bar.
+                        diag["clamp_shape"] += 1
+                        max_span_px = float(ref * span_guard)
+                        body_px = float(max(0.0, top - bot))
+                        max_body_px = float(ref * body_guard)
+                        if body_px > max_body_px:
+                            if c >= o:
+                                o = c - max_body_px
+                            else:
+                                o = c + max_body_px
+                            top = max(o, c)
+                            bot = min(o, c)
+                            body_px = float(max(0.0, top - bot))
+                        if body_px > max_span_px:
                             o = c
                             top = c
                             bot = c
-                            body = 0.0
-                        wick_allow = max(0.0, max_range - body)
-                        h = min(h, top + (wick_allow * 0.5))
-                        l_val = max(l_val, bot - (wick_allow * 0.5))
+                            body_px = 0.0
+                        wick_allow = max(0.0, max_span_px - body_px)
+                        h = min(h, top + (wick_allow * 0.60))
+                        l_val = max(l_val, bot - (wick_allow * 0.60))
                         if h < l_val:
                             h, l_val = l_val, h
+                        span = abs(h - l_val) / max(ref, 1e-8)
+                        body = abs(o - c) / max(ref, 1e-8)
+                        upper_wick = max(0.0, h - max(o, c)) / max(ref, 1e-8)
+                        lower_wick = max(0.0, min(o, c) - l_val) / max(ref, 1e-8)
+                        if (
+                            body > (body_guard * 1.40)
+                            or span > (span_guard * 1.25)
+                            or upper_wick > (wick_guard * 1.35)
+                            or lower_wick > (wick_guard * 1.35)
+                        ):
+                            diag["drop_shape"] += 1
+                            continue
 
-                    if anchor > 0 and (h - l_val) > (float(anchor) * float(effective_range_cap) * 1.05):
-                        continue
+                    o = min(max(o, l_val), h)
+                    c = min(max(c, l_val), h)
 
                     x_pos = len(closes)
                     ohlc.append((x_pos, o, c, l_val, h))
                     closes.append(c)
                     prev_close = c
+                    if bar_day is not None:
+                        prev_day = bar_day
+                    diag["kept"] += 1
+                    rows_kept += 1
+                    if (
+                        allow_degenerate_rebuild
+                        and rows_kept >= 120
+                        and (float(rebuild_count) / float(max(1, rows_kept))) > 0.40
+                    ):
+                        allow_degenerate_rebuild = False
                 except (ValueError, TypeError):
+                    diag["drop_parse"] += 1
                     continue
 
             if not closes:
+                self._dbg_log(
+                    f"chart_render:{default_iv}:empty",
+                    (
+                        f"chart render empty iv={default_iv} "
+                        f"rows={diag['rows_total']} kept={diag['kept']} "
+                        f"drop_nonfinite={diag['drop_nonfinite']} "
+                        f"drop_interval={diag['drop_interval']} "
+                        f"drop_jump={diag['drop_jump']} "
+                        f"drop_shape={diag['drop_shape']} drop_parse={diag['drop_parse']}"
+                    ),
+                    min_gap_seconds=0.8,
+                    level="warning",
+                )
                 self._clear_all()
                 return
 
@@ -431,10 +710,79 @@ class StockChart(QWidget):
                         dtype=float
                     )
                     self.predicted_line.setData(x_pred, y_pred)
+                    try:
+                        p = y_pred[1:] if y_pred.size > 1 else y_pred
+                        if p.size > 0:
+                            anchor = float(closes[-1]) if closes[-1] > 0 else float(p[0])
+                            span = float(np.max(p) - np.min(p)) / max(anchor, 1e-8)
+                            steps = np.abs(np.diff(p)) / np.maximum(np.abs(p[:-1]), 1e-8) if p.size >= 2 else np.array([0.0])
+                            max_step = float(np.max(steps)) if steps.size > 0 else 0.0
+                            flips = 0
+                            if p.size >= 3:
+                                dirs = np.sign(np.diff(p))
+                                dirs = dirs[dirs != 0]
+                                if dirs.size >= 2:
+                                    flips = int(np.sum(dirs[1:] != dirs[:-1]))
+                            flip_ratio = (
+                                float(flips) / float(max(1, (len(p) - 2)))
+                                if len(p) >= 3
+                                else 0.0
+                            )
+                            self._dbg_log(
+                                f"forecast_render:{default_iv}",
+                                (
+                                    f"forecast render iv={default_iv} points={int(p.size)} "
+                                    f"span={span:.2%} max_step={max_step:.2%} "
+                                    f"flip={flip_ratio:.2f}"
+                                ),
+                                min_gap_seconds=2.0,
+                                level="info",
+                            )
+                            if span <= 0.0012 or max_step >= 0.08:
+                                self._dbg_log(
+                                    f"forecast_render_warn:{default_iv}",
+                                    (
+                                        f"forecast render anomaly iv={default_iv}: "
+                                        f"points={int(p.size)} span={span:.2%} "
+                                        f"max_step={max_step:.2%} flip={flip_ratio:.2f}"
+                                    ),
+                                    min_gap_seconds=1.0,
+                                    level="warning",
+                                )
+                    except Exception:
+                        pass
                 else:
                     self.predicted_line.clear()
 
             self._actual_prices = closes
+
+            total_drops = int(
+                diag["drop_nonfinite"]
+                + diag["drop_interval"]
+                + diag["drop_jump"]
+                + diag["drop_shape"]
+                + diag["drop_parse"]
+            )
+            diag_msg = (
+                f"chart render iv={default_iv} rows={diag['rows_total']} "
+                f"kept={diag['kept']} drops={total_drops} "
+                f"(nf={diag['drop_nonfinite']} iv={diag['drop_interval']} "
+                f"jump={diag['drop_jump']} shape={diag['drop_shape']} parse={diag['drop_parse']}) "
+                f"rebuild={diag['rebuild_shape']} clamp={diag['clamp_shape']}"
+            )
+            self._dbg_log(
+                f"chart_render:{default_iv}",
+                diag_msg,
+                min_gap_seconds=2.0,
+                level="info",
+            )
+            if total_drops > max(2, int(diag["rows_total"] * 0.08)):
+                self._dbg_log(
+                    f"chart_render_warn:{default_iv}",
+                    f"chart render anomalies high iv={default_iv}: {diag_msg}",
+                    min_gap_seconds=1.0,
+                    level="warning",
+                )
 
             self._update_overlay_lines(render_bars, closes)
             self._update_level_lines()

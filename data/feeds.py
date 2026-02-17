@@ -9,7 +9,7 @@ import time
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from enum import Enum
 
 from config.settings import CONFIG
@@ -151,7 +151,12 @@ class PollingFeed(DataFeed):
 
                 if symbols:
                     quotes = self._fetch_batch_quotes(symbols)
-                    now_ts = datetime.now()
+                    try:
+                        from zoneinfo import ZoneInfo
+
+                        now_ts = datetime.now(tz=ZoneInfo("Asia/Shanghai"))
+                    except Exception:
+                        now_ts = datetime.now()
 
                     for symbol, quote in quotes.items():
                         if quote and getattr(quote, 'price', 0) > 0:
@@ -840,6 +845,59 @@ class BarAggregator:
         self._last_partial_emit_ts: dict[str, float] = {}
         self._min_partial_emit_interval_s: float = 0.20
 
+    @staticmethod
+    def _to_shanghai_naive(ts_raw) -> datetime:
+        """
+        Normalize quote timestamps to naive Asia/Shanghai time.
+        """
+        try:
+            from zoneinfo import ZoneInfo
+
+            sh_tz = ZoneInfo("Asia/Shanghai")
+        except Exception:
+            sh_tz = timezone.utc
+
+        if ts_raw is None:
+            return datetime.now(tz=sh_tz).replace(tzinfo=None)
+
+        if isinstance(ts_raw, datetime):
+            dt = ts_raw
+        else:
+            text = str(ts_raw).strip()
+            if not text:
+                return datetime.now(tz=sh_tz).replace(tzinfo=None)
+            try:
+                dt = datetime.fromisoformat(text.replace("Z", "+00:00"))
+            except Exception:
+                return datetime.now(tz=sh_tz).replace(tzinfo=None)
+
+        try:
+            if dt.tzinfo is None:
+                # Treat naive provider timestamps as market-local time.
+                dt = dt.replace(tzinfo=sh_tz)
+            dt = dt.astimezone(sh_tz)
+            return dt.replace(tzinfo=None)
+        except Exception:
+            try:
+                return dt.replace(tzinfo=None)
+            except Exception:
+                return datetime.now(tz=sh_tz).replace(tzinfo=None)
+
+    @staticmethod
+    def _is_cn_session_time(ts_val: datetime) -> bool:
+        """
+        Check whether a timestamp is within CN A-share regular trading session.
+        """
+        if not isinstance(ts_val, datetime):
+            return False
+        # Monday..Friday
+        if ts_val.weekday() >= 5:
+            return False
+        hhmm = (ts_val.hour * 100) + ts_val.minute
+        morning = 930 <= hhmm <= 1130
+        afternoon = 1300 <= hhmm <= 1500
+        return bool(morning or afternoon)
+
     def add_callback(self, callback: Callable):
         with self._lock:
             if callback not in self._callbacks:
@@ -865,18 +923,33 @@ class BarAggregator:
         if not symbol:
             return
 
-        ts = getattr(quote, "timestamp", None) or datetime.now()
+        ts = self._to_shanghai_naive(getattr(quote, "timestamp", None))
+        try:
+            quote.timestamp = ts
+        except Exception:
+            pass
         px = float(getattr(quote, "price", 0) or 0)
         if px <= 0:
             return
 
         with self._lock:
+            # Ignore off-session ticks, but flush any pending live bar first.
+            if not self._is_cn_session_time(ts):
+                stale = self._current_bars.pop(symbol, None)
+                if stale is not None:
+                    try:
+                        self._emit_bar(symbol, stale, final=True)
+                    except Exception:
+                        pass
+                self._last_partial_emit_ts.pop(symbol, None)
+                return
+
             if symbol not in self._current_bars:
                 self._current_bars[symbol] = self._new_bar(quote)
 
             bar = self._current_bars[symbol]
 
-            # Session/day boundary
+            # Day boundary: finalize old day bar before touching current tick.
             if (
                 bar.get("session_date")
                 and bar["session_date"] != ts.date()
@@ -885,26 +958,26 @@ class BarAggregator:
                 self._current_bars[symbol] = self._new_bar(quote)
                 bar = self._current_bars[symbol]
 
+            bar_end = bar["timestamp"] + timedelta(seconds=self._interval)
+            if ts >= bar_end:
+                # CRITICAL: roll first, then apply tick to new bucket.
+                self._emit_bar(symbol, bar, final=True)
+                self._current_bars[symbol] = self._new_bar(quote)
+                bar = self._current_bars[symbol]
+                self._last_partial_emit_ts.pop(symbol, None)
+
             bar["high"] = max(float(bar["high"]), px)
             bar["low"] = min(float(bar["low"]), px)
             bar["close"] = px
 
             self._update_volume(bar, quote)
 
-            bar_end = bar["timestamp"] + timedelta(seconds=self._interval)
-
-            if ts >= bar_end:
-                # Bar complete - emit as final and start new bar
-                self._emit_bar(symbol, bar, final=True)
-                self._current_bars[symbol] = self._new_bar(quote)
-                self._last_partial_emit_ts.pop(symbol, None)
-            else:
-                # FIXED: Emit partial bar for real-time chart updates
-                now_ts = time.monotonic()
-                last_emit = float(self._last_partial_emit_ts.get(symbol, 0.0))
-                if (now_ts - last_emit) >= self._min_partial_emit_interval_s:
-                    self._emit_bar(symbol, bar, final=False)
-                    self._last_partial_emit_ts[symbol] = now_ts
+            # Emit partial bar for real-time chart updates.
+            now_ts = time.monotonic()
+            last_emit = float(self._last_partial_emit_ts.get(symbol, 0.0))
+            if (now_ts - last_emit) >= self._min_partial_emit_interval_s:
+                self._emit_bar(symbol, bar, final=False)
+                self._last_partial_emit_ts[symbol] = now_ts
 
     def _update_volume(self, bar: dict, quote):
         """Update bar volume based on configured mode."""
@@ -933,7 +1006,7 @@ class BarAggregator:
 
     def _new_bar(self, quote) -> dict:
         """Create a new bar with proper time alignment."""
-        ts = getattr(quote, "timestamp", None) or datetime.now()
+        ts = self._to_shanghai_naive(getattr(quote, "timestamp", None))
 
         total_seconds = ts.hour * 3600 + ts.minute * 60 + ts.second
         remainder = total_seconds % max(self._interval, 1)
@@ -961,6 +1034,25 @@ class BarAggregator:
             "session_date": bar_start.date(),
         }
 
+    @staticmethod
+    def _interval_label(interval_seconds: int) -> str:
+        """Canonical interval token used by UI/cache layers."""
+        sec = max(1, int(interval_seconds))
+        known = {
+            60: "1m",
+            300: "5m",
+            900: "15m",
+            1800: "30m",
+            3600: "60m",
+            86400: "1d",
+        }
+        if sec in known:
+            return known[sec]
+        if sec % 60 == 0:
+            mins = int(sec // 60)
+            return f"{mins}m"
+        return f"{sec}s"
+
     def set_interval(self, interval_seconds: int):
         """Change bar interval; clears partial bars."""
         with self._lock:
@@ -978,6 +1070,9 @@ class BarAggregator:
             final: If True, this is a completed bar. If False, partial/live bar.
         """
         bar_copy = dict(bar)
+        interval_label = self._interval_label(self._interval)
+        bar_copy["interval"] = interval_label
+        bar_copy["interval_seconds"] = int(self._interval)
         bar_copy["final"] = final
 
         # Publish event only for final bars (to avoid spamming event bus)
@@ -1012,16 +1107,7 @@ class BarAggregator:
                     index=pd.DatetimeIndex([bar["timestamp"]]),
                 )
 
-                if self._interval >= 60:
-                    mins = self._interval / 60
-                    if mins == int(mins):
-                        label = f"{int(mins)}m"
-                    else:
-                        label = f"{self._interval}s"
-                else:
-                    label = f"{self._interval}s"
-
-                db.upsert_intraday_bars(symbol, label, df)
+                db.upsert_intraday_bars(symbol, interval_label, df)
             except ImportError:
                 pass
             except Exception as e:

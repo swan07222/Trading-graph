@@ -8,7 +8,7 @@ import time
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from functools import wraps
 
 import numpy as np
@@ -133,7 +133,12 @@ class Quote:
 
     def __post_init__(self):
         if self.timestamp is None:
-            self.timestamp = datetime.now()
+            try:
+                from zoneinfo import ZoneInfo
+
+                self.timestamp = datetime.now(tz=ZoneInfo("Asia/Shanghai"))
+            except Exception:
+                self.timestamp = datetime.now(tz=timezone.utc)
 
 @dataclass
 class DataSourceStatus:
@@ -1262,13 +1267,22 @@ class DataFetcher:
                     [c for c in cleaned if c not in result], result, retry_sources
                 )
 
-        # Last-good fallback
-        if not result:
-            result = self._fallback_last_good(cleaned)
+        # Per-symbol fallbacks for any unresolved codes.
+        missing = [c for c in cleaned if c not in result]
+        if missing:
+            last_good = self._fallback_last_good(missing)
+            if last_good:
+                for code, quote in last_good.items():
+                    if code not in result:
+                        result[code] = quote
 
-        # Local DB fallback for symbols still missing all real-time providers.
-        if not result:
-            result = self._fallback_last_close_from_db(cleaned)
+        missing = [c for c in cleaned if c not in result]
+        if missing:
+            last_close = self._fallback_last_close_from_db(missing)
+            if last_close:
+                for code, quote in last_close.items():
+                    if code not in result:
+                        result[code] = quote
 
         # Update last-good store
         if result:
@@ -1352,12 +1366,29 @@ class DataFetcher:
             for c in codes:
                 q = self._last_good_quotes.get(c)
                 if q and q.price > 0:
-                    age = (
-                        datetime.now() - (q.timestamp or datetime.now())
-                    ).total_seconds()
+                    age = self._quote_age_seconds(q)
                     if age <= _LAST_GOOD_MAX_AGE:
                         result[c] = q
         return result
+
+    @staticmethod
+    def _quote_age_seconds(q: Quote | None) -> float:
+        """
+        Compute quote age robustly for naive and timezone-aware timestamps.
+        """
+        if q is None:
+            return float("inf")
+        ts = getattr(q, "timestamp", None)
+        if ts is None:
+            return float("inf")
+        try:
+            if getattr(ts, "tzinfo", None) is not None:
+                now = datetime.now(tz=ts.tzinfo)
+            else:
+                now = datetime.now()
+            return max(0.0, float((now - ts).total_seconds()))
+        except Exception:
+            return float("inf")
 
     def _fallback_last_close_from_db(self, codes: list[str]) -> dict[str, Quote]:
         """
@@ -1421,7 +1452,11 @@ class DataFetcher:
             return False
 
     def _fetch_from_sources_instrument(
-        self, inst: dict, days: int, interval: str = "1d"
+        self,
+        inst: dict,
+        days: int,
+        interval: str = "1d",
+        include_localdb: bool = True,
     ) -> pd.DataFrame:
         """
         Fetch from active sources with smart fallback.
@@ -1429,6 +1464,10 @@ class DataFetcher:
         FIX: Tries ALL available sources, not just network-preferred ones.
         """
         sources = self._get_active_sources()
+        if not include_localdb:
+            sources = [
+                s for s in sources if str(getattr(s, "name", "")) != "localdb"
+            ]
 
         if not sources:
             # No "active" sources — try ALL sources anyway
@@ -1476,6 +1515,13 @@ class DataFetcher:
                         source, inst, days, interval
                     )
                     if df is not None and not df.empty:
+                        df = self._clean_dataframe(df, interval=interval)
+                        if df.empty:
+                            log.debug(
+                                f"{source.name} returned unusable rows for "
+                                f"{inst.get('symbol')} ({interval})"
+                            )
+                            continue
                         min_required = min(days // 4, 30)
                         if len(df) >= min_required:
                             log.debug(
@@ -1505,7 +1551,10 @@ class DataFetcher:
 
         if collected:
             try:
-                merged = self._clean_dataframe(pd.concat(collected, axis=0))
+                merged = self._clean_dataframe(
+                    pd.concat(collected, axis=0),
+                    interval=interval,
+                )
                 if not merged.empty:
                     return merged
             except Exception as exc:
@@ -1613,17 +1662,216 @@ class DataFetcher:
         return digits.zfill(6) if digits else ""
 
     @staticmethod
-    def _clean_dataframe(df: pd.DataFrame) -> pd.DataFrame:
+    def _normalize_interval_token(interval: str | None) -> str:
+        iv = str(interval or "1d").strip().lower()
+        aliases = {
+            "1h": "60m",
+            "60min": "60m",
+            "60mins": "60m",
+            "daily": "1d",
+            "day": "1d",
+            "1day": "1d",
+            "1440m": "1d",
+        }
+        return aliases.get(iv, iv)
+
+    @staticmethod
+    def _interval_seconds(interval: str | None) -> int:
+        iv = str(interval or "1d").strip().lower()
+        aliases = {
+            "1h": "60m",
+            "60min": "60m",
+            "60mins": "60m",
+            "daily": "1d",
+            "day": "1d",
+            "1day": "1d",
+            "1440m": "1d",
+        }
+        iv = aliases.get(iv, iv)
+        mapping = {
+            "1m": 60,
+            "2m": 120,
+            "5m": 300,
+            "15m": 900,
+            "30m": 1800,
+            "60m": 3600,
+            "1d": 86400,
+            "1wk": 86400 * 7,
+            "1mo": 86400 * 30,
+        }
+        if iv in mapping:
+            return int(mapping[iv])
+        try:
+            if iv.endswith("m"):
+                return max(1, int(float(iv[:-1]) * 60))
+            if iv.endswith("s"):
+                return max(1, int(float(iv[:-1])))
+            if iv.endswith("h"):
+                return max(1, int(float(iv[:-1]) * 3600))
+        except Exception:
+            pass
+        return 60
+
+    @classmethod
+    def _to_shanghai_naive_ts(cls, value: object) -> pd.Timestamp:
+        """
+        Parse one timestamp-like value and normalize to Asia/Shanghai naive time.
+        Returns NaT when parsing fails.
+        """
+        if value is None:
+            return pd.NaT
+
+        try:
+            # Avoid treating RangeIndex-like values (0, 1, 2...) as epoch time.
+            if isinstance(value, (int, float, np.integer, np.floating)):
+                v = float(value)
+                if not np.isfinite(v):
+                    return pd.NaT
+                if abs(v) < 1e9:
+                    return pd.NaT
+                if abs(v) >= 1e11:
+                    v = v / 1000.0
+                ts = pd.to_datetime(v, unit="s", errors="coerce", utc=True)
+            else:
+                text = str(value).strip()
+                if not text:
+                    return pd.NaT
+                if text.isdigit():
+                    num = float(text)
+                    if abs(num) < 1e9:
+                        return pd.NaT
+                    if abs(num) >= 1e11:
+                        num = num / 1000.0
+                    ts = pd.to_datetime(num, unit="s", errors="coerce", utc=True)
+                else:
+                    ts = pd.to_datetime(value, errors="coerce")
+        except Exception:
+            return pd.NaT
+
+        if pd.isna(ts):
+            return pd.NaT
+
+        try:
+            ts_obj = pd.Timestamp(ts)
+        except Exception:
+            return pd.NaT
+
+        try:
+            if ts_obj.tzinfo is not None:
+                ts_obj = ts_obj.tz_convert("Asia/Shanghai").tz_localize(None)
+        except Exception:
+            try:
+                ts_obj = ts_obj.tz_localize(None)
+            except Exception:
+                return pd.NaT
+        return ts_obj
+
+    @classmethod
+    def _normalize_datetime_index(
+        cls,
+        idx: object,
+    ) -> pd.DatetimeIndex | None:
+        """
+        Convert an index-like object to DatetimeIndex in Asia/Shanghai naive time.
+        Returns None when conversion is not reliable.
+        """
+        if isinstance(idx, pd.DatetimeIndex):
+            out = idx
+            try:
+                if out.tz is not None:
+                    out = out.tz_convert("Asia/Shanghai").tz_localize(None)
+            except Exception:
+                try:
+                    out = out.tz_localize(None)
+                except Exception:
+                    pass
+            return pd.DatetimeIndex(out)
+
+        values = list(idx) if idx is not None else []
+        if not values:
+            return None
+
+        parsed = [cls._to_shanghai_naive_ts(v) for v in values]
+        dt = pd.DatetimeIndex(parsed)
+        valid_ratio = float(dt.notna().sum()) / float(max(1, len(dt)))
+        if valid_ratio < 0.80:
+            return None
+        return dt
+
+    @classmethod
+    def _clean_dataframe(
+        cls,
+        df: pd.DataFrame,
+        interval: str | None = None,
+    ) -> pd.DataFrame:
         """Standardize and validate an OHLCV dataframe."""
         if df is None or df.empty:
             return pd.DataFrame()
 
         out = df.copy()
+        iv = cls._normalize_interval_token(interval)
 
-        if not isinstance(out.index, pd.DatetimeIndex):
-            out.index = pd.to_datetime(out.index, errors="coerce")
-        out = out[~out.index.isna()]
-        out = out[~out.index.duplicated(keep="last")].sort_index()
+        norm_idx = cls._normalize_datetime_index(out.index)
+        has_dt_index = norm_idx is not None
+        if norm_idx is not None:
+            out.index = norm_idx
+
+        if not has_dt_index:
+            parsed_dt = None
+            for col in ("datetime", "timestamp", "date", "time"):
+                if col not in out.columns:
+                    continue
+                dt = cls._normalize_datetime_index(out[col])
+                if dt is None:
+                    continue
+                if len(dt) <= 0:
+                    continue
+                valid_ratio = float(dt.notna().sum()) / float(len(dt))
+                if valid_ratio >= 0.80:
+                    parsed_dt = dt
+                    break
+
+            if parsed_dt is None:
+                # Avoid converting pure numeric indexes (RangeIndex) to 1970 timestamps.
+                numeric_ratio = 0.0
+                try:
+                    idx_num = pd.to_numeric(
+                        pd.Series(out.index, dtype=object),
+                        errors="coerce",
+                    )
+                    if len(idx_num) > 0:
+                        numeric_ratio = float(idx_num.notna().sum()) / float(len(idx_num))
+                except Exception:
+                    numeric_ratio = 0.0
+
+                if numeric_ratio < 0.60:
+                    dt = cls._normalize_datetime_index(out.index)
+                    if dt is not None and len(dt) > 0:
+                        valid_ratio = float(dt.notna().sum()) / float(len(dt))
+                        if valid_ratio >= 0.80:
+                            parsed_dt = dt
+
+            if parsed_dt is not None:
+                out.index = parsed_dt
+                has_dt_index = isinstance(out.index, pd.DatetimeIndex)
+            else:
+                if iv not in {"1d", "1wk", "1mo"} and len(out) > 0:
+                    # Intraday fallback: synthesize a monotonic datetime index
+                    # to avoid RangeIndex-driven 1970 bucket artifacts.
+                    step = int(max(1, cls._interval_seconds(iv)))
+                    end = datetime.now()
+                    out.index = pd.date_range(
+                        end=end,
+                        periods=len(out),
+                        freq=f"{step}s",
+                    )
+                    has_dt_index = True
+                else:
+                    out = out.reset_index(drop=True)
+
+        if has_dt_index:
+            out = out[~out.index.isna()]
+            out = out[~out.index.duplicated(keep="last")].sort_index()
 
         for c in ("open", "high", "low", "close", "volume", "amount"):
             if c in out.columns:
@@ -1632,6 +1880,62 @@ class DataFetcher:
         if "close" in out.columns:
             out = out.dropna(subset=["close"])
             out = out[out["close"] > 0]
+        else:
+            return pd.DataFrame()
+
+        if out.empty:
+            return pd.DataFrame()
+
+        # Repair malformed OHLC rows from provider payloads (e.g. open=0).
+        if "open" not in out.columns:
+            out["open"] = out["close"]
+        out["open"] = pd.to_numeric(out["open"], errors="coerce").fillna(0.0)
+        out["open"] = out["open"].where(out["open"] > 0, out["close"])
+
+        if "high" not in out.columns:
+            out["high"] = out[["open", "close"]].max(axis=1)
+        else:
+            out["high"] = pd.to_numeric(out["high"], errors="coerce")
+
+        if "low" not in out.columns:
+            out["low"] = out[["open", "close"]].min(axis=1)
+        else:
+            out["low"] = pd.to_numeric(out["low"], errors="coerce")
+
+        out["high"] = pd.concat(
+            [out["high"], out["open"], out["close"]],
+            axis=1,
+        ).max(axis=1)
+        out["low"] = pd.concat(
+            [out["low"], out["open"], out["close"]],
+            axis=1,
+        ).min(axis=1)
+
+        is_intraday = iv not in {"1d", "1wk", "1mo"}
+        if is_intraday:
+            close_safe = out["close"].clip(lower=1e-8)
+            body_ratio = (out["open"] - out["close"]).abs() / close_safe
+            # Intraday opens should not deviate excessively from closes.
+            bad_open = body_ratio > 0.08
+            if bool(bad_open.any()):
+                out.loc[bad_open, "open"] = out.loc[bad_open, "close"]
+
+            out["high"] = pd.concat(
+                [out["high"], out["open"], out["close"]],
+                axis=1,
+            ).max(axis=1)
+            out["low"] = pd.concat(
+                [out["low"], out["open"], out["close"]],
+                axis=1,
+            ).min(axis=1)
+
+            span_ratio = (out["high"] - out["low"]).abs() / close_safe
+            too_wide = span_ratio > 0.08
+            if bool(too_wide.any()):
+                oc_top = out[["open", "close"]].max(axis=1)
+                oc_bot = out[["open", "close"]].min(axis=1)
+                out.loc[too_wide, "high"] = oc_top[too_wide]
+                out.loc[too_wide, "low"] = oc_bot[too_wide]
 
         if "volume" in out.columns:
             out = out[out["volume"].fillna(0) >= 0]
@@ -1649,7 +1953,7 @@ class DataFetcher:
         out = out.replace([np.inf, -np.inf], np.nan)
         ohlc_cols = [c for c in ("open", "high", "low", "close") if c in out.columns]
         if ohlc_cols:
-            out[ohlc_cols] = out[ohlc_cols].ffill()
+            out[ohlc_cols] = out[ohlc_cols].ffill().bfill()
         out = out.fillna(0)
 
         return out
@@ -1664,6 +1968,7 @@ class DataFetcher:
         instrument: dict | None = None,
         interval: str = "1d",
         max_age_hours: float | None = None,
+        allow_online: bool = True,
     ) -> pd.DataFrame:
         """
         Unified history fetcher.
@@ -1674,8 +1979,11 @@ class DataFetcher:
 
         inst = instrument or parse_instrument(code)
         key = instrument_key(inst)
-        interval = str(interval).lower()
-        offline = _is_offline()
+        interval = self._normalize_interval_token(interval)
+        offline = _is_offline() or (not bool(allow_online))
+        is_cn_equity = (
+            inst.get("market") == "CN" and inst.get("asset") == "EQUITY"
+        )
 
         count = self._resolve_requested_bar_count(days=days, bars=bars, interval=interval)
         max_days = INTERVAL_MAX_DAYS.get(interval, 10_000)
@@ -1694,7 +2002,17 @@ class DataFetcher:
         if use_cache:
             cached_df = self._cache.get(cache_key, ttl)
             if isinstance(cached_df, pd.DataFrame) and not cached_df.empty:
-                cached_df = self._clean_dataframe(cached_df)
+                cached_df = self._clean_dataframe(
+                    cached_df, interval=interval
+                )
+                if (
+                    is_cn_equity
+                    and self._normalize_interval_token(interval)
+                    not in {"1d", "1wk", "1mo"}
+                ):
+                    cached_df = self._filter_cn_intraday_session(
+                        cached_df, interval
+                    )
                 stale_cached_df = cached_df
                 if len(cached_df) >= min(count, 100):
                     return cached_df.tail(count)
@@ -1715,10 +2033,6 @@ class DataFetcher:
             and len(session_df) >= count
         ):
             return self._cache_tail(cache_key, session_df, count)
-
-        is_cn_equity = (
-            inst.get("market") == "CN" and inst.get("asset") == "EQUITY"
-        )
 
         if is_cn_equity and interval != "1d":
             return self._get_history_cn_intraday(
@@ -1741,7 +2055,7 @@ class DataFetcher:
         )
         if df.empty:
             return pd.DataFrame()
-        out = self._merge_parts(df, session_df).tail(count)
+        out = self._merge_parts(df, session_df, interval=interval).tail(count)
         self._cache.set(cache_key, out)
         return out
 
@@ -1791,16 +2105,30 @@ class DataFetcher:
         best = pd.DataFrame()
         # Accept slightly short windows for very long requests.
         target = max(60, int(min(requested_count, 1200)))
+        is_intraday = iv not in {"1d", "1wk", "1mo"}
 
         for days in candidates:
             d = max(1, min(int(days), max_days))
             if d in tried:
                 continue
             tried.add(d)
-            df = self._clean_dataframe(
-                self._fetch_from_sources_instrument(
-                    inst, days=d, interval=iv
+            try:
+                raw_df = self._fetch_from_sources_instrument(
+                    inst,
+                    days=d,
+                    interval=iv,
+                    include_localdb=not is_intraday,
                 )
+            except TypeError:
+                # Backward compatibility for tests/mocks with legacy signature.
+                raw_df = self._fetch_from_sources_instrument(
+                    inst,
+                    days=d,
+                    interval=iv,
+                )
+            df = self._clean_dataframe(
+                raw_df,
+                interval=iv,
             )
             if not df.empty and len(df) > len(best):
                 best = df
@@ -1821,9 +2149,15 @@ class DataFetcher:
         """Handle CN equity intraday intervals."""
         code6 = str(inst["symbol"]).zfill(6)
         db_df = pd.DataFrame()
+        db_limit = int(max(count * 3, count + 600))
         try:
             db_df = self._clean_dataframe(
-                self._db.get_intraday_bars(code6, interval=interval, limit=count)
+                self._db.get_intraday_bars(
+                    code6,
+                    interval=interval,
+                    limit=db_limit,
+                ),
+                interval=interval,
             )
         except Exception:
             pass
@@ -1838,9 +2172,14 @@ class DataFetcher:
             )
 
         if offline:
-            merged = self._merge_parts(db_df, session_df)
+            merged = self._merge_parts(
+                db_df, session_df, interval=interval
+            )
         else:
-            merged = self._merge_parts(db_df, session_df, online_df)
+            merged = self._merge_parts(
+                db_df, session_df, online_df, interval=interval
+            )
+        merged = self._filter_cn_intraday_session(merged, interval)
 
         if merged.empty:
             return pd.DataFrame()
@@ -1865,7 +2204,8 @@ class DataFetcher:
         """Handle CN equity daily interval."""
         code6 = str(inst["symbol"]).zfill(6)
         db_df = self._clean_dataframe(
-            self._db.get_bars(inst["symbol"], limit=count)
+            self._db.get_bars(inst["symbol"], limit=count),
+            interval="1d",
         )
 
         if (
@@ -1873,11 +2213,15 @@ class DataFetcher:
             and self._db_is_fresh_enough(code6, max_lag_days=3)
         ):
             return self._cache_tail(
-                cache_key, self._merge_parts(db_df, session_df), count
+                cache_key,
+                self._merge_parts(db_df, session_df, interval="1d"),
+                count,
             )
 
         if offline:
-            merged_offline = self._merge_parts(db_df, session_df)
+            merged_offline = self._merge_parts(
+                db_df, session_df, interval="1d"
+            )
             return merged_offline.tail(count) if not merged_offline.empty else pd.DataFrame()
 
         online_df = self._fetch_history_with_depth_retry(
@@ -1886,7 +2230,9 @@ class DataFetcher:
             requested_count=count,
             base_fetch_days=fetch_days,
         )
-        merged = self._merge_parts(db_df, session_df, online_df)
+        merged = self._merge_parts(
+            db_df, session_df, online_df, interval="1d"
+        )
         if merged.empty:
             return pd.DataFrame()
 
@@ -1898,12 +2244,46 @@ class DataFetcher:
                 pass
         return out
 
-    def _merge_parts(self, *dfs: pd.DataFrame) -> pd.DataFrame:
+    def _merge_parts(
+        self,
+        *dfs: pd.DataFrame,
+        interval: str | None = None,
+    ) -> pd.DataFrame:
         """Merge and clean non-empty dataframes."""
         parts = [p for p in dfs if isinstance(p, pd.DataFrame) and not p.empty]
         if not parts:
             return pd.DataFrame()
-        return self._clean_dataframe(pd.concat(parts, axis=0))
+        return self._clean_dataframe(
+            pd.concat(parts, axis=0),
+            interval=interval,
+        )
+
+    @classmethod
+    def _filter_cn_intraday_session(
+        cls,
+        df: pd.DataFrame,
+        interval: str,
+    ) -> pd.DataFrame:
+        """
+        Keep only regular CN A-share intraday session rows.
+        """
+        iv = cls._normalize_interval_token(interval)
+        if iv in {"1d", "1wk", "1mo"}:
+            return df if isinstance(df, pd.DataFrame) else pd.DataFrame()
+        if df is None or df.empty:
+            return pd.DataFrame()
+
+        out = cls._clean_dataframe(df, interval=iv)
+        if out.empty or not isinstance(out.index, pd.DatetimeIndex):
+            return out
+
+        idx = out.index
+        hhmm = (idx.hour * 100) + idx.minute
+        in_morning = (hhmm >= 930) & (hhmm <= 1130)
+        in_afternoon = (hhmm >= 1300) & (hhmm <= 1500)
+        weekday = idx.dayofweek < 5
+        mask = weekday & (in_morning | in_afternoon)
+        return out.loc[mask]
 
     def _cache_tail(self, cache_key: str, df: pd.DataFrame, count: int) -> pd.DataFrame:
         out = df.tail(count)
@@ -1916,7 +2296,8 @@ class DataFetcher:
         try:
             cache = get_session_bar_cache()
             return self._clean_dataframe(
-                cache.read_history(symbol=symbol, interval=interval, bars=bars)
+                cache.read_history(symbol=symbol, interval=interval, bars=bars),
+                interval=interval,
             )
         except Exception as e:
             log.debug("Session cache lookup failed: %s", e)
@@ -1965,9 +2346,7 @@ class DataFetcher:
         with self._last_good_lock:
             q = self._last_good_quotes.get(code6)
             if q and q.price > 0:
-                age = (
-                    datetime.now() - (q.timestamp or datetime.now())
-                ).total_seconds()
+                age = self._quote_age_seconds(q)
                 if age <= _LAST_GOOD_MAX_AGE:
                     return q
         return None

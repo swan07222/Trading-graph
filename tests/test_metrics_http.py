@@ -98,6 +98,10 @@ def test_metrics_http_extended_telemetry_endpoints(monkeypatch):
         assert "/api/v1/execution" in api_index["routes"]
         assert "/api/v1/risk/metrics" in api_index["routes"]
         assert "/api/v1/sentiment" in api_index["routes"]
+        assert "/api/v1/data/cache" in api_index["routes"]
+        assert "/api/v1/data/feeds" in api_index["routes"]
+        assert "/api/v1/learning/status" in api_index["routes"]
+        assert "/api/v1/scanner/status" in api_index["routes"]
 
         status, execution = _fetch_json(f"{server.url}/api/v1/execution")
         assert status == 200
@@ -125,6 +129,26 @@ def test_metrics_http_extended_telemetry_endpoints(monkeypatch):
         assert sentiment["hours_lookback"] == 12
         assert sentiment["snapshot"]["status"] == "ok"
 
+        status, cache = _fetch_json(f"{server.url}/api/v1/data/cache")
+        assert status == 200
+        assert "snapshot" in cache
+        assert cache["snapshot"]["status"] in {"ok", "unavailable"}
+
+        status, feeds = _fetch_json(f"{server.url}/api/v1/data/feeds")
+        assert status == 200
+        assert "snapshot" in feeds
+        assert feeds["snapshot"]["status"] in {"ok", "unavailable"}
+
+        status, learning = _fetch_json(f"{server.url}/api/v1/learning/status")
+        assert status == 200
+        assert "snapshot" in learning
+        assert learning["snapshot"]["status"] in {"ok", "unavailable"}
+
+        status, scanner = _fetch_json(f"{server.url}/api/v1/scanner/status")
+        assert status == 200
+        assert "snapshot" in scanner
+        assert scanner["snapshot"]["status"] in {"ok", "unavailable"}
+
         status, full = _fetch_json(f"{server.url}/api/v1/dashboard/full?limit=5&hours=8")
         assert status == 200
         assert "snapshot" in full
@@ -132,5 +156,9 @@ def test_metrics_http_extended_telemetry_endpoints(monkeypatch):
         assert "risk" in full["snapshot"]
         assert "health" in full["snapshot"]
         assert "sentiment" in full["snapshot"]
+        assert "cache" in full["snapshot"]
+        assert "feeds" in full["snapshot"]
+        assert "learning" in full["snapshot"]
+        assert "scanner" in full["snapshot"]
     finally:
         server.stop()

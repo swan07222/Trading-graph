@@ -107,7 +107,13 @@ class AutoLearnWorker(QThread):
             mode = str(self.config.get("mode", "full"))
             interval = "1m"
             horizon = 30
-            lookback_bars = 3000
+            try:
+                from data.fetcher import BARS_PER_DAY
+                lookback_bars = int(
+                    max(120, round(7 * float(BARS_PER_DAY.get("1m", 240))))
+                )
+            except Exception:
+                lookback_bars = 1680
             cycle_interval_seconds = 900
 
             def on_progress(p):
@@ -130,9 +136,13 @@ class AutoLearnWorker(QThread):
                     results["discovered"] = int(
                         getattr(p, "stocks_found", 0) or 0
                     )
-                    results["processed"] = int(
+                    processed_direct = int(
                         getattr(p, "stocks_processed", 0) or 0
                     )
+                    processed_alt = int(
+                        getattr(p, "processed_count", 0) or 0
+                    )
+                    results["processed"] = max(processed_direct, processed_alt)
                     results["accuracy"] = float(
                         getattr(p, "validation_accuracy", 0.0) or 0.0
                     )
@@ -183,8 +193,6 @@ class AutoLearnWorker(QThread):
             elif self._error_flag:
                 results["status"] = "error"
                 results["error"] = self._error_message or "Auto-learning failed"
-                if self.running:
-                    self.error_occurred.emit(results["error"])
             else:
                 results["status"] = "ok"
             self.finished_result.emit(results)
@@ -222,10 +230,8 @@ class AutoLearnWorker(QThread):
             log.error(f"Learner thread error: {e}")
             log.debug(traceback.format_exc())
             if self.running:
-                try:
-                    self.error_occurred.emit(str(e))
-                except RuntimeError:
-                    pass
+                self._error_flag = True
+                self._error_message = str(e)
 
     def _stop_learner(self):
         if self._learner is not None:
@@ -273,6 +279,8 @@ class TargetedLearnWorker(QThread):
         self.token = _get_cancellation_token()
         self._learner = None
         self._learner_thread: threading.Thread | None = None
+        self._error_flag = False
+        self._error_message = ""
 
     def run(self):
         self.running = True
@@ -301,10 +309,16 @@ class TargetedLearnWorker(QThread):
 
             epochs = int(self.config.get("epochs", 10))
             incremental = bool(self.config.get("incremental", True))
-            interval = str(self.config.get("interval", "1m"))
+            requested_interval = str(self.config.get("interval", "1m")).strip().lower()
+            interval = "1m"
             horizon = int(self.config.get("horizon", 30))
             lookback = self.config.get("lookback_bars", None)
             continuous = bool(self.config.get("continuous", False))
+            if requested_interval != "1m":
+                self.log_message.emit(
+                    f"Training interval forced to 1m (requested {requested_interval})",
+                    "info",
+                )
 
             def on_progress(p):
                 if not self.running:
@@ -315,14 +329,21 @@ class TargetedLearnWorker(QThread):
                         getattr(p, 'message', '') or getattr(p, 'stage', '')
                     )
                     stage = str(getattr(p, 'stage', ''))
+                    if stage == "error":
+                        self._error_flag = True
+                        self._error_message = message or "Targeted training failed"
                     self.progress.emit(percent, message)
                     self.log_message.emit(
                         f"{stage}: {message}" if stage else message,
                         "info",
                     )
-                    results["processed"] = int(
+                    processed_direct = int(
                         getattr(p, "stocks_processed", 0) or 0
                     )
+                    processed_alt = int(
+                        getattr(p, "processed_count", 0) or 0
+                    )
+                    results["processed"] = max(processed_direct, processed_alt)
                     results["accuracy"] = float(
                         getattr(p, "validation_accuracy", 0.0) or 0.0
                     )
@@ -371,6 +392,11 @@ class TargetedLearnWorker(QThread):
             self._stop_learner()
             if self.token.is_cancelled or not self.running:
                 results["status"] = "stopped"
+            elif self._error_flag:
+                results["status"] = "error"
+                results["error"] = (
+                    self._error_message or "Targeted training failed"
+                )
             else:
                 results["status"] = "ok"
             results["stocks_trained"] = stock_codes
@@ -406,10 +432,8 @@ class TargetedLearnWorker(QThread):
             log.error(f"Targeted learner thread error: {e}")
             log.debug(traceback.format_exc())
             if self.running:
-                try:
-                    self.error_occurred.emit(str(e))
-                except RuntimeError:
-                    pass
+                self._error_flag = True
+                self._error_message = str(e)
 
     def _stop_learner(self):
         if self._learner is not None:
@@ -449,7 +473,7 @@ class StockValidatorWorker(QThread):
     """
     validation_result = pyqtSignal(dict)
 
-    def __init__(self, code: str, interval: str = "1d", request_id: int = 0):
+    def __init__(self, code: str, interval: str = "1m", request_id: int = 0):
         super().__init__()
         self.code = code
         self.interval = interval
@@ -493,7 +517,7 @@ class AutoLearnDialog(QDialog):
 
     def __init__(self, parent=None, seed_stock_codes: list[str] | None = None):
         super().__init__(parent)
-        self.setWindowTitle("🤖 Auto Learning")
+        self.setWindowTitle("Auto Learning")
         self.setMinimumSize(700, 540)
         self.resize(920, 660)
         self.setSizeGripEnabled(True)
@@ -509,6 +533,8 @@ class AutoLearnDialog(QDialog):
             str(c).strip() for c in (seed_stock_codes or []) if str(c).strip()
         ]
         self._validation_request_id = 0
+        self._last_progress_percent = 0
+        self._error_dialog_shown = False
 
         # Last validated stock (for Add button)
         self._last_validated_code = ""
@@ -527,9 +553,9 @@ class AutoLearnDialog(QDialog):
         root_layout.setSpacing(8)
         root_layout.setContentsMargins(10, 10, 10, 10)
 
-        header = QLabel("🧠 Automatic Stock Discovery & Learning")
+        header = QLabel("Automatic Stock Discovery and Learning")
         header.setStyleSheet(
-            "font-size: 20px; font-weight: bold; color: #58a6ff;"
+            "font-size: 20px; font-weight: 700; color: #9ecbff;"
         )
         root_layout.addWidget(header)
 
@@ -574,15 +600,15 @@ class AutoLearnDialog(QDialog):
 
         # Tab 1: Auto Learn
         auto_tab = self._create_auto_tab()
-        self.tabs.addTab(auto_tab, "🔄 Auto Learn")
+        self.tabs.addTab(auto_tab, "Auto Learn")
 
         # Tab 2: Train by Search
         search_tab = self._create_search_tab()
-        self.tabs.addTab(search_tab, "🔍 Train by Search")
+        self.tabs.addTab(search_tab, "Train by Search")
 
         layout.addWidget(self.tabs)
 
-        progress_group = QGroupBox("📊 Progress")
+        progress_group = QGroupBox("Progress")
         progress_layout = QVBoxLayout()
 
         self.status_label = QLabel("Ready to start")
@@ -594,12 +620,13 @@ class AutoLearnDialog(QDialog):
         self.progress_bar = QProgressBar()
         self.progress_bar.setTextVisible(True)
         self.progress_bar.setMinimumHeight(25)
+        self.progress_bar.setFormat("0%")
         progress_layout.addWidget(self.progress_bar)
 
         progress_group.setLayout(progress_layout)
         layout.addWidget(progress_group)
 
-        log_group = QGroupBox("📋 Activity Log")
+        log_group = QGroupBox("Activity Log")
         log_layout = QVBoxLayout()
 
         self.log_text = QTextEdit()
@@ -637,7 +664,7 @@ class AutoLearnDialog(QDialog):
         desc.setStyleSheet("color: #8b949e; font-size: 12px;")
         layout.addWidget(desc)
 
-        settings_group = QGroupBox("⚙️ Settings")
+        settings_group = QGroupBox("Settings")
         settings_layout = QGridLayout()
         settings_layout.setSpacing(10)
 
@@ -690,13 +717,13 @@ class AutoLearnDialog(QDialog):
 
         btn_layout = QHBoxLayout()
 
-        self.auto_start_btn = QPushButton("🚀 Start Auto Learning")
+        self.auto_start_btn = QPushButton("Start Auto Learning")
         self.auto_start_btn.setMinimumHeight(45)
         self.auto_start_btn.setStyleSheet(self._green_button_style())
         self.auto_start_btn.clicked.connect(self._start_auto_learning)
         btn_layout.addWidget(self.auto_start_btn)
 
-        self.auto_stop_btn = QPushButton("⏹️ Stop")
+        self.auto_stop_btn = QPushButton("Stop")
         self.auto_stop_btn.setMinimumHeight(45)
         self.auto_stop_btn.setEnabled(False)
         self.auto_stop_btn.clicked.connect(self._stop_auto_learning)
@@ -726,7 +753,7 @@ class AutoLearnDialog(QDialog):
         layout.addWidget(desc)
 
         # --- Search section ---
-        search_group = QGroupBox("🔍 Search & Add Stocks")
+        search_group = QGroupBox("Search and Add Stocks")
         search_layout = QVBoxLayout()
 
         search_row = QHBoxLayout()
@@ -739,13 +766,13 @@ class AutoLearnDialog(QDialog):
         self.search_input.returnPressed.connect(self._search_stock)
         search_row.addWidget(self.search_input)
 
-        self.search_btn = QPushButton("🔍 Search")
+        self.search_btn = QPushButton("Search")
         self.search_btn.setMinimumHeight(38)
         self.search_btn.setMinimumWidth(100)
         self.search_btn.clicked.connect(self._search_stock)
         search_row.addWidget(self.search_btn)
 
-        self.add_btn = QPushButton("➕ Add")
+        self.add_btn = QPushButton("Add")
         self.add_btn.setMinimumHeight(38)
         self.add_btn.setMinimumWidth(80)
         self.add_btn.setEnabled(False)
@@ -764,7 +791,7 @@ class AutoLearnDialog(QDialog):
         layout.addWidget(search_group)
 
         # --- Stock list section ---
-        list_group = QGroupBox("📋 Training Stock List")
+        list_group = QGroupBox("Training Stock List")
         list_layout = QVBoxLayout()
 
         quick_row = QHBoxLayout()
@@ -772,15 +799,15 @@ class AutoLearnDialog(QDialog):
         quick_label.setStyleSheet("color: #8b949e; font-size: 11px;")
         quick_row.addWidget(quick_label)
 
-        # Popular stocks — codes match CONFIG.STOCK_POOL format (bare 6-digit)
+        # Popular stocks - codes match CONFIG.STOCK_POOL format (bare 6-digit)
         # but we add sh/sz prefix so they display nicely and the fetcher
-        # strips the prefix internally via clean_code() → parse_instrument()
+        # strips the prefix internally via clean_code() -> parse_instrument()
         popular_stocks = [
-            ("贵州茅台", "sh600519"),
-            ("平安银行", "sz000001"),
-            ("五粮液", "sz000858"),
-            ("招商银行", "sh600036"),
-            ("中国平安", "sh601318"),
+            ("Kweichow Moutai", "sh600519"),
+            ("Ping An Bank", "sz000001"),
+            ("Wuliangye", "sz000858"),
+            ("China Merchants Bank", "sh600036"),
+            ("Ping An Insurance", "sh601318"),
         ]
         for name, code in popular_stocks:
             btn = QPushButton(name)
@@ -838,11 +865,11 @@ class AutoLearnDialog(QDialog):
 
         list_btn_row = QHBoxLayout()
 
-        self.remove_btn = QPushButton("🗑️ Remove Selected")
+        self.remove_btn = QPushButton("Remove Selected")
         self.remove_btn.clicked.connect(self._remove_selected_stocks)
         list_btn_row.addWidget(self.remove_btn)
 
-        self.clear_list_btn = QPushButton("🧹 Clear All")
+        self.clear_list_btn = QPushButton("Clear All")
         self.clear_list_btn.clicked.connect(self._clear_stock_list)
         list_btn_row.addWidget(self.clear_list_btn)
 
@@ -859,7 +886,7 @@ class AutoLearnDialog(QDialog):
         layout.addWidget(list_group)
 
         # --- Training settings for targeted ---
-        target_settings = QGroupBox("⚙️ Training Settings")
+        target_settings = QGroupBox("Training Settings")
         ts_layout = QGridLayout()
         ts_layout.setSpacing(8)
 
@@ -872,9 +899,7 @@ class AutoLearnDialog(QDialog):
 
         ts_layout.addWidget(QLabel("Interval:"), 0, 2)
         self.target_interval_combo = QComboBox()
-        self.target_interval_combo.addItems([
-            "1m", "5m", "15m", "30m", "1h", "1d",
-        ])
+        self.target_interval_combo.addItems(["1m"])
         self.target_interval_combo.setCurrentText("1m")
         ts_layout.addWidget(self.target_interval_combo, 0, 3)
 
@@ -895,13 +920,13 @@ class AutoLearnDialog(QDialog):
         # --- Train button ---
         train_btn_layout = QHBoxLayout()
 
-        self.target_start_btn = QPushButton("🎯 Train on Selected Stocks")
+        self.target_start_btn = QPushButton("Train on Selected Stocks")
         self.target_start_btn.setMinimumHeight(45)
         self.target_start_btn.setStyleSheet(self._blue_button_style())
         self.target_start_btn.clicked.connect(self._start_targeted_learning)
         train_btn_layout.addWidget(self.target_start_btn)
 
-        self.target_stop_btn = QPushButton("⏹️ Stop")
+        self.target_stop_btn = QPushButton("Stop")
         self.target_stop_btn.setMinimumHeight(45)
         self.target_stop_btn.setEnabled(False)
         self.target_stop_btn.clicked.connect(self._stop_targeted_learning)
@@ -921,7 +946,7 @@ class AutoLearnDialog(QDialog):
 
         The fetcher's clean_code() strips prefixes anyway, but we add
         them here so the UI shows a recognizable format and the code
-        survives the round-trip through ParallelFetcher → Trainer.
+        survives the round-trip through ParallelFetcher -> Trainer.
 
         Handles: 600519, sh600519, SH600519, 000001, sz000001, SZ.000001
         """
@@ -936,7 +961,7 @@ class AutoLearnDialog(QDialog):
         if code_lower.startswith(("sh", "sz", "bj")):
             return code_lower
 
-        # Pure digits — guess prefix from first digit
+        # Pure digits - guess prefix from first digit
         digits = "".join(ch for ch in code if ch.isdigit())
         if len(digits) == 6:
             first = digits[0]
@@ -964,13 +989,13 @@ class AutoLearnDialog(QDialog):
         if code in self._targeted_stock_codes:
             self.search_result_label.setText(
                 f'<span style="color: #d29922;">'
-                f"⚠️ {code} is already in the list"
+                f"Warning: {code} is already in the list"
                 f"</span>"
             )
             return
 
         self.search_btn.setEnabled(False)
-        self.search_btn.setText("🔄 Searching...")
+        self.search_btn.setText("Searching...")
         self.add_btn.setEnabled(False)
         self.search_result_label.setText(
             f'<span style="color: #8b949e;">'
@@ -978,7 +1003,7 @@ class AutoLearnDialog(QDialog):
             f"</span>"
         )
 
-        interval = self.target_interval_combo.currentText()
+        interval = "1m"
         self._validation_request_id += 1
         self._validator = StockValidatorWorker(
             code, interval, request_id=self._validation_request_id
@@ -995,7 +1020,7 @@ class AutoLearnDialog(QDialog):
 
         # Re-enable search button
         self.search_btn.setEnabled(True)
-        self.search_btn.setText("🔍 Search")
+        self.search_btn.setText("Search")
 
         code = result.get("code", "")
         valid = result.get("valid", False)
@@ -1007,10 +1032,10 @@ class AutoLearnDialog(QDialog):
             display = code
             if name:
                 display += f" ({name})"
-            display += f" — {bars} bars"
+            display += f" - {bars} bars"
 
             self.search_result_label.setText(
-                f'<span style="color: #3fb950;">✅ {display}</span>'
+                f'<span style="color: #2f9e44;">Valid: {display}</span>'
             )
             self.add_btn.setEnabled(True)
 
@@ -1019,7 +1044,7 @@ class AutoLearnDialog(QDialog):
             self._last_validated_bars = bars
         else:
             self.search_result_label.setText(
-                f'<span style="color: #f85149;">❌ {code}: {message}</span>'
+                f'<span style="color: #c92a2a;">Invalid: {code}: {message}</span>'
             )
             self.add_btn.setEnabled(False)
             self._last_validated_code = ""
@@ -1035,7 +1060,7 @@ class AutoLearnDialog(QDialog):
         if code in self._targeted_stock_codes:
             self.search_result_label.setText(
                 f'<span style="color: #d29922;">'
-                f"⚠️ {code} already in list"
+                f"Warning: {code} already in list"
                 f"</span>"
             )
             return
@@ -1047,8 +1072,8 @@ class AutoLearnDialog(QDialog):
 
         self.search_input.clear()
         self.search_result_label.setText(
-            f'<span style="color: #3fb950;">'
-            f"✅ Added {code} to training list"
+            f'<span style="color: #2f9e44;">'
+            f"Added {code} to training list"
             f"</span>"
         )
         self.add_btn.setEnabled(False)
@@ -1072,7 +1097,7 @@ class AutoLearnDialog(QDialog):
         """Add a stock item to the QListWidget."""
         display = f"  {code}"
         if name:
-            display += f"  —  {name}"
+            display += f"  -  {name}"
         if bars > 0:
             display += f"  ({bars} bars)"
 
@@ -1162,7 +1187,18 @@ class AutoLearnDialog(QDialog):
                 interval = self.target_interval_combo.currentText().strip().lower()
             except Exception:
                 interval = "1m"
-            live_codes = cache.get_recent_symbols(interval=interval, min_rows=10)
+            interval_s = {
+                "1m": 60,
+                "2m": 120,
+                "3m": 180,
+                "5m": 300,
+                "15m": 900,
+                "30m": 1800,
+                "60m": 3600,
+                "1h": 3600,
+            }.get(interval, 60)
+            min_rows = max(2, int((3600 // max(1, interval_s)) + 1))
+            live_codes = cache.get_recent_symbols(interval=interval, min_rows=min_rows)
             codes.extend(live_codes)
         except Exception:
             pass
@@ -1375,7 +1411,10 @@ class AutoLearnDialog(QDialog):
 
         if running:
             self.progress_bar.setValue(0)
+            self.progress_bar.setFormat("0%")
             self.status_label.setText("Initializing...")
+            self._last_progress_percent = 0
+            self._error_dialog_shown = False
             self.close_btn.setEnabled(False)
 
             # Disable BOTH tabs' start buttons (only one can run)
@@ -1432,14 +1471,26 @@ class AutoLearnDialog(QDialog):
 
             self.worker = None
             self.targeted_worker = None
+            self._last_progress_percent = 0
 
     # =========================================================================
     # =========================================================================
 
     def _on_progress(self, percent: int, message: str):
         """Handle progress update from either worker."""
-        self.progress_bar.setValue(percent)
-        self.status_label.setText(str(message))
+        try:
+            p_raw = int(float(percent))
+        except Exception:
+            p_raw = self._last_progress_percent
+        p = int(max(0, min(100, p_raw)))
+        msg = str(message or "").strip()
+        # Keep progress stable on noisy callback order.
+        if p < self._last_progress_percent and "cycle" not in msg.lower():
+            p = self._last_progress_percent
+        self._last_progress_percent = p
+        self.progress_bar.setValue(p)
+        self.progress_bar.setFormat(f"{p}%")
+        self.status_label.setText(msg or f"Running ({p}%)")
 
     def _on_auto_finished(self, results: dict):
         """Handle auto-learning completion."""
@@ -1450,27 +1501,33 @@ class AutoLearnDialog(QDialog):
             self._set_running(False)
             self.status_label.setText("Stopped")
             self.progress_bar.setValue(0)
+            self.progress_bar.setFormat("Stopped")
             return
         if status == "error":
             err = str(results.get("error") or "Auto-learning failed")
             self._log(f"Auto-learning failed: {err}", "error")
             self._log_results(results)
             self._set_running(False)
+            current = max(0, min(99, self.progress_bar.value()))
+            self.progress_bar.setValue(current)
+            self.progress_bar.setFormat("Failed")
             self.status_label.setText("Auto-learning failed")
-            self.progress_bar.setValue(100)
-            QMessageBox.critical(
-                self,
-                "Learning Failed",
-                f"Auto-learning failed:\n\n{err}",
-            )
+            if not self._error_dialog_shown:
+                self._error_dialog_shown = True
+                QMessageBox.critical(
+                    self,
+                    "Learning Failed",
+                    f"Auto-learning failed:\n\n{err}",
+                )
             return
 
-        self._log("🎉 Auto-learning completed!", "success")
+        self._log("Auto-learning completed", "success")
         self._log_results(results)
 
         self._set_running(False)
-        self.status_label.setText("✅ Auto-learning completed!")
+        self.status_label.setText("Auto-learning completed")
         self.progress_bar.setValue(100)
+        self.progress_bar.setFormat("Complete")
 
         QMessageBox.information(
             self,
@@ -1490,9 +1547,27 @@ class AutoLearnDialog(QDialog):
             self._set_running(False)
             self.status_label.setText("Stopped")
             self.progress_bar.setValue(0)
+            self.progress_bar.setFormat("Stopped")
+            return
+        if status == "error":
+            err = str(results.get("error") or "Targeted training failed")
+            self._log(f"Targeted training failed: {err}", "error")
+            self._log_results(results)
+            self._set_running(False)
+            current = max(0, min(99, self.progress_bar.value()))
+            self.progress_bar.setValue(current)
+            self.progress_bar.setFormat("Failed")
+            self.status_label.setText("Targeted training failed")
+            if not self._error_dialog_shown:
+                self._error_dialog_shown = True
+                QMessageBox.critical(
+                    self,
+                    "Training Failed",
+                    f"Targeted training failed:\n\n{err}",
+                )
             return
 
-        self._log("🎉 Targeted training completed!", "success")
+        self._log("Targeted training completed", "success")
         self._log_results(results)
 
         stocks = results.get("stocks_trained", [])
@@ -1503,8 +1578,9 @@ class AutoLearnDialog(QDialog):
             self._log(f"Trained on: {display}", "info")
 
         self._set_running(False)
-        self.status_label.setText("✅ Targeted training completed!")
+        self.status_label.setText("Targeted training completed")
         self.progress_bar.setValue(100)
+        self.progress_bar.setFormat("Complete")
 
         QMessageBox.information(
             self,
@@ -1517,17 +1593,23 @@ class AutoLearnDialog(QDialog):
 
     def _on_error(self, error: str):
         """Handle error from either worker."""
+        error = str(error or "Unknown error")
         display_error = error[:300] if len(error) > 300 else error
         self._log(f"Error: {display_error}", "error")
 
         self._set_running(False)
-        self.status_label.setText("❌ Error occurred")
+        current = max(0, min(99, self.progress_bar.value()))
+        self.progress_bar.setValue(current)
+        self.progress_bar.setFormat("Failed")
+        self.status_label.setText("Error occurred")
 
-        QMessageBox.critical(
-            self,
-            "Error",
-            f"An error occurred during learning:\n\n{error[:500]}",
-        )
+        if not self._error_dialog_shown:
+            self._error_dialog_shown = True
+            QMessageBox.critical(
+                self,
+                "Error",
+                f"An error occurred during learning:\n\n{error[:500]}",
+            )
 
     def _log_results(self, results: dict):
         """Log training results to the activity log."""
@@ -1536,11 +1618,11 @@ class AutoLearnDialog(QDialog):
         accuracy = float(results.get("accuracy", 0))
 
         if discovered > 0:
-            self._log(f"📊 Stocks discovered: {discovered}", "info")
+            self._log(f"Stocks discovered: {discovered}", "info")
         if processed > 0:
-            self._log(f"📈 Stocks processed: {processed}", "info")
+            self._log(f"Stocks processed: {processed}", "info")
         if accuracy > 0:
-            self._log(f"🎯 Model accuracy: {accuracy:.1%}", "success")
+            self._log(f"Model accuracy: {accuracy:.1%}", "success")
 
     # =========================================================================
     # =========================================================================
@@ -1550,24 +1632,24 @@ class AutoLearnDialog(QDialog):
         timestamp = datetime.now().strftime("%H:%M:%S")
 
         colors = {
-            "info": "#c9d1d9",
-            "success": "#3fb950",
-            "warning": "#d29922",
-            "error": "#f85149",
+            "info": "#d3dbe3",
+            "success": "#6fd08c",
+            "warning": "#f2c14e",
+            "error": "#ff8a80",
         }
-        color = colors.get(level, "#c9d1d9")
-
-        icons = {
-            "info": "ℹ️",
-            "success": "✅",
-            "warning": "⚠️",
-            "error": "❌",
+        tags = {
+            "info": "INFO",
+            "success": "SUCCESS",
+            "warning": "WARN",
+            "error": "ERROR",
         }
-        icon = icons.get(level, "")
+        color = colors.get(level, "#d3dbe3")
+        tag = tags.get(level, "INFO")
 
         self.log_text.append(
             f'<span style="color: #6e7681;">[{timestamp}]</span> '
-            f'{icon} <span style="color: {color};">{message}</span>'
+            f'<span style="color: #6e7681;">[{tag}]</span> '
+            f'<span style="color: {color};">{message}</span>'
         )
 
         # Auto-scroll to bottom
@@ -1582,22 +1664,24 @@ class AutoLearnDialog(QDialog):
     def _green_button_style() -> str:
         return """
             QPushButton {
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                    stop:0 #238636, stop:1 #2ea043);
+                background: #1f8f4a;
                 color: white;
-                border: none;
-                padding: 12px 30px;
-                border-radius: 6px;
-                font-weight: bold;
+                border: 1px solid #17773c;
+                padding: 11px 24px;
+                border-radius: 8px;
+                font-weight: 600;
                 font-size: 14px;
             }
             QPushButton:hover {
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                    stop:0 #2ea043, stop:1 #3fb950);
+                background: #258c4e;
+            }
+            QPushButton:pressed {
+                background: #1b6f3b;
             }
             QPushButton:disabled {
-                background: #21262d;
-                color: #484f58;
+                background: #27333b;
+                border-color: #27333b;
+                color: #7d8993;
             }
         """
 
@@ -1605,22 +1689,24 @@ class AutoLearnDialog(QDialog):
     def _blue_button_style() -> str:
         return """
             QPushButton {
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                    stop:0 #1f6feb, stop:1 #388bfd);
+                background: #1e66c6;
                 color: white;
-                border: none;
-                padding: 12px 30px;
-                border-radius: 6px;
-                font-weight: bold;
+                border: 1px solid #1655a4;
+                padding: 11px 24px;
+                border-radius: 8px;
+                font-weight: 600;
                 font-size: 14px;
             }
             QPushButton:hover {
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                    stop:0 #388bfd, stop:1 #58a6ff);
+                background: #255fb0;
+            }
+            QPushButton:pressed {
+                background: #1a4884;
             }
             QPushButton:disabled {
-                background: #21262d;
-                color: #484f58;
+                background: #27333b;
+                border-color: #27333b;
+                color: #7d8993;
             }
         """
 
@@ -1630,35 +1716,35 @@ class AutoLearnDialog(QDialog):
     def _apply_style(self):
         self.setStyleSheet("""
             QDialog {
-                background: #0d1117;
+                background: #0f1720;
             }
             QGroupBox {
-                font-weight: bold;
-                border: 1px solid #30363d;
-                border-radius: 8px;
+                font-weight: 600;
+                border: 1px solid #2f3d4b;
+                border-radius: 10px;
                 margin-top: 12px;
-                padding-top: 15px;
-                color: #58a6ff;
-                background: #161b22;
+                padding-top: 14px;
+                color: #c7d2de;
+                background: #16202b;
             }
             QGroupBox::title {
                 subcontrol-origin: margin;
                 left: 12px;
-                padding: 0 8px;
+                padding: 0 6px;
             }
             QLabel {
-                color: #c9d1d9;
+                color: #d3dbe3;
             }
             QComboBox, QSpinBox {
                 padding: 8px;
-                border: 1px solid #30363d;
-                border-radius: 6px;
-                background: #21262d;
-                color: #c9d1d9;
+                border: 1px solid #2f3d4b;
+                border-radius: 8px;
+                background: #1d2935;
+                color: #d3dbe3;
                 min-width: 120px;
             }
             QComboBox:focus, QSpinBox:focus {
-                border-color: #58a6ff;
+                border-color: #4a91e2;
             }
             QComboBox::drop-down {
                 border: none;
@@ -1666,65 +1752,69 @@ class AutoLearnDialog(QDialog):
             }
             QLineEdit {
                 padding: 8px 12px;
-                border: 1px solid #30363d;
-                border-radius: 6px;
-                background: #21262d;
-                color: #c9d1d9;
+                border: 1px solid #2f3d4b;
+                border-radius: 8px;
+                background: #1d2935;
+                color: #d3dbe3;
                 font-size: 13px;
             }
             QLineEdit:focus {
-                border-color: #58a6ff;
+                border-color: #4a91e2;
             }
             QCheckBox {
-                color: #c9d1d9;
+                color: #d3dbe3;
                 spacing: 8px;
             }
             QCheckBox::indicator {
                 width: 18px;
                 height: 18px;
                 border-radius: 4px;
-                border: 1px solid #30363d;
-                background: #21262d;
+                border: 1px solid #2f3d4b;
+                background: #1d2935;
             }
             QCheckBox::indicator:checked {
-                background: #238636;
-                border-color: #238636;
+                background: #1f8f4a;
+                border-color: #1f8f4a;
             }
             QProgressBar {
-                border: none;
-                background: #21262d;
-                border-radius: 6px;
+                border: 1px solid #2f3d4b;
+                background: #1d2935;
+                border-radius: 8px;
                 text-align: center;
-                color: #c9d1d9;
+                color: #d3dbe3;
+                min-height: 24px;
             }
             QProgressBar::chunk {
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                    stop:0 #238636, stop:1 #2ea043);
-                border-radius: 6px;
+                background: #1f8f4a;
+                border-radius: 7px;
             }
             QTextEdit {
-                background: #0d1117;
-                color: #7ee787;
-                border: 1px solid #30363d;
-                border-radius: 6px;
+                background: #0f1720;
+                color: #d3dbe3;
+                border: 1px solid #2f3d4b;
+                border-radius: 8px;
                 font-family: 'Consolas', 'Monaco', monospace;
-                font-size: 11px;
+                font-size: 12px;
             }
             QPushButton {
-                background: #21262d;
-                color: #c9d1d9;
-                border: 1px solid #30363d;
+                background: #1d2935;
+                color: #d3dbe3;
+                border: 1px solid #2f3d4b;
                 padding: 10px 20px;
-                border-radius: 6px;
-                font-weight: bold;
+                border-radius: 8px;
+                font-weight: 600;
             }
             QPushButton:hover {
-                background: #30363d;
-                border-color: #58a6ff;
+                background: #243240;
+                border-color: #4a91e2;
+            }
+            QPushButton:pressed {
+                background: #1a2430;
             }
             QPushButton:disabled {
-                background: #161b22;
-                color: #484f58;
+                background: #16202b;
+                border-color: #16202b;
+                color: #7d8993;
             }
         """)
 
@@ -1732,7 +1822,7 @@ class AutoLearnDialog(QDialog):
     # =========================================================================
 
     def closeEvent(self, event):
-        """Handle close — stop any running training first."""
+        """Handle close - stop any running training first."""
         if self._is_running:
             reply = QMessageBox.question(
                 self,
@@ -1766,7 +1856,7 @@ class AutoLearnDialog(QDialog):
         super().closeEvent(event)
 
 def show_auto_learn_dialog(parent=None, seed_stock_codes: list[str] | None = None):
-    """Show the auto-learn dialog — convenience function."""
+    """Show the auto-learn dialog - convenience function."""
     dialog = AutoLearnDialog(parent, seed_stock_codes=seed_stock_codes)
     dialog.exec()
     return dialog
