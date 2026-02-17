@@ -752,7 +752,9 @@ class StockRotator:
         self._fail_max = 3
         self._pool: list[str] = []
         self._last_discovery: float = 0.0
-        self._discovery_ttl: float = 3600.0
+        self._discovery_ttl: float = 90.0
+        self._new_listing_probe_ttl: float = 5.0
+        self._last_listing_probe: float = 0.0
         self._last_network_state: bool | None = None
 
     def discover_new(
@@ -760,6 +762,7 @@ class StockRotator:
         stop_check: Callable, progress_cb: Callable,
     ) -> list[str]:
         self._maybe_refresh_pool(max_stocks, min_market_cap, stop_check, progress_cb)
+        self._maybe_probe_new_listings(stop_check, progress_cb)
         if not self._pool:
             self._pool = list(CONFIG.STOCK_POOL)
 
@@ -776,6 +779,11 @@ class StockRotator:
         retries = [c for c in available if c in self._failed]
         ordered = never_tried + retries
         return ordered[:max_stocks]
+
+    @staticmethod
+    def _norm_code(raw: str) -> str:
+        code = "".join(ch for ch in str(raw or "").strip() if ch.isdigit())
+        return code.zfill(6) if code else ""
 
     def mark_processed(self, codes: list[str]):
         for code in codes:
@@ -809,6 +817,7 @@ class StockRotator:
         self._failed = dict(failed)
 
     def _maybe_refresh_pool(self, max_stocks, min_market_cap, stop_check, progress_cb):
+        del max_stocks, min_market_cap  # Pool refresh is universe-wide.
         now = time.time()
         expired = (now - self._last_discovery) > self._discovery_ttl
 
@@ -826,32 +835,106 @@ class StockRotator:
         if self._pool and not expired and not network_changed:
             return
 
+        if callable(stop_check) and stop_check():
+            return
+
         try:
             from data.universe import get_new_listings, get_universe_codes
-            universe = get_universe_codes(force_refresh=network_changed)
-            new_listed = get_new_listings(days=60)
+            universe = get_universe_codes(
+                force_refresh=bool(expired or network_changed),
+                max_age_hours=max(5.0 / 3600.0, self._discovery_ttl / 3600.0),
+            )
+            new_listed = get_new_listings(
+                days=120,
+                force_refresh=bool(expired or network_changed),
+            )
         except Exception:
             universe, new_listed = [], []
+
+        if len(list(universe or [])) < 1200:
+            try:
+                from data.discovery import UniversalStockDiscovery
+
+                discovered = UniversalStockDiscovery().discover_all(
+                    callback=None,
+                    max_stocks=None,
+                    min_market_cap=0,
+                    include_st=True,
+                )
+                if discovered:
+                    discovered_codes = [
+                        self._norm_code(getattr(row, "code", ""))
+                        for row in discovered
+                    ]
+                    discovered_codes = [c for c in discovered_codes if c]
+                    universe = list(universe or []) + discovered_codes
+            except Exception:
+                pass
 
         pool = []
         seen = set()
         for c in (new_listed or []):
-            if c and c not in seen:
-                seen.add(c)
-                pool.append(c)
+            code = self._norm_code(c)
+            if code and code not in seen:
+                seen.add(code)
+                pool.append(code)
         for c in (universe or []):
-            if c and c not in seen:
-                seen.add(c)
-                pool.append(c)
+            code = self._norm_code(c)
+            if code and code not in seen:
+                seen.add(code)
+                pool.append(code)
         if not pool:
             pool = list(CONFIG.STOCK_POOL)
 
-        head = pool[:200]
-        tail = pool[200:]
+        head = pool[:256]
+        tail = pool[256:]
         random.shuffle(tail)
         self._pool = head + tail
         self._last_discovery = now
+        if callable(progress_cb):
+            try:
+                progress_cb("Universe refreshed", len(self._pool))
+            except Exception:
+                pass
         log.info(f"Pool refreshed (universe-first): {len(self._pool)} stocks")
+
+    def _maybe_probe_new_listings(self, stop_check: Callable, progress_cb: Callable) -> None:
+        """Fast probe to inject newly listed symbols between full refreshes."""
+        now = time.time()
+        if (now - self._last_listing_probe) < self._new_listing_probe_ttl:
+            return
+        self._last_listing_probe = now
+
+        if callable(stop_check) and stop_check():
+            return
+
+        try:
+            from data.universe import get_new_listings
+            new_listed = get_new_listings(days=14, force_refresh=True)
+        except Exception:
+            return
+
+        if not new_listed:
+            return
+
+        seen = set(self._pool)
+        injected: list[str] = []
+        for c in new_listed:
+            code = self._norm_code(c)
+            if not code or code in seen:
+                continue
+            seen.add(code)
+            injected.append(code)
+        if not injected:
+            return
+
+        self._pool = injected + self._pool
+        if callable(progress_cb):
+            try:
+                progress_cb("New listings added to pool", len(self._pool))
+            except Exception:
+                pass
+        log.info("Injected %d newly listed stocks into discovery pool", len(injected))
 
     @property
     def processed_count(self) -> int:
@@ -868,19 +951,46 @@ class StockRotator:
         return {
             'processed': list(self._processed),
             'failed': dict(self._failed),
-            'pool': self._pool[:500],
+            'pool': list(self._pool),
             'last_discovery': self._last_discovery,
+            'last_listing_probe': self._last_listing_probe,
         }
 
     def from_dict(self, data: dict):
-        self._processed = set(data.get('processed', []))
+        self._processed = {
+            self._norm_code(c)
+            for c in data.get('processed', [])
+            if self._norm_code(c)
+        }
         failed = data.get('failed', {})
         if isinstance(failed, list):
-            self._failed = {c: 1 for c in failed}
+            self._failed = {
+                self._norm_code(c): 1
+                for c in failed
+                if self._norm_code(c)
+            }
         else:
-            self._failed = {k: int(v) for k, v in failed.items()}
-        self._pool = data.get('pool', [])
+            self._failed = {}
+            for k, v in failed.items():
+                code = self._norm_code(k)
+                if not code:
+                    continue
+                try:
+                    self._failed[code] = int(v)
+                except Exception:
+                    self._failed[code] = 1
+        raw_pool = list(data.get('pool', []) or [])
+        seen: set[str] = set()
+        pool: list[str] = []
+        for c in raw_pool:
+            code = self._norm_code(c)
+            if not code or code in seen:
+                continue
+            seen.add(code)
+            pool.append(code)
+        self._pool = pool
         self._last_discovery = data.get('last_discovery', 0.0)
+        self._last_listing_probe = float(data.get('last_listing_probe', 0.0) or 0.0)
 
 class LRScheduler:
     """Learning rate with warmup + decay + plateau boost."""

@@ -4,11 +4,21 @@ from data.fetcher import AkShareSource, DataFetcher, DataSourceStatus
 from data.universe import _can_use_akshare
 
 
-def test_universe_skips_akshare_when_eastmoney_unreachable(monkeypatch):
+def test_universe_tries_akshare_on_direct_china_even_if_probe_is_down(monkeypatch):
     env = SimpleNamespace(
         eastmoney_ok=False,
         is_vpn_active=False,
         is_china_direct=True,
+    )
+    monkeypatch.setattr("data.universe.get_network_env", lambda: env)
+    assert _can_use_akshare() is True
+
+
+def test_universe_skips_akshare_when_probe_is_down_offshore(monkeypatch):
+    env = SimpleNamespace(
+        eastmoney_ok=False,
+        is_vpn_active=False,
+        is_china_direct=False,
     )
     monkeypatch.setattr("data.universe.get_network_env", lambda: env)
     assert _can_use_akshare() is False

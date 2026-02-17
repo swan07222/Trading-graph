@@ -101,7 +101,7 @@ class AutoLearnWorker(QThread):
 
             self._learner = LearnerClass()
 
-            max_stocks = int(self.config.get("max_stocks", 50))
+            max_stocks = int(self.config.get("max_stocks", 200))
             epochs = int(self.config.get("epochs", 10))
             incremental = bool(self.config.get("incremental", True))
             mode = str(self.config.get("mode", "full"))
@@ -680,8 +680,8 @@ class AutoLearnDialog(QDialog):
 
         settings_layout.addWidget(QLabel("Max Stocks:"), 1, 0)
         self.max_stocks_spin = QSpinBox()
-        self.max_stocks_spin.setRange(10, 500)
-        self.max_stocks_spin.setValue(50)
+        self.max_stocks_spin.setRange(10, 10000)
+        self.max_stocks_spin.setValue(200)
         self.max_stocks_spin.setSuffix(" stocks")
         settings_layout.addWidget(self.max_stocks_spin, 1, 1)
 
@@ -1251,15 +1251,16 @@ class AutoLearnDialog(QDialog):
                     "info",
                 )
 
-        # VPN mode is more fragile for large Yahoo-heavy batches.
+        # VPN mode may be slower for very large discovery batches.
         try:
             from core.network import get_network_env
             env = get_network_env()
-            if env.is_vpn_active and config["max_stocks"] > 30:
-                config["max_stocks"] = 30
-                self.max_stocks_spin.setValue(30)
+            if env.is_vpn_active and config["max_stocks"] > 3000:
                 self._log(
-                    "VPN detected: Max stocks auto-capped to 30 for stability",
+                    (
+                        "VPN detected: very large stock batches may be slower; "
+                        "consider reducing max stocks if network is unstable"
+                    ),
                     "warning",
                 )
         except Exception:

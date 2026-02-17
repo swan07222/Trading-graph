@@ -75,7 +75,6 @@ _DEFAULT_RATE_LIMIT: float = 1.0
 _DEFAULT_TIMEOUT: int = 10
 _MAX_RETRIES: int = 2
 _TENCENT_CHUNK_SIZE: int = 80
-_SPOT_DF_LIMIT: int = 500  # cap for "all" filter to avoid scoring 5000 stocks
 
 @dataclass
 class DiscoveredStock:
@@ -583,9 +582,7 @@ class UniversalStockDiscovery:
         elif filter_type == "large_cap":
             work = work.sort_values("总市值", ascending=False).head(200)
         elif filter_type == "all":
-            work = work.sort_values("成交额", ascending=False).head(
-                _SPOT_DF_LIMIT
-            )
+            work = work.sort_values("成交额", ascending=False)
 
         items: list[DiscoveredStock] = []
         for _, row in work.iterrows():

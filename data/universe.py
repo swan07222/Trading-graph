@@ -24,6 +24,11 @@ except ImportError:
     _HAS_PANDAS = False
 
 _universe_lock = threading.Lock()
+_new_listings_cache: dict[str, object] = {
+    "ts": 0.0,
+    "days": 0,
+    "codes": [],
+}
 
 def _universe_path() -> Path:
     return Path(CONFIG.data_dir) / "stock_universe.json"
@@ -116,15 +121,21 @@ def _can_use_akshare() -> bool:
     except Exception:
         return True
 
-    if not bool(getattr(env, "eastmoney_ok", False)):
-        mode = "VPN" if bool(getattr(env, "is_vpn_active", False)) else "DIRECT"
-        log.info(
-            "Skipping AkShare universe fetch: Eastmoney unreachable "
-            f"(mode={mode})"
-        )
-        return False
+    eastmoney_ok = bool(getattr(env, "eastmoney_ok", False))
+    is_china_direct = bool(getattr(env, "is_china_direct", False))
+    if eastmoney_ok:
+        return True
+    if is_china_direct:
+        # Probe can be stale/noisy; direct CN path is still worth trying.
+        log.info("Eastmoney probe unavailable, retrying AkShare on direct CN network")
+        return True
 
-    return bool(env.is_china_direct)
+    mode = "VPN" if bool(getattr(env, "is_vpn_active", False)) else "DIRECT"
+    log.info(
+        "Skipping AkShare universe fetch: Eastmoney unreachable "
+        f"(mode={mode})"
+    )
+    return False
 
 def _find_first_column(candidates: list[str], columns: list[str]) -> str | None:
     colset = set(columns)
@@ -339,8 +350,30 @@ def refresh_universe() -> dict:
 
     return {"codes": [], "updated_ts": time.time(), "source": "empty"}
 
-def get_new_listings(days: int = 60, force_refresh: bool = False) -> list[str]:
+def get_new_listings(
+    days: int = 60,
+    force_refresh: bool = False,
+    max_age_seconds: float = 5.0,
+) -> list[str]:
     """Return codes of stocks listed within the last N days."""
+    now = time.time()
+    with _universe_lock:
+        try:
+            cached_ts = float(_new_listings_cache.get("ts", 0.0) or 0.0)
+            cached_days = int(_new_listings_cache.get("days", 0) or 0)
+            cached_codes = _validate_codes(list(_new_listings_cache.get("codes", []) or []))
+        except Exception:
+            cached_ts = 0.0
+            cached_days = 0
+            cached_codes = []
+    if (
+        not force_refresh
+        and cached_codes
+        and cached_days == int(days)
+        and (now - cached_ts) <= max(0.0, float(max_age_seconds))
+    ):
+        return cached_codes
+
     if not _HAS_PANDAS:
         return []
 
@@ -397,6 +430,10 @@ def get_new_listings(days: int = 60, force_refresh: bool = False) -> list[str]:
                     pass
 
             log.info(f"New listings (last {days} days): {len(codes)} codes")
+            with _universe_lock:
+                _new_listings_cache["ts"] = time.time()
+                _new_listings_cache["days"] = int(days)
+                _new_listings_cache["codes"] = list(codes)
             return codes
 
     except Exception as exc:
@@ -404,4 +441,6 @@ def get_new_listings(days: int = 60, force_refresh: bool = False) -> list[str]:
     finally:
         socket.setdefaulttimeout(old_timeout)
 
+    if cached_codes:
+        return cached_codes
     return []
