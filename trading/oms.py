@@ -94,8 +94,8 @@ class OrderDatabase:
         if hasattr(self._local, 'conn') and self._local.conn:
             try:
                 self._local.conn.close()
-            except Exception:
-                pass
+            except Exception as e:
+                log.debug("OMS DB close_connection failed: %s", e)
             self._local.conn = None
 
     @contextmanager
@@ -415,7 +415,7 @@ class OrderDatabase:
             try:
                 loaded = json.loads(row['tags'])
                 order.tags = loaded if isinstance(loaded, dict) else {}
-            except Exception:
+            except (json.JSONDecodeError, TypeError, ValueError):
                 order.tags = {}
         else:
             order.tags = {}
@@ -575,7 +575,7 @@ class OrderDatabase:
             payload_raw = r["payload"] if "payload" in r.keys() else "{}"
             try:
                 payload = json.loads(payload_raw) if payload_raw else {}
-            except Exception:
+            except (json.JSONDecodeError, TypeError, ValueError):
                 payload = {}
             out.append(
                 {

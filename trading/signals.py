@@ -222,7 +222,8 @@ class SignalGenerator:
         try:
             value = getattr(obj, attr, default)
             return value if value is not None else default
-        except Exception:
+        except Exception as e:
+            log.debug("Safe attribute access failed (%s): %s", attr, e)
             return default
 
     @staticmethod
@@ -463,8 +464,8 @@ class SignalGenerator:
                             description = self._safe_get(sig, "description", "")
                             if description:
                                 reasons.append(f"Technical: {description}")
-                except Exception:
-                    pass
+                except Exception as e:
+                    log.debug("Technical signal detail parse skipped: %s", e)
 
         except Exception as e:
             log.warning(f"Technical analysis failed: {e}")

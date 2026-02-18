@@ -195,7 +195,8 @@ class AutoTrader:
             min_edge = float(getattr(p_cfg, "min_edge", 0.0) or 0.0)
             if edge < min_edge:
                 return False, f"Weak directional edge ({edge:.2f} < {min_edge:.2f})"
-        except Exception:
+        except Exception as e:
+            log.debug("Precision quality gate failed-open due to config error: %s", e)
             # Fail-open to avoid accidental trading halt from malformed config.
             return True, ""
 
@@ -228,7 +229,7 @@ class AutoTrader:
         if levels is not None:
             try:
                 stop_loss = float(getattr(levels, "stop_loss", 0.0) or 0.0)
-            except Exception:
+            except (TypeError, ValueError):
                 stop_loss = 0.0
 
         if not (0.0 < stop_loss < price_f):
@@ -501,8 +502,8 @@ class AutoTrader:
             if p_cfg and bool(getattr(p_cfg, "force_strong_signals_auto_trade", False)):
                 signal_allow_map[Signal.BUY] = False
                 signal_allow_map[Signal.SELL] = False
-        except Exception:
-            pass
+        except Exception as e:
+            log.debug("Precision auto-trade filter unavailable: %s", e)
 
         candidates = []
         for p in preds:
@@ -759,8 +760,8 @@ class AutoTrader:
                 if pred.current_price > 0:
                     action.price = pred.current_price
                     levels_entry = pred.current_price
-        except Exception:
-            pass
+        except Exception as e:
+            log.debug("Auto-trade level enrichment failed for %s: %s", action.stock_code, e)
 
         signal = TradeSignal(
             symbol=action.stock_code,
@@ -1278,7 +1279,8 @@ class ExecutionEngine:
                 "highest_price": highest_price,
                 "armed_at": armed_at,
             }
-        except Exception:
+        except Exception as e:
+            log.debug("Synthetic exit plan normalize failed for %r: %s", plan, e)
             return None
 
     def _persist_synthetic_exits(self, force: bool = False) -> None:
@@ -1369,8 +1371,8 @@ class ExecutionEngine:
             px = float(hinted_price or 0.0)
             if px > 0:
                 return px
-        except Exception:
-            pass
+        except Exception as e:
+            log.debug("Hinted price parse failed for %s: %s", symbol, e)
 
         try:
             from data.feeds import get_feed_manager
@@ -1379,15 +1381,15 @@ class ExecutionEngine:
             q = fm.get_quote(symbol)
             if q and getattr(q, "price", 0) and float(q.price) > 0:
                 return float(q.price)
-        except Exception:
-            pass
+        except Exception as e:
+            log.debug("Feed price resolve failed for %s: %s", symbol, e)
 
         try:
             px = self.broker.get_quote(symbol)
             if px and float(px) > 0:
                 return float(px)
-        except Exception:
-            pass
+        except Exception as e:
+            log.debug("Broker price resolve failed for %s: %s", symbol, e)
 
         try:
             from data.fetcher import get_fetcher
@@ -1395,8 +1397,8 @@ class ExecutionEngine:
             q = get_fetcher().get_realtime(symbol)
             if q and getattr(q, "price", 0) and float(q.price) > 0:
                 return float(q.price)
-        except Exception:
-            pass
+        except Exception as e:
+            log.debug("Fetcher price resolve failed for %s: %s", symbol, e)
 
         return 0.0
 
@@ -1428,8 +1430,8 @@ class ExecutionEngine:
 
         try:
             self._queue.put_nowait(None)
-        except Exception:
-            pass
+        except Exception as e:
+            log.debug("Execution queue sentinel enqueue skipped: %s", e)
 
         for t in [
             self._exec_thread,
@@ -1451,13 +1453,13 @@ class ExecutionEngine:
         try:
             self._health_monitor.stop()
             self._alert_manager.stop()
-        except Exception:
-            pass
+        except Exception as e:
+            log.warning("Shutdown monitor stop error: %s", e)
         if unregister_snapshot_provider is not None:
             try:
                 unregister_snapshot_provider(self._snapshot_provider_name)
-            except Exception:
-                pass
+            except Exception as e:
+                log.debug("Execution snapshot provider unregister failed: %s", e)
         self._persist_synthetic_exits(force=True)
         self._persist_runtime_state(clean_shutdown=True)
         self._release_runtime_lease()
@@ -1470,7 +1472,8 @@ class ExecutionEngine:
         if self.auto_trader is not None:
             try:
                 auto_state = self.auto_trader.get_state()
-            except Exception:
+            except Exception as e:
+                log.debug("Auto-trader state snapshot unavailable: %s", e)
                 auto_state = None
 
         snapshot: dict[str, object] = {
@@ -1493,8 +1496,8 @@ class ExecutionEngine:
         if hasattr(broker, "get_health_snapshot"):
             try:
                 snapshot["broker"]["routing"] = broker.get_health_snapshot()
-            except Exception:
-                pass
+            except Exception as e:
+                log.debug("Broker health snapshot unavailable: %s", e)
         try:
             with self._thread_hb_lock:
                 now = time.time()
@@ -1525,8 +1528,8 @@ class ExecutionEngine:
                     record = lease_client.read()
                     if isinstance(record, dict) and record:
                         snapshot["runtime"]["lease_record"] = record
-            except Exception:
-                pass
+            except Exception as e:
+                log.debug("Runtime lease snapshot read failed: %s", e)
             snapshot["execution_quality"] = self._get_execution_quality_snapshot()
             with self._synthetic_exit_lock:
                 snapshot["synthetic_exits"] = {
@@ -1536,8 +1539,8 @@ class ExecutionEngine:
                         getattr(self, "_synthetic_exit_state_path", "")
                     ),
                 }
-        except Exception:
-            pass
+        except Exception as e:
+            log.warning("Execution snapshot build degraded: %s", e)
         return snapshot
 
     def _get_execution_quality_snapshot(self) -> dict[str, object]:
@@ -1566,7 +1569,8 @@ class ExecutionEngine:
         if self.auto_trader is not None:
             try:
                 auto_state = self.auto_trader.get_state()
-            except Exception:
+            except Exception as e:
+                log.debug("Auto-trader runtime-state snapshot unavailable: %s", e)
                 auto_state = None
         with self._thread_hb_lock:
             hb = dict(self._thread_heartbeats)
@@ -1699,8 +1703,8 @@ class ExecutionEngine:
                 owner_id=self._runtime_lease_id,
                 metadata={"released_by": self._runtime_lease_id},
             )
-        except Exception:
-            pass
+        except Exception as e:
+            log.warning("Runtime lease release failed: %s", e)
 
     def _persist_runtime_state(self, clean_shutdown: bool = False):
         """Write runtime checkpoint atomically."""
@@ -1764,8 +1768,10 @@ class ExecutionEngine:
                         log.critical(msg)
                         try:
                             self._kill_switch.activate(msg, activated_by="runtime_lease")
-                        except Exception:
-                            pass
+                        except Exception as e:
+                            log.critical(
+                                "Kill switch activation failed after lease loss: %s", e
+                            )
                     last_lease = now
             except Exception as e:
                 log.debug(f"Checkpoint loop error: {e}")
@@ -1809,17 +1815,17 @@ class ExecutionEngine:
                     HealthStatus.DEGRADED,
                     error=msg,
                 )
-            except Exception:
-                pass
+            except Exception as e:
+                log.debug("Watchdog health-report update failed: %s", e)
             try:
                 if self.auto_trader is not None:
                     self.auto_trader.pause(msg, duration_seconds=300)
-            except Exception:
-                pass
+            except Exception as e:
+                log.debug("Watchdog auto-trader pause failed: %s", e)
             try:
                 self._alert_manager.risk_alert("Runtime watchdog", msg)
-            except Exception:
-                pass
+            except Exception as e:
+                log.debug("Watchdog alert dispatch failed: %s", e)
 
     def _get_quote_snapshot(
         self, symbol: str
@@ -1836,16 +1842,16 @@ class ExecutionEngine:
             if q and float(getattr(q, "price", 0.0) or 0.0) > 0:
                 ts = getattr(q, "timestamp", None)
                 return float(q.price), ts, "feed"
-        except Exception:
-            pass
+        except Exception as e:
+            log.debug("Feed quote snapshot failed for %s: %s", symbol, e)
 
         # 2) broker quote
         try:
             px = self.broker.get_quote(symbol)
             if px and float(px) > 0:
                 return float(px), None, "broker"
-        except Exception:
-            pass
+        except Exception as e:
+            log.debug("Broker quote snapshot failed for %s: %s", symbol, e)
 
         # 3) fetcher realtime
         try:
@@ -1858,8 +1864,8 @@ class ExecutionEngine:
                     getattr(q, "timestamp", None),
                     f"fetcher:{getattr(q, 'source', '')}",
                 )
-        except Exception:
-            pass
+        except Exception as e:
+            log.debug("Fetcher quote snapshot failed for %s: %s", symbol, e)
 
         return 0.0, None, "none"
 
@@ -1882,7 +1888,8 @@ class ExecutionEngine:
 
         try:
             age = (datetime.now() - ts).total_seconds()
-        except Exception:
+        except Exception as e:
+            log.debug("Quote timestamp age calculation failed for %s: %s", symbol, e)
             age = 0.0
 
         if age > float(max_age_seconds):
@@ -2031,8 +2038,8 @@ class ExecutionEngine:
             if block_degraded and h.status == HealthStatus.DEGRADED:
                 self._reject_signal(signal, "System degraded: trading paused by policy")
                 return False
-        except Exception:
-            pass
+        except Exception as e:
+            log.warning("Health policy guard failed for signal=%s: %s", signal.symbol, e)
 
         # Institutional controls: permission gating + optional dual-control.
         try:
@@ -2118,8 +2125,8 @@ class ExecutionEngine:
             if not CONFIG.is_market_open():
                 self._reject_signal(signal, "Market closed")
                 return False
-        except Exception:
-            pass
+        except Exception as e:
+            log.warning("Market-open check failed for signal=%s: %s", signal.symbol, e)
 
         if not self._kill_switch.can_trade:
             self._reject_signal(signal, "Trading halted - kill switch active")
@@ -2133,8 +2140,8 @@ class ExecutionEngine:
             from data.fetcher import DataFetcher
 
             signal.symbol = DataFetcher.clean_code(signal.symbol)
-        except Exception:
-            pass
+        except Exception as e:
+            log.debug("Signal symbol normalization failed for %s: %s", signal.symbol, e)
 
         max_age = 15.0
         if hasattr(CONFIG, "risk") and hasattr(CONFIG.risk, "quote_staleness_seconds"):
@@ -2190,11 +2197,19 @@ class ExecutionEngine:
                                 "limit_bps": float(max_bps),
                             },
                         )
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        log.warning(
+                            "Audit log write failed for best-exec rejection on %s: %s",
+                            signal.symbol,
+                            e,
+                        )
                     return False
-        except Exception:
-            pass
+        except Exception as e:
+            log.warning(
+                "Best-exec guard evaluation failed for %s: %s",
+                signal.symbol,
+                e,
+            )
 
         signal._arrival_price = float(fresh_px)
         signal.price = (
@@ -2232,8 +2247,8 @@ class ExecutionEngine:
                         signal, f"At/near limit-down ({lim * 100:.0f}%)"
                     )
                     return False
-        except Exception:
-            pass
+        except Exception as e:
+            log.warning("CN price-limit sanity check failed for %s: %s", signal.symbol, e)
 
         passed, rmsg = self.risk_manager.check_order(
             signal.symbol, signal.side, int(signal.quantity), float(signal.price)
@@ -2508,8 +2523,12 @@ class ExecutionEngine:
                     oms.update_order_status(
                         order.id, OrderStatus.REJECTED, message=str(e)
                     )
-                except Exception:
-                    pass
+                except Exception as status_err:
+                    log.warning(
+                        "Failed to mark order rejected in OMS (order_id=%s): %s",
+                        getattr(order, "id", ""),
+                        status_err,
+                    )
             self._alert_manager.system_alert(
                 "Execution Failed",
                 f"{signal.symbol}: {e}",
@@ -2536,7 +2555,8 @@ class ExecutionEngine:
                         message="Startup sync",
                         broker_id=synced.broker_id or order.broker_id or "",
                     )
-            except Exception:
+            except Exception as e:
+                log.debug("Startup order sync failed for order=%s: %s", order.id, e)
                 continue
 
     def _process_pending_fills(self):
@@ -2587,7 +2607,12 @@ class ExecutionEngine:
                             order = oms.get_order_by_broker_id(fill.order_id)
                             if order:
                                 fill.order_id = order.id
-                        except Exception:
+                        except Exception as e:
+                            log.debug(
+                                "Fallback order lookup by broker_id failed for %s: %s",
+                                fill.order_id,
+                                e,
+                            )
                             order = None
 
                     if not order:
@@ -2693,7 +2718,8 @@ class ExecutionEngine:
                     if bool(self.broker.cancel_order(oid)):
                         cancel_ok = True
                         break
-                except Exception:
+                except Exception as e:
+                    log.debug("OCO sibling cancel attempt failed for %s: %s", oid, e)
                     continue
 
             if not cancel_ok and sibling.status == OrderStatus.PENDING:
@@ -2957,7 +2983,8 @@ class ExecutionEngine:
 
             oms = get_oms()
             fills = oms.get_fills()
-        except Exception:
+        except Exception as e:
+            log.debug("Processed-fill pruning fallback (OMS unavailable): %s", e)
             fills = []
 
         keep = set()
@@ -2999,7 +3026,8 @@ class ExecutionEngine:
                     broker_status = None
                     try:
                         broker_status = self.broker.get_order_status(order.id)
-                    except Exception:
+                    except Exception as e:
+                        log.debug("Broker order status fetch failed for %s: %s", order.id, e)
                         broker_status = None
 
                     # If broker_status missing, try broker.sync_order
@@ -3018,7 +3046,8 @@ class ExecutionEngine:
                                     broker_id=synced.broker_id,
                                     message="Recovered broker_id",
                                 )
-                        except Exception:
+                        except Exception as e:
+                            log.debug("Broker sync_order fallback failed for %s: %s", order.id, e)
                             broker_status = None
 
                     # If broker says FILLED: process fills immediately
@@ -3080,8 +3109,12 @@ class ExecutionEngine:
                         if self.AUTO_CANCEL_STUCK_ORDERS:
                             try:
                                 self.broker.cancel_order(order.id)
-                            except Exception:
-                                pass
+                            except Exception as cancel_err:
+                                log.warning(
+                                    "Auto-cancel of stuck order failed (order_id=%s): %s",
+                                    order.id,
+                                    cancel_err,
+                                )
 
             except Exception as e:
                 log.error(f"Status sync error: {e}")
@@ -3184,23 +3217,27 @@ class ExecutionEngine:
         if self.auto_trader:
             try:
                 self.auto_trader.pause(f"Kill switch: {reason}")
-            except Exception:
-                pass
+            except Exception as e:
+                log.warning("Failed to pause auto-trader during kill switch: %s", e)
 
         try:
             for order in self.broker.get_orders(active_only=True):
                 try:
                     self.broker.cancel_order(order.id)
-                except Exception:
-                    pass
+                except Exception as cancel_err:
+                    log.warning(
+                        "Kill-switch cancel failed for order_id=%s: %s",
+                        order.id,
+                        cancel_err,
+                    )
         except Exception as e:
             log.error(f"Failed to cancel orders: {e}")
 
         try:
             while not self._queue.empty():
                 self._queue.get_nowait()
-        except Exception:
-            pass
+        except Exception as e:
+            log.debug("Kill-switch queue drain interrupted: %s", e)
 
         self._alert_manager.critical_alert(
             "KILL SWITCH ACTIVATED", f"All trading halted: {reason}"

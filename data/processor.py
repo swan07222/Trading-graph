@@ -4,6 +4,7 @@ from __future__ import annotations
 import copy
 import pickle
 import threading
+import time
 from collections import deque
 from datetime import datetime
 from pathlib import Path
@@ -173,6 +174,8 @@ class DataProcessor:
         # Real-time buffers per stock
         self._realtime_buffers: dict[str, RealtimeBuffer] = {}
         self._buffer_lock = threading.RLock()
+        self._last_unfitted_infer_warn_ts: float = 0.0
+        self._unfitted_infer_warn_interval_s: float = 120.0
 
     # =========================================================================
     # =========================================================================
@@ -805,7 +808,12 @@ class DataProcessor:
         if self._fitted:
             features = self.transform(features)
         else:
-            log.warning("Scaler not fitted - using clipped raw features")
+            now_ts = time.monotonic()
+            if (
+                now_ts - float(self._last_unfitted_infer_warn_ts)
+            ) >= float(self._unfitted_infer_warn_interval_s):
+                log.warning("Scaler not fitted - using clipped raw features")
+                self._last_unfitted_infer_warn_ts = now_ts
             features = np.clip(
                 features, -FEATURE_CLIP_VALUE, FEATURE_CLIP_VALUE
             ).astype(np.float32)

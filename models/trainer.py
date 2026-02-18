@@ -159,7 +159,12 @@ class Trainer:
             from data.fetcher import BARS_PER_DAY, INTERVAL_MAX_DAYS
             bpd = float(BARS_PER_DAY.get(iv, 1.0))
             max_days = int(INTERVAL_MAX_DAYS.get(iv, 7))
-        except Exception:
+        except Exception as e:
+            log.debug(
+                "Using fallback lookback constants for interval=%s due to fetcher constants error: %s",
+                iv,
+                e,
+            )
             bpd = float({
                 "1m": 240.0,
                 "2m": 120.0,
@@ -207,13 +212,15 @@ class Trainer:
                 return bool(
                     is_cancelled() if callable(is_cancelled) else is_cancelled
                 )
-            except Exception:
+            except Exception as e:
+                log.debug("Stop-flag is_cancelled evaluation failed: %s", e)
                 return False
 
         if callable(stop_flag):
             try:
                 return bool(stop_flag())
-            except Exception:
+            except Exception as e:
+                log.debug("Stop-flag callable evaluation failed: %s", e)
                 return False
 
         return False
@@ -240,15 +247,16 @@ class Trainer:
 
         try:
             out = out.sort_index()
-        except Exception:
-            pass
+        except Exception as e:
+            log.debug("Raw history sort_index failed; preserving original order: %s", e)
 
         try:
             dup_mask = out.index.duplicated(keep="last")
             duplicates_removed = int(np.sum(dup_mask))
             if duplicates_removed > 0:
                 out = out.loc[~dup_mask]
-        except Exception:
+        except Exception as e:
+            log.debug("Raw history duplicate cleanup failed: %s", e)
             duplicates_removed = 0
 
         return out, {
@@ -289,7 +297,8 @@ class Trainer:
             high_s = pd.to_numeric(df[col_map["high"]], errors="coerce")
             low_s = pd.to_numeric(df[col_map["low"]], errors="coerce")
             close_s = pd.to_numeric(df[col_map["close"]], errors="coerce")
-        except Exception:
+        except Exception as e:
+            log.debug("OHLC numeric coercion failed: %s", e)
             report["reasons"] = ["ohlc_numeric_coercion_failed"]
             return report
 
@@ -956,7 +965,7 @@ class Trainer:
         if regime_profile:
             try:
                 boost = float(regime_profile.get("confidence_boost", 0.0))
-            except Exception:
+            except (TypeError, ValueError):
                 boost = 0.0
         return float(min(0.95, max(base, base + boost)))
 
@@ -1050,7 +1059,7 @@ class Trainer:
             for item in values or []:
                 try:
                     v = float(item)
-                except Exception:
+                except (TypeError, ValueError):
                     continue
                 if np.isfinite(v):
                     out.append(v)
@@ -1429,7 +1438,8 @@ class Trainer:
                 with open(path, encoding="utf-8") as f:
                     data = json.load(f)
             return data if isinstance(data, dict) else None
-        except Exception:
+        except Exception as e:
+            log.debug("Failed reading JSON from %s: %s", path, e)
             return None
 
     @staticmethod

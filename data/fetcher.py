@@ -1324,8 +1324,8 @@ class DataFetcher:
                         is_delayed=False,
                         latency_ms=0.0,
                     )
-        except Exception:
-            pass
+        except Exception as e:
+            log.debug("Spot-cache quote fill failed (symbols=%d): %s", len(missing), e)
 
     def _fill_from_single_source_quotes(
         self,
@@ -1708,8 +1708,8 @@ class DataFetcher:
                 return max(1, int(float(iv[:-1])))
             if iv.endswith("h"):
                 return max(1, int(float(iv[:-1]) * 3600))
-        except Exception:
-            pass
+        except Exception as e:
+            log.debug("Invalid interval token for seconds conversion (%s): %s", iv, e)
         return 60
 
     @classmethod
@@ -1783,8 +1783,8 @@ class DataFetcher:
             except Exception:
                 try:
                     out = out.tz_localize(None)
-                except Exception:
-                    pass
+                except Exception as e:
+                    log.debug("Datetime index tz normalization fallback failed: %s", e)
             return pd.DatetimeIndex(out)
 
         values = list(idx) if idx is not None else []
@@ -2133,8 +2133,8 @@ class DataFetcher:
 
             if not is_trading_day(now.date()):
                 return True
-        except Exception:
-            pass
+        except Exception as e:
+            log.debug("Trading-day calendar lookup failed; using session clock fallback: %s", e)
 
         t = CONFIG.trading
         cur = now.time()
@@ -2247,8 +2247,13 @@ class DataFetcher:
                 ),
                 interval=interval,
             )
-        except Exception:
-            pass
+        except Exception as e:
+            log.warning(
+                "Intraday DB read failed for %s (%s): %s",
+                code6,
+                interval,
+                e,
+            )
 
         online_df = pd.DataFrame()
         if not offline:
@@ -2276,8 +2281,13 @@ class DataFetcher:
         if bool(persist_intraday_db):
             try:
                 self._db.upsert_intraday_bars(code6, interval, out)
-            except Exception:
-                pass
+            except Exception as e:
+                log.warning(
+                    "Intraday DB upsert failed for %s (%s): %s",
+                    code6,
+                    interval,
+                    e,
+                )
         return out
 
     def _get_history_cn_intraday_exact(
@@ -2318,7 +2328,13 @@ class DataFetcher:
                 interval=interval,
             )
             db_df = self._filter_cn_intraday_session(db_df, interval)
-        except Exception:
+        except Exception as e:
+            log.warning(
+                "Intraday exact DB read failed for %s (%s): %s",
+                code6,
+                interval,
+                e,
+            )
             db_df = pd.DataFrame()
 
         if online_df is None or online_df.empty:
@@ -2334,8 +2350,13 @@ class DataFetcher:
         out = self._cache_tail(cache_key, merged, count)
         try:
             self._db.upsert_intraday_bars(code6, interval, out)
-        except Exception:
-            pass
+        except Exception as e:
+            log.warning(
+                "Intraday exact DB upsert failed for %s (%s): %s",
+                code6,
+                interval,
+                e,
+            )
         return out
 
     def _get_history_cn_daily(
@@ -2387,8 +2408,12 @@ class DataFetcher:
         if update_db:
             try:
                 self._db.upsert_bars(inst["symbol"], out)
-            except Exception:
-                pass
+            except Exception as e:
+                log.warning(
+                    "Daily DB upsert failed for %s: %s",
+                    str(inst.get("symbol", "")),
+                    e,
+                )
         return out
 
     def _merge_parts(
@@ -2486,8 +2511,8 @@ class DataFetcher:
                 with self._rt_cache_lock:
                     self._rt_single_microcache[code6] = {"ts": now, "q": q}
                 return q
-        except Exception:
-            pass
+        except Exception as e:
+            log.debug("CN realtime batch fetch failed for %s: %s", code6, e)
 
         # Last-good fallback
         with self._last_good_lock:

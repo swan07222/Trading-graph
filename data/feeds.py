@@ -159,7 +159,7 @@ class PollingFeed(DataFeed):
                         now_ts = datetime.now()
 
                     for symbol, quote in quotes.items():
-                        if quote and getattr(quote, 'price', 0) > 0:
+                        if self._is_valid_quote_obj(quote):
                             if getattr(quote, "timestamp", None) is None:
                                 quote.timestamp = now_ts
 
@@ -209,6 +209,16 @@ class PollingFeed(DataFeed):
             else:
                 time.sleep(max(0.0, next_tick - now))
 
+    @staticmethod
+    def _is_valid_quote_obj(quote: object | None) -> bool:
+        """Check whether quote object is usable by poll loop/event pipeline."""
+        if quote is None:
+            return False
+        try:
+            return float(getattr(quote, "price", 0) or 0) > 0
+        except Exception:
+            return False
+
     def _fetch_batch_quotes(self, symbols: list[str]) -> dict[str, object]:
         """Fetch quotes for all symbols with fallback chain."""
         result: dict[str, object] = {}
@@ -217,11 +227,13 @@ class PollingFeed(DataFeed):
         try:
             batch = fetcher.get_realtime_batch(symbols)
             if isinstance(batch, dict) and batch:
-                result.update(batch)
-        except Exception:
-            pass
+                for symbol, quote in batch.items():
+                    if self._is_valid_quote_obj(quote):
+                        result[str(symbol)] = quote
+        except Exception as e:
+            log.debug("Polling batch quote fetch failed: %s", e)
 
-        missing = [s for s in symbols if s not in result]
+        missing = [s for s in symbols if not self._is_valid_quote_obj(result.get(s))]
 
         if missing:
             try:
@@ -248,17 +260,18 @@ class PollingFeed(DataFeed):
                             source="spot_cache",
                             is_delayed=False,
                         )
-            except Exception:
-                pass
+            except Exception as e:
+                log.debug("Polling spot-cache quote fallback failed: %s", e)
 
-        missing = [s for s in symbols if s not in result]
+        missing = [s for s in symbols if not self._is_valid_quote_obj(result.get(s))]
         if missing and len(missing) <= 8:
             for symbol in missing:
                 try:
                     q = fetcher.get_realtime(symbol)
-                    if q and getattr(q, 'price', 0) > 0:
+                    if self._is_valid_quote_obj(q):
                         result[symbol] = q
-                except Exception:
+                except Exception as e:
+                    log.debug("Polling single-quote fallback failed for %s: %s", symbol, e)
                     continue
 
         return result

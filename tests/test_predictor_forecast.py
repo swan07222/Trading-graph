@@ -106,6 +106,26 @@ def test_generate_forecast_fallback_uses_sequence_signature():
     assert not np.allclose(out_a, out_b)
 
 
+def test_generate_forecast_last_resort_without_models_is_not_flat():
+    predictor = Predictor.__new__(Predictor)
+    predictor.forecaster = None
+    predictor.ensemble = None
+
+    recent = [100.0 + (0.04 * np.sin(i / 5.0)) for i in range(120)]
+    out = predictor._generate_forecast(
+        X=np.zeros((1, 60, 8), dtype=np.float32),
+        current_price=100.0,
+        horizon=20,
+        atr_pct=0.02,
+        sequence_signature=5.0,
+        seed_context="600519:1m",
+        recent_prices=recent,
+    )
+
+    assert len(out) == 20
+    assert np.std(np.array(out, dtype=float)) > 1e-6
+
+
 def test_generate_forecast_seed_context_differentiates_same_signature():
     predictor = Predictor.__new__(Predictor)
     predictor.forecaster = None

@@ -1,6 +1,7 @@
 import time
+from types import SimpleNamespace
 
-from data.feeds import FeedManager, FeedStatus, WebSocketFeed
+from data.feeds import FeedManager, FeedStatus, PollingFeed, WebSocketFeed
 
 
 def _is_watchdog_alive(thread_obj) -> bool:
@@ -165,3 +166,32 @@ def test_websocket_feed_host_resolves_uses_cache(monkeypatch):
     assert ws._host_resolves("push.sina.cn") is False
     assert ws._host_resolves("push.sina.cn") is False
     assert int(calls["n"]) == 1
+
+
+def test_polling_feed_batch_invalid_quote_falls_back_to_single_fetch(monkeypatch):
+    feed = PollingFeed(interval=1.0)
+
+    class _Fetcher:
+        def __init__(self):
+            self.single_calls = 0
+
+        def get_realtime_batch(self, symbols):
+            return {str(symbols[0]): SimpleNamespace(price=0.0)}
+
+        def get_realtime(self, symbol):
+            self.single_calls += 1
+            return SimpleNamespace(code=str(symbol), price=15.2)
+
+    class _SpotCache:
+        @staticmethod
+        def get_quote(symbol):  # noqa: ARG004
+            return None
+
+    fetcher = _Fetcher()
+    monkeypatch.setattr(feed, "_get_fetcher", lambda: fetcher)
+    monkeypatch.setattr("data.fetcher.get_spot_cache", lambda: _SpotCache())
+
+    out = feed._fetch_batch_quotes(["600519"])
+    assert "600519" in out
+    assert float(getattr(out["600519"], "price", 0) or 0) == 15.2
+    assert int(fetcher.single_calls) == 1

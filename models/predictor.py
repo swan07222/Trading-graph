@@ -2,6 +2,7 @@
 import copy
 import json
 import os
+import re
 import threading
 import time
 from dataclasses import dataclass, field
@@ -167,8 +168,13 @@ class Predictor:
         self._high_precision = self._load_high_precision_config()
         self._loaded_ensemble_path: Path | None = None
         self._trained_stock_codes: list[str] = []
+        self._model_artifact_sig: str = ""
+        self._last_model_reload_attempt_ts: float = 0.0
+        self._model_reload_cooldown_s: float = 15.0
 
         self._load_models()
+        self._model_artifact_sig = self._model_artifact_signature()
+        self._last_model_reload_attempt_ts = time.monotonic()
 
     def _load_high_precision_config(self) -> dict[str, float]:
         """
@@ -187,7 +193,8 @@ class Predictor:
                 return float(default)
             try:
                 return float(raw)
-            except Exception:
+            except Exception as e:
+                log.debug("Invalid float env override %s=%r: %s", name, raw, e)
                 return float(default)
 
         precision_cfg = getattr(CONFIG, "precision", None)
@@ -267,9 +274,12 @@ class Predictor:
 
             # Pick best ensemble + scaler pair
             chosen_ens, chosen_scl = self._find_best_model_pair(model_dir)
+            if chosen_scl is None:
+                chosen_scl = self._find_best_scaler_checkpoint(model_dir)
 
             if chosen_scl and chosen_scl.exists():
-                self.processor.load_scaler(str(chosen_scl))
+                if not self.processor.load_scaler(str(chosen_scl)):
+                    log.warning("Failed loading scaler from %s", chosen_scl)
             else:
                 log.warning(
                     "No scaler found for requested interval/horizon (%s/%s)",
@@ -278,6 +288,8 @@ class Predictor:
                 )
 
             self.ensemble = None
+            self._loaded_ensemble_path = None
+            self._trained_stock_codes = []
             if chosen_ens and chosen_ens.exists():
                 self._loaded_ensemble_path = Path(chosen_ens)
                 input_size = (
@@ -367,12 +379,15 @@ class Predictor:
             parts = ep.stem.split("_", 2)
             if len(parts) != 3:
                 continue
-            try:
-                cand_h = int(parts[2])
-            except Exception:
+            cand_h = self._parse_artifact_horizon(parts[2])
+            if cand_h is None:
                 continue
-            sp = model_dir / f"scaler_{self.interval}_{cand_h}.pkl"
-            if not sp.exists():
+            sp = self._find_scaler_for_interval_horizon(
+                model_dir=model_dir,
+                interval=self.interval,
+                horizon=cand_h,
+            )
+            if sp is None:
                 continue
             same_interval.append(
                 (abs(cand_h - int(self.horizon)), -ep.stat().st_mtime, ep, sp)
@@ -389,6 +404,37 @@ class Predictor:
         )
         return None, None
 
+    @staticmethod
+    def _parse_artifact_horizon(token: str) -> int | None:
+        """Extract horizon integer from artifact token (supports suffixes)."""
+        s = str(token or "").strip()
+        if not s:
+            return None
+        m = re.match(r"^(\d+)", s)
+        if m is None:
+            return None
+        try:
+            return int(m.group(1))
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _find_scaler_for_interval_horizon(
+        model_dir: Path,
+        interval: str,
+        horizon: int,
+    ) -> Path | None:
+        """Find exact or suffixed scaler checkpoint for interval+horizon."""
+        exact = model_dir / f"scaler_{interval}_{int(horizon)}.pkl"
+        if exact.exists():
+            return exact
+
+        matches = list(model_dir.glob(f"scaler_{interval}_{int(horizon)}*.pkl"))
+        if not matches:
+            return None
+        matches.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+        return matches[0]
+
     def _find_best_forecaster_checkpoint(self, model_dir: Path) -> Path | None:
         """Find best-matching forecaster for current interval+horizon."""
         req_path = model_dir / f"forecast_{self.interval}_{self.horizon}.pt"
@@ -400,9 +446,8 @@ class Predictor:
             parts = fp.stem.split("_", 2)
             if len(parts) != 3:
                 continue
-            try:
-                cand_h = int(parts[2])
-            except Exception:
+            cand_h = self._parse_artifact_horizon(parts[2])
+            if cand_h is None:
                 continue
             same_interval.append(
                 (abs(cand_h - int(self.horizon)), -fp.stat().st_mtime, fp)
@@ -413,6 +458,108 @@ class Predictor:
             return fp
 
         return None
+
+    def _find_best_scaler_checkpoint(self, model_dir: Path) -> Path | None:
+        """Find best-matching scaler for current interval+horizon."""
+        req_path = model_dir / f"scaler_{self.interval}_{self.horizon}.pkl"
+        if req_path.exists():
+            return req_path
+
+        same_interval: list[tuple[int, float, Path]] = []
+        for sp in model_dir.glob(f"scaler_{self.interval}_*.pkl"):
+            parts = sp.stem.split("_", 2)
+            if len(parts) != 3:
+                continue
+            cand_h = self._parse_artifact_horizon(parts[2])
+            if cand_h is None:
+                continue
+            same_interval.append(
+                (abs(cand_h - int(self.horizon)), -sp.stat().st_mtime, sp)
+            )
+        if same_interval:
+            same_interval.sort(key=lambda x: (x[0], x[1]))
+            _delta, _mtime_neg, sp = same_interval[0]
+            return sp
+
+        return None
+
+    def _model_artifact_signature(self) -> str:
+        """Compact signature of model artifacts for hot-reload checks."""
+        try:
+            model_dir = Path(CONFIG.MODEL_DIR)
+            if not model_dir.exists():
+                return ""
+            parts: list[str] = []
+            for pattern in ("ensemble_*.pt", "forecast_*.pt", "scaler_*.pkl"):
+                files = list(model_dir.glob(pattern))
+                latest = 0.0
+                for fp in files:
+                    try:
+                        latest = max(latest, float(fp.stat().st_mtime))
+                    except OSError:
+                        continue
+                parts.append(f"{pattern}:{len(files)}:{latest:.3f}")
+            return "|".join(parts)
+        except Exception as e:
+            log.debug("Model artifact signature check failed: %s", e)
+            return ""
+
+    def _models_ready_for_runtime(self) -> bool:
+        """Whether runtime has enough loaded artifacts for stable inference."""
+        processor = getattr(self, "processor", None)
+        ensemble = getattr(self, "ensemble", None)
+        forecaster = getattr(self, "forecaster", None)
+        scaler_ready = bool(
+            processor is not None and getattr(processor, "is_fitted", True)
+        )
+        return scaler_ready and (ensemble is not None or forecaster is not None)
+
+    def _maybe_reload_models(self, *, reason: str = "", force: bool = False) -> bool:
+        """
+        Opportunistically reload models when artifacts appear/rotate on disk.
+
+        This keeps long-running UI sessions in sync without requiring restart
+        after training finishes.
+        """
+        # Unit tests may construct Predictor via __new__ with a minimal fixture.
+        # In that case, skip runtime hot-reload logic.
+        if (
+            not hasattr(self, "_model_artifact_sig")
+            or not hasattr(self, "_model_reload_cooldown_s")
+        ):
+            return False
+
+        now_ts = time.monotonic()
+        current_sig = self._model_artifact_signature()
+        prev_sig = str(getattr(self, "_model_artifact_sig", ""))
+        sig_changed = bool(current_sig) and current_sig != prev_sig
+        ready = self._models_ready_for_runtime()
+        last_reload_ts = float(getattr(self, "_last_model_reload_attempt_ts", 0.0))
+        cooldown_s = float(getattr(self, "_model_reload_cooldown_s", 15.0))
+        cooldown_ok = (
+            (now_ts - last_reload_ts)
+            >= cooldown_s
+        )
+        should_reload = bool(force) or ((not ready or sig_changed) and cooldown_ok)
+        if not should_reload:
+            return False
+
+        self._last_model_reload_attempt_ts = now_ts
+        before_ready = ready
+        ok = bool(self._load_models())
+        self._model_artifact_sig = self._model_artifact_signature()
+        after_ready = self._models_ready_for_runtime()
+
+        if before_ready != after_ready or sig_changed:
+            log.info(
+                "Predictor model reload (%s): ok=%s scaler=%s ensemble=%s forecaster=%s",
+                reason or "runtime",
+                ok,
+                bool(self.processor is not None and getattr(self.processor, "is_fitted", False)),
+                bool(self.ensemble is not None),
+                bool(self.forecaster is not None),
+            )
+        return ok
 
     def _extract_trained_stocks_from_ensemble(self) -> list[str]:
         if self.ensemble is None:
@@ -427,7 +574,8 @@ class Predictor:
                 if str(x).strip()
             ]
             return out
-        except Exception:
+        except Exception as e:
+            log.debug("Failed reading trained stocks from ensemble metadata: %s", e)
             return []
 
     def _load_trained_stocks_from_manifest(self, ensemble_path: Path) -> list[str]:
@@ -446,7 +594,8 @@ class Predictor:
                 if str(x).strip()
             ]
             return out
-        except Exception:
+        except Exception as e:
+            log.debug("Failed reading trained stocks from manifest %s: %s", ensemble_path, e)
             return []
 
     def _load_trained_stocks_from_learner_state(
@@ -472,7 +621,7 @@ class Predictor:
             iv = str(data.get("last_interval", "")).strip().lower()
             try:
                 hz = int(data.get("last_horizon", 0) or 0)
-            except Exception:
+            except (TypeError, ValueError):
                 hz = 0
 
             if iv != str(interval).strip().lower() or hz != int(horizon):
@@ -497,7 +646,8 @@ class Predictor:
                 seen.add(code)
                 out.append(code)
             return out
-        except Exception:
+        except Exception as e:
+            log.debug("Failed reading trained stocks from learner state: %s", e)
             return []
 
     def get_trained_stock_codes(self, limit: int | None = None) -> list[str]:
@@ -509,8 +659,8 @@ class Predictor:
             try:
                 n = max(0, int(limit))
                 return codes[:n]
-            except Exception:
-                pass
+            except (TypeError, ValueError) as e:
+                log.debug("Invalid trained stock code limit %r: %s", limit, e)
         return codes
 
     def _load_forecaster(self):
@@ -606,6 +756,7 @@ class Predictor:
             Prediction object with all fields populated
         """
         with self._predict_lock:
+            self._maybe_reload_models(reason="predict")
             interval = self._normalize_interval_token(interval)
             horizon = int(forecast_minutes or self.horizon)
             lookback = int(
@@ -741,7 +892,8 @@ class Predictor:
             return False
         try:
             return int(len(df)) >= int(max(1, required_rows))
-        except Exception:
+        except Exception as e:
+            log.debug("Failed required-row check (required=%r): %s", required_rows, e)
             return False
 
     def _populate_minimal_snapshot(self, pred: Prediction, code: str) -> None:
@@ -757,13 +909,14 @@ class Predictor:
 
         try:
             quote = fetcher.get_realtime(code)
-        except Exception:
+        except Exception as e:
+            log.debug("Realtime quote unavailable for %s: %s", code, e)
             quote = None
 
         if quote is not None:
             try:
                 px = float(getattr(quote, "price", 0) or 0)
-            except Exception:
+            except (TypeError, ValueError):
                 px = 0.0
             if px > 0:
                 pred.current_price = px
@@ -793,13 +946,14 @@ class Predictor:
                 use_cache=True,
                 update_db=False,
             )
-        except Exception:
+        except Exception as e:
+            log.debug("Fallback history fetch failed for %s: %s", code, e)
             df = None
 
         if isinstance(df, pd.DataFrame) and not df.empty:
             try:
                 px = float(df["close"].iloc[-1] or 0)
-            except Exception:
+            except (TypeError, ValueError):
                 px = 0.0
             if px > 0:
                 pred.current_price = px
@@ -926,16 +1080,28 @@ class Predictor:
 
         try:
             pred.levels = self._calculate_levels(pred)
-        except Exception:
-            pass
+        except Exception as e:
+            log.debug(
+                "Short-history levels calculation failed for %s: %s",
+                pred.stock_code,
+                e,
+            )
         try:
             pred.position = self._calculate_position(pred)
-        except Exception:
-            pass
+        except Exception as e:
+            log.debug(
+                "Short-history position calculation failed for %s: %s",
+                pred.stock_code,
+                e,
+            )
         try:
             self._generate_reasons(pred)
-        except Exception:
-            pass
+        except Exception as e:
+            log.debug(
+                "Short-history reason generation failed for %s: %s",
+                pred.stock_code,
+                e,
+            )
 
         pred.warnings.append(
             "Short-history fallback used: "
@@ -953,6 +1119,7 @@ class Predictor:
     ) -> list[Prediction]:
         """Quick batch prediction without full forecasting."""
         with self._predict_lock:
+            self._maybe_reload_models(reason="quick_batch")
             interval = self._normalize_interval_token(interval)
             lookback = int(
                 lookback_bars or self._default_lookback_bars(interval)
@@ -1082,6 +1249,7 @@ class Predictor:
             (actual_prices, predicted_prices)
         """
         with self._predict_lock:
+            self._maybe_reload_models(reason="forecast_curve")
             interval = self._normalize_interval_token(interval)
             horizon = max(
                 1,
@@ -1191,8 +1359,12 @@ class Predictor:
                                 float(df["low"].iloc[-1]),
                                 px,
                             )
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        log.debug(
+                            "Realtime tail merge skipped while building forecast curve for %s: %s",
+                            code,
+                            e,
+                        )
 
                 df = self._sanitize_history_df(df, interval)
                 if (
@@ -1205,6 +1377,24 @@ class Predictor:
 
                 actual = df["close"].tail(min(lookback, len(df))).tolist()
                 current_price = float(df["close"].iloc[-1])
+
+                scaler_ready = bool(
+                    self.processor is not None
+                    and getattr(self.processor, "is_fitted", True)
+                )
+                if not scaler_ready:
+                    self._maybe_reload_models(reason="forecast_curve_scaler_missing")
+                    scaler_ready = bool(
+                        self.processor is not None
+                        and getattr(self.processor, "is_fitted", True)
+                    )
+                if not scaler_ready:
+                    log.debug(
+                        "Realtime forecast skipped for %s/%s: scaler unavailable",
+                        code,
+                        interval,
+                    )
+                    return actual, []
 
                 df = self.feature_engine.create_features(df)
                 X = self.processor.prepare_inference_sequence(
@@ -1284,7 +1474,7 @@ class Predictor:
         for raw in values:
             try:
                 p = float(raw)
-            except Exception:
+            except (TypeError, ValueError):
                 p = prev
             if not np.isfinite(p) or p <= 0:
                 p = prev
@@ -1932,7 +2122,7 @@ class Predictor:
             h = float(h or 0.0)
             low = float(low or 0.0)
             c = float(c or 0.0)
-        except Exception:
+        except (TypeError, ValueError):
             return None
         if not all(np.isfinite(v) for v in (o, h, low, c)):
             return None
@@ -2026,10 +2216,12 @@ class Predictor:
                 ts = ts.tz_localize("Asia/Shanghai", ambiguous="NaT", nonexistent="shift_forward")
             else:
                 ts = ts.tz_convert("Asia/Shanghai")
-        except Exception:
+        except Exception as e:
+            log.debug("Session mask timezone conversion fallback triggered: %s", e)
             try:
                 ts = idx.tz_localize(None)
-            except Exception:
+            except Exception as inner_e:
+                log.debug("Session mask timezone fallback failed: %s", inner_e)
                 ts = idx
 
         weekday = np.asarray(ts.weekday, dtype=int)
@@ -2110,7 +2302,7 @@ class Predictor:
                 o = float(row.get("open", c) or c)
                 h = float(row.get("high", c) or c)
                 low = float(row.get("low", c) or c)
-            except Exception:
+            except (TypeError, ValueError):
                 continue
 
             idx_date = idx.date() if hasattr(idx, "date") else None
@@ -2234,8 +2426,8 @@ class Predictor:
                             float(df["low"].iloc[-1]),
                             float(quote.price)
                         )
-                except Exception:
-                    pass
+                except Exception as e:
+                    log.debug("Realtime quote merge failed for %s: %s", code, e)
 
             df = self._sanitize_history_df(df, interval)
             if df is None or df.empty:
@@ -2257,7 +2449,8 @@ class Predictor:
             from data.fetcher import BARS_PER_DAY, INTERVAL_MAX_DAYS
             bpd = float(BARS_PER_DAY.get(iv, 1.0))
             max_days = int(INTERVAL_MAX_DAYS.get(iv, 7))
-        except Exception:
+        except Exception as e:
+            log.debug("Falling back to default lookback constants for interval=%s: %s", iv, e)
             bpd = float({
                 "1m": 240.0,
                 "2m": 120.0,
@@ -2290,7 +2483,7 @@ class Predictor:
             tail = arr[-min(64, arr.size):]
             weights = np.arange(1, tail.size + 1, dtype=float)
             return float(np.sum(np.round(tail, 5) * weights))
-        except Exception:
+        except (TypeError, ValueError):
             return 0.0
 
     def _forecast_seed(
@@ -2324,7 +2517,7 @@ class Predictor:
                     recent_hash = int(
                         abs(np.sum(np.round(tail, 4) * weights) * 10.0)
                     )
-            except Exception:
+            except (TypeError, ValueError):
                 recent_hash = 0
 
         seed = (
@@ -2381,7 +2574,8 @@ class Predictor:
                 hint_entropy = float(
                     np.clip(getattr(hint_pred, "entropy", 0.5), 0.0, 1.0)
                 )
-            except Exception:
+            except Exception as e:
+                log.debug("Ensemble direction hint unavailable: %s", e)
                 direction_hint = 0.0
                 hint_confidence = 0.5
                 hint_entropy = 0.5
@@ -2699,7 +2893,54 @@ class Predictor:
             except Exception as e:
                 log.debug(f"Ensemble forecast failed: {e}")
 
-        return [current_price] * horizon
+        # Last resort: deterministic micro-trajectory from recent volatility
+        # instead of a flat line when model artifacts are unavailable.
+        prices_arr = np.array(
+            [float(p) for p in (recent_prices or []) if float(p) > 0],
+            dtype=float,
+        )
+        if prices_arr.size >= 4:
+            rets = np.diff(np.log(prices_arr[-min(120, prices_arr.size):]))
+            ret_mu = float(np.clip(np.mean(rets), -0.01, 0.01))
+            ret_sigma = float(
+                np.clip(
+                    np.std(rets),
+                    max(float(atr_pct) * 0.02, 0.0003),
+                    max(float(atr_pct) * 0.18, 0.0060),
+                )
+            )
+        else:
+            ret_mu = 0.0
+            ret_sigma = float(max(float(atr_pct) * 0.05, 0.0006))
+
+        max_step = float(max(float(atr_pct) * 0.22, 0.0012))
+        drift = float(np.clip(ret_mu + (news_bias * 0.0012), -max_step * 0.45, max_step * 0.45))
+        seed = self._forecast_seed(
+            current_price=current_price,
+            sequence_signature=sequence_signature,
+            direction_hint=direction_hint,
+            horizon=horizon,
+            seed_context=seed_context,
+            recent_prices=recent_prices,
+        )
+        rng = np.random.RandomState(seed)
+
+        out: list[float] = []
+        price = float(current_price)
+        prev_eps = 0.0
+        for i in range(horizon):
+            decay = max(0.25, 1.0 - (float(i) / float(max(horizon, 1))) * 0.65)
+            eps = (0.55 * prev_eps) + float(
+                rng.normal(0.0, ret_sigma * (0.45 + (0.55 * decay)))
+            )
+            prev_eps = eps
+            mean_revert = -0.08 * ((price / max(float(current_price), 1e-8)) - 1.0)
+            change = float(np.clip(drift + eps + mean_revert, -max_step, max_step))
+            if abs(change) < 1e-7:
+                change = float(((-1.0) ** i) * max_step * 0.03)
+            price = float(np.clip(price * (1.0 + change), current_price * 0.5, current_price * 2.0))
+            out.append(price)
+        return out
 
     # =========================================================================
     # =========================================================================
@@ -2979,8 +3220,8 @@ class Predictor:
                 atr = float(df["atr_pct"].iloc[-1])
                 # atr_pct from FeatureEngine is: atr_14 / close * 100
                 return max(atr / 100.0, 0.005)
-        except Exception:
-            pass
+        except Exception as e:
+            log.debug("ATR extraction failed; using default: %s", e)
         return 0.02  # default 2%
 
     # =========================================================================
@@ -3081,8 +3322,8 @@ class Predictor:
                     reasons.append(
                         f"Forecast interval width: {spread_pct:.1f}% at horizon"
                     )
-            except Exception:
-                pass
+            except Exception as e:
+                log.debug("Failed computing forecast interval reason for %s: %s", pred.stock_code, e)
 
         pred.reasons = existing_reasons + [
             msg for msg in reasons if msg not in existing_reasons
@@ -3096,12 +3337,13 @@ class Predictor:
 
     def _get_stock_name(self, code: str, df: pd.DataFrame) -> str:
         """Get stock name from fetcher."""
+        del df
         try:
             quote = self.fetcher.get_realtime(code)
             if quote and quote.name:
                 return str(quote.name)
-        except Exception:
-            pass
+        except Exception as e:
+            log.debug("Stock name lookup failed for %s: %s", code, e)
         return ""
 
     def _clean_code(self, code: str) -> str:
@@ -3112,8 +3354,8 @@ class Predictor:
         if self.fetcher is not None:
             try:
                 return self.fetcher.clean_code(code)
-            except Exception:
-                pass
+            except Exception as e:
+                log.debug("Fetcher clean_code failed for %r: %s", code, e)
 
         if not code:
             return ""

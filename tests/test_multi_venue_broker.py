@@ -2,7 +2,7 @@ from datetime import datetime
 
 from config.settings import CONFIG
 from core.types import Account, Fill, Order, OrderSide, OrderStatus, OrderType
-from trading.broker import BrokerInterface, MultiVenueBroker, create_broker
+from trading.broker import BrokerInterface, MultiVenueBroker, THSBroker, create_broker
 
 
 class _DummyVenue(BrokerInterface):
@@ -198,3 +198,22 @@ def test_multi_venue_snapshot_includes_score_and_read_count():
     assert "avg_read_latency_ms" in first
     assert "recent_failures_5m" in first
     assert "last_error" in first
+
+
+def test_easytrader_get_quote_fetcher_failure_returns_none(monkeypatch):
+    broker = THSBroker()
+
+    class _FeedManager:
+        @staticmethod
+        def get_quote(symbol):  # noqa: ARG004
+            return None
+
+    class _BrokenFetcher:
+        @staticmethod
+        def get_realtime(symbol):  # noqa: ARG004
+            raise RuntimeError("realtime temporarily unavailable")
+
+    monkeypatch.setattr("data.feeds.get_feed_manager", lambda auto_init=False: _FeedManager())
+    monkeypatch.setattr(broker, "_get_fetcher", lambda: _BrokenFetcher())
+
+    assert broker.get_quote("600519") is None

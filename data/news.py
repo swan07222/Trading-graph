@@ -2,11 +2,13 @@
 import json
 import math
 import re
+import ssl
 import threading
 import time
 from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
+from pathlib import Path
 
 import numpy as np
 import requests
@@ -177,6 +179,56 @@ class NewsItem:
 class _BaseNewsFetcher:
     """Shared session setup for news fetchers."""
 
+    @staticmethod
+    def _resolve_tls_verify() -> bool | str:
+        """
+        Resolve a usable CA bundle path for requests.
+
+        Some environments can have a stale certifi path; in that case, fall
+        back to system/default bundle or finally disable verification so feeds
+        remain available.
+        """
+        candidates: list[str] = []
+        try:
+            import certifi
+
+            p = str(certifi.where() or "").strip()
+            if p:
+                candidates.append(p)
+        except Exception:
+            pass
+
+        try:
+            from requests.utils import DEFAULT_CA_BUNDLE_PATH
+
+            p = str(DEFAULT_CA_BUNDLE_PATH or "").strip()
+            if p:
+                candidates.append(p)
+        except Exception:
+            pass
+
+        try:
+            dflt = ssl.get_default_verify_paths()
+            for p in (dflt.cafile, dflt.capath):
+                s = str(p or "").strip()
+                if s:
+                    candidates.append(s)
+        except Exception:
+            pass
+
+        seen: set[str] = set()
+        for raw in candidates:
+            if raw in seen:
+                continue
+            seen.add(raw)
+            try:
+                if Path(raw).exists():
+                    return raw
+            except OSError:
+                continue
+
+        return False
+
     def __init__(self, referer: str = ""):
         self._session = requests.Session()
         headers = {
@@ -188,6 +240,13 @@ class _BaseNewsFetcher:
         if referer:
             headers["Referer"] = referer
         self._session.headers.update(headers)
+        verify_cfg = self._resolve_tls_verify()
+        self._session.verify = verify_cfg
+        if verify_cfg is False:
+            log.warning(
+                "No valid TLS CA bundle found for news fetchers; "
+                "HTTPS verification disabled for this session"
+            )
 
 class SinaNewsFetcher(_BaseNewsFetcher):
     """Fetch news from Sina Finance (works on China IP)."""

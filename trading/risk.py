@@ -40,7 +40,8 @@ def _get_audit_log():
     try:
         from utils.security import get_audit_log
         return get_audit_log()
-    except Exception:
+    except Exception as e:
+        log.debug("Audit log unavailable; using no-op stub: %s", e)
         return _NoOpAuditLog()
 
 # Cost estimation helper (single source of truth)
@@ -212,8 +213,12 @@ class RiskManager:
         for event_type, handler in self._event_handlers.items():
             try:
                 EVENT_BUS.unsubscribe(event_type, handler)
-            except Exception:
-                pass
+            except Exception as e:
+                log.debug(
+                    "RiskManager unsubscribe failed for %s: %s",
+                    event_type,
+                    e,
+                )
 
     # =========================================================================
     # =========================================================================
@@ -287,8 +292,8 @@ class RiskManager:
             acc = oms.get_account()
             if acc is not None:
                 return acc
-        except Exception:
-            pass
+        except Exception as e:
+            log.debug("OMS account snapshot unavailable in risk view: %s", e)
 
         if self._account is None:
             return Account()
@@ -540,8 +545,8 @@ class RiskManager:
                 if metrics.kill_switch_active:
                     metrics.can_trade = False
                     warnings.append("Kill switch active")
-            except Exception:
-                pass
+            except Exception as e:
+                log.debug("Kill-switch metrics snapshot unavailable: %s", e)
 
             metrics.warnings = warnings
             metrics.timestamp = datetime.now()
@@ -804,7 +809,8 @@ class RiskManager:
                 try:
                     if not _get_oms().get_account():
                         return False, "Risk manager not initialized"
-                except Exception:
+                except Exception as e:
+                    log.debug("RiskManager OMS account lookup failed: %s", e)
                     return False, "Risk manager not initialized"
 
             # FIX(5): Kill switch failure now BLOCKS trading

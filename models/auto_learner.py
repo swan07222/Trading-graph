@@ -409,7 +409,8 @@ class ExperienceReplayBuffer:
                 return None
             data = np.load(path)
             return data['X'], data['y']
-        except Exception:
+        except Exception as e:
+            log.debug("Cache load failed for %s: %s", code, e)
             return None
 
     def get_cached_codes(self) -> list[str]:
@@ -433,8 +434,8 @@ class ExperienceReplayBuffer:
             path = self._cache_dir / f"{code}.npz"
             path.unlink(missing_ok=True)
             self._cache_times.pop(code, None)
-        except Exception:
-            pass
+        except Exception as e:
+            log.debug("Cache cleanup failed for %s: %s", code, e)
 
     def get_all(self) -> list[str]:
         with self._lock:
@@ -472,8 +473,8 @@ class ExperienceReplayBuffer:
                 cached_at = self._cache_times.get(code, 0)
                 if now - cached_at > self._cache_ttl:
                     path.unlink(missing_ok=True)
-        except Exception:
-            pass
+        except Exception as e:
+            log.debug("Stale cache cleanup failed: %s", e)
 
 class ModelGuardian:
     """
@@ -573,8 +574,8 @@ class ModelGuardian:
                 with open(path) as f:
                     self._best_metrics = json.load(f)
                 return self._best_metrics
-        except Exception:
-            pass
+        except Exception as e:
+            log.debug("Failed loading best metrics for %s/%s: %s", interval, horizon, e)
         return {}
 
     def validate_model(
@@ -752,8 +753,8 @@ class ModelGuardian:
             )
             for old in backups[self._max_backups:]:
                 shutil.rmtree(old, ignore_errors=True)
-        except Exception:
-            pass
+        except Exception as e:
+            log.debug("Backup prune failed: %s", e)
 
 class StockRotator:
     """
@@ -846,8 +847,8 @@ class StockRotator:
             if self._last_network_state is not None and current_state != self._last_network_state:
                 network_changed = True
             self._last_network_state = current_state
-        except Exception:
-            pass
+        except Exception as e:
+            log.debug("Network state refresh failed during pool update: %s", e)
 
         if self._pool and not expired and not network_changed:
             return
@@ -865,7 +866,8 @@ class StockRotator:
                 days=120,
                 force_refresh=bool(expired or network_changed),
             )
-        except Exception:
+        except Exception as e:
+            log.warning("Universe fetch failed; using fallback pool sources: %s", e)
             universe, new_listed = [], []
 
         if len(list(universe or [])) < 1200:
@@ -885,8 +887,8 @@ class StockRotator:
                     ]
                     discovered_codes = [c for c in discovered_codes if c]
                     universe = list(universe or []) + discovered_codes
-            except Exception:
-                pass
+            except Exception as e:
+                log.debug("Universal discovery fallback skipped: %s", e)
 
         pool = []
         seen = set()
@@ -911,8 +913,8 @@ class StockRotator:
         if callable(progress_cb):
             try:
                 progress_cb("Universe refreshed", len(self._pool))
-            except Exception:
-                pass
+            except Exception as e:
+                log.debug("Progress callback failed on universe refresh: %s", e)
         log.info(f"Pool refreshed (universe-first): {len(self._pool)} stocks")
 
     def _maybe_probe_new_listings(self, stop_check: Callable, progress_cb: Callable) -> None:
@@ -928,7 +930,8 @@ class StockRotator:
         try:
             from data.universe import get_new_listings
             new_listed = get_new_listings(days=14, force_refresh=True)
-        except Exception:
+        except Exception as e:
+            log.debug("New-listing probe failed: %s", e)
             return
 
         if not new_listed:
@@ -949,8 +952,8 @@ class StockRotator:
         if callable(progress_cb):
             try:
                 progress_cb("New listings added to pool", len(self._pool))
-            except Exception:
-                pass
+            except Exception as e:
+                log.debug("Progress callback failed on new-listing injection: %s", e)
         log.info("Injected %d newly listed stocks into discovery pool", len(injected))
 
     @property
@@ -994,7 +997,7 @@ class StockRotator:
                     continue
                 try:
                     self._failed[code] = int(v)
-                except Exception:
+                except (TypeError, ValueError):
                     self._failed[code] = 1
         raw_pool = list(data.get('pool', []) or [])
         seen: set[str] = set()
@@ -1096,8 +1099,8 @@ class ParallelFetcher:
             if interval not in ("1m", "2m", "5m", "15m", "30m", "60m", "1h") and env.is_vpn_active:
                 delay = max(delay, 0.9)
                 max_concurrent = min(max_concurrent, 2)
-        except Exception:
-            pass
+        except Exception as e:
+            log.debug("Network-aware fetch pacing unavailable: %s", e)
 
         semaphore = threading.Semaphore(max_concurrent)
 
@@ -1162,9 +1165,10 @@ class ParallelFetcher:
 
                 try:
                     code, success = future.result(timeout=120)
-                except Exception:
+                except Exception as e:
                     code = futures[future]
                     success = False
+                    log.debug("Concurrent fetch future failed for %s: %s", code, e)
 
                 with lock:
                     if success:
@@ -1182,8 +1186,8 @@ class ParallelFetcher:
                 for f in list(futures.keys()):
                     try:
                         f.cancel()
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        log.debug("Future cancellation failed: %s", e)
                 try:
                     executor.shutdown(wait=False, cancel_futures=True)
                 except TypeError:
@@ -1282,8 +1286,8 @@ class ContinuousLearner:
         for cb in callbacks:
             try:
                 cb(self.progress)
-            except Exception:
-                pass
+            except Exception as e:
+                log.warning("Progress callback failed: %s", e)
 
     def _update(self, stage=None, message=None, progress=None, **kw):
         if stage:
@@ -1357,8 +1361,8 @@ class ContinuousLearner:
             from core.network import get_network_env, invalidate_network_cache
             invalidate_network_cache()
             get_network_env(force_refresh=True)
-        except Exception:
-            pass
+        except Exception as e:
+            log.debug("Network cache refresh skipped before learning start: %s", e)
 
         self._thread = threading.Thread(
             target=self._main_loop,
@@ -1431,7 +1435,8 @@ class ContinuousLearner:
                 bars=max(10, int(max_bars)),
                 final_only=False,
             )
-        except Exception:
+        except Exception as e:
+            log.debug("Coverage score history read failed for %s: %s", code, e)
             return 0.0
 
         if df is None or df.empty:
@@ -1443,12 +1448,13 @@ class ContinuousLearner:
             for ts in df.index.tolist():
                 try:
                     ep = float(ts.timestamp())
-                except Exception:
+                except (AttributeError, OSError, OverflowError, TypeError, ValueError):
                     continue
                 if not np.isfinite(ep):
                     continue
                 buckets.append(int(ep // step))
-        except Exception:
+        except Exception as e:
+            log.debug("Coverage score timestamp processing failed for %s: %s", code, e)
             return 0.0
 
         if not buckets:
@@ -1530,7 +1536,8 @@ class ContinuousLearner:
         try:
             from data.news import get_news_aggregator
             agg = get_news_aggregator()
-        except Exception:
+        except Exception as e:
+            log.debug("News prioritization disabled (aggregator unavailable): %s", e)
             return ordered
 
         candidate_set = set(ordered)
@@ -1539,7 +1546,8 @@ class ContinuousLearner:
 
         try:
             market_news = agg.get_market_news(count=80, force_refresh=False)
-        except Exception:
+        except Exception as e:
+            log.debug("Market-news fetch failed during prioritization: %s", e)
             market_news = []
 
         for item in list(market_news or []):
@@ -1555,7 +1563,7 @@ class ContinuousLearner:
                     0.0,
                     (now - getattr(item, "publish_time", now)).total_seconds() / 3600.0,
                 )
-            except Exception:
+            except (AttributeError, TypeError, ValueError):
                 age_h = 24.0
             recency = 1.0 / (1.0 + (age_h / 10.0))
             sentiment_mag = abs(float(getattr(item, "sentiment_score", 0.0) or 0.0))
@@ -1575,7 +1583,8 @@ class ContinuousLearner:
                 continue
             try:
                 summary = agg.get_sentiment_summary(code)
-            except Exception:
+            except Exception as e:
+                log.debug("Sentiment summary probe failed for %s: %s", code, e)
                 continue
             count = int(summary.get("total", 0) or 0)
             if count <= 0:
@@ -1775,8 +1784,8 @@ class ContinuousLearner:
                 quote = spot.get_quote(code)
                 if quote and quote.get('name'):
                     name = str(quote['name'])
-            except Exception:
-                pass
+            except Exception as e:
+                log.debug("Spot-cache name lookup failed for %s: %s", code, e)
 
             return {
                 'valid': True, 'code': code, 'name': name, 'bars': bars,
@@ -2182,8 +2191,8 @@ class ContinuousLearner:
                     self.progress.add_warning(
                         "VPN mode: batch capped to 30 stocks for fetch stability"
                     )
-            except Exception:
-                pass
+            except Exception as e:
+                log.debug("VPN batch-cap check skipped: %s", e)
 
             if not codes:
                 self._update(stage="error", message="No stocks available")
@@ -2223,8 +2232,8 @@ class ContinuousLearner:
                 from core.network import get_network_env
                 if get_network_env().is_vpn_active:
                     min_ok = min(batch_size, max(2, int(batch_size * 0.03)))
-            except Exception:
-                pass
+            except Exception as e:
+                log.debug("VPN min-ok adjustment unavailable: %s", e)
             if len(ok_codes) < min_ok and failed_codes and not self._should_stop():
                 relaxed_min_bars = max(CONFIG.SEQUENCE_LENGTH + 20, int(min_bars * 0.7))
                 retry_codes = failed_codes[: min(len(failed_codes), max(8, min_ok * 2))]
@@ -2718,7 +2727,8 @@ class ContinuousLearner:
                     )
                 if df is not None and len(df) >= min_bars:
                     new_holdout.append(code)
-            except Exception:
+            except Exception as e:
+                log.debug("Holdout candidate fetch failed for %s: %s", code, e)
                 continue
 
         if self._should_stop():
@@ -3086,7 +3096,8 @@ class ContinuousLearner:
             try:
                 from utils.atomic_io import atomic_write_json
                 atomic_write_json(path, payload, indent=2, use_lock=True)
-            except Exception:
+            except Exception as e:
+                log.debug("Atomic precision-profile save failed; using plain write: %s", e)
                 path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
             log.info(
                 "Precision profile saved: conf>=%.2f agree>=%.2f ent<=%.2f edge>=%.2f "
@@ -3142,7 +3153,8 @@ class ContinuousLearner:
                     if len(X) > 0:
                         self._replay.cache_sequences(code, X, y)
                         cached += 1
-                except Exception:
+                except Exception as e:
+                    log.debug("Sequence cache build failed for %s: %s", code, e)
                     continue
 
             log.debug(f"Cached sequences for {cached}/{min(len(codes), 30)} stocks")
@@ -3282,7 +3294,7 @@ class ContinuousLearner:
             self.progress.current_interval = "1m"
             try:
                 last_h = int(state.get('last_horizon', 30))
-            except Exception:
+            except (TypeError, ValueError):
                 last_h = 30
             self.progress.current_horizon = (
                 max(1, last_h) if last_interval == "1m" else 30

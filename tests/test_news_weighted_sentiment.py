@@ -1,6 +1,7 @@
 from datetime import datetime, timedelta
+from types import SimpleNamespace
 
-from data.news import NewsAggregator, NewsItem
+from data.news import NewsAggregator, NewsItem, _BaseNewsFetcher
 
 
 def test_sentiment_summary_uses_weighted_mode(monkeypatch):
@@ -117,3 +118,38 @@ def test_sentiment_entropy_zero_for_single_source(monkeypatch):
     summary = agg.get_sentiment_summary()
 
     assert summary["source_entropy"] == 0.0
+
+
+def test_base_news_fetcher_uses_existing_ca_bundle(tmp_path, monkeypatch):
+    ca_path = tmp_path / "ca.pem"
+    ca_path.write_text("dummy", encoding="utf-8")
+
+    monkeypatch.setattr("certifi.where", lambda: str(ca_path), raising=False)
+    monkeypatch.setattr(
+        "requests.utils.DEFAULT_CA_BUNDLE_PATH",
+        "Z:/missing/default.pem",
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "ssl.get_default_verify_paths",
+        lambda: SimpleNamespace(cafile="Z:/missing/sys.pem", capath="Z:/missing/capath"),
+    )
+
+    fetcher = _BaseNewsFetcher()
+    assert str(fetcher._session.verify) == str(ca_path)
+
+
+def test_base_news_fetcher_disables_verify_when_all_ca_paths_invalid(monkeypatch):
+    monkeypatch.setattr("certifi.where", lambda: "Z:/missing/certifi.pem", raising=False)
+    monkeypatch.setattr(
+        "requests.utils.DEFAULT_CA_BUNDLE_PATH",
+        "Z:/missing/default.pem",
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "ssl.get_default_verify_paths",
+        lambda: SimpleNamespace(cafile="Z:/missing/sys.pem", capath="Z:/missing/capath"),
+    )
+
+    fetcher = _BaseNewsFetcher()
+    assert fetcher._session.verify is False

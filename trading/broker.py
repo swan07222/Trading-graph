@@ -380,7 +380,13 @@ class SimulatorBroker(BrokerInterface):
                         bars=int(bars),
                         use_cache=True,
                     )
-            except Exception:
+            except Exception as e:
+                log.debug(
+                    "History fallback quote fetch failed for %s (%s): %s",
+                    symbol,
+                    interval,
+                    e,
+                )
                 df = None
             if df is None or len(df) <= 0:
                 continue
@@ -398,7 +404,7 @@ class SimulatorBroker(BrokerInterface):
             return float(default)
         try:
             return float(order.tags.get(key, default) or default)
-        except Exception:
+        except (TypeError, ValueError):
             return float(default)
 
     def _fallback_reference_price(self, order: Order) -> float:
@@ -434,8 +440,8 @@ class SimulatorBroker(BrokerInterface):
             self._connected = False
             try:
                 self._exec_pool.shutdown(wait=False)
-            except Exception:
-                pass
+            except Exception as e:
+                log.debug("Simulator execution pool shutdown failed: %s", e)
             log.info("Simulator disconnected")
 
     def get_quote(self, symbol: str) -> float | None:
@@ -451,8 +457,8 @@ class SimulatorBroker(BrokerInterface):
                 px = float(q.price)
                 self._cache_quote(symbol, px)
                 return px
-        except Exception:
-            pass
+        except Exception as e:
+            log.debug("Feed-manager quote unavailable for %s: %s", symbol, e)
 
         try:
             fetcher = self._get_fetcher()
@@ -461,8 +467,8 @@ class SimulatorBroker(BrokerInterface):
                 px = float(quote.price)
                 self._cache_quote(symbol, px)
                 return px
-        except Exception:
-            pass
+        except Exception as e:
+            log.debug("Realtime quote fetch unavailable for %s: %s", symbol, e)
 
         cached = self._get_cached_quote(symbol)
         if cached is not None:
@@ -886,8 +892,8 @@ class SimulatorBroker(BrokerInterface):
             q = fetcher.get_realtime(order.symbol)
             if q and getattr(q, "close", 0) and float(q.close) > 0:
                 prev_close = float(q.close)
-        except Exception:
-            pass
+        except Exception as e:
+            log.debug("Previous-close lookup failed for %s: %s", order.symbol, e)
 
         can_trade, reason = self._check_price_limits(
             order.symbol, order.side, float(market_price),
@@ -1341,15 +1347,16 @@ class EasytraderBroker(BrokerInterface):
             q = fm.get_quote(symbol)
             if q and getattr(q, "price", 0) and float(q.price) > 0:
                 return float(q.price)
-        except Exception:
-            pass
+        except Exception as e:
+            log.debug("Easytrader feed quote unavailable for %s: %s", symbol, e)
 
-        fetcher = self._get_fetcher()
-        quote = fetcher.get_realtime(symbol)
-        return (
-            float(quote.price)
-            if quote and quote.price > 0 else None
-        )
+        try:
+            fetcher = self._get_fetcher()
+            quote = fetcher.get_realtime(symbol)
+            return float(quote.price) if quote and quote.price > 0 else None
+        except Exception as e:
+            log.debug("Easytrader realtime quote unavailable for %s: %s", symbol, e)
+            return None
 
     def get_account(self) -> Account:
         if not self.is_connected:
@@ -1552,8 +1559,8 @@ class EasytraderBroker(BrokerInterface):
                         fill_time = datetime.combine(
                             date.today(), t,
                         )
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        log.debug("Fill timestamp parse failed for %r: %s", ts, e)
 
                 # since-filter
                 if (
@@ -1835,7 +1842,8 @@ class MultiVenueBroker(BrokerInterface):
             try:
                 if venue.is_connected:
                     out.append(i)
-            except Exception:
+            except Exception as e:
+                log.debug("Venue connectivity probe failed at index %s: %s", i, e)
                 continue
         return out
 

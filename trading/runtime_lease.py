@@ -155,8 +155,8 @@ class FileRuntimeLeaseClient(RuntimeLeaseClient):
             if metadata:
                 cur["metadata"] = dict(metadata)
             atomic_write_json(self._path, cur, indent=2)
-        except Exception:
-            pass
+        except Exception as e:
+            log.debug("File lease release failed for owner=%s: %s", owner_id, e)
 
     def read(self) -> dict[str, Any] | None:
         return self._read()
@@ -217,7 +217,8 @@ class SqliteRuntimeLeaseClient(RuntimeLeaseClient):
         meta_raw = str(out.get("metadata_json", "{}") or "{}")
         try:
             out["metadata"] = json.loads(meta_raw)
-        except Exception:
+        except Exception as e:
+            log.debug("Lease metadata decode failed (backend=%s): %s", backend, e)
             out["metadata"] = {}
         return out
 
@@ -280,8 +281,8 @@ class SqliteRuntimeLeaseClient(RuntimeLeaseClient):
         except Exception as e:
             try:
                 conn.execute("ROLLBACK")
-            except Exception:
-                pass
+            except Exception as rollback_e:
+                log.debug("SQLite lease acquire rollback failed: %s", rollback_e)
             log.warning("SQLite lease acquire failed: %s", e)
             return LeaseResult(ok=False, record=None)
         finally:
@@ -326,8 +327,8 @@ class SqliteRuntimeLeaseClient(RuntimeLeaseClient):
         except Exception as e:
             try:
                 conn.execute("ROLLBACK")
-            except Exception:
-                pass
+            except Exception as rollback_e:
+                log.debug("SQLite lease refresh rollback failed: %s", rollback_e)
             log.warning("SQLite lease refresh failed: %s", e)
             return LeaseResult(ok=False, record=None)
         finally:
@@ -357,11 +358,12 @@ class SqliteRuntimeLeaseClient(RuntimeLeaseClient):
                 (now_ts, meta, self._cluster, owner),
             )
             conn.execute("COMMIT")
-        except Exception:
+        except Exception as e:
             try:
                 conn.execute("ROLLBACK")
-            except Exception:
-                pass
+            except Exception as rollback_e:
+                log.debug("SQLite lease release rollback failed: %s", rollback_e)
+            log.warning("SQLite lease release failed for owner=%s: %s", owner, e)
         finally:
             conn.close()
 
@@ -374,7 +376,8 @@ class SqliteRuntimeLeaseClient(RuntimeLeaseClient):
                 (self._cluster,),
             ).fetchone()
             return self._row_to_dict(row, backend="sqlite")
-        except Exception:
+        except Exception as e:
+            log.debug("SQLite lease read failed: %s", e)
             return None
         finally:
             conn.close()
@@ -389,4 +392,3 @@ def create_runtime_lease_client(
     if mode == "sqlite":
         return SqliteRuntimeLeaseClient(db_path=Path(path), cluster=cluster)
     return FileRuntimeLeaseClient(path=Path(path), cluster=cluster)
-
