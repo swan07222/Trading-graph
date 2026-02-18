@@ -1,12 +1,61 @@
 from __future__ import annotations
 
+import builtins
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pandas as pd
 
 from config.settings import CONFIG
 from models.trainer import Trainer
+
+
+def test_evaluate_falls_back_when_sklearn_metrics_missing(monkeypatch):
+    trainer = Trainer.__new__(Trainer)
+    trainer.ensemble = SimpleNamespace(
+        predict_batch=lambda X: [
+            SimpleNamespace(
+                predicted_class=int(i % 3),
+                confidence=0.7,
+                agreement=0.8,
+                entropy=0.2,
+                margin=0.1,
+                prob_up=0.6,
+                prob_down=0.2,
+            )
+            for i in range(len(X))
+        ]
+    )
+    trainer._effective_confidence_floor = lambda *_a, **_k: 0.6
+    trainer._trade_quality_thresholds = lambda *_a, **_k: {}
+    trainer._trade_masks = lambda *_a, **_k: {}
+    trainer._simulate_trading = lambda *_a, **_k: {}
+    trainer._build_trading_stress_tests = lambda *_a, **_k: {}
+    trainer._build_explainability_samples = lambda *_a, **_k: []
+    trainer._risk_adjusted_score = lambda *_a, **_k: 0.0
+
+    original_import = builtins.__import__
+
+    def _fake_import(name, globals=None, locals=None, fromlist=(), level=0):
+        if name == "sklearn.metrics":
+            raise ModuleNotFoundError("No module named 'sklearn.metrics'")
+        return original_import(name, globals, locals, fromlist, level)
+
+    monkeypatch.setattr(builtins, "__import__", _fake_import)
+
+    X = np.zeros((9, int(CONFIG.SEQUENCE_LENGTH), 3), dtype=np.float32)
+    y = np.asarray([0, 1, 2, 0, 1, 2, 0, 1, 2], dtype=np.int64)
+    r = np.zeros(9, dtype=np.float32)
+
+    out = trainer._evaluate(X, y, r, regime_profile={"level": "normal"})
+
+    assert out["metrics_backend"] == "numpy"
+    assert isinstance(out["confusion_matrix"], list)
+    assert len(out["confusion_matrix"]) == 3
+    assert "up_precision" in out
+    assert "up_recall" in out
+    assert "up_f1" in out
 
 
 def test_fetch_raw_data_rejects_invalid_ohlc():

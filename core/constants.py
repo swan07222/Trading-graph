@@ -1,4 +1,5 @@
 # core/constants.py
+import re
 from datetime import date, datetime, time
 from enum import Enum
 from functools import lru_cache
@@ -201,6 +202,10 @@ FONTS = {
     "mono": "Consolas",
 }
 
+# FIX Bug 6: Proper ST detection with word boundaries instead of substring match
+_ST_PATTERN = re.compile(r'(?<!\w)\*?ST(?!\w)', re.IGNORECASE)
+
+
 def get_exchange(code: str) -> str:
     """Get exchange from stock code."""
     code = str(code).zfill(6)
@@ -211,6 +216,7 @@ def get_exchange(code: str) -> str:
                 return exchange
 
     return "UNKNOWN"
+
 
 @lru_cache(maxsize=1)
 def _load_external_holidays() -> frozenset:
@@ -240,6 +246,7 @@ def _load_external_holidays() -> frozenset:
 
     return frozenset(extra)
 
+
 @lru_cache(maxsize=1)
 def get_holidays() -> frozenset:
     """
@@ -249,6 +256,7 @@ def get_holidays() -> frozenset:
     and the lru_cache actually works.  Also allows O(1) ``in`` checks.
     """
     return frozenset(_HOLIDAYS_BUILTIN) | _load_external_holidays()
+
 
 def get_price_limit(code: str, name: str | None = None) -> float:
     """
@@ -280,6 +288,7 @@ def get_price_limit(code: str, name: str | None = None) -> float:
 
     return PRICE_LIMITS["main_board"]
 
+
 def get_lot_size(code: str) -> int:
     """Get lot size for stock."""
     code = str(code).zfill(6)
@@ -288,6 +297,7 @@ def get_lot_size(code: str) -> int:
         return LOT_SIZES["star_market"]
 
     return LOT_SIZES["main_board"]
+
 
 def is_trading_day(d: date) -> bool:
     """
@@ -298,6 +308,7 @@ def is_trading_day(d: date) -> bool:
     if d.weekday() >= 5:
         return False
     return d not in get_holidays()
+
 
 def is_trading_time(exchange: str = "SSE") -> bool:
     """
@@ -320,9 +331,14 @@ def is_trading_time(exchange: str = "SSE") -> bool:
 
     return morning or afternoon
 
+
 def is_st_stock(name: str) -> bool:
-    """Check if stock is ST."""
+    """
+    Check if stock is ST.
+
+    FIX Bug 6: Uses word-boundary regex to avoid false positives on names
+    like "BEST" or "FASTEST" that contain "ST" as a substring.
+    """
     if not name:
         return False
-    name_upper = name.upper()
-    return "ST" in name_upper or "*ST" in name_upper
+    return bool(_ST_PATTERN.search(name))

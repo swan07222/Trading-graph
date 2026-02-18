@@ -1066,6 +1066,9 @@ class ParallelFetcher:
         min_bars: int,
         stop_check: Callable,
         progress_cb: Callable,
+        *,
+        allow_online: bool = True,
+        update_db: bool = True,
     ) -> tuple[list[str], list[str]]:
         """
         Fetch data for multiple stocks in parallel.
@@ -1126,9 +1129,11 @@ class ParallelFetcher:
                             interval=interval,
                             bars=max(int(lookback), int(min_cache_bars)),
                             use_cache=True,
-                            update_db=True,
-                            allow_online=True,
-                            refresh_intraday_after_close=True,
+                            update_db=bool(update_db),
+                            allow_online=bool(allow_online),
+                            refresh_intraday_after_close=bool(
+                                update_db and allow_online
+                            ),
                         )
                     except TypeError:
                         df = fetcher.get_history(
@@ -1136,7 +1141,7 @@ class ParallelFetcher:
                             interval=interval,
                             bars=max(int(lookback), int(min_cache_bars)),
                             use_cache=True,
-                            update_db=True,
+                            update_db=bool(update_db),
                         )
                     if df is not None and not df.empty and len(df) >= min_bars:
                         return code, True
@@ -2215,16 +2220,67 @@ class ContinuousLearner:
                 stocks_processed=0,
             )
 
-            ok_codes, failed_codes = self._fetcher.fetch_batch(
-                codes, eff_interval, eff_lookback, min_bars,
-                stop_check=self._should_stop,
-                progress_cb=lambda msg, cnt: self._update(
-                    message=msg, stocks_processed=cnt,
-                    progress=10.0 + 30.0 * (cnt / max(len(codes), 1)),
-                ),
-            )
-            if self._should_stop():
-                raise CancelledException()
+            ok_codes: list[str] = []
+            failed_codes: list[str] = []
+            total_codes = max(1, int(len(codes)))
+            fetched_so_far = 0
+            fetch_groups: list[tuple[str, list[str], bool, bool]] = []
+            if new_batch:
+                # New stocks: online + DB update (latest 1m window).
+                fetch_groups.append(("new", list(new_batch), True, True))
+            if replay_batch:
+                # Replay stocks: use saved/cache data only.
+                fetch_groups.append(("replay", list(replay_batch), False, False))
+            if not fetch_groups:
+                fetch_groups.append(("batch", list(codes), True, True))
+
+            for label, group_codes, group_online, group_update in fetch_groups:
+                if not group_codes:
+                    continue
+                base_processed = int(fetched_so_far)
+                self._update(
+                    message=f"Fetching {label} stocks ({len(group_codes)})...",
+                    stocks_processed=base_processed,
+                    progress=10.0 + 30.0 * (base_processed / float(total_codes)),
+                )
+                try:
+                    group_ok, group_failed = self._fetcher.fetch_batch(
+                        group_codes, eff_interval, eff_lookback, min_bars,
+                        stop_check=self._should_stop,
+                        progress_cb=lambda msg, cnt, b=base_processed, tag=label: self._update(
+                            message=f"{tag}: {msg}",
+                            stocks_processed=min(len(codes), b + int(cnt)),
+                            progress=10.0 + 30.0 * (
+                                (b + int(cnt)) / float(total_codes)
+                            ),
+                        ),
+                        allow_online=group_online,
+                        update_db=group_update,
+                    )
+                except TypeError:
+                    group_ok, group_failed = self._fetcher.fetch_batch(
+                        group_codes, eff_interval, eff_lookback, min_bars,
+                        stop_check=self._should_stop,
+                        progress_cb=lambda msg, cnt, b=base_processed, tag=label: self._update(
+                            message=f"{tag}: {msg}",
+                            stocks_processed=min(len(codes), b + int(cnt)),
+                            progress=10.0 + 30.0 * (
+                                (b + int(cnt)) / float(total_codes)
+                            ),
+                        ),
+                    )
+                ok_codes.extend(group_ok)
+                failed_codes.extend(group_failed)
+                fetched_so_far += len(group_codes)
+                if self._should_stop():
+                    raise CancelledException()
+
+            ok_codes = list(dict.fromkeys(ok_codes))
+            ok_set = set(ok_codes)
+            failed_codes = [
+                c for c in dict.fromkeys(failed_codes)
+                if c not in ok_set
+            ]
 
             batch_size = max(1, int(len(codes)))
             min_ok = min(batch_size, max(3, int(batch_size * 0.05)))
@@ -2236,38 +2292,102 @@ class ContinuousLearner:
                 log.debug("VPN min-ok adjustment unavailable: %s", e)
             if len(ok_codes) < min_ok and failed_codes and not self._should_stop():
                 relaxed_min_bars = max(CONFIG.SEQUENCE_LENGTH + 20, int(min_bars * 0.7))
-                retry_codes = failed_codes[: min(len(failed_codes), max(8, min_ok * 2))]
                 retry_base_processed = int(max(0, len(ok_codes)))
+                retry_groups: list[tuple[str, list[str], bool, bool]] = []
+                retry_cap = min(len(failed_codes), max(8, min_ok * 2))
+                new_batch_set = set(new_batch)
+                replay_batch_set = set(replay_batch)
+                new_failed = [c for c in failed_codes if c in new_batch_set]
+                replay_failed = [c for c in failed_codes if c in replay_batch_set]
+                if new_failed:
+                    retry_groups.append((
+                        "new",
+                        new_failed[: min(len(new_failed), retry_cap)],
+                        True,
+                        True,
+                    ))
+                used_retry = sum(len(g[1]) for g in retry_groups)
+                replay_left = max(0, retry_cap - used_retry)
+                if replay_failed and replay_left > 0:
+                    retry_groups.append((
+                        "replay",
+                        replay_failed[: min(len(replay_failed), replay_left)],
+                        False,
+                        False,
+                    ))
+                if not retry_groups:
+                    retry_groups.append((
+                        "batch",
+                        failed_codes[:retry_cap],
+                        True,
+                        True,
+                    ))
+                total_retry = max(1, sum(len(g[1]) for g in retry_groups))
                 self._update(
                     message=(
-                        f"Retrying {len(retry_codes)} failed stocks "
+                        f"Retrying {sum(len(g[1]) for g in retry_groups)} failed stocks "
                         f"(relaxed min bars {relaxed_min_bars})"
                     ),
                     progress=36.0,
                 )
-                retry_ok, retry_failed = self._fetcher.fetch_batch(
-                    retry_codes, eff_interval, eff_lookback, relaxed_min_bars,
-                    stop_check=self._should_stop,
-                    progress_cb=lambda msg, cnt: self._update(
-                        message=f"Retry pass: {msg}",
-                        stocks_processed=min(
-                            len(codes),
-                            retry_base_processed + int(cnt),
-                        ),
-                        progress=36.0 + 4.0 * (cnt / max(len(retry_codes), 1)),
-                    ),
-                )
-                if self._should_stop():
-                    raise CancelledException()
+                retry_ok_all: list[str] = []
+                retry_failed_all: list[str] = []
+                retry_done = 0
+                retried_set: set[str] = set()
+                for label, retry_codes, retry_online, retry_update in retry_groups:
+                    if not retry_codes:
+                        continue
+                    base_retry = int(retry_done)
+                    retried_set.update(retry_codes)
+                    try:
+                        retry_ok, retry_failed = self._fetcher.fetch_batch(
+                            retry_codes, eff_interval, eff_lookback, relaxed_min_bars,
+                            stop_check=self._should_stop,
+                            progress_cb=lambda msg, cnt, b=base_retry, tag=label: self._update(
+                                message=f"Retry {tag}: {msg}",
+                                stocks_processed=min(
+                                    len(codes),
+                                    retry_base_processed + b + int(cnt),
+                                ),
+                                progress=36.0 + 4.0 * (
+                                    (b + int(cnt)) / float(total_retry)
+                                ),
+                            ),
+                            allow_online=retry_online,
+                            update_db=retry_update,
+                        )
+                    except TypeError:
+                        retry_ok, retry_failed = self._fetcher.fetch_batch(
+                            retry_codes, eff_interval, eff_lookback, relaxed_min_bars,
+                            stop_check=self._should_stop,
+                            progress_cb=lambda msg, cnt, b=base_retry, tag=label: self._update(
+                                message=f"Retry {tag}: {msg}",
+                                stocks_processed=min(
+                                    len(codes),
+                                    retry_base_processed + b + int(cnt),
+                                ),
+                                progress=36.0 + 4.0 * (
+                                    (b + int(cnt)) / float(total_retry)
+                                ),
+                            ),
+                        )
+                    retry_ok_all.extend(retry_ok)
+                    retry_failed_all.extend(retry_failed)
+                    retry_done += len(retry_codes)
+                    if self._should_stop():
+                        raise CancelledException()
+
                 ok_set = set(ok_codes)
-                for code in retry_ok:
+                for code in retry_ok_all:
                     if code not in ok_set:
                         ok_codes.append(code)
                         ok_set.add(code)
+                retry_failed_set = set(retry_failed_all)
                 failed_codes = [
                     c for c in failed_codes
-                    if c not in set(retry_ok) and c in set(retry_failed)
-                ] + [c for c in failed_codes if c not in retry_codes]
+                    if c not in ok_set
+                    and (c not in retried_set or c in retry_failed_set)
+                ]
 
             for code in failed_codes:
                 self._rotator.mark_failed(code)
@@ -2402,10 +2522,16 @@ class ContinuousLearner:
 
             self.progress.stocks_found = len(train_codes)
             self.progress.stocks_total = len(train_codes)
+            known_codes = set(self._replay.get_all())
+            targeted_new = [c for c in train_codes if c not in known_codes]
+            targeted_replay = [c for c in train_codes if c in known_codes]
 
             self._update(
                 stage="targeted_training",
-                message=f"Targeted batch: {len(train_codes)} stocks",
+                message=(
+                    f"Targeted batch: {len(targeted_new)} new + "
+                    f"{len(targeted_replay)} replay"
+                ),
                 progress=5.0,
             )
 
@@ -2417,45 +2543,165 @@ class ContinuousLearner:
                 stocks_processed=0,
             )
 
-            ok_codes, failed_codes = self._fetcher.fetch_batch(
-                train_codes, eff_interval, eff_lookback, min_bars,
-                stop_check=self._should_stop,
-                progress_cb=lambda msg, cnt: self._update(
-                    message=msg,
-                    stocks_processed=cnt,
-                    progress=10.0 + 30.0 * (cnt / max(len(train_codes), 1)),
-                ),
-            )
-            if self._should_stop():
-                raise CancelledException()
+            ok_codes: list[str] = []
+            failed_codes: list[str] = []
+            total_codes = max(1, int(len(train_codes)))
+            fetched_so_far = 0
+            fetch_groups: list[tuple[str, list[str], bool, bool]] = []
+            if targeted_new:
+                fetch_groups.append(("new", list(targeted_new), True, True))
+            if targeted_replay:
+                fetch_groups.append(("replay", list(targeted_replay), False, False))
+            if not fetch_groups:
+                fetch_groups.append(("batch", list(train_codes), True, True))
+
+            for label, group_codes, group_online, group_update in fetch_groups:
+                if not group_codes:
+                    continue
+                base_processed = int(fetched_so_far)
+                self._update(
+                    message=f"Fetching targeted {label} stocks ({len(group_codes)})...",
+                    stocks_processed=base_processed,
+                    progress=10.0 + 30.0 * (base_processed / float(total_codes)),
+                )
+                try:
+                    group_ok, group_failed = self._fetcher.fetch_batch(
+                        group_codes, eff_interval, eff_lookback, min_bars,
+                        stop_check=self._should_stop,
+                        progress_cb=lambda msg, cnt, b=base_processed, tag=label: self._update(
+                            message=f"{tag}: {msg}",
+                            stocks_processed=min(len(train_codes), b + int(cnt)),
+                            progress=10.0 + 30.0 * (
+                                (b + int(cnt)) / float(total_codes)
+                            ),
+                        ),
+                        allow_online=group_online,
+                        update_db=group_update,
+                    )
+                except TypeError:
+                    group_ok, group_failed = self._fetcher.fetch_batch(
+                        group_codes, eff_interval, eff_lookback, min_bars,
+                        stop_check=self._should_stop,
+                        progress_cb=lambda msg, cnt, b=base_processed, tag=label: self._update(
+                            message=f"{tag}: {msg}",
+                            stocks_processed=min(len(train_codes), b + int(cnt)),
+                            progress=10.0 + 30.0 * (
+                                (b + int(cnt)) / float(total_codes)
+                            ),
+                        ),
+                    )
+                ok_codes.extend(group_ok)
+                failed_codes.extend(group_failed)
+                fetched_so_far += len(group_codes)
+                if self._should_stop():
+                    raise CancelledException()
+
+            ok_codes = list(dict.fromkeys(ok_codes))
+            ok_set = set(ok_codes)
+            failed_codes = [
+                c for c in dict.fromkeys(failed_codes)
+                if c not in ok_set
+            ]
 
             if not ok_codes and failed_codes and not self._should_stop():
                 relaxed_min_bars = max(CONFIG.SEQUENCE_LENGTH + 20, int(min_bars * 0.7))
-                retry_codes = failed_codes[: min(len(failed_codes), 12)]
                 retry_base_processed = int(max(0, len(ok_codes)))
+                retry_groups: list[tuple[str, list[str], bool, bool]] = []
+                retry_cap = min(len(failed_codes), 12)
+                targeted_new_set = set(targeted_new)
+                targeted_replay_set = set(targeted_replay)
+                new_failed = [c for c in failed_codes if c in targeted_new_set]
+                replay_failed = [c for c in failed_codes if c in targeted_replay_set]
+                if new_failed:
+                    retry_groups.append((
+                        "new",
+                        new_failed[: min(len(new_failed), retry_cap)],
+                        True,
+                        True,
+                    ))
+                used_retry = sum(len(g[1]) for g in retry_groups)
+                replay_left = max(0, retry_cap - used_retry)
+                if replay_failed and replay_left > 0:
+                    retry_groups.append((
+                        "replay",
+                        replay_failed[: min(len(replay_failed), replay_left)],
+                        False,
+                        False,
+                    ))
+                if not retry_groups:
+                    retry_groups.append((
+                        "batch",
+                        failed_codes[:retry_cap],
+                        True,
+                        True,
+                    ))
+                total_retry = max(1, sum(len(g[1]) for g in retry_groups))
                 self._update(
                     message=(
-                        f"Retrying targeted fetch for {len(retry_codes)} stocks "
+                        f"Retrying targeted fetch for "
+                        f"{sum(len(g[1]) for g in retry_groups)} stocks "
                         f"(min bars {relaxed_min_bars})"
                     ),
                     progress=36.0,
                 )
-                retry_ok, retry_failed = self._fetcher.fetch_batch(
-                    retry_codes, eff_interval, eff_lookback, relaxed_min_bars,
-                    stop_check=self._should_stop,
-                    progress_cb=lambda msg, cnt: self._update(
-                        message=f"Retry pass: {msg}",
-                        stocks_processed=min(
-                            len(train_codes),
-                            retry_base_processed + int(cnt),
-                        ),
-                        progress=36.0 + 4.0 * (cnt / max(len(retry_codes), 1)),
-                    ),
-                )
-                if self._should_stop():
-                    raise CancelledException()
-                ok_codes = retry_ok or ok_codes
-                failed_codes = retry_failed + [c for c in failed_codes if c not in retry_codes]
+                retry_ok_all: list[str] = []
+                retry_failed_all: list[str] = []
+                retry_done = 0
+                retried_set: set[str] = set()
+                for label, retry_codes, retry_online, retry_update in retry_groups:
+                    if not retry_codes:
+                        continue
+                    base_retry = int(retry_done)
+                    retried_set.update(retry_codes)
+                    try:
+                        retry_ok, retry_failed = self._fetcher.fetch_batch(
+                            retry_codes, eff_interval, eff_lookback, relaxed_min_bars,
+                            stop_check=self._should_stop,
+                            progress_cb=lambda msg, cnt, b=base_retry, tag=label: self._update(
+                                message=f"Retry {tag}: {msg}",
+                                stocks_processed=min(
+                                    len(train_codes),
+                                    retry_base_processed + b + int(cnt),
+                                ),
+                                progress=36.0 + 4.0 * (
+                                    (b + int(cnt)) / float(total_retry)
+                                ),
+                            ),
+                            allow_online=retry_online,
+                            update_db=retry_update,
+                        )
+                    except TypeError:
+                        retry_ok, retry_failed = self._fetcher.fetch_batch(
+                            retry_codes, eff_interval, eff_lookback, relaxed_min_bars,
+                            stop_check=self._should_stop,
+                            progress_cb=lambda msg, cnt, b=base_retry, tag=label: self._update(
+                                message=f"Retry {tag}: {msg}",
+                                stocks_processed=min(
+                                    len(train_codes),
+                                    retry_base_processed + b + int(cnt),
+                                ),
+                                progress=36.0 + 4.0 * (
+                                    (b + int(cnt)) / float(total_retry)
+                                ),
+                            ),
+                        )
+                    retry_ok_all.extend(retry_ok)
+                    retry_failed_all.extend(retry_failed)
+                    retry_done += len(retry_codes)
+                    if self._should_stop():
+                        raise CancelledException()
+
+                ok_set = set(ok_codes)
+                for code in retry_ok_all:
+                    if code not in ok_set:
+                        ok_codes.append(code)
+                        ok_set.add(code)
+                retry_failed_set = set(retry_failed_all)
+                failed_codes = [
+                    c for c in failed_codes
+                    if c not in ok_set
+                    and (c not in retried_set or c in retry_failed_set)
+                ]
 
             if failed_codes:
                 failed_display = ', '.join(failed_codes[:10])

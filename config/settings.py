@@ -17,24 +17,29 @@ _SENTINEL = object()
 # (avoids circular import: settings → logger → settings)
 _log = logging.getLogger("config.settings")
 
+
 class TradingMode(Enum):
     SIMULATION = "simulation"
     PAPER = "paper"
     LIVE = "live"
+
 
 class RiskProfile(Enum):
     CONSERVATIVE = "conservative"
     MODERATE = "moderate"
     AGGRESSIVE = "aggressive"
 
+
 class MarketType(Enum):
     A_SHARE = "a_share"
     HK = "hk"
     US = "us"
 
+
 @dataclass
 class DataConfig:
     """Data layer configuration."""
+
     cache_ttl_hours: float = 4.0
     max_memory_cache_mb: int = 500
     parallel_downloads: int = 10
@@ -45,9 +50,11 @@ class DataConfig:
     feature_lookback: int = 60
     poll_interval_seconds: float = 1.0
 
+
 @dataclass
 class ModelConfig:
     """ML model configuration."""
+
     sequence_length: int = 60
     hidden_size: int = 256
     num_layers: int = 3
@@ -76,9 +83,11 @@ class ModelConfig:
     sell_threshold: float = 0.60
     strong_sell_threshold: float = 0.72
 
+
 @dataclass
 class TradingConfig:
     """Trading rules configuration."""
+
     lot_size: int = 100
     commission: float = 0.00025
     stamp_tax: float = 0.001
@@ -99,9 +108,11 @@ class TradingConfig:
     broker_plugin: str = ""
     broker_plugin_kwargs: dict[str, Any] = field(default_factory=dict)
 
+
 @dataclass
 class RiskConfig:
     """Risk management configuration."""
+
     max_position_pct: float = 15.0
     max_portfolio_risk_pct: float = 30.0
     max_daily_loss_pct: float = 3.0
@@ -124,9 +135,11 @@ class RiskConfig:
     kill_switch_loss_pct: float = 8.0
     kill_switch_drawdown_pct: float = 20.0
 
+
 @dataclass
 class SecurityConfig:
     """Security configuration."""
+
     encrypt_credentials: bool = True
     audit_logging: bool = True
     audit_hash_chain: bool = True
@@ -149,9 +162,11 @@ class SecurityConfig:
     runtime_lease_node_id: str = ""
     runtime_lease_ttl_seconds: float = 20.0
 
+
 @dataclass
 class AlertConfig:
     """Alerting configuration."""
+
     enabled: bool = True
     email_enabled: bool = False
     email_recipients: list[str] = field(default_factory=list)
@@ -169,6 +184,7 @@ class AlertConfig:
     smtp_username: str = ""
     smtp_password_key: str = "smtp_password"
 
+
 @dataclass
 class AutoTradeConfig:
     """
@@ -177,6 +193,7 @@ class AutoTradeConfig:
     Controls the autonomous trading engine that can execute trades
     without manual confirmation when enabled.
     """
+
     # Master enable/disable
     enabled: bool = False
 
@@ -218,6 +235,7 @@ class AutoTradeConfig:
     # Paper trading safety — require explicit confirmation for live
     confirm_live_auto_trade: bool = True
 
+
 @dataclass
 class PrecisionConfig:
     """
@@ -226,6 +244,7 @@ class PrecisionConfig:
     All options are optional and default-safe (disabled) so existing workflows
     keep behaving the same unless explicitly enabled.
     """
+
     enabled: bool = True
 
     # Predictor runtime gating
@@ -255,6 +274,7 @@ class PrecisionConfig:
     # Persistence for learned threshold profile
     profile_filename: str = "precision_thresholds.json"
 
+
 def _safe_dataclass_from_dict(dc_instance, data: dict) -> list[str]:
     """
     Apply dict values to a dataclass instance with type checking.
@@ -283,9 +303,13 @@ def _safe_dataclass_from_dict(dc_instance, data: dict) -> list[str]:
                     warnings_list.append(
                         f"Bad value for bool field '{key}': {value!r}"
                     )
-            elif isinstance(current_value, int) and isinstance(value, (int, float)):
+            elif isinstance(current_value, int) and isinstance(
+                value, (int, float)
+            ):
                 setattr(dc_instance, key, int(value))
-            elif isinstance(current_value, float) and isinstance(value, (int, float)):
+            elif isinstance(current_value, float) and isinstance(
+                value, (int, float)
+            ):
                 setattr(dc_instance, key, float(value))
             elif isinstance(current_value, str) and isinstance(value, str):
                 setattr(dc_instance, key, value)
@@ -338,6 +362,7 @@ def _coerce_bool(value: Any) -> tuple[bool, bool]:
 
     return False, False
 
+
 def _dataclass_to_dict(dc_instance) -> dict:
     """Serialize a dataclass to dict, handling special types."""
     result = {}
@@ -350,6 +375,7 @@ def _dataclass_to_dict(dc_instance) -> dict:
         else:
             result[f.name] = value
     return result
+
 
 class Config:
     """
@@ -380,7 +406,7 @@ class Config:
     @classmethod
     def reset_instance(cls) -> None:
         """
-        FIX #9: Destroy singleton for testing.
+        Destroy singleton for testing.
         Call between tests to get a fresh Config.
         """
         with cls._instance_lock:
@@ -418,7 +444,7 @@ class Config:
         self._base_dir = Path(__file__).parent.parent
         self._model_dir_override: str | None = None
 
-        # FIX #6: Sentinel-based caching for path properties
+        # Sentinel-based caching for path properties
         self._data_dir_cached: Any = _SENTINEL
         self._model_dir_cached: Any = _SENTINEL
         self._model_dir_cached_override: Any = _SENTINEL
@@ -427,27 +453,36 @@ class Config:
         self._audit_dir_cached: Any = _SENTINEL
 
         self.stock_pool: list[str] = [
-            "600519", "601318", "600036", "000858", "600900",
-            "002594", "300750", "002475", "300059", "002230",
-            "000333", "000651", "600887", "603288", "600276",
-            "300760", "300015", "601166", "601398", "600030",
+            "600519",
+            "601318",
+            "600036",
+            "000858",
+            "600900",
+            "002594",
+            "300750",
+            "002475",
+            "300059",
+            "002230",
+            "000333",
+            "000651",
+            "600887",
+            "603288",
+            "600276",
+            "300760",
+            "300015",
+            "601166",
+            "601398",
+            "600030",
         ]
 
         self.min_stocks_for_training: int = 5
         self.auto_learn_epochs: int = 50
 
-        # Load from file/env
-        # FIX LOCK: _load() is called from __init__ so we do NOT acquire
-        # self._lock here (it would deadlock on RLock from __getattr__
-        # during initialization). _load is only called once from __init__
-        # which is already protected by _instance_lock.
         self._load()
-        # FIX #1: Validate but don't crash — collect warnings
         self._validate()
 
     # ==================== LEGACY COMPATIBILITY ====================
 
-    # FIX #8: Single unified mapping
     _LEGACY_MAP: dict[str, str] = {
         "SEQUENCE_LENGTH": "model.sequence_length",
         "PREDICTION_HORIZON": "model.prediction_horizon",
@@ -505,16 +540,9 @@ class Config:
 
         Only called when normal attribute lookup fails,
         so @property definitions always take precedence.
-
-        FIX GETATTR: Guard against recursive calls during __init__
-        by checking _initialized. During __init__, sub-configs may not
-        exist yet, so we must not try to resolve legacy names.
         """
-        # FIX GETATTR: During __init__, _initialized may not exist yet
-        # (object.__getattribute__ hasn't set it). Use object.__getattribute__
-        # to check without recursing.
         try:
-            initialized = object.__getattribute__(self, '_initialized')
+            initialized = object.__getattribute__(self, "_initialized")
         except AttributeError as exc:
             raise AttributeError(
                 f"{self.__class__.__name__} has no attribute {name!r}"
@@ -549,10 +577,11 @@ class Config:
 
     @CAPITAL.setter
     def CAPITAL(self, value: float) -> None:
-        # FIX SETATTR: Validate positive value
         value = float(value)
         if value <= 0:
-            _log.warning(f"Capital must be positive, got {value} — clamping to 1.0")
+            _log.warning(
+                f"Capital must be positive, got {value} — clamping to 1.0"
+            )
             value = 1.0
         self.capital = value
 
@@ -581,7 +610,6 @@ class Config:
         return self.auto_learn_epochs
 
     # ==================== PATH PROPERTIES ====================
-    # FIX #11: No directory creation in getters. Use ensure_dirs() explicitly.
 
     @property
     def BASE_DIR(self) -> Path:
@@ -630,10 +658,7 @@ class Config:
         return self._audit_dir_cached
 
     def ensure_dirs(self) -> None:
-        """
-        FIX #11: Create all directories explicitly.
-        Call once at startup, not as a side effect of reading config.
-        """
+        """Create all directories explicitly. Call once at startup."""
         for d in (
             self.data_dir,
             self.model_dir,
@@ -653,14 +678,7 @@ class Config:
     # ==================== LOADING ====================
 
     def _load(self) -> None:
-        """
-        Load configuration from file and environment.
-
-        FIX LOCK: NOT locked here — called from __init__ which is
-        already serialized by _instance_lock. Acquiring self._lock
-        here would be redundant and could cause issues if _apply_dict
-        triggers __getattr__ during init.
-        """
+        """Load configuration from file and environment."""
         if self._config_file.exists():
             try:
                 with open(self._config_file, encoding="utf-8") as f:
@@ -673,6 +691,7 @@ class Config:
 
     def _load_from_env(self) -> None:
         """Load from environment variables."""
+
         def _env_bool(raw: str) -> bool:
             ok, parsed = _coerce_bool(raw)
             if not ok:
@@ -699,14 +718,35 @@ class Config:
                 "security.enable_runtime_lease",
                 _env_bool,
             ),
-            "RUNTIME_LEASE_BACKEND": ("security.runtime_lease_backend", str),
-            "RUNTIME_LEASE_CLUSTER": ("security.runtime_lease_cluster", str),
+            "RUNTIME_LEASE_BACKEND": (
+                "security.runtime_lease_backend",
+                str,
+            ),
+            "RUNTIME_LEASE_CLUSTER": (
+                "security.runtime_lease_cluster",
+                str,
+            ),
             "RUNTIME_LEASE_PATH": ("security.runtime_lease_path", str),
-            "RUNTIME_LEASE_NODE_ID": ("security.runtime_lease_node_id", str),
-            "RUNTIME_LEASE_TTL_SECONDS": ("security.runtime_lease_ttl_seconds", float),
-            "RUNTIME_CHECKPOINT_SECONDS": ("runtime_checkpoint_seconds", float),
-            "RUNTIME_WATCHDOG_STALL_SECONDS": ("runtime_watchdog_stall_seconds", float),
-            "RUNTIME_LEASE_HEARTBEAT_SECONDS": ("runtime_lease_heartbeat_seconds", float),
+            "RUNTIME_LEASE_NODE_ID": (
+                "security.runtime_lease_node_id",
+                str,
+            ),
+            "RUNTIME_LEASE_TTL_SECONDS": (
+                "security.runtime_lease_ttl_seconds",
+                float,
+            ),
+            "RUNTIME_CHECKPOINT_SECONDS": (
+                "runtime_checkpoint_seconds",
+                float,
+            ),
+            "RUNTIME_WATCHDOG_STALL_SECONDS": (
+                "runtime_watchdog_stall_seconds",
+                float,
+            ),
+            "RUNTIME_LEASE_HEARTBEAT_SECONDS": (
+                "runtime_lease_heartbeat_seconds",
+                float,
+            ),
         }
 
         for env_key, (attr_path, converter) in env_mappings.items():
@@ -716,19 +756,15 @@ class Config:
                 try:
                     self._set_nested(attr_path, converter(value.strip()))
                 except Exception as e:
-                    # FIX #3: Log instead of silently ignoring
                     _log.warning(
-                        "Failed to apply env %s=%r: %s", full_key, value, e
+                        "Failed to apply env %s=%r: %s",
+                        full_key,
+                        value,
+                        e,
                     )
 
     def _apply_dict(self, data: dict, _from_init: bool = False) -> None:
-        """
-        Apply dictionary to config with type checking.
-
-        Args:
-            data: Configuration dictionary
-            _from_init: If True, skip lock acquisition (caller holds init lock)
-        """
+        """Apply dictionary to config with type checking."""
         if not _from_init:
             self._lock.acquire()
 
@@ -740,7 +776,6 @@ class Config:
 
     def _apply_dict_inner(self, data: dict) -> None:
         """Inner implementation of _apply_dict without locking."""
-        # Sub-config dataclasses
         sub_configs = {
             "data": self.data,
             "model": self.model,
@@ -753,7 +788,6 @@ class Config:
         }
 
         for key, value in data.items():
-            # Handle sub-config dicts
             if key in sub_configs:
                 if isinstance(value, dict):
                     warnings_list = _safe_dataclass_from_dict(
@@ -790,11 +824,9 @@ class Config:
                     _log.warning("Bad market_type %r: %s", value, e)
                 continue
 
-            # Handle known top-level attributes with type checking
             if hasattr(self, key) and not key.startswith("_"):
                 current = getattr(self, key)
                 try:
-                    # FIX: Check bool before int (bool is subclass of int)
                     if isinstance(current, bool):
                         ok, parsed = _coerce_bool(value)
                         if ok:
@@ -813,9 +845,13 @@ class Config:
                         value, (int, float)
                     ):
                         setattr(self, key, int(value))
-                    elif isinstance(current, str) and isinstance(value, str):
+                    elif isinstance(current, str) and isinstance(
+                        value, str
+                    ):
                         setattr(self, key, value)
-                    elif isinstance(current, list) and isinstance(value, list):
+                    elif isinstance(current, list) and isinstance(
+                        value, list
+                    ):
                         setattr(self, key, value)
                     else:
                         _log.warning(
@@ -841,12 +877,8 @@ class Config:
 
     def _validate(self) -> None:
         """
-        FIX #1: Validate configuration without raising.
+        Validate configuration without raising (except LIVE mode).
         Collects warnings accessible via self.validation_warnings.
-        Only raises on truly fatal errors (capital <= 0 in LIVE mode).
-
-        FIX VALIDATE: Additional checks for threshold consistency.
-        FIX RATIO: Auto-correct split ratios that don't sum to 1.0.
         """
         self._validation_warnings.clear()
 
@@ -861,7 +893,6 @@ class Config:
                 "Embargo must be >= prediction horizon"
             )
 
-        # FIX VALIDATE: Check threshold relationship
         if self.model.down_threshold >= 0:
             self._validation_warnings.append(
                 f"down_threshold should be negative, got {self.model.down_threshold}"
@@ -876,7 +907,6 @@ class Config:
                 f"up_threshold ({self.model.up_threshold})"
             )
 
-        # FIX RATIO: Check and auto-correct split ratios
         ratio_sum = (
             self.model.train_ratio
             + self.model.val_ratio
@@ -887,8 +917,9 @@ class Config:
                 f"Split ratios must sum to 1.0, got {ratio_sum:.4f} — "
                 f"auto-correcting test_ratio"
             )
-            # Auto-correct: adjust test_ratio to make sum = 1.0
-            corrected_test = 1.0 - self.model.train_ratio - self.model.val_ratio
+            corrected_test = (
+                1.0 - self.model.train_ratio - self.model.val_ratio
+            )
             if corrected_test > 0:
                 self.model.test_ratio = round(corrected_test, 4)
                 _log.info(
@@ -899,35 +930,51 @@ class Config:
                     "Cannot auto-correct: train_ratio + val_ratio >= 1.0"
                 )
 
-        # Auto-trade validation
         if self.auto_trade.enabled:
             if self.auto_trade.min_confidence < 0.5:
                 self._validation_warnings.append(
                     "Auto-trade min_confidence should be >= 0.5 for safety"
                 )
-            if self.auto_trade.max_auto_positions > self.risk.max_positions:
+            if (
+                self.auto_trade.max_auto_positions
+                > self.risk.max_positions
+            ):
                 self._validation_warnings.append(
                     "Auto-trade max_positions exceeds risk max_positions"
                 )
-            if self.auto_trade.max_auto_position_pct > self.risk.max_position_pct:
+            if (
+                self.auto_trade.max_auto_position_pct
+                > self.risk.max_position_pct
+            ):
                 self._validation_warnings.append(
                     "Auto-trade max_position_pct exceeds risk max_position_pct"
                 )
 
-        # Precision config validation
-        if self.precision.min_confidence < 0 or self.precision.min_confidence > 1:
+        if (
+            self.precision.min_confidence < 0
+            or self.precision.min_confidence > 1
+        ):
             self._validation_warnings.append(
                 f"precision.min_confidence out of range: {self.precision.min_confidence}"
             )
-        if self.precision.min_agreement < 0 or self.precision.min_agreement > 1:
+        if (
+            self.precision.min_agreement < 0
+            or self.precision.min_agreement > 1
+        ):
             self._validation_warnings.append(
                 f"precision.min_agreement out of range: {self.precision.min_agreement}"
             )
-        if self.precision.max_entropy < 0 or self.precision.max_entropy > 1:
+        if (
+            self.precision.max_entropy < 0
+            or self.precision.max_entropy > 1
+        ):
             self._validation_warnings.append(
                 f"precision.max_entropy out of range: {self.precision.max_entropy}"
             )
-        if self.precision.min_edge < 0 or self.precision.min_edge > 1:
+        if (
+            self.precision.min_edge < 0
+            or self.precision.min_edge > 1
+        ):
             self._validation_warnings.append(
                 f"precision.min_edge out of range: {self.precision.min_edge}"
             )
@@ -952,10 +999,7 @@ class Config:
     # ==================== SAVE / RELOAD ====================
 
     def save(self) -> None:
-        """
-        FIX #4: Save ALL configuration including sub-configs.
-        FIX SAVE: Use atomic_write_json for consistency with other writers.
-        """
+        """Save ALL configuration including sub-configs."""
         with self._lock:
             data = {
                 "capital": self.capital,
@@ -982,11 +1026,11 @@ class Config:
 
             try:
                 from utils.atomic_io import atomic_write_json
+
                 atomic_write_json(
                     self._config_file, data, indent=2, use_lock=True
                 )
             except ImportError:
-                # Fallback: manual atomic write with resilient fsync
                 tmp_path = self._config_file.with_suffix(".tmp")
                 with open(tmp_path, "w", encoding="utf-8") as f:
                     json.dump(data, f, indent=2)
@@ -1001,12 +1045,8 @@ class Config:
             _log.error("Failed to save config: %s", e)
 
     def reload(self) -> None:
-        """
-        FIX #5: Hot-reload — reset sub-configs to defaults, then re-apply.
-        FIX RELOAD: Invalidate path caches after reset.
-        """
+        """Hot-reload — reset sub-configs to defaults, then re-apply."""
         with self._lock:
-            # Reset sub-configs to defaults
             self.data = DataConfig()
             self.model = ModelConfig()
             self.trading = TradingConfig()
@@ -1016,7 +1056,6 @@ class Config:
             self.auto_trade = AutoTradeConfig()
             self.precision = PrecisionConfig()
 
-            # FIX RELOAD: Invalidate all path caches
             self._data_dir_cached = _SENTINEL
             self._model_dir_cached = _SENTINEL
             self._model_dir_cached_override = _SENTINEL
@@ -1024,7 +1063,6 @@ class Config:
             self._cache_dir_cached = _SENTINEL
             self._audit_dir_cached = _SENTINEL
 
-            # Re-load from file/env
             if self._config_file.exists():
                 try:
                     with open(self._config_file, encoding="utf-8") as f:
@@ -1040,7 +1078,10 @@ class Config:
 
     def is_market_open(self) -> bool:
         """
-        FIX #10: Robust market-open check with proper fallback.
+        FIX: Robust market-open check with proper timezone handling.
+
+        Always compares naive time objects to avoid tz-aware vs tz-naive
+        mismatch with TradingConfig time fields.
         """
         try:
             from zoneinfo import ZoneInfo
@@ -1049,7 +1090,7 @@ class Config:
         except Exception:
             now = datetime.now()
 
-        # Weekend check (always available)
+        # Weekend check
         if now.weekday() >= 5:
             return False
 
@@ -1059,9 +1100,11 @@ class Config:
             if not is_trading_day(now.date()):
                 return False
         except ImportError:
-            pass  # No holiday calendar — weekday check is our best effort
+            pass
 
-        current_time = now.time()
+        # FIX #18: Always use naive time for comparison with TradingConfig
+        # time fields which are naive
+        current_time = now.time().replace(tzinfo=None)
         t = self.trading
 
         morning = t.market_open_am <= current_time <= t.market_close_am
@@ -1087,5 +1130,6 @@ class Config:
             f"risk={self.risk_profile.value}, "
             f"auto_trade={'ON' if self.auto_trade.enabled else 'OFF'})"
         )
+
 
 CONFIG = Config()

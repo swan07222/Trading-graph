@@ -1,13 +1,15 @@
 ﻿# data/news.py
+import copy
 import json
 import math
+import os
 import re
 import ssl
 import threading
 import time
 from collections import deque
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 
 import numpy as np
@@ -92,6 +94,43 @@ NEGATIVE_WORDS: dict[str, float] = {
 # Max times a single keyword is counted (prevents spam amplification)
 _MAX_KEYWORD_COUNT: int = 3
 
+
+def _safe_age_seconds_from_now(
+    publish_time: datetime | None,
+) -> float | None:
+    """Age in seconds vs now for naive/aware datetimes without type errors."""
+    if not isinstance(publish_time, datetime):
+        return None
+    try:
+        if publish_time.tzinfo is not None:
+            now_dt = datetime.now(tz=publish_time.tzinfo)
+        else:
+            now_dt = datetime.now()
+        return float((now_dt - publish_time).total_seconds())
+    except Exception:
+        return None
+
+
+def _safe_age_hours_from_now(
+    publish_time: datetime | None,
+) -> float | None:
+    age_s = _safe_age_seconds_from_now(publish_time)
+    if age_s is None:
+        return None
+    return float(age_s / 3600.0)
+
+
+def _safe_float(value: object, default: float = 0.0) -> float:
+    """Best-effort float conversion with finite guard."""
+    try:
+        out = float(value)
+    except (TypeError, ValueError):
+        return float(default)
+    if not math.isfinite(out):
+        return float(default)
+    return out
+
+
 def analyze_sentiment(text: str) -> tuple[float, str]:
     """
     Weighted keyword sentiment scoring.
@@ -99,7 +138,7 @@ def analyze_sentiment(text: str) -> tuple[float, str]:
     - Counts each keyword up to _MAX_KEYWORD_COUNT times
     - Normalizes by total absolute weight contribution
     - Applies tanh to produce smooth [-1, 1] output
-    - Returns (score, label) where label 鈭?{positive, negative, neutral}
+    - Returns (score, label) where label in {positive, negative, neutral}
     """
     if not text:
         return 0.0, "neutral"
@@ -134,6 +173,7 @@ def analyze_sentiment(text: str) -> tuple[float, str]:
 
     return round(float(normalized), 3), label
 
+
 @dataclass
 class NewsItem:
     """Single news article with auto-computed sentiment."""
@@ -145,9 +185,9 @@ class NewsItem:
     publish_time: datetime = field(default_factory=datetime.now)
     stock_codes: list[str] = field(default_factory=list)
     category: str = ""  # policy, earnings, market, industry, company
-    sentiment_score: float = 0.0  # -1.0 鈥?+1.0
+    sentiment_score: float = 0.0  # -1.0 .. +1.0
     sentiment_label: str = "neutral"  # positive, negative, neutral
-    importance: float = 0.5  # 0.0 鈥?1.0
+    importance: float = 0.5  # 0.0 .. 1.0
     keywords: list[str] = field(default_factory=list)
 
     def __post_init__(self):
@@ -159,16 +199,20 @@ class NewsItem:
             )
 
     def age_minutes(self) -> float:
-        return (datetime.now() - self.publish_time).total_seconds() / 60.0
+        age_s = _safe_age_seconds_from_now(self.publish_time)
+        if age_s is None:
+            return 0.0
+        return max(0.0, float(age_s) / 60.0)
 
     def is_relevant_to(self, stock_code: str) -> bool:
         return stock_code in self.stock_codes
 
     def to_dict(self) -> dict:
+        ts = self.publish_time if isinstance(self.publish_time, datetime) else None
         return {
             "title": self.title,
             "source": self.source,
-            "time": self.publish_time.strftime("%Y-%m-%d %H:%M"),
+            "time": ts.strftime("%Y-%m-%d %H:%M") if ts is not None else "",
             "sentiment": self.sentiment_score,
             "sentiment_label": self.sentiment_label,
             "importance": self.importance,
@@ -176,17 +220,23 @@ class NewsItem:
             "codes": self.stock_codes,
         }
 
+
 class _BaseNewsFetcher:
     """Shared session setup for news fetchers."""
+
+    @staticmethod
+    def _allow_insecure_tls() -> bool:
+        raw = str(os.environ.get("TRADING_NEWS_ALLOW_INSECURE_TLS", "0"))
+        return raw.strip().lower() in ("1", "true", "yes", "on")
 
     @staticmethod
     def _resolve_tls_verify() -> bool | str:
         """
         Resolve a usable CA bundle path for requests.
 
-        Some environments can have a stale certifi path; in that case, fall
-        back to system/default bundle or finally disable verification so feeds
-        remain available.
+        Some environments can have a stale certifi path; in that case we first
+        try system/default bundles. If no valid bundle path can be found,
+        remain secure-by-default (verify=True) unless explicitly overridden.
         """
         candidates: list[str] = []
         try:
@@ -227,7 +277,10 @@ class _BaseNewsFetcher:
             except OSError:
                 continue
 
-        return False
+        if _BaseNewsFetcher._allow_insecure_tls():
+            return False
+        # Keep TLS verification enabled by default.
+        return True
 
     def __init__(self, referer: str = ""):
         self._session = requests.Session()
@@ -244,9 +297,10 @@ class _BaseNewsFetcher:
         self._session.verify = verify_cfg
         if verify_cfg is False:
             log.warning(
-                "No valid TLS CA bundle found for news fetchers; "
-                "HTTPS verification disabled for this session"
+                "News TLS verification disabled by env "
+                "(TRADING_NEWS_ALLOW_INSECURE_TLS=1)"
             )
+
 
 class SinaNewsFetcher(_BaseNewsFetcher):
     """Fetch news from Sina Finance (works on China IP)."""
@@ -335,6 +389,7 @@ class SinaNewsFetcher(_BaseNewsFetcher):
         except Exception as exc:
             log.debug(f"Sina stock news failed for {stock_code}: {exc}")
             return []
+
 
 class EastmoneyNewsFetcher(_BaseNewsFetcher):
     """Fetch news from Eastmoney (works on China IP only)."""
@@ -457,6 +512,7 @@ class EastmoneyNewsFetcher(_BaseNewsFetcher):
             log.debug(f"Eastmoney policy news failed: {exc}")
             return []
 
+
 class TencentNewsFetcher(_BaseNewsFetcher):
     """Fetch news from Tencent Finance (works from ANY IP)."""
 
@@ -504,6 +560,7 @@ class TencentNewsFetcher(_BaseNewsFetcher):
             log.warning(f"Tencent market news failed: {exc}")
             return []
 
+
 _POLICY_KEYWORDS: tuple[str, ...] = (
     "\u592e\u884c",
     "\u8bc1\u76d1\u4f1a",
@@ -514,6 +571,22 @@ _POLICY_KEYWORDS: tuple[str, ...] = (
     "\u6539\u9769",
     "\u6cd5\u89c4",
 )
+
+
+def _make_dedup_key(item: NewsItem) -> tuple[str, str]:
+    """
+    Create a stable dedup key from title prefix and publish_time.
+
+    FIX Bug 1: Original code referenced item.published_at which does not
+    exist on NewsItem. The correct attribute is item.publish_time.
+    """
+    title_part = str(item.title or "").strip()[:_DEDUP_PREFIX_LEN]
+    if isinstance(item.publish_time, datetime):
+        time_part = item.publish_time.strftime("%Y-%m-%d %H:%M")
+    else:
+        time_part = ""
+    return (title_part, time_part)
+
 
 class NewsAggregator:
     """
@@ -532,7 +605,7 @@ class NewsAggregator:
         self._lock = threading.RLock()
 
         # Rolling news buffer (last N items)
-        self._all_news: deque = deque(maxlen=_NEWS_BUFFER_SIZE)
+        self._all_news: deque[NewsItem] = deque(maxlen=_NEWS_BUFFER_SIZE)
         self._source_health: dict[str, dict[str, object]] = {
             "tencent": {
                 "ok_calls": 0,
@@ -630,6 +703,17 @@ class NewsAggregator:
                 return True
         return False
 
+    @staticmethod
+    def _publish_recency_key(item: NewsItem) -> float:
+        """
+        Stable recency sort key for mixed naive/aware publish_time values.
+        Smaller means newer. Missing timestamps are pushed to the end.
+        """
+        age_s = _safe_age_seconds_from_now(getattr(item, "publish_time", None))
+        if age_s is None:
+            return float("inf")
+        return max(0.0, float(age_s))
+
     # -- market news ---------------------------------------------------------
 
     def get_market_news(
@@ -640,7 +724,7 @@ class NewsAggregator:
 
         with self._lock:
             if not force_refresh and self._is_cache_valid(cache_key):
-                return self._cache[cache_key]
+                return list(self._cache[cache_key])
 
         from core.network import get_network_env
         env = get_network_env()
@@ -679,7 +763,7 @@ class NewsAggregator:
                 self._record_source_result("eastmoney_policy", False, error=str(exc))
 
         unique = self._deduplicate(all_items)
-        unique.sort(key=lambda x: x.publish_time, reverse=True)
+        unique.sort(key=self._publish_recency_key)
         unique = unique[:count]
 
         # Institutional fail-safe: stale cache fallback if all providers fail.
@@ -718,12 +802,13 @@ class NewsAggregator:
 
         with self._lock:
             if not force_refresh and self._is_cache_valid(cache_key):
-                return self._cache[cache_key]
+                return list(self._cache[cache_key])
 
         from core.network import get_network_env
         env = get_network_env()
 
         all_items: list[NewsItem] = []
+        context_items: list[NewsItem] = []
 
         should_try_sina = bool(env.is_china_direct) or bool(env.tencent_ok) or bool(env.eastmoney_ok)
         should_try_eastmoney = bool(env.eastmoney_ok) or bool(env.is_china_direct)
@@ -744,40 +829,69 @@ class NewsAggregator:
             except Exception as exc:
                 self._record_source_result("eastmoney_stock", False, error=str(exc))
 
+        # FIX Bug 4: Access _all_news under lock for thread safety
         with self._lock:
             for item in self._all_news:
                 if self._item_mentions_code(item, code6):
                     all_items.append(item)
 
-        # Final fallback path: derive stock-specific headlines from market stream
-        # so UI still shows relevant news when provider-specific stock APIs fail.
-        if not all_items:
-            market_pool = self.get_market_news(
-                count=max(50, int(count) * 4),
-                force_refresh=force_refresh,
-            )
-            for item in market_pool:
-                if self._item_mentions_code(item, code6):
-                    all_items.append(item)
+        # Blend in market-wide context so downstream views are not limited
+        # to symbol-tagged headlines only.
+        # FIX Bug 3: Don't propagate force_refresh to avoid unnecessary
+        # cache invalidation of unrelated market cache.
+        market_pool = self.get_market_news(
+            count=max(60, int(count) * 4),
+            force_refresh=False,
+        )
+        for item in market_pool:
+            if self._item_mentions_code(item, code6):
+                all_items.append(item)
+            else:
+                context_items.append(item)
 
-        unique = self._deduplicate(all_items)
-        unique.sort(key=lambda x: x.publish_time, reverse=True)
-        unique = unique[:count]
+        unique_all = self._deduplicate(all_items + context_items)
+        unique_all.sort(key=self._publish_recency_key)
+
+        direct = [
+            item for item in unique_all
+            if self._item_mentions_code(item, code6)
+        ]
+        context = [
+            item for item in unique_all
+            if not self._item_mentions_code(item, code6)
+        ]
+
+        target_count = max(1, int(count))
+
+        # Keep stock-relevant items first; only fallback to context if none exist.
+        selected: list[NewsItem] = []
+        candidate_pool = direct if direct else context
+        for item in candidate_pool:
+            selected.append(item)
+            if len(selected) >= target_count:
+                break
+
+        selected.sort(key=self._publish_recency_key)
+        selected = selected[:target_count]
 
         # Same stale-cache guard as market path.
-        if not unique:
+        if not selected:
             with self._lock:
                 stale = list(self._cache.get(cache_key, []))
             if stale:
                 log.warning(
-                    "Stock news providers returned no items; serving stale cache "
+                    "Stock/news blend returned no items; serving stale cache "
                     f"for {code6} ({len(stale)} items)"
                 )
-                return stale[:count]
+                return stale[:target_count]
 
-        for item in unique:
-            if code6 not in item.stock_codes:
-                item.stock_codes.append(code6)
+        # Avoid mutating shared market/news objects in-place.
+        unique: list[NewsItem] = []
+        for item in selected:
+            cloned = copy.deepcopy(item)
+            if code6 not in cloned.stock_codes:
+                cloned.stock_codes.append(code6)
+            unique.append(cloned)
 
         with self._lock:
             self._cache[cache_key] = unique
@@ -800,14 +914,23 @@ class NewsAggregator:
     # -- sentiment summary ---------------------------------------------------
 
     def get_sentiment_summary(
-        self, stock_code: str | None = None
+        self,
+        stock_code: str | None = None,
+        _news: list[NewsItem] | None = None,
     ) -> dict:
-        """Get aggregated sentiment for stock or market."""
-        news = (
-            self.get_stock_news(stock_code)
-            if stock_code
-            else self.get_market_news()
-        )
+        """
+        Get aggregated sentiment for stock or market.
+
+        FIX Bug 2: Accept optional _news parameter to break recursive call
+        chain. When called from get_news_features(), the already-fetched
+        news list is passed directly instead of re-fetching.
+        """
+        if _news is not None:
+            news = _news
+        elif stock_code:
+            news = self.get_stock_news(stock_code)
+        else:
+            news = self.get_market_news()
 
         if not news:
             return {
@@ -827,6 +950,7 @@ class NewsAggregator:
                 "average_age_hours": 0.0,
                 "sentiment_momentum_6h": 0.0,
                 "source_mix": {},
+                "source_weight_mix": {},
                 "source_contributions": {},
                 "positive_count": 0,
                 "negative_count": 0,
@@ -836,8 +960,7 @@ class NewsAggregator:
                 "top_negative": [],
             }
 
-        now = datetime.now()
-        scores = [float(n.sentiment_score) for n in news]
+        scores = [_safe_float(getattr(n, "sentiment_score", 0.0), 0.0) for n in news]
         simple_avg = (sum(scores) / len(scores)) if scores else 0.0
 
         weighted_total = 0.0
@@ -857,12 +980,10 @@ class NewsAggregator:
         scores_older_6h: list[float] = []
 
         for n in news:
-            score = float(getattr(n, "sentiment_score", 0.0) or 0.0)
-            importance = float(getattr(n, "importance", 0.5) or 0.5)
-            age_h = max(
-                0.0,
-                (now - getattr(n, "publish_time", now)).total_seconds() / 3600.0,
-            )
+            score = _safe_float(getattr(n, "sentiment_score", 0.0), 0.0)
+            importance = _safe_float(getattr(n, "importance", 0.5), 0.5)
+            age_h_raw = _safe_age_hours_from_now(getattr(n, "publish_time", None))
+            age_h = max(0.0, float(age_h_raw)) if age_h_raw is not None else 0.0
             recency_w = float(0.5 ** (age_h / recency_half_life_hours))
             src = str(getattr(n, "source", "") or "").strip().lower()
             src_w = self._source_reliability_weight(src)
@@ -1034,6 +1155,9 @@ class NewsAggregator:
         """
         Get numerical features from news for AI model input.
         These can be appended to the technical feature vector.
+
+        FIX Bug 2: Fetch news once and pass to get_sentiment_summary
+        to avoid recursive re-fetching.
         """
         news = (
             self.get_stock_news(stock_code, count=50)
@@ -1041,8 +1165,24 @@ class NewsAggregator:
             else self.get_market_news(count=50)
         )
 
-        cutoff = datetime.now() - timedelta(hours=hours_lookback)
-        recent = [n for n in news if n.publish_time >= cutoff]
+        try:
+            lookback_h_raw = float(hours_lookback)
+        except (TypeError, ValueError):
+            lookback_h_raw = 24.0
+        lookback_h = lookback_h_raw if lookback_h_raw > 0.0 else 1.0
+
+        # FIX Bug 7: Store age per index instead of id() which can be
+        # unreliable after list slicing/copying
+        recent: list[NewsItem] = []
+        recent_age_hours: list[float] = []
+        for n in news:
+            age_h = _safe_age_hours_from_now(getattr(n, "publish_time", None))
+            if age_h is None:
+                continue
+            age_h = max(0.0, float(age_h))
+            if age_h <= lookback_h:
+                recent.append(n)
+                recent_age_hours.append(age_h)
 
         if not recent:
             return {
@@ -1068,23 +1208,21 @@ class NewsAggregator:
                 "policy_sentiment": 0.0,
             }
 
-        scores = [n.sentiment_score for n in recent]
+        scores = [_safe_float(getattr(n, "sentiment_score", 0.0), 0.0) for n in recent]
         total = len(scores)
         positive = sum(1 for s in scores if s > 0.1)
         negative = sum(1 for s in scores if s < -0.1)
 
         # Recency-weighted sentiment (newer news matters more)
         recency_weights: list[float] = []
-        for n in recent:
-            age_hours = (
-                (datetime.now() - n.publish_time).total_seconds() / 3600.0
-            )
-            weight = max(0.1, 1.0 - (age_hours / hours_lookback))
+        for age_hours in recent_age_hours:
+            weight = max(0.1, 1.0 - (age_hours / lookback_h))
             recency_weights.append(weight)
 
         weight_sum = sum(recency_weights)
         weighted_sentiment = (
-            sum(s * w for s, w in zip(scores, recency_weights, strict=False)) / weight_sum
+            sum(s * w for s, w in zip(scores, recency_weights, strict=False))
+            / weight_sum
             if weight_sum > 0
             else 0.0
         )
@@ -1092,19 +1230,18 @@ class NewsAggregator:
         source_groups: dict[str, list[float]] = {}
         fused_w_sum = 0.0
         fused_s_sum = 0.0
-        for n in recent:
+        for idx, n in enumerate(recent):
             src = str(getattr(n, "source", "") or "").strip().lower()
-            source_groups.setdefault(src, []).append(float(n.sentiment_score))
-            src_w = self._source_reliability_weight(src)
-            age_h = max(
-                0.0,
-                (datetime.now() - n.publish_time).total_seconds() / 3600.0,
+            source_groups.setdefault(src, []).append(
+                _safe_float(getattr(n, "sentiment_score", 0.0), 0.0)
             )
+            src_w = self._source_reliability_weight(src)
+            age_h = recent_age_hours[idx]
             rec_w = float(0.5 ** (age_h / 18.0))
-            imp_w = max(0.1, float(getattr(n, "importance", 0.5) or 0.5))
+            imp_w = max(0.1, _safe_float(getattr(n, "importance", 0.5), 0.5))
             w = max(0.03, src_w * rec_w * imp_w)
             fused_w_sum += w
-            fused_s_sum += float(n.sentiment_score) * w
+            fused_s_sum += _safe_float(getattr(n, "sentiment_score", 0.0), 0.0) * w
 
         fused_sentiment = fused_s_sum / fused_w_sum if fused_w_sum > 0 else weighted_sentiment
         source_disagreement = (
@@ -1117,13 +1254,19 @@ class NewsAggregator:
         # Policy-specific sentiment
         policy_items = [n for n in recent if n.category == "policy"]
         policy_sentiment = (
-            sum(n.sentiment_score for n in policy_items) / len(policy_items)
+            sum(
+                _safe_float(getattr(n, "sentiment_score", 0.0), 0.0)
+                for n in policy_items
+            )
+            / len(policy_items)
             if policy_items
             else 0.0
         )
 
-        importances = [n.importance for n in recent]
-        summary = self.get_sentiment_summary(stock_code=stock_code)
+        importances = [_safe_float(getattr(n, "importance", 0.5), 0.5) for n in recent]
+
+        # FIX Bug 2: Pass already-fetched news to avoid recursive calls
+        summary = self.get_sentiment_summary(stock_code=stock_code, _news=news)
         summary_overall = float(summary.get("overall_sentiment", 0.0) or 0.0)
         summary_simple = float(summary.get("simple_sentiment", 0.0) or 0.0)
         summary_disagreement = float(summary.get("disagreement_index", 0.0) or 0.0)
@@ -1138,7 +1281,7 @@ class NewsAggregator:
             "news_sentiment_disagreement": round(float(source_disagreement), 4),
             "news_positive_ratio": round(positive / total, 4),
             "news_negative_ratio": round(negative / total, 4),
-            "news_volume": min(total / 20.0, 1.0),  # Normalized 0鈥?
+            "news_volume": min(total / 20.0, 1.0),  # Normalized 0-1
             "news_importance_avg": round(float(np.mean(importances)), 4),
             "news_recency_score": round(weighted_sentiment, 4),
             "news_source_diversity": round(float(source_diversity), 4),
@@ -1159,11 +1302,16 @@ class NewsAggregator:
     @staticmethod
     def _deduplicate(items: list[NewsItem]) -> list[NewsItem]:
         """Remove duplicate news by title prefix similarity."""
-        seen_titles: set = set()
+        seen_titles: set[str] = set()
         unique: list[NewsItem] = []
         for item in items:
-            key = item.title[:_DEDUP_PREFIX_LEN] if item.title else ""
-            if key and key not in seen_titles:
+            # FIX Bug 5: Skip items with empty/whitespace-only titles
+            # instead of adding empty string to seen set
+            title = (item.title or "").strip()
+            if not title:
+                continue
+            key = title[:_DEDUP_PREFIX_LEN]
+            if key not in seen_titles:
                 seen_titles.add(key)
                 unique.append(item)
         return unique
@@ -1211,7 +1359,8 @@ class NewsAggregator:
             if stock_code
             else self.get_market_news(count=60)
         )
-        summary = self.get_sentiment_summary(stock_code=stock_code)
+        # FIX Bug 2: Pass fetched news to avoid redundant calls
+        summary = self.get_sentiment_summary(stock_code=stock_code, _news=news)
         features = self.get_news_features(
             stock_code=stock_code, hours_lookback=hours_lookback
         )
@@ -1219,9 +1368,12 @@ class NewsAggregator:
 
         now = datetime.now()
         ages = [
-            (now - n.publish_time).total_seconds()
-            for n in news
-            if getattr(n, "publish_time", None) is not None
+            max(0.0, float(age_s))
+            for age_s in (
+                _safe_age_seconds_from_now(getattr(n, "publish_time", None))
+                for n in news
+            )
+            if age_s is not None
         ]
         freshness = {
             "latest_age_seconds": round(float(min(ages)), 1) if ages else None,
@@ -1251,10 +1403,12 @@ class NewsAggregator:
             "features": features,
         }
 
+
 # Thread-safe singleton
 
 _aggregator: NewsAggregator | None = None
 _aggregator_lock = threading.Lock()
+
 
 def get_news_aggregator() -> NewsAggregator:
     """Double-checked locking singleton for NewsAggregator."""
@@ -1264,5 +1418,3 @@ def get_news_aggregator() -> NewsAggregator:
             if _aggregator is None:
                 _aggregator = NewsAggregator()
     return _aggregator
-
-

@@ -108,7 +108,7 @@ def test_news_aggregator_stale_cache_fallback_and_source_health(monkeypatch):
     agg._cache_time["market_1"] = 0.0  # force stale
 
     class _Env:
-        tencent_ok = True
+        tencent_ok = False
         is_china_direct = False
         eastmoney_ok = False
 
@@ -169,7 +169,7 @@ def test_news_aggregator_stock_fallback_from_market_pool(monkeypatch):
     agg = NewsAggregator()
 
     class _Env:
-        tencent_ok = False
+        tencent_ok = True
         is_china_direct = False
         eastmoney_ok = False
 
@@ -197,3 +197,65 @@ def test_news_aggregator_stock_fallback_from_market_pool(monkeypatch):
     out = agg.get_stock_news("600519", count=5, force_refresh=True)
     assert len(out) == 1
     assert "600519" in out[0].title
+
+
+def test_news_aggregator_stock_news_prefers_direct_over_context(monkeypatch):
+    agg = NewsAggregator()
+
+    class _Env:
+        tencent_ok = True
+        is_china_direct = False
+        eastmoney_ok = False
+
+    now = datetime.now()
+    direct_item = NewsItem(
+        title="600519 earnings beat expectations",
+        source="sina",
+        publish_time=now - timedelta(minutes=2),
+        category="company",
+    )
+    context_item = NewsItem(
+        title="macro headline",
+        source="cache",
+        publish_time=now - timedelta(minutes=1),
+        category="market",
+    )
+
+    monkeypatch.setattr("core.network.get_network_env", lambda: _Env())
+    monkeypatch.setattr(agg._sina, "fetch_stock_news", lambda *a, **k: [direct_item])
+    monkeypatch.setattr(agg._eastmoney, "fetch_stock_news", lambda *a, **k: [])
+    monkeypatch.setattr(agg, "get_market_news", lambda *a, **k: [context_item])
+
+    out = agg.get_stock_news("600519", count=1, force_refresh=True)
+    assert len(out) == 1
+    assert "600519" in out[0].title
+
+
+def test_news_aggregator_stock_news_does_not_mutate_shared_market_items(monkeypatch):
+    agg = NewsAggregator()
+
+    class _Env:
+        tencent_ok = False
+        is_china_direct = False
+        eastmoney_ok = False
+
+    now = datetime.now()
+    shared_market_item = NewsItem(
+        title="macro headline",
+        source="cache",
+        publish_time=now - timedelta(minutes=4),
+        category="market",
+    )
+    market_items = [shared_market_item]
+
+    monkeypatch.setattr("core.network.get_network_env", lambda: _Env())
+    monkeypatch.setattr(agg._sina, "fetch_stock_news", lambda *a, **k: [])
+    monkeypatch.setattr(agg._eastmoney, "fetch_stock_news", lambda *a, **k: [])
+    monkeypatch.setattr(agg, "get_market_news", lambda *a, **k: market_items)
+
+    out_a = agg.get_stock_news("600519", count=1, force_refresh=True)
+    out_b = agg.get_stock_news("000001", count=1, force_refresh=True)
+
+    assert out_a and "600519" in out_a[0].stock_codes
+    assert out_b and "000001" in out_b[0].stock_codes
+    assert shared_market_item.stock_codes == []

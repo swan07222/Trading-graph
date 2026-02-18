@@ -2754,10 +2754,76 @@ class Trainer:
         regime_profile: dict[str, Any] | None = None,
     ) -> dict:
         """Evaluate model on test data."""
-        from sklearn.metrics import (
-            confusion_matrix,
-            precision_recall_fscore_support,
-        )
+        try:
+            from sklearn.metrics import (
+                confusion_matrix,
+                precision_recall_fscore_support,
+            )
+            metrics_backend = "sklearn"
+        except Exception as e:
+            log.warning(
+                "scikit-learn metrics unavailable (%s); "
+                "falling back to numpy metrics in evaluation",
+                e,
+            )
+            metrics_backend = "numpy"
+
+            def confusion_matrix(y_true, y_pred, labels):  # type: ignore[redef]
+                labels_arr = np.asarray(labels, dtype=int).reshape(-1)
+                out = np.zeros((len(labels_arr), len(labels_arr)), dtype=np.int64)
+                pos = {int(v): i for i, v in enumerate(labels_arr.tolist())}
+                for t, p in zip(y_true, y_pred, strict=False):
+                    ti = pos.get(int(t))
+                    pi = pos.get(int(p))
+                    if ti is None or pi is None:
+                        continue
+                    out[ti, pi] += 1
+                return out
+
+            def precision_recall_fscore_support(  # type: ignore[redef]
+                y_true,
+                y_pred,
+                labels=None,
+                average=None,
+                zero_division=0,
+            ):
+                del average  # current caller uses labels=[2], average=None
+                labels_arr = np.asarray(labels if labels is not None else [2], dtype=int)
+                p_list: list[float] = []
+                r_list: list[float] = []
+                f_list: list[float] = []
+                s_list: list[int] = []
+                for lbl in labels_arr.tolist():
+                    tp = int(np.sum((y_true == lbl) & (y_pred == lbl)))
+                    fp = int(np.sum((y_true != lbl) & (y_pred == lbl)))
+                    fn = int(np.sum((y_true == lbl) & (y_pred != lbl)))
+                    support = int(np.sum(y_true == lbl))
+                    precision = (
+                        (tp / (tp + fp))
+                        if (tp + fp) > 0
+                        else float(zero_division)
+                    )
+                    recall = (
+                        (tp / (tp + fn))
+                        if (tp + fn) > 0
+                        else float(zero_division)
+                    )
+                    denom = precision + recall
+                    f1 = (
+                        (2.0 * precision * recall / denom)
+                        if denom > 0.0
+                        else float(zero_division)
+                    )
+                    p_list.append(float(precision))
+                    r_list.append(float(recall))
+                    f_list.append(float(f1))
+                    s_list.append(int(support))
+                return (
+                    np.asarray(p_list, dtype=np.float64),
+                    np.asarray(r_list, dtype=np.float64),
+                    np.asarray(f_list, dtype=np.float64),
+                    np.asarray(s_list, dtype=np.int64),
+                )
 
         empty_result = {
             "accuracy": 0.0,
@@ -2906,6 +2972,7 @@ class Trainer:
                 "samples": explainability_samples,
                 "filters": thresholds,
             },
+            "metrics_backend": metrics_backend,
         }
 
     def _simulate_trading(

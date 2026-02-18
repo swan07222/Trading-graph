@@ -6,6 +6,7 @@ from contextlib import contextmanager
 from datetime import date, datetime
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 from config.settings import CONFIG
@@ -16,6 +17,7 @@ log = get_logger(__name__)
 
 # Current schema version — bump when adding/altering tables
 _SCHEMA_VERSION = 2
+
 
 class MarketDatabase:
     """
@@ -29,17 +31,18 @@ class MarketDatabase:
     - features: Computed features
     - predictions: Model predictions
 
-    FIX: Replaced weakref.WeakSet with regular set for connection tracking.
-    sqlite3.Connection does not support weak references.
+    FIX #3: Tracks connections by thread ID so dead-thread connections
+    can be cleaned up, preventing connection leaks.
+    FIX #4: Schema readiness wait checks return value and raises on timeout.
+    FIX #9: Migration connection is registered and always cleaned up.
     """
 
     def __init__(self, db_path: Path = None):
         self._db_path = db_path or CONFIG.data_dir / "market_data.db"
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
         self._local = threading.local()
-        # FIX: Use regular set instead of WeakSet
-        # sqlite3.Connection doesn't support weak references
-        self._connections: set = set()
+        # FIX #3: Track by thread ID for dead-thread cleanup
+        self._connections: dict[int, sqlite3.Connection] = {}
         self._connections_lock = threading.Lock()
         self._schema_lock = threading.Lock()
         self._schema_ready = threading.Event()
@@ -47,12 +50,16 @@ class MarketDatabase:
         atexit.register(self.close_all)
 
     # ------------------------------------------------------------------
+    # Connection management
     # ------------------------------------------------------------------
 
     @property
     def _conn(self) -> sqlite3.Connection:
         """Thread-local connection with automatic registration."""
-        if not hasattr(self._local, "conn") or self._local.conn is None:
+        if (
+            not hasattr(self._local, "conn")
+            or self._local.conn is None
+        ):
             conn = sqlite3.connect(
                 str(self._db_path),
                 check_same_thread=False,
@@ -63,12 +70,41 @@ class MarketDatabase:
             conn.execute("PRAGMA synchronous=NORMAL")
             conn.execute("PRAGMA foreign_keys=ON")
             self._local.conn = conn
+            tid = threading.get_ident()
             with self._connections_lock:
-                self._connections.add(conn)
-        # Wait for schema to be ready (blocks only on first access
-        # if another thread is still running _init_db)
-        self._schema_ready.wait(timeout=30)
+                # FIX #3: Clean up dead threads while registering
+                self._cleanup_dead_threads()
+                self._connections[tid] = conn
+
+        # FIX #4: Check wait return value — raise on timeout
+        if not self._schema_ready.wait(timeout=30):
+            raise RuntimeError(
+                "Database schema initialization timed out after 30s. "
+                "This may indicate a deadlock or very slow disk."
+            )
         return self._local.conn
+
+    def _cleanup_dead_threads(self):
+        """
+        Remove and close connections for threads that no longer exist.
+
+        FIX #3: Called under _connections_lock by the caller.
+        """
+        alive_ids = {
+            t.ident for t in threading.enumerate() if t.ident is not None
+        }
+        dead_ids = [
+            tid
+            for tid in self._connections
+            if tid not in alive_ids
+        ]
+        for tid in dead_ids:
+            conn = self._connections.pop(tid, None)
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
 
     @contextmanager
     def _transaction(self):
@@ -82,6 +118,7 @@ class MarketDatabase:
             raise
 
     # ------------------------------------------------------------------
+    # Schema initialization
     # ------------------------------------------------------------------
 
     def _init_db(self):
@@ -108,7 +145,9 @@ class MarketDatabase:
         except Exception:
             return 0
 
-    def _set_schema_version(self, conn: sqlite3.Connection, version: int):
+    def _set_schema_version(
+        self, conn: sqlite3.Connection, version: int
+    ):
         conn.execute(
             "INSERT INTO _meta (key, value) VALUES ('schema_version', ?) "
             "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
@@ -117,12 +156,16 @@ class MarketDatabase:
         conn.commit()
 
     def _create_or_migrate(self):
-        """Create tables or migrate from older schema versions."""
-        # Use a dedicated connection for DDL so thread-local isn't
-        # exposed before the schema is ready.
-        conn = sqlite3.connect(str(self._db_path), timeout=30)
-        conn.execute("PRAGMA journal_mode=WAL")
+        """
+        Create tables or migrate from older schema versions.
+
+        FIX #9: Migration connection is tracked and always closed.
+        """
+        conn = None
         try:
+            conn = sqlite3.connect(str(self._db_path), timeout=30)
+            conn.execute("PRAGMA journal_mode=WAL")
+
             current = self._get_schema_version(conn)
 
             if current < 1:
@@ -132,12 +175,17 @@ class MarketDatabase:
 
             self._set_schema_version(conn, _SCHEMA_VERSION)
         finally:
-            conn.close()
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
 
     @staticmethod
     def _apply_v1(conn: sqlite3.Connection):
         """V1: core tables."""
-        conn.executescript("""
+        conn.executescript(
+            """
             CREATE TABLE IF NOT EXISTS stocks (
                 code TEXT PRIMARY KEY,
                 name TEXT,
@@ -182,13 +230,15 @@ class MarketDatabase:
                 price REAL,
                 UNIQUE(code, timestamp)
             );
-        """)
+        """
+        )
         conn.commit()
 
     @staticmethod
     def _apply_v2(conn: sqlite3.Connection):
         """V2: intraday bars table."""
-        conn.executescript("""
+        conn.executescript(
+            """
             CREATE TABLE IF NOT EXISTS intraday_bars (
                 code TEXT NOT NULL,
                 ts TEXT NOT NULL,
@@ -203,17 +253,21 @@ class MarketDatabase:
             );
             CREATE INDEX IF NOT EXISTS idx_intraday_code_interval_ts
                 ON intraday_bars(code, interval, ts);
-        """)
+        """
+        )
         conn.commit()
 
     # ------------------------------------------------------------------
+    # Column validation
     # ------------------------------------------------------------------
 
     _REQUIRED_BAR_COLUMNS = {"open", "high", "low", "close"}
     _OPTIONAL_BAR_COLUMNS = {"volume", "amount", "turnover"}
 
     @classmethod
-    def _validate_bar_columns(cls, df: pd.DataFrame, context: str = "bars") -> None:
+    def _validate_bar_columns(
+        cls, df: pd.DataFrame, context: str = "bars"
+    ) -> None:
         """Raise ValueError if required columns are missing."""
         if df is None or df.empty:
             return
@@ -237,7 +291,345 @@ class MarketDatabase:
     def _to_int(x, default: int = 0) -> int:
         return to_int(x, default)
 
+    @staticmethod
+    def _intraday_quality_caps(
+        interval: str,
+    ) -> tuple[float, float, float, float]:
+        """Return (body_cap, span_cap, wick_cap, jump_cap) for intraday writes."""
+        iv = str(interval or "1m").strip().lower()
+        if iv == "1m":
+            return 0.0100, 0.0160, 0.0120, 0.10
+        if iv == "2m":
+            return 0.0120, 0.0180, 0.0130, 0.10
+        if iv == "5m":
+            return 0.0160, 0.0240, 0.0180, 0.12
+        if iv == "15m":
+            return 0.0240, 0.0360, 0.0240, 0.14
+        if iv == "30m":
+            return 0.0320, 0.0500, 0.0300, 0.16
+        if iv in ("60m", "1h"):
+            return 0.0450, 0.0700, 0.0400, 0.20
+        return 0.0600, 0.1000, 0.0600, 0.25
+
+    @classmethod
+    def _sanitize_intraday_frame(
+        cls,
+        df: pd.DataFrame,
+        interval: str,
+    ) -> pd.DataFrame:
+        """Sanitize intraday OHLCV rows before read/write usage."""
+        if df is None or df.empty:
+            return pd.DataFrame()
+
+        iv = str(interval or "1m").strip().lower()
+        out = df.copy()
+
+        if not isinstance(out.index, pd.DatetimeIndex):
+            out.index = pd.to_datetime(out.index, errors="coerce")
+        out = out[~out.index.isna()]
+        out = out[~out.index.duplicated(keep="last")].sort_index()
+        if out.empty:
+            return pd.DataFrame()
+
+        for col in (
+            "open",
+            "high",
+            "low",
+            "close",
+            "volume",
+            "amount",
+        ):
+            if col in out.columns:
+                out[col] = pd.to_numeric(out[col], errors="coerce")
+
+        out = out.replace([np.inf, -np.inf], np.nan)
+        out = out.dropna(subset=["close"])
+        out = out[out["close"] > 0]
+        if out.empty:
+            return pd.DataFrame()
+
+        if "open" not in out.columns:
+            out["open"] = out["close"]
+        out["open"] = pd.to_numeric(
+            out["open"], errors="coerce"
+        ).fillna(0.0)
+        out["open"] = out["open"].where(
+            out["open"] > 0, out["close"]
+        )
+
+        if "high" not in out.columns:
+            out["high"] = out[["open", "close"]].max(axis=1)
+        else:
+            out["high"] = pd.to_numeric(
+                out["high"], errors="coerce"
+            )
+
+        if "low" not in out.columns:
+            out["low"] = out[["open", "close"]].min(axis=1)
+        else:
+            out["low"] = pd.to_numeric(
+                out["low"], errors="coerce"
+            )
+
+        oc_top = out[["open", "close"]].max(axis=1)
+        oc_bot = out[["open", "close"]].min(axis=1)
+        out["high"] = pd.concat(
+            [out["high"], oc_top], axis=1
+        ).max(axis=1)
+        out["low"] = pd.concat(
+            [out["low"], oc_bot], axis=1
+        ).min(axis=1)
+
+        is_intraday = iv not in ("1d", "1wk", "1mo")
+        if is_intraday:
+            body_cap, span_cap, wick_cap, jump_cap = (
+                cls._intraday_quality_caps(iv)
+            )
+            close_safe = out["close"].clip(lower=1e-8)
+
+            body = (
+                (out["open"] - out["close"]).abs() / close_safe
+            )
+            bad_open = body > float(body_cap)
+            if bool(bad_open.any()):
+                out.loc[bad_open, "open"] = out.loc[
+                    bad_open, "close"
+                ]
+
+            oc_top = out[["open", "close"]].max(axis=1)
+            oc_bot = out[["open", "close"]].min(axis=1)
+            out["high"] = pd.concat(
+                [out["high"], oc_top], axis=1
+            ).max(axis=1)
+            out["low"] = pd.concat(
+                [out["low"], oc_bot], axis=1
+            ).min(axis=1)
+
+            span = (
+                (out["high"] - out["low"]).abs() / close_safe
+            )
+            upper_wick = (
+                (out["high"] - oc_top).clip(lower=0.0) / close_safe
+            )
+            lower_wick = (
+                (oc_bot - out["low"]).clip(lower=0.0) / close_safe
+            )
+            bad_shape = (
+                (span > float(span_cap))
+                | (upper_wick > float(wick_cap))
+                | (lower_wick > float(wick_cap))
+            )
+            if bool(bad_shape.any()):
+                wick_allow = close_safe * float(wick_cap)
+                out.loc[bad_shape, "high"] = (oc_top + wick_allow)[
+                    bad_shape
+                ]
+                out.loc[bad_shape, "low"] = (oc_bot - wick_allow)[
+                    bad_shape
+                ]
+                out["high"] = pd.concat(
+                    [out["high"], oc_top], axis=1
+                ).max(axis=1)
+                out["low"] = pd.concat(
+                    [out["low"], oc_bot], axis=1
+                ).min(axis=1)
+
+            prev_close = out["close"].shift(1)
+            prev_safe = prev_close.where(prev_close > 0, np.nan)
+            jump = (out["close"] / prev_safe - 1.0).abs()
+            jump_cap_eff = float(max(jump_cap, body_cap * 4.0))
+            bad_jump = jump > jump_cap_eff
+            if isinstance(out.index, pd.DatetimeIndex):
+                day_change = (
+                    pd.Series(
+                        out.index.normalize(), index=out.index
+                    )
+                    .diff()
+                    .ne(pd.Timedelta(0))
+                )
+                day_change = day_change.fillna(False)
+                bad_jump = bad_jump & (~day_change)
+            bad_jump = bad_jump.fillna(False)
+            if bool(bad_jump.any()):
+                prev_vals = prev_close[bad_jump].astype(float)
+                curr_vals = out.loc[bad_jump, "close"].astype(float)
+                signs = np.where(
+                    curr_vals >= prev_vals, 1.0, -1.0
+                )
+                clipped = prev_vals * (
+                    1.0 + (signs * jump_cap_eff)
+                )
+                out.loc[bad_jump, "close"] = clipped.values
+                out.loc[bad_jump, "open"] = prev_vals.values
+                close_safe = out["close"].clip(lower=1e-8)
+                oc_top = out[["open", "close"]].max(axis=1)
+                oc_bot = out[["open", "close"]].min(axis=1)
+                wick_allow = close_safe * float(wick_cap)
+                out.loc[bad_jump, "high"] = np.minimum(
+                    out.loc[bad_jump, "high"],
+                    (oc_top + wick_allow)[bad_jump],
+                )
+                out.loc[bad_jump, "low"] = np.maximum(
+                    out.loc[bad_jump, "low"],
+                    (oc_bot - wick_allow)[bad_jump],
+                )
+                out["high"] = pd.concat(
+                    [out["high"], oc_top], axis=1
+                ).max(axis=1)
+                out["low"] = pd.concat(
+                    [out["low"], oc_bot], axis=1
+                ).min(axis=1)
+
+            vol = (
+                out["volume"]
+                if "volume" in out.columns
+                else pd.Series(0.0, index=out.index)
+            )
+            close_safe = out["close"].clip(lower=1e-8)
+            same_close = out["close"].diff().abs() <= (
+                close_safe * 1e-6
+            )
+            flat_body = (out["open"] - out["close"]).abs() <= (
+                close_safe * 1e-6
+            )
+            flat_span = (out["high"] - out["low"]).abs() <= (
+                close_safe * 2e-6
+            )
+            stale_flat = (
+                same_close
+                & flat_body
+                & flat_span
+                & (vol.fillna(0) <= 0)
+            )
+            if bool(stale_flat.any()):
+                group_key = (
+                    stale_flat.ne(
+                        stale_flat.shift(fill_value=False)
+                    ).cumsum()
+                )
+                stale_pos = stale_flat.groupby(
+                    group_key
+                ).cumcount()
+                drop_mask = stale_flat & (stale_pos % 12 != 0)
+                if bool(drop_mask.any()):
+                    out = out.loc[~drop_mask]
+
+        if "volume" in out.columns:
+            out = out[out["volume"].fillna(0) >= 0]
+        else:
+            out["volume"] = 0
+
+        out = out[out["high"].fillna(0) >= out["low"].fillna(0)]
+        if "amount" not in out.columns:
+            out["amount"] = (
+                out["close"] * out["volume"].fillna(0)
+            )
+        out = out.fillna(0)
+        out = out[~out.index.duplicated(keep="last")].sort_index()
+        return out
+
     # ------------------------------------------------------------------
+    # Daily bar sanitization (FIX #23: symmetry with intraday)
+    # ------------------------------------------------------------------
+
+    @classmethod
+    def _sanitize_daily_frame(
+        cls, df: pd.DataFrame
+    ) -> pd.DataFrame:
+        """
+        Sanitize daily OHLCV rows before write.
+
+        FIX #23: Applies basic quality checks analogous to intraday
+        sanitization — ensures high >= low, positive close, non-negative
+        volume, and fills missing columns.
+        """
+        if df is None or df.empty:
+            return pd.DataFrame()
+
+        out = df.copy()
+
+        if not isinstance(out.index, pd.DatetimeIndex):
+            out.index = pd.to_datetime(out.index, errors="coerce")
+        out = out[~out.index.isna()]
+        out = out[~out.index.duplicated(keep="last")].sort_index()
+        if out.empty:
+            return pd.DataFrame()
+
+        for col in (
+            "open",
+            "high",
+            "low",
+            "close",
+            "volume",
+            "amount",
+            "turnover",
+        ):
+            if col in out.columns:
+                out[col] = pd.to_numeric(out[col], errors="coerce")
+
+        out = out.replace([np.inf, -np.inf], np.nan)
+        out = out.dropna(subset=["close"])
+        out = out[out["close"] > 0]
+        if out.empty:
+            return pd.DataFrame()
+
+        # Ensure open is positive
+        if "open" not in out.columns:
+            out["open"] = out["close"]
+        out["open"] = pd.to_numeric(
+            out["open"], errors="coerce"
+        ).fillna(0.0)
+        out["open"] = out["open"].where(
+            out["open"] > 0, out["close"]
+        )
+
+        # Ensure high/low are consistent
+        if "high" not in out.columns:
+            out["high"] = out[["open", "close"]].max(axis=1)
+        else:
+            out["high"] = pd.to_numeric(
+                out["high"], errors="coerce"
+            )
+
+        if "low" not in out.columns:
+            out["low"] = out[["open", "close"]].min(axis=1)
+        else:
+            out["low"] = pd.to_numeric(
+                out["low"], errors="coerce"
+            )
+
+        oc_top = out[["open", "close"]].max(axis=1)
+        oc_bot = out[["open", "close"]].min(axis=1)
+        out["high"] = pd.concat(
+            [out["high"], oc_top], axis=1
+        ).max(axis=1)
+        out["low"] = pd.concat(
+            [out["low"], oc_bot], axis=1
+        ).min(axis=1)
+
+        # Ensure high >= low
+        out = out[out["high"].fillna(0) >= out["low"].fillna(0)]
+
+        # Non-negative volume
+        if "volume" in out.columns:
+            out = out[out["volume"].fillna(0) >= 0]
+        else:
+            out["volume"] = 0
+
+        if "amount" not in out.columns:
+            out["amount"] = (
+                out["close"] * out["volume"].fillna(0)
+            )
+
+        if "turnover" not in out.columns:
+            out["turnover"] = 0.0
+
+        out = out.fillna(0)
+        out = out[~out.index.duplicated(keep="last")].sort_index()
+        return out
+
+    # ------------------------------------------------------------------
+    # Intraday bars
     # ------------------------------------------------------------------
 
     def get_intraday_bars(
@@ -260,10 +652,14 @@ class MarketDatabase:
         """
         try:
             df = pd.read_sql_query(
-                query, self._conn, params=(code, interval, limit)
+                query,
+                self._conn,
+                params=(code, interval, limit),
             )
         except Exception as e:
-            log.warning(f"Intraday query failed for {code}/{interval}: {e}")
+            log.warning(
+                f"Intraday query failed for {code}/{interval}: {e}"
+            )
             return pd.DataFrame()
 
         if df.empty:
@@ -271,7 +667,9 @@ class MarketDatabase:
 
         df["ts"] = pd.to_datetime(df["ts"], errors="coerce")
         df = df.dropna(subset=["ts"]).set_index("ts").sort_index()
-        return df
+        return self._sanitize_intraday_frame(
+            df, interval=interval
+        )
 
     def upsert_intraday_bars(
         self, code: str, interval: str, df: pd.DataFrame
@@ -287,14 +685,19 @@ class MarketDatabase:
 
         work = df.copy()
         if not isinstance(work.index, pd.DatetimeIndex):
-            work.index = pd.to_datetime(work.index, errors="coerce")
+            work.index = pd.to_datetime(
+                work.index, errors="coerce"
+            )
         work = work[~work.index.isna()]
         work = work.sort_index()
         work = work[~work.index.duplicated(keep="last")]
 
         # Defensive guard: keep CN intraday rows only within regular session
-        # so lunch/after-close bad bars do not pollute persisted cache.
-        if interval not in ("1d", "1wk", "1mo") and code.isdigit() and len(code) == 6:
+        if (
+            interval not in ("1d", "1wk", "1mo")
+            and code.isdigit()
+            and len(code) == 6
+        ):
             try:
                 idx = work.index
                 idx_local = idx
@@ -316,6 +719,9 @@ class MarketDatabase:
             except Exception:
                 pass
 
+        work = self._sanitize_intraday_frame(
+            work, interval=interval
+        )
         if work.empty:
             return
 
@@ -325,7 +731,8 @@ class MarketDatabase:
             conn.executemany(
                 """
                 INSERT INTO intraday_bars
-                    (code, ts, interval, open, high, low, close, volume, amount)
+                    (code, ts, interval, open, high, low, close,
+                     volume, amount)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(code, ts, interval) DO UPDATE SET
                     open=excluded.open, high=excluded.high,
@@ -338,32 +745,34 @@ class MarketDatabase:
     def _build_intraday_rows(
         self, code: str, interval: str, work: pd.DataFrame
     ) -> list[tuple]:
-        """Build rows for intraday bar insert."""
+        """
+        Build rows for intraday bar insert.
+
+        FIX #19: Uses itertuples() instead of iterrows() for performance.
+        """
         tf = self._to_float
         ti = self._to_int
 
-        timestamps = work.index.to_series().apply(
-            lambda t: t.isoformat()
-        ).values
-
         rows = []
-        for _i, (ts_iso, (_, row)) in enumerate(
-            zip(timestamps, work.iterrows(), strict=False)
-        ):
-            rows.append((
-                code,
-                ts_iso,
-                interval,
-                tf(row.get("open", 0)),
-                tf(row.get("high", 0)),
-                tf(row.get("low", 0)),
-                tf(row.get("close", 0)),
-                ti(row.get("volume", 0)),
-                tf(row.get("amount", 0)),
-            ))
+        for tup in work.itertuples():
+            ts_iso = tup.Index.isoformat()
+            rows.append(
+                (
+                    code,
+                    ts_iso,
+                    interval,
+                    tf(getattr(tup, "open", 0)),
+                    tf(getattr(tup, "high", 0)),
+                    tf(getattr(tup, "low", 0)),
+                    tf(getattr(tup, "close", 0)),
+                    ti(getattr(tup, "volume", 0)),
+                    tf(getattr(tup, "amount", 0)),
+                )
+            )
         return rows
 
     # ------------------------------------------------------------------
+    # Stock metadata
     # ------------------------------------------------------------------
 
     def upsert_stock(
@@ -380,13 +789,20 @@ class MarketDatabase:
             conn.execute(
                 """
                 INSERT INTO stocks
-                    (code, name, exchange, sector, market_cap, is_st, updated_at)
+                    (code, name, exchange, sector, market_cap,
+                     is_st, updated_at)
                 VALUES (?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(code) DO UPDATE SET
                     name = COALESCE(excluded.name, stocks.name),
-                    exchange = COALESCE(excluded.exchange, stocks.exchange),
-                    sector = COALESCE(excluded.sector, stocks.sector),
-                    market_cap = COALESCE(excluded.market_cap, stocks.market_cap),
+                    exchange = COALESCE(
+                        excluded.exchange, stocks.exchange
+                    ),
+                    sector = COALESCE(
+                        excluded.sector, stocks.sector
+                    ),
+                    market_cap = COALESCE(
+                        excluded.market_cap, stocks.market_cap
+                    ),
                     is_st = excluded.is_st,
                     updated_at = excluded.updated_at
                 """,
@@ -402,10 +818,16 @@ class MarketDatabase:
             )
 
     # ------------------------------------------------------------------
+    # Daily bars
     # ------------------------------------------------------------------
 
     def upsert_bars(self, code: str, df: pd.DataFrame):
-        """Insert/update daily bars with column validation."""
+        """
+        Insert/update daily bars with column validation and sanitization.
+
+        FIX #23: Now sanitizes daily bars (high >= low, positive close, etc.)
+        for symmetry with intraday sanitization.
+        """
         if df is None or df.empty:
             return
 
@@ -413,11 +835,18 @@ class MarketDatabase:
 
         work = df.copy()
         if not isinstance(work.index, pd.DatetimeIndex):
-            work.index = pd.to_datetime(work.index, errors="coerce")
+            work.index = pd.to_datetime(
+                work.index, errors="coerce"
+            )
         work = work[~work.index.isna()]
         work = work.sort_index()
         work = work[~work.index.duplicated(keep="last")]
 
+        if work.empty:
+            return
+
+        # FIX #23: Sanitize daily bars
+        work = self._sanitize_daily_frame(work)
         if work.empty:
             return
 
@@ -428,7 +857,8 @@ class MarketDatabase:
             conn.executemany(
                 """
                 INSERT INTO daily_bars
-                    (code, date, open, high, low, close, volume, amount, turnover)
+                    (code, date, open, high, low, close, volume,
+                     amount, turnover)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(code, date) DO UPDATE SET
                     open=excluded.open, high=excluded.high,
@@ -442,26 +872,33 @@ class MarketDatabase:
     def _build_daily_rows(
         self, code: str, work: pd.DataFrame
     ) -> list[tuple]:
-        """Build rows for daily bar insert."""
+        """
+        Build rows for daily bar insert.
+
+        FIX #19: Uses itertuples() instead of iterrows() for performance.
+        """
         tf = self._to_float
         ti = self._to_int
 
         rows = []
-        for idx, row in work.iterrows():
-            rows.append((
-                code,
-                idx.strftime("%Y-%m-%d"),
-                tf(row.get("open", 0)),
-                tf(row.get("high", 0)),
-                tf(row.get("low", 0)),
-                tf(row.get("close", 0)),
-                ti(row.get("volume", 0)),
-                tf(row.get("amount", 0)),
-                tf(row.get("turnover", 0)),
-            ))
+        for tup in work.itertuples():
+            rows.append(
+                (
+                    code,
+                    tup.Index.strftime("%Y-%m-%d"),
+                    tf(getattr(tup, "open", 0)),
+                    tf(getattr(tup, "high", 0)),
+                    tf(getattr(tup, "low", 0)),
+                    tf(getattr(tup, "close", 0)),
+                    ti(getattr(tup, "volume", 0)),
+                    tf(getattr(tup, "amount", 0)),
+                    tf(getattr(tup, "turnover", 0)),
+                )
+            )
         return rows
 
     # ------------------------------------------------------------------
+    # Query methods
     # ------------------------------------------------------------------
 
     def get_bars(
@@ -507,7 +944,9 @@ class MarketDatabase:
                 f"ORDER BY date DESC LIMIT ?"
             )
             params.append(int(limit))
-            query = f"SELECT * FROM ({inner_query}) ORDER BY date ASC"
+            query = (
+                f"SELECT * FROM ({inner_query}) ORDER BY date ASC"
+            )
         else:
             query = (
                 f"SELECT * FROM daily_bars "
@@ -515,7 +954,9 @@ class MarketDatabase:
             )
 
         try:
-            df = pd.read_sql_query(query, self._conn, params=params)
+            df = pd.read_sql_query(
+                query, self._conn, params=params
+            )
         except Exception as e:
             log.warning(f"Database query failed for {code}: {e}")
             return pd.DataFrame()
@@ -536,7 +977,8 @@ class MarketDatabase:
         code = str(code).zfill(6)
         try:
             cursor = self._conn.execute(
-                "SELECT MAX(date) FROM daily_bars WHERE code = ?", (code,)
+                "SELECT MAX(date) FROM daily_bars WHERE code = ?",
+                (code,),
             )
             row = cursor.fetchone()
             if row and row[0]:
@@ -554,7 +996,9 @@ class MarketDatabase:
             log.warning(f"get_all_stocks failed: {e}")
             return []
 
-    def get_stocks_with_data(self, min_days: int = 100) -> list[str]:
+    def get_stocks_with_data(
+        self, min_days: int = 100
+    ) -> list[str]:
         """Get stock codes with at least *min_days* of bar data."""
         try:
             cursor = self._conn.execute(
@@ -572,6 +1016,7 @@ class MarketDatabase:
             return []
 
     # ------------------------------------------------------------------
+    # Predictions
     # ------------------------------------------------------------------
 
     def save_prediction(
@@ -622,14 +1067,18 @@ class MarketDatabase:
             )
             stats["total_stocks"] = cursor.fetchone()[0] or 0
 
-            cursor = self._conn.execute("SELECT COUNT(*) FROM daily_bars")
+            cursor = self._conn.execute(
+                "SELECT COUNT(*) FROM daily_bars"
+            )
             stats["total_bars"] = cursor.fetchone()[0] or 0
 
             cursor = self._conn.execute(
                 "SELECT MIN(date), MAX(date) FROM daily_bars"
             )
             row = cursor.fetchone()
-            stats["date_range"] = (row[0], row[1]) if row else (None, None)
+            stats["date_range"] = (
+                (row[0], row[1]) if row else (None, None)
+            )
         except Exception as e:
             log.warning(f"get_data_stats failed: {e}")
             stats.setdefault("total_stocks", 0)
@@ -639,51 +1088,71 @@ class MarketDatabase:
         return stats
 
     def vacuum(self):
-        """Optimize database."""
-        conn = self._conn
-        conn.commit()
-        old_isolation = conn.isolation_level
+        """
+        Optimize database.
+
+        FIX #15: Uses a dedicated connection for VACUUM to avoid
+        mutating the shared thread-local connection's isolation_level.
+        """
+        conn = None
         try:
-            conn.isolation_level = None
+            conn = sqlite3.connect(
+                str(self._db_path), timeout=60
+            )
             conn.execute("VACUUM")
+        except Exception as e:
+            log.warning(f"VACUUM failed: {e}")
         finally:
-            conn.isolation_level = old_isolation
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
 
     def close(self):
         """Close this thread's connection."""
-        if hasattr(self._local, "conn") and self._local.conn is None:
+        if (
+            hasattr(self._local, "conn")
+            and self._local.conn is None
+        ):
             return
         if hasattr(self._local, "conn"):
             conn = self._local.conn
+            tid = threading.get_ident()
             try:
                 conn.close()
             except Exception:
                 pass
             with self._connections_lock:
-                self._connections.discard(conn)
+                self._connections.pop(tid, None)
             self._local.conn = None
 
     def close_all(self):
         """Close all tracked connections (call on shutdown)."""
         with self._connections_lock:
-            for conn in list(self._connections):
+            for _tid, conn in list(self._connections.items()):
                 try:
                     conn.close()
                 except Exception:
                     pass
             self._connections.clear()
         # Also close this thread's connection
-        if hasattr(self._local, "conn") and self._local.conn is not None:
+        if (
+            hasattr(self._local, "conn")
+            and self._local.conn is not None
+        ):
             try:
                 self._local.conn.close()
             except Exception:
                 pass
             self._local.conn = None
 
+
 # Global database instance (thread-safe)
 
 _db: MarketDatabase | None = None
 _db_lock = threading.Lock()
+
 
 def get_database() -> MarketDatabase:
     """Get global database instance (thread-safe)."""
@@ -693,3 +1162,20 @@ def get_database() -> MarketDatabase:
             if _db is None:
                 _db = MarketDatabase()
     return _db
+
+
+def reset_database() -> None:
+    """
+    Reset global database instance (for testing).
+
+    FIX #21: Provides a way to cleanly shut down and reset
+    the global database singleton.
+    """
+    global _db
+    with _db_lock:
+        if _db is not None:
+            try:
+                _db.close_all()
+            except Exception:
+                pass
+            _db = None

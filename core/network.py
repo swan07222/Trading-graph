@@ -1,5 +1,6 @@
 # core/network.py
 
+import inspect
 import os
 import threading
 import time
@@ -11,6 +12,7 @@ import requests
 from utils.logger import get_logger
 
 log = get_logger(__name__)
+
 
 @dataclass
 class NetworkEnv:
@@ -28,12 +30,16 @@ class NetworkEnv:
     detection_method: str = ""
     latency_ms: float = 0.0
 
+
 class NetworkDetector:
     """
     Singleton that probes endpoints to determine network environment.
 
     Results are cached for `ttl_seconds` to avoid repeated probing.
     Thread-safe.
+
+    FIX Bug 11: Releases lock during slow HTTP probes so other threads
+    can read cached results without blocking for ~10s.
     """
 
     _instance = None
@@ -56,6 +62,7 @@ class NetworkDetector:
         self._env_time: float = 0.0
         self._ttl: float = 120.0  # Re-detect every 2 minutes
         self._probe_lock = threading.Lock()
+        self._detecting = threading.Event()  # Signals when detection is in progress
 
     def _has_fresh_cache_unlocked(self, now: float | None = None) -> bool:
         """Check cache freshness. Caller should hold _probe_lock."""
@@ -65,15 +72,48 @@ class NetworkDetector:
         return (t_now - float(self._env_time)) < float(self._ttl)
 
     def get_env(self, force_refresh: bool = False) -> NetworkEnv:
-        """Get current network environment (cached)."""
+        """
+        Get current network environment (cached).
+
+        FIX Bug 11: The lock is released during the slow HTTP probing
+        phase so that other threads can still read the (stale but usable)
+        cached environment instead of blocking for ~10 seconds.
+        """
         with self._probe_lock:
             if not force_refresh and self._has_fresh_cache_unlocked():
                 return self._env  # type: ignore[return-value]
 
-            env = self._detect()
-            self._env = env
-            self._env_time = time.time()
-            return env
+            # Snapshot previous env before releasing lock
+            prev_env = self._env
+
+        # Detect WITHOUT holding the lock — other threads can still read cache
+        env = self._run_detect(prev_env)
+
+        with self._probe_lock:
+            if force_refresh:
+                self._env = env
+                self._env_time = time.time()
+                return self._env  # type: ignore[return-value]
+
+            # Another thread may have updated while we were probing;
+            # only write if our result is newer
+            if not self._has_fresh_cache_unlocked():
+                self._env = env
+                self._env_time = time.time()
+            return self._env  # type: ignore[return-value]
+
+    def _run_detect(self, prev_env: NetworkEnv | None) -> NetworkEnv:
+        """
+        Call detector while supporting legacy/monkeypatched zero-arg callables.
+        """
+        detect_fn = self._detect
+        try:
+            n_params = len(inspect.signature(detect_fn).parameters)
+        except (TypeError, ValueError):
+            n_params = 1
+        if n_params <= 0:
+            return detect_fn()  # type: ignore[misc]
+        return detect_fn(prev_env)
 
     def invalidate(self):
         """Force re-detection on next call."""
@@ -91,8 +131,13 @@ class NetworkDetector:
                 return None
             return self._env
 
-    def _detect(self) -> NetworkEnv:
-        """Probe endpoints concurrently and determine network environment."""
+    def _detect(self, prev_env: NetworkEnv | None = None) -> NetworkEnv:
+        """
+        Probe endpoints concurrently and determine network environment.
+
+        Args:
+            prev_env: Previous environment snapshot for fallback logic.
+        """
         from concurrent.futures import ThreadPoolExecutor, as_completed
 
         env = NetworkEnv(detected_at=datetime.now())
@@ -109,8 +154,15 @@ class NetworkDetector:
 
         probes = {
             "tencent_ok": ("https://qt.gtimg.cn/q=sh600519", 3),
-            "eastmoney_ok": ("https://82.push2.eastmoney.com/api/qt/clist/get?pn=1&pz=1&fields=f2&fid=f3&fs=m:0+t:6", 3),
-            "yahoo_ok": ("https://query1.finance.yahoo.com/v8/finance/chart/AAPL?range=1d", 4),
+            "eastmoney_ok": (
+                "https://82.push2.eastmoney.com/api/qt/clist/get"
+                "?pn=1&pz=1&fields=f2&fid=f3&fs=m:0+t:6",
+                3,
+            ),
+            "yahoo_ok": (
+                "https://query1.finance.yahoo.com/v8/finance/chart/AAPL?range=1d",
+                4,
+            ),
             "csindex_ok": ("https://www.csindex.com.cn/", 3),
         }
 
@@ -144,6 +196,7 @@ class NetworkDetector:
                         setattr(env, k, False)
         except Exception as e:
             log.debug(f"Network detection thread pool error: {e}")
+
         if env.eastmoney_ok and not env.yahoo_ok:
             env.is_china_direct = True
             env.is_vpn_active = False
@@ -159,10 +212,9 @@ class NetworkDetector:
         else:
             # Both major probes failed (often transient/rate-limit).
             # Keep previous mode if available to avoid flip-flopping.
-            prev = self._env
-            if prev is not None:
-                env.is_china_direct = bool(prev.is_china_direct)
-                env.is_vpn_active = bool(prev.is_vpn_active)
+            if prev_env is not None:
+                env.is_china_direct = bool(prev_env.is_china_direct)
+                env.is_vpn_active = bool(prev_env.is_vpn_active)
                 env.detection_method = "both_failed_keep_previous"
             else:
                 # First detection fallback: Tencent is a weak China hint.
@@ -185,7 +237,8 @@ class NetworkDetector:
 
         env.latency_ms = (time.time() - start) * 1000
         log.info(
-            f"Network detected: {'CHINA_DIRECT' if env.is_china_direct else 'VPN_FOREIGN'} "
+            f"Network detected: "
+            f"{'CHINA_DIRECT' if env.is_china_direct else 'VPN_FOREIGN'} "
             f"({env.detection_method}) "
             f"[eastmoney={'OK' if env.eastmoney_ok else 'FAIL'}, "
             f"tencent={'OK' if env.tencent_ok else 'FAIL'}, "
@@ -194,25 +247,31 @@ class NetworkDetector:
         )
         return env
 
+
 # Module-level convenience functions
 
 _detector = NetworkDetector()
+
 
 def get_network_env(force_refresh: bool = False) -> NetworkEnv:
     """Get current network environment."""
     return _detector.get_env(force_refresh=force_refresh)
 
+
 def peek_network_env() -> NetworkEnv | None:
     """Get cached network environment without triggering probe."""
     return _detector.peek_env()
+
 
 def invalidate_network_cache():
     """Force re-detection on next call."""
     _detector.invalidate()
 
+
 def is_china_direct() -> bool:
     """Quick check: are we on a direct China connection?"""
     return get_network_env().is_china_direct
+
 
 def is_vpn_active() -> bool:
     """Quick check: is VPN routing traffic abroad?"""

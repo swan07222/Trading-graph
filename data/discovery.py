@@ -2,10 +2,11 @@
 from __future__ import annotations
 
 import re
-import socket
 import threading
 import time
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FuturesTimeout
 from dataclasses import dataclass, field
 from datetime import datetime
 from types import SimpleNamespace
@@ -21,7 +22,9 @@ from utils.logger import get_logger
 
 log = get_logger(__name__)
 
+# ====================================================================== #
 # SCORING CONSTANTS (no more magic numbers)
+# ====================================================================== #
 
 # Market cap thresholds (in raw yuan)
 _MCAP_LARGE: float = 100e8       # 100亿 (10B CNY)
@@ -62,19 +65,75 @@ _VALID_PREFIXES = (
 )
 
 # Prefix → exchange mapping (aligned with core/constants.py naming)
-_PREFIX_TO_EXCHANGE: dict[str, str] = {}
 _SSE_PREFIXES = ("600", "601", "603", "605", "688")
 _SZSE_PREFIXES = ("000", "001", "002", "003", "300", "301")
 _BSE_PREFIXES = ("83", "87", "43")
 
+# FIX Bug 1: Actually populate the prefix→exchange mapping
+_PREFIX_TO_EXCHANGE: dict[str, str] = {
+    **{p: "SSE" for p in _SSE_PREFIXES},
+    **{p: "SZSE" for p in _SZSE_PREFIXES},
+    **{p: "BSE" for p in _BSE_PREFIXES},
+}
+
 _PREFIX_RE = re.compile(r'^(sh|sz|bj)\.?', re.IGNORECASE)
 _SUFFIX_RE = re.compile(r'\.(sh|sz|bj|ss)$', re.IGNORECASE)
+
+# FIX Bug 6: Proper ST detection with word boundaries
+_ST_PATTERN = re.compile(r'(?<!\w)\*?ST(?!\w)', re.IGNORECASE)
+
+# Source authority ranking for merge decisions (Bug 4 fix)
+_SOURCE_RANK: dict[str, int] = {
+    "CSI300": 5,
+    "CSI500": 4,
+    "CSI1000": 3,
+    "tencent": 2,
+    "all": 1,
+    "gainers": 1,
+    "losers": 1,
+    "volume": 1,
+    "large_cap": 1,
+    "universe": 0,
+    "fallback": -1,
+}
 
 # Rate limit & network
 _DEFAULT_RATE_LIMIT: float = 1.0
 _DEFAULT_TIMEOUT: int = 10
 _MAX_RETRIES: int = 2
 _TENCENT_CHUNK_SIZE: int = 80
+
+
+# ====================================================================== #
+# Module-level helpers
+# ====================================================================== #
+
+def _is_st(name: str | None) -> bool:
+    """
+    Check if a stock name indicates ST status.
+
+    FIX Bug 6: Uses word-boundary regex to avoid false positives
+    on names like "BEST" or "FASTEST".
+    """
+    if not name:
+        return False
+    return bool(_ST_PATTERN.search(name))
+
+
+def _find_column(
+    df: pd.DataFrame, candidates: list[str]
+) -> str | None:
+    """Return the first column name from *candidates* that exists in *df*."""
+    for col in candidates:
+        if col in df.columns:
+            return col
+    # Last resort: first column
+    return df.columns[0] if len(df.columns) > 0 else None
+
+
+# ====================================================================== #
+# DiscoveredStock
+# ====================================================================== #
 
 @dataclass
 class DiscoveredStock:
@@ -94,9 +153,16 @@ class DiscoveredStock:
         self.code = self._clean_code(self.code)
 
     # ------------------------------------------------------------------ #
+    # Code cleaning
     # ------------------------------------------------------------------ #
     @staticmethod
     def _clean_code(code: str) -> str:
+        """
+        Clean and normalise a stock code to bare 6-digit form.
+
+        FIX Bug 12: Properly handles BSE codes that might be 5 digits;
+        only zero-pads when the result is a valid prefix.
+        """
         if not code:
             return ""
         code = str(code).strip()
@@ -104,7 +170,30 @@ class DiscoveredStock:
         code = _SUFFIX_RE.sub("", code)
         code = code.replace(".", "").replace("-", "").replace(" ", "")
         digits = "".join(c for c in code if c.isdigit())
-        return digits.zfill(6) if digits else ""
+        if not digits:
+            return ""
+
+        # Already 6 digits — return directly
+        if len(digits) == 6:
+            return digits
+
+        # 5 digits — try zero-padding; only accept if result is valid
+        if len(digits) == 5:
+            padded = digits.zfill(6)
+            if any(padded.startswith(p) for p in _VALID_PREFIXES):
+                return padded
+            # Can't pad to a valid prefix — return as-is (will fail is_valid)
+            return digits
+
+        # Shorter codes: try zero-pad
+        if len(digits) < 6:
+            padded = digits.zfill(6)
+            if any(padded.startswith(p) for p in _VALID_PREFIXES):
+                return padded
+            return ""
+
+        # Longer than 6 digits — invalid
+        return ""
 
     # ------------------------------------------------------------------ #
     # Validation (uses exact prefixes from core/constants.py)
@@ -116,17 +205,20 @@ class DiscoveredStock:
 
     # ------------------------------------------------------------------ #
     # Exchange (naming aligned with core/constants.py: SSE / SZSE / BSE)
+    # FIX Bug 1: Uses the populated _PREFIX_TO_EXCHANGE dict
     # ------------------------------------------------------------------ #
     @property
     def market(self) -> str:
         """Return exchange string consistent with ``core.constants.get_exchange``."""
-        if any(self.code.startswith(p) for p in _SSE_PREFIXES):
-            return "SSE"
-        if any(self.code.startswith(p) for p in _SZSE_PREFIXES):
-            return "SZSE"
-        if any(self.code.startswith(p) for p in _BSE_PREFIXES):
-            return "BSE"
+        for prefix, exchange in _PREFIX_TO_EXCHANGE.items():
+            if self.code.startswith(prefix):
+                return exchange
         return "UNKNOWN"
+
+
+# ====================================================================== #
+# UniversalStockDiscovery
+# ====================================================================== #
 
 class UniversalStockDiscovery:
     """
@@ -179,6 +271,7 @@ class UniversalStockDiscovery:
         return self._net_env
 
     # ================================================================== #
+    # Rate limiting
     # ================================================================== #
     def _wait(self) -> None:
         with self._lock:
@@ -189,27 +282,39 @@ class UniversalStockDiscovery:
 
     # ================================================================== #
     # Safe fetch with retry + timeout
+    # FIX Bug 10: Uses ThreadPoolExecutor instead of socket.setdefaulttimeout
     # ================================================================== #
     def _safe_fetch(self, fetch_func, description: str = "data"):
+        """
+        Execute *fetch_func* with retries and per-call timeout.
+
+        Uses a ThreadPoolExecutor with future.result(timeout=...) instead
+        of socket.setdefaulttimeout() which is process-global and racy
+        in multi-threaded environments.
+        """
         for attempt in range(_MAX_RETRIES):
+            timeout = self._timeout * (attempt + 1)
             try:
-                old_timeout = socket.getdefaulttimeout()
-                socket.setdefaulttimeout(self._timeout * (attempt + 1))
-                try:
-                    self._wait()
-                    return fetch_func()
-                finally:
-                    socket.setdefaulttimeout(old_timeout)
+                self._wait()
+                with ThreadPoolExecutor(max_workers=1) as ex:
+                    fut = ex.submit(fetch_func)
+                    return fut.result(timeout=timeout)
+            except FuturesTimeout:
+                log.warning(
+                    f"Attempt {attempt + 1}/{_MAX_RETRIES} timed out for "
+                    f"{description} (timeout={timeout}s)"
+                )
             except Exception as exc:
                 log.warning(
                     f"Attempt {attempt + 1}/{_MAX_RETRIES} failed for "
                     f"{description}: {exc}"
                 )
-                if attempt < _MAX_RETRIES - 1:
-                    time.sleep(2 ** attempt)
+            if attempt < _MAX_RETRIES - 1:
+                time.sleep(2 ** attempt)
         return None
 
     # ================================================================== #
+    # Main discovery entry point
     # ================================================================== #
     def discover_all(
         self,
@@ -239,28 +344,71 @@ class UniversalStockDiscovery:
         all_stocks: dict[str, DiscoveredStock] = {}
 
         # -------------------------------------------------------------- #
-        # 1. AkShare full spot (China direct only)
+        # 0. Seed from cached/full universe (works offline)
         # -------------------------------------------------------------- #
-        if env.is_china_direct and env.eastmoney_ok and self._ak:
+        try:
+            from data.universe import get_universe_codes
+
+            universe_codes = get_universe_codes(force_refresh=False, max_age_hours=24.0)
+        except Exception as exc:
+            universe_codes = []
+            log.debug("Universe seed unavailable: %s", exc)
+
+        if universe_codes:
+            for code in universe_codes:
+                s = DiscoveredStock(code=str(code), source="universe")
+                if s.is_valid() and (include_st or not _is_st(s.name)):
+                    all_stocks.setdefault(s.code, s)
+            log.info("Discovery seeded from universe: %d stocks", len(all_stocks))
+            if callback:
+                callback("Seeded from universe cache", len(all_stocks))
+
+        # -------------------------------------------------------------- #
+        # 1. AkShare full spot (China direct only)
+        # FIX Bug 3: Track whether index constituents were already fetched
+        # -------------------------------------------------------------- #
+        ak_used_index_fallback = False
+
+        if env.is_china_direct and self._ak:
             log.info("Discovery via AkShare (China direct IP)")
-            ak_stocks = self._discover_via_akshare(callback, include_st)
+            ak_stocks, ak_used_index_fallback = self._discover_via_akshare(
+                callback, include_st
+            )
             if ak_stocks:
                 for s in ak_stocks:
-                    all_stocks[s.code] = s
+                    if s.code in all_stocks:
+                        self._merge_stock(all_stocks[s.code], s)
+                    else:
+                        all_stocks[s.code] = s
 
         # -------------------------------------------------------------- #
         # 2. Tencent verification (any IP)
+        # FIX Bug 2: Always run Tencent when available (not gated on empty)
         # -------------------------------------------------------------- #
-        if not all_stocks and env.tencent_ok:
+        if env.tencent_ok:
             log.info("Discovery via Tencent (works from any IP)")
             for s in self._discover_via_tencent():
-                if s.is_valid() and (include_st or not _is_st(s.name)):
-                    all_stocks.setdefault(s.code, s)
+                if not s.is_valid():
+                    continue
+                if not include_st and _is_st(s.name):
+                    continue
+                if s.code in all_stocks:
+                    # Enrich existing entry with live-verified name
+                    existing = all_stocks[s.code]
+                    if not existing.name and s.name:
+                        existing.name = s.name
+                    if s.source == "tencent":
+                        # Tencent-verified stocks get a small reliability boost
+                        existing.market_cap = max(existing.market_cap, s.market_cap)
+                        existing.volume = max(existing.volume, s.volume)
+                else:
+                    all_stocks[s.code] = s
 
         # -------------------------------------------------------------- #
         # 3. Index constituents (China direct, AkShare)
+        # FIX Bug 3: Skip if AkShare already fetched these as fallback
         # -------------------------------------------------------------- #
-        if env.is_china_direct and self._ak:
+        if env.is_china_direct and self._ak and not ak_used_index_fallback:
             for label, fn in (
                 ("CSI 300", self._get_csi300),
                 ("CSI 500", self._get_csi500),
@@ -270,9 +418,14 @@ class UniversalStockDiscovery:
                     callback(f"Searching {label}…", len(all_stocks))
                 try:
                     for s in fn() or []:
-                        if s.is_valid() and s.code not in all_stocks:
-                            if include_st or not _is_st(s.name):
-                                all_stocks[s.code] = s
+                        if not s.is_valid():
+                            continue
+                        if not include_st and _is_st(s.name):
+                            continue
+                        if s.code in all_stocks:
+                            self._merge_stock(all_stocks[s.code], s)
+                        else:
+                            all_stocks[s.code] = s
                 except Exception as exc:
                     log.warning(f"Failed {label}: {exc}")
 
@@ -310,18 +463,24 @@ class UniversalStockDiscovery:
         log.info(f"Before filtering: {len(stocks)} stocks")
 
         # Market-cap filter (convert billions → raw yuan)
+        # Stocks with market_cap == 0.0 have no data available; we keep them
+        # rather than wrongly excluding them. Only discard stocks with a
+        # *known* market cap that is below the threshold.
         if min_market_cap > 0:
             threshold = min_market_cap * 1e9
             filtered = [
                 s for s in stocks
-                if s.market_cap <= 0 or s.market_cap >= threshold
+                if s.market_cap == 0.0 or s.market_cap >= threshold
             ]
             if filtered:
                 stocks = filtered
 
         # Score (pure arithmetic — no network calls)
+        # FIX Bug 7: Use max(existing_score, calculated) so manually
+        # assigned scores (e.g. tencent=0.7, CSI300=0.8) are not downgraded
         for s in stocks:
-            s.score = self._calculate_score(s)
+            calculated = self._calculate_score(s)
+            s.score = max(s.score, calculated)
 
         stocks.sort(key=lambda x: x.score, reverse=True)
 
@@ -375,15 +534,21 @@ class UniversalStockDiscovery:
 
     # ================================================================== #
     # AkShare discovery (China direct)
+    # FIX Bug 3: Returns a tuple (stocks, used_index_fallback)
     # ================================================================== #
     def _discover_via_akshare(
         self,
         callback: Callable | None = None,
         include_st: bool = False,
-    ) -> list[DiscoveredStock] | None:
-        """Full AkShare discovery — China direct IP only."""
+    ) -> tuple[list[DiscoveredStock] | None, bool]:
+        """
+        Full AkShare discovery — China direct IP only.
+
+        Returns:
+            Tuple of (discovered_stocks_or_None, used_index_fallback_bool).
+        """
         if not self._ak:
-            return None
+            return None, False
 
         if callback:
             callback("Fetching market data via AkShare…", 0)
@@ -392,6 +557,8 @@ class UniversalStockDiscovery:
             lambda: self._ak.stock_zh_a_spot_em(), "spot data"
         )
         spot_ok = spot_df is not None and not spot_df.empty
+
+        used_index_fallback = False
 
         if spot_ok:
             sources = [
@@ -403,6 +570,7 @@ class UniversalStockDiscovery:
             ]
         else:
             log.warning("Spot data unavailable, trying index constituents")
+            used_index_fallback = True
             sources = [
                 ("CSI 300", self._get_csi300),
                 ("CSI 500", self._get_csi500),
@@ -427,18 +595,32 @@ class UniversalStockDiscovery:
             except Exception as exc:
                 log.warning(f"Failed {label}: {exc}")
 
-        return list(all_stocks.values()) if all_stocks else None
+        if all_stocks:
+            return list(all_stocks.values()), used_index_fallback
+        return None, used_index_fallback
 
+    # ================================================================== #
+    # Merge helper
+    # FIX Bug 4: Keep best score based on source authority ranking
+    # ================================================================== #
     @staticmethod
     def _merge_stock(existing: DiscoveredStock, new: DiscoveredStock) -> None:
         """Merge metadata from *new* into *existing*."""
-        existing.score = (existing.score + new.score) / 2.0
         existing.market_cap = max(existing.market_cap, new.market_cap)
         existing.volume = max(existing.volume, new.volume)
         if not existing.name and new.name:
             existing.name = new.name
 
+        # Promote source/score only if new is more authoritative
+        existing_rank = _SOURCE_RANK.get(existing.source, 0)
+        new_rank = _SOURCE_RANK.get(new.source, 0)
+        if new_rank > existing_rank:
+            existing.source = new.source
+            existing.score = new.score
+
     # ================================================================== #
+    # Tencent discovery
+    # FIX Bug 8: Supports BSE stocks via 'bj' prefix
     # ================================================================== #
     def _discover_via_tencent(self) -> list[DiscoveredStock]:
         """
@@ -461,7 +643,10 @@ class UniversalStockDiscovery:
                 sym = f"sh{s.code}"
             elif ex == "SZSE":
                 sym = f"sz{s.code}"
+            elif ex == "BSE":
+                sym = f"bj{s.code}"
             else:
+                log.debug("Skipping unknown exchange for code %s", s.code)
                 continue
             vendor_symbols.append(sym)
             code_map[sym] = s.code
@@ -564,6 +749,7 @@ class UniversalStockDiscovery:
 
     # ================================================================== #
     # Spot-DF slicing
+    # FIX Bug 13: Filter out invalid codes from spot data
     # ================================================================== #
     @staticmethod
     def _from_spot_df(
@@ -586,79 +772,31 @@ class UniversalStockDiscovery:
 
         items: list[DiscoveredStock] = []
         for _, row in work.iterrows():
-            items.append(
-                DiscoveredStock(
-                    code=str(row.get("代码", "")),
-                    name=str(row.get("名称", "")),
-                    source=filter_type,
-                    market_cap=float(row.get("总市值", 0) or 0),
-                    volume=float(row.get("成交额", 0) or 0),
-                    change_pct=float(row.get("涨跌幅", 0) or 0),
-                )
+            s = DiscoveredStock(
+                code=str(row.get("代码", "")),
+                name=str(row.get("名称", "")),
+                source=filter_type,
+                market_cap=float(row.get("总市值", 0) or 0),
+                volume=float(row.get("成交额", 0) or 0),
+                change_pct=float(row.get("涨跌幅", 0) or 0),
             )
+            # FIX Bug 13: Only include valid A-share codes
+            if s.is_valid():
+                items.append(s)
         return items
 
     # ================================================================== #
     # Fallback (hardcoded blue-chips)
+    # FIX Bug 9: Uses shared fallback_stocks module to break circular import
     # ================================================================== #
     @staticmethod
     def _get_fallback_stocks() -> list[DiscoveredStock]:
         """Return a curated list of liquid A-share blue-chips."""
-        _FALLBACK = (
-            ("600519", "贵州茅台"), ("601318", "中国平安"),
-            ("600036", "招商银行"), ("000858", "五粮液"),
-            ("600900", "长江电力"), ("000333", "美的集团"),
-            ("000651", "格力电器"), ("002594", "比亚迪"),
-            ("300750", "宁德时代"), ("002475", "立讯精密"),
-            ("600887", "伊利股份"), ("603288", "海天味业"),
-            ("600276", "恒瑞医药"), ("300760", "迈瑞医疗"),
-            ("300015", "爱尔眼科"), ("601166", "兴业银行"),
-            ("601398", "工商银行"), ("600030", "中信证券"),
-            ("002230", "科大讯飞"), ("300059", "东方财富"),
-            ("601857", "中国石油"), ("600028", "中国石化"),
-            ("601088", "中国神华"), ("600309", "万华化学"),
-            ("601012", "隆基绿能"), ("000568", "泸州老窖"),
-            ("600000", "浦发银行"), ("601328", "交通银行"),
-            ("000002", "万科A"),   ("002714", "牧原股份"),
-            ("600690", "海尔智家"), ("000725", "京东方A"),
-            ("601899", "紫金矿业"), ("600585", "海螺水泥"),
-            ("002352", "顺丰控股"), ("300124", "汇川技术"),
-            ("002415", "海康威视"), ("600031", "三一重工"),
-            ("000001", "平安银行"), ("002304", "洋河股份"),
-            ("601688", "华泰证券"), ("600104", "上汽集团"),
-            ("601888", "中国中免"), ("600809", "山西汾酒"),
-            ("002371", "北方华创"), ("688041", "海光信息"),
-            ("688256", "寒武纪"),   ("300896", "爱美客"),
-            ("688012", "中微公司"), ("002049", "紫光国微"),
-            ("600050", "中国联通"), ("601728", "中国电信"),
-            ("600941", "中国移动"), ("601669", "中国电建"),
-            ("601668", "中国建筑"), ("601390", "中国中铁"),
-            ("000063", "中兴通讯"), ("002460", "赣锋锂业"),
-            ("300274", "阳光电源"), ("601816", "京沪高铁"),
-            ("600438", "通威股份"), ("002466", "天齐锂业"),
-            ("601225", "陕西煤业"), ("600048", "保利发展"),
-            ("601633", "长城汽车"), ("002812", "恩捷股份"),
-            ("300033", "同花顺"),   ("601919", "中远海控"),
-            ("603259", "药明康德"), ("600346", "恒力石化"),
-            ("002241", "歌尔股份"), ("688981", "中芯国际"),
-            ("300347", "泰格医药"), ("600763", "通策医疗"),
-            ("601100", "恒立液压"), ("300782", "卓胜微"),
-            ("603501", "韦尔股份"), ("300661", "圣邦股份"),
-            ("688036", "传音控股"), ("002709", "天赐材料"),
-            ("300014", "亿纬锂能"), ("600745", "闻泰科技"),
-            ("601865", "福莱特"),   ("300316", "晶盛机电"),
-            ("688111", "金山办公"), ("300999", "金龙鱼"),
-            ("603986", "兆易创新"), ("688561", "奇安信"),
-            ("300308", "中际旭创"), ("002916", "深南电路"),
-            ("300413", "芒果超媒"), ("601138", "工业富联"),
-            ("600406", "国电南瑞"), ("601615", "明阳智能"),
-            ("002382", "蓝思科技"), ("300122", "智飞生物"),
-            ("600196", "复星医药"),
-        )
+        from data.fallback_stocks import FALLBACK_STOCK_LIST
 
         seen: set = set()
         stocks: list[DiscoveredStock] = []
-        for code, name in _FALLBACK:
+        for code, name in FALLBACK_STOCK_LIST:
             s = DiscoveredStock(
                 code=code, name=name, source="fallback", score=0.7
             )
@@ -668,21 +806,3 @@ class UniversalStockDiscovery:
 
         log.info(f"Fallback list: {len(stocks)} stocks")
         return stocks
-
-# MODULE-LEVEL HELPERS
-
-def _is_st(name: str | None) -> bool:
-    """Check if a stock name indicates ST status."""
-    if not name:
-        return False
-    return "ST" in name.upper()
-
-def _find_column(
-    df: pd.DataFrame, candidates: list[str]
-) -> str | None:
-    """Return the first column name from *candidates* that exists in *df*."""
-    for col in candidates:
-        if col in df.columns:
-            return col
-    # Last resort: first column
-    return df.columns[0] if len(df.columns) > 0 else None

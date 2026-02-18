@@ -9,7 +9,11 @@ import numpy as np
 
 
 def to_float(x, default: float = 0.0) -> float:
-    """Safely convert to float with NaN/Inf handling."""
+    """
+    Safely convert to float with NaN/Inf handling.
+
+    Returns *default* for None, NaN, Inf, and unconvertible values.
+    """
     try:
         if x is None:
             return float(default)
@@ -20,9 +24,23 @@ def to_float(x, default: float = 0.0) -> float:
     except (ValueError, TypeError):
         return float(default)
 
+
 def to_int(x, default: int = 0) -> int:
-    """Safely convert to int with NaN/Inf handling."""
-    return int(to_float(x, default))
+    """
+    Safely convert to int with NaN/Inf handling.
+
+    FIX: Uses round() instead of int() truncation so that
+    2.9 → 3 instead of 2. Falls back to *default* on failure.
+
+    Note: For very large floats (> 2**53) precision is lost due to
+    float representation, but this is inherent to the float → int path.
+    """
+    try:
+        f = to_float(x, float(default))
+        return int(round(f))
+    except (ValueError, TypeError, OverflowError):
+        return int(default)
+
 
 def format_number(n: float, decimals: int = 2) -> str:
     """
@@ -56,6 +74,7 @@ def format_number(n: float, decimals: int = 2) -> str:
     else:
         return f"{n:,.{decimals}f}"
 
+
 def format_pct(n: float, decimals: int = 2) -> str:
     """
     Format a number as a percentage with sign.
@@ -85,6 +104,7 @@ def format_pct(n: float, decimals: int = 2) -> str:
     sign = "+" if n > 0 else ""
     return f"{sign}{n:.{decimals}f}%"
 
+
 def format_price(n: float, currency: str = "¥") -> str:
     """
     Format a price with currency symbol.
@@ -108,6 +128,7 @@ def format_price(n: float, currency: str = "¥") -> str:
         return f"{currency}∞" if n > 0 else f"-{currency}∞"
 
     return f"{currency}{n:,.2f}"
+
 
 def get_trading_dates(
     start: datetime,
@@ -141,6 +162,7 @@ def get_trading_dates(
         current += timedelta(days=1)
     return dates
 
+
 def calculate_sharpe(
     returns: np.ndarray | Sequence[float],
     risk_free_annual: float = 0.03,
@@ -156,10 +178,6 @@ def calculate_sharpe(
 
     Returns:
         Annualized Sharpe ratio, or 0.0 if insufficient data or zero volatility
-
-    Examples:
-        >>> returns = np.array([0.01, 0.02, -0.01, 0.005, 0.015])
-        >>> calculate_sharpe(returns)  # some positive number
     """
     returns = np.asarray(returns, dtype=np.float64)
 
@@ -168,17 +186,16 @@ def calculate_sharpe(
     if len(returns) < 2:
         return 0.0
 
-    # Convert annual risk-free rate to per-period rate
     rf_per_period = risk_free_annual / periods_per_year
     excess = returns - rf_per_period
 
     std = np.std(excess, ddof=1)
 
-    # Use isclose instead of == 0 for floating point safety
     if np.isclose(std, 0.0) or np.isnan(std):
         return 0.0
 
     return float(np.mean(excess) / std * np.sqrt(periods_per_year))
+
 
 def calculate_max_drawdown(
     equity: np.ndarray | Sequence[float],
@@ -192,10 +209,6 @@ def calculate_max_drawdown(
     Returns:
         Maximum drawdown as a positive fraction (e.g., 0.25 for 25%)
         Returns 0.0 if equity curve is empty or non-positive
-
-    Examples:
-        >>> equity = np.array([100, 110, 105, 95, 100])
-        >>> calculate_max_drawdown(equity)  # ≈ 0.1364 (from 110 to 95)
     """
     equity = np.asarray(equity, dtype=np.float64)
 

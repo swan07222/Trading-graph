@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import socket
 import threading
 import time
 from datetime import date, datetime, timedelta
@@ -30,8 +29,10 @@ _new_listings_cache: dict[str, object] = {
     "codes": [],
 }
 
+
 def _universe_path() -> Path:
     return Path(CONFIG.data_dir) / "stock_universe.json"
+
 
 def load_universe() -> dict:
     """Load universe from disk."""
@@ -47,6 +48,7 @@ def load_universe() -> dict:
     except (json.JSONDecodeError, OSError) as exc:
         log.warning(f"Failed to load universe file: {exc}")
         return {}
+
 
 def save_universe(data: dict) -> None:
     """Atomically save universe to disk."""
@@ -68,6 +70,7 @@ def save_universe(data: dict) -> None:
         except OSError as exc:
             log.warning(f"Failed to save universe: {exc}")
 
+
 def _parse_updated_ts(data: dict) -> float:
     raw = data.get("updated_ts")
     if raw is None:
@@ -76,6 +79,7 @@ def _parse_updated_ts(data: dict) -> float:
         return float(raw)
     except (ValueError, TypeError):
         return 0.0
+
 
 def _validate_codes(codes: list) -> list[str]:
     """Validate stock codes."""
@@ -90,24 +94,25 @@ def _validate_codes(codes: list) -> list[str]:
         validated.append(code6)
     return sorted(set(validated))
 
+
 def _fallback_codes() -> list[str]:
-    """Build robust offline fallback universe."""
+    """
+    Build robust offline fallback universe.
+
+    FIX Bug 9: Uses shared fallback_stocks module instead of importing
+    from data.discovery, which would create a circular import.
+    """
     base = _validate_codes(getattr(CONFIG, "stock_pool", []))
 
-    # Reuse curated discovery fallback list when available.
     try:
-        from data.discovery import UniversalStockDiscovery
-
-        extra = [
-            s.code
-            for s in UniversalStockDiscovery._get_fallback_stocks()  # static helper
-            if getattr(s, "code", None)
-        ]
+        from data.fallback_stocks import FALLBACK_STOCK_LIST
+        extra = [code for code, _name in FALLBACK_STOCK_LIST]
         base.extend(extra)
     except Exception:
         pass
 
     return _validate_codes(base)
+
 
 def _can_use_akshare() -> bool:
     """
@@ -137,12 +142,14 @@ def _can_use_akshare() -> bool:
     )
     return False
 
+
 def _find_first_column(candidates: list[str], columns: list[str]) -> str | None:
     colset = set(columns)
     for c in candidates:
         if c in colset:
             return c
     return None
+
 
 def _rank_codes_by_liquidity(df) -> list[str]:
     """
@@ -151,11 +158,14 @@ def _rank_codes_by_liquidity(df) -> list[str]:
     """
     cols = list(getattr(df, "columns", []))
     code_col = _find_first_column(
-        ["代码", "证券代码", "浠ｇ爜", "璇佸埜浠ｇ爜", "code"],
+        ["code", "symbol", "secid", "stock_code", "ticker"],
         cols,
     )
+    if code_col is None and cols:
+        code_col = cols[0]
     if code_col is None:
         return []
+
     if not _HAS_PANDAS:
         raw_codes = (
             df[code_col].astype(str).str.extract(r"(\d+)")[0].dropna().tolist()
@@ -174,15 +184,15 @@ def _rank_codes_by_liquidity(df) -> list[str]:
     ranked = ranked[ranked["__code__"].str.fullmatch(r"\d{6}")]
 
     amount_col = _find_first_column(
-        ["成交额", "amount", "turnover", "amount_zh"],
+        ["amount", "turnover", "amount_zh"],
         cols,
     )
     volume_col = _find_first_column(
-        ["成交量", "volume", "vol"],
+        ["volume", "vol"],
         cols,
     )
     cap_col = _find_first_column(
-        ["总市值", "market_cap", "mktcap"],
+        ["market_cap", "mktcap", "total_mv"],
         cols,
     )
 
@@ -208,12 +218,62 @@ def _rank_codes_by_liquidity(df) -> list[str]:
     )
     return _validate_codes(ranked["__code__"].tolist())
 
+
+def _extract_codes_from_df(df) -> list[str]:
+    """Extract valid 6-digit A-share codes from a generic DataFrame."""
+    if df is None or getattr(df, "empty", True):
+        return []
+
+    cols = list(getattr(df, "columns", []))
+    preferred_cols = (
+        "code",
+        "symbol",
+        "secid",
+        "stock_code",
+        "ticker",
+    )
+
+    for col in preferred_cols:
+        if col not in cols:
+            continue
+        try:
+            raw = (
+                df[col]
+                .astype(str)
+                .str.extract(r"(\d{6})")[0]
+                .dropna()
+                .tolist()
+            )
+            codes = _validate_codes(raw)
+            if codes:
+                return codes
+        except Exception:
+            continue
+
+    # Fallback: scan first few columns for 6-digit values.
+    raw_codes: list[str] = []
+    for col in cols[:8]:
+        try:
+            part = (
+                df[col]
+                .astype(str)
+                .str.extract(r"(\d{6})")[0]
+                .dropna()
+                .tolist()
+            )
+            if part:
+                raw_codes.extend(part)
+        except Exception:
+            continue
+    return _validate_codes(raw_codes)
+
+
 def _try_akshare_fetch(timeout: int = 20) -> list[str] | None:
     """
     Try to fetch stock universe from AkShare.
 
-    FIX: Always tries regardless of network detection.
-    Returns None on failure, valid codes on success.
+    FIX Bug 10: Uses ThreadPoolExecutor for timeout instead of
+    socket.setdefaulttimeout which is process-global and racy.
     """
     try:
         import akshare as ak
@@ -221,44 +281,78 @@ def _try_akshare_fetch(timeout: int = 20) -> list[str] | None:
         log.warning("AkShare not installed")
         return None
 
-    old_timeout = socket.getdefaulttimeout()
-    socket.setdefaulttimeout(timeout)
+    from concurrent.futures import ThreadPoolExecutor
+    from concurrent.futures import TimeoutError as FuturesTimeout
 
-    try:
+    def _do_spot_fetch():
         log.info("Fetching universe from AkShare (stock_zh_a_spot_em)...")
-        df = ak.stock_zh_a_spot_em()
-
-        if df is None or df.empty:
-            log.warning("AkShare returned empty DataFrame")
-            return None
-
-        code_col = None
-        for c in ("代码", "code", "证券代码"):
-            if c in df.columns:
-                code_col = c
-                break
-
-        if code_col is None:
-            log.warning(f"No code column found. Columns: {list(df.columns)[:10]}")
-            return None
-
-        codes = _rank_codes_by_liquidity(df)
-        if not codes:
-            raw_codes = df[code_col].astype(str).str.extract(r"(\d+)")[0].dropna().tolist()
-            codes = _validate_codes(raw_codes)
-
-        if codes:
-            log.info(f"AkShare returned {len(codes)} valid codes")
-            return codes
+        df_spot = ak.stock_zh_a_spot_em()
+        if df_spot is not None and not df_spot.empty:
+            codes = _rank_codes_by_liquidity(df_spot)
+            if not codes:
+                codes = _extract_codes_from_df(df_spot)
+            if codes:
+                log.info(f"AkShare spot returned {len(codes)} valid codes")
+                return codes
         else:
-            log.warning("No valid codes after filtering")
-            return None
-
-    except Exception as exc:
-        log.warning(f"AkShare fetch failed: {type(exc).__name__}: {exc}")
+            log.warning("AkShare spot endpoint returned empty data")
         return None
-    finally:
-        socket.setdefaulttimeout(old_timeout)
+
+    def _do_fallback_fetch():
+        fallback_calls = [
+            ("stock_info_a_code_name", getattr(ak, "stock_info_a_code_name", None)),
+            ("stock_zh_a_name_code", getattr(ak, "stock_zh_a_name_code", None)),
+        ]
+        for api_name, api_fn in fallback_calls:
+            if not callable(api_fn):
+                continue
+            try:
+                log.info(f"Fetching universe from AkShare fallback ({api_name})...")
+                df_codes = api_fn()
+                codes = _extract_codes_from_df(df_codes)
+                if codes:
+                    log.info(
+                        "AkShare fallback %s returned %s valid codes",
+                        api_name,
+                        len(codes),
+                    )
+                    return codes
+            except Exception as exc:
+                log.warning(
+                    "AkShare fallback %s failed: %s: %s",
+                    api_name,
+                    type(exc).__name__,
+                    exc,
+                )
+        return None
+
+    # Try primary endpoint with timeout
+    try:
+        with ThreadPoolExecutor(max_workers=1) as ex:
+            fut = ex.submit(_do_spot_fetch)
+            result = fut.result(timeout=timeout)
+            if result:
+                return result
+    except FuturesTimeout:
+        log.warning(f"AkShare spot fetch timed out after {timeout}s")
+    except Exception as exc:
+        log.warning(f"AkShare spot fetch failed: {type(exc).__name__}: {exc}")
+
+    # Try fallback endpoints with timeout
+    try:
+        with ThreadPoolExecutor(max_workers=1) as ex:
+            fut = ex.submit(_do_fallback_fetch)
+            result = fut.result(timeout=timeout)
+            if result:
+                return result
+    except FuturesTimeout:
+        log.warning(f"AkShare fallback fetch timed out after {timeout}s")
+    except Exception as exc:
+        log.warning(f"AkShare fallback fetch failed: {type(exc).__name__}: {exc}")
+
+    log.warning("No valid stock codes from any AkShare universe endpoint")
+    return None
+
 
 def get_universe_codes(
     force_refresh: bool = False,
@@ -280,8 +374,10 @@ def get_universe_codes(
         log.debug(f"Using cached universe: {len(cached_codes)} codes")
         return cached_codes
 
-    # Network-aware source choice: avoid AkShare timeouts when Eastmoney is blocked.
-    fresh_codes = _try_akshare_fetch() if _can_use_akshare() else None
+    # Try AkShare regardless of probe result; use shorter timeout when probe
+    # says Eastmoney is likely blocked.
+    can_try_direct = _can_use_akshare()
+    fresh_codes = _try_akshare_fetch(timeout=20 if can_try_direct else 8)
 
     if fresh_codes:
         out = {
@@ -311,6 +407,7 @@ def get_universe_codes(
     log.error("No stock codes available from any source!")
     return []
 
+
 def refresh_universe() -> dict:
     """
     Refresh universe from AkShare.
@@ -320,7 +417,8 @@ def refresh_universe() -> dict:
     existing = load_universe()
     existing_codes = existing.get("codes") or []
 
-    fresh_codes = _try_akshare_fetch() if _can_use_akshare() else None
+    can_try_direct = _can_use_akshare()
+    fresh_codes = _try_akshare_fetch(timeout=20 if can_try_direct else 8)
 
     if fresh_codes:
         out = {
@@ -350,22 +448,32 @@ def refresh_universe() -> dict:
 
     return {"codes": [], "updated_ts": time.time(), "source": "empty"}
 
+
 def get_new_listings(
     days: int = 60,
     force_refresh: bool = False,
     max_age_seconds: float = 5.0,
 ) -> list[str]:
-    """Return codes of stocks listed within the last N days."""
+    """
+    Return codes of stocks listed within the last N days.
+
+    FIX Bug 14: Atomic snapshot reads and writes under lock.
+    """
     now = time.time()
+
+    # Atomic snapshot read
     with _universe_lock:
         try:
             cached_ts = float(_new_listings_cache.get("ts", 0.0) or 0.0)
             cached_days = int(_new_listings_cache.get("days", 0) or 0)
-            cached_codes = _validate_codes(list(_new_listings_cache.get("codes", []) or []))
+            cached_codes = _validate_codes(
+                list(_new_listings_cache.get("codes", []) or [])
+            )
         except Exception:
             cached_ts = 0.0
             cached_days = 0
             cached_codes = []
+
     if (
         not force_refresh
         and cached_codes
@@ -383,10 +491,12 @@ def get_new_listings(
         return []
 
     cutoff = date.today() - timedelta(days=days)
-    old_timeout = socket.getdefaulttimeout()
-    socket.setdefaulttimeout(10)
 
-    try:
+    # FIX Bug 10: Use ThreadPoolExecutor for timeout
+    from concurrent.futures import ThreadPoolExecutor
+    from concurrent.futures import TimeoutError as FuturesTimeout
+
+    def _fetch_new_listings_inner() -> list[str] | None:
         for fn_name in ("stock_zh_a_new_em", "stock_zh_a_new"):
             fn = getattr(ak, fn_name, None)
             if not callable(fn):
@@ -400,21 +510,42 @@ def get_new_listings(
             if df is None or df.empty:
                 continue
 
-            code_col = None
-            for c in ("代码", "证券代码", "stock_code", "code"):
-                if c in df.columns:
-                    code_col = c
-                    break
+            code_col = _find_first_column(
+                ["code", "symbol", "stock_code", "secid", "ticker"],
+                list(df.columns),
+            )
+            if code_col is None:
+                for col in list(df.columns)[:8]:
+                    try:
+                        probe = (
+                            df[col].astype(str).str.extract(r"(\d{6})")[0].dropna()
+                        )
+                    except Exception:
+                        continue
+                    if not probe.empty:
+                        code_col = col
+                        break
             if code_col is None:
                 continue
 
-            date_col = None
-            for c in ("上市日期", "listing_date", "list_date"):
-                if c in df.columns:
-                    date_col = c
-                    break
+            date_col = _find_first_column(
+                ["listing_date", "list_date", "ipo_date", "date"],
+                list(df.columns),
+            )
+            if date_col is None and _HAS_PANDAS:
+                for col in list(df.columns)[:10]:
+                    try:
+                        parsed = pd.to_datetime(df[col], errors="coerce")
+                    except Exception:
+                        continue
+                    valid = int(parsed.notna().sum())
+                    if valid >= max(3, int(len(parsed) * 0.2)):
+                        date_col = col
+                        break
 
-            raw_codes = df[code_col].astype(str).str.extract(r"(\d+)")[0].dropna().tolist()
+            raw_codes = (
+                df[code_col].astype(str).str.extract(r"(\d+)")[0].dropna().tolist()
+            )
             codes = _validate_codes(raw_codes)
 
             if date_col and codes:
@@ -422,7 +553,11 @@ def get_new_listings(
                     dates = pd.to_datetime(df[date_col], errors="coerce")
                     mask = dates >= pd.Timestamp(cutoff)
                     filtered = _validate_codes(
-                        df.loc[mask, code_col].astype(str).str.extract(r"(\d+)")[0].dropna().tolist()
+                        df.loc[mask, code_col]
+                        .astype(str)
+                        .str.extract(r"(\d+)")[0]
+                        .dropna()
+                        .tolist()
                     )
                     if filtered:
                         codes = filtered
@@ -430,16 +565,27 @@ def get_new_listings(
                     pass
 
             log.info(f"New listings (last {days} days): {len(codes)} codes")
-            with _universe_lock:
-                _new_listings_cache["ts"] = time.time()
-                _new_listings_cache["days"] = int(days)
-                _new_listings_cache["codes"] = list(codes)
             return codes
 
+        return None
+
+    result_codes: list[str] | None = None
+    try:
+        with ThreadPoolExecutor(max_workers=1) as ex:
+            fut = ex.submit(_fetch_new_listings_inner)
+            result_codes = fut.result(timeout=15)
+    except FuturesTimeout:
+        log.warning("New listings fetch timed out")
     except Exception as exc:
         log.debug(f"get_new_listings failed: {exc}")
-    finally:
-        socket.setdefaulttimeout(old_timeout)
+
+    if result_codes:
+        # Atomic cache write
+        with _universe_lock:
+            _new_listings_cache["ts"] = time.time()
+            _new_listings_cache["days"] = int(days)
+            _new_listings_cache["codes"] = list(result_codes)
+        return result_codes
 
     if cached_codes:
         return cached_codes

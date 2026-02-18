@@ -1016,7 +1016,43 @@ class MainApp(QMainWindow):
         std_pct = (math.sqrt(var / float(max(1, len(vals)))) / max(anchor, 1e-8))
 
         _, cap_step = self._chart_prediction_caps(iv_chart)
-        flat_line = len(vals) >= 5 and (span_pct <= 0.0012 or std_pct <= 0.0005)
+        quiet_span_pct = 0.0
+        quiet_std_pct = 0.0
+        try:
+            recent_rows = list(self._bars_by_symbol.get(self._ui_norm(symbol), []) or [])
+            recent_closes: list[float] = []
+            for row in recent_rows[-96:]:
+                try:
+                    row_iv = self._normalize_interval_token(
+                        row.get("interval", iv_chart),
+                        fallback=iv_chart,
+                    )
+                    if row_iv != iv_chart:
+                        continue
+                    px = float(row.get("close", 0.0) or 0.0)
+                    if px > 0 and math.isfinite(px):
+                        recent_closes.append(px)
+                except Exception:
+                    continue
+            if len(recent_closes) >= 6:
+                q_anchor = float(np.median(np.asarray(recent_closes[-24:], dtype=float)))
+                q_anchor = max(q_anchor, 1e-8)
+                quiet_span_pct = (
+                    abs(max(recent_closes) - min(recent_closes)) / q_anchor
+                )
+                q_std = float(np.std(np.asarray(recent_closes, dtype=float)))
+                quiet_std_pct = q_std / q_anchor
+        except Exception:
+            quiet_span_pct = 0.0
+            quiet_std_pct = 0.0
+
+        quiet_market = bool(
+            (quiet_span_pct > 0 and quiet_span_pct <= max(0.0030, cap_step * 0.85))
+            or (quiet_std_pct > 0 and quiet_std_pct <= max(0.0010, cap_step * 0.22))
+        )
+
+        flat_line_raw = len(vals) >= 5 and (span_pct <= 0.0012 or std_pct <= 0.0005)
+        flat_line = bool(flat_line_raw and not quiet_market)
         jagged = max_step > (cap_step * 1.80) or flip_ratio > 0.82
 
         self._debug_console(
@@ -1045,6 +1081,17 @@ class MainApp(QMainWindow):
                 ),
                 min_gap_seconds=0.8,
                 level="warning",
+            )
+        elif flat_line_raw and quiet_market:
+            self._debug_console(
+                f"forecast_q_quiet:{context}:{sym}:{iv_chart}",
+                (
+                    f"forecast quiet-shape [{context}] symbol={sym} chart={iv_chart} "
+                    f"source={iv_src} accepted_flat=1 "
+                    f"market_span={quiet_span_pct:.2%} market_std={quiet_std_pct:.2%}"
+                ),
+                min_gap_seconds=2.0,
+                level="info",
             )
 
     def _chart_prediction_caps(self, interval: str) -> tuple[float, float]:
@@ -5468,7 +5515,7 @@ class MainApp(QMainWindow):
             body_cap = float(max(0.004, min(0.014, (range_cap * 0.92))))
             span_cap = float(max(0.006, min(0.022, (range_cap * 1.10))))
             wick_cap = float(max(0.004, min(0.013, (range_cap * 0.82))))
-            ref_jump_cap = float(max(0.018, min(0.090, jump_cap * 0.95)))
+            ref_jump_cap = float(max(0.012, min(0.035, jump_cap * 0.45)))
             iv_s = float(max(1, self._interval_seconds(iv)))
 
             filtered: list[dict[str, Any]] = []
@@ -5482,6 +5529,7 @@ class MainApp(QMainWindow):
             processed_count = 0
             allow_shape_rebuild = True
             rebuild_disabled = False
+            rebuild_streak = 0
             prev_close: float | None = None
             prev_epoch: float | None = None
 
@@ -5525,6 +5573,7 @@ class MainApp(QMainWindow):
                     continue
                 o, h, low, c = sanitized
                 processed_count += 1
+                rebuilt_now = False
                 if (
                     allow_shape_rebuild
                     and ref_close
@@ -5539,8 +5588,8 @@ class MainApp(QMainWindow):
                     # candles are readable without inventing large moves.
                     if (
                         body_prev <= 0.00008
-                        and span_prev <= 0.004
-                        and jump_prev <= 0.004
+                        and span_prev <= 0.0018
+                        and jump_prev <= 0.0025
                     ):
                         o = float(ref_close)
                         top0 = max(o, c)
@@ -5548,13 +5597,25 @@ class MainApp(QMainWindow):
                         h = max(h, top0)
                         low = min(low, bot0)
                         repaired_shape += 1
+                        rebuilt_now = True
+                        rebuild_streak += 1
                         if (
                             allow_shape_rebuild
-                            and processed_count >= 120
-                            and (float(repaired_shape) / float(max(1, processed_count))) > 0.45
+                            and (
+                                rebuild_streak >= 8
+                                or (
+                                    processed_count >= 60
+                                    and (
+                                        float(repaired_shape)
+                                        / float(max(1, processed_count))
+                                    ) > 0.22
+                                )
+                            )
                         ):
                             allow_shape_rebuild = False
                             rebuild_disabled = True
+                if not rebuilt_now:
+                    rebuild_streak = 0
 
                 ref_values = [
                     float(v) for v in recent_closes[-32:]

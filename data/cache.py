@@ -25,9 +25,16 @@ log = get_logger(__name__)
 T = TypeVar("T")
 _MANUAL_DELETE_ENV = "TRADING_MANUAL_CACHE_DELETE"
 
+# Module-level sentinel for internal miss detection (L1/L2/L3)
+_SENTINEL = object()
+
+# Public sentinel for callers that need to distinguish "not found" from None
+MISSING = object()
+
 
 def _cache_delete_allowed() -> bool:
     return os.environ.get(_MANUAL_DELETE_ENV, "0") == "1"
+
 
 @dataclass
 class CacheStats:
@@ -52,16 +59,24 @@ class CacheStats:
 
     @property
     def total_hits(self) -> int:
-        return self.l1_hits + self.l2_hits + self.l3_hits
+        # FIX #17: Read under lock for consistency
+        with self._lock:
+            return self.l1_hits + self.l2_hits + self.l3_hits
 
     @property
     def total_misses(self) -> int:
-        return self.l3_misses  # Final miss
+        with self._lock:
+            return self.l3_misses  # Final miss
 
     @property
     def hit_rate(self) -> float:
-        total = self.total_hits + self.total_misses
-        return self.total_hits / max(total, 1)
+        # FIX #17: Atomic snapshot of all fields
+        with self._lock:
+            hits = self.l1_hits + self.l2_hits + self.l3_hits
+            misses = self.l3_misses
+        total = hits + misses
+        return hits / max(total, 1)
+
 
 @dataclass
 class CacheEntry:
@@ -73,9 +88,9 @@ class CacheEntry:
     access_count: int = 0
     last_access: datetime = field(default_factory=datetime.now)
 
+
 # L1: In-memory LRU with TTL
 
-_SENTINEL = object()
 
 class LRUCache:
     """Thread-safe LRU cache with TTL enforcement."""
@@ -157,17 +172,34 @@ class LRUCache:
         """Remove a specific key (caller must hold lock)."""
         entry = self._cache.pop(key, None)
         if entry:
-            self._current_size -= entry.size_bytes
+            # FIX #6: Prevent _current_size going negative
+            self._current_size = max(
+                0, self._current_size - entry.size_bytes
+            )
 
     def _evict_oldest(self):
         """Remove oldest entry (caller must hold lock)."""
         if self._cache:
             _, entry = self._cache.popitem(last=False)
-            self._current_size -= entry.size_bytes
+            # FIX #6: Prevent _current_size going negative
+            self._current_size = max(
+                0, self._current_size - entry.size_bytes
+            )
 
     @staticmethod
-    def _estimate_size(value: Any) -> int:
-        """Estimate object memory footprint."""
+    def _estimate_size(value: Any, _depth: int = 0) -> int:
+        """
+        Estimate object memory footprint.
+
+        FIX #20: Added max depth to prevent infinite recursion on
+        self-referencing structures.
+        """
+        if _depth > 10:
+            try:
+                return sys.getsizeof(value)
+            except TypeError:
+                return 1024
+
         if isinstance(value, pd.DataFrame):
             return int(value.memory_usage(deep=True).sum())
         if isinstance(value, np.ndarray):
@@ -177,7 +209,8 @@ class LRUCache:
         if isinstance(value, dict):
             try:
                 return sys.getsizeof(value) + sum(
-                    sys.getsizeof(k) + LRUCache._estimate_size(v)
+                    sys.getsizeof(k)
+                    + LRUCache._estimate_size(v, _depth + 1)
                     for k, v in value.items()
                 )
             except (TypeError, RecursionError):
@@ -185,11 +218,11 @@ class LRUCache:
         if isinstance(value, (list, tuple)):
             try:
                 return sys.getsizeof(value) + sum(
-                    LRUCache._estimate_size(item) for item in value
+                    LRUCache._estimate_size(item, _depth + 1)
+                    for item in value
                 )
             except (TypeError, RecursionError):
                 return sys.getsizeof(value)
-        # Use sys.getsizeof as a rough fallback
         try:
             return sys.getsizeof(value)
         except TypeError:
@@ -202,13 +235,19 @@ class LRUCache:
     def size_mb(self) -> float:
         return self._current_size / (1024 * 1024)
 
+
 # Disk cache (L2 / L3)
+
 
 class DiskCache:
     """
     Disk-based cache with atomic writes.
 
     Uses write-to-temp-then-rename to prevent corruption on crash.
+
+    FIX #7: Removed global lock from get() — reads don't need
+    serialization since writes are atomic (temp → rename).
+    Lock only protects writes.
 
     FIX C4: Closes file descriptor immediately after mkstemp to prevent
     fd leak and avoid Windows PermissionError when renaming.
@@ -218,10 +257,9 @@ class DiskCache:
         self._dir = cache_dir
         self._dir.mkdir(parents=True, exist_ok=True)
         self._compress = compress
-        self._lock = threading.RLock()
+        self._write_lock = threading.RLock()
 
     def _key_to_path(self, key: str) -> Path:
-        # SHA-256 avoids MD5 collision risk
         h = hashlib.sha256(key.encode()).hexdigest()
         ext = ".pkl.gz" if self._compress else ".pkl"
         return self._dir / f"{h}{ext}"
@@ -233,6 +271,10 @@ class DiskCache:
         Read from disk cache.
 
         Returns _SENTINEL on miss/expiry/error.
+
+        FIX #7: No lock needed — files are written atomically via
+        temp-then-rename, so a concurrent read sees either the old
+        complete file or the new complete file.
         """
         path = self._key_to_path(key)
 
@@ -251,15 +293,16 @@ class DiskCache:
                 return _SENTINEL
 
         try:
-            with self._lock:
-                if self._compress:
-                    with gzip.open(path, "rb") as f:
-                        return pickle.load(f)
-                else:
-                    with open(path, "rb") as f:
-                        return pickle.load(f)
+            if self._compress:
+                with gzip.open(path, "rb") as f:
+                    return pickle.load(f)  # noqa: S301
+            else:
+                with open(path, "rb") as f:
+                    return pickle.load(f)  # noqa: S301
         except Exception as e:
-            log.warning(f"Cache read error for key hash {path.stem}: {e}")
+            log.warning(
+                f"Cache read error for key hash {path.stem}: {e}"
+            )
             try:
                 path.unlink(missing_ok=True)
             except OSError:
@@ -271,21 +314,17 @@ class DiskCache:
         Atomic write: temp file → rename.
 
         FIX C4: Close the file descriptor from mkstemp IMMEDIATELY
-        before opening the file with gzip.open or open(). This prevents:
-        1. File descriptor leak (the fd stays open until finally block)
-        2. Windows PermissionError (two handles to same file)
+        before opening the file with gzip.open or open().
         """
         path = self._key_to_path(key)
         tmp_path: Path | None = None
 
         try:
-            with self._lock:
-                # Create temp file - mkstemp returns (fd, path)
+            with self._write_lock:
                 fd, tmp_path_str = tempfile.mkstemp(
                     dir=str(self._dir), suffix=".tmp"
                 )
 
-                # FIX C4: Close fd IMMEDIATELY - we'll reopen with gzip/open
                 try:
                     os.close(fd)
                 except OSError:
@@ -293,21 +332,23 @@ class DiskCache:
 
                 tmp_path = Path(tmp_path_str)
 
-                # Now write to the file (no fd leak)
                 if self._compress:
                     with gzip.open(tmp_path, "wb") as f:
-                        pickle.dump(value, f, protocol=pickle.HIGHEST_PROTOCOL)
+                        pickle.dump(
+                            value, f, protocol=pickle.HIGHEST_PROTOCOL
+                        )
                 else:
                     with open(tmp_path, "wb") as f:
-                        pickle.dump(value, f, protocol=pickle.HIGHEST_PROTOCOL)
+                        pickle.dump(
+                            value, f, protocol=pickle.HIGHEST_PROTOCOL
+                        )
 
                 tmp_path.replace(path)
-                tmp_path = None  # Successfully moved, don't delete in finally
+                tmp_path = None  # Successfully moved
 
         except Exception as e:
             log.warning(f"Cache write error: {e}")
         finally:
-            # Clean up temp file if it still exists (rename failed or exception)
             if tmp_path is not None:
                 try:
                     tmp_path.unlink(missing_ok=True)
@@ -316,7 +357,10 @@ class DiskCache:
 
     def delete(self, key: str) -> bool:
         if not _cache_delete_allowed():
-            log.warning("Cache delete blocked for key=%s (manual override required)", key)
+            log.warning(
+                "Cache delete blocked for key=%s (manual override required)",
+                key,
+            )
             return False
         path = self._key_to_path(key)
         try:
@@ -330,7 +374,9 @@ class DiskCache:
     def clear(self, older_than_hours: float = None):
         """Clear cache, optionally only old files."""
         if not _cache_delete_allowed():
-            log.warning("Cache clear blocked (manual override required)")
+            log.warning(
+                "Cache clear blocked (manual override required)"
+            )
             return
         now = datetime.now()
         patterns = ["*.pkl", "*.pkl.gz"]
@@ -338,13 +384,16 @@ class DiskCache:
             for path in self._dir.glob(pattern):
                 try:
                     if older_than_hours is not None:
-                        mtime = datetime.fromtimestamp(path.stat().st_mtime)
+                        mtime = datetime.fromtimestamp(
+                            path.stat().st_mtime
+                        )
                         age = (now - mtime).total_seconds() / 3600
                         if age <= older_than_hours:
                             continue
                     path.unlink()
                 except OSError:
                     pass
+
 
 class TieredCache:
     """
@@ -353,9 +402,14 @@ class TieredCache:
     L1: Fast in-memory LRU with TTL
     L2: Disk cache (fast reads)
     L3: Compressed disk (persistent, longer TTL)
+
+    FIX #2: Uses MISSING sentinel throughout the public API so that
+    None can be a valid cached value.
+    FIX #5: Uses per-key locking in get_or_compute to prevent
+    double-compute race conditions.
+    FIX #12: Tracks shutdown state to prevent RuntimeError after shutdown.
     """
 
-    # Bounded thread pool for L3 background writes
     _L3_MAX_WORKERS = 4
 
     def __init__(self):
@@ -363,12 +417,22 @@ class TieredCache:
             max_items=500,
             max_size_mb=CONFIG.data.max_memory_cache_mb,
         )
-        self._l2 = DiskCache(CONFIG.cache_dir / "l2", compress=False)
-        self._l3 = DiskCache(CONFIG.cache_dir / "l3", compress=True)
+        self._l2 = DiskCache(
+            CONFIG.cache_dir / "l2", compress=False
+        )
+        self._l3 = DiskCache(
+            CONFIG.cache_dir / "l3", compress=True
+        )
         self._stats = CacheStats()
         self._lock = threading.RLock()
+        self._shutdown_flag = False
 
-        # Bounded executor for L3 writes (replaces unbounded Thread())
+        # Per-key locks for get_or_compute (FIX #5)
+        self._compute_locks: dict[str, threading.Lock] = {}
+        self._compute_locks_lock = threading.Lock()
+        # Limit compute lock dict growth
+        self._compute_locks_max = 10000
+
         from concurrent.futures import ThreadPoolExecutor
 
         self._l3_executor = ThreadPoolExecutor(
@@ -376,10 +440,23 @@ class TieredCache:
             thread_name_prefix="cache_l3",
         )
 
-    def get(
-        self, key: str, max_age_hours: float = None
-    ) -> Any | None:
-        """Get value with tiered lookup. Returns None on miss."""
+    def _get_compute_lock(self, key: str) -> threading.Lock:
+        """Get or create a per-key lock for compute operations."""
+        with self._compute_locks_lock:
+            # FIX #13: Prevent unbounded growth
+            if len(self._compute_locks) > self._compute_locks_max:
+                self._compute_locks.clear()
+            if key not in self._compute_locks:
+                self._compute_locks[key] = threading.Lock()
+            return self._compute_locks[key]
+
+    def get(self, key: str, max_age_hours: float = None) -> Any:
+        """
+        Get value with tiered lookup.
+
+        FIX #2: Returns MISSING sentinel on miss (not None).
+        This allows None to be a valid cached value.
+        """
         max_age = max_age_hours or CONFIG.data.cache_ttl_hours
 
         # L1: Memory (with TTL)
@@ -406,7 +483,7 @@ class TieredCache:
             return value
         self._stats.increment("l3_misses")
 
-        return None
+        return MISSING
 
     def set(self, key: str, value: Any, persist: bool = True):
         """Store value in cache tiers."""
@@ -419,12 +496,22 @@ class TieredCache:
             # L2 synchronously (fast)
             self._l2.set(key, value)
             # L3 asynchronously via bounded pool
-            self._l3_executor.submit(self._l3.set, key, value)
+            # FIX #12: Don't submit after shutdown
+            if not self._shutdown_flag:
+                try:
+                    self._l3_executor.submit(self._l3.set, key, value)
+                except RuntimeError:
+                    # Pool already shut down
+                    pass
 
     def delete(self, key: str):
         """Delete from all tiers."""
         if not _cache_delete_allowed():
-            log.warning("Tiered cache delete blocked for key=%s (manual override required)", key)
+            log.warning(
+                "Tiered cache delete blocked for key=%s "
+                "(manual override required)",
+                key,
+            )
             return
         self._l1.delete(key)
         self._l2.delete(key)
@@ -437,7 +524,9 @@ class TieredCache:
     ):
         """Clear cache (optionally one tier or old entries only)."""
         if not _cache_delete_allowed():
-            log.warning("Tiered cache clear blocked (manual override required)")
+            log.warning(
+                "Tiered cache clear blocked (manual override required)"
+            )
             return
         if tier is None or tier == "l1":
             self._l1.clear()
@@ -459,39 +548,46 @@ class TieredCache:
         """
         Get from cache or compute and store.
 
-        Uses a single stats-counted lookup before compute,
-        then a raw L1 check after compute to avoid double-counting.
+        FIX #2: Uses MISSING sentinel so None return values are cacheable.
+        FIX #5: Uses per-key locking to prevent double-compute race.
         """
-        # First lookup (stats counted once)
+        # Quick check without compute lock
         value = self.get(key, max_age_hours)
-        if value is not None:
+        if value is not MISSING:
             return value
 
-        value = compute_fn()
+        # Per-key lock to prevent double-compute
+        compute_lock = self._get_compute_lock(key)
+        with compute_lock:
+            # Re-check after acquiring lock (another thread may have
+            # computed and stored while we waited)
+            value = self.get(key, max_age_hours)
+            if value is not MISSING:
+                return value
 
-        with self._lock:
-            # Double-check with raw L1 lookup (no stats)
-            existing = self._l1.get(
-                key, max_age_hours=max_age_hours or CONFIG.data.cache_ttl_hours
-            )
-            if existing is not _SENTINEL:
-                return existing
+            value = compute_fn()
 
-            if value is not None:
-                self.set(key, value, persist)
+            # Store any value including None
+            self.set(key, value, persist)
 
         return value
 
     def shutdown(self):
         """Shutdown L3 background writer pool."""
+        # FIX #12: Set flag before shutdown to prevent new submissions
+        self._shutdown_flag = True
         try:
-            self._l3_executor.shutdown(wait=True, cancel_futures=False)
+            self._l3_executor.shutdown(
+                wait=True, cancel_futures=False
+            )
         except TypeError:
             # Python < 3.9 doesn't have cancel_futures
             self._l3_executor.shutdown(wait=True)
 
+
 _cache: TieredCache | None = None
 _cache_lock = threading.Lock()
+
 
 def get_cache() -> TieredCache:
     """Get global cache instance."""
@@ -501,6 +597,23 @@ def get_cache() -> TieredCache:
             if _cache is None:
                 _cache = TieredCache()
     return _cache
+
+
+def reset_cache() -> None:
+    """
+    Reset global cache instance (for testing).
+
+    Shuts down the existing cache cleanly before clearing.
+    """
+    global _cache
+    with _cache_lock:
+        if _cache is not None:
+            try:
+                _cache.shutdown()
+            except Exception:
+                pass
+            _cache = None
+
 
 def cached(
     key_fn: Callable[..., str] = None,
@@ -512,27 +625,44 @@ def cached(
 
     Args:
         key_fn: Function to compute cache key from args/kwargs.
-                If None, a default key is derived from module + function name + args.
+                If None, a default key is derived from module + function
+                name + sorted args/kwargs hash.
         max_age_hours: TTL override.
         persist: Whether to persist to disk tiers.
+
+    FIX #1: Uses get_cache() instead of bare _cache module variable
+    so the cache is always initialized.
+    FIX #2: Uses MISSING sentinel so None return values are cacheable.
+    FIX #11: Default key uses sorted kwargs and SHA-256 hash for
+    deterministic, bounded keys.
     """
 
     def decorator(func):
         @wraps(func)
         def wrapper(*args, **kwargs):
+            cache = get_cache()
+
             if key_fn:
                 key = key_fn(*args, **kwargs)
             else:
-                key = f"{func.__module__}.{func.__qualname__}:{args}:{kwargs}"
+                # FIX #11: Deterministic key with sorted kwargs + hash
+                sorted_kwargs = tuple(sorted(kwargs.items()))
+                raw_key = (
+                    f"{func.__module__}.{func.__qualname__}"
+                    f":{args}:{sorted_kwargs}"
+                )
+                key = hashlib.sha256(
+                    raw_key.encode()
+                ).hexdigest()
 
-            result = _cache.get(key, max_age_hours) if _cache else None
-            if result is not None:
+            result = cache.get(key, max_age_hours)
+            if result is not MISSING:
                 return result
 
             result = func(*args, **kwargs)
 
-            if result is not None and _cache:
-                _cache.set(key, result, persist)
+            # FIX #2: Cache any value including None
+            cache.set(key, result, persist)
 
             return result
 

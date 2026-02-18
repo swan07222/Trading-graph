@@ -15,7 +15,7 @@ try:
     import torch
 
     _HAS_TORCH = True
-except ImportError:
+except (ImportError, OSError):
     torch = None  # type: ignore[assignment]
     _HAS_TORCH = False
 

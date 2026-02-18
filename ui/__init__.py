@@ -2,42 +2,42 @@
 
 try:
     from .app import MainApp, run_app
-except ImportError:
+except Exception:
     MainApp = None
     run_app = None
 
 try:
     from .charts import StockChart
-except ImportError:
+except Exception:
     StockChart = None
 
 try:
     from .auto_learn_dialog import AutoLearnDialog, show_auto_learn_dialog
-except ImportError:
+except Exception:
     AutoLearnDialog = None
     show_auto_learn_dialog = None
 
 try:
     from .widgets import LogWidget, PositionTable, SignalPanel
-except ImportError:
+except Exception:
     SignalPanel = None
     PositionTable = None
     LogWidget = None
 
 try:
     from .dialogs import BacktestDialog, TrainingDialog
-except ImportError:
+except Exception:
     TrainingDialog = None
     BacktestDialog = None
 
 try:
     from .news_widget import NewsPanel
-except ImportError:
+except Exception:
     NewsPanel = None
 
 try:
     from .strategy_marketplace_dialog import StrategyMarketplaceDialog
-except ImportError:
+except Exception:
     StrategyMarketplaceDialog = None
 
 __all__ = [

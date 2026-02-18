@@ -1,5 +1,6 @@
 # ui/charts.py
 import math
+import os
 import time
 from collections import Counter
 from datetime import datetime, timezone
@@ -464,7 +465,7 @@ class StockChart(QWidget):
             jump_cap, range_cap = _caps(cap_iv)
             intraday_mode = cap_iv not in ("1d", "1wk", "1mo")
             if intraday_mode:
-                max_jump_guard = float(max(jump_cap * 1.20, 0.015))
+                max_jump_guard = float(max(0.012, min(0.040, jump_cap * 0.55)))
                 body_guard = float(max(range_cap * 0.92, 0.0045))
                 span_guard = float(max(range_cap * 1.20, 0.0070))
                 wick_guard = float(max(range_cap * 0.86, 0.0055))
@@ -528,8 +529,11 @@ class StockChart(QWidget):
                     flat_count += 1
                 flat_total += 1
             flat_ratio = (float(flat_count) / float(flat_total)) if flat_total > 0 else 0.0
+            rebuild_enabled = str(
+                os.environ.get("TRADING_CHART_REBUILD_DEGENERATE", "0")
+            ).strip().lower() in {"1", "true", "yes", "on"}
             reconstruct_degenerate = bool(
-                intraday_mode and (0.25 <= flat_ratio <= 0.75)
+                intraday_mode and rebuild_enabled and (0.25 <= flat_ratio <= 0.75)
             )
             allow_degenerate_rebuild = bool(reconstruct_degenerate)
             rebuild_count = 0
@@ -774,6 +778,21 @@ class StockChart(QWidget):
                             span = float(np.max(p) - np.min(p)) / max(anchor, 1e-8)
                             steps = np.abs(np.diff(p)) / np.maximum(np.abs(p[:-1]), 1e-8) if p.size >= 2 else np.array([0.0])
                             max_step = float(np.max(steps)) if steps.size > 0 else 0.0
+                            quiet_market = False
+                            try:
+                                real = np.asarray(closes[-96:], dtype=float)
+                                real = real[np.isfinite(real)]
+                                real = real[real > 0]
+                                if real.size >= 8:
+                                    real_anchor = float(np.median(real[-24:]))
+                                    real_anchor = max(real_anchor, 1e-8)
+                                    real_span = float(np.max(real) - np.min(real)) / real_anchor
+                                    real_std = float(np.std(real)) / real_anchor
+                                    quiet_market = bool(
+                                        real_span <= 0.0030 or real_std <= 0.0010
+                                    )
+                            except Exception:
+                                quiet_market = False
                             flips = 0
                             if p.size >= 3:
                                 dirs = np.sign(np.diff(p))
@@ -792,10 +811,11 @@ class StockChart(QWidget):
                                     f"span={span:.2%} max_step={max_step:.2%} "
                                     f"flip={flip_ratio:.2f}"
                                 ),
-                                min_gap_seconds=2.0,
-                                level="info",
-                            )
-                            if span <= 0.0012 or max_step >= 0.08:
+                                    min_gap_seconds=2.0,
+                                    level="info",
+                                )
+                            flat_render = span <= 0.0012
+                            if (flat_render and not quiet_market) or max_step >= 0.08:
                                 self._dbg_log(
                                     f"forecast_render_warn:{default_iv}",
                                     (
@@ -805,6 +825,16 @@ class StockChart(QWidget):
                                     ),
                                     min_gap_seconds=1.0,
                                     level="warning",
+                                )
+                            elif flat_render and quiet_market:
+                                self._dbg_log(
+                                    f"forecast_render_quiet:{default_iv}",
+                                    (
+                                        f"forecast render quiet-shape iv={default_iv}: "
+                                        f"points={int(p.size)} span={span:.2%}"
+                                    ),
+                                    min_gap_seconds=2.0,
+                                    level="info",
                                 )
                     except Exception:
                         pass

@@ -92,6 +92,20 @@ class TestDataFetcher:
         )
         assert bars >= 1000
 
+    def test_resolve_weekly_monthly_days_to_bar_depth(self):
+        bars_weekly = DataFetcher._resolve_requested_bar_count(
+            days=500,
+            bars=None,
+            interval="1wk",
+        )
+        bars_monthly = DataFetcher._resolve_requested_bar_count(
+            days=500,
+            bars=None,
+            interval="1mo",
+        )
+        assert bars_weekly == 100
+        assert bars_monthly == 25
+
 class TestDataProcessor:
     """Tests for DataProcessor"""
 
