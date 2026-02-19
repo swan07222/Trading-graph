@@ -124,3 +124,37 @@ def test_trained_stock_fallback_uses_matching_learner_state(tmp_path):
         assert no_match == []
     finally:
         CONFIG._data_dir_cached = old_cached
+
+
+def test_trained_stock_last_train_manifest_fallback(tmp_path):
+    import json
+
+    ensemble_path = tmp_path / "ensemble_1m_30.pt"
+    ensemble_path.write_bytes(b"x")
+    manifest_path = tmp_path / "model_manifest_ensemble_1m_30.json"
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "trained_stock_last_train": {
+                    "600519": "2026-02-19T10:00:00",
+                    "bad_code": "2026-02-19T11:00:00",
+                    "000001": "",
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    predictor = Predictor.__new__(Predictor)
+    out = predictor._load_trained_stock_last_train_from_manifest(ensemble_path)
+    assert out == {"600519": "2026-02-19T10:00:00"}
+
+
+def test_get_trained_stock_last_train_returns_copy():
+    predictor = Predictor.__new__(Predictor)
+    predictor._trained_stock_last_train = {"600519": "2026-02-19T10:00:00"}
+
+    out = predictor.get_trained_stock_last_train()
+    assert out == {"600519": "2026-02-19T10:00:00"}
+    out["600519"] = "tampered"
+    assert predictor._trained_stock_last_train["600519"] == "2026-02-19T10:00:00"

@@ -1,9 +1,10 @@
 import sqlite3
+import threading
 import time
 from types import SimpleNamespace
 
 from trading.executor import ExecutionEngine
-from trading.runtime_lease import create_runtime_lease_client
+from trading.runtime_lease import FileRuntimeLeaseClient, create_runtime_lease_client
 
 
 def _mk_engine(tmp_path, lease_id: str) -> ExecutionEngine:
@@ -73,3 +74,44 @@ def test_sqlite_runtime_lease_stale_takeover_increments_fencing_token(tmp_path):
     assert r2.ok is True
     assert str((r2.record or {}).get("owner_id", "")) == "node-b"
     assert int((r2.record or {}).get("generation", 0)) == 2
+
+
+def test_file_runtime_lease_contention_has_single_winner(tmp_path, monkeypatch):
+    lease_path = tmp_path / "lease.json"
+    c1 = FileRuntimeLeaseClient(path=lease_path, cluster="cluster-c")
+    c2 = FileRuntimeLeaseClient(path=lease_path, cluster="cluster-c")
+
+    start_barrier = threading.Barrier(3)
+    race_barrier = threading.Barrier(2)
+    original_row = FileRuntimeLeaseClient._row
+
+    def _patched_row(self, *args, **kwargs):
+        row = original_row(self, *args, **kwargs)
+        # Force overlap in the critical section to verify acquire is serialized.
+        try:
+            race_barrier.wait(timeout=0.2)
+        except Exception:
+            pass
+        return row
+
+    monkeypatch.setattr(FileRuntimeLeaseClient, "_row", _patched_row, raising=True)
+    out: dict[str, bool] = {}
+
+    def _run(owner_id: str, client: FileRuntimeLeaseClient) -> None:
+        start_barrier.wait(timeout=2.0)
+        out[owner_id] = bool(client.acquire(owner_id=owner_id, ttl_seconds=30.0).ok)
+
+    t1 = threading.Thread(target=_run, args=("node-a", c1))
+    t2 = threading.Thread(target=_run, args=("node-b", c2))
+    t1.start()
+    t2.start()
+    start_barrier.wait(timeout=2.0)
+    t1.join(timeout=2.0)
+    t2.join(timeout=2.0)
+
+    assert t1.is_alive() is False
+    assert t2.is_alive() is False
+    assert sum(1 for ok in out.values() if ok) == 1
+
+    row = c1.read() or {}
+    assert str(row.get("owner_id", "")) in {"node-a", "node-b"}

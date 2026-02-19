@@ -36,3 +36,17 @@ def test_parse_instrument_fx_pair():
     assert inst["currency"] == "USD"
     assert inst["vendor"]["base"] == "EUR"
     assert inst["vendor"]["quote"] == "USD"
+
+
+def test_parse_instrument_us_prefix_does_not_corrupt_tickers():
+    plain = parse_instrument("USO")
+    assert plain["market"] == "US"
+    assert plain["symbol"] == "USO"
+
+    explicit = parse_instrument("US:USO")
+    assert explicit["market"] == "US"
+    assert explicit["symbol"] == "USO"
+
+    class_share = parse_instrument("US:BRK.B")
+    assert class_share["market"] == "US"
+    assert class_share["symbol"] == "BRK.B"

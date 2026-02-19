@@ -382,6 +382,16 @@ class MarketDatabase:
 
         is_intraday = iv not in ("1d", "1wk", "1mo")
         if is_intraday:
+            preserve_truth = bool(
+                getattr(getattr(CONFIG, "data", None), "truth_preserving_cleaning", True)
+            )
+            aggressive_repairs = bool(
+                getattr(
+                    getattr(CONFIG, "data", None),
+                    "aggressive_intraday_repair",
+                    False,
+                )
+            )
             body_cap, span_cap, wick_cap, jump_cap = (
                 cls._intraday_quality_caps(iv)
             )
@@ -420,13 +430,18 @@ class MarketDatabase:
                 | (lower_wick > float(wick_cap))
             )
             if bool(bad_shape.any()):
-                wick_allow = close_safe * float(wick_cap)
-                out.loc[bad_shape, "high"] = (oc_top + wick_allow)[
-                    bad_shape
-                ]
-                out.loc[bad_shape, "low"] = (oc_bot - wick_allow)[
-                    bad_shape
-                ]
+                if aggressive_repairs and not preserve_truth:
+                    wick_allow = close_safe * float(wick_cap)
+                    out.loc[bad_shape, "high"] = (oc_top + wick_allow)[
+                        bad_shape
+                    ]
+                    out.loc[bad_shape, "low"] = (oc_bot - wick_allow)[
+                        bad_shape
+                    ]
+                else:
+                    # Truth-preserving default: avoid synthetic wick injection.
+                    out.loc[bad_shape, "high"] = oc_top[bad_shape]
+                    out.loc[bad_shape, "low"] = oc_bot[bad_shape]
                 out["high"] = pd.concat(
                     [out["high"], oc_top], axis=1
                 ).max(axis=1)
@@ -439,6 +454,7 @@ class MarketDatabase:
             jump = (out["close"] / prev_safe - 1.0).abs()
             jump_cap_eff = float(max(jump_cap, body_cap * 4.0))
             bad_jump = jump > jump_cap_eff
+            day_change = pd.Series(False, index=out.index)
             if isinstance(out.index, pd.DatetimeIndex):
                 day_change = (
                     pd.Series(
@@ -448,37 +464,43 @@ class MarketDatabase:
                     .ne(pd.Timedelta(0))
                 )
                 day_change = day_change.fillna(False)
-                bad_jump = bad_jump & (~day_change)
+            bad_jump = bad_jump & (~day_change)
             bad_jump = bad_jump.fillna(False)
             if bool(bad_jump.any()):
-                prev_vals = prev_close[bad_jump].astype(float)
-                curr_vals = out.loc[bad_jump, "close"].astype(float)
-                signs = np.where(
-                    curr_vals >= prev_vals, 1.0, -1.0
-                )
-                clipped = prev_vals * (
-                    1.0 + (signs * jump_cap_eff)
-                )
-                out.loc[bad_jump, "close"] = clipped.values
-                out.loc[bad_jump, "open"] = prev_vals.values
-                close_safe = out["close"].clip(lower=1e-8)
-                oc_top = out[["open", "close"]].max(axis=1)
-                oc_bot = out[["open", "close"]].min(axis=1)
-                wick_allow = close_safe * float(wick_cap)
-                out.loc[bad_jump, "high"] = np.minimum(
-                    out.loc[bad_jump, "high"],
-                    (oc_top + wick_allow)[bad_jump],
-                )
-                out.loc[bad_jump, "low"] = np.maximum(
-                    out.loc[bad_jump, "low"],
-                    (oc_bot - wick_allow)[bad_jump],
-                )
-                out["high"] = pd.concat(
-                    [out["high"], oc_top], axis=1
-                ).max(axis=1)
-                out["low"] = pd.concat(
-                    [out["low"], oc_bot], axis=1
-                ).min(axis=1)
+                if aggressive_repairs and not preserve_truth:
+                    prev_vals = prev_close[bad_jump].astype(float)
+                    curr_vals = out.loc[bad_jump, "close"].astype(float)
+                    signs = np.where(
+                        curr_vals >= prev_vals, 1.0, -1.0
+                    )
+                    clipped = prev_vals * (
+                        1.0 + (signs * jump_cap_eff)
+                    )
+                    out.loc[bad_jump, "close"] = clipped.values
+                    out.loc[bad_jump, "open"] = prev_vals.values
+                    close_safe = out["close"].clip(lower=1e-8)
+                    oc_top = out[["open", "close"]].max(axis=1)
+                    oc_bot = out[["open", "close"]].min(axis=1)
+                    wick_allow = close_safe * float(wick_cap)
+                    out.loc[bad_jump, "high"] = np.minimum(
+                        out.loc[bad_jump, "high"],
+                        (oc_top + wick_allow)[bad_jump],
+                    )
+                    out.loc[bad_jump, "low"] = np.maximum(
+                        out.loc[bad_jump, "low"],
+                        (oc_bot - wick_allow)[bad_jump],
+                    )
+                    out["high"] = pd.concat(
+                        [out["high"], oc_top], axis=1
+                    ).max(axis=1)
+                    out["low"] = pd.concat(
+                        [out["low"], oc_bot], axis=1
+                    ).min(axis=1)
+                else:
+                    # Preserve observed bars by dropping impossible inter-bar jumps.
+                    out = out.loc[~bad_jump]
+                    if out.empty:
+                        return pd.DataFrame()
 
             vol = (
                 out["volume"]

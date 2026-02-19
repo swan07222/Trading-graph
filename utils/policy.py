@@ -159,7 +159,35 @@ class TradePolicyEngine:
         stop_loss = self._to_float(getattr(signal, "stop_loss", 0.0) or 0.0)
         take_profit = self._to_float(getattr(signal, "take_profit", 0.0) or 0.0)
         bracket = bool(getattr(signal, "bracket", False))
-        notional = float(max(0.0, qty * px))
+        if not symbol:
+            return PolicyDecision(
+                False,
+                "policy rejected missing symbol",
+                version,
+                {"symbol": symbol},
+            )
+        if not side:
+            return PolicyDecision(
+                False,
+                "policy rejected missing side",
+                version,
+                {"side": side},
+            )
+
+        notional_px = float(max(0.0, px))
+        if notional_px <= 0.0:
+            for attr in (
+                "estimated_price",
+                "reference_price",
+                "mark_price",
+                "last_price",
+                "current_price",
+            ):
+                candidate = self._to_float(getattr(signal, attr, 0.0) or 0.0)
+                if candidate > 0.0:
+                    notional_px = float(candidate)
+                    break
+        notional = float(max(0.0, qty * notional_px))
         strategy = str(getattr(signal, "strategy", "") or "").strip().lower()
         auto_generated = bool(getattr(signal, "auto_generated", False))
 
@@ -302,6 +330,13 @@ class TradePolicyEngine:
                 )
 
         max_notional = float(lp.get("max_order_notional", 0.0) or 0.0)
+        if max_notional > 0 and notional_px <= 0:
+            return PolicyDecision(
+                False,
+                "policy rejected order without enforceable notional price",
+                version,
+                {"max_order_notional": max_notional, "price": px},
+            )
         if max_notional > 0 and notional > max_notional:
             return PolicyDecision(
                 False,

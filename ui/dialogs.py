@@ -1,6 +1,8 @@
 # ui/dialogs.py
 from __future__ import annotations
 
+from datetime import datetime
+
 from PyQt6.QtCore import QThread, pyqtSignal
 from PyQt6.QtGui import QFont
 from PyQt6.QtWidgets import (
@@ -33,51 +35,56 @@ log = get_logger(__name__)
 def _apply_dialog_theme(dialog: QDialog) -> None:
     """Apply consistent professional styling for modal dialogs."""
     dialog.setStyleSheet("""
-        QDialog { background: #0f1728; color: #d7e0f2; }
+        QDialog { background: #0b1422; color: #dbe4f3; }
         QGroupBox {
-            border: 1px solid #243454;
-            border-radius: 10px;
+            border: 1px solid #253754;
+            border-radius: 11px;
             margin-top: 12px;
             padding-top: 12px;
             font-weight: 700;
-            color: #9eb9ff;
-            background: #101b30;
+            color: #9ab8ea;
+            background: #0f1b2e;
         }
         QGroupBox::title { left: 12px; padding: 0 6px; }
-        QLabel { color: #d7e0f2; }
+        QLabel { color: #dbe4f3; }
         QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox, QListWidget, QTextEdit {
-            background: #131f36;
-            color: #d7e0f2;
-            border: 1px solid #2b3a5b;
-            border-radius: 7px;
+            background: #13223a;
+            color: #dbe4f3;
+            border: 1px solid #324968;
+            border-radius: 8px;
             padding: 6px 8px;
-            selection-background-color: #3558c8;
+            selection-background-color: #2f5fda;
+            selection-color: #f8fbff;
         }
         QLineEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus, QComboBox:focus, QTextEdit:focus {
-            border-color: #4c78ff;
-            background: #18243d;
+            border-color: #4a7bff;
+            background: #182b47;
         }
         QPushButton {
-            background: #1a2a49;
-            color: #e6eeff;
-            border: 1px solid #335084;
-            border-radius: 7px;
+            background: #1c3253;
+            color: #eaf1ff;
+            border: 1px solid #3d5f8f;
+            border-radius: 8px;
             padding: 7px 12px;
             font-weight: 700;
         }
-        QPushButton:hover { background: #22365f; border-color: #4c78ff; }
-        QPushButton:disabled { background: #121d33; color: #5f6d89; border-color: #243454; }
+        QPushButton:hover { background: #24416b; border-color: #4a7bff; }
+        QPushButton:pressed { background: #2a4977; }
+        QPushButton:disabled { background: #12223a; color: #6b7d9c; border-color: #253754; }
         QProgressBar {
-            border: 1px solid #2c3f63;
-            border-radius: 6px;
-            background: #101b2f;
-            color: #dbe5ff;
+            border: 1px solid #304968;
+            border-radius: 7px;
+            background: #101f34;
+            color: #dbe4f3;
             text-align: center;
             min-height: 18px;
         }
         QProgressBar::chunk {
-            border-radius: 5px;
-            background: qlineargradient(x1:0,y1:0,x2:1,y2:0,stop:0 #2c7be5, stop:1 #32c48d);
+            border-radius: 6px;
+            background: qlineargradient(
+                x1:0, y1:0, x2:1, y2:0,
+                stop:0 #2f6be0, stop:1 #39b982
+            );
         }
     """)
 
@@ -98,10 +105,11 @@ class TrainWorker(QThread):
     finished = pyqtSignal(dict)
     failed = pyqtSignal(str)
 
-    def __init__(self, stocks: list[str], epochs: int):
+    def __init__(self, stocks: list[str], epochs: int, incremental: bool = False):
         super().__init__()
         self.stocks = list(stocks)
         self.epochs = int(epochs)
+        self.incremental = bool(incremental)
 
         CancellationToken = _get_cancellation_token()
         self.cancel_token = CancellationToken()
@@ -131,7 +139,8 @@ class TrainWorker(QThread):
                 epochs=self.epochs,
                 callback=cb,
                 stop_flag=self.cancel_token,
-                save_model=True
+                save_model=True,
+                incremental=bool(self.incremental),
             )
 
             self.finished.emit(results if results else {})
@@ -212,6 +221,7 @@ class TrainingDialog(QDialog):
         self._is_training = False
         self._epoch_by_model: dict[str, int] = {}
         self._expected_model_count: int = 1
+        self.training_result: dict | None = None
 
         layout = QVBoxLayout(self)
 
@@ -464,12 +474,14 @@ class TrainingDialog(QDialog):
     def _on_finished(self, results: dict):
         """Handle training completion."""
         if results.get("cancelled"):
+            self.training_result = {"status": "cancelled"}
             self.logs.append("")
             self.logs.append("Training was cancelled by user.")
             self._set_idle("Cancelled")
             return
 
         if results.get("status") == "cancelled":
+            self.training_result = {"status": "cancelled"}
             self.logs.append("")
             self.logs.append("Training was cancelled by user.")
             self._set_idle("Cancelled")
@@ -494,6 +506,7 @@ class TrainingDialog(QDialog):
 
         self.progress.setValue(100)
         self._set_idle("Done")
+        self.training_result = dict(results or {})
 
         QMessageBox.information(
             self, "Training Complete",
@@ -505,6 +518,7 @@ class TrainingDialog(QDialog):
 
     def _on_failed(self, err: str):
         """Handle training failure."""
+        self.training_result = {"status": "failed", "error": str(err)}
         self.logs.append(f"ERROR: {err}")
         self._set_idle("Failed")
 
@@ -530,7 +544,7 @@ class TrainingDialog(QDialog):
         self.worker = None
 
     def closeEvent(self, event):
-        """Handle close — stop training if running."""
+        """Handle close - stop training if running."""
         if self._is_training and self.worker:
             reply = QMessageBox.question(
                 self, "Stop Training?",
@@ -550,6 +564,295 @@ class TrainingDialog(QDialog):
             event.accept()
 
         super().closeEvent(event)
+
+
+class TrainTrainedStocksDialog(QDialog):
+    """Train only already-trained stocks with recent cached data."""
+
+    def __init__(
+        self,
+        trained_codes: list[str],
+        last_train_map: dict[str, str] | None = None,
+        parent=None,
+    ):
+        super().__init__(parent)
+        self.setWindowTitle("Train Trained Stocks")
+        self.setMinimumSize(680, 520)
+        _apply_dialog_theme(self)
+
+        self.worker: TrainWorker | None = None
+        self._is_training = False
+        self._epoch_by_model: dict[str, int] = {}
+        self._expected_model_count = 5
+        self.training_result: dict | None = None
+        self._last_run_codes: list[str] = []
+
+        self._last_train_map = {
+            str(k).strip(): str(v).strip()
+            for k, v in dict(last_train_map or {}).items()
+            if str(k).strip()
+        }
+        self._ordered_codes = self._build_ordered_codes(trained_codes)
+
+        layout = QVBoxLayout(self)
+
+        settings_group = QGroupBox("Training Scope")
+        settings = QFormLayout(settings_group)
+
+        self.total_label = QLabel(str(len(self._ordered_codes)))
+        settings.addRow("Total trained stocks:", self.total_label)
+
+        self.count_spin = QSpinBox()
+        self.count_spin.setRange(1, max(1, len(self._ordered_codes)))
+        self.count_spin.setValue(min(5, max(1, len(self._ordered_codes))))
+        self.count_spin.valueChanged.connect(self._refresh_preview)
+        settings.addRow("Number of stocks:", self.count_spin)
+
+        self.epochs_spin = QSpinBox()
+        self.epochs_spin.setRange(5, 500)
+        self.epochs_spin.setValue(int(CONFIG.EPOCHS))
+        settings.addRow("Epochs:", self.epochs_spin)
+
+        self.scope_hint = QLabel(
+            "Trains stocks whose last-train time is oldest first."
+        )
+        settings.addRow("Policy:", self.scope_hint)
+        layout.addWidget(settings_group)
+
+        preview_group = QGroupBox("Stock Preview")
+        preview_layout = QVBoxLayout(preview_group)
+        self.preview_list = QListWidget()
+        preview_layout.addWidget(self.preview_list)
+        layout.addWidget(preview_group)
+
+        progress_group = QGroupBox("Progress")
+        progress_layout = QVBoxLayout(progress_group)
+        self.progress = QProgressBar()
+        self.progress.setRange(0, 100)
+        self.progress.setValue(0)
+        progress_layout.addWidget(self.progress)
+        self.status = QLabel("Ready")
+        progress_layout.addWidget(self.status)
+        self.logs = QTextEdit()
+        self.logs.setReadOnly(True)
+        self.logs.setFont(QFont("Consolas", 10))
+        progress_layout.addWidget(self.logs)
+        layout.addWidget(progress_group)
+
+        btn_row = QHBoxLayout()
+        self.start_btn = QPushButton("Start Training")
+        self.stop_btn = QPushButton("Stop")
+        self.close_btn = QPushButton("Close")
+        self.stop_btn.setEnabled(False)
+        btn_row.addWidget(self.start_btn)
+        btn_row.addWidget(self.stop_btn)
+        btn_row.addWidget(self.close_btn)
+        layout.addLayout(btn_row)
+
+        self.start_btn.clicked.connect(self.start_training)
+        self.stop_btn.clicked.connect(self.stop_training)
+        self.close_btn.clicked.connect(self.close)
+
+        self._refresh_preview()
+
+    @staticmethod
+    def _parse_train_dt(text: str) -> datetime | None:
+        raw = str(text or "").strip()
+        if not raw:
+            return None
+        try:
+            dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+            if dt.tzinfo is not None:
+                dt = dt.astimezone().replace(tzinfo=None)
+            return dt
+        except Exception:
+            return None
+
+    def _build_ordered_codes(self, trained_codes: list[str]) -> list[str]:
+        codes = []
+        seen = set()
+        for raw in list(trained_codes or []):
+            code = "".join(c for c in str(raw or "").strip() if c.isdigit())
+            if len(code) != 6 or code in seen:
+                continue
+            seen.add(code)
+            codes.append(code)
+
+        def _sort_key(code: str):
+            dt = self._parse_train_dt(self._last_train_map.get(code, ""))
+            # Older train timestamps are prioritized first.
+            score = float(dt.timestamp()) if dt is not None else float("-inf")
+            return (score, code)
+
+        return sorted(codes, key=_sort_key, reverse=False)
+
+    @staticmethod
+    def _display_train_dt(text: str) -> str:
+        dt = TrainTrainedStocksDialog._parse_train_dt(text)
+        if dt is None:
+            return "--"
+        return dt.strftime("%Y-%m-%d %H:%M")
+
+    def _selected_codes(self) -> list[str]:
+        n = int(self.count_spin.value())
+        return list(self._ordered_codes[: max(1, n)])
+
+    def _refresh_preview(self):
+        self.preview_list.clear()
+        for code in self._selected_codes():
+            last_text = self._display_train_dt(self._last_train_map.get(code, ""))
+            self.preview_list.addItem(f"{code}  | last train: {last_text}")
+
+    def start_training(self):
+        if self._is_training:
+            return
+        stocks = self._selected_codes()
+        if not stocks:
+            QMessageBox.warning(
+                self,
+                "No stocks",
+                "No trained stocks available for this run.",
+            )
+            return
+
+        epochs = int(self.epochs_spin.value())
+        self._last_run_codes = list(stocks)
+        self.logs.clear()
+        self.logs.append(
+            f"Starting incremental training for {len(stocks)} stock(s), {epochs} epochs..."
+        )
+        self.progress.setValue(0)
+        self.status.setText("Training...")
+        self.training_result = None
+        self._epoch_by_model = {}
+
+        self._is_training = True
+        self.start_btn.setEnabled(False)
+        self.stop_btn.setEnabled(True)
+        self.close_btn.setEnabled(False)
+        self.count_spin.setEnabled(False)
+        self.epochs_spin.setEnabled(False)
+
+        self.worker = TrainWorker(
+            stocks=stocks,
+            epochs=epochs,
+            incremental=True,
+        )
+        self.worker.progress.connect(self._on_log)
+        self.worker.epoch.connect(self._on_epoch)
+        self.worker.finished.connect(self._on_finished)
+        self.worker.failed.connect(self._on_failed)
+        self.worker.start()
+
+    def stop_training(self):
+        if self.worker:
+            self.logs.append("Requesting cancellation...")
+            self.stop_btn.setEnabled(False)
+            self.worker.cancel()
+            self.worker.wait(10000)
+        self._set_idle("Stopped")
+
+    def _on_log(self, msg: str):
+        self.logs.append(str(msg))
+
+    def _on_epoch(self, model_name: str, epoch: int, val_acc: float):
+        self.logs.append(f"[{model_name}] epoch={epoch} val_acc={val_acc:.2%}")
+        key = str(model_name or "model")
+        prev = int(self._epoch_by_model.get(key, 0))
+        self._epoch_by_model[key] = max(prev, int(epoch))
+        epochs = int(self.epochs_spin.value())
+        observed_models = max(1, len(self._epoch_by_model))
+        total_models = max(self._expected_model_count, observed_models)
+        completed = sum(min(int(epochs), int(v)) for v in self._epoch_by_model.values())
+        pct = int(
+            min(
+                99,
+                round(
+                    (completed / max(1.0, float(total_models * max(1, epochs)))) * 100.0
+                ),
+            )
+        )
+        self.progress.setValue(pct)
+        self.status.setText(
+            f"Training... {pct}% ({observed_models}/{total_models} models)"
+        )
+
+    def _on_finished(self, results: dict):
+        if results.get("cancelled") or str(results.get("status", "")).lower() == "cancelled":
+            self.training_result = {
+                "status": "cancelled",
+                "selected_codes": list(self._last_run_codes),
+            }
+            self.logs.append("")
+            self.logs.append("Training cancelled.")
+            self._set_idle("Cancelled")
+            return
+
+        out = dict(results or {})
+        out["status"] = str(out.get("status", "complete") or "complete")
+        out["selected_codes"] = list(self._last_run_codes)
+        out["trained_at"] = str(
+            out.get("trained_at") or datetime.now().isoformat(timespec="seconds")
+        )
+        self.training_result = out
+
+        best_acc = float(out.get("best_accuracy", 0.0))
+        self.logs.append("")
+        self.logs.append(
+            f"Training finished. Best validation accuracy: {best_acc:.2%}"
+        )
+        self.progress.setValue(100)
+        self._set_idle("Done")
+
+        QMessageBox.information(
+            self,
+            "Training Complete",
+            (
+                "Trained stocks updated successfully.\n\n"
+                f"Stocks: {len(self._last_run_codes)}\n"
+                f"Best accuracy: {best_acc:.2%}"
+            ),
+        )
+
+    def _on_failed(self, err: str):
+        self.training_result = {
+            "status": "failed",
+            "error": str(err),
+            "selected_codes": list(self._last_run_codes),
+        }
+        self.logs.append(f"ERROR: {err}")
+        self._set_idle("Failed")
+        QMessageBox.critical(self, "Training Failed", f"{err[:500]}")
+
+    def _set_idle(self, status: str):
+        self._is_training = False
+        self.status.setText(status)
+        self.start_btn.setEnabled(True)
+        self.stop_btn.setEnabled(False)
+        self.close_btn.setEnabled(True)
+        self.count_spin.setEnabled(True)
+        self.epochs_spin.setEnabled(True)
+        self.worker = None
+
+    def closeEvent(self, event):
+        if self._is_training and self.worker:
+            reply = QMessageBox.question(
+                self,
+                "Stop Training?",
+                "Training is still in progress. Stop and close?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if reply == QMessageBox.StandardButton.Yes:
+                self.stop_training()
+                event.accept()
+            else:
+                event.ignore()
+                return
+        else:
+            event.accept()
+        super().closeEvent(event)
+
 
 class BacktestDialog(QDialog):
     """Dialog for walk-forward backtesting."""
@@ -660,7 +963,7 @@ class BacktestDialog(QDialog):
         self.worker = None
 
     def closeEvent(self, event):
-        """Handle close — stop backtest if running."""
+        """Handle close - stop backtest if running."""
         if self.worker and self.worker.isRunning():
             self.stop_backtest()
         event.accept()

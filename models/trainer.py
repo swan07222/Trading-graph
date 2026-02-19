@@ -119,6 +119,7 @@ class Trainer:
         # Incremental training flag 鈥?set externally by auto_learner.
         self._skip_scaler_fit: bool = False
         self._last_data_quality_summary: dict[str, Any] = {}
+        self._last_consistency_guard: dict[str, Any] = {}
 
     @staticmethod
     def _normalize_model_names(model_names: list[str] | None) -> list[str]:
@@ -482,6 +483,42 @@ class Trainer:
         short_1m_codes: list[str] = []
         quality_reports: dict[str, dict[str, Any]] = {}
         reject_counts: dict[str, int] = {}
+        consistency_guard: dict[str, Any] = {
+            "reconcile_attempted": False,
+            "pending_count": 0,
+            "pending_codes": [],
+        }
+        pending_codes: set[str] = set()
+
+        try:
+            reconcile_fn = getattr(self.fetcher, "reconcile_pending_cache_sync", None)
+            if callable(reconcile_fn):
+                consistency_guard["reconcile_attempted"] = True
+                try:
+                    reconcile_report = reconcile_fn(
+                        codes=list(stocks or []),
+                        interval=interval,
+                    )
+                except TypeError:
+                    reconcile_report = reconcile_fn()
+                if isinstance(reconcile_report, dict):
+                    consistency_guard["reconcile_report"] = dict(reconcile_report)
+
+            pending_fn = getattr(self.fetcher, "get_pending_reconcile_codes", None)
+            if callable(pending_fn):
+                pending_raw = pending_fn(interval=interval)
+                pending_codes = {
+                    str(x).strip()
+                    for x in list(pending_raw or [])
+                    if str(x).strip()
+                }
+                consistency_guard["pending_count"] = int(len(pending_codes))
+                consistency_guard["pending_codes"] = sorted(list(pending_codes))
+        except Exception as exc:
+            consistency_guard["error"] = str(exc)
+            log.debug("Consistency preflight failed: %s", exc)
+
+        self._last_consistency_guard = dict(consistency_guard)
         iterator = tqdm(stocks, desc="Loading stocks") if verbose else stocks
 
         for code in iterator:
@@ -490,6 +527,30 @@ class Trainer:
                 break
 
             try:
+                code_clean = ""
+                try:
+                    clean_fn = getattr(self.fetcher, "clean_code", None)
+                    if callable(clean_fn):
+                        code_clean = str(clean_fn(code) or "").strip()
+                except Exception:
+                    code_clean = ""
+                if not code_clean:
+                    digits = "".join(ch for ch in str(code).strip() if ch.isdigit())
+                    code_clean = digits if len(digits) == 6 else ""
+
+                if code_clean and code_clean in pending_codes:
+                    reason = "pending_reconcile_consistency"
+                    reject_counts[reason] = int(reject_counts.get(reason, 0)) + 1
+                    quality_reports[str(code)] = {
+                        "passed": False,
+                        "reasons": [reason],
+                    }
+                    log.warning(
+                        "Skipping %s for training until refresh reconcile completes",
+                        code,
+                    )
+                    continue
+
                 try:
                     df = self.fetcher.get_history(
                         code,
@@ -581,6 +642,7 @@ class Trainer:
             "symbols_rejected": symbols_rejected,
             "valid_symbol_ratio": float(valid_ratio),
             "top_reject_reasons": top_reject_reasons,
+            "consistency_guard": dict(self._last_consistency_guard or {}),
         }
 
         if symbols_checked > 0:
@@ -2082,6 +2144,21 @@ class Trainer:
         self.ensemble.interval = str(interval)
         self.ensemble.prediction_horizon = int(horizon)
         self.ensemble.trained_stock_codes = list(trained_stock_codes)
+        trained_at = datetime.now().isoformat(timespec="seconds")
+        known_last_train = dict(getattr(self.ensemble, "trained_stock_last_train", {}) or {})
+        trained_code_set = {
+            "".join(ch for ch in str(x).strip() if ch.isdigit())
+            for x in list(trained_stock_codes or [])
+        }
+        trained_code_set = {c for c in trained_code_set if len(c) == 6}
+        fresh_last_train = {
+            code: str(known_last_train.get(code, "")).strip()
+            for code in trained_code_set
+            if str(known_last_train.get(code, "")).strip()
+        }
+        for code in trained_code_set:
+            fresh_last_train[code] = trained_at
+        self.ensemble.trained_stock_last_train = fresh_last_train
 
         if X_val is None or len(X_val) == 0:
             (
@@ -2302,6 +2379,7 @@ class Trainer:
             "regime_profile": regime_profile,
             "drift_guard": drift_guard,
             "data_quality": data_quality_summary,
+            "consistency_guard": dict(self._last_consistency_guard or {}),
             "incremental_guard": incremental_guard,
             "sampling_guard": sampling_guard,
             "deployment": deployment,
@@ -2319,6 +2397,8 @@ class Trainer:
             "prediction_horizon": int(horizon),
             "trained_stock_count": int(len(trained_stock_codes)),
             "trained_stock_codes": list(trained_stock_codes),
+            "trained_stock_last_train": dict(self.ensemble.trained_stock_last_train or {}),
+            "trained_at": str(trained_at),
             "forecaster_trained": forecaster_trained,
             "model_path": f"ensemble_{interval}_{horizon}.pt",
             "scaler_path": f"scaler_{interval}_{horizon}.pkl",

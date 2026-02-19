@@ -6,8 +6,10 @@ from collections import Counter
 from datetime import datetime, timezone
 
 import numpy as np
+import pandas as pd
 from PyQt6.QtCore import Qt, pyqtSignal
-from PyQt6.QtWidgets import QLabel, QMenu, QVBoxLayout, QWidget
+from PyQt6.QtGui import QCursor
+from PyQt6.QtWidgets import QLabel, QMenu, QToolTip, QVBoxLayout, QWidget
 
 from utils.logger import get_logger
 
@@ -78,8 +80,8 @@ if HAS_PYQTGRAPH:
 
                 up = (c >= o)
                 color = (
-                    pg.mkColor("#3fb950") if up
-                    else pg.mkColor("#f85149")
+                    pg.mkColor("#35b57c") if up
+                    else pg.mkColor("#e5534b")
                 )
 
                 p.setPen(pg.mkPen(color=color, width=1))
@@ -163,6 +165,10 @@ class StockChart(QWidget):
         self._predicted_prices_low: list[float] = []
         self._predicted_prices_high: list[float] = []
         self._levels: dict[str, float] = {}
+        self._candle_meta: list[dict] = []
+        self._hover_proxy = None
+        self._last_hover_index: int | None = None
+        self._last_hover_tooltip: str = ""
 
         self.plot_widget = None
         self.candles = None           # Layer 3: Candlesticks (top)
@@ -230,19 +236,188 @@ class StockChart(QWidget):
         except Exception:
             pass
 
+    @staticmethod
+    def _format_bar_timestamp(bar: dict) -> str:
+        if not isinstance(bar, dict):
+            return ""
+        for key in ("timestamp", "time", "datetime", "date", "_ts_epoch"):
+            raw = bar.get(key)
+            if raw is None:
+                continue
+            ts = pd.NaT
+            try:
+                if isinstance(raw, (int, float, np.integer, np.floating)):
+                    v = float(raw)
+                    if not np.isfinite(v):
+                        continue
+                    if abs(v) >= 1e11:
+                        v /= 1000.0
+                    ts = pd.to_datetime(v, unit="s", errors="coerce", utc=True)
+                else:
+                    ts = pd.to_datetime(raw, errors="coerce")
+            except Exception:
+                ts = pd.NaT
+
+            if pd.isna(ts):
+                text = str(raw).strip()
+                if text:
+                    return text
+                continue
+
+            try:
+                ts_obj = pd.Timestamp(ts)
+                if ts_obj.tzinfo is not None:
+                    ts_obj = ts_obj.tz_convert("Asia/Shanghai").tz_localize(None)
+                else:
+                    ts_obj = ts_obj.tz_localize(None)
+            except Exception:
+                try:
+                    ts_obj = pd.Timestamp(ts).tz_localize(None)
+                except Exception:
+                    ts_obj = pd.Timestamp(ts)
+
+            if (
+                int(getattr(ts_obj, "hour", 0)) == 0
+                and int(getattr(ts_obj, "minute", 0)) == 0
+                and int(getattr(ts_obj, "second", 0)) == 0
+            ):
+                return ts_obj.strftime("%Y-%m-%d")
+            return ts_obj.strftime("%Y-%m-%d %H:%M")
+        return ""
+
+    @staticmethod
+    def _format_number(value: object, decimals: int = 2) -> str:
+        try:
+            v = float(value)
+            if not np.isfinite(v):
+                return "--"
+            return f"{v:.{int(max(0, decimals))}f}"
+        except Exception:
+            return "--"
+
+    @staticmethod
+    def _format_volume(value: object) -> str:
+        try:
+            v = float(value)
+            if not np.isfinite(v):
+                return "--"
+            if abs(v) >= 1:
+                return f"{int(round(v)):,}"
+            return f"{v:.2f}"
+        except Exception:
+            return "--"
+
+    def _build_candle_tooltip(self, meta: dict) -> str:
+        ts_text = str(meta.get("ts", "") or "").strip() or "--"
+        o = float(meta.get("open", 0.0) or 0.0)
+        h = float(meta.get("high", 0.0) or 0.0)
+        l_val = float(meta.get("low", 0.0) or 0.0)
+        c = float(meta.get("close", 0.0) or 0.0)
+        v = float(meta.get("volume", 0.0) or 0.0)
+        amount = float(meta.get("amount", 0.0) or 0.0)
+        prev_c = float(meta.get("prev_close", 0.0) or 0.0)
+
+        change = 0.0
+        change_pct = 0.0
+        if prev_c > 0:
+            change = c - prev_c
+            change_pct = (change / prev_c) * 100.0
+
+        sign = "+" if change > 0 else ""
+        pct_sign = "+" if change_pct > 0 else ""
+
+        return (
+            f"Time: {ts_text}\n"
+            f"Open: {self._format_number(o, 3)}\n"
+            f"High: {self._format_number(h, 3)}\n"
+            f"Low: {self._format_number(l_val, 3)}\n"
+            f"Close: {self._format_number(c, 3)}\n"
+            f"Change: {sign}{self._format_number(change, 3)} ({pct_sign}{self._format_number(change_pct, 2)}%)\n"
+            f"Volume: {self._format_volume(v)}\n"
+            f"Amount: {self._format_number(amount, 2)}"
+        )
+
+    def _hide_candle_tooltip(self) -> None:
+        self._last_hover_index = None
+        self._last_hover_tooltip = ""
+        try:
+            QToolTip.hideText()
+        except Exception:
+            pass
+
+    def _on_plot_mouse_moved(self, evt) -> None:
+        if not HAS_PYQTGRAPH or self.plot_widget is None:
+            return
+        if not self._candle_meta:
+            self._hide_candle_tooltip()
+            return
+
+        try:
+            pos = evt[0] if isinstance(evt, (tuple, list)) else evt
+            if pos is None:
+                self._hide_candle_tooltip()
+                return
+            if not self.plot_widget.sceneBoundingRect().contains(pos):
+                self._hide_candle_tooltip()
+                return
+            view_pos = self.plot_widget.plotItem.vb.mapSceneToView(pos)
+            x = float(view_pos.x())
+            y = float(view_pos.y())
+        except Exception:
+            self._hide_candle_tooltip()
+            return
+
+        idx = int(round(x))
+        if idx < 0 or idx >= len(self._candle_meta):
+            self._hide_candle_tooltip()
+            return
+
+        if abs(x - float(idx)) > 0.60:
+            self._hide_candle_tooltip()
+            return
+
+        meta = self._candle_meta[idx]
+        try:
+            high = float(meta.get("high", 0.0) or 0.0)
+            low = float(meta.get("low", 0.0) or 0.0)
+            close = float(meta.get("close", 0.0) or 0.0)
+        except Exception:
+            self._hide_candle_tooltip()
+            return
+
+        if high <= 0 or low <= 0 or high < low:
+            self._hide_candle_tooltip()
+            return
+
+        y_pad = max((high - low) * 0.30, max(abs(close) * 0.002, 0.01))
+        if y < (low - y_pad) or y > (high + y_pad):
+            self._hide_candle_tooltip()
+            return
+
+        tooltip_text = self._build_candle_tooltip(meta)
+        if idx == self._last_hover_index and tooltip_text == self._last_hover_tooltip:
+            return
+
+        self._last_hover_index = idx
+        self._last_hover_tooltip = tooltip_text
+        try:
+            QToolTip.showText(QCursor.pos(), tooltip_text, self.plot_widget)
+        except Exception:
+            pass
+
     def _setup_pyqtgraph(self):
         """Setup pyqtgraph chart with all three layers."""
         pg.setConfigOptions(
             antialias=True,
-            background='#0d1117',
-            foreground='#c9d1d9'
+            background='#0c1728',
+            foreground='#dbe4f3'
         )
 
         self.plot_widget = pg.PlotWidget()
-        self.plot_widget.setLabel('left', 'Price', units='¥')
+        self.plot_widget.setLabel('left', 'Price', units='CNY')
         self.plot_widget.setLabel('bottom', 'Time', units='bars')
         self.plot_widget.showGrid(x=True, y=True, alpha=0.3)
-        self.plot_widget.setBackground('#0d1117')
+        self.plot_widget.setBackground('#0c1728')
         self.plot_widget.setContextMenuPolicy(
             Qt.ContextMenuPolicy.CustomContextMenu
         )
@@ -253,7 +428,7 @@ class StockChart(QWidget):
         # === Layer 1 (BOTTOM): Prediction line - dashed green ===
         self.predicted_line = self.plot_widget.plot(
             pen=pg.mkPen(
-                color='#3fb950',
+                color='#35b57c',
                 width=2,
                 style=Qt.PenStyle.DashLine
             ),
@@ -261,7 +436,7 @@ class StockChart(QWidget):
         )
         self.predicted_low_line = self.plot_widget.plot(
             pen=pg.mkPen(
-                color='#d29922',
+                color='#d8a03a',
                 width=1,
                 style=Qt.PenStyle.DotLine,
             ),
@@ -269,7 +444,7 @@ class StockChart(QWidget):
         )
         self.predicted_high_line = self.plot_widget.plot(
             pen=pg.mkPen(
-                color='#d29922',
+                color='#d8a03a',
                 width=1,
                 style=Qt.PenStyle.DotLine,
             ),
@@ -278,7 +453,7 @@ class StockChart(QWidget):
 
         # === Layer 2 (MIDDLE): Price line - solid blue ===
         self.actual_line = self.plot_widget.plot(
-            pen=pg.mkPen(color='#58a6ff', width=1.5),
+            pen=pg.mkPen(color='#79a6ff', width=1.5),
             name='Price'
         )
 
@@ -293,11 +468,11 @@ class StockChart(QWidget):
                 name="SMA20",
             ),
             "sma50": self.plot_widget.plot(
-                pen=pg.mkPen(color="#d2a8ff", width=1, style=Qt.PenStyle.DashLine),
+                pen=pg.mkPen(color="#6f95ff", width=1, style=Qt.PenStyle.DashLine),
                 name="SMA50",
             ),
             "sma200": self.plot_widget.plot(
-                pen=pg.mkPen(color="#c9d1d9", width=1, style=Qt.PenStyle.DashLine),
+                pen=pg.mkPen(color="#dbe4f3", width=1, style=Qt.PenStyle.DashLine),
                 name="SMA200",
             ),
             "ema21": self.plot_widget.plot(
@@ -309,11 +484,11 @@ class StockChart(QWidget):
                 name="EMA55",
             ),
             "bb_upper": self.plot_widget.plot(
-                pen=pg.mkPen(color="#8b949e", width=1, style=Qt.PenStyle.DashLine),
+                pen=pg.mkPen(color="#aac3ec", width=1, style=Qt.PenStyle.DashLine),
                 name="BB Upper",
             ),
             "bb_lower": self.plot_widget.plot(
-                pen=pg.mkPen(color="#8b949e", width=1, style=Qt.PenStyle.DashLine),
+                pen=pg.mkPen(color="#aac3ec", width=1, style=Qt.PenStyle.DashLine),
                 name="BB Lower",
             ),
             "vwap20": self.plot_widget.plot(
@@ -323,6 +498,15 @@ class StockChart(QWidget):
         }
 
         self.plot_widget.addLegend()
+        try:
+            self._hover_proxy = pg.SignalProxy(
+                self.plot_widget.scene().sigMouseMoved,
+                rateLimit=45,
+                slot=self._on_plot_mouse_moved,
+            )
+        except Exception as exc:
+            self._hover_proxy = None
+            log.debug("Failed to attach chart hover proxy: %s", exc)
 
         self.layout().addWidget(self.plot_widget)
 
@@ -335,9 +519,9 @@ class StockChart(QWidget):
         self.fallback_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.fallback_label.setStyleSheet("""
             QLabel {
-                background: #0d1117;
-                color: #8b949e;
-                border: 1px solid #30363d;
+                background: #0c1728;
+                color: #aac3ec;
+                border: 1px solid #2f4466;
                 border-radius: 8px;
                 font-size: 14px;
             }
@@ -374,6 +558,7 @@ class StockChart(QWidget):
         self._predicted_prices_low = self._coerce_list(predicted_prices_low)
         self._predicted_prices_high = self._coerce_list(predicted_prices_high)
         self._levels = levels or {}
+        self._candle_meta = []
 
         if not HAS_PYQTGRAPH:
             return
@@ -691,9 +876,39 @@ class StockChart(QWidget):
 
                     o = min(max(o, l_val), h)
                     c = min(max(c, l_val), h)
+                    try:
+                        vol = float(b.get("volume", 0) or 0)
+                    except Exception:
+                        vol = 0.0
+                    if (not np.isfinite(vol)) or vol < 0:
+                        vol = 0.0
+                    try:
+                        amount = float(b.get("amount", 0) or 0)
+                    except Exception:
+                        amount = 0.0
+                    if not np.isfinite(amount):
+                        amount = 0.0
 
                     x_pos = len(closes)
                     ohlc.append((x_pos, o, c, l_val, h))
+                    self._candle_meta.append(
+                        {
+                            "x": x_pos,
+                            "open": float(o),
+                            "high": float(h),
+                            "low": float(l_val),
+                            "close": float(c),
+                            "volume": float(vol),
+                            "amount": float(amount),
+                            "prev_close": (
+                                float(ref_prev)
+                                if (ref_prev is not None and ref_prev > 0)
+                                else None
+                            ),
+                            "ts": self._format_bar_timestamp(b),
+                            "interval": str(bar_iv),
+                        }
+                    )
                     closes.append(c)
                     prev_close = c
                     if bar_day is not None:
@@ -952,6 +1167,8 @@ class StockChart(QWidget):
 
     def _clear_all(self):
         """Clear all chart elements."""
+        self._candle_meta = []
+        self._hide_candle_tooltip()
         try:
             if self.candles is not None:
                 self.candles.setData([])
@@ -1141,11 +1358,11 @@ class StockChart(QWidget):
             return
 
         level_colors = {
-            'stop_loss': '#f85149',
-            'target_1': '#3fb950',
+            'stop_loss': '#e5534b',
+            'target_1': '#35b57c',
             'target_2': '#2ea043',
             'target_3': '#238636',
-            'entry': '#58a6ff',
+            'entry': '#79a6ff',
         }
 
         for name, price in self._levels.items():
@@ -1160,7 +1377,7 @@ class StockChart(QWidget):
                             width=1,
                             style=Qt.PenStyle.DotLine
                         ),
-                        label=f'{name}: ¥{price:.2f}',
+                        label=f'{name}: CNY {price:.2f}',
                         labelOpts={
                             'color': color,
                             'position': 0.95
@@ -1218,7 +1435,7 @@ class StockChart(QWidget):
         if HAS_PYQTGRAPH and self.plot_widget is not None:
             try:
                 self.plot_widget.setTitle(
-                    title, color='#c9d1d9', size='12pt'
+                    title, color='#dbe4f3', size='12pt'
                 )
             except Exception:
                 pass
@@ -1265,13 +1482,13 @@ class MiniChart(QWidget):
 
         if HAS_PYQTGRAPH:
             self.plot = pg.PlotWidget()
-            self.plot.setBackground('#0d1117')
+            self.plot.setBackground('#0c1728')
             self.plot.hideAxis('left')
             self.plot.hideAxis('bottom')
             self.plot.setMouseEnabled(False, False)
 
             self.line = self.plot.plot(
-                pen=pg.mkPen(color='#58a6ff', width=1)
+                pen=pg.mkPen(color='#79a6ff', width=1)
             )
             layout.addWidget(self.plot)
         else:
@@ -1300,9 +1517,9 @@ class MiniChart(QWidget):
 
             if len(y) > 1:
                 if y[-1] > y[0]:
-                    color = '#3fb950'
+                    color = '#35b57c'
                 elif y[-1] < y[0]:
-                    color = '#f85149'
+                    color = '#e5534b'
                 else:
                     color = '#888'
             else:
@@ -1314,3 +1531,4 @@ class MiniChart(QWidget):
 
         except Exception:
             pass
+

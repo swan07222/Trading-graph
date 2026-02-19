@@ -140,6 +140,7 @@ class EnsembleModel:
         self.interval: str = "1d"
         self.prediction_horizon: int = int(CONFIG.model.prediction_horizon)
         self.trained_stock_codes: list[str] = []
+        self.trained_stock_last_train: dict[str, str] = {}
 
         model_names = model_names or ["lstm", "gru", "tcn", "transformer", "hybrid"]
 
@@ -899,6 +900,9 @@ class EnsembleModel:
                     "interval": interval,
                     "prediction_horizon": horizon,
                     "trained_stock_codes": list(self.trained_stock_codes),
+                    "trained_stock_last_train": dict(
+                        self.trained_stock_last_train or {}
+                    ),
                 },
                 "arch": {
                     "hidden_size": CONFIG.model.hidden_size,
@@ -925,6 +929,7 @@ class EnsembleModel:
             "prediction_horizon": horizon,
             "trained_stock_count": len(self.trained_stock_codes),
             "trained_stock_codes": list(self.trained_stock_codes),
+            "trained_stock_last_train": dict(self.trained_stock_last_train or {}),
         }
 
         manifest_path = path_obj.parent / f"model_manifest_{path_obj.stem}.json"
@@ -969,6 +974,22 @@ class EnsembleModel:
                     for x in list(meta.get("trained_stock_codes", []) or [])
                     if str(x).strip()
                 ]
+                raw_last_train = meta.get("trained_stock_last_train", {})
+                if not isinstance(raw_last_train, dict):
+                    raw_last_train = {}
+                clean_last_train: dict[str, str] = {}
+                for k, v in raw_last_train.items():
+                    code = "".join(ch for ch in str(k).strip() if ch.isdigit())
+                    if len(code) != 6:
+                        continue
+                    ts = str(v or "").strip()
+                    if not ts:
+                        continue
+                    clean_last_train[code] = ts
+                if clean_last_train:
+                    self.trained_stock_last_train = clean_last_train
+                else:
+                    self.trained_stock_last_train = {}
 
                 arch = state.get("arch", {})
                 h = int(arch.get("hidden_size", CONFIG.model.hidden_size))
@@ -1046,6 +1067,9 @@ class EnsembleModel:
                 "device": self.device,
                 "trained_stock_count": int(len(self.trained_stock_codes)),
                 "trained_stock_codes": list(self.trained_stock_codes),
+                "trained_stock_last_train": dict(
+                    self.trained_stock_last_train or {}
+                ),
             }
 
     def set_eval_mode(self):

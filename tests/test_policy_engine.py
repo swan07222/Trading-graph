@@ -191,3 +191,83 @@ def test_policy_engine_normalizes_symbol_and_order_sanity(tmp_path):
     )
     assert d3.allowed is False
     assert "limit price" in d3.reason.lower()
+
+
+def test_policy_engine_rejects_missing_symbol_or_side(tmp_path):
+    policy_path = tmp_path / "security_policy.json"
+    policy_path.write_text(
+        json.dumps(
+            {
+                "version": "9.6",
+                "enabled": True,
+                "live_trade": {
+                    "min_approvals": 1,
+                    "allowed_sides": ["buy", "sell"],
+                    "allowed_order_types": ["limit", "market"],
+                    "require_change_ticket": False,
+                    "require_business_justification": False,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    eng = TradePolicyEngine(policy_path=policy_path)
+
+    missing_symbol = eng.evaluate_live_trade(
+        _signal(symbol="", approvals_count=1, approver_ids=["a"])
+    )
+    assert missing_symbol.allowed is False
+    assert "missing symbol" in missing_symbol.reason.lower()
+
+    missing_side = eng.evaluate_live_trade(
+        _signal(side="", approvals_count=1, approver_ids=["a"])
+    )
+    assert missing_side.allowed is False
+    assert "missing side" in missing_side.reason.lower()
+
+
+def test_policy_engine_prevents_market_notional_bypass(tmp_path):
+    policy_path = tmp_path / "security_policy.json"
+    policy_path.write_text(
+        json.dumps(
+            {
+                "version": "9.7",
+                "enabled": True,
+                "live_trade": {
+                    "min_approvals": 1,
+                    "allowed_sides": ["buy", "sell"],
+                    "allowed_order_types": ["market"],
+                    "max_order_notional": 5000,
+                    "require_change_ticket": False,
+                    "require_business_justification": False,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    eng = TradePolicyEngine(policy_path=policy_path)
+
+    no_price = eng.evaluate_live_trade(
+        _signal(
+            order_type="market",
+            quantity=100000,
+            price=0.0,
+            approvals_count=1,
+            approver_ids=["a"],
+        )
+    )
+    assert no_price.allowed is False
+    assert "notional price" in no_price.reason.lower()
+
+    with_reference = eng.evaluate_live_trade(
+        _signal(
+            order_type="market",
+            quantity=100,
+            price=0.0,
+            reference_price=100.0,
+            approvals_count=1,
+            approver_ids=["a"],
+        )
+    )
+    assert with_reference.allowed is False
+    assert "notional exceeds" in with_reference.reason.lower()

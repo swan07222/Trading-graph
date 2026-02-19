@@ -91,6 +91,62 @@ def test_fetch_raw_data_rejects_invalid_ohlc():
     assert "invalid_ohlc_relations" in set(summary["top_reject_reasons"])
 
 
+def test_fetch_raw_data_skips_codes_with_pending_reconcile():
+    trainer = Trainer()
+
+    idx = pd.date_range("2026-02-18 09:30:00", periods=300, freq="min")
+    good_df = pd.DataFrame(
+        {
+            "open": [10.0] * len(idx),
+            "high": [10.1] * len(idx),
+            "low": [9.9] * len(idx),
+            "close": [10.0] * len(idx),
+            "volume": [100] * len(idx),
+            "amount": [1000.0] * len(idx),
+        },
+        index=idx,
+    )
+
+    class _Fetcher:
+        def __init__(self):
+            self.reconcile_calls = 0
+
+        @staticmethod
+        def clean_code(code):
+            return str(code).zfill(6)
+
+        def reconcile_pending_cache_sync(self, codes=None, interval="1m"):  # noqa: ARG002
+            self.reconcile_calls += 1
+            return {"reconciled": 0, "remaining": 1}
+
+        @staticmethod
+        def get_pending_reconcile_codes(interval="1m"):  # noqa: ARG002
+            return ["000001"]
+
+        @staticmethod
+        def get_history(code, **kwargs):  # noqa: ARG002
+            return good_df
+
+    fetcher = _Fetcher()
+    trainer.fetcher = fetcher
+
+    out = trainer._fetch_raw_data(
+        stocks=["000001", "000002"],
+        interval="1m",
+        bars=300,
+        verbose=False,
+    )
+
+    assert "000001" not in out
+    assert "000002" in out
+    assert fetcher.reconcile_calls >= 1
+
+    summary = trainer._last_data_quality_summary
+    assert "pending_reconcile_consistency" in set(summary["top_reject_reasons"])
+    guard = dict(summary.get("consistency_guard", {}) or {})
+    assert int(guard.get("pending_count", 0)) == 1
+
+
 def test_quality_gate_blocks_tail_stress_failure_only():
     trainer = Trainer()
     test_metrics = {

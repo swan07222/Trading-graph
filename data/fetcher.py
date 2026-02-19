@@ -1,1292 +1,56 @@
 # data/fetcher.py
 import json
 import math
-import os
 import threading
 import time
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from concurrent.futures import TimeoutError as FuturesTimeout
-from dataclasses import dataclass, replace
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
-from functools import wraps
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
-import requests
 
 from config.settings import CONFIG
-from core.exceptions import DataFetchError, DataSourceUnavailableError
 from data.cache import get_cache
 from data.database import get_database
+from data.fetcher_sources import (
+    _INTRADAY_CAPS,
+    _INTRADAY_INTERVALS,
+    _LAST_GOOD_MAX_AGE,
+    _MICRO_CACHE_TTL,
+    BARS_PER_DAY,
+    INTERVAL_MAX_DAYS,
+    AkShareSource,
+    DataSource,
+    DataSourceStatus,
+    ITickSource,
+    Quote,
+    TencentQuoteSource,
+    YahooSource,
+    _is_offline,
+    bars_to_days,
+    get_spot_cache,
+)
 from data.session_cache import get_session_bar_cache
-from utils.helpers import to_float, to_int
 from utils.logger import get_logger
 
 log = get_logger(__name__)
 
-# Maximum calendar days each interval can fetch (API limits)
-INTERVAL_MAX_DAYS: dict[str, int] = {
-    "1m": 7,
-    "2m": 60,
-    "5m": 60,
-    "15m": 60,
-    "30m": 60,
-    "60m": 730,
-    "1h": 730,
-    "1d": 10_000,
-    "1wk": 10_000,
-    "1mo": 10_000,
-}
-
-BARS_PER_DAY: dict[str, float] = {
-    "1m": 240,
-    "2m": 120,
-    "5m": 48,
-    "15m": 16,
-    "30m": 8,
-    "60m": 4,
-    "1h": 4,
-    "1d": 1,
-    "1wk": 0.2,
-    "1mo": 0.05,
-}
-
-# Intraday intervals that need tighter rate-limiting
-_INTRADAY_INTERVALS = frozenset({"1m", "2m", "5m", "15m", "30m", "60m", "1h"})
-
-# Micro-cache TTL in seconds
-_MICRO_CACHE_TTL: float = 0.25
-
-# Maximum staleness (seconds) for last-good quote fallback
-_LAST_GOOD_MAX_AGE: float = 12.0
-
-_TENCENT_CHUNK_SIZE: int = 80  # reduced chunk size for reliability
-
-# Default socket timeout for AkShare calls (seconds)
-_AKSHARE_SOCKET_TIMEOUT: int = 15
-
-# SpotCache default TTL (seconds)
-_SPOT_CACHE_TTL: float = 30.0
-
-# China A-share daily price limit (10% for normal, 20% for ST)
-_CN_DAILY_LIMIT: float = 0.205
-
-# Intraday caps used by _clean_dataframe sanitization.
-# (body_cap, span_cap, wick_cap, jump_cap) per interval
-_INTRADAY_CAPS: dict[str, tuple[float, float, float, float]] = {
-    "1m":  (0.010, 0.030, 0.010, 0.08),
-    "2m":  (0.012, 0.036, 0.012, 0.10),
-    "5m":  (0.016, 0.050, 0.016, 0.12),
-    "15m": (0.024, 0.070, 0.022, 0.14),
-    "30m": (0.032, 0.090, 0.028, 0.16),
-    "60m": (0.045, 0.120, 0.038, 0.18),
-    "1h":  (0.045, 0.120, 0.038, 0.18),
-}
-
-
-def _run_with_timeout(
-    task: Callable[[], object],
-    timeout_s: float,
-) -> object | None:
-    """
-    Run a callable with a timeout without mutating process-global socket defaults.
-    """
-    executor = ThreadPoolExecutor(max_workers=1)
-    future = executor.submit(task)
-    try:
-        return future.result(timeout=max(0.1, float(timeout_s)))
-    except FuturesTimeout:
-        return None
-    finally:
-        executor.shutdown(wait=False, cancel_futures=True)
-
-
-def _is_offline() -> bool:
-    """Check TRADING_OFFLINE environment variable."""
-    return str(os.environ.get("TRADING_OFFLINE", "0")).lower() in ("1", "true", "yes")
-
-
-def bars_to_days(bars: int, interval: str) -> int:
-    """Convert bar count to calendar days needed, respecting API limits."""
-    interval = str(interval).lower()
-    bpd = BARS_PER_DAY.get(interval, 1.0)
-    if bpd <= 0:
-        bpd = 1.0
-    trading_days = max(1, int(math.ceil(bars / bpd)))
-    # 1.8x multiplier converts trading days → calendar days
-    # (accounts for weekends, holidays), +3 for safety buffer
-    calendar_days = int(trading_days * 1.8) + 3
-    max_days = INTERVAL_MAX_DAYS.get(interval, 10_000)
-    return min(calendar_days, max_days)
-
-
-def retry(max_attempts: int = 3, delay: float = 1.0, backoff: float = 2.0):
-    """Retry decorator with exponential backoff."""
-    def decorator(func: Callable) -> Callable:
-        @wraps(func)
-        def wrapper(*args, **kwargs):
-            last_error: Exception | None = None
-            current_delay = delay
-            for attempt in range(max_attempts):
-                try:
-                    return func(*args, **kwargs)
-                except Exception as exc:
-                    last_error = exc
-                    if attempt < max_attempts - 1:
-                        log.debug(
-                            f"Retry {attempt + 1}/{max_attempts} for "
-                            f"{func.__name__}: {exc}"
-                        )
-                        time.sleep(current_delay)
-                        current_delay *= backoff
-            raise last_error  # type: ignore[misc]
-        return wrapper
-    return decorator
-
-
-@dataclass
-class Quote:
-    """Real-time quote for a single instrument."""
-    code: str
-    name: str = ""
-    price: float = 0.0
-    open: float = 0.0
-    high: float = 0.0
-    low: float = 0.0
-    close: float = 0.0
-    volume: int = 0
-    amount: float = 0.0
-    change: float = 0.0
-    change_pct: float = 0.0
-    bid: float = 0.0
-    ask: float = 0.0
-    bid_vol: int = 0
-    ask_vol: int = 0
-    timestamp: datetime | None = None
-    source: str = ""
-    is_delayed: bool = True
-    latency_ms: float = 0.0
-
-    def __post_init__(self):
-        if self.timestamp is None:
-            try:
-                from zoneinfo import ZoneInfo
-                self.timestamp = datetime.now(tz=ZoneInfo("Asia/Shanghai"))
-            except Exception:
-                self.timestamp = datetime.now(tz=timezone.utc)
-
-
-@dataclass
-class DataSourceStatus:
-    """Health / telemetry for a single data source."""
-    name: str
-    available: bool = True
-    last_success: datetime | None = None
-    last_error: str | None = None
-    success_count: int = 0
-    error_count: int = 0
-    consecutive_errors: int = 0
-    avg_latency_ms: float = 0.0
-    disabled_until: datetime | None = None
-
-
-class DataSource:
-    """Abstract data source with error tracking and circuit-breaker."""
-
-    name: str = "base"
-    priority: int = 0
-    needs_china_direct: bool = False
-    needs_vpn: bool = False
-
-    # Circuit-breaker thresholds — raised to avoid premature disabling
-    _CB_ERROR_THRESHOLD: int = 12
-    _CB_MIN_COOLDOWN: int = 20
-    _CB_MAX_COOLDOWN: int = 90
-    _CB_COOLDOWN_INCREMENT: int = 2
-    _CB_RECENT_SUCCESS_DECAY_SEC: float = 30.0
-    _CB_HALF_OPEN_PROBE_INTERVAL: float = 8.0
-    _CB_DISABLE_WARN_MIN_GAP_SEC: float = 8.0
-
-    def __init__(self):
-        self.status = DataSourceStatus(name=self.name)
-        self._session = requests.Session()
-        self._session.headers.update({
-            "User-Agent": (
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/120.0.0.0 Safari/537.36"
-            )
-        })
-        self._latencies: list[float] = []
-        self._lock = threading.Lock()
-        self._next_half_open_probe_ts: float = 0.0
-        self._last_disable_warn_ts: float = 0.0
-
-    def is_available(self) -> bool:
-        with self._lock:
-            if not self.status.available:
-                return False
-            if self.status.disabled_until:
-                if datetime.now() < self.status.disabled_until:
-                    now_probe = time.monotonic()
-                    if now_probe >= float(self._next_half_open_probe_ts):
-                        self._next_half_open_probe_ts = (
-                            now_probe + float(self._CB_HALF_OPEN_PROBE_INTERVAL)
-                        )
-                        return True
-                    return False
-                # Cooldown expired → re-enable
-                self.status.disabled_until = None
-                self.status.consecutive_errors = 0
-                self._next_half_open_probe_ts = 0.0
-                log.info(f"Data source {self.name} re-enabled after cooldown")
-            return True
-
-    def is_suitable_for_network(self) -> bool:
-        """Check if this source works in the current network environment."""
-        from core.network import get_network_env
-        env = get_network_env()
-        if self.needs_china_direct and not env.is_china_direct:
-            return False
-        if self.needs_vpn and not env.is_vpn_active:
-            return False
-        return True
-
-    def _record_success(self, latency_ms: float = 0.0) -> None:
-        with self._lock:
-            self.status.last_success = datetime.now()
-            self.status.success_count += 1
-            self.status.consecutive_errors = 0
-            self.status.available = True
-            self.status.disabled_until = None
-            self._next_half_open_probe_ts = 0.0
-            if latency_ms > 0:
-                self._latencies.append(latency_ms)
-                if len(self._latencies) > 100:
-                    self._latencies.pop(0)
-                self.status.avg_latency_ms = float(np.mean(self._latencies))
-
-    def _record_error(self, error: str) -> None:
-        with self._lock:
-            now_dt = datetime.now()
-            self.status.last_error = error
-            self.status.error_count += 1
-            # Dampen error streak if source was recently healthy
-            if (
-                self.status.last_success is not None
-                and self.status.consecutive_errors > 0
-            ):
-                try:
-                    age = (now_dt - self.status.last_success).total_seconds()
-                except Exception:
-                    age = float("inf")
-                if age <= float(self._CB_RECENT_SUCCESS_DECAY_SEC):
-                    self.status.consecutive_errors = max(
-                        0, int(self.status.consecutive_errors) - 1
-                    )
-            self.status.consecutive_errors += 1
-            if self.status.consecutive_errors >= self._CB_ERROR_THRESHOLD:
-                overflow = max(
-                    0,
-                    int(self.status.consecutive_errors)
-                    - int(self._CB_ERROR_THRESHOLD),
-                )
-                cooldown = min(
-                    self._CB_MIN_COOLDOWN
-                    + (overflow * self._CB_COOLDOWN_INCREMENT),
-                    self._CB_MAX_COOLDOWN,
-                )
-                self.status.disabled_until = (
-                    now_dt + timedelta(seconds=cooldown)
-                )
-                probe_after = max(
-                    2.0,
-                    min(
-                        float(self._CB_HALF_OPEN_PROBE_INTERVAL),
-                        float(cooldown) * 0.30,
-                    ),
-                )
-                self._next_half_open_probe_ts = (
-                    time.monotonic() + float(probe_after)
-                )
-                now_warn = time.monotonic()
-                if (
-                    now_warn - float(self._last_disable_warn_ts)
-                    >= float(self._CB_DISABLE_WARN_MIN_GAP_SEC)
-                ):
-                    self._last_disable_warn_ts = now_warn
-                    log.warning(
-                        f"Data source {self.name} disabled for {cooldown}s "
-                        f"({self.status.consecutive_errors} consecutive errors)"
-                    )
-
-    def get_history(self, code: str, days: int) -> pd.DataFrame:
-        raise NotImplementedError
-
-    def get_history_instrument(
-        self, inst: dict, days: int, interval: str = "1d"
-    ) -> pd.DataFrame:
-        raise NotImplementedError
-
-    def get_realtime(self, code: str) -> Quote | None:
-        return None
-
-
-class SpotCache:
-    """Thread-safe cached A-share spot data with TTL."""
-
-    # Robust column name mapping (handles API version differences)
-    _FIELD_MAP = {
-        "price":      ("最新价", "现价", "price"),
-        "open":       ("今开", "开盘价", "open"),
-        "high":       ("最高", "最高价", "high"),
-        "low":        ("最低", "最低价", "low"),
-        "close":      ("昨收", "昨收价", "prev_close", "close"),
-        "volume":     ("成交量", "volume"),
-        "amount":     ("成交额", "amount"),
-        "change":     ("涨跌额", "change"),
-        "change_pct": ("涨跌幅", "change_pct"),
-        "name":       ("名称", "股票名称", "name"),
-    }
-
-    def __init__(self, ttl_seconds: float = _SPOT_CACHE_TTL):
-        self._cache: pd.DataFrame | None = None
-        self._cache_time: float = 0.0
-        self._ttl = ttl_seconds
-        self._lock = threading.RLock()
-        self._rate_lock = threading.Lock()
-        self._ak = None
-        try:
-            import akshare as ak
-            self._ak = ak
-        except ImportError:
-            pass
-
-    def _get_field(self, row: pd.Series, field: str) -> object:
-        """Safely get a field from a row trying multiple column name variants."""
-        for col in self._FIELD_MAP.get(field, (field,)):
-            val = row.get(col)
-            if val is not None and str(val) not in ("", "nan", "None", "-"):
-                return val
-        return None
-
-    def get(self, force_refresh: bool = False) -> pd.DataFrame | None:
-        """Return cached spot DataFrame, refreshing if stale."""
-        now = time.time()
-        with self._lock:
-            if (
-                not force_refresh
-                and self._cache is not None
-                and (now - self._cache_time) < self._ttl
-            ):
-                return self._cache
-            stale = self._cache
-
-        if self._ak is None:
-            return stale
-
-        from core.network import get_network_env
-        env = get_network_env()
-        if not env.eastmoney_ok:
-            return stale
-
-        with self._rate_lock:
-            # Re-check after acquiring rate lock
-            with self._lock:
-                if (
-                    not force_refresh
-                    and self._cache is not None
-                    and (time.time() - self._cache_time) < self._ttl
-                ):
-                    return self._cache
-
-            try:
-                timeout_s = 10.0
-                fresh = _run_with_timeout(
-                    lambda: self._ak.stock_zh_a_spot_em(),
-                    timeout_s,
-                )
-                if fresh is None:
-                    log.debug("SpotCache refresh timed out after %.1fs", timeout_s)
-
-                with self._lock:
-                    if isinstance(fresh, pd.DataFrame) and not fresh.empty:
-                        self._cache = fresh
-                        self._cache_time = time.time()
-                        log.debug(
-                            "SpotCache refreshed: %d rows, cols=%s",
-                            len(fresh),
-                            list(fresh.columns[:8]),
-                        )
-                    return self._cache
-
-            except Exception as exc:
-                log.debug("SpotCache refresh failed: %s", exc)
-                with self._lock:
-                    return self._cache
-
-    def get_quote(self, symbol: str) -> dict | None:
-        """Look up a single stock from the cached spot snapshot."""
-        symbol = str(symbol).strip()
-        # Strip common exchange prefixes
-        for prefix in ("sh", "sz", "SH", "SZ", "bj", "BJ"):
-            if symbol.upper().startswith(prefix.upper()) and len(symbol) > len(prefix):
-                candidate = symbol[len(prefix):]
-                if candidate.isdigit():
-                    symbol = candidate
-                    break
-        # Strip dot-suffixes like .SZ .SS
-        if "." in symbol:
-            symbol = symbol.split(".")[0]
-        symbol = symbol.strip().zfill(6)
-
-        df = self.get()
-        if df is None or df.empty:
-            return None
-
-        try:
-            # Find code column robustly
-            code_col_name = None
-            for candidate in ("代码", "股票代码", "code", "symbol"):
-                if candidate in df.columns:
-                    code_col_name = candidate
-                    break
-            if code_col_name is None:
-                log.debug("SpotCache: no code column found in %s", list(df.columns))
-                return None
-
-            code_col = (
-                df[code_col_name]
-                .astype(str)
-                .str.extract(r"(\d+)", expand=False)
-                .str.zfill(6)
-            )
-            row_mask = code_col == symbol
-            if not row_mask.any():
-                return None
-            r = df[row_mask].iloc[0]
-        except Exception as exc:
-            log.debug("SpotCache lookup error for %s: %s", symbol, exc)
-            return None
-
-        try:
-            price = to_float(self._get_field(r, "price"))
-            if price is None or price <= 0:
-                return None
-            return {
-                "code":       symbol,
-                "name":       str(self._get_field(r, "name") or ""),
-                "price":      price,
-                "open":       to_float(self._get_field(r, "open") or 0),
-                "high":       to_float(self._get_field(r, "high") or 0),
-                "low":        to_float(self._get_field(r, "low") or 0),
-                "close":      to_float(self._get_field(r, "close") or 0),
-                "volume":     to_int(self._get_field(r, "volume") or 0),
-                "amount":     to_float(self._get_field(r, "amount") or 0),
-                "change":     to_float(self._get_field(r, "change") or 0),
-                "change_pct": to_float(self._get_field(r, "change_pct") or 0),
-            }
-        except Exception as exc:
-            log.debug("SpotCache field extraction error for %s: %s", symbol, exc)
-            return None
-
-
-_spot_cache: SpotCache | None = None
-_spot_cache_lock = threading.Lock()
-
-
-def get_spot_cache() -> SpotCache:
-    """Module-level singleton for SpotCache."""
-    global _spot_cache
-    if _spot_cache is None:
-        with _spot_cache_lock:
-            if _spot_cache is None:
-                _spot_cache = SpotCache()
-    return _spot_cache
-
-
-class AkShareSource(DataSource):
-    """AkShare data source — works ONLY on China direct IP."""
-
-    name = "akshare"
-    priority = 1
-    needs_china_direct = True
-
-    _AKSHARE_PERIOD_MAP = {"1d": "daily", "1wk": "weekly", "1mo": "monthly"}
-    _AKSHARE_MIN_MAP = {
-        "1m": "1", "5m": "5", "15m": "15", "30m": "30", "60m": "60"
-    }
-
-    _COLUMN_MAP = {
-        "日期": "date",
-        "开盘": "open",
-        "收盘": "close",
-        "最高": "high",
-        "最低": "low",
-        "成交量": "volume",
-        "成交额": "amount",
-        "涨跌幅": "change_pct",
-        "换手率": "turnover",
-    }
-
-    _INTRADAY_COL_MAPS = [
-        {
-            "时间": "date", "开盘": "open", "收盘": "close",
-            "最高": "high", "最低": "low", "成交量": "volume",
-            "成交额": "amount",
-        },
-        {
-            "日期": "date", "开盘": "open", "收盘": "close",
-            "最高": "high", "最低": "low", "成交量": "volume",
-            "成交额": "amount",
-        },
-    ]
-
-    def __init__(self):
-        super().__init__()
-        self._ak = None
-        self._spot_cache: SpotCache | None = None
-        try:
-            import akshare as ak
-            self._ak = ak
-            log.info("AkShare initialized")
-        except ImportError:
-            self.status.available = False
-            log.warning("AkShare not available")
-
-    def is_available(self) -> bool:
-        if not self._ak:
-            return False
-        if not self.is_suitable_for_network():
-            return False
-        return super().is_available()
-
-    def is_suitable_for_network(self) -> bool:
-        from core.network import get_network_env
-        env = get_network_env()
-        if not bool(getattr(env, "eastmoney_ok", False)):
-            return False
-        return bool(env.is_china_direct)
-
-    def _get_spot_cache(self) -> SpotCache:
-        if self._spot_cache is None:
-            self._spot_cache = get_spot_cache()
-        return self._spot_cache
-
-    def _get_effective_timeout(self) -> int:
-        from core.network import get_network_env
-        env = get_network_env()
-        if not env.eastmoney_ok:
-            return 5
-        return _AKSHARE_SOCKET_TIMEOUT
-
-    @retry(max_attempts=2, delay=1.0, backoff=2.0)
-    def get_history(self, code: str, days: int) -> pd.DataFrame:
-        if not self._ak or not self.is_available():
-            raise DataSourceUnavailableError("AkShare not available")
-
-        start_t = time.time()
-        timeout_s = float(self._get_effective_timeout())
-        end_date = datetime.now().strftime("%Y%m%d")
-        # Fetch extra days to account for weekends/holidays
-        start_date = (
-            datetime.now() - timedelta(days=int(days * 2.0) + 10)
-        ).strftime("%Y%m%d")
-        df = _run_with_timeout(
-            lambda: self._ak.stock_zh_a_hist(
-                symbol=code,
-                period="daily",
-                start_date=start_date,
-                end_date=end_date,
-                adjust="qfq",
-            ),
-            timeout_s,
-        )
-
-        if df is None:
-            raise DataFetchError(f"AkShare timeout for {code}")
-        if not isinstance(df, pd.DataFrame) or df.empty:
-            raise DataFetchError(f"No data for {code}")
-
-        df = self._normalize_daily(df)
-        latency = (time.time() - start_t) * 1000
-        self._record_success(latency)
-        log.debug("AkShare daily %s: %d bars", code, len(df))
-        return df.tail(days)
-
-    def get_realtime(self, code: str) -> Quote | None:
-        if not self._ak or not self.is_available():
-            return None
-        try:
-            data = self._get_spot_cache().get_quote(code)
-            if data is None or not data.get("price") or data["price"] <= 0:
-                return None
-            return Quote(
-                code=code, name=data["name"], price=data["price"],
-                open=data["open"], high=data["high"], low=data["low"],
-                close=data["close"], volume=data["volume"],
-                amount=data["amount"], change=data["change"],
-                change_pct=data["change_pct"], source=self.name,
-                is_delayed=False,
-            )
-        except Exception as exc:
-            self._record_error(str(exc))
-            return None
-
-    def get_history_instrument(
-        self, inst: dict, days: int, interval: str = "1d"
-    ) -> pd.DataFrame:
-        if not self._ak or not self.is_available():
-            return pd.DataFrame()
-        if inst.get("market") != "CN" or inst.get("asset") != "EQUITY":
-            return pd.DataFrame()
-
-        start_t = time.time()
-        timeout_s = float(self._get_effective_timeout())
-        symbol = str(inst["symbol"]).zfill(6)
-
-        if interval in self._AKSHARE_MIN_MAP:
-            time.sleep(0.3)
-            df = _run_with_timeout(
-                lambda: self._ak.stock_zh_a_hist_min_em(
-                    symbol=symbol,
-                    period=self._AKSHARE_MIN_MAP[interval],
-                    adjust="qfq",
-                ),
-                timeout_s,
-            )
-            if not isinstance(df, pd.DataFrame) or df.empty:
-                return pd.DataFrame()
-            df = self._normalize_intraday(df)
-            if df.empty:
-                return pd.DataFrame()
-            latency = (time.time() - start_t) * 1000
-            self._record_success(latency)
-            log.debug(
-                "AkShare intraday %s (%s): %d bars",
-                symbol, interval, len(df)
-            )
-            return df
-
-        period = self._AKSHARE_PERIOD_MAP.get(interval, "daily")
-        end_date = datetime.now().strftime("%Y%m%d")
-        max_cal_days = INTERVAL_MAX_DAYS.get(interval, 10_000)
-        # Fetch 2.5x requested days to ensure enough bars after holiday filtering
-        cal_days = min(int(days * 2.5) + 10, max_cal_days)
-        start_date = (
-            datetime.now() - timedelta(days=cal_days)
-        ).strftime("%Y%m%d")
-
-        df = _run_with_timeout(
-            lambda: self._ak.stock_zh_a_hist(
-                symbol=symbol, period=period,
-                start_date=start_date, end_date=end_date, adjust="qfq",
-            ),
-            timeout_s,
-        )
-
-        if not isinstance(df, pd.DataFrame) or df.empty:
-            return pd.DataFrame()
-
-        df = self._normalize_daily(df)
-        latency = (time.time() - start_t) * 1000
-        self._record_success(latency)
-        log.debug(
-            "AkShare %s (%s): %d bars",
-            inst.get("symbol"), interval, len(df)
-        )
-        return df.tail(days)
-
-    def get_all_stocks(self) -> pd.DataFrame:
-        if not self._ak or not self.is_available():
-            return pd.DataFrame()
-        try:
-            return self._ak.stock_zh_a_spot_em()
-        except Exception:
-            return pd.DataFrame()
-
-    def _normalize_daily(self, df: pd.DataFrame) -> pd.DataFrame:
-        df = df.copy()
-        df = df.rename(columns=self._COLUMN_MAP)
-        if "date" not in df.columns:
-            # Try to find date column
-            for col in df.columns:
-                if "日" in col or "date" in col.lower() or "time" in col.lower():
-                    df = df.rename(columns={col: "date"})
-                    break
-        if "date" not in df.columns:
-            log.warning("AkShare: no date column found, cols=%s", list(df.columns))
-            return pd.DataFrame()
-
-        df["date"] = pd.to_datetime(df["date"], errors="coerce")
-        df = df.dropna(subset=["date"])
-        df = df.set_index("date").sort_index()
-
-        for col in ("open", "high", "low", "close", "volume", "amount"):
-            if col in df.columns:
-                df[col] = pd.to_numeric(df[col], errors="coerce")
-
-        df = df.dropna(subset=["close"])
-        df = df[df["close"] > 0]
-        if "volume" in df.columns:
-            df = df[df["volume"].fillna(0) >= 0]
-        if "high" in df.columns and "low" in df.columns:
-            df = df[df["high"] >= df["low"]]
-
-        # Validate OHLC consistency
-        if all(c in df.columns for c in ("open", "high", "low", "close")):
-            df["high"] = df[["open", "high", "close"]].max(axis=1)
-            df["low"] = df[["open", "low", "close"]].min(axis=1)
-
-        return df
-
-    def _normalize_intraday(self, df: pd.DataFrame) -> pd.DataFrame:
-        df = df.copy()
-        for cmap in self._INTRADAY_COL_MAPS:
-            if set(cmap.keys()).issubset(set(df.columns)):
-                df = df.rename(columns=cmap)
-                break
-        if "date" not in df.columns:
-            df = df.rename(columns={df.columns[0]: "date"})
-
-        df["date"] = pd.to_datetime(df["date"], errors="coerce")
-        df = df.dropna(subset=["date"]).set_index("date").sort_index()
-
-        for c in ("open", "high", "low", "close", "volume", "amount"):
-            if c in df.columns:
-                df[c] = pd.to_numeric(df[c], errors="coerce")
-
-        df = df.dropna(subset=["close"])
-        df = df[df["close"] > 0]
-
-        if "volume" in df.columns:
-            df = df[df["volume"].fillna(0) >= 0]
-
-        # Validate and fix OHLC
-        if all(c in df.columns for c in ("open", "high", "low", "close")):
-            df["open"] = df["open"].where(df["open"] > 0, df["close"])
-            df["high"] = df[["open", "high", "close"]].max(axis=1)
-            df["low"] = df[["open", "low", "close"]].min(axis=1)
-
-        return df
-
-
-class YahooSource(DataSource):
-    """Yahoo Finance — works ONLY through VPN (foreign IP)."""
-
-    name = "yahoo"
-    priority = 1
-    needs_vpn = True
-    _CB_ERROR_THRESHOLD = 20
-    _CB_MIN_COOLDOWN = 20
-    _CB_MAX_COOLDOWN = 90
-
-    _SUFFIX_MAP = {"6": ".SS", "0": ".SZ", "3": ".SZ"}
-    _SUPPORTED_PREFIXES = ("0", "3", "6")
-
-    def __init__(self):
-        super().__init__()
-        self._yf = None
-        try:
-            import yfinance as yf
-            self._yf = yf
-            log.info("Yahoo Finance initialized")
-        except ImportError:
-            self.status.available = False
-            log.warning("yfinance not available")
-
-    def is_available(self) -> bool:
-        if not self._yf:
-            return False
-        if not self.is_suitable_for_network():
-            return False
-        return super().is_available()
-
-    def is_suitable_for_network(self) -> bool:
-        from core.network import get_network_env
-        env = get_network_env()
-        return bool(env.is_vpn_active) or (
-            bool(getattr(env, "yahoo_ok", False)) and not env.is_china_direct
-        )
-
-    def _record_error(self, error: str) -> None:
-        msg = str(error).lower()
-        # Don't trip circuit-breaker for expected no-data responses
-        if any(k in msg for k in ("no data", "returned empty", "period=", "no timezone")):
-            with self._lock:
-                self.status.last_error = str(error)
-                self.status.error_count += 1
-            return
-        super()._record_error(error)
-
-    def _to_yahoo_symbol(self, code: str) -> str:
-        code = str(code).zfill(6)
-        if not code or code[0] not in self._SUPPORTED_PREFIXES:
-            return ""
-        suffix = self._SUFFIX_MAP.get(code[0], ".SS")
-        return f"{code}{suffix}"
-
-    @retry(max_attempts=2, delay=1.0, backoff=2.0)
-    def get_history(self, code: str, days: int) -> pd.DataFrame:
-        if not self._yf or not self.is_available():
-            raise DataSourceUnavailableError("Yahoo Finance not available")
-
-        start_t = time.time()
-        symbol = self._to_yahoo_symbol(code)
-        if not symbol:
-            raise DataFetchError(f"Cannot map {code} to Yahoo symbol")
-
-        ticker = self._yf.Ticker(symbol)
-        end = datetime.now()
-        start_date = end - timedelta(days=int(days * 2.0) + 10)
-        df = ticker.history(start=start_date, end=end, auto_adjust=True)
-
-        if df is None or df.empty:
-            raise DataFetchError(f"No data from Yahoo for {code}")
-
-        df = self._normalize(df)
-        latency = (time.time() - start_t) * 1000
-        self._record_success(latency)
-        return df.tail(days)
-
-    def get_history_instrument(
-        self, inst: dict, days: int, interval: str = "1d"
-    ) -> pd.DataFrame:
-        if not self._yf or not self.is_available():
-            return pd.DataFrame()
-
-        start_t = time.time()
-        try:
-            yahoo_symbol = self._resolve_symbol(inst)
-            if not yahoo_symbol:
-                return pd.DataFrame()
-
-            ticker = self._yf.Ticker(yahoo_symbol)
-            max_days = INTERVAL_MAX_DAYS.get(interval, 10_000)
-            capped_days = min(int(days), max_days)
-            yahoo_interval = "1h" if interval == "60m" else interval
-
-            if interval in ("1m", "2m", "5m", "15m", "30m", "60m", "1h"):
-                period_str = f"{capped_days}d"
-                df = ticker.history(
-                    period=period_str,
-                    interval=yahoo_interval,
-                    auto_adjust=True,
-                )
-            else:
-                end = datetime.now()
-                start_date = end - timedelta(days=int(capped_days * 2.0) + 10)
-                df = ticker.history(
-                    start=start_date,
-                    end=end,
-                    interval=yahoo_interval,
-                    auto_adjust=True,
-                )
-
-            if df is None or df.empty:
-                log.debug(
-                    "Yahoo returned empty for %s (%s)",
-                    yahoo_symbol, interval
-                )
-                return pd.DataFrame()
-
-            df = self._normalize(df)
-            if df.empty:
-                return pd.DataFrame()
-
-            latency = (time.time() - start_t) * 1000
-            self._record_success(latency)
-            log.debug(
-                "Yahoo OK: %s (%s): %d bars",
-                yahoo_symbol, interval, len(df)
-            )
-            return df
-
-        except Exception as exc:
-            self._record_error(str(exc))
-            log.debug(
-                "Yahoo failed for %s (%s): %s",
-                inst.get("symbol"), interval, exc
-            )
-            return pd.DataFrame()
-
-    def get_realtime(self, code: str) -> Quote | None:
-        if not self._yf or not self.is_available():
-            return None
-        try:
-            symbol = self._to_yahoo_symbol(code)
-            if not symbol:
-                return None
-            ticker = self._yf.Ticker(symbol)
-            info = ticker.info
-            if not info or "regularMarketPrice" not in info:
-                return None
-            price = float(info.get("regularMarketPrice") or 0)
-            if price <= 0:
-                return None
-            return Quote(
-                code=code,
-                name=info.get("shortName", ""),
-                price=price,
-                open=float(info.get("regularMarketOpen") or 0),
-                high=float(info.get("regularMarketDayHigh") or 0),
-                low=float(info.get("regularMarketDayLow") or 0),
-                close=float(info.get("previousClose") or 0),
-                volume=int(info.get("regularMarketVolume") or 0),
-                source=self.name,
-                is_delayed=False,
-            )
-        except Exception as exc:
-            self._record_error(str(exc))
-            return None
-
-    def _resolve_symbol(self, inst: dict) -> str | None:
-        if inst.get("market") == "CN" and inst.get("asset") == "EQUITY":
-            code6 = str(inst.get("symbol", "")).zfill(6)
-            if not code6 or code6[0] not in self._SUPPORTED_PREFIXES:
-                return None
-            return self._to_yahoo_symbol(code6)
-        return inst.get("yahoo") or inst.get("symbol") or None
-
-    @staticmethod
-    def _normalize(df: pd.DataFrame) -> pd.DataFrame:
-        df = df.copy()
-        df = df.rename(columns={
-            "Open": "open", "High": "high", "Low": "low",
-            "Close": "close", "Volume": "volume",
-            "Dividends": "dividends", "Stock Splits": "splits",
-        })
-        df.index.name = "date"
-
-        # Drop metadata columns
-        keep = [c for c in ("open", "high", "low", "close", "volume")
-                if c in df.columns]
-        df = df[keep].copy()
-
-        for col in keep:
-            df[col] = pd.to_numeric(df[col], errors="coerce")
-
-        df = df.dropna(subset=["close"])
-        df = df[df["close"] > 0]
-
-        if "volume" in df.columns:
-            df = df[df["volume"].fillna(0) >= 0]
-
-        if "close" in df.columns and "volume" in df.columns:
-            df["amount"] = df["close"] * df["volume"]
-
-        # Fix OHLC consistency
-        if all(c in df.columns for c in ("open", "high", "low", "close")):
-            df["open"] = df["open"].where(df["open"] > 0, df["close"])
-            df["high"] = df[["open", "high", "close"]].max(axis=1)
-            df["low"] = df[["open", "low", "close"]].min(axis=1)
-
-        return df
-
-
-class TencentQuoteSource(DataSource):
-    """Tencent quotes — works from ANY IP (China or foreign)."""
-
-    name = "tencent"
-    priority = 0
-    needs_china_direct = False
-    needs_vpn = False
-    _CB_ERROR_THRESHOLD = 10
-    _CB_MIN_COOLDOWN = 18
-    _CB_MAX_COOLDOWN = 75
-    _CB_COOLDOWN_INCREMENT = 2
-    _CB_HALF_OPEN_PROBE_INTERVAL = 6.0
-
-    def get_realtime_batch(self, codes: list[str]) -> dict[str, Quote]:
-        if not self.is_available():
-            return {}
-
-        from core.constants import get_exchange
-
-        vendor_symbols: list[str] = []
-        vendor_to_code: dict[str, str] = {}
-        for c in codes:
-            code6 = str(c).zfill(6)
-            ex = get_exchange(code6)
-            prefix_map = {"SSE": "sh", "SZSE": "sz", "BSE": "bj"}
-            prefix = prefix_map.get(ex)
-            if prefix is None:
-                continue
-            sym = f"{prefix}{code6}"
-            vendor_symbols.append(sym)
-            vendor_to_code[sym] = code6
-
-        if not vendor_symbols:
-            return {}
-
-        out: dict[str, Quote] = {}
-        start_all = time.time()
-
-        try:
-            for i in range(0, len(vendor_symbols), _TENCENT_CHUNK_SIZE):
-                chunk = vendor_symbols[i: i + _TENCENT_CHUNK_SIZE]
-                url = "https://qt.gtimg.cn/q=" + ",".join(chunk)
-                resp = self._session.get(url, timeout=6)
-                resp.encoding = "gbk"  # Tencent returns GBK encoded content
-
-                for line in resp.text.splitlines():
-                    if "~" not in line or "=" not in line:
-                        continue
-                    try:
-                        left, right = line.split("=", 1)
-                        vendor_sym = left.strip().replace("v_", "")
-                        payload = right.strip().strip('";')
-                        if not payload or payload == "":
-                            continue
-                        parts = payload.split("~")
-                        if len(parts) < 32:
-                            continue
-
-                        code6 = vendor_to_code.get(vendor_sym)
-                        if not code6:
-                            continue
-
-                        name = str(parts[1]) if parts[1] else ""
-                        price_str = parts[3].strip()
-                        if not price_str:
-                            continue
-                        price = float(price_str)
-                        if price <= 0:
-                            continue
-
-                        prev_close = float(parts[4] or 0)
-                        open_px   = float(parts[5] or 0)
-                        # parts[6] = volume in lots (手), multiply by 100 for shares
-                        volume    = int(float(parts[6] or 0) * 100)
-                        # parts[37] = amount in CNY (元)
-                        amount    = float(parts[37] or 0) if len(parts) > 37 else 0.0
-                        # parts[33] = high, parts[34] = low for the day
-                        high_px   = float(parts[33] or price) if len(parts) > 33 else price
-                        low_px    = float(parts[34] or price) if len(parts) > 34 else price
-                        # parts[30] = bid1, parts[32] = ask1
-                        bid_px    = float(parts[9] or 0)   if len(parts) > 9  else 0.0
-                        ask_px    = float(parts[19] or 0)  if len(parts) > 19 else 0.0
-
-                        # Validate price bounds (sanity check)
-                        if prev_close > 0:
-                            ratio = price / prev_close
-                            if ratio > 1.25 or ratio < 0.75:
-                                # Likely bad data; skip
-                                log.debug(
-                                    "Tencent: suspicious price for %s: "
-                                    "price=%.2f prev_close=%.2f",
-                                    code6, price, prev_close
-                                )
-                                continue
-
-                        # Fix OHLC bounds
-                        open_px = open_px if open_px > 0 else price
-                        high_px = max(high_px, open_px, price)
-                        low_px  = min(low_px,  open_px, price)
-                        if low_px <= 0:
-                            low_px = price
-
-                        chg = price - prev_close if prev_close > 0 else 0.0
-                        chg_pct = (chg / prev_close * 100) if prev_close > 0 else 0.0
-
-                        out[code6] = Quote(
-                            code=code6, name=name,
-                            price=price,
-                            open=open_px, high=high_px, low=low_px,
-                            close=prev_close,
-                            volume=volume, amount=amount,
-                            change=chg, change_pct=chg_pct,
-                            bid=bid_px, ask=ask_px,
-                            source=self.name, is_delayed=False,
-                            latency_ms=0.0,
-                        )
-                    except Exception as exc:
-                        log.debug("Tencent parse error line: %s", exc)
-                        continue
-
-            latency = (time.time() - start_all) * 1000
-            self._record_success(latency)
-            for q in out.values():
-                q.latency_ms = latency
-            log.debug(
-                "Tencent batch: %d/%d quotes fetched in %.0fms",
-                len(out), len(codes), latency
-            )
-            return out
-
-        except Exception as exc:
-            self._record_error(str(exc))
-            log.debug("Tencent batch failed: %s", exc)
-            return {}
-
-    def get_realtime(self, code: str) -> Quote | None:
-        res = self.get_realtime_batch([code])
-        return res.get(str(code).zfill(6))
-
-    def get_history(self, code: str, days: int) -> pd.DataFrame:
-        inst = {
-            "market": "CN", "asset": "EQUITY",
-            "symbol": str(code).zfill(6)
-        }
-        return self.get_history_instrument(inst, days=days, interval="1d")
-
-    def get_history_instrument(
-        self, inst: dict, days: int, interval: str = "1d"
-    ) -> pd.DataFrame:
-        if inst.get("market") != "CN" or inst.get("asset") != "EQUITY":
-            return pd.DataFrame()
-        if str(interval).lower() != "1d":
-            return pd.DataFrame()
-
-        code6 = str(inst.get("symbol") or "").zfill(6)
-        if not code6.isdigit() or len(code6) != 6:
-            return pd.DataFrame()
-
-        from core.constants import get_exchange
-        ex = get_exchange(code6)
-        prefix = {"SSE": "sh", "SZSE": "sz", "BSE": "bj"}.get(ex)
-        if not prefix:
-            return pd.DataFrame()
-
-        vendor_symbol = f"{prefix}{code6}"
-        start_t = time.time()
-        try:
-            # Request more bars than needed to account for gaps
-            fetch_count = max(100, int(days) + 60)
-            url = (
-                "https://web.ifzq.gtimg.cn/appstock/app/fqkline/get"
-                f"?param={vendor_symbol},day,,,{fetch_count},qfq"
-            )
-            resp = self._session.get(url, timeout=10)
-            resp.encoding = "utf-8"
-            if resp.status_code != 200:
-                self._record_error(f"HTTP {resp.status_code}")
-                return pd.DataFrame()
-            payload = resp.text
-            if not payload:
-                return pd.DataFrame()
-            data = self._parse_daily_kline(payload, vendor_symbol)
-            if data.empty:
-                return pd.DataFrame()
-            latency = (time.time() - start_t) * 1000.0
-            self._record_success(latency)
-            log.debug(
-                "Tencent daily %s: %d bars in %.0fms",
-                code6, len(data), latency
-            )
-            return data.tail(max(1, int(days)))
-        except Exception as exc:
-            self._record_error(str(exc))
-            log.debug("Tencent history failed for %s: %s", code6, exc)
-            return pd.DataFrame()
-
-    @staticmethod
-    def _parse_daily_kline(payload_text: str, vendor_symbol: str) -> pd.DataFrame:
-        """Parse Tencent qfq daily K-line JSON response."""
-        text = str(payload_text or "").strip()
-        if not text:
-            return pd.DataFrame()
-
-        payload = None
-        try:
-            payload = json.loads(text)
-        except Exception:
-            # Handle JSONP wrapper
-            left = text.find("{")
-            right = text.rfind("}")
-            if left < 0 or right <= left:
-                return pd.DataFrame()
-            try:
-                payload = json.loads(text[left: right + 1])
-            except Exception:
-                return pd.DataFrame()
-
-        if not isinstance(payload, dict):
-            return pd.DataFrame()
-
-        data_root = payload.get("data")
-        if not isinstance(data_root, dict):
-            return pd.DataFrame()
-
-        item = data_root.get(vendor_symbol)
-        if not isinstance(item, dict):
-            return pd.DataFrame()
-
-        # Try multiple key names Tencent uses
-        rows = (
-            item.get("qfqday")
-            or item.get("day")
-            or item.get("hfqday")
-            or []
-        )
-        if not isinstance(rows, list) or not rows:
-            return pd.DataFrame()
-
-        out_rows = []
-        for row in rows:
-            if not isinstance(row, (list, tuple)) or len(row) < 6:
-                continue
-            try:
-                # Tencent format: [date, open, close, high, low, volume, ...]
-                date_str = str(row[0]).strip()
-                date = pd.to_datetime(date_str, errors="coerce")
-                if pd.isna(date):
-                    continue
-
-                open_px  = float(row[1] or 0)
-                close_px = float(row[2] or 0)
-                high_px  = float(row[3] or 0)
-                low_px   = float(row[4] or 0)
-                # Volume in Tencent is in shares (not lots)
-                vol      = float(row[5] or 0)
-
-                if close_px <= 0:
-                    continue
-
-                # Fix OHLC
-                open_px = open_px if open_px > 0 else close_px
-                high_px = max(high_px, open_px, close_px)
-                low_px  = min(low_px,  open_px, close_px)
-                if low_px <= 0:
-                    low_px = close_px
-
-                if high_px < low_px:
-                    continue
-
-                # Amount: Tencent sometimes provides index 6
-                amount = 0.0
-                if len(row) > 6:
-                    try:
-                        amount = float(row[6] or 0)
-                    except Exception:
-                        amount = close_px * max(0.0, vol)
-                else:
-                    amount = close_px * max(0.0, vol)
-
-                out_rows.append({
-                    "date":   date,
-                    "open":   open_px,
-                    "high":   high_px,
-                    "low":    low_px,
-                    "close":  close_px,
-                    "volume": max(0.0, vol),
-                    "amount": max(0.0, amount),
-                })
-            except Exception:
-                continue
-
-        if not out_rows:
-            return pd.DataFrame()
-
-        df = (
-            pd.DataFrame(out_rows)
-            .dropna(subset=["date"])
-            .sort_values("date")
-            .set_index("date")
-        )
-        return df
-
+__all__ = [
+    "AkShareSource",
+    "DataFetcher",
+    "DataSource",
+    "DataSourceStatus",
+    "ITickSource",
+    "Quote",
+    "TencentQuoteSource",
+    "YahooSource",
+    "bars_to_days",
+    "get_fetcher",
+    "get_spot_cache",
+]
 
 class DataFetcher:
     """
@@ -1321,13 +85,18 @@ class DataFetcher:
         self._last_network_mode: tuple[bool, bool, bool] | None = None
         self._last_network_force_refresh_ts: float = 0.0
         self._network_force_refresh_cooldown_s: float = 20.0
+        self._refresh_reconcile_lock = threading.RLock()
+        self._refresh_reconcile_path = Path(CONFIG.data_dir) / "refresh_reconcile_queue.json"
         self._init_sources()
 
     def _init_sources(self) -> None:
         self._all_sources = []
         self._init_local_db_source()
 
-        for source_cls in (AkShareSource, TencentQuoteSource, YahooSource):
+        # Runtime policy:
+        # - historical data: iTick primary
+        # - realtime data: Tencent primary
+        for source_cls in (ITickSource, AkShareSource, TencentQuoteSource, YahooSource):
             try:
                 source = source_cls()
                 if source.status.available:
@@ -1411,7 +180,7 @@ class DataFetcher:
             with self._rate_lock:
                 self._request_times.clear()
             log.info(
-                "Network mode changed → cooldowns reset "
+                "Network mode changed -> cooldowns reset "
                 "(%s)",
                 "CHINA_DIRECT" if env.is_china_direct else "VPN_FOREIGN",
             )
@@ -1429,6 +198,8 @@ class DataFetcher:
 
         if source.name == "localdb":
             score += 120.0
+        elif source.name == "itick":
+            score += 95.0
         elif env.is_china_direct:
             eastmoney_ok = bool(getattr(env, "eastmoney_ok", False))
             if source.name == "akshare":
@@ -1530,8 +301,14 @@ class DataFetcher:
 
         result: dict[str, Quote] = {}
 
+        # Realtime policy: Tencent-only network path.
+        sources = [
+            s
+            for s in self._get_active_sources()
+            if str(getattr(s, "name", "")).strip().lower() == "tencent"
+        ]
+
         # Batch-capable sources first
-        sources = self._get_active_sources()
         for source in sources:
             fn = getattr(source, "get_realtime_batch", None)
             if not callable(fn):
@@ -1552,20 +329,21 @@ class DataFetcher:
                 log.debug("Batch quote source %s failed: %s", source.name, exc)
                 continue
 
-        # SpotCache fill for missing
+        # Realtime network fallback to non-Tencent providers is disabled.
         missing = [c for c in cleaned if c not in result]
+
+        # Fill from spot-cache snapshot before forcing network refresh.
         if missing:
             self._fill_from_spot_cache(missing, result)
-
-        # Per-symbol fallback for remaining (only sources WITHOUT batch method)
-        missing = [c for c in cleaned if c not in result]
-        if missing:
-            self._fill_from_single_source_quotes(missing, result, sources)
 
         # Force network refresh and retry once if still missing
         missing = [c for c in cleaned if c not in result]
         if missing and self._maybe_force_network_refresh():
-            retry_sources = self._get_active_sources()
+            retry_sources = [
+                s
+                for s in self._get_active_sources()
+                if str(getattr(s, "name", "")).strip().lower() == "tencent"
+            ]
             for source in retry_sources:
                 fn = getattr(source, "get_realtime_batch", None)
                 if not callable(fn):
@@ -1584,14 +362,6 @@ class DataFetcher:
                                 result[code6] = q
                 except Exception:
                     continue
-            missing = [c for c in cleaned if c not in result]
-            if missing:
-                self._fill_from_spot_cache(missing, result)
-                self._fill_from_single_source_quotes(
-                    [c for c in cleaned if c not in result],
-                    result,
-                    retry_sources,
-                )
 
         # Last-good fallback
         missing = [c for c in cleaned if c not in result]
@@ -1822,24 +592,59 @@ class DataFetcher:
             log.warning("No sources at all for %s (%s)", inst.get("symbol"), interval)
             return pd.DataFrame()
 
-        # For CN equity, sort by preferred source for current network
-        if inst.get("market") == "CN" and inst.get("asset") == "EQUITY":
-            from core.network import get_network_env
-            env = get_network_env()
-            if env.is_china_direct and bool(getattr(env, "eastmoney_ok", False)):
-                preferred = "akshare"
-            elif bool(getattr(env, "tencent_ok", False)):
-                preferred = "tencent"
-            elif env.yahoo_ok:
-                preferred = "yahoo"
+        # Historical policy: route online history through iTick when available.
+        original_source_names = [
+            str(getattr(s, "name", "")).strip().lower() for s in sources
+        ]
+        itick_sources = [
+            s for s in sources
+            if str(getattr(s, "name", "")).strip().lower() == "itick"
+        ]
+        if itick_sources:
+            if include_localdb:
+                local_sources = [
+                    s for s in self._all_sources
+                    if str(getattr(s, "name", "")).strip().lower() == "localdb"
+                ]
+                sources = list(itick_sources) + list(local_sources)
             else:
-                preferred = "localdb"
+                sources = list(itick_sources)
+        elif inst.get("market") == "CN" and inst.get("asset") == "EQUITY":
+            # Backward-compatible fallback when iTick is unavailable.
+            ak_sources = [
+                s for s in sources
+                if str(getattr(s, "name", "")).strip().lower() == "akshare"
+            ]
+            if ak_sources:
+                sources = ak_sources
+            elif include_localdb:
+                sources = [
+                    s for s in self._all_sources
+                    if str(getattr(s, "name", "")).strip().lower() == "localdb"
+                ]
+            # If include_localdb is False, keep original non-local sources as
+            # best-effort fallback instead of collapsing to empty.
 
-            sources.sort(key=lambda s: (
-                0 if s.name == preferred else
-                1 if s.name == "localdb" else 2,
-                s.priority,
-            ))
+        if not sources:
+            log.warning("No allowed sources for %s (%s)", inst.get("symbol"), interval)
+            return pd.DataFrame()
+
+        # Helpful signal when iTick policy could not be applied at runtime.
+        source_names_now = [
+            str(getattr(s, "name", "")).strip().lower() for s in sources
+        ]
+        if (
+            inst.get("market") == "CN"
+            and inst.get("asset") == "EQUITY"
+            and "itick" not in source_names_now
+            and "itick" not in original_source_names
+        ):
+            log.debug(
+                "iTick not active for %s (%s); fallback sources=%s",
+                inst.get("symbol"),
+                interval,
+                source_names_now,
+            )
 
         log.debug(
             "Sources for %s (%s): %s",
@@ -1995,10 +800,11 @@ class DataFetcher:
                 return pd.DataFrame()
 
             # Merge: later sources fill gaps only (primary source rows win)
-            # Sort collected by score descending so best source is last (wins in dedup)
+            # Sort by score descending so best source rows are kept first during dedup.
             collected_by_score = sorted(
                 collected,
                 key=lambda item: float(dict(item.get("quality") or {}).get("score", 0.0)),
+                reverse=True,
             )
             merged_parts = [item["df"] for item in collected_by_score if not item["df"].empty]
             merged = self._clean_dataframe(
@@ -2141,7 +947,303 @@ class DataFetcher:
             from zoneinfo import ZoneInfo
             return datetime.now(tz=ZoneInfo("Asia/Shanghai")).replace(tzinfo=None)
         except Exception:
-            return datetime.utcnow()
+            # zoneinfo may be unavailable; keep Shanghai wall-clock fallback.
+            return datetime.now(
+                tz=timezone(timedelta(hours=8))
+            ).replace(tzinfo=None)
+
+    def _get_refresh_reconcile_lock(self) -> threading.RLock:
+        lock = getattr(self, "_refresh_reconcile_lock", None)
+        if hasattr(lock, "acquire") and hasattr(lock, "release"):
+            return lock
+        lock = threading.RLock()
+        self._refresh_reconcile_lock = lock
+        return lock
+
+    def _get_refresh_reconcile_path(self) -> Path:
+        path = getattr(self, "_refresh_reconcile_path", None)
+        if isinstance(path, Path):
+            return path
+        path = Path(CONFIG.data_dir) / "refresh_reconcile_queue.json"
+        self._refresh_reconcile_path = path
+        return path
+
+    def _refresh_reconcile_key(self, code: str, interval: str) -> str:
+        code6 = self.clean_code(code)
+        iv = self._normalize_interval_token(interval)
+        return f"{code6}:{iv}" if code6 else ""
+
+    def _load_refresh_reconcile_queue(self) -> dict[str, dict[str, object]]:
+        """Load pending refresh reconcile tasks from disk."""
+        path = self._get_refresh_reconcile_path()
+        lock = self._get_refresh_reconcile_lock()
+        with lock:
+            if not path.exists():
+                return {}
+            try:
+                raw = json.loads(path.read_text(encoding="utf-8"))
+            except Exception:
+                return {}
+        payload = raw.get("pending", raw) if isinstance(raw, dict) else {}
+        if not isinstance(payload, dict):
+            return {}
+
+        out: dict[str, dict[str, object]] = {}
+        for key, value in payload.items():
+            if not isinstance(value, dict):
+                continue
+            code_hint = value.get("code")
+            iv_hint = value.get("interval")
+            if not code_hint and isinstance(key, str) and ":" in key:
+                code_hint = key.split(":", 1)[0]
+            if not iv_hint and isinstance(key, str) and ":" in key:
+                iv_hint = key.split(":", 1)[1]
+            code6 = self.clean_code(str(code_hint or ""))
+            iv = self._normalize_interval_token(str(iv_hint or "1m"))
+            if not code6:
+                continue
+            qkey = self._refresh_reconcile_key(code6, iv)
+            if not qkey:
+                continue
+            out[qkey] = {
+                "code": code6,
+                "interval": iv,
+                "pending_since": str(value.get("pending_since") or ""),
+                "attempts": int(value.get("attempts", 0) or 0),
+                "last_attempt_at": str(value.get("last_attempt_at") or ""),
+                "last_error": str(value.get("last_error") or ""),
+            }
+        return out
+
+    def _save_refresh_reconcile_queue(self, queue: dict[str, dict[str, object]]) -> None:
+        """Persist pending refresh reconcile tasks to disk."""
+        path = self._get_refresh_reconcile_path()
+        lock = self._get_refresh_reconcile_lock()
+        payload = {
+            "updated_at": datetime.now().isoformat(timespec="seconds"),
+            "pending": dict(queue or {}),
+        }
+        with lock:
+            try:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                tmp = path.with_suffix(".tmp")
+                tmp.write_text(
+                    json.dumps(payload, ensure_ascii=True, indent=2),
+                    encoding="utf-8",
+                )
+                tmp.replace(path)
+            except Exception as exc:
+                log.debug("Failed saving refresh reconcile queue: %s", exc)
+
+    def _mark_refresh_reconcile_pending(
+        self,
+        queue: dict[str, dict[str, object]],
+        code: str,
+        interval: str,
+        *,
+        error_text: str,
+    ) -> bool:
+        key = self._refresh_reconcile_key(code, interval)
+        code6 = self.clean_code(code)
+        iv = self._normalize_interval_token(interval)
+        if not key or not code6:
+            return False
+        prev = dict(queue.get(key) or {})
+        attempts = int(prev.get("attempts", 0) or 0) + 1
+        pending_since = str(
+            prev.get("pending_since") or datetime.now().isoformat(timespec="seconds")
+        )
+        entry = {
+            "code": code6,
+            "interval": iv,
+            "pending_since": pending_since,
+            "attempts": attempts,
+            "last_attempt_at": datetime.now().isoformat(timespec="seconds"),
+            "last_error": str(error_text or ""),
+        }
+        if prev == entry:
+            return False
+        queue[key] = entry
+        return True
+
+    def _clear_refresh_reconcile_pending(
+        self,
+        queue: dict[str, dict[str, object]],
+        code: str,
+        interval: str,
+    ) -> bool:
+        key = self._refresh_reconcile_key(code, interval)
+        if not key:
+            return False
+        return queue.pop(key, None) is not None
+
+    def get_pending_reconcile_entries(
+        self,
+        interval: str | None = None,
+    ) -> dict[str, dict[str, object]]:
+        """Return pending reconcile entries, optionally filtered by interval."""
+        queue = self._load_refresh_reconcile_queue()
+        iv_filter = self._normalize_interval_token(interval) if interval else ""
+        if not iv_filter:
+            return dict(queue)
+
+        out: dict[str, dict[str, object]] = {}
+        for key, entry in queue.items():
+            iv = self._normalize_interval_token(entry.get("interval") if isinstance(entry, dict) else "")
+            if iv != iv_filter:
+                continue
+            out[str(key)] = dict(entry)
+        return out
+
+    def get_pending_reconcile_codes(
+        self,
+        interval: str | None = None,
+    ) -> list[str]:
+        """Return sorted unique stock codes that still need reconcile."""
+        entries = self.get_pending_reconcile_entries(interval=interval)
+        seen: set[str] = set()
+        out: list[str] = []
+        for entry in entries.values():
+            code6 = self.clean_code(str(entry.get("code") if isinstance(entry, dict) else ""))
+            if not code6 or code6 in seen:
+                continue
+            seen.add(code6)
+            out.append(code6)
+        return sorted(out)
+
+    def reconcile_pending_cache_sync(
+        self,
+        *,
+        codes: list[str] | None = None,
+        interval: str = "1m",
+        db_limit: int | None = None,
+    ) -> dict[str, object]:
+        """
+        Attempt to heal pending DB->session-cache sync debt without network fetches.
+
+        Reads pending queue entries, writes existing DB bars into session cache, and
+        clears successfully reconciled entries.
+        """
+        iv = self._normalize_interval_token(interval)
+        intraday = iv not in {"1d", "1wk", "1mo"}
+        queue = self._load_refresh_reconcile_queue()
+
+        target_codes = {
+            self.clean_code(x)
+            for x in list(codes or [])
+            if self.clean_code(x)
+        }
+        pending_items: list[tuple[str, dict[str, object]]] = []
+        for key, entry in queue.items():
+            if not isinstance(entry, dict):
+                continue
+            code6 = self.clean_code(str(entry.get("code") or ""))
+            if not code6:
+                continue
+            entry_iv = self._normalize_interval_token(str(entry.get("interval") or "1m"))
+            if entry_iv != iv:
+                continue
+            if target_codes and code6 not in target_codes:
+                continue
+            pending_items.append((str(key), dict(entry)))
+
+        report: dict[str, object] = {
+            "interval": iv,
+            "queued_before": int(len(queue)),
+            "targeted": int(len(pending_items)),
+            "reconciled": 0,
+            "failed": 0,
+            "errors": {},
+            "remaining": int(len(queue)),
+        }
+        if not pending_items:
+            return report
+
+        try:
+            session_cache = get_session_bar_cache()
+        except Exception as exc:
+            session_cache = None
+            report["errors"] = {"_session_cache": str(exc)}
+            report["failed"] = int(len(pending_items))
+            return report
+
+        if session_cache is None:
+            report["errors"] = {"_session_cache": "unavailable"}
+            report["failed"] = int(len(pending_items))
+            return report
+
+        rows_limit = int(max(1, db_limit or (12000 if intraday else 2400)))
+        changed = False
+        errors: dict[str, str] = {}
+        now_iso = datetime.now().isoformat(timespec="seconds")
+        market_open = bool(CONFIG.is_market_open())
+
+        for key, entry in pending_items:
+            code6 = self.clean_code(str(entry.get("code") or ""))
+            if not code6:
+                continue
+            try:
+                if intraday:
+                    db_frame = self._clean_dataframe(
+                        self._db.get_intraday_bars(code6, interval=iv, limit=rows_limit),
+                        interval=iv,
+                    )
+                    db_frame = self._filter_cn_intraday_session(db_frame, iv)
+                else:
+                    db_frame = self._clean_dataframe(
+                        self._db.get_bars(code6, limit=rows_limit),
+                        interval="1d",
+                    )
+                    db_frame = self._resample_daily_to_interval(db_frame, iv)
+
+                if db_frame.empty:
+                    raise RuntimeError("no_db_rows_for_reconcile")
+
+                session_cache.upsert_history_frame(
+                    code6,
+                    iv,
+                    db_frame,
+                    source="itick",
+                    is_final=True,
+                )
+
+                if intraday and (not market_open):
+                    try:
+                        markers = session_cache.describe_symbol_interval(code6, iv)
+                        rt_anchor = markers.get("first_realtime_after_akshare_ts")
+                        if rt_anchor is not None:
+                            session_cache.purge_realtime_rows(
+                                code6,
+                                iv,
+                                since_ts=rt_anchor,
+                            )
+                    except Exception:
+                        pass
+
+                if queue.pop(key, None) is not None:
+                    changed = True
+                report["reconciled"] = int(report.get("reconciled", 0)) + 1
+            except Exception as exc:
+                msg = str(exc)
+                errors[code6] = msg
+                report["failed"] = int(report.get("failed", 0)) + 1
+                self._mark_refresh_reconcile_pending(
+                    queue,
+                    code6,
+                    iv,
+                    error_text=msg,
+                )
+                current_key = self._refresh_reconcile_key(code6, iv)
+                if current_key and current_key in queue:
+                    queue[current_key]["last_attempt_at"] = now_iso
+                changed = True
+
+        if changed:
+            self._save_refresh_reconcile_queue(queue)
+
+        report["errors"] = errors
+        report["remaining"] = int(len(queue))
+        return report
 
     @staticmethod
     def _intraday_quality_caps(
@@ -2151,7 +1253,7 @@ class DataFetcher:
         Return (body_cap, span_cap, wick_cap, jump_cap) for intraday cleanup.
 
         Values are deliberately generous to avoid corrupting legitimate price
-        moves (China A-shares can move ±10% intraday; ST stocks ±5%).
+        moves (China A-shares can move +/-10% intraday; ST stocks +/-5%).
         Only truly malformed bars are removed.
         """
         iv = DataFetcher._normalize_interval_token(interval)
@@ -2179,7 +1281,13 @@ class DataFetcher:
                 "suspect": True,
             }
 
-        out = cls._clean_dataframe(df, interval=interval)
+        out = cls._clean_dataframe(
+            df,
+            interval=interval,
+            preserve_truth=True,
+            aggressive_repairs=False,
+            allow_synthetic_index=False,
+        )
         if out.empty:
             return {
                 "score": 0.0, "rows": 0.0,
@@ -2257,7 +1365,7 @@ class DataFetcher:
     @classmethod
     def _to_shanghai_naive_ts(cls, value: object) -> pd.Timestamp:
         """
-        Parse one timestamp-like value → Asia/Shanghai naive time.
+        Parse one timestamp-like value -> Asia/Shanghai naive time.
         Returns NaT on failure.
         """
         if value is None:
@@ -2336,29 +1444,49 @@ class DataFetcher:
         if valid_ratio < 0.80:
             return None
         return dt
-
     @classmethod
     def _clean_dataframe(
         cls,
         df: pd.DataFrame,
         interval: str | None = None,
+        *,
+        preserve_truth: bool | None = None,
+        aggressive_repairs: bool | None = None,
+        allow_synthetic_index: bool | None = None,
     ) -> pd.DataFrame:
         """
         Standardize and validate an OHLCV dataframe.
 
-        Key fixes vs original:
-        - Intraday caps are generous (won't corrupt legitimate ±10% moves)
-        - Stale bar removal keeps every 10th bar to preserve continuity
-        - Deduplication keeps LAST occurrence (newest fetch wins on merge)
-        - Jump correction only clips bars that are truly impossible (>20%)
+        Defaults are truth-preserving:
+        - no synthetic intraday timestamps unless explicitly enabled
+        - no aggressive intraday mutation unless explicitly enabled
+        - duplicate timestamps keep first occurrence by default
         """
         if df is None or df.empty:
             return pd.DataFrame()
 
+        if preserve_truth is None:
+            preserve_truth = bool(
+                getattr(CONFIG.data, "truth_preserving_cleaning", True)
+            )
+        if aggressive_repairs is None:
+            aggressive_repairs = bool(
+                getattr(CONFIG.data, "aggressive_intraday_repair", False)
+            )
+        if allow_synthetic_index is None:
+            allow_synthetic_index = bool(
+                getattr(CONFIG.data, "synthesize_intraday_index", False)
+            )
+
+        preserve_truth = bool(preserve_truth)
+        aggressive_repairs = bool(aggressive_repairs)
+        allow_synthetic_index = bool(allow_synthetic_index)
+
         out = df.copy()
         iv = cls._normalize_interval_token(interval)
+        is_intraday = iv not in {"1d", "1wk", "1mo"}
 
-        # ── 1. Index → DatetimeIndex ──────────────────────────────────────────
+        # 1) Normalize index to DatetimeIndex when reliable.
         norm_idx = cls._normalize_datetime_index(out.index)
         has_dt_index = norm_idx is not None
         if norm_idx is not None:
@@ -2398,28 +1526,22 @@ class DataFetcher:
                 out.index = parsed_dt
                 has_dt_index = isinstance(out.index, pd.DatetimeIndex)
             else:
-                if iv not in {"1d", "1wk", "1mo"} and len(out) > 0:
-                    step = int(max(1, cls._interval_seconds(iv)))
-                    end = cls._now_shanghai_naive()
-                    out.index = pd.date_range(
-                        end=end, periods=len(out), freq=f"{step}s"
-                    )
-                    has_dt_index = True
-                else:
-                    out = out.reset_index(drop=True)
+                if is_intraday and preserve_truth:
+                    return pd.DataFrame()
+                out = out.reset_index(drop=True)
 
-        # ── 2. Deduplicate & sort ─────────────────────────────────────────────
+        # 2) Deduplicate and order.
         if has_dt_index:
             out = out[~out.index.isna()]
-            # keep="last" means newest fetch wins when merging multiple sources
-            out = out[~out.index.duplicated(keep="last")].sort_index()
+            keep_mode = "first" if preserve_truth else "last"
+            out = out[~out.index.duplicated(keep=keep_mode)].sort_index()
 
-        # ── 3. Numeric coercion ───────────────────────────────────────────────
+        # 3) Numeric coercion.
         for c in ("open", "high", "low", "close", "volume", "amount"):
             if c in out.columns:
                 out[c] = pd.to_numeric(out[c], errors="coerce")
 
-        # ── 4. Basic close validity ───────────────────────────────────────────
+        # 4) Basic close validity.
         if "close" not in out.columns:
             return pd.DataFrame()
         out = out.dropna(subset=["close"])
@@ -2427,13 +1549,13 @@ class DataFetcher:
         if out.empty:
             return pd.DataFrame()
 
-        # ── 5. Repair open=0 ─────────────────────────────────────────────────
+        # 5) Minimal open repair.
         if "open" not in out.columns:
             out["open"] = out["close"]
         out["open"] = pd.to_numeric(out["open"], errors="coerce").fillna(0.0)
         out["open"] = out["open"].where(out["open"] > 0, out["close"])
 
-        # ── 6. Repair high/low ────────────────────────────────────────────────
+        # 6) Minimal high/low repair.
         if "high" not in out.columns:
             out["high"] = out[["open", "close"]].max(axis=1)
         else:
@@ -2444,7 +1566,6 @@ class DataFetcher:
         else:
             out["low"] = pd.to_numeric(out["low"], errors="coerce")
 
-        # Ensure OHLC consistency
         out["high"] = pd.concat(
             [out["high"], out["open"], out["close"]], axis=1
         ).max(axis=1)
@@ -2452,102 +1573,20 @@ class DataFetcher:
             [out["low"], out["open"], out["close"]], axis=1
         ).min(axis=1)
 
-        # ── 7. Intraday-specific cleanup ──────────────────────────────────────
-        is_intraday = iv not in {"1d", "1wk", "1mo"}
-        if is_intraday:
-            body_cap, span_cap, wick_cap, jump_cap = cls._intraday_quality_caps(iv)
-            close_safe = out["close"].clip(lower=1e-8)
+        # 7) Aggressive intraday mutation is disabled to preserve raw source truth.
+        _ = aggressive_repairs
 
-            # 7a. Fix wildly wrong open (body > cap × 3 means provider glitch)
-            body_ratio = (out["open"] - out["close"]).abs() / close_safe
-            bad_open = body_ratio > (float(body_cap) * 3.0)
-            if bad_open.any():
-                out.loc[bad_open, "open"] = out.loc[bad_open, "close"]
-
-            # Re-compute after open fix
-            oc_top = out[["open", "close"]].max(axis=1)
-            oc_bot = out[["open", "close"]].min(axis=1)
-            out["high"] = pd.concat([out["high"], oc_top], axis=1).max(axis=1)
-            out["low"]  = pd.concat([out["low"],  oc_bot], axis=1).min(axis=1)
-
-            # 7b. Fix extreme wicks/spans (cap × 3)
-            upper_wick = (out["high"] - oc_top).clip(lower=0.0) / close_safe
-            lower_wick = (oc_bot - out["low"]).clip(lower=0.0) / close_safe
-            span_ratio = (out["high"] - out["low"]).abs() / close_safe
-            bad_shape = (
-                (span_ratio  > float(span_cap)  * 3.0)
-                | (upper_wick > float(wick_cap)  * 3.0)
-                | (lower_wick > float(wick_cap)  * 3.0)
-            )
-            if bad_shape.any():
-                wick_allow = close_safe * float(wick_cap)
-                out.loc[bad_shape, "high"] = (oc_top + wick_allow)[bad_shape]
-                out.loc[bad_shape, "low"]  = (oc_bot - wick_allow)[bad_shape]
-                out["high"] = pd.concat([out["high"], oc_top], axis=1).max(axis=1)
-                out["low"]  = pd.concat([out["low"],  oc_bot], axis=1).min(axis=1)
-
-            # 7c. Fix impossible inter-bar jumps (only intra-day, skip day boundary)
-            prev_close = out["close"].shift(1)
-            prev_safe  = prev_close.where(prev_close > 0, np.nan)
-            jump_ratio = (out["close"] / prev_safe - 1.0).abs()
-            # China limit ≈ 10% (20% for some instruments); use jump_cap from caps
-            bad_jump = jump_ratio > float(jump_cap)
-            if isinstance(out.index, pd.DatetimeIndex):
-                day_change = (
-                    pd.Series(out.index.normalize(), index=out.index)
-                    .diff()
-                    .ne(pd.Timedelta(0))
-                )
-                bad_jump = bad_jump & (~day_change.fillna(False))
-            bad_jump = bad_jump.fillna(False)
-            if bad_jump.any():
-                prev_vals = prev_close[bad_jump].astype(float)
-                curr_vals = out.loc[bad_jump, "close"].astype(float)
-                signs  = np.where(curr_vals >= prev_vals, 1.0, -1.0)
-                clipped = prev_vals * (1.0 + signs * float(jump_cap))
-                out.loc[bad_jump, "close"] = clipped.values
-                out.loc[bad_jump, "open"]  = prev_vals.values
-                close_safe2 = out["close"].clip(lower=1e-8)
-                oc_top2 = out[["open", "close"]].max(axis=1)
-                oc_bot2 = out[["open", "close"]].min(axis=1)
-                wick_allow2 = close_safe2 * float(wick_cap)
-                out.loc[bad_jump, "high"] = np.minimum(
-                    out.loc[bad_jump, "high"],
-                    (oc_top2 + wick_allow2)[bad_jump],
-                )
-                out.loc[bad_jump, "low"] = np.maximum(
-                    out.loc[bad_jump, "low"],
-                    (oc_bot2 - wick_allow2)[bad_jump],
-                )
-                out["high"] = pd.concat([out["high"], oc_top2], axis=1).max(axis=1)
-                out["low"]  = pd.concat([out["low"],  oc_bot2], axis=1).min(axis=1)
-
-            # 7d. Remove consecutive stale bars (keep every 10th for continuity)
-            vol_s = (
-                out["volume"] if "volume" in out.columns
-                else pd.Series(0.0, index=out.index)
-            )
-            close_safe3 = out["close"].clip(lower=1e-8)
-            same_close3 = out["close"].diff().abs() <= (close_safe3 * 1e-6)
-            flat_body3  = (out["open"] - out["close"]).abs() <= (close_safe3 * 1e-6)
-            flat_span3  = (out["high"] - out["low"]).abs() <= (close_safe3 * 2e-6)
-            stale_flat3 = same_close3 & flat_body3 & flat_span3 & (vol_s.fillna(0) <= 0)
-            if stale_flat3.any():
-                group_key  = stale_flat3.ne(stale_flat3.shift(fill_value=False)).cumsum()
-                stale_pos  = stale_flat3.groupby(group_key).cumcount()
-                drop_mask  = stale_flat3 & (stale_pos % 10 != 0)
-                if drop_mask.any():
-                    out = out.loc[~drop_mask]
-
-        # ── 8. Volume ≥ 0 ────────────────────────────────────────────────────
+        # 8) Volume >= 0.
         if "volume" in out.columns:
             out = out[out["volume"].fillna(0) >= 0]
+        else:
+            out["volume"] = 0.0
 
-        # ── 9. high ≥ low ────────────────────────────────────────────────────
+        # 9) high >= low.
         if "high" in out.columns and "low" in out.columns:
             out = out[out["high"].fillna(0) >= out["low"].fillna(0)]
 
-        # ── 10. Derive amount if missing ─────────────────────────────────────
+        # 10) Derive amount if missing.
         if (
             "amount" not in out.columns
             and "close" in out.columns
@@ -2555,18 +1594,34 @@ class DataFetcher:
         ):
             out["amount"] = out["close"] * out["volume"]
 
-        # ── 11. Final cleanup ─────────────────────────────────────────────────
+        # 11) Final cleanup.
         out = out.replace([np.inf, -np.inf], np.nan)
         ohlc_cols = [c for c in ("open", "high", "low", "close") if c in out.columns]
-        if ohlc_cols:
+        if not ohlc_cols:
+            return pd.DataFrame()
+
+        if preserve_truth:
+            out = out.dropna(subset=ohlc_cols)
+            if out.empty:
+                return pd.DataFrame()
+            if "volume" in out.columns:
+                out["volume"] = pd.to_numeric(out["volume"], errors="coerce").fillna(0.0)
+                out = out[out["volume"] >= 0]
+            if "amount" in out.columns:
+                out["amount"] = pd.to_numeric(out["amount"], errors="coerce").fillna(0.0)
+        else:
             out[ohlc_cols] = out[ohlc_cols].ffill().bfill()
-        out = out.fillna(0)
+            out = out.fillna(0)
+
+        if has_dt_index:
+            keep_mode = "first" if preserve_truth else "last"
+            out = out[~out.index.duplicated(keep=keep_mode)].sort_index()
 
         return out
 
-    # ─────────────────────────────────────────────────────────────────────────
+    # ------------------------------------------------------------------
     # History orchestration (unchanged logic, minor robustness improvements)
-    # ─────────────────────────────────────────────────────────────────────────
+    # ------------------------------------------------------------------
 
     def get_history(
         self,
@@ -2581,7 +1636,7 @@ class DataFetcher:
         allow_online: bool = True,
         refresh_intraday_after_close: bool = False,
     ) -> pd.DataFrame:
-        """Unified history fetcher. Priority: cache → local DB → online."""
+        """Unified history fetcher. Priority: cache -> local DB -> online."""
         from core.instruments import instrument_key, parse_instrument
 
         inst = instrument or parse_instrument(code)
@@ -2635,14 +1690,15 @@ class DataFetcher:
                     return cached_df.tail(count)
 
         session_df = pd.DataFrame()
-        if not force_exact_intraday:
+        use_session_history = bool((not force_exact_intraday) and (not is_cn_equity))
+        if use_session_history:
             session_df = self._get_session_history(
                 symbol=str(inst.get("symbol", code)),
                 interval=interval,
                 bars=count,
             )
         if (
-            not force_exact_intraday
+            use_session_history
             and interval in _INTRADAY_INTERVALS
             and not session_df.empty
             and count <= 500
@@ -2896,7 +1952,7 @@ class DataFetcher:
         *,
         persist_intraday_db: bool = True,
     ) -> pd.DataFrame:
-        """Handle CN equity intraday intervals."""
+        """Handle CN equity intraday intervals (iTick-first online path)."""
         code6 = str(inst["symbol"]).zfill(6)
         db_df = pd.DataFrame()
         db_limit = int(max(count * 3, count + 600))
@@ -2907,6 +1963,7 @@ class DataFetcher:
                 ),
                 interval=interval,
             )
+            db_df = self._filter_cn_intraday_session(db_df, interval)
         except Exception as exc:
             log.warning(
                 "Intraday DB read failed for %s (%s): %s",
@@ -2921,32 +1978,29 @@ class DataFetcher:
             )
             online_df = self._filter_cn_intraday_session(online_df, interval)
 
-        baseline_df = self._merge_parts(db_df, session_df, interval=interval)
-        if (
-            not offline
-            and not online_df.empty
-            and not self._accept_online_intraday_snapshot(
-                symbol=code6, interval=interval,
-                online_df=online_df, baseline_df=baseline_df,
-            )
-        ):
-            online_df = pd.DataFrame()
+        if online_df is not None and (not online_df.empty):
+            if not self._accept_online_intraday_snapshot(
+                symbol=code6,
+                interval=interval,
+                online_df=online_df,
+                baseline_df=db_df,
+            ):
+                online_df = pd.DataFrame()
 
-        if offline:
-            merged = self._merge_parts(db_df, session_df, interval=interval)
-        else:
-            merged = self._merge_parts(
-                db_df, session_df, online_df, interval=interval
-            )
+        if offline or online_df.empty:
+            if db_df.empty:
+                return pd.DataFrame()
+            return self._cache_tail(cache_key, db_df, count)
+
+        merged = self._merge_parts(db_df, online_df, interval=interval)
         merged = self._filter_cn_intraday_session(merged, interval)
-
         if merged.empty:
             return pd.DataFrame()
 
         out = self._cache_tail(cache_key, merged, count)
         if bool(persist_intraday_db):
             try:
-                self._db.upsert_intraday_bars(code6, interval, out)
+                self._db.upsert_intraday_bars(code6, interval, online_df)
             except Exception as exc:
                 log.warning(
                     "Intraday DB upsert failed for %s (%s): %s",
@@ -2963,7 +2017,7 @@ class DataFetcher:
         cache_key: str,
         offline: bool,
     ) -> pd.DataFrame:
-        """Post-close exact mode: prefer online bars, update DB."""
+        """Post-close exact mode: iTick-first online bars, update DB."""
         code6 = str(inst["symbol"]).zfill(6)
         online_df = pd.DataFrame()
         if not offline:
@@ -2989,16 +2043,6 @@ class DataFetcher:
                 code6, interval, exc,
             )
 
-        if (
-            not offline
-            and not online_df.empty
-            and not self._accept_online_intraday_snapshot(
-                symbol=code6, interval=interval,
-                online_df=online_df, baseline_df=db_df,
-            )
-        ):
-            online_df = pd.DataFrame()
-
         if online_df is None or online_df.empty:
             if db_df is None or db_df.empty:
                 return pd.DataFrame()
@@ -3011,7 +2055,7 @@ class DataFetcher:
 
         out = self._cache_tail(cache_key, merged, count)
         try:
-            self._db.upsert_intraday_bars(code6, interval, out)
+            self._db.upsert_intraday_bars(code6, interval, online_df)
         except Exception as exc:
             log.warning(
                 "Intraday exact DB upsert failed for %s (%s): %s",
@@ -3030,9 +2074,8 @@ class DataFetcher:
         session_df: pd.DataFrame | None = None,
         interval: str = "1d",
     ) -> pd.DataFrame:
-        """Handle CN equity daily/weekly/monthly intervals."""
+        """Handle CN equity daily/weekly/monthly intervals (iTick-first online path)."""
         iv = self._normalize_interval_token(interval)
-        code6 = str(inst["symbol"]).zfill(6)
         db_limit = (
             int(max(count, fetch_days))
             if iv == "1d"
@@ -3043,16 +2086,9 @@ class DataFetcher:
             interval="1d",
         )
         base_df = self._resample_daily_to_interval(
-            self._merge_parts(db_df, session_df, interval="1d"),
+            db_df,
             iv,
         )
-
-        if (
-            iv == "1d"
-            and len(base_df) >= count
-            and self._db_is_fresh_enough(code6, max_lag_days=3)
-        ):
-            return self._cache_tail(cache_key, base_df, count)
 
         if offline:
             return base_df.tail(count) if not base_df.empty else pd.DataFrame()
@@ -3061,22 +2097,442 @@ class DataFetcher:
             inst=inst, interval=iv,
             requested_count=count, base_fetch_days=fetch_days,
         )
-        merged = self._merge_parts(
-            base_df, online_df, interval=iv
-        )
+        if online_df is None or online_df.empty:
+            return base_df.tail(count) if not base_df.empty else pd.DataFrame()
+
+        merged = self._merge_parts(base_df, online_df, interval=iv)
         if merged.empty:
             return pd.DataFrame()
 
         out = self._cache_tail(cache_key, merged, count)
         if update_db and iv == "1d":
             try:
-                self._db.upsert_bars(inst["symbol"], out)
+                self._db.upsert_bars(inst["symbol"], online_df)
             except Exception as exc:
                 log.warning(
                     "Daily DB upsert failed for %s: %s",
                     str(inst.get("symbol", "")), exc,
                 )
         return out
+
+    def refresh_trained_stock_history(
+        self,
+        codes: list[str],
+        *,
+        interval: str = "1m",
+        window_days: int = 29,
+        allow_online: bool = True,
+        sync_session_cache: bool = True,
+        replace_realtime_after_close: bool = True,
+    ) -> dict[str, object]:
+        """
+        Refresh recent history for trained stocks from iTick and persist to DB.
+
+        Incremental behavior:
+        - Default anchor is the last saved official-history cache timestamp.
+        - If no official-history cache anchor exists, use DB/cache latest timestamp.
+        - After market close, if realtime rows exist and replacement is enabled,
+          fetch from the first realtime timestamp and replace those realtime rows
+          with iTick rows in session cache.
+        """
+        iv = self._normalize_interval_token(interval)
+        wd = max(1, int(window_days or 29))
+        intraday = iv not in {"1d", "1wk", "1mo"}
+        bpd = float(BARS_PER_DAY.get(iv, 1.0) or 1.0)
+        if bpd <= 0:
+            bpd = 1.0
+
+        target_bars = int(max(1, math.ceil(float(wd) * bpd)))
+        db_limit = int(max(target_bars * 2, target_bars + 800))
+        max_api_days = int(max(1, INTERVAL_MAX_DAYS.get(iv, wd)))
+        now = self._now_shanghai_naive()
+        window_start = pd.Timestamp(now - timedelta(days=wd))
+        market_open = bool(CONFIG.is_market_open())
+        do_sync_cache = bool(sync_session_cache)
+
+        session_cache = None
+        if do_sync_cache:
+            try:
+                session_cache = get_session_bar_cache()
+            except Exception as exc:
+                log.debug("Session cache unavailable for refresh: %s", exc)
+                session_cache = None
+
+        codes6 = list(
+            dict.fromkeys(
+                c for c in (self.clean_code(x) for x in list(codes or [])) if c
+            )
+        )
+        report: dict[str, object] = {
+            "interval": iv,
+            "window_days": int(wd),
+            "window_bars": int(target_bars),
+            "total": int(len(codes6)),
+            "completed": 0,
+            "updated": 0,
+            "cached": 0,
+            "rows": {},
+            "fetched_days": {},
+            "purged_realtime_rows": {},
+            "cache_markers": {},
+            "replacement_anchor_used": {},
+            "cache_sync_errors": {},
+            "status": {},
+            "errors": {},
+        }
+        reconcile_queue = self._load_refresh_reconcile_queue()
+        reconcile_dirty = False
+        report["pending_reconcile_before"] = int(len(reconcile_queue))
+        report["pending_reconcile_after"] = int(len(reconcile_queue))
+        report["pending_reconcile_codes"] = sorted(list(reconcile_queue.keys()))
+
+        for idx, code6 in enumerate(codes6, start=1):
+            fetched = pd.DataFrame()
+            fetched_days = int(wd)
+            purged_rows = 0
+            cache_sync_attempted = False
+            cache_sync_errors: list[str] = []
+            pending_key = self._refresh_reconcile_key(code6, iv)
+            had_pending = bool(pending_key and pending_key in reconcile_queue)
+            try:
+                if intraday:
+                    db_df = self._clean_dataframe(
+                        self._db.get_intraday_bars(
+                            code6, interval=iv, limit=db_limit
+                        ),
+                        interval=iv,
+                    )
+                    db_df = self._filter_cn_intraday_session(db_df, iv)
+                else:
+                    db_df = self._clean_dataframe(
+                        self._db.get_bars(code6, limit=db_limit),
+                        interval="1d",
+                    )
+                    db_df = self._resample_daily_to_interval(db_df, iv)
+
+                if (
+                    not db_df.empty
+                    and isinstance(db_df.index, pd.DatetimeIndex)
+                ):
+                    db_recent = db_df.loc[db_df.index >= window_start]
+                else:
+                    db_recent = db_df
+
+                first_rt_ts = None
+                first_rt_after_ak_ts = None
+                last_ak_ts = None
+                last_cache_ts = None
+                purge_required = False
+                purge_attempted = False
+                if intraday and session_cache is not None:
+                    try:
+                        markers = session_cache.describe_symbol_interval(code6, iv)
+                    except Exception as exc:
+                        log.debug(
+                            "Session cache marker read failed for %s (%s): %s",
+                            code6, iv, exc,
+                        )
+                        markers = {}
+                    first_rt_ts = markers.get("first_realtime_ts")
+                    first_rt_after_ak_ts = markers.get("first_realtime_after_akshare_ts")
+                    last_ak_ts = markers.get("last_akshare_ts")
+                    last_cache_ts = markers.get("last_ts")
+                    report_markers = dict(report.get("cache_markers") or {})
+                    report_markers[code6] = {
+                        "first_realtime_ts": (
+                            pd.Timestamp(first_rt_ts).isoformat()
+                            if first_rt_ts is not None
+                            else None
+                        ),
+                        "last_akshare_ts": (
+                            pd.Timestamp(last_ak_ts).isoformat()
+                            if last_ak_ts is not None
+                            else None
+                        ),
+                        "last_cache_ts": (
+                            pd.Timestamp(last_cache_ts).isoformat()
+                            if last_cache_ts is not None
+                            else None
+                        ),
+                        "first_realtime_after_akshare_ts": (
+                            pd.Timestamp(first_rt_after_ak_ts).isoformat()
+                            if first_rt_after_ak_ts is not None
+                            else None
+                        ),
+                    }
+                    report["cache_markers"] = report_markers
+
+                purge_required = bool(
+                    intraday
+                    and bool(replace_realtime_after_close)
+                    and (first_rt_after_ak_ts is not None)
+                )
+
+                replace_realtime = bool(
+                    intraday
+                    and (session_cache is not None)
+                    and (not market_open)
+                    and bool(replace_realtime_after_close)
+                    and (first_rt_after_ak_ts is not None)
+                )
+
+                anchor_ts = None
+                if replace_realtime:
+                    anchor_ts = pd.Timestamp(first_rt_after_ak_ts)
+                elif last_ak_ts is not None:
+                    anchor_ts = pd.Timestamp(last_ak_ts)
+                elif last_cache_ts is not None:
+                    anchor_ts = pd.Timestamp(last_cache_ts)
+                elif (
+                    not db_recent.empty
+                    and isinstance(db_recent.index, pd.DatetimeIndex)
+                ):
+                    anchor_ts = pd.Timestamp(db_recent.index.max())
+                else:
+                    anchor_ts = pd.Timestamp(window_start)
+
+                if anchor_ts is not None:
+                    try:
+                        if anchor_ts.tzinfo is not None:
+                            anchor_ts = anchor_ts.tz_localize(None)
+                    except Exception:
+                        pass
+
+                if (
+                    anchor_ts is not None
+                    and (not replace_realtime)
+                    and (anchor_ts < window_start)
+                ):
+                    anchor_ts = pd.Timestamp(window_start)
+
+                fetched_days = int(wd)
+                if anchor_ts is not None:
+                    try:
+                        gap_seconds = float(
+                            max(
+                                0.0,
+                                (
+                                    now - pd.Timestamp(anchor_ts).to_pydatetime()
+                                ).total_seconds(),
+                            )
+                        )
+                        step_seconds = float(max(60, self._interval_seconds(iv)))
+                        if gap_seconds <= (step_seconds * 1.1):
+                            fetched_days = 1
+                        else:
+                            fetched_days = int(
+                                max(1, math.ceil(gap_seconds / 86400.0) + 1)
+                            )
+                    except Exception:
+                        fetched_days = int(wd)
+                fetched_days = int(min(max(1, fetched_days), max_api_days))
+
+                report_days = dict(report.get("fetched_days") or {})
+                report_days[code6] = int(fetched_days)
+                report["fetched_days"] = report_days
+
+                if bool(allow_online) and (not _is_offline()) and fetched_days > 0:
+                    inst = {"market": "CN", "asset": "EQUITY", "symbol": code6}
+                    fetched = self._fetch_from_sources_instrument(
+                        inst=inst,
+                        days=fetched_days,
+                        interval=iv,
+                        include_localdb=False,
+                    )
+                    fetched = self._clean_dataframe(fetched, interval=iv)
+                    if intraday:
+                        fetched = self._filter_cn_intraday_session(fetched, iv)
+
+                    if (
+                        not fetched.empty
+                        and isinstance(fetched.index, pd.DatetimeIndex)
+                    ):
+                        lower_bound = window_start - pd.Timedelta(days=2)
+                        if anchor_ts is not None:
+                            lower_bound = min(
+                                lower_bound,
+                                pd.Timestamp(anchor_ts) - pd.Timedelta(days=1),
+                            )
+                        fetched = fetched.loc[fetched.index >= lower_bound]
+
+                    if not fetched.empty:
+                        if intraday:
+                            self._db.upsert_intraday_bars(code6, iv, fetched)
+                        else:
+                            self._db.upsert_bars(code6, fetched)
+
+                cache_sync_frame = fetched
+                if (
+                    intraday
+                    and cache_sync_frame.empty
+                    and had_pending
+                    and isinstance(db_recent, pd.DataFrame)
+                    and (not db_recent.empty)
+                    and isinstance(db_recent.index, pd.DatetimeIndex)
+                ):
+                    cache_sync_frame = db_recent.copy()
+
+                if bool(do_sync_cache):
+                    if session_cache is None:
+                        if intraday and (not cache_sync_frame.empty):
+                            cache_sync_errors.append("session_cache_unavailable")
+                    else:
+                        if not cache_sync_frame.empty:
+                            cache_sync_attempted = True
+                            try:
+                                session_cache.upsert_history_frame(
+                                    code6,
+                                    iv,
+                                    cache_sync_frame,
+                                    source="itick",
+                                    is_final=True,
+                                )
+                            except Exception as exc:
+                                msg = str(exc)
+                                cache_sync_errors.append(f"upsert_failed:{msg}")
+                                log.warning(
+                                    "Session cache upsert failed for %s (%s): %s",
+                                    code6,
+                                    iv,
+                                    msg,
+                                )
+
+                        if (
+                            replace_realtime
+                            and (anchor_ts is not None)
+                            and (not cache_sync_frame.empty)
+                        ):
+                            cache_sync_attempted = True
+                            purge_attempted = True
+                            purge_anchor = pd.Timestamp(anchor_ts)
+                            if isinstance(cache_sync_frame.index, pd.DatetimeIndex):
+                                try:
+                                    fetched_min_ts = pd.Timestamp(cache_sync_frame.index.min())
+                                    if fetched_min_ts.tzinfo is not None:
+                                        fetched_min_ts = fetched_min_ts.tz_localize(None)
+                                    if fetched_min_ts > purge_anchor:
+                                        log.warning(
+                                            (
+                                                "Realtime replacement window limited for %s (%s): "
+                                                "requested_anchor=%s, fetched_start=%s; "
+                                                "preserving older realtime cache rows."
+                                            ),
+                                            code6,
+                                            iv,
+                                            purge_anchor.isoformat(),
+                                            fetched_min_ts.isoformat(),
+                                        )
+                                        purge_anchor = fetched_min_ts
+                                except Exception:
+                                    pass
+
+                            report_anchor = dict(report.get("replacement_anchor_used") or {})
+                            report_anchor[code6] = str(purge_anchor.isoformat())
+                            report["replacement_anchor_used"] = report_anchor
+
+                            try:
+                                purged_rows = int(
+                                    session_cache.purge_realtime_rows(
+                                        code6,
+                                        iv,
+                                        since_ts=purge_anchor,
+                                    )
+                                )
+                            except Exception as exc:
+                                msg = str(exc)
+                                cache_sync_errors.append(f"purge_failed:{msg}")
+                                log.debug(
+                                    "Session realtime purge failed for %s (%s): %s",
+                                    code6,
+                                    iv,
+                                    msg,
+                                )
+                                purged_rows = 0
+
+                if cache_sync_errors:
+                    sync_msg = "; ".join(cache_sync_errors)
+                    report_sync = dict(report.get("cache_sync_errors") or {})
+                    report_sync[code6] = sync_msg
+                    report["cache_sync_errors"] = report_sync
+                    if intraday and bool(do_sync_cache) and (not cache_sync_frame.empty):
+                        if self._mark_refresh_reconcile_pending(
+                            reconcile_queue,
+                            code6,
+                            iv,
+                            error_text=sync_msg,
+                        ):
+                            reconcile_dirty = True
+                elif had_pending and cache_sync_attempted and (
+                    (not purge_required) or purge_attempted
+                ):
+                    if self._clear_refresh_reconcile_pending(
+                        reconcile_queue,
+                        code6,
+                        iv,
+                    ):
+                        reconcile_dirty = True
+
+                report_purged = dict(report.get("purged_realtime_rows") or {})
+                report_purged[code6] = int(max(0, purged_rows))
+                report["purged_realtime_rows"] = report_purged
+
+                if intraday:
+                    db_after = self._clean_dataframe(
+                        self._db.get_intraday_bars(
+                            code6, interval=iv, limit=db_limit
+                        ),
+                        interval=iv,
+                    )
+                    db_after = self._filter_cn_intraday_session(db_after, iv)
+                else:
+                    db_after = self._clean_dataframe(
+                        self._db.get_bars(code6, limit=db_limit),
+                        interval="1d",
+                    )
+                    db_after = self._resample_daily_to_interval(db_after, iv)
+
+                if (
+                    not db_after.empty
+                    and isinstance(db_after.index, pd.DatetimeIndex)
+                ):
+                    db_after = db_after.loc[db_after.index >= window_start]
+
+                rows = int(len(db_after.tail(target_bars)))
+                report_rows = dict(report.get("rows") or {})
+                report_rows[code6] = rows
+                report["rows"] = report_rows
+
+                report_status = dict(report.get("status") or {})
+                if not fetched.empty:
+                    report_status[code6] = "updated"
+                    report["updated"] = int(report.get("updated", 0)) + 1
+                elif rows > 0:
+                    report_status[code6] = "cached"
+                    report["cached"] = int(report.get("cached", 0)) + 1
+                else:
+                    report_status[code6] = "empty"
+                report["status"] = report_status
+
+            except Exception as exc:
+                report_status = dict(report.get("status") or {})
+                report_status[code6] = "error"
+                report["status"] = report_status
+                report_errors = dict(report.get("errors") or {})
+                report_errors[code6] = str(exc)
+                report["errors"] = report_errors
+                log.warning(
+                    "Trained-stock history refresh failed for %s (%s): %s",
+                    code6, iv, exc,
+                )
+            finally:
+                report["completed"] = int(idx)
+
+        if reconcile_dirty:
+            self._save_refresh_reconcile_queue(reconcile_queue)
+        report["pending_reconcile_after"] = int(len(reconcile_queue))
+        report["pending_reconcile_codes"] = sorted(list(reconcile_queue.keys()))
+
+        return report
 
     @classmethod
     def _resample_daily_to_interval(
@@ -3287,7 +2743,14 @@ class DataFetcher:
                 log.debug("Failed to fetch %s: %s", code, exc)
                 return code, pd.DataFrame()
 
-        workers = min(max_workers or 2, 2) if interval in _INTRADAY_INTERVALS else min(max_workers or 5, 5)
+        default_workers = 2 if interval in _INTRADAY_INTERVALS else 5
+        cap_workers = 2 if interval in _INTRADAY_INTERVALS else 5
+        requested_workers = default_workers if max_workers is None else int(max_workers)
+        workers = max(1, min(requested_workers, cap_workers))
+        requested_bars = self._resolve_requested_bar_count(
+            days=days, bars=None, interval=interval
+        )
+        min_required_rows = max(1, min(int(CONFIG.data.min_history_days), int(requested_bars)))
 
         with ThreadPoolExecutor(max_workers=workers) as executor:
             futures = {executor.submit(fetch_one, c): c for c in codes}
@@ -3297,7 +2760,7 @@ class DataFetcher:
                     code, df = future.result(timeout=120)
                     if (
                         not df.empty
-                        and len(df) >= CONFIG.data.min_history_days
+                        and len(df) >= min_required_rows
                     ):
                         results[code] = df
                 except Exception as exc:

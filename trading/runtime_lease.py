@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 import threading
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -60,12 +62,63 @@ class FileRuntimeLeaseClient(RuntimeLeaseClient):
     def __init__(self, path: Path, cluster: str):
         self._path = Path(path)
         self._cluster = str(cluster or "execution_engine")
+        self._lock_path = self._path.with_suffix(self._path.suffix + ".lock")
+        self._lock_timeout_s = 5.0
+        self._lock_stale_s = 30.0
 
     def _read(self) -> dict[str, Any]:
         if not self._path.exists():
             return {}
         raw = read_json(self._path)
         return raw if isinstance(raw, dict) else {}
+
+    @contextmanager
+    def _file_guard(self):
+        """
+        Best-effort inter-process lock for file-backed lease updates.
+
+        Uses a sidecar lock file created with O_EXCL so read-modify-write
+        cycles are serialized across processes.
+        """
+        self._path.parent.mkdir(parents=True, exist_ok=True)
+        deadline = time.monotonic() + float(self._lock_timeout_s)
+
+        while True:
+            try:
+                fd = os.open(
+                    str(self._lock_path),
+                    os.O_CREAT | os.O_EXCL | os.O_WRONLY,
+                )
+                try:
+                    payload = f"{os.getpid()} {time.time():.6f}".encode("ascii")
+                    os.write(fd, payload)
+                finally:
+                    os.close(fd)
+                break
+            except FileExistsError as err:
+                try:
+                    age = time.time() - float(self._lock_path.stat().st_mtime)
+                    if age > float(self._lock_stale_s):
+                        self._lock_path.unlink(missing_ok=True)
+                        continue
+                except FileNotFoundError:
+                    continue
+                except Exception:
+                    pass
+
+                if time.monotonic() >= deadline:
+                    raise TimeoutError(
+                        f"lease lock timeout for {self._lock_path.name}"
+                    ) from err
+                time.sleep(0.01)
+
+        try:
+            yield
+        finally:
+            try:
+                self._lock_path.unlink(missing_ok=True)
+            except Exception as e:
+                log.debug("File lease lock cleanup failed (%s): %s", self._lock_path, e)
 
     def _is_stale(self, row: dict[str, Any], now_ts: float) -> bool:
         exp = float(row.get("lease_expires_ts", 0.0) or 0.0)
@@ -97,19 +150,27 @@ class FileRuntimeLeaseClient(RuntimeLeaseClient):
         metadata: dict[str, Any] | None = None,
     ) -> LeaseResult:
         try:
-            self._path.parent.mkdir(parents=True, exist_ok=True)
-            cur = self._read()
-            now_ts = float(time.time())
-            cur_owner = str(cur.get("owner_id", "") or "")
-            if cur_owner and cur_owner != owner_id and not self._is_stale(cur, now_ts):
-                return LeaseResult(ok=False, record=cur)
+            with self._file_guard():
+                cur = self._read()
+                now_ts = float(time.time())
+                cur_owner = str(cur.get("owner_id", "") or "")
+                if cur_owner and cur_owner != owner_id and not self._is_stale(cur, now_ts):
+                    return LeaseResult(ok=False, record=cur)
 
-            gen = int(cur.get("generation", 0) or 0) + 1
-            row = self._row(owner_id=owner_id, generation=gen, ttl_seconds=ttl_seconds, metadata=metadata)
-            atomic_write_json(self._path, row, indent=2)
-            out = self._read()
-            ok = str(out.get("owner_id", "") or "") == str(owner_id) and int(out.get("generation", 0) or 0) == gen
-            return LeaseResult(ok=ok, record=out)
+                gen = int(cur.get("generation", 0) or 0) + 1
+                row = self._row(
+                    owner_id=owner_id,
+                    generation=gen,
+                    ttl_seconds=ttl_seconds,
+                    metadata=metadata,
+                )
+                atomic_write_json(self._path, row, indent=2)
+                out = self._read()
+                ok = (
+                    str(out.get("owner_id", "") or "") == str(owner_id)
+                    and int(out.get("generation", 0) or 0) == gen
+                )
+                return LeaseResult(ok=ok, record=out)
         except Exception as e:
             log.warning("File lease acquire failed: %s", e)
             return LeaseResult(ok=False, record=None)
@@ -121,19 +182,25 @@ class FileRuntimeLeaseClient(RuntimeLeaseClient):
         metadata: dict[str, Any] | None = None,
     ) -> LeaseResult:
         try:
-            cur = self._read()
-            cur_owner = str(cur.get("owner_id", "") or "")
-            if cur_owner != str(owner_id):
-                return LeaseResult(ok=False, record=cur)
+            with self._file_guard():
+                cur = self._read()
+                cur_owner = str(cur.get("owner_id", "") or "")
+                if cur_owner != str(owner_id):
+                    return LeaseResult(ok=False, record=cur)
 
-            gen = int(cur.get("generation", 0) or 0)
-            row = self._row(owner_id=owner_id, generation=gen, ttl_seconds=ttl_seconds, metadata=metadata)
-            # preserve original acquire ts on heartbeat updates
-            acq = float(cur.get("acquired_ts", 0.0) or 0.0)
-            if acq > 0.0:
-                row["acquired_ts"] = acq
-            atomic_write_json(self._path, row, indent=2)
-            return LeaseResult(ok=True, record=self._read())
+                gen = int(cur.get("generation", 0) or 0)
+                row = self._row(
+                    owner_id=owner_id,
+                    generation=gen,
+                    ttl_seconds=ttl_seconds,
+                    metadata=metadata,
+                )
+                # preserve original acquire ts on heartbeat updates
+                acq = float(cur.get("acquired_ts", 0.0) or 0.0)
+                if acq > 0.0:
+                    row["acquired_ts"] = acq
+                atomic_write_json(self._path, row, indent=2)
+                return LeaseResult(ok=True, record=self._read())
         except Exception as e:
             log.warning("File lease refresh failed: %s", e)
             return LeaseResult(ok=False, record=None)
@@ -144,17 +211,18 @@ class FileRuntimeLeaseClient(RuntimeLeaseClient):
         metadata: dict[str, Any] | None = None,
     ) -> None:
         try:
-            cur = self._read()
-            if str(cur.get("owner_id", "") or "") != str(owner_id):
-                return
-            cur["owner_id"] = ""
-            cur["heartbeat_ts"] = float(time.time())
-            cur["lease_expires_ts"] = 0.0
-            cur["released_ts"] = float(time.time())
-            cur["released_by"] = str(owner_id)
-            if metadata:
-                cur["metadata"] = dict(metadata)
-            atomic_write_json(self._path, cur, indent=2)
+            with self._file_guard():
+                cur = self._read()
+                if str(cur.get("owner_id", "") or "") != str(owner_id):
+                    return
+                cur["owner_id"] = ""
+                cur["heartbeat_ts"] = float(time.time())
+                cur["lease_expires_ts"] = 0.0
+                cur["released_ts"] = float(time.time())
+                cur["released_by"] = str(owner_id)
+                if metadata:
+                    cur["metadata"] = dict(metadata)
+                atomic_write_json(self._path, cur, indent=2)
         except Exception as e:
             log.debug("File lease release failed for owner=%s: %s", owner_id, e)
 

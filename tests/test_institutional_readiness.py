@@ -68,3 +68,39 @@ def test_institutional_readiness_flags_missing_controls():
     assert "runtime_lease_enabled" in failed
     assert "strict_live_governance" in failed
     assert "policy_change_ticket" in failed
+
+
+def test_institutional_readiness_parses_string_booleans_safely():
+    sec = SimpleNamespace(
+        enable_runtime_lease="false",
+        runtime_lease_backend="sqlite",
+        runtime_lease_ttl_seconds="10.0",
+        audit_logging="false",
+        audit_hash_chain="false",
+        audit_retention_days="365",
+        require_live_trade_permission="false",
+        require_2fa_for_live="false",
+        strict_live_governance="false",
+        min_live_approvals="2",
+    )
+    policy = {
+        "version": "9.9",
+        "enabled": True,
+        "live_trade": {
+            "min_approvals": 2,
+            "require_distinct_approvers": True,
+            "require_change_ticket": True,
+            "require_business_justification": True,
+            "max_order_notional": 100000.0,
+        },
+    }
+    report = collect_institutional_readiness(
+        security_config=sec,
+        policy_payload=policy,
+    )
+    controls = {c["id"]: c for c in report["controls"]}
+    assert controls["runtime_lease_enabled"]["actual"] == "false"
+    assert controls["runtime_lease_enabled"]["ok"] is False
+    assert controls["audit_logging_enabled"]["ok"] is False
+    assert controls["live_permission_gate"]["ok"] is False
+    assert report["pass"] is False

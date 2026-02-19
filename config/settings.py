@@ -49,6 +49,17 @@ class DataConfig:
     min_history_days: int = 200
     feature_lookback: int = 60
     poll_interval_seconds: float = 1.0
+    # Cleaning defaults prioritize preserving original bar truth.
+    truth_preserving_cleaning: bool = True
+    # Aggressive intraday repair can modify bars and should stay opt-in.
+    aggressive_intraday_repair: bool = False
+    # Synthetic intraday timestamps are disabled by default.
+    synthesize_intraday_index: bool = False
+    # Session cache retention controls (CSV-per-symbol compaction).
+    session_cache_retention_days: int = 45
+    session_cache_max_rows_per_symbol: int = 12000
+    session_cache_compact_every_writes: int = 240
+    session_cache_max_file_mb: float = 8.0
 
 
 @dataclass

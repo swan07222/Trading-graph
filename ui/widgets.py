@@ -59,21 +59,22 @@ class SignalPanel(QFrame):
         down_label = QLabel("DOWN")
         down_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         down_label.setStyleSheet(
-            "color: #f85149; font-weight: bold; font-size: 11px;"
+            "color: #e5534b; font-weight: bold; font-size: 11px;"
         )
         self.prob_down = QProgressBar()
         self.prob_down.setFormat("%p%")
         self.prob_down.setStyleSheet("""
             QProgressBar {
-                background: #21262d;
-                border-radius: 5px;
+                background: #101f34;
+                border: 1px solid #304968;
+                border-radius: 6px;
                 text-align: center;
-                color: white;
+                color: #eaf1ff;
                 height: 20px;
             }
             QProgressBar::chunk {
                 background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                    stop:0 #f85149, stop:1 #da3633);
+                    stop:0 #e5534b, stop:1 #cf3e36);
                 border-radius: 5px;
             }
         """)
@@ -85,21 +86,22 @@ class SignalPanel(QFrame):
         neutral_label = QLabel("NEUTRAL")
         neutral_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         neutral_label.setStyleSheet(
-            "color: #d29922; font-weight: bold; font-size: 11px;"
+            "color: #d8a03a; font-weight: bold; font-size: 11px;"
         )
         self.prob_neutral = QProgressBar()
         self.prob_neutral.setFormat("%p%")
         self.prob_neutral.setStyleSheet("""
             QProgressBar {
-                background: #21262d;
-                border-radius: 5px;
+                background: #101f34;
+                border: 1px solid #304968;
+                border-radius: 6px;
                 text-align: center;
-                color: white;
+                color: #eaf1ff;
                 height: 20px;
             }
             QProgressBar::chunk {
                 background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                    stop:0 #d29922, stop:1 #bb8009);
+                    stop:0 #d8a03a, stop:1 #bd8224);
                 border-radius: 5px;
             }
         """)
@@ -111,21 +113,22 @@ class SignalPanel(QFrame):
         up_label = QLabel("UP")
         up_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         up_label.setStyleSheet(
-            "color: #3fb950; font-weight: bold; font-size: 11px;"
+            "color: #35b57c; font-weight: bold; font-size: 11px;"
         )
         self.prob_up = QProgressBar()
         self.prob_up.setFormat("%p%")
         self.prob_up.setStyleSheet("""
             QProgressBar {
-                background: #21262d;
-                border-radius: 5px;
+                background: #101f34;
+                border: 1px solid #304968;
+                border-radius: 6px;
                 text-align: center;
-                color: white;
+                color: #eaf1ff;
                 height: 20px;
             }
             QProgressBar::chunk {
                 background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                    stop:0 #3fb950, stop:1 #238636);
+                    stop:0 #35b57c, stop:1 #239760);
                 border-radius: 5px;
             }
         """)
@@ -152,11 +155,11 @@ class SignalPanel(QFrame):
         self.setStyleSheet("""
             SignalPanel {
                 background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 #21262d, stop:1 #161b22);
+                    stop:0 #14243d, stop:1 #0f1b2e);
                 border-radius: 12px;
-                border: 2px solid #30363d;
+                border: 2px solid #2b4266;
             }
-            QLabel { color: #8b949e; }
+            QLabel { color: #b8c8e3; }
         """)
 
     @staticmethod
@@ -207,7 +210,7 @@ class SignalPanel(QFrame):
         price = self._safe_float(pred, "current_price")
 
         self.signal_label.setText(sig_text)
-        self.info_label.setText(f"{code} - {name} | ¥{price:.2f}")
+        self.info_label.setText(f"{code} - {name} | CNY {price:.2f}")
 
         prob_down = self._safe_float(pred, "prob_down", 0.33)
         prob_neutral = self._safe_float(pred, "prob_neutral", 0.34)
@@ -227,12 +230,12 @@ class SignalPanel(QFrame):
         if Signal is not None and shares > 0:
             if sig in (Signal.STRONG_BUY, Signal.BUY):
                 self.action_label.setText(
-                    f"BUY {shares:,} shares @ ¥{entry:.2f}\n"
-                    f"Stop Loss: ¥{stop:.2f} | Target: ¥{tgt2:.2f}"
+                    f"BUY {shares:,} shares @ CNY {entry:.2f}\n"
+                    f"Stop Loss: CNY {stop:.2f} | Target: CNY {tgt2:.2f}"
                 )
             elif sig in (Signal.STRONG_SELL, Signal.SELL):
                 self.action_label.setText(
-                    f"SELL {shares:,} shares @ ¥{entry:.2f}"
+                    f"SELL {shares:,} shares @ CNY {entry:.2f}"
                 )
             else:
                 self.action_label.setText(
@@ -262,15 +265,15 @@ class SignalPanel(QFrame):
 
         if Signal is not None:
             colors = {
-                Signal.STRONG_BUY: ("#2ea043", "#0d1117"),
-                Signal.BUY: ("#3fb950", "#0d1117"),
-                Signal.HOLD: ("#d29922", "#0d1117"),
-                Signal.SELL: ("#f85149", "#0d1117"),
-                Signal.STRONG_SELL: ("#da3633", "#0d1117"),
+                Signal.STRONG_BUY: ("#20a56a", "#0c1728"),
+                Signal.BUY: ("#35b57c", "#0c1728"),
+                Signal.HOLD: ("#d8a03a", "#0c1728"),
+                Signal.SELL: ("#e5534b", "#0c1728"),
+                Signal.STRONG_SELL: ("#cf3e36", "#0c1728"),
             }
-            fg, bg = colors.get(sig, ("#c9d1d9", "#21262d"))
+            fg, bg = colors.get(sig, ("#dbe4f3", "#13223a"))
         else:
-            fg, bg = "#c9d1d9", "#21262d"
+            fg, bg = "#dbe4f3", "#13223a"
 
         self.setStyleSheet(f"""
             SignalPanel {{
@@ -357,7 +360,7 @@ class PositionTable(QTableWidget):
             self.setItem(row, 3, avail_item)
 
             avg_cost = self._safe_attr(pos, 'avg_cost', 0.0)
-            cost_item = QTableWidgetItem(f"¥{avg_cost:.2f}")
+            cost_item = QTableWidgetItem(f"CNY {avg_cost:.2f}")
             cost_item.setTextAlignment(
                 Qt.AlignmentFlag.AlignRight
                 | Qt.AlignmentFlag.AlignVCenter
@@ -365,7 +368,7 @@ class PositionTable(QTableWidget):
             self.setItem(row, 4, cost_item)
 
             current_price = self._safe_attr(pos, 'current_price', 0.0)
-            price_item = QTableWidgetItem(f"¥{current_price:.2f}")
+            price_item = QTableWidgetItem(f"CNY {current_price:.2f}")
             price_item.setTextAlignment(
                 Qt.AlignmentFlag.AlignRight
                 | Qt.AlignmentFlag.AlignVCenter
@@ -374,7 +377,7 @@ class PositionTable(QTableWidget):
 
             # P&L
             unrealized_pnl = self._safe_attr(pos, 'unrealized_pnl', 0.0)
-            pnl_item = QTableWidgetItem(f"¥{unrealized_pnl:+,.2f}")
+            pnl_item = QTableWidgetItem(f"CNY {unrealized_pnl:+,.2f}")
             pnl_item.setTextAlignment(
                 Qt.AlignmentFlag.AlignRight
                 | Qt.AlignmentFlag.AlignVCenter
@@ -394,9 +397,9 @@ class PositionTable(QTableWidget):
 
             # Color based on profit/loss
             if unrealized_pnl >= 0:
-                color = QColor("#3fb950")
+                color = QColor("#35b57c")
             else:
-                color = QColor("#f85149")
+                color = QColor("#e5534b")
 
             pnl_item.setForeground(color)
             pnl_pct_item.setForeground(color)
@@ -417,10 +420,10 @@ class LogWidget(QTextEdit):
         self.setMaximumHeight(200)
         self.setStyleSheet("""
             QTextEdit {
-                background: #0d1117;
-                color: #7ee787;
-                border: 1px solid #30363d;
-                border-radius: 6px;
+                background: #0c1728;
+                color: #cde8d7;
+                border: 1px solid #253754;
+                border-radius: 8px;
                 padding: 5px;
             }
         """)
@@ -429,28 +432,28 @@ class LogWidget(QTextEdit):
     def log(self, message: str, level: str = "info"):
         """Add log message with color coding"""
         colors = {
-            "info": "#7ee787",
-            "warning": "#d29922",
-            "error": "#f85149",
-            "success": "#3fb950",
-            "debug": "#8b949e",
+            "info": "#95e8bf",
+            "warning": "#d8a03a",
+            "error": "#e5534b",
+            "success": "#35b57c",
+            "debug": "#9ab8ea",
         }
 
         icons = {
-            "info": "ℹ️",
-            "warning": "⚠️",
-            "error": "❌",
-            "success": "✅",
-            "debug": "🔧",
+            "info": "[I]",
+            "warning": "[!]",
+            "error": "[X]",
+            "success": "[OK]",
+            "debug": "[D]",
         }
 
-        color = colors.get(level, "#c9d1d9")
-        icon = icons.get(level, "•")
+        color = colors.get(level, "#dbe4f3")
+        icon = icons.get(level, "[.]")
 
         ts = datetime.now().strftime("%H:%M:%S")
 
         self.append(
-            f'<span style="color:#484f58">[{ts}]</span> '
+            f'<span style="color:#7b8ca7">[{ts}]</span> '
             f'<span style="color:{color}">{icon} {message}</span>'
         )
 
@@ -527,9 +530,9 @@ class MetricCard(QFrame):
         self.setStyleSheet("""
             MetricCard {
                 background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
-                    stop:0 #21262d, stop:1 #161b22);
+                    stop:0 #14243d, stop:1 #0f1b2e);
                 border-radius: 10px;
-                border: 1px solid #30363d;
+                border: 1px solid #2f4466;
                 padding: 15px;
             }
         """)
@@ -540,12 +543,12 @@ class MetricCard(QFrame):
 
         title_text = f"{icon} {title}" if icon else title
         title_label = QLabel(title_text)
-        title_label.setStyleSheet("color: #8b949e; font-size: 12px;")
+        title_label.setStyleSheet("color: #aac3ec; font-size: 12px;")
         layout.addWidget(title_label)
 
         self.value_label = QLabel(str(value))
         self.value_label.setStyleSheet("""
-            color: #58a6ff;
+            color: #79a6ff;
             font-size: 24px;
             font-weight: bold;
         """)
@@ -577,9 +580,9 @@ class TradingStatusBar(QFrame):
     def _setup_ui(self):
         self.setStyleSheet("""
             TradingStatusBar {
-                background: #161b22;
+                background: #0f1b2e;
                 border-radius: 8px;
-                border: 1px solid #30363d;
+                border: 1px solid #2f4466;
                 padding: 10px;
             }
         """)
@@ -587,22 +590,22 @@ class TradingStatusBar(QFrame):
         layout = QHBoxLayout(self)
         layout.setContentsMargins(15, 10, 15, 10)
 
-        self.connection_label = QLabel("● Disconnected")
+        self.connection_label = QLabel("Disconnected")
         self.connection_label.setStyleSheet(
-            "color: #f85149; font-weight: bold;"
+            "color: #e5534b; font-weight: bold;"
         )
         layout.addWidget(self.connection_label)
 
         layout.addStretch()
 
         self.market_label = QLabel("Market: --")
-        self.market_label.setStyleSheet("color: #8b949e;")
+        self.market_label.setStyleSheet("color: #aac3ec;")
         layout.addWidget(self.market_label)
 
         layout.addStretch()
 
         self.mode_label = QLabel("Mode: Paper Trading")
-        self.mode_label.setStyleSheet("color: #d29922;")
+        self.mode_label.setStyleSheet("color: #d8a03a;")
         layout.addWidget(self.mode_label)
 
     def set_connected(self, connected: bool, mode: str = "paper"):
@@ -611,23 +614,23 @@ class TradingStatusBar(QFrame):
             return
 
         if connected:
-            self.connection_label.setText("● Connected")
+            self.connection_label.setText("Connected")
             self.connection_label.setStyleSheet(
-                "color: #3fb950; font-weight: bold;"
+                "color: #35b57c; font-weight: bold;"
             )
 
             if mode == "live":
-                self.mode_label.setText("⚠️ Mode: LIVE TRADING")
+                self.mode_label.setText("Mode: LIVE TRADING")
                 self.mode_label.setStyleSheet(
-                    "color: #f85149; font-weight: bold;"
+                    "color: #e5534b; font-weight: bold;"
                 )
             else:
                 self.mode_label.setText("Mode: Paper Trading")
-                self.mode_label.setStyleSheet("color: #d29922;")
+                self.mode_label.setStyleSheet("color: #d8a03a;")
         else:
-            self.connection_label.setText("● Disconnected")
+            self.connection_label.setText("Disconnected")
             self.connection_label.setStyleSheet(
-                "color: #f85149; font-weight: bold;"
+                "color: #e5534b; font-weight: bold;"
             )
 
     def set_market_status(self, is_open: bool):
@@ -636,8 +639,9 @@ class TradingStatusBar(QFrame):
             return
 
         if is_open:
-            self.market_label.setText("🟢 Market Open")
-            self.market_label.setStyleSheet("color: #3fb950;")
+            self.market_label.setText("Market Open")
+            self.market_label.setStyleSheet("color: #35b57c;")
         else:
-            self.market_label.setText("🔴 Market Closed")
-            self.market_label.setStyleSheet("color: #f85149;")
+            self.market_label.setText("Market Closed")
+            self.market_label.setStyleSheet("color: #e5534b;")
+

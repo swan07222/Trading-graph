@@ -8,6 +8,15 @@ from utils.policy import get_trade_policy_engine
 
 
 def _to_bool(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    text = str(value or "").strip().lower()
+    if text in {"1", "true", "yes", "on", "y"}:
+        return True
+    if text in {"0", "false", "no", "off", "n", ""}:
+        return False
     return bool(value)
 
 

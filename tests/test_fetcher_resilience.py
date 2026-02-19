@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 
 import pandas as pd
 
-from data.fetcher import DataFetcher, DataSource, Quote
+from data.fetcher import DataFetcher, DataSource, ITickSource, Quote
 
 
 class _DummyCache:
@@ -48,23 +48,27 @@ def _make_fetcher_for_realtime() -> DataFetcher:
     return f
 
 
-def test_realtime_batch_merges_partial_results_across_sources(monkeypatch):
+def test_realtime_batch_uses_tencent_only_and_ignores_other_sources(monkeypatch):
     monkeypatch.setenv("TRADING_OFFLINE", "0")
     fetcher = _make_fetcher_for_realtime()
 
-    class _S1:
+    class _Tencent:
+        name = "tencent"
+
         def get_realtime_batch(self, codes):
             if "600519" in codes:
-                return {"600519": _mk_quote("600519", 101.0, "s1")}
+                return {"600519": _mk_quote("600519", 101.0, "tencent")}
             return {}
 
-    class _S2:
+    class _Other:
+        name = "akshare"
+
         def get_realtime_batch(self, codes):
             if "000001" in codes:
-                return {"000001": _mk_quote("000001", 22.5, "s2")}
+                return {"000001": _mk_quote("000001", 22.5, "akshare")}
             return {}
 
-    fetcher._get_active_sources = lambda: [_S1(), _S2()]
+    fetcher._get_active_sources = lambda: [_Tencent(), _Other()]
     fetcher._fill_from_spot_cache = lambda missing, result: None
     fetcher._fill_from_single_source_quotes = lambda missing, result, sources: None
     fetcher._maybe_force_network_refresh = lambda: False
@@ -73,9 +77,8 @@ def test_realtime_batch_merges_partial_results_across_sources(monkeypatch):
 
     out = fetcher.get_realtime_batch(["600519", "000001"])
 
-    assert set(out.keys()) == {"600519", "000001"}
-    assert out["600519"].source == "s1"
-    assert out["000001"].source == "s2"
+    assert set(out.keys()) == {"600519"}
+    assert out["600519"].source == "tencent"
 
 
 def test_realtime_batch_falls_back_to_localdb_last_close_when_live_unavailable(monkeypatch):
@@ -119,6 +122,8 @@ def test_realtime_batch_partial_missing_uses_last_good_then_localdb(monkeypatch)
     fetcher = _make_fetcher_for_realtime()
 
     class _S1:
+        name = "tencent"
+
         def get_realtime_batch(self, codes):
             if "600519" in codes:
                 return {"600519": _mk_quote("600519", 101.0, "s1")}
@@ -154,6 +159,44 @@ def test_realtime_batch_partial_missing_uses_last_good_then_localdb(monkeypatch)
     assert out["600519"].source == "s1"
     assert out["000001"].source == "last_good"
     assert out["000002"].source == "localdb_last_close"
+
+
+def test_realtime_batch_uses_spot_cache_when_tencent_missing(monkeypatch):
+    import data.fetcher as fetcher_mod
+
+    monkeypatch.setenv("TRADING_OFFLINE", "0")
+    fetcher = _make_fetcher_for_realtime()
+
+    class _Spot:
+        @staticmethod
+        def get_quote(code):
+            if str(code).zfill(6) != "600519":
+                return None
+            return {
+                "name": "KWEICHOW MOUTAI",
+                "price": 1888.8,
+                "open": 1870.0,
+                "high": 1899.0,
+                "low": 1866.0,
+                "close": 1880.0,
+                "volume": 1200,
+                "amount": 2266560.0,
+                "change": 8.8,
+                "change_pct": 0.47,
+            }
+
+    fetcher._get_active_sources = lambda: []
+    fetcher._maybe_force_network_refresh = lambda: False
+    fetcher._fallback_last_good = lambda codes: {}
+    fetcher._fallback_last_close_from_db = lambda codes: {}
+
+    monkeypatch.setattr(fetcher_mod, "get_spot_cache", lambda: _Spot())
+
+    out = fetcher.get_realtime_batch(["600519"])
+
+    assert "600519" in out
+    assert out["600519"].source == "spot_cache"
+    assert float(out["600519"].price) == 1888.8
 
 
 def test_last_good_fallback_marks_quote_delayed():
@@ -218,7 +261,194 @@ def test_fetch_history_with_depth_retry_uses_larger_windows():
     assert any(x > 5 for x in calls)
 
 
-def test_get_history_session_shortcut_only_for_small_intraday_windows():
+def test_fetch_history_policy_prefers_itick_when_available():
+    fetcher = DataFetcher.__new__(DataFetcher)
+    fetcher._rate_limiter = threading.Semaphore(1)
+    fetcher._rate_limit = lambda source, interval: None  # noqa: ARG005
+
+    idx = pd.date_range("2026-01-01", periods=40, freq="D")
+    frame = pd.DataFrame(
+        {
+            "open": [10.0] * len(idx),
+            "high": [10.2] * len(idx),
+            "low": [9.8] * len(idx),
+            "close": [10.1] * len(idx),
+            "volume": [100] * len(idx),
+            "amount": [1010.0] * len(idx),
+        },
+        index=idx,
+    )
+
+    class _Itick:
+        name = "itick"
+
+        def __init__(self):
+            self.called = 0
+
+        def get_history_instrument(self, inst, days, interval="1d"):  # noqa: ARG002
+            self.called += 1
+            return frame.copy()
+
+    class _Akshare:
+        name = "akshare"
+
+        def __init__(self):
+            self.called = 0
+
+        def get_history_instrument(self, inst, days, interval="1d"):  # noqa: ARG002
+            self.called += 1
+            return frame.copy()
+
+    class _Local:
+        name = "localdb"
+
+        def __init__(self):
+            self.called = 0
+
+        def get_history_instrument(self, inst, days, interval="1d"):  # noqa: ARG002
+            self.called += 1
+            return frame.copy()
+
+    itick = _Itick()
+    akshare = _Akshare()
+    localdb = _Local()
+
+    fetcher._get_active_sources = lambda: [localdb, itick, akshare]
+    fetcher._all_sources = [localdb, itick, akshare]
+
+    out = fetcher._fetch_from_sources_instrument(
+        inst={"market": "CN", "asset": "EQUITY", "symbol": "600519"},
+        days=200,
+        interval="1d",
+        include_localdb=True,
+    )
+
+    assert not out.empty
+    assert int(itick.called) == 1
+    assert int(akshare.called) == 0
+
+
+def test_history_policy_keeps_nonlocal_fallback_when_itick_missing():
+    fetcher = DataFetcher.__new__(DataFetcher)
+    fetcher._rate_limiter = threading.Semaphore(1)
+    fetcher._rate_limit = lambda source, interval: None  # noqa: ARG005
+
+    idx = pd.date_range("2026-01-01", periods=20, freq="D")
+    frame = pd.DataFrame(
+        {
+            "open": [10.0] * len(idx),
+            "high": [10.2] * len(idx),
+            "low": [9.8] * len(idx),
+            "close": [10.1] * len(idx),
+            "volume": [100] * len(idx),
+            "amount": [1010.0] * len(idx),
+        },
+        index=idx,
+    )
+
+    class _Tencent:
+        name = "tencent"
+
+        def get_history_instrument(self, inst, days, interval="1d"):  # noqa: ARG002
+            return frame.copy()
+
+    src = _Tencent()
+    fetcher._get_active_sources = lambda: [src]
+    fetcher._all_sources = [src]
+
+    out = fetcher._fetch_from_sources_instrument(
+        inst={"market": "CN", "asset": "EQUITY", "symbol": "600519"},
+        days=20,
+        interval="1d",
+        include_localdb=False,
+    )
+    assert not out.empty
+
+
+def test_itick_source_parses_kline_payload(monkeypatch):
+    monkeypatch.setenv("TRADING_ITICK_ALLOW_ANON", "1")
+    monkeypatch.delenv("TRADING_ITICK_TOKEN", raising=False)
+    monkeypatch.delenv("ITICK_TOKEN", raising=False)
+    monkeypatch.delenv("ITICK_API_KEY", raising=False)
+
+    src = ITickSource()
+
+    class _Resp:
+        status_code = 200
+
+        @staticmethod
+        def json():
+            return {
+                "code": 0,
+                "data": [
+                    {
+                        "t": 1700000000000,
+                        "o": "10.0",
+                        "h": "10.5",
+                        "l": "9.8",
+                        "c": "10.2",
+                        "v": "1000",
+                        "tu": "10200",
+                    },
+                    {
+                        "t": 1700000060000,
+                        "o": "10.2",
+                        "h": "10.6",
+                        "l": "10.1",
+                        "c": "10.4",
+                        "v": "900",
+                        "tu": "9360",
+                    },
+                ],
+            }
+
+    monkeypatch.setattr(src._session, "get", lambda *args, **kwargs: _Resp())
+
+    out = src.get_history_instrument(
+        {"market": "CN", "asset": "EQUITY", "symbol": "600519"},
+        days=3,
+        interval="1d",
+    )
+
+    assert not out.empty
+    assert "close" in out.columns
+    assert float(out["close"].iloc[-1]) > 0
+
+
+def test_itick_source_defaults_free_tier_rpm(monkeypatch):
+    monkeypatch.setenv("TRADING_ITICK_ALLOW_ANON", "1")
+    monkeypatch.delenv("TRADING_ITICK_MAX_CALLS_PER_MIN", raising=False)
+    monkeypatch.delenv("TRADING_ITICK_FREE_TIER", raising=False)
+    monkeypatch.setenv("TRADING_ITICK_BASE_URL", "https://api-free.itick.io/stock")
+    src = ITickSource()
+    assert src.is_free_tier is True
+    assert int(src._max_calls_per_min) == 5
+
+
+def test_itick_source_rate_limit_triggers_cooldown(monkeypatch):
+    monkeypatch.setenv("TRADING_ITICK_ALLOW_ANON", "1")
+    src = ITickSource()
+
+    class _Resp:
+        status_code = 429
+        headers = {"Retry-After": "3"}
+
+        @staticmethod
+        def json():
+            return {}
+
+    monkeypatch.setattr(src._session, "get", lambda *args, **kwargs: _Resp())
+
+    out = src.get_history_instrument(
+        {"market": "CN", "asset": "EQUITY", "symbol": "600519"},
+        days=1,
+        interval="1d",
+    )
+    assert out.empty
+    assert float(src._quota_cooldown_until_ts) > 0.0
+
+
+def test_get_history_cn_intraday_does_not_use_session_shortcut():
     fetcher = DataFetcher.__new__(DataFetcher)
     fetcher._cache = _DummyCache()
 
@@ -239,7 +469,17 @@ def test_get_history_session_shortcut_only_for_small_intraday_windows():
 
     def _fake_intraday(inst, count, fetch_days, interval, cache_key, offline, session):  # noqa: ARG001
         called["intraday"] += 1
-        return session.tail(count)
+        idx_local = pd.date_range("2026-02-12 09:30:00", periods=int(count), freq="min")
+        return pd.DataFrame(
+            {
+                "open": [10.0] * int(count),
+                "high": [10.0] * int(count),
+                "low": [10.0] * int(count),
+                "close": [10.0] * int(count),
+                "volume": [1] * int(count),
+            },
+            index=idx_local,
+        )
 
     fetcher._get_history_cn_intraday = _fake_intraday
 
@@ -251,7 +491,7 @@ def test_get_history_session_shortcut_only_for_small_intraday_windows():
     )
     assert not out_small.empty
     assert len(out_small) == 200
-    assert called["intraday"] == 0
+    assert called["intraday"] == 1
 
     out_large = fetcher.get_history(
         "600519",
@@ -261,7 +501,7 @@ def test_get_history_session_shortcut_only_for_small_intraday_windows():
     )
     assert not out_large.empty
     assert len(out_large) == 700
-    assert called["intraday"] == 1
+    assert called["intraday"] == 2
 
 
 def test_get_history_post_close_exact_refresh_bypasses_session_shortcut():
@@ -402,6 +642,98 @@ def test_get_history_intraday_market_closed_allows_db_persist(monkeypatch):
 
     assert not out.empty
     assert captured["persist"] is True
+
+
+def test_get_history_cn_intraday_offline_filters_non_session_rows():
+    fetcher = DataFetcher.__new__(DataFetcher)
+    fetcher._cache = _DummyCache()
+
+    idx = pd.to_datetime(
+        ["2026-02-18 09:00:00", "2026-02-18 09:35:00", "2026-02-18 15:30:00"]
+    )
+    raw_df = pd.DataFrame(
+        {
+            "open": [10.0, 10.1, 10.2],
+            "high": [10.2, 10.3, 10.4],
+            "low": [9.8, 9.9, 10.0],
+            "close": [10.0, 10.1, 10.2],
+            "volume": [100, 120, 90],
+        },
+        index=idx,
+    )
+
+    class _DB:
+        @staticmethod
+        def get_intraday_bars(code, interval="1m", limit=1000):  # noqa: ARG002
+            return raw_df.tail(int(limit)).copy()
+
+    fetcher._db = _DB()
+
+    out = fetcher._get_history_cn_intraday(
+        inst={"market": "CN", "asset": "EQUITY", "symbol": "600519"},
+        count=100,
+        fetch_days=1,
+        interval="1m",
+        cache_key="history:cn:offline",
+        offline=True,
+        session_df=pd.DataFrame(),
+        persist_intraday_db=False,
+    )
+
+    assert len(out) == 1
+    assert out.index[0].strftime("%H:%M") == "09:35"
+
+
+def test_get_history_cn_intraday_rejects_weak_online_snapshot():
+    fetcher = DataFetcher.__new__(DataFetcher)
+    fetcher._cache = _DummyCache()
+
+    idx_db = pd.date_range("2026-02-18 09:30:00", periods=30, freq="min")
+    db_df = pd.DataFrame(
+        {
+            "open": [10.0 + (i * 0.01) for i in range(30)],
+            "high": [10.05 + (i * 0.01) for i in range(30)],
+            "low": [9.95 + (i * 0.01) for i in range(30)],
+            "close": [10.0 + (i * 0.01) for i in range(30)],
+            "volume": [100] * 30,
+            "amount": [1000.0] * 30,
+        },
+        index=idx_db,
+    )
+    idx_online = pd.date_range("2026-02-18 10:00:00", periods=30, freq="min")
+    weak_online = pd.DataFrame(
+        {
+            "open": [8.0] * 30,
+            "high": [8.0] * 30,
+            "low": [8.0] * 30,
+            "close": [8.0] * 30,
+            "volume": [0] * 30,
+            "amount": [0.0] * 30,
+        },
+        index=idx_online,
+    )
+
+    class _DB:
+        @staticmethod
+        def get_intraday_bars(code, interval="1m", limit=1000):  # noqa: ARG002
+            return db_df.tail(int(limit)).copy()
+
+    fetcher._db = _DB()
+    fetcher._fetch_history_with_depth_retry = lambda **kwargs: weak_online.copy()
+
+    out = fetcher._get_history_cn_intraday(
+        inst={"market": "CN", "asset": "EQUITY", "symbol": "600519"},
+        count=200,
+        fetch_days=2,
+        interval="1m",
+        cache_key="history:cn:weak_online",
+        offline=False,
+        session_df=pd.DataFrame(),
+        persist_intraday_db=False,
+    )
+
+    assert len(out) == len(db_df)
+    assert float(out["close"].min()) >= 10.0
 
 
 def test_get_history_normalizes_interval_alias_before_source_routing():
@@ -647,3 +979,470 @@ def test_depth_retry_keeps_probing_when_first_intraday_window_is_bad():
     assert len(calls) >= 2
     q = fetcher._intraday_frame_quality(out, "1m")
     assert float(q["stale_ratio"]) < 0.20
+
+
+def test_refresh_trained_stock_history_uses_last_saved_increment(monkeypatch):
+    monkeypatch.setenv("TRADING_OFFLINE", "0")
+    fetcher = DataFetcher.__new__(DataFetcher)
+
+    now = datetime(2026, 2, 18, 14, 30, 0)
+    monkeypatch.setattr(
+        DataFetcher,
+        "_now_shanghai_naive",
+        staticmethod(lambda: now),
+    )
+    base_idx = pd.date_range(
+        end=(now - timedelta(minutes=20)),
+        periods=240,
+        freq="min",
+    )
+    base_df = pd.DataFrame(
+        {
+            "open": [10.0] * len(base_idx),
+            "high": [10.1] * len(base_idx),
+            "low": [9.9] * len(base_idx),
+            "close": [10.0] * len(base_idx),
+            "volume": [100] * len(base_idx),
+            "amount": [1000.0] * len(base_idx),
+        },
+        index=base_idx,
+    )
+
+    class _DB:
+        def __init__(self, seed: pd.DataFrame):
+            self.df = seed.copy()
+
+        def get_intraday_bars(self, code, interval="1m", limit=1000):  # noqa: ARG002
+            return self.df.tail(int(limit)).copy()
+
+        def upsert_intraday_bars(self, code, interval, df):  # noqa: ARG002
+            merged = pd.concat([self.df, df], axis=0)
+            merged = merged[~merged.index.duplicated(keep="last")].sort_index()
+            self.df = merged
+
+        def get_bars(self, code, limit=1000):  # noqa: ARG002
+            return pd.DataFrame()
+
+        def upsert_bars(self, code, df):  # noqa: ARG002
+            return None
+
+    fetcher._db = _DB(base_df)
+    calls: list[int] = []
+
+    def _fake_fetch(inst, days, interval="1m", include_localdb=False):  # noqa: ARG001
+        calls.append(int(days))
+        idx = pd.date_range(end=now, periods=30, freq="min")
+        return pd.DataFrame(
+            {
+                "open": [10.2] * len(idx),
+                "high": [10.3] * len(idx),
+                "low": [10.1] * len(idx),
+                "close": [10.2] * len(idx),
+                "volume": [120] * len(idx),
+                "amount": [1224.0] * len(idx),
+            },
+            index=idx,
+        )
+
+    fetcher._fetch_from_sources_instrument = _fake_fetch
+
+    out = fetcher.refresh_trained_stock_history(
+        ["600519"],
+        interval="1m",
+        window_days=29,
+        allow_online=True,
+    )
+
+    assert int(out["total"]) == 1
+    assert int(out["updated"]) == 1
+    assert calls
+    assert int(calls[0]) <= 2
+    rows = dict(out.get("rows", {}) or {})
+    assert int(rows.get("600519", 0)) > 0
+
+
+def test_refresh_trained_stock_history_replaces_realtime_cache_after_close(monkeypatch):
+    import data.fetcher as fetcher_mod
+
+    monkeypatch.setenv("TRADING_OFFLINE", "0")
+    monkeypatch.setattr(fetcher_mod.CONFIG, "is_market_open", lambda: False, raising=False)
+
+    now = datetime(2026, 2, 18, 15, 30, 0)
+    monkeypatch.setattr(
+        DataFetcher,
+        "_now_shanghai_naive",
+        staticmethod(lambda: now),
+    )
+
+    fetcher = DataFetcher.__new__(DataFetcher)
+
+    class _DB:
+        def __init__(self):
+            self.df = pd.DataFrame()
+
+        def get_intraday_bars(self, code, interval="1m", limit=1000):  # noqa: ARG002
+            if self.df.empty:
+                return pd.DataFrame()
+            return self.df.tail(int(limit)).copy()
+
+        def upsert_intraday_bars(self, code, interval, df):  # noqa: ARG002
+            merged = pd.concat([self.df, df], axis=0)
+            merged = merged[~merged.index.duplicated(keep="last")].sort_index()
+            self.df = merged
+
+        def get_bars(self, code, limit=1000):  # noqa: ARG002
+            return pd.DataFrame()
+
+        def upsert_bars(self, code, df):  # noqa: ARG002
+            return None
+
+    fetcher._db = _DB()
+    calls: list[int] = []
+
+    def _fake_fetch(inst, days, interval="1m", include_localdb=False):  # noqa: ARG001
+        calls.append(int(days))
+        idx = pd.date_range(end=now, periods=40, freq="min")
+        return pd.DataFrame(
+            {
+                "open": [11.0] * len(idx),
+                "high": [11.1] * len(idx),
+                "low": [10.9] * len(idx),
+                "close": [11.0] * len(idx),
+                "volume": [200] * len(idx),
+                "amount": [2200.0] * len(idx),
+            },
+            index=idx,
+        )
+
+    fetcher._fetch_from_sources_instrument = _fake_fetch
+
+    class _SessionCache:
+        def __init__(self):
+            self.purged_calls = 0
+            self.upsert_calls = []
+            self.purge_kwargs = []
+
+        def describe_symbol_interval(self, symbol, interval):  # noqa: ARG002
+            return {
+                "rows": 100,
+                "first_ts": now - timedelta(days=2),
+                "last_ts": now - timedelta(minutes=1),
+                "first_realtime_ts": now - timedelta(days=2),
+                "first_realtime_after_akshare_ts": now - timedelta(hours=2),
+                "last_akshare_ts": now - timedelta(hours=1),
+            }
+
+        def purge_realtime_rows(self, symbol, interval, *, since_ts=None):  # noqa: ARG002
+            self.purged_calls += 1
+            self.purge_kwargs.append({"since_ts": since_ts})
+            return 100
+
+        def upsert_history_frame(
+            self,
+            symbol,
+            interval,
+            frame,
+            source="itick",
+            is_final=True,  # noqa: ARG002
+        ):
+            self.upsert_calls.append((str(symbol), str(interval), str(source), int(len(frame))))
+            return int(len(frame))
+
+    cache = _SessionCache()
+    monkeypatch.setattr(fetcher_mod, "get_session_bar_cache", lambda: cache)
+
+    out = fetcher.refresh_trained_stock_history(
+        ["600519"],
+        interval="1m",
+        window_days=29,
+        allow_online=True,
+        sync_session_cache=True,
+        replace_realtime_after_close=True,
+    )
+
+    assert int(out["total"]) == 1
+    assert calls
+    assert int(calls[0]) >= 2
+    assert cache.purged_calls == 1
+    assert cache.upsert_calls
+    assert cache.upsert_calls[0][2] == "itick"
+    assert cache.purge_kwargs
+    since_ts = cache.purge_kwargs[0]["since_ts"]
+    assert since_ts is not None
+    assert pd.Timestamp(since_ts) >= pd.Timestamp(now - timedelta(hours=1))
+    purged = dict(out.get("purged_realtime_rows", {}) or {})
+    assert int(purged.get("600519", 0)) == 100
+    used = dict(out.get("replacement_anchor_used", {}) or {})
+    assert str(used.get("600519", "")).strip() != ""
+
+
+def test_refresh_trained_stock_history_retries_pending_cache_sync(monkeypatch, tmp_path):
+    import data.fetcher as fetcher_mod
+
+    monkeypatch.setenv("TRADING_OFFLINE", "0")
+    monkeypatch.setattr(fetcher_mod.CONFIG, "is_market_open", lambda: True, raising=False)
+
+    now = datetime(2026, 2, 18, 14, 30, 0)
+    monkeypatch.setattr(
+        DataFetcher,
+        "_now_shanghai_naive",
+        staticmethod(lambda: now),
+    )
+
+    fetcher = DataFetcher.__new__(DataFetcher)
+    fetcher._refresh_reconcile_lock = threading.RLock()
+    fetcher._refresh_reconcile_path = tmp_path / "refresh_reconcile_queue.json"
+
+    class _DB:
+        def __init__(self):
+            self.df = pd.DataFrame()
+
+        def get_intraday_bars(self, code, interval="1m", limit=1000):  # noqa: ARG002
+            if self.df.empty:
+                return pd.DataFrame()
+            return self.df.tail(int(limit)).copy()
+
+        def upsert_intraday_bars(self, code, interval, df):  # noqa: ARG002
+            merged = pd.concat([self.df, df], axis=0)
+            merged = merged[~merged.index.duplicated(keep="last")].sort_index()
+            self.df = merged
+
+        def get_bars(self, code, limit=1000):  # noqa: ARG002
+            return pd.DataFrame()
+
+        def upsert_bars(self, code, df):  # noqa: ARG002
+            return None
+
+    fetcher._db = _DB()
+
+    def _fake_fetch(inst, days, interval="1m", include_localdb=False):  # noqa: ARG001
+        idx = pd.date_range(end=now, periods=30, freq="min")
+        return pd.DataFrame(
+            {
+                "open": [10.0] * len(idx),
+                "high": [10.1] * len(idx),
+                "low": [9.9] * len(idx),
+                "close": [10.0] * len(idx),
+                "volume": [100] * len(idx),
+                "amount": [1000.0] * len(idx),
+            },
+            index=idx,
+        )
+
+    fetcher._fetch_from_sources_instrument = _fake_fetch
+
+    class _FailCache:
+        def describe_symbol_interval(self, symbol, interval):  # noqa: ARG002
+            return {
+                "rows": 0,
+                "first_ts": None,
+                "last_ts": None,
+                "first_realtime_ts": None,
+                "first_realtime_after_akshare_ts": None,
+                "last_akshare_ts": None,
+            }
+
+        def upsert_history_frame(
+            self,
+            symbol,
+            interval,
+            frame,
+            source="itick",
+            is_final=True,  # noqa: ARG002
+        ):
+            raise RuntimeError("cache write failed")
+
+        def purge_realtime_rows(self, symbol, interval, *, since_ts=None):  # noqa: ARG002
+            return 0
+
+    monkeypatch.setattr(fetcher_mod, "get_session_bar_cache", lambda: _FailCache())
+
+    out1 = fetcher.refresh_trained_stock_history(
+        ["600519"],
+        interval="1m",
+        window_days=29,
+        allow_online=True,
+        sync_session_cache=True,
+    )
+    sync_errors_1 = dict(out1.get("cache_sync_errors", {}) or {})
+    assert "600519" in sync_errors_1
+    assert int(out1.get("pending_reconcile_after", 0)) == 1
+    assert fetcher._refresh_reconcile_path.exists()
+
+    class _GoodCache:
+        def __init__(self):
+            self.upsert_calls = 0
+
+        def describe_symbol_interval(self, symbol, interval):  # noqa: ARG002
+            return {
+                "rows": 0,
+                "first_ts": None,
+                "last_ts": None,
+                "first_realtime_ts": None,
+                "first_realtime_after_akshare_ts": None,
+                "last_akshare_ts": None,
+            }
+
+        def upsert_history_frame(
+            self,
+            symbol,
+            interval,
+            frame,
+            source="itick",
+            is_final=True,  # noqa: ARG002
+        ):
+            self.upsert_calls += 1
+            return int(len(frame))
+
+        def purge_realtime_rows(self, symbol, interval, *, since_ts=None):  # noqa: ARG002
+            return 0
+
+    good_cache = _GoodCache()
+    monkeypatch.setattr(fetcher_mod, "get_session_bar_cache", lambda: good_cache)
+
+    out2 = fetcher.refresh_trained_stock_history(
+        ["600519"],
+        interval="1m",
+        window_days=29,
+        allow_online=False,
+        sync_session_cache=True,
+    )
+    assert good_cache.upsert_calls >= 1
+    assert int(out2.get("pending_reconcile_after", 0)) == 0
+
+
+def test_reconcile_pending_cache_sync_clears_queue_on_success(monkeypatch, tmp_path):
+    import data.fetcher as fetcher_mod
+
+    fetcher = DataFetcher.__new__(DataFetcher)
+    fetcher._refresh_reconcile_lock = threading.RLock()
+    fetcher._refresh_reconcile_path = tmp_path / "refresh_reconcile_queue.json"
+
+    idx = pd.date_range("2026-02-18 09:30:00", periods=30, freq="min")
+    db_df = pd.DataFrame(
+        {
+            "open": [10.0] * len(idx),
+            "high": [10.1] * len(idx),
+            "low": [9.9] * len(idx),
+            "close": [10.0] * len(idx),
+            "volume": [100] * len(idx),
+            "amount": [1000.0] * len(idx),
+        },
+        index=idx,
+    )
+
+    class _DB:
+        def get_intraday_bars(self, code, interval="1m", limit=1000):  # noqa: ARG002
+            return db_df.tail(int(limit)).copy()
+
+        def get_bars(self, code, limit=1000):  # noqa: ARG002
+            return pd.DataFrame()
+
+    fetcher._db = _DB()
+
+    fetcher._save_refresh_reconcile_queue(
+        {
+            "600519:1m": {
+                "code": "600519",
+                "interval": "1m",
+                "pending_since": "2026-02-18T15:00:00",
+                "attempts": 1,
+                "last_attempt_at": "",
+                "last_error": "cache write failed",
+            }
+        }
+    )
+
+    class _Cache:
+        def __init__(self):
+            self.upsert_calls = 0
+
+        def upsert_history_frame(
+            self,
+            symbol,
+            interval,
+            frame,
+            source="itick",
+            is_final=True,  # noqa: ARG002
+        ):
+            self.upsert_calls += 1
+            assert str(symbol) == "600519"
+            assert str(interval) == "1m"
+            assert str(source) == "itick"
+            return int(len(frame))
+
+        def describe_symbol_interval(self, symbol, interval):  # noqa: ARG002
+            return {
+                "first_realtime_after_akshare_ts": None,
+            }
+
+        def purge_realtime_rows(self, symbol, interval, *, since_ts=None):  # noqa: ARG002
+            return 0
+
+    cache = _Cache()
+    monkeypatch.setattr(fetcher_mod, "get_session_bar_cache", lambda: cache)
+    monkeypatch.setattr(fetcher_mod.CONFIG, "is_market_open", lambda: True, raising=False)
+
+    out = fetcher.reconcile_pending_cache_sync(codes=["600519"], interval="1m")
+
+    assert int(out.get("targeted", 0)) == 1
+    assert int(out.get("reconciled", 0)) == 1
+    assert int(out.get("failed", 0)) == 0
+    assert int(out.get("remaining", 0)) == 0
+    assert cache.upsert_calls == 1
+    assert fetcher.get_pending_reconcile_codes(interval="1m") == []
+
+
+def test_get_multiple_parallel_allows_short_requests_under_global_history_floor():
+    fetcher = DataFetcher.__new__(DataFetcher)
+    fetcher._all_sources = []
+
+    idx = pd.date_range("2026-01-01", periods=50, freq="D")
+    small_df = pd.DataFrame(
+        {
+            "open": [10.0] * len(idx),
+            "high": [10.2] * len(idx),
+            "low": [9.8] * len(idx),
+            "close": [10.1] * len(idx),
+            "volume": [100] * len(idx),
+        },
+        index=idx,
+    )
+    fetcher.get_history = lambda code, days=500, interval="1d", **kwargs: small_df.copy()  # type: ignore[method-assign]
+
+    out = fetcher.get_multiple_parallel(
+        ["600519", "000001"],
+        days=20,
+        interval="1d",
+        max_workers=2,
+    )
+
+    assert set(out.keys()) == {"600519", "000001"}
+    assert all(len(df) == 50 for df in out.values())
+
+
+def test_get_multiple_parallel_clamps_invalid_negative_worker_count():
+    fetcher = DataFetcher.__new__(DataFetcher)
+    fetcher._all_sources = []
+
+    idx = pd.date_range("2026-01-01", periods=20, freq="D")
+    df = pd.DataFrame(
+        {
+            "open": [10.0] * len(idx),
+            "high": [10.2] * len(idx),
+            "low": [9.8] * len(idx),
+            "close": [10.1] * len(idx),
+            "volume": [100] * len(idx),
+        },
+        index=idx,
+    )
+    fetcher.get_history = lambda code, days=500, interval="1d", **kwargs: df.copy()  # type: ignore[method-assign]
+
+    out = fetcher.get_multiple_parallel(
+        ["600519"],
+        days=20,
+        interval="1d",
+        max_workers=-1,
+    )
+
+    assert set(out.keys()) == {"600519"}

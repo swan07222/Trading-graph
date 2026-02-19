@@ -1,4 +1,4 @@
-﻿# data/news.py
+# data/news.py
 import copy
 import json
 import math

@@ -168,6 +168,7 @@ class Predictor:
         self._high_precision = self._load_high_precision_config()
         self._loaded_ensemble_path: Path | None = None
         self._trained_stock_codes: list[str] = []
+        self._trained_stock_last_train: dict[str, str] = {}
         self._model_artifact_sig: str = ""
         self._last_model_reload_attempt_ts: float = 0.0
         self._model_reload_cooldown_s: float = 15.0
@@ -290,6 +291,7 @@ class Predictor:
             self.ensemble = None
             self._loaded_ensemble_path = None
             self._trained_stock_codes = []
+            self._trained_stock_last_train = {}
             if chosen_ens and chosen_ens.exists():
                 self._loaded_ensemble_path = Path(chosen_ens)
                 input_size = (
@@ -334,6 +336,22 @@ class Predictor:
                             loaded_horizon,
                         )
                     )
+                    self._trained_stock_last_train = (
+                        self._extract_trained_stock_last_train_from_ensemble()
+                        or self._load_trained_stock_last_train_from_manifest(chosen_ens)
+                    )
+                    if self._trained_stock_last_train and self._trained_stock_codes:
+                        allowed = {
+                            self._normalize_stock_code(x)
+                            for x in list(self._trained_stock_codes or [])
+                        }
+                        allowed = {x for x in allowed if x}
+                        if allowed:
+                            self._trained_stock_last_train = {
+                                c: ts
+                                for c, ts in self._trained_stock_last_train.items()
+                                if c in allowed
+                            }
 
                     log.info(
                         f"Ensemble loaded from {chosen_ens.name} "
@@ -578,6 +596,43 @@ class Predictor:
             log.debug("Failed reading trained stocks from ensemble metadata: %s", e)
             return []
 
+    @staticmethod
+    def _normalize_stock_code(value: object) -> str:
+        code = "".join(ch for ch in str(value or "").strip() if ch.isdigit())
+        return code if len(code) == 6 else ""
+
+    @classmethod
+    def _sanitize_last_train_map(cls, payload: object) -> dict[str, str]:
+        if not isinstance(payload, dict):
+            return {}
+        out: dict[str, str] = {}
+        for raw_code, raw_ts in payload.items():
+            code = cls._normalize_stock_code(raw_code)
+            if not code:
+                continue
+            ts = str(raw_ts or "").strip()
+            if not ts:
+                continue
+            out[code] = ts
+        return out
+
+    def _extract_trained_stock_last_train_from_ensemble(self) -> dict[str, str]:
+        if self.ensemble is None:
+            return {}
+        try:
+            info = self.ensemble.get_model_info()
+            if not isinstance(info, dict):
+                return {}
+            return self._sanitize_last_train_map(
+                info.get("trained_stock_last_train", {})
+            )
+        except Exception as e:
+            log.debug(
+                "Failed reading trained-stock last-train from ensemble metadata: %s",
+                e,
+            )
+            return {}
+
     def _load_trained_stocks_from_manifest(self, ensemble_path: Path) -> list[str]:
         """Fallback for legacy model loads when ensemble metadata is missing."""
         try:
@@ -597,6 +652,30 @@ class Predictor:
         except Exception as e:
             log.debug("Failed reading trained stocks from manifest %s: %s", ensemble_path, e)
             return []
+
+    def _load_trained_stock_last_train_from_manifest(
+        self,
+        ensemble_path: Path,
+    ) -> dict[str, str]:
+        """Fallback for legacy loads when ensemble metadata is missing."""
+        try:
+            stem = Path(ensemble_path).stem
+            p = Path(ensemble_path).parent / f"model_manifest_{stem}.json"
+            if not p.exists():
+                return {}
+            data = json.loads(p.read_text(encoding="utf-8"))
+            if not isinstance(data, dict):
+                return {}
+            return self._sanitize_last_train_map(
+                data.get("trained_stock_last_train", {})
+            )
+        except Exception as e:
+            log.debug(
+                "Failed reading trained-stock last-train from manifest %s: %s",
+                ensemble_path,
+                e,
+            )
+            return {}
 
     def _load_trained_stocks_from_learner_state(
         self,
@@ -662,6 +741,10 @@ class Predictor:
             except (TypeError, ValueError) as e:
                 log.debug("Invalid trained stock code limit %r: %s", limit, e)
         return codes
+
+    def get_trained_stock_last_train(self) -> dict[str, str]:
+        """Return per-stock last-train timestamps from loaded model artifacts."""
+        return dict(self._trained_stock_last_train or {})
 
     def _load_forecaster(self):
         """Load TCN forecaster for price curve prediction."""

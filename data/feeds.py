@@ -1106,6 +1106,9 @@ class BarAggregator:
                 from data.session_cache import get_session_bar_cache
 
                 cache_bar = dict(bar_copy)
+                cache_bar["source"] = str(
+                    cache_bar.get("source", "") or "tencent_rt"
+                )
                 get_session_bar_cache().append_bar(
                     symbol,
                     interval_label,

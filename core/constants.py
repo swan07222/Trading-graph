@@ -53,7 +53,7 @@ TRADING_HOURS = {
     },
 }
 
-# HOLIDAYS (2024-2025 China)
+# HOLIDAYS (2024-2026 China)
 
 HOLIDAYS_2024: set[date] = {
     date(2024, 1, 1),
@@ -78,7 +78,22 @@ HOLIDAYS_2025: set[date] = {
     date(2025, 2, 3), date(2025, 2, 4),
 }
 
-_HOLIDAYS_BUILTIN = HOLIDAYS_2024 | HOLIDAYS_2025
+HOLIDAYS_2026: set[date] = {
+    date(2026, 1, 1), date(2026, 1, 2), date(2026, 1, 3),
+    date(2026, 2, 15), date(2026, 2, 16), date(2026, 2, 17),
+    date(2026, 2, 18), date(2026, 2, 19), date(2026, 2, 20),
+    date(2026, 2, 21), date(2026, 2, 22), date(2026, 2, 23),
+    date(2026, 4, 4), date(2026, 4, 5), date(2026, 4, 6),
+    date(2026, 5, 1), date(2026, 5, 2), date(2026, 5, 3),
+    date(2026, 5, 4), date(2026, 5, 5),
+    date(2026, 6, 19), date(2026, 6, 20), date(2026, 6, 21),
+    date(2026, 9, 25), date(2026, 9, 26), date(2026, 9, 27),
+    date(2026, 10, 1), date(2026, 10, 2), date(2026, 10, 3),
+    date(2026, 10, 4), date(2026, 10, 5), date(2026, 10, 6),
+    date(2026, 10, 7),
+}
+
+_HOLIDAYS_BUILTIN = HOLIDAYS_2024 | HOLIDAYS_2025 | HOLIDAYS_2026
 
 # Keep the old name for backward compat but don't use it for lookups
 HOLIDAYS = _HOLIDAYS_BUILTIN
@@ -202,8 +217,8 @@ FONTS = {
     "mono": "Consolas",
 }
 
-# FIX Bug 6: Proper ST detection with word boundaries instead of substring match
-_ST_PATTERN = re.compile(r'(?<!\w)\*?ST(?!\w)', re.IGNORECASE)
+# FIX Bug 6: Detect ST labels only at name prefix.
+_ST_PREFIX_PATTERN = re.compile(r"^\s*\*?\s*ST", re.IGNORECASE)
 
 
 def get_exchange(code: str) -> str:
@@ -336,9 +351,9 @@ def is_st_stock(name: str) -> bool:
     """
     Check if stock is ST.
 
-    FIX Bug 6: Uses word-boundary regex to avoid false positives on names
-    like "BEST" or "FASTEST" that contain "ST" as a substring.
+    Detects ST at prefix only, e.g. "ST600000", "*ST600000", "ST ABC".
+    Avoids false positives like "BEST" or "FASTEST".
     """
     if not name:
         return False
-    return bool(_ST_PATTERN.search(name))
+    return bool(_ST_PREFIX_PATTERN.match(str(name)))

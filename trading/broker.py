@@ -1,14 +1,14 @@
-﻿# trading/broker.py
+# trading/broker.py
 """
 Unified Broker Interface - Production Grade with Full Fill Sync
 
 Supports:
 - Paper Trading (Simulator)
-- 鍚岃姳椤?(THS)
-- 鍗庢嘲璇佸埜 (HT)
-- 鎷涘晢璇佸埜 (ZSZQ)
-- 鍥介噾璇佸埜 (GJ)
-- 閾舵渤璇佸埜 (YH)
+- TongHuaShun (THS)
+- HuaTai (HT)
+- ZhaoShang (ZSZQ)
+- GuoJin (GJ)
+- YinHe (YH)
 
 """
 import hashlib
@@ -32,7 +32,7 @@ log = get_logger(__name__)
 # FIX(6): Prevents unbounded growth of order ID maps
 
 class BoundedOrderedDict(OrderedDict):
-    """OrderedDict with max size 鈥?evicts oldest on overflow."""
+    """OrderedDict with max size - evicts oldest on overflow."""
 
     def __init__(self, maxsize: int = 10000, *args, **kwargs):
         self._maxsize = maxsize
@@ -149,7 +149,7 @@ def parse_broker_status(status_str: str) -> OrderStatus:
 
 class BrokerInterface(ABC):
     """
-    Abstract broker interface 鈥?all brokers must implement this.
+    Abstract broker interface - all brokers must implement this.
     Thread-safe design with callbacks for order updates.
     """
 
@@ -1204,7 +1204,7 @@ class SimulatorBroker(BrokerInterface):
         if not is_trading_day(today):
             return
 
-        # It's a new trading day 鈥?settle all positions
+        # It's a new trading day - settle all positions
         for _symbol, pos in self._positions.items():
             pos.available_qty = pos.quantity
         self._last_settlement_date = today
@@ -1489,7 +1489,7 @@ class EasytraderBroker(BrokerInterface):
 
             if result and isinstance(result, dict):
                 entrust_no = (
-                    result.get('濮旀墭缂栧彿')
+                    result.get("\u59d4\u6258\u7f16\u53f7")
                     or result.get('entrust_no')
                     or result.get('order_id')
                 )
@@ -1527,7 +1527,7 @@ class EasytraderBroker(BrokerInterface):
             return order
 
     def get_fills(self, since: datetime = None) -> list[Fill]:
-        """Get fills from broker 鈥?deduplicates by broker_fill_id."""
+        """Get fills from broker - deduplicates by broker_fill_id."""
         if not self.is_connected:
             return []
 
@@ -1721,7 +1721,7 @@ class EasytraderBroker(BrokerInterface):
             self._fetcher = get_fetcher()
         return self._fetcher
 
-# FIX(11): Thin subclasses 鈥?all shared logic is in base
+# FIX(11): Thin subclasses - all shared logic is in base
 
 class THSBroker(EasytraderBroker):
     """THS/HT/GJ/YH broker via easytrader."""
@@ -1747,11 +1747,11 @@ class THSBroker(EasytraderBroker):
         return self._broker_type
 
 class ZSZQBroker(EasytraderBroker):
-    """鎷涘晢璇佸埜 broker via easytrader (universal mode)."""
+    """ZSZQ broker via easytrader (universal mode)."""
 
     @property
     def name(self) -> str:
-        return "鎷涘晢璇佸埜"
+        return "ZSZQ"
 
     def _get_easytrader_type(self) -> str:
         return 'universal'
@@ -2181,7 +2181,7 @@ class MultiVenueBroker(BrokerInterface):
 
 def _create_live_broker_by_type(broker_type: str) -> BrokerInterface:
     broker_type = str(broker_type or "ths").lower()
-    if broker_type in ('zszq', 'zhaoshang', '鎷涘晢'):
+    if broker_type in ('zszq', 'zhaoshang'):
         return ZSZQBroker()
     if broker_type in ('ths', 'ht', 'gj', 'yh'):
         return THSBroker(broker_type=broker_type)
@@ -2242,7 +2242,7 @@ def create_broker(
         return _create_live_broker_by_type(kwargs.get('broker_type', 'ths'))
     elif mode in ('ths', 'ht', 'gj', 'yh'):
         return THSBroker(broker_type=mode)
-    elif mode in ('zszq', 'zhaoshang', '鎷涘晢'):
+    elif mode in ('zszq', 'zhaoshang'):
         return ZSZQBroker()
     else:
         log.warning(

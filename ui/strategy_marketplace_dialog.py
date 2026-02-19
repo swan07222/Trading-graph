@@ -48,7 +48,7 @@ class StrategyMarketplaceDialog(QDialog):
             "Only enabled and integrity-valid scripts are executed."
         )
         info.setWordWrap(True)
-        info.setStyleSheet("color: #8b949e; font-size: 12px;")
+        info.setStyleSheet("color: #aac3ec; font-size: 12px;")
         layout.addWidget(info)
 
         self.table = QTableWidget(0, 9)
@@ -156,3 +156,4 @@ class StrategyMarketplaceDialog(QDialog):
         self._marketplace.save_enabled_ids(enabled_ids)
         log.info("Saved strategy marketplace enabled list (%d strategies)", len(enabled_ids))
         self.accept()
+

@@ -20,7 +20,8 @@ CN_PREFIXES = (
     "CN:", "cn:",
 )
 HK_PREFIXES = ("hk.", "HK.", "hk", "HK", "HK:", "hk:")
-US_PREFIXES = ("us.", "US.", "us", "US", "US:", "us:")
+# Keep only delimiter-style US prefixes to avoid corrupting tickers like USO.
+US_PREFIXES = ("us.", "US.", "US:", "us:")
 
 CN_SUFFIXES = (".SS", ".SZ", ".BJ", ".ss", ".sz", ".bj")
 HK_SUFFIXES = (".HK", ".hk")
@@ -315,13 +316,7 @@ def parse_instrument(code: str) -> dict[str, Any]:
     # -------------------------
     # Strip optional US: prefix, keep dot class (BRK.B)
     if is_explicit_us:
-        t = _strip_prefixes(s, US_PREFIXES)
-        t = t.upper()
-        t = _letters_numbers(t.replace(".", "."))  # keep dot through next step
-        # restore dot if removed by letters_numbers
-        # (letters_numbers removes dot; handle separately)
-        t = raw.upper().replace("US:", "").replace("us:", "").replace("US", "").replace("us", "")
-        t = t.strip()
+        t = _strip_prefixes(raw.strip(), US_PREFIXES).upper().replace(" ", "")
         if _is_us_ticker(t):
             return {
                 "market": "US",

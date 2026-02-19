@@ -288,6 +288,10 @@ class TestEnsemble:
         ensemble.interval = "1m"
         ensemble.prediction_horizon = 20
         ensemble.trained_stock_codes = ["600519", "000001", "300750"]
+        ensemble.trained_stock_last_train = {
+            "600519": "2026-02-19T10:00:00",
+            "000001": "2026-02-18T09:30:00",
+        }
 
         model_path = tmp_path / "ensemble_1m_20.pt"
         ensemble.save(str(model_path))
@@ -299,6 +303,10 @@ class TestEnsemble:
         assert info.get("trained_stock_codes", []) == [
             "600519", "000001", "300750"
         ]
+        assert info.get("trained_stock_last_train", {}) == {
+            "600519": "2026-02-19T10:00:00",
+            "000001": "2026-02-18T09:30:00",
+        }
 
 class TestTrainer:
     """Test trainer module"""

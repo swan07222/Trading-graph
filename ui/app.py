@@ -1,4 +1,5 @@
 # ui/app.py
+import json
 import math
 import os
 import signal
@@ -7,6 +8,7 @@ import threading
 import time
 from datetime import datetime, timedelta, timezone
 from importlib import import_module
+from pathlib import Path
 from statistics import median
 from typing import Any
 
@@ -26,6 +28,7 @@ from PyQt6.QtWidgets import (
     QLabel,
     QLineEdit,
     QListWidget,
+    QListWidgetItem,
     QMainWindow,
     QMessageBox,
     QProgressBar,
@@ -449,6 +452,7 @@ class MainApp(QMainWindow):
 
         self._bars_by_symbol: dict[str, list[dict]] = {}
         self._trained_stock_codes_cache: list[str] = []
+        self._trained_stock_last_train: dict[str, str] = {}
         self._last_bar_feed_ts: dict[str, float] = {}
         self._chart_symbol: str = ""
         self._history_refresh_once: set[tuple[str, str]] = set()
@@ -463,6 +467,7 @@ class MainApp(QMainWindow):
             self._session_bar_cache = get_session_bar_cache()
         except Exception:
             self._session_bar_cache = None
+        self._load_trained_stock_last_train_meta()
 
         # Auto-trade state
         self._auto_trade_mode: AutoTradeMode = AutoTradeMode.MANUAL
@@ -507,6 +512,98 @@ class MainApp(QMainWindow):
             return list(values)
         except Exception:
             return []
+
+    def _trained_stock_last_train_meta_path(self) -> Path:
+        return Path(CONFIG.data_dir) / "trained_stock_last_train.json"
+
+    def _load_trained_stock_last_train_meta(self) -> None:
+        """Load trained-stock last-train timestamps from disk."""
+        self._trained_stock_last_train = {}
+        path = self._trained_stock_last_train_meta_path()
+        if not path.exists():
+            return
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+            payload = raw.get("last_train", raw) if isinstance(raw, dict) else {}
+            if not isinstance(payload, dict):
+                return
+            out: dict[str, str] = {}
+            for k, v in payload.items():
+                code = self._ui_norm(str(k or ""))
+                if not code:
+                    continue
+                ts = str(v or "").strip()
+                if not ts:
+                    continue
+                out[code] = ts
+            self._trained_stock_last_train = out
+        except Exception as exc:
+            log.debug("Failed to load trained-stock last-train metadata: %s", exc)
+            self._trained_stock_last_train = {}
+
+    def _save_trained_stock_last_train_meta(self) -> None:
+        """Persist trained-stock last-train timestamps to disk."""
+        path = self._trained_stock_last_train_meta_path()
+        payload = {
+            "updated_at": datetime.now().isoformat(timespec="seconds"),
+            "last_train": dict(self._trained_stock_last_train or {}),
+        }
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(
+                json.dumps(payload, ensure_ascii=True, indent=2),
+                encoding="utf-8",
+            )
+        except Exception as exc:
+            log.debug("Failed to save trained-stock last-train metadata: %s", exc)
+
+    def _record_trained_stock_last_train(
+        self,
+        codes: list[str],
+        *,
+        trained_at: str | None = None,
+    ) -> None:
+        """Update last-train timestamps for the provided stock codes."""
+        when = str(trained_at or datetime.now().isoformat(timespec="seconds"))
+        changed = False
+        for raw in list(codes or []):
+            code = self._ui_norm(raw)
+            if not code:
+                continue
+            if self._trained_stock_last_train.get(code) != when:
+                self._trained_stock_last_train[code] = when
+                changed = True
+        if changed:
+            try:
+                if self.predictor is not None:
+                    if hasattr(self.predictor, "_trained_stock_last_train"):
+                        self.predictor._trained_stock_last_train = dict(  # type: ignore[attr-defined]
+                            self._trained_stock_last_train
+                        )
+                    ens = getattr(self.predictor, "ensemble", None)
+                    if ens is not None and hasattr(ens, "trained_stock_last_train"):
+                        ens.trained_stock_last_train = dict(
+                            self._trained_stock_last_train
+                        )
+            except Exception:
+                pass
+            self._save_trained_stock_last_train_meta()
+
+    @staticmethod
+    def _format_last_train_text(ts_text: str | None) -> str:
+        """Format ISO timestamp into short display text."""
+        if not ts_text:
+            return "--"
+        text = str(ts_text).strip()
+        if not text:
+            return "--"
+        try:
+            dt = datetime.fromisoformat(text.replace("Z", "+00:00"))
+            if dt.tzinfo is not None:
+                dt = dt.astimezone().replace(tzinfo=None)
+            return dt.strftime("%Y-%m-%d %H:%M")
+        except Exception:
+            return text[:16]
 
     def _set_initial_window_geometry(self) -> None:
         """Fit initial window to available screen so bottom controls remain visible."""
@@ -1707,7 +1804,7 @@ class MainApp(QMainWindow):
         # Auto-trade status indicator
         self.auto_trade_status_label = QLabel("  MANUAL  ")
         self.auto_trade_status_label.setStyleSheet(
-            "color: #8b949e; font-weight: bold; padding: 0 8px;"
+            "color: #aac3ec; font-weight: bold; padding: 0 8px;"
         )
         toolbar.addWidget(self.auto_trade_status_label)
 
@@ -2294,9 +2391,25 @@ class MainApp(QMainWindow):
         )
         ai_layout.addWidget(self.open_trained_tab_btn)
 
+        self.get_infor_btn = QPushButton("Get Infor (29d)")
+        self.get_infor_btn.setToolTip(
+            "Fetch 29-day history for all trained stocks from AKShare.\n"
+            "If market is closed, replaces saved realtime rows with AKShare rows.\n"
+            "Otherwise fetches incrementally from the last saved AKShare point."
+        )
+        self.get_infor_btn.clicked.connect(self._get_infor_trained_stocks)
+        ai_layout.addWidget(self.get_infor_btn)
+
         self.train_btn = QPushButton("Train Model")
         self.train_btn.clicked.connect(self._start_training)
         ai_layout.addWidget(self.train_btn)
+
+        self.train_trained_btn = QPushButton("Train Trained Stocks")
+        self.train_trained_btn.setToolTip(
+            "Train only already-trained stocks using newly synced cache data."
+        )
+        self.train_trained_btn.clicked.connect(self._train_trained_stocks)
+        ai_layout.addWidget(self.train_trained_btn)
 
         self.auto_learn_btn = QPushButton("Auto Learn")
         self.auto_learn_btn.clicked.connect(self._show_auto_learn)
@@ -2761,55 +2874,68 @@ class MainApp(QMainWindow):
     # =========================================================================
 
     def _apply_professional_style(self):
-        """Apply a cleaner, more professional trading desk theme."""
+        """Apply a modern, clean desktop trading theme without changing behavior."""
         self.setFont(QFont("Segoe UI", 10))
         self.setStyleSheet("""
-            QMainWindow { background: #0b1220; }
+            QMainWindow, QWidget {
+                background: #0b1422;
+                color: #dbe4f3;
+            }
 
             QMenuBar {
-                background: #10192d;
-                color: #d7e0f2;
-                border-bottom: 1px solid #1f2b45;
-                padding: 2px 4px;
+                background: #0f1b2e;
+                color: #dbe4f3;
+                border-bottom: 1px solid #253754;
+                padding: 3px 6px;
             }
-            QMenuBar::item { padding: 6px 10px; border-radius: 6px; }
-            QMenuBar::item:selected { background: #1b2742; }
+            QMenuBar::item {
+                padding: 6px 11px;
+                border-radius: 7px;
+                margin: 2px 2px;
+            }
+            QMenuBar::item:selected { background: #172742; }
             QMenu {
-                background: #10192d;
-                color: #d7e0f2;
-                border: 1px solid #283555;
+                background: #0f1b2e;
+                color: #dbe4f3;
+                border: 1px solid #2d4263;
                 padding: 6px;
             }
-            QMenu::item { padding: 7px 16px; border-radius: 6px; }
-            QMenu::item:selected { background: #1b2742; }
+            QMenu::item {
+                padding: 7px 16px;
+                border-radius: 6px;
+            }
+            QMenu::item:selected { background: #1a2c49; }
 
             QToolBar {
-                background: #10192d;
+                background: #0f1b2e;
                 border: none;
-                border-bottom: 1px solid #1f2b45;
+                border-bottom: 1px solid #253754;
                 spacing: 8px;
                 padding: 6px 8px;
             }
             QToolButton {
-                background: #17233d;
-                color: #d7e0f2;
-                border: 1px solid #283555;
-                border-radius: 7px;
-                padding: 6px 10px;
+                background: #15243d;
+                color: #dbe4f3;
+                border: 1px solid #2f4466;
+                border-radius: 8px;
+                padding: 6px 11px;
                 font-weight: 600;
             }
-            QToolButton:hover { border-color: #4c78ff; background: #1d2b4a; }
-            QToolButton:pressed { background: #223257; }
+            QToolButton:hover {
+                background: #1b2f50;
+                border-color: #4a7bff;
+            }
+            QToolButton:pressed { background: #233a61; }
 
             QGroupBox {
                 font-weight: 700;
                 font-size: 12px;
-                border: 1px solid #243454;
-                border-radius: 10px;
+                border: 1px solid #253754;
+                border-radius: 11px;
                 margin-top: 12px;
                 padding-top: 12px;
-                color: #8fb3ff;
-                background: #0f1728;
+                color: #9ab8ea;
+                background: #0f1b2e;
             }
             QGroupBox::title {
                 subcontrol-origin: margin;
@@ -2817,127 +2943,201 @@ class MainApp(QMainWindow):
                 padding: 0 6px;
             }
 
-            QLabel { color: #d7e0f2; font-size: 12px; }
+            QLabel {
+                color: #dbe4f3;
+                font-size: 12px;
+                background: transparent;
+            }
 
-            QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox {
-                min-height: 30px;
+            QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox, QListWidget {
+                min-height: 31px;
                 padding: 4px 8px;
-                border: 1px solid #2b3a5b;
-                border-radius: 7px;
-                background: #131d33;
-                color: #d7e0f2;
-                selection-background-color: #3558c8;
+                border: 1px solid #324968;
+                border-radius: 8px;
+                background: #13223a;
+                color: #dbe4f3;
+                selection-background-color: #2f5fda;
+                selection-color: #f8fbff;
             }
-            QLineEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus, QComboBox:focus {
-                border-color: #4c78ff;
-                background: #18243d;
+            QLineEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus, QComboBox:focus, QListWidget:focus {
+                border-color: #4a7bff;
+                background: #182b47;
             }
 
-            QTableWidget {
-                background: #0e1628;
-                color: #d7e0f2;
-                border: 1px solid #243454;
-                border-radius: 8px;
-                gridline-color: #23314f;
-                selection-background-color: #223860;
-                selection-color: #f3f7ff;
-                alternate-background-color: #101b2f;
+            QComboBox::drop-down {
+                border: none;
+                width: 22px;
             }
-            QTableWidget::item { padding: 6px; }
+
+            QTableWidget, QTableView, QTreeView {
+                background: #0e1a2d;
+                color: #dbe4f3;
+                border: 1px solid #253754;
+                border-radius: 9px;
+                gridline-color: #23334e;
+                selection-background-color: #22406d;
+                selection-color: #f7fbff;
+                alternate-background-color: #101f34;
+                outline: none;
+            }
+            QTableWidget::item, QTableView::item {
+                padding: 6px;
+                border: none;
+            }
             QHeaderView::section {
-                background: #16233d;
-                color: #a6c1ff;
+                background: #172840;
+                color: #aac3ec;
                 padding: 8px 10px;
                 border: none;
-                border-right: 1px solid #243454;
-                border-bottom: 1px solid #243454;
+                border-right: 1px solid #253754;
+                border-bottom: 1px solid #253754;
                 font-weight: 700;
             }
 
             QTabWidget::pane {
-                border: 1px solid #243454;
-                background: #0e1628;
-                border-radius: 8px;
+                border: 1px solid #253754;
+                background: #0e1a2d;
+                border-radius: 9px;
                 top: -1px;
             }
             QTabBar::tab {
-                background: #131f36;
-                color: #96a9d0;
+                background: #13223a;
+                color: #9db1d6;
                 padding: 9px 16px;
                 border-top-left-radius: 7px;
                 border-top-right-radius: 7px;
                 margin-right: 3px;
+                min-width: 72px;
             }
             QTabBar::tab:selected {
-                background: #1a2a49;
-                color: #dfe8ff;
-                border: 1px solid #314873;
-                border-bottom: 1px solid #1a2a49;
+                background: #1b3150;
+                color: #e8f0ff;
+                border: 1px solid #38537a;
+                border-bottom: 1px solid #1b3150;
             }
-            QTabBar::tab:hover:!selected { color: #c7d7ff; }
+            QTabBar::tab:hover:!selected {
+                color: #c9daf7;
+                background: #172a45;
+            }
 
             QPushButton {
-                background: #1a2a49;
-                color: #e6eeff;
-                border: 1px solid #335084;
-                border-radius: 7px;
+                background: #1c3253;
+                color: #eaf1ff;
+                border: 1px solid #3d5f8f;
+                border-radius: 8px;
                 padding: 8px 14px;
                 font-weight: 700;
             }
-            QPushButton:hover { background: #22365f; border-color: #4c78ff; }
-            QPushButton:pressed { background: #27406f; }
+            QPushButton:hover {
+                background: #24416b;
+                border-color: #4a7bff;
+            }
+            QPushButton:pressed { background: #2a4977; }
             QPushButton:disabled {
-                background: #121d33;
-                color: #5f6d89;
-                border-color: #243454;
+                background: #12223a;
+                color: #6b7d9c;
+                border-color: #253754;
+            }
+
+            QCheckBox, QRadioButton {
+                spacing: 7px;
+                color: #dbe4f3;
+                background: transparent;
+            }
+            QCheckBox::indicator, QRadioButton::indicator {
+                width: 16px;
+                height: 16px;
+            }
+            QCheckBox::indicator {
+                border: 1px solid #3b5479;
+                border-radius: 4px;
+                background: #13223a;
+            }
+            QCheckBox::indicator:checked {
+                background: #2f5fda;
+                border-color: #2f5fda;
+            }
+
+            QTextEdit, QPlainTextEdit {
+                background: #0c1728;
+                color: #cde8d7;
+                border: 1px solid #253754;
+                border-radius: 9px;
+                font-family: 'Consolas', 'Cascadia Mono', monospace;
+                padding: 6px;
+                selection-background-color: #2f5fda;
+                selection-color: #f8fbff;
             }
 
             QProgressBar {
-                border: 1px solid #2c3f63;
-                background: #101b2f;
-                border-radius: 6px;
+                border: 1px solid #304968;
+                background: #101f34;
+                border-radius: 7px;
                 text-align: center;
-                color: #dbe5ff;
+                color: #dbe4f3;
                 min-height: 18px;
             }
             QProgressBar::chunk {
-                border-radius: 5px;
+                border-radius: 6px;
                 background: qlineargradient(
                     x1:0, y1:0, x2:1, y2:0,
-                    stop:0 #2c7be5, stop:1 #32c48d
+                    stop:0 #2f6be0, stop:1 #39b982
                 );
             }
 
             QStatusBar {
-                background: #10192d;
-                color: #9eb0d3;
-                border-top: 1px solid #1f2b45;
-            }
-
-            QTextEdit {
-                background: #0b1324;
-                color: #c8f0d7;
-                border: 1px solid #243454;
-                border-radius: 8px;
-                font-family: 'Consolas', 'Cascadia Mono', monospace;
-                padding: 6px;
+                background: #0f1b2e;
+                color: #9db1d6;
+                border-top: 1px solid #253754;
             }
 
             QScrollBar:vertical {
-                background: #0f1728;
-                width: 10px;
+                background: #0f1b2e;
+                width: 11px;
                 margin: 2px;
+                border-radius: 5px;
             }
             QScrollBar::handle:vertical {
-                background: #2c3f63;
+                background: #34507a;
                 border-radius: 5px;
                 min-height: 24px;
             }
-            QScrollBar::handle:vertical:hover { background: #3d5688; }
+            QScrollBar::handle:vertical:hover { background: #45669c; }
             QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
                 border: none;
                 background: none;
                 height: 0;
+            }
+            QScrollBar:horizontal {
+                background: #0f1b2e;
+                height: 11px;
+                margin: 2px;
+                border-radius: 5px;
+            }
+            QScrollBar::handle:horizontal {
+                background: #34507a;
+                border-radius: 5px;
+                min-width: 24px;
+            }
+            QScrollBar::handle:horizontal:hover { background: #45669c; }
+            QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {
+                border: none;
+                background: none;
+                width: 0;
+            }
+
+            QSplitter::handle {
+                background: #1a2c47;
+            }
+            QSplitter::handle:hover {
+                background: #2b456b;
+            }
+
+            QToolTip {
+                background: #1a2c49;
+                color: #e9f0ff;
+                border: 1px solid #3b5479;
+                padding: 6px 8px;
             }
         """)
 
@@ -3039,6 +3239,33 @@ class MainApp(QMainWindow):
             pass
         return []
 
+    def _sync_trained_stock_last_train_from_model(self) -> None:
+        """Use loaded model artifacts as source-of-truth for last-train metadata."""
+        if self.predictor is None:
+            return
+        fn = getattr(self.predictor, "get_trained_stock_last_train", None)
+        if not callable(fn):
+            return
+        try:
+            raw = fn()
+        except Exception:
+            return
+        if not isinstance(raw, dict):
+            return
+        out: dict[str, str] = {}
+        for k, v in raw.items():
+            code = self._ui_norm(str(k or ""))
+            if not code:
+                continue
+            ts = str(v or "").strip()
+            if not ts:
+                continue
+            out[code] = ts
+        if out == dict(self._trained_stock_last_train or {}):
+            return
+        self._trained_stock_last_train = out
+        self._save_trained_stock_last_train_meta()
+
     def _get_trained_stock_set(self) -> set[str]:
         """Normalized trained stock set from metadata cache/predictor."""
         raw = list(getattr(self, "_trained_stock_codes_cache", []) or [])
@@ -3085,6 +3312,7 @@ class MainApp(QMainWindow):
                 return
             payload = dict(bar)
             payload["interval"] = iv
+            payload["source"] = str(payload.get("source", "") or "tencent_rt")
             wrote = self._session_bar_cache.append_bar(symbol, iv, payload)
             if wrote:
                 self._last_session_cache_write_ts[key] = now_ts
@@ -3138,7 +3366,14 @@ class MainApp(QMainWindow):
         """Load selected trained stock from right-panel list."""
         if item is None:
             return
-        code = self._ui_norm(item.text())
+        code_hint = ""
+        try:
+            code_hint = str(
+                item.data(Qt.ItemDataRole.UserRole) or ""
+            ).strip()
+        except Exception:
+            code_hint = ""
+        code = self._ui_norm(code_hint or item.text())
         if not code:
             return
         interval = self._normalize_interval_token(
@@ -3149,7 +3384,12 @@ class MainApp(QMainWindow):
         except Exception:
             pass
         try:
-            target_lookback = int(self._recommended_lookback(interval))
+            target_lookback = int(
+                max(
+                    self._recommended_lookback(interval),
+                    self._trained_stock_window_bars(interval),
+                )
+            )
             if int(self.lookback_spin.value()) < target_lookback:
                 self.lookback_spin.setValue(target_lookback)
         except Exception:
@@ -3181,7 +3421,20 @@ class MainApp(QMainWindow):
 
         self.trained_stock_list.clear()
         if view_codes:
-            self.trained_stock_list.addItems(view_codes)
+            for code in view_codes:
+                last_train = str(
+                    self._trained_stock_last_train.get(code, "")
+                ).strip()
+                last_text = self._format_last_train_text(last_train)
+                item = QListWidgetItem(
+                    f"{code}  | last train: {last_text}"
+                )
+                item.setData(Qt.ItemDataRole.UserRole, code)
+                item.setToolTip(
+                    f"Stock: {code}\n"
+                    f"Last Train: {last_text}"
+                )
+                self.trained_stock_list.addItem(item)
         elif all_codes and q:
             self.trained_stock_list.addItem(
                 "No matching trained stocks for current search."
@@ -3203,6 +3456,7 @@ class MainApp(QMainWindow):
 
     def _update_trained_stocks_ui(self, codes: list[str] | None = None):
         """Refresh trained-stock metadata section in AI panel."""
+        self._sync_trained_stock_last_train_from_model()
         stocks = list(codes) if isinstance(codes, list) else self._get_trained_stock_codes()
         self._trained_stock_codes_cache = list(stocks)
 
@@ -3231,6 +3485,233 @@ class MainApp(QMainWindow):
         idx = int(getattr(self, "_trained_tab_index", -1))
         if tabs is not None and idx >= 0:
             tabs.setCurrentIndex(idx)
+
+    def _get_infor_trained_stocks(self) -> None:
+        """
+        Refresh 29-day AKShare history for all trained stocks.
+
+        If data already exists in the target window, only fetches from the
+        last saved timestamp forward.
+        """
+        raw_codes = self._get_trained_stock_codes()
+        codes = list(
+            dict.fromkeys(
+                self._ui_norm(x) for x in list(raw_codes or []) if self._ui_norm(x)
+            )
+        )
+        if not codes:
+            self.log("No trained stocks found. Load/train a model first.", "warning")
+            return
+
+        old_worker = self.workers.get("get_infor")
+        if old_worker and old_worker.isRunning():
+            self.log("Get Infor is already running.", "info")
+            return
+
+        if hasattr(self, "get_infor_btn"):
+            self.get_infor_btn.setEnabled(False)
+        self.progress.setRange(0, 0)
+        self.progress.show()
+        self.status_label.setText(
+            f"Get Infor: syncing {len(codes)} trained stocks..."
+        )
+        self.log(
+            (
+                "Get Infor started: AKShare sync for "
+                f"{len(codes)} trained stocks (last 29 days, incremental)."
+            ),
+            "info",
+        )
+
+        def _task():
+            from data.fetcher import get_fetcher
+
+            fetcher = get_fetcher()
+            return fetcher.refresh_trained_stock_history(
+                codes,
+                interval="1m",
+                window_days=29,
+                allow_online=True,
+                sync_session_cache=True,
+                replace_realtime_after_close=True,
+            )
+
+        worker = WorkerThread(
+            _task,
+            timeout_seconds=float(max(180, int(len(codes)) * 18)),
+        )
+        self._track_worker(worker)
+        self.workers["get_infor"] = worker
+
+        def _finalize() -> None:
+            self.progress.hide()
+            if hasattr(self, "get_infor_btn"):
+                self.get_infor_btn.setEnabled(True)
+            self.workers.pop("get_infor", None)
+
+        def _on_done(res: object) -> None:
+            _finalize()
+            report = dict(res or {})
+            total = int(report.get("total", 0) or 0)
+            updated = int(report.get("updated", 0) or 0)
+            cached = int(report.get("cached", 0) or 0)
+            purged_map = dict(report.get("purged_realtime_rows", {}) or {})
+            purged = int(
+                sum(int(v or 0) for v in purged_map.values())
+            )
+            errors = dict(report.get("errors", {}) or {})
+            if errors:
+                self.log(
+                    (
+                        "Get Infor completed with warnings: "
+                        f"updated={updated}, cached={cached}, purged_rt={purged}, "
+                        f"errors={len(errors)}, total={total}."
+                    ),
+                    "warning",
+                )
+                bad_codes = ", ".join(list(errors.keys())[:8])
+                if bad_codes:
+                    self.log(f"Get Infor error codes: {bad_codes}", "warning")
+            else:
+                self.log(
+                    (
+                        "Get Infor completed: "
+                        f"updated={updated}, cached={cached}, purged_rt={purged}, "
+                        f"total={total}."
+                    ),
+                    "success",
+                )
+            self.status_label.setText("Get Infor completed")
+
+            try:
+                sym = self._ui_norm(self.stock_input.text())
+                iv = self._normalize_interval_token(self.interval_combo.currentText())
+                if sym:
+                    self._queue_history_refresh(sym, iv)
+            except Exception:
+                pass
+
+        def _on_error(err: str) -> None:
+            _finalize()
+            self.status_label.setText("Get Infor failed")
+            self.log(f"Get Infor failed: {err}", "error")
+
+        worker.result.connect(_on_done)
+        worker.error.connect(_on_error)
+        worker.start()
+
+    def _train_trained_stocks(self) -> None:
+        """
+        Train only already-trained stocks using latest cached data.
+
+        A dialog asks for stock count (N). The model is retrained on the
+        N stocks with the oldest last-train timestamps.
+        """
+        trained = list(
+            dict.fromkeys(
+                self._ui_norm(x) for x in self._get_trained_stock_codes()
+                if self._ui_norm(x)
+            )
+        )
+        self._sync_trained_stock_last_train_from_model()
+
+        pending_codes: set[str] = set()
+        try:
+            fetcher = getattr(self.predictor, "fetcher", None)
+            if fetcher is None:
+                from data.fetcher import get_fetcher
+                fetcher = get_fetcher()
+            reconcile_fn = getattr(fetcher, "reconcile_pending_cache_sync", None)
+            if callable(reconcile_fn):
+                try:
+                    reconcile_fn(codes=list(trained), interval="1m")
+                except TypeError:
+                    reconcile_fn()
+            pending_fn = getattr(fetcher, "get_pending_reconcile_codes", None)
+            if callable(pending_fn):
+                pending_codes = {
+                    self._ui_norm(x)
+                    for x in list(pending_fn(interval="1m") or [])
+                    if self._ui_norm(x)
+                }
+        except Exception:
+            pending_codes = set()
+
+        if pending_codes:
+            before = int(len(trained))
+            trained = [c for c in trained if c not in pending_codes]
+            removed = int(max(0, before - len(trained)))
+            if removed > 0:
+                self.log(
+                    (
+                        f"Skipped {removed} stock(s) with pending cache reconcile. "
+                        "Press Get Infor to finish sync before training."
+                    ),
+                    "warning",
+                )
+
+        if not trained:
+            if pending_codes:
+                self.log(
+                    "All trained stocks are waiting for cache reconcile. Run Get Infor first.",
+                    "warning",
+                )
+            else:
+                self.log("No trained stocks found. Load/train a model first.", "warning")
+            return
+
+        try:
+            from .dialogs import TrainTrainedStocksDialog
+        except Exception as exc:
+            self.log(f"Train trained stocks dialog unavailable: {exc}", "error")
+            return
+
+        dialog = TrainTrainedStocksDialog(
+            trained_codes=trained,
+            last_train_map=dict(self._trained_stock_last_train or {}),
+            parent=self,
+        )
+        dialog.exec()
+
+        result = getattr(dialog, "training_result", None)
+        if not isinstance(result, dict):
+            return
+
+        if str(result.get("status", "")).strip().lower() != "complete":
+            status = str(result.get("status", "cancelled")).strip().lower()
+            if status == "cancelled":
+                self.log("Train trained stocks cancelled.", "info")
+            return
+
+        trained_codes = list(
+            dict.fromkeys(
+                self._ui_norm(x)
+                for x in list(
+                    result.get("trained_stock_codes")
+                    or result.get("selected_codes")
+                    or []
+                )
+                if self._ui_norm(x)
+            )
+        )
+        if trained_codes:
+            trained_at = str(
+                result.get("trained_at") or datetime.now().isoformat(timespec="seconds")
+            )
+            self._record_trained_stock_last_train(
+                trained_codes,
+                trained_at=trained_at,
+            )
+            self._update_trained_stocks_ui()
+            self.log(
+                (
+                    "Train trained stocks completed: "
+                    f"{len(trained_codes)} stock(s)."
+                ),
+                "success",
+            )
+
+        self._init_components()
 
     def _init_auto_trader(self):
         """Initialize auto-trader on the execution engine."""
@@ -3360,6 +3841,31 @@ class MainApp(QMainWindow):
             bpd = float(fallback.get(iv, 1.0))
         bars = int(max(7, round(7.0 * bpd)))
         return max(50, bars) if iv != "1d" else 7
+
+    def _trained_stock_window_bars(
+        self, interval: str, window_days: int = 29
+    ) -> int:
+        """Return lookback bars representing the trained-stock refresh window."""
+        iv = self._normalize_interval_token(interval)
+        wd = max(1, int(window_days or 29))
+        try:
+            from data.fetcher import BARS_PER_DAY
+            bpd = float(BARS_PER_DAY.get(iv, 1.0))
+        except Exception:
+            fallback = {
+                "1m": 240.0,
+                "2m": 120.0,
+                "5m": 48.0,
+                "15m": 16.0,
+                "30m": 8.0,
+                "60m": 4.0,
+                "1h": 4.0,
+                "1d": 1.0,
+                "1wk": 0.2,
+                "1mo": 0.05,
+            }
+            bpd = float(fallback.get(iv, 1.0))
+        return int(max(1, round(float(wd) * max(0.01, bpd))))
 
     def _recommended_lookback(self, interval: str) -> int:
         """
@@ -4402,7 +4908,7 @@ class MainApp(QMainWindow):
 
         price = pred.current_price if hasattr(pred, 'current_price') else 0
         self.signals_table.setItem(
-            row, 4, QTableWidgetItem(f"¥{price:.2f}")
+            row, 4, QTableWidgetItem(f"CNY {price:.2f}")
         )
 
         action_btn = QPushButton("Trade")
@@ -4416,7 +4922,7 @@ class MainApp(QMainWindow):
             )
 
         self.log(
-            f"SIGNAL: {signal_text} - {pred.stock_code} @ ¥{price:.2f}",
+            f"SIGNAL: {signal_text} - {pred.stock_code} @ CNY {price:.2f}",
             "success"
         )
 
@@ -4468,7 +4974,7 @@ class MainApp(QMainWindow):
                     refresh_price = False
 
             if refresh_price:
-                text = f"¥{price:.2f}"
+                text = f"CNY {price:.2f}"
                 cell = self.watchlist.item(int(row), 1)
                 if cell is None:
                     self.watchlist.setItem(int(row), 1, QTableWidgetItem(text))
@@ -5381,6 +5887,11 @@ class MainApp(QMainWindow):
                     low = float(row.get("low", min(o, c)) or min(o, c))
                 except Exception:
                     low = min(o, c)
+                if iv not in ("1d", "1wk", "1mo"):
+                    # Recovery mode should avoid carrying forward vendor day-range
+                    # highs/lows into minute bars.
+                    h = max(o, c)
+                    low = min(o, c)
 
                 s = self._sanitize_ohlc(
                     o,
@@ -6286,7 +6797,7 @@ class MainApp(QMainWindow):
             norm_iv = requested_iv or source_iv
             is_trained = self._is_trained_stock(symbol)
             if is_trained:
-                target_floor = 7 if norm_iv == "1d" else 120
+                target_floor = int(self._trained_stock_window_bars(norm_iv))
                 lookback = max(target_floor, int(lookback_bars))
                 refresh_requested = bool(
                     self._consume_history_refresh(symbol, norm_iv)
@@ -6917,14 +7428,14 @@ class MainApp(QMainWindow):
 
         signal_colors = {
             Signal.STRONG_BUY: "#2ea043",
-            Signal.BUY: "#3fb950",
-            Signal.HOLD: "#d29922",
-            Signal.SELL: "#f85149",
+            Signal.BUY: "#35b57c",
+            Signal.HOLD: "#d8a03a",
+            Signal.SELL: "#e5534b",
             Signal.STRONG_SELL: "#da3633",
         }
 
         signal = getattr(pred, 'signal', Signal.HOLD)
-        color = signal_colors.get(signal, "#c9d1d9")
+        color = signal_colors.get(signal, "#dbe4f3")
         signal_text = (
             signal.value if hasattr(signal, 'value') else str(signal)
         )
@@ -6971,13 +7482,13 @@ class MainApp(QMainWindow):
                     sent_label = sentiment['label']
 
                     if sent_label == "positive":
-                        sent_color = "#3fb950"
+                        sent_color = "#35b57c"
                         sent_emoji = "UP"
                     elif sent_label == "negative":
-                        sent_color = "#f85149"
+                        sent_color = "#e5534b"
                         sent_emoji = "DOWN"
                     else:
-                        sent_color = "#d29922"
+                        sent_color = "#d8a03a"
                         sent_emoji = "NEUTRAL"
 
                     news_html = f"""
@@ -7038,15 +7549,22 @@ class MainApp(QMainWindow):
 
         html = f"""
         <style>
-            body {{ color: #c9d1d9; font-family: Consolas; }}
+            body {{
+                color: #dbe4f3;
+                font-family: Consolas;
+                background-color: transparent;
+            }}
             .signal {{
                 color: {color}; font-size: 18px; font-weight: bold;
             }}
-            .section {{ margin: 10px 0; }}
-            .label {{ color: #8b949e; }}
-            .positive {{ color: #3fb950; }}
-            .negative {{ color: #f85149; }}
-            .neutral {{ color: #d29922; }}
+            .section {{
+                margin: 10px 0;
+                background-color: transparent;
+            }}
+            .label {{ color: #aac3ec; }}
+            .positive {{ color: #35b57c; }}
+            .negative {{ color: #e5534b; }}
+            .neutral {{ color: #d8a03a; }}
         </style>
 
         <div class="section">
@@ -7098,10 +7616,10 @@ class MainApp(QMainWindow):
             html += f"""
             <div class="section">
                 <span class="label">Trading Plan:</span><br/>
-                Entry: ¥{entry:.2f} |
-                Stop: ¥{stop_loss:.2f} ({stop_loss_pct:+.1f}%)<br/>
-                Target 1: ¥{target_1:.2f} ({target_1_pct:+.1f}%) |
-                Target 2: ¥{target_2:.2f} ({target_2_pct:+.1f}%)
+                Entry: CNY {entry:.2f} |
+                Stop: CNY {stop_loss:.2f} ({stop_loss_pct:+.1f}%)<br/>
+                Target 1: CNY {target_1:.2f} ({target_1_pct:+.1f}%) |
+                Target 2: CNY {target_2:.2f} ({target_2_pct:+.1f}%)
             </div>
             """
 
@@ -7118,7 +7636,7 @@ class MainApp(QMainWindow):
                 html += f"""
                 <div class="section">
                     <span class="label">Forecast Interval:</span>
-                    ¥{lo_last:.2f} to ¥{hi_last:.2f}
+                    CNY {lo_last:.2f} to CNY {hi_last:.2f}
                     ({spread_pct:.1f}% width at horizon)
                 </div>
                 """
@@ -7132,8 +7650,8 @@ class MainApp(QMainWindow):
             html += f"""
             <div class="section">
                 <span class="label">Position:</span>
-                {shares:,} shares | ¥{value:,.2f} |
-                Risk: ¥{risk_amount:,.2f}
+                {shares:,} shares | CNY {value:,.2f} |
+                Risk: CNY {risk_amount:,.2f}
             </div>
             """
 
@@ -7176,7 +7694,7 @@ class MainApp(QMainWindow):
             signal.value if hasattr(signal, 'value') else str(signal)
         )
         signal_item = QTableWidgetItem(signal_text)
-        signal_item.setForeground(QColor("#58a6ff"))
+        signal_item.setForeground(QColor("#79a6ff"))
         self.history_table.setItem(row, 2, signal_item)
 
         prob_up = getattr(pred, 'prob_up', 0)
@@ -7265,20 +7783,20 @@ class MainApp(QMainWindow):
 
             if direction == "NONE":
                 result_item.setText("--")
-                result_item.setForeground(QColor("#8b949e"))
+                result_item.setForeground(QColor("#aac3ec"))
             elif pnl > 0:
                 result_item.setText(
-                    f"CORRECT +¥{pnl:,.2f} ({signed_ret_pct:+.2f}%)"
+                    f"CORRECT CNY {pnl:+,.2f} ({signed_ret_pct:+.2f}%)"
                 )
-                result_item.setForeground(QColor("#3fb950"))
+                result_item.setForeground(QColor("#35b57c"))
             elif pnl < 0:
                 result_item.setText(
-                    f"WRONG ¥{pnl:,.2f} ({signed_ret_pct:+.2f}%)"
+                    f"WRONG CNY {pnl:,.2f} ({signed_ret_pct:+.2f}%)"
                 )
-                result_item.setForeground(QColor("#f85149"))
+                result_item.setForeground(QColor("#e5534b"))
             else:
-                result_item.setText("FLAT ¥0.00 (+0.00%)")
-                result_item.setForeground(QColor("#8b949e"))
+                result_item.setText("FLAT CNY 0.00 (+0.00%)")
+                result_item.setForeground(QColor("#aac3ec"))
 
             meta["mark_price"] = mark_price
             result_item.setData(Qt.ItemDataRole.UserRole, meta)
@@ -7345,7 +7863,7 @@ class MainApp(QMainWindow):
             gross_correct = float(stats.get("correct_profit", 0.0) or 0.0)
             gross_wrong = float(stats.get("wrong_loss", 0.0) or 0.0)
             label_profit.setText(f"CNY {net_val:+,.2f}")
-            color = "#3fb950" if net_val >= 0 else "#f85149"
+            color = "#35b57c" if net_val >= 0 else "#e5534b"
             label_profit.setStyleSheet(
                 f"color: {color}; font-size: 16px; font-weight: bold;"
             )
@@ -7363,7 +7881,7 @@ class MainApp(QMainWindow):
             rate = float(stats.get("hit_rate", 0.0) or 0.0)
             label_rate.setText(f"{rate:.1%} ({correct}/{total})")
             label_rate.setStyleSheet(
-                "color: #58a6ff; font-size: 16px; font-weight: bold;"
+                "color: #79a6ff; font-size: 16px; font-weight: bold;"
             )
 
     def _scan_stocks(self):
@@ -8042,10 +8560,10 @@ class MainApp(QMainWindow):
             self, "Confirm Buy Order",
             f"<b>Buy {pred.stock_code} - {stock_name}</b><br><br>"
             f"Quantity: {shares:,} shares<br>"
-            f"Price: ¥{entry:.2f}<br>"
-            f"Value: ¥{value:,.2f}<br>"
-            f"Stop Loss: ¥{stop_loss:.2f}<br>"
-            f"Target: ¥{target_2:.2f}",
+            f"Price: CNY {entry:.2f}<br>"
+            f"Value: CNY {value:,.2f}<br>"
+            f"Stop Loss: CNY {stop_loss:.2f}<br>"
+            f"Target: CNY {target_2:.2f}",
             QMessageBox.StandardButton.Yes
             | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No
@@ -8111,7 +8629,7 @@ class MainApp(QMainWindow):
                 self, "Confirm Sell Order",
                 f"<b>Sell {pred.stock_code} - {stock_name}</b><br><br>"
                 f"Available: {available_qty:,} shares<br>"
-                f"Current Price: ¥{current_price:.2f}",
+                f"Current Price: CNY {current_price:.2f}",
                 QMessageBox.StandardButton.Yes
                 | QMessageBox.StandardButton.No,
                 QMessageBox.StandardButton.No
@@ -8149,7 +8667,7 @@ class MainApp(QMainWindow):
         price = getattr(fill, 'price', 0)
 
         self.log(
-            f"Order filled: {side} {qty} {order.symbol} @ ¥{price:.2f}",
+            f"Order filled: {side} {qty} {order.symbol} @ CNY {price:.2f}",
             "success"
         )
         self._refresh_portfolio()
@@ -8174,14 +8692,14 @@ class MainApp(QMainWindow):
             total_pnl = getattr(account, 'total_pnl', 0)
             positions = getattr(account, 'positions', {})
 
-            self.account_labels['equity'].setText(f"¥{equity:,.2f}")
-            self.account_labels['cash'].setText(f"¥{available:,.2f}")
+            self.account_labels['equity'].setText(f"CNY {equity:,.2f}")
+            self.account_labels['cash'].setText(f"CNY {available:,.2f}")
             self.account_labels['positions'].setText(
-                f"¥{market_value:,.2f}"
+                f"CNY {market_value:,.2f}"
             )
 
-            pnl_color = "#3fb950" if total_pnl >= 0 else "#f85149"
-            self.account_labels['pnl'].setText(f"¥{total_pnl:,.2f}")
+            pnl_color = "#35b57c" if total_pnl >= 0 else "#e5534b"
+            self.account_labels['pnl'].setText(f"CNY {total_pnl:,.2f}")
             self.account_labels['pnl'].setStyleSheet(
                 f"color: {pnl_color}; font-size: 18px; font-weight: bold;"
             )
@@ -8219,6 +8737,22 @@ class MainApp(QMainWindow):
             from .dialogs import TrainingDialog
             dialog = TrainingDialog(self)
             dialog.exec()
+            result = getattr(dialog, "training_result", None)
+            if isinstance(result, dict):
+                if str(result.get("status", "")).strip().lower() == "complete":
+                    trained_codes = list(
+                        dict.fromkeys(
+                            self._ui_norm(x)
+                            for x in list(result.get("trained_stock_codes", []) or [])
+                            if self._ui_norm(x)
+                        )
+                    )
+                    if trained_codes:
+                        self._record_trained_stock_last_train(
+                            trained_codes,
+                            trained_at=datetime.now().isoformat(timespec="seconds"),
+                        )
+                        self._update_trained_stocks_ui()
         except Exception as e:
             self.log(f"Training dialog failed: {e}", "error")
             return
@@ -8343,7 +8877,7 @@ class MainApp(QMainWindow):
                 "Enable fully automatic trading?\n\n"
                 f"- Min confidence: {CONFIG.auto_trade.min_confidence:.0%}\n"
                 f"- Max trades/day: {CONFIG.auto_trade.max_trades_per_day}\n"
-                f"- Max order value: ¥{CONFIG.auto_trade.max_auto_order_value:,.0f}\n"
+                f"- Max order value: CNY {CONFIG.auto_trade.max_auto_order_value:,.0f}\n"
                 f"- Max auto positions: {CONFIG.auto_trade.max_auto_positions}\n\n"
                 "You can pause or switch to Manual at any time.",
                 QMessageBox.StandardButton.Yes
@@ -8413,7 +8947,7 @@ class MainApp(QMainWindow):
         else:
             self.auto_trade_status_label.setText("  MANUAL  ")
             self.auto_trade_status_label.setStyleSheet(
-                "color: #8b949e; font-weight: bold; padding: 0 8px;"
+                "color: #aac3ec; font-weight: bold; padding: 0 8px;"
             )
 
     def _toggle_auto_pause(self):
@@ -8512,7 +9046,7 @@ class MainApp(QMainWindow):
         max_order_spin = QDoubleSpinBox()
         max_order_spin.setRange(1000, 1000000)
         max_order_spin.setValue(cfg.max_auto_order_value)
-        max_order_spin.setPrefix("¥ ")
+        max_order_spin.setPrefix("CNY ")
         max_order_spin.setSingleStep(5000)
         form.addRow("Max Order Value:", max_order_spin)
 
@@ -8672,7 +9206,7 @@ class MainApp(QMainWindow):
             self.log(
                 f"AUTO-TRADE: {action.side.upper()} "
                 f"{action.quantity} {action.stock_code} "
-                f"@ ¥{action.price:.2f} ({action.confidence:.0%})",
+                f"@ CNY {action.price:.2f} ({action.confidence:.0%})",
                 "success"
             )
         elif action.decision == "SKIPPED":
@@ -8712,7 +9246,7 @@ class MainApp(QMainWindow):
             row, 3, QTableWidgetItem(f"{action.confidence:.0%}")
         )
         self.pending_table.setItem(
-            row, 4, QTableWidgetItem(f"¥{action.price:.2f}")
+            row, 4, QTableWidgetItem(f"CNY {action.price:.2f}")
         )
 
         # Approve/Reject buttons
@@ -8749,7 +9283,7 @@ class MainApp(QMainWindow):
 
         self.log(
             f"PENDING: {action.signal_type} {action.stock_code} "
-            f"@ ¥{action.price:.2f} - approve or reject",
+            f"@ CNY {action.price:.2f} - approve or reject",
             "warning"
         )
         QApplication.alert(self)
@@ -8797,7 +9331,7 @@ class MainApp(QMainWindow):
             elif state.mode == AutoTradeMode.SEMI_AUTO:
                 color = "#FFD54F"
             else:
-                color = "#8b949e"
+                color = "#aac3ec"
             mode_label.setStyleSheet(
                 f"color: {color}; font-size: 16px; font-weight: bold;"
             )
@@ -8813,8 +9347,8 @@ class MainApp(QMainWindow):
         pnl_label = self.auto_trade_labels.get('pnl')
         if pnl_label:
             pnl = state.auto_trade_pnl
-            pnl_color = "#3fb950" if pnl >= 0 else "#f85149"
-            pnl_label.setText(f"¥{pnl:+,.2f}")
+            pnl_color = "#35b57c" if pnl >= 0 else "#e5534b"
+            pnl_label.setText(f"CNY {pnl:+,.2f}")
             pnl_label.setStyleSheet(
                 f"color: {pnl_color}; font-size: 16px; font-weight: bold;"
             )
@@ -8840,7 +9374,7 @@ class MainApp(QMainWindow):
             else:
                 status_label.setText("Idle")
                 status_label.setStyleSheet(
-                    "color: #8b949e; font-size: 14px;"
+                    "color: #aac3ec; font-size: 14px;"
                 )
 
         if state.is_safety_paused or state.is_paused:
@@ -8884,7 +9418,7 @@ class MainApp(QMainWindow):
                 f"Market Open | Trading Hours: {hours_text}"
             )
             self.market_label.setStyleSheet(
-                "color: #3fb950; font-weight: bold;"
+                "color: #35b57c; font-weight: bold;"
             )
         else:
             next_open = self._next_market_open(now_sh)
@@ -8895,19 +9429,19 @@ class MainApp(QMainWindow):
             self.market_label.setText(
                 f"Market Closed | Trading Hours: {hours_text} | Next Open: {next_open_text}"
             )
-            self.market_label.setStyleSheet("color: #f85149;")
+            self.market_label.setStyleSheet("color: #e5534b;")
 
     def log(self, message: str, level: str = "info"):
         """Log message to UI"""
         timestamp = datetime.now().strftime("%H:%M:%S")
 
         colors = {
-            "info": "#c9d1d9",
-            "success": "#3fb950",
-            "warning": "#d29922",
-            "error": "#f85149",
+            "info": "#dbe4f3",
+            "success": "#35b57c",
+            "warning": "#d8a03a",
+            "error": "#e5534b",
         }
-        color = colors.get(level, "#c9d1d9")
+        color = colors.get(level, "#dbe4f3")
 
         formatted = (
             f'<span style="color: #888;">[{timestamp}]</span> '
@@ -9120,3 +9654,4 @@ def _restore_sigint_handler(previous_handler) -> None:
 
 if __name__ == "__main__":
     run_app()
+

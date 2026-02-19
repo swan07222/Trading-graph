@@ -5,9 +5,9 @@
 
 # ML Framework
 torch>=2.0.0,<3.0.0
-numpy>=1.24.0,<2.0.0
+numpy>=2.0.0,<3.0.0
 pandas>=2.0.0,<3.0.0
-scikit-learn>=1.3.0,<2.0.0
+scikit-learn>=1.8.0,<2.0.0
 scipy>=1.11.0,<2.0.0
 
 # Technical Analysis
@@ -22,6 +22,7 @@ pyqtgraph>=0.13.0,<1.0.0
 
 # HTTP
 requests>=2.31.0,<3.0.0
+psutil>=6.0.0,<7.0.0
 
 # Progress bars
 tqdm>=4.65.0,<5.0.0

@@ -1,4 +1,4 @@
-﻿# models/auto_learner.py
+# models/auto_learner.py
 
 import hashlib
 import json
@@ -814,7 +814,7 @@ class StockRotator:
         self._failed.clear()
 
     def reset_processed(self):
-        """Clear processed set 鈥?used by plateau handler."""
+        """Clear processed set - used by plateau handler."""
         self._processed.clear()
 
     def reset_discovery(self):
@@ -822,7 +822,7 @@ class StockRotator:
         self._last_discovery = 0
 
     def clear_pool(self):
-        """Clear the stock pool 鈥?used by reset_rotation()."""
+        """Clear the stock pool - used by reset_rotation()."""
         self._pool.clear()
 
     # FIX PRIV: Public methods for state migration from old format
@@ -1328,7 +1328,7 @@ class ContinuousLearner:
         return self._should_stop()
 
     # =========================================================================
-    # LIFECYCLE 鈥?AUTO MODE
+    # LIFECYCLE - AUTO MODE
     # =========================================================================
 
     def start(
@@ -1646,7 +1646,7 @@ class ContinuousLearner:
         self._notify()
 
     # =========================================================================
-    # LIFECYCLE 鈥?TARGETED MODE
+    # LIFECYCLE - TARGETED MODE
     # =========================================================================
 
     def start_targeted(
@@ -1794,7 +1794,7 @@ class ContinuousLearner:
 
             return {
                 'valid': True, 'code': code, 'name': name, 'bars': bars,
-                'message': f'OK 鈥?{bars} bars available',
+                'message': f'OK - {bars} bars available',
             }
 
         except Exception as e:
@@ -1804,7 +1804,7 @@ class ContinuousLearner:
             }
 
     # =========================================================================
-    # MAIN LOOP 鈥?AUTO MODE
+    # MAIN LOOP - AUTO MODE
     # =========================================================================
 
     def _main_loop(
@@ -1968,7 +1968,7 @@ class ContinuousLearner:
             self._notify()
 
     # =========================================================================
-    # MAIN LOOP 鈥?TARGETED MODE
+    # MAIN LOOP - TARGETED MODE
     # =========================================================================
 
     def _targeted_loop(
@@ -2053,7 +2053,7 @@ class ContinuousLearner:
     def _handle_plateau(
         self, plateau: dict, current_epochs: int, incremental: bool,
     ) -> tuple[int, bool]:
-        """Graduated plateau response 鈥?uses public rotator methods."""
+        """Graduated plateau response - uses public rotator methods."""
         action = plateau['action']
         log.info(f"Plateau response: {plateau['message']}")
         self._update(message=plateau['message'])
@@ -2078,7 +2078,7 @@ class ContinuousLearner:
         return current_epochs, incremental
 
     # =========================================================================
-    # SINGLE CYCLE 鈥?AUTO MODE
+    # SINGLE CYCLE - AUTO MODE
     # =========================================================================
 
     def _run_cycle(
@@ -2483,7 +2483,7 @@ class ContinuousLearner:
             return False
 
     # =========================================================================
-    # SINGLE CYCLE 鈥?TARGETED MODE
+    # SINGLE CYCLE - TARGETED MODE
     # =========================================================================
 
     def _run_targeted_cycle(
@@ -2515,7 +2515,7 @@ class ContinuousLearner:
 
             if not train_codes:
                 self.progress.add_warning(
-                    "All selected stocks overlap with holdout set 鈥?"
+                    "All selected stocks overlap with holdout set - "
                     "training on them anyway"
                 )
                 train_codes = list(stock_codes)
@@ -2857,7 +2857,7 @@ class ContinuousLearner:
             self._update(
                 stage="complete", progress=100.0,
                 message=(
-                    f"鉁?{label}Cycle {cycle_number}: acc={acc:.1%}, "
+                    f"[OK] {label}Cycle {cycle_number}: acc={acc:.1%}, "
                     f"{len(ok_codes)} trained, "
                     f"total={len(self._replay)} | ACCEPTED"
                 ),
@@ -2981,14 +2981,14 @@ class ContinuousLearner:
             raise CancelledException()
 
         if len(new_holdout) < min_required:
-            log.warning("Failed to build new holdout set 鈥?keeping existing")
+            log.warning("Failed to build new holdout set - keeping existing")
             return
 
         # Atomic check-and-swap
         with self._lock:
             current_holdout_set = set(self._holdout_codes)
             if current_holdout_set != old_holdout_set and self._holdout_codes:
-                log.debug("Holdout already updated by another thread 鈥?skipping")
+                log.debug("Holdout already updated by another thread - skipping")
                 return
             self._holdout_codes = new_holdout
 
@@ -3123,7 +3123,7 @@ class ContinuousLearner:
         holdout_snapshot = list(self._get_holdout_set())
 
         if not holdout_snapshot:
-            log.info("No holdout validation 鈥?accepting")
+            log.info("No holdout validation - accepting")
             return True
 
         post_val = self._guardian.validate_model(
@@ -3513,7 +3513,7 @@ class ContinuousLearner:
                 data_str = json.dumps(state, indent=2, sort_keys=True)
                 expected = hashlib.sha256(data_str.encode()).hexdigest()[:16]
                 if saved_checksum != expected:
-                    log.warning("State file checksum mismatch 鈥?may be corrupted")
+                    log.warning("State file checksum mismatch - may be corrupted")
             elif '_checksum' in raw:
                 raw_copy = dict(raw)
                 raw_copy.pop('_checksum', None)
