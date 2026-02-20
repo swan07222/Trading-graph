@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(done)",
+      "Bash(while read f)",
+      "Bash(do wc -l \"$f\")",
+      "Bash(python -c:*)"
+    ]
+  }
+}
