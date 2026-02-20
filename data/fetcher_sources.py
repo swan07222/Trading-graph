@@ -764,280 +764,43 @@ class AkShareSource(DataSource):
         return df
 
 
-class ITickSource(DataSource):
-    """iTick source for historical K-line bars."""
+class SinaHistorySource(DataSource):
+    """Sina historical K-line source for CN equity (China direct IP)."""
 
-    name = "itick"
-    priority = 0
-    needs_china_direct = False
+    name = "sina"
+    priority = 2
+    needs_china_direct = True
     needs_vpn = False
-    _CB_ERROR_THRESHOLD = 3
-    _CB_MIN_COOLDOWN = 30
-    _CB_MAX_COOLDOWN = 600
-    _CB_COOLDOWN_INCREMENT = 30
-    _CB_HALF_OPEN_PROBE_INTERVAL = 15.0
+    _CB_ERROR_THRESHOLD = 8
+    _CB_MIN_COOLDOWN = 15
+    _CB_MAX_COOLDOWN = 90
 
-    _FREE_BASE_URL = "https://api-free.itick.io/stock"
-    _PRO_BASE_URL = "https://api.itick.io/stock"
-    _TOKEN_ENV_KEYS = (
-        "TRADING_ITICK_TOKEN",
-        "ITICK_TOKEN",
-        "ITICK_API_KEY",
-    )
-    _BASE_URL_ENV_KEYS = (
-        "TRADING_ITICK_BASE_URL",
-        "ITICK_BASE_URL",
-    )
-    _MAX_PAGE_LIMIT = 1200
-    _MAX_PAGES = 28
-    _PAGE_DELAY_SECONDS = 0.12
-    _FREE_RPM_DEFAULT = 5
-    _PRO_RPM_DEFAULT = 60
-    _RPM_MIN = 1
-    _RPM_MAX = 240
-    _RATE_WINDOW_SECONDS = 60.0
-    _RATE_STATE_LOCK = threading.Lock()
-    _RATE_STATE: dict[str, list[float]] = {}
-
-    # https://docs.itick.io/reference/stock-kline
-    _KTYPE_MAP = {
+    _KLINE_SCALE_MAP = {
         "1m": "1",
-        "5m": "2",
-        "15m": "3",
-        "30m": "4",
-        "60m": "5",
-        "1h": "5",
-        "1d": "8",
-        "1wk": "9",
-        "1mo": "10",
+        "5m": "5",
+        "15m": "15",
+        "30m": "30",
+        "60m": "60",
+        "1h": "60",
+        # Sina uses 240-min bars as daily bars.
+        "1d": "240",
     }
-
-    def __init__(self):
-        super().__init__()
-        self._base_url = self._resolve_base_url()
-        self._token = self._resolve_token()
-        self._allow_anonymous = self._read_bool_env(
-            ("TRADING_ITICK_ALLOW_ANON",),
-            default=False,
-        )
-        self._free_tier_mode = self._detect_free_tier_mode()
-        self._max_calls_per_min = self._resolve_max_calls_per_min()
-        self._min_call_spacing_s = max(
-            0.5,
-            float(self._RATE_WINDOW_SECONDS) / float(max(1, self._max_calls_per_min)),
-        )
-        self._quota_cooldown_until_ts: float = 0.0
-        self._quota_backoff_s: float = 0.0
-        self._last_quota_warn_ts: float = 0.0
-        token_key = self._token[:12] if self._token else "anon"
-        self._rate_key = f"{self._base_url}|{token_key}"
-
-        if (not self._token) and (not self._allow_anonymous):
-            self.status.available = False
-            log.warning(
-                "iTick disabled: missing token. "
-                "Set TRADING_ITICK_TOKEN to enable iTick historical data."
-            )
-        else:
-            tier = "free" if self._free_tier_mode else "pro/unknown"
-            log.info(
-                "iTick initialized (base_url=%s tier=%s rpm=%d)",
-                self._base_url,
-                tier,
-                int(self._max_calls_per_min),
-            )
-
-    @staticmethod
-    def _read_bool_env(
-        keys: tuple[str, ...],
-        default: bool = False,
-    ) -> bool:
-        for key in keys:
-            raw = str(os.environ.get(key, "")).strip().lower()
-            if not raw:
-                continue
-            if raw in ("1", "true", "yes", "on"):
-                return True
-            if raw in ("0", "false", "no", "off"):
-                return False
-        return bool(default)
-
-    def _resolve_token(self) -> str:
-        for key in self._TOKEN_ENV_KEYS:
-            token = str(os.environ.get(key, "")).strip()
-            if token:
-                return token
-        for key in self._TOKEN_ENV_KEYS:
-            token = self._read_windows_user_env(key)
-            if token:
-                return token
-        return ""
-
-    @staticmethod
-    def _read_windows_user_env(key: str) -> str:
-        if os.name != "nt":
-            return ""
-        name = str(key or "").strip()
-        if not name:
-            return ""
-        try:
-            import winreg
-
-            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, "Environment") as hk:
-                val, _ = winreg.QueryValueEx(hk, name)
-            text = str(val or "").strip()
-            return text
-        except Exception:
-            return ""
-
-    def _resolve_base_url(self) -> str:
-        raw = ""
-        for key in self._BASE_URL_ENV_KEYS:
-            val = str(os.environ.get(key, "")).strip()
-            if val:
-                raw = val
-                break
-
-        if not raw:
-            use_pro = self._read_bool_env(
-                ("TRADING_ITICK_USE_PRO", "TRADING_ITICK_USE_PROD"),
-                default=False,
-            )
-            raw = self._PRO_BASE_URL if use_pro else self._FREE_BASE_URL
-
-        base = raw.rstrip("/")
-        if not base.lower().endswith("/stock"):
-            base = f"{base}/stock"
-        return base
-
-    def _detect_free_tier_mode(self) -> bool:
-        explicit = os.environ.get("TRADING_ITICK_FREE_TIER")
-        if explicit is not None:
-            return self._read_bool_env(("TRADING_ITICK_FREE_TIER",), default=False)
-        return "api-free.itick.io" in str(self._base_url).lower()
-
-    def _resolve_max_calls_per_min(self) -> int:
-        raw = os.environ.get("TRADING_ITICK_MAX_CALLS_PER_MIN")
-        if raw is None or str(raw).strip() == "":
-            return int(
-                self._FREE_RPM_DEFAULT if self._free_tier_mode else self._PRO_RPM_DEFAULT
-            )
-        try:
-            val = int(float(str(raw).strip()))
-        except Exception:
-            val = self._FREE_RPM_DEFAULT if self._free_tier_mode else self._PRO_RPM_DEFAULT
-        return int(max(self._RPM_MIN, min(self._RPM_MAX, val)))
-
-    def _headers(self) -> dict[str, str]:
-        headers = {"accept": "application/json"}
-        if self._token:
-            headers["token"] = self._token
-        return headers
-
-    @property
-    def is_free_tier(self) -> bool:
-        return bool(self._free_tier_mode)
+    _MAX_DATALEN = 1600
+    _ENDPOINTS = (
+        "https://quotes.sina.cn/cn/api/openapi.php/CN_MarketDataService.getKLineData",
+        "https://money.finance.sina.com.cn/quotes_service/api/json_v2.php/CN_MarketData.getKLineData",
+    )
 
     def is_available(self) -> bool:
-        if (not self._token) and (not self._allow_anonymous):
-            return False
-        if time.monotonic() < float(self._quota_cooldown_until_ts):
+        if not self.is_suitable_for_network():
             return False
         return super().is_available()
 
-    def _mark_itick_cooldown(
-        self,
-        *,
-        seconds: float,
-        reason: str,
-        hard_disable: bool = False,
-    ) -> None:
-        cool_s = float(max(self._min_call_spacing_s, seconds))
-        now_m = time.monotonic()
-        self._quota_backoff_s = max(cool_s, float(self._quota_backoff_s) * 1.5)
-        self._quota_backoff_s = min(float(self._quota_backoff_s), 900.0)
-        self._quota_cooldown_until_ts = max(
-            float(self._quota_cooldown_until_ts),
-            now_m + float(self._quota_backoff_s),
-        )
+    def is_suitable_for_network(self) -> bool:
+        from core.network import get_network_env
 
-        until_dt = datetime.now() + timedelta(seconds=float(self._quota_backoff_s))
-        with self._lock:
-            self.status.disabled_until = until_dt
-            if hard_disable:
-                self.status.available = False
-            self.status.last_error = str(reason)
-
-        if (now_m - float(self._last_quota_warn_ts)) >= 10.0:
-            self._last_quota_warn_ts = now_m
-            log.warning(
-                "iTick cooldown %.0fs: %s",
-                float(self._quota_backoff_s),
-                str(reason),
-            )
-
-    def _wait_client_rate_slot(self) -> None:
-        max_calls = int(max(1, self._max_calls_per_min))
-        min_spacing = float(max(0.1, self._min_call_spacing_s))
-        window = float(self._RATE_WINDOW_SECONDS)
-
-        while True:
-            now = time.monotonic()
-            if now < float(self._quota_cooldown_until_ts):
-                time.sleep(min(2.0, float(self._quota_cooldown_until_ts) - now))
-                continue
-
-            with self._RATE_STATE_LOCK:
-                bucket = self._RATE_STATE.setdefault(self._rate_key, [])
-                cutoff = now - window
-                if bucket:
-                    bucket[:] = [t for t in bucket if t > cutoff]
-
-                wait_quota = 0.0
-                if len(bucket) >= max_calls:
-                    wait_quota = max(0.0, (bucket[0] + window) - now)
-
-                wait_spacing = 0.0
-                if bucket:
-                    wait_spacing = max(0.0, (bucket[-1] + min_spacing) - now)
-
-                wait_s = max(wait_quota, wait_spacing)
-                if wait_s <= 0:
-                    bucket.append(now)
-                    return
-
-            time.sleep(min(2.0, wait_s))
-
-    @staticmethod
-    def _is_rate_limit_text(msg: str) -> bool:
-        text = str(msg or "").strip().lower()
-        if not text:
-            return False
-        keys = (
-            "rate limit",
-            "too many request",
-            "too many requests",
-            "frequency",
-            "quota",
-            "429",
-            "request limit",
-        )
-        return any(k in text for k in keys)
-
-    @staticmethod
-    def _retry_after_seconds(headers: object) -> float:
-        if headers is None:
-            return 0.0
-        try:
-            raw = ""
-            if hasattr(headers, "get"):
-                raw = str(headers.get("Retry-After", "")).strip()
-            if not raw:
-                return 0.0
-            sec = float(raw)
-            return max(0.0, sec)
-        except Exception:
-            return 0.0
+        env = get_network_env()
+        return bool(getattr(env, "is_china_direct", False))
 
     def get_history(self, code: str, days: int) -> pd.DataFrame:
         inst = {
@@ -1048,57 +811,74 @@ class ITickSource(DataSource):
         return self.get_history_instrument(inst, days=days, interval="1d")
 
     def get_history_instrument(
-        self,
-        inst: dict,
-        days: int,
-        interval: str = "1d",
+        self, inst: dict, days: int, interval: str = "1d"
     ) -> pd.DataFrame:
         if not self.is_available():
             return pd.DataFrame()
-
-        if str(inst.get("asset") or "").upper() != "EQUITY":
-            return pd.DataFrame()
-
-        region, code = self._resolve_region_and_code(inst)
-        if not region or not code:
+        if inst.get("market") != "CN" or str(inst.get("asset") or "").upper() != "EQUITY":
             return pd.DataFrame()
 
         iv_out = str(interval or "1d").lower()
         iv_req = "1m" if iv_out == "2m" else iv_out
-        ktype = self._KTYPE_MAP.get(iv_req)
-        if not ktype:
+        if iv_req in {"1wk", "1mo"}:
+            iv_req = "1d"
+        scale = self._KLINE_SCALE_MAP.get(iv_req)
+        if not scale:
+            return pd.DataFrame()
+
+        symbol = self._to_sina_symbol(str(inst.get("symbol") or ""))
+        if not symbol:
             return pd.DataFrame()
 
         target_rows = self._estimate_target_rows(days, iv_out)
+        # Request extra rows for cleanup and weekend gaps.
+        request_rows = int(min(self._MAX_DATALEN, max(120, target_rows + 80)))
         start_t = time.time()
         try:
-            df = self._fetch_paged_kline(
-                region=region,
-                code=code,
-                ktype=ktype,
-                target_rows=target_rows,
-            )
-            if iv_out == "2m":
-                df = self._resample_to_2m(df)
+            df = self._request_kline(symbol=symbol, scale=scale, datalen=request_rows)
             if df.empty:
                 return pd.DataFrame()
 
-            self._quota_backoff_s = 0.0
-            self._quota_cooldown_until_ts = 0.0
+            if iv_out == "2m":
+                df = self._resample_to_2m(df)
+            elif iv_out in {"1wk", "1mo"}:
+                df = self._resample_daily(df, interval=iv_out)
+
+            if df.empty:
+                return pd.DataFrame()
+
             latency = (time.time() - start_t) * 1000.0
             self._record_success(latency)
             log.debug(
-                "iTick %s:%s (%s): %d bars in %.0fms",
-                region, code, iv_out, len(df), latency,
+                "Sina history %s (%s): %d bars in %.0fms",
+                symbol,
+                iv_out,
+                len(df),
+                latency,
             )
             return df.tail(max(1, int(target_rows)))
         except Exception as exc:
             self._record_error(str(exc))
-            log.debug(
-                "iTick history failed for %s:%s (%s): %s",
-                region, code, iv_out, exc,
-            )
+            log.debug("Sina history failed for %s (%s): %s", symbol, iv_out, exc)
             return pd.DataFrame()
+
+    @staticmethod
+    def _to_sina_symbol(code: str) -> str:
+        code6 = "".join(ch for ch in str(code or "") if ch.isdigit()).zfill(6)
+        if not code6 or len(code6) != 6:
+            return ""
+        try:
+            from core.constants import get_exchange
+
+            ex = str(get_exchange(code6) or "").upper()
+        except Exception:
+            ex = ""
+        prefix = {"SSE": "sh", "SZSE": "sz", "BSE": "bj"}.get(ex)
+        if prefix:
+            return f"{prefix}{code6}"
+        if code6.startswith(("5", "6", "9")):
+            return f"sh{code6}"
+        return f"sz{code6}"
 
     @staticmethod
     def _estimate_target_rows(days: int, interval: str) -> int:
@@ -1109,260 +889,121 @@ class ITickSource(DataSource):
         rows = int(math.ceil(float(d) * bpd)) + 8
         return int(max(1, min(rows, 120_000)))
 
-    @staticmethod
-    def _resolve_region_and_code(inst: dict) -> tuple[str | None, str | None]:
-        market = str(inst.get("market") or "").upper()
-        symbol = str(inst.get("symbol") or "").strip()
-        if not symbol:
-            return None, None
+    def _request_kline(self, *, symbol: str, scale: str, datalen: int) -> pd.DataFrame:
+        params = {
+            "symbol": str(symbol),
+            "scale": str(scale),
+            "ma": "no",
+            "datalen": str(max(1, min(int(datalen), self._MAX_DATALEN))),
+        }
 
-        if market == "CN":
-            code6 = "".join(ch for ch in symbol if ch.isdigit()).zfill(6)
-            if not code6.isdigit() or len(code6) != 6:
-                return None, None
+        errors: list[str] = []
+        for url in self._ENDPOINTS:
             try:
-                from core.constants import get_exchange
+                resp = self._session.get(url, params=params, timeout=10)
+                if int(resp.status_code) != 200:
+                    errors.append(f"{url} HTTP {resp.status_code}")
+                    continue
+                frame = self._parse_kline_payload(resp.text)
+                if frame is not None and not frame.empty:
+                    return frame
+                errors.append(f"{url} empty")
+            except Exception as exc:
+                errors.append(f"{url} {exc}")
+                continue
 
-                ex = str(get_exchange(code6) or "").upper()
-            except Exception:
-                ex = ""
-            region = {
-                "SSE": "SH",
-                "SZSE": "SZ",
-                "BSE": "BJ",
-            }.get(ex)
-            if not region:
-                if code6.startswith(("5", "6", "9")):
-                    region = "SH"
-                elif code6.startswith(("0", "1", "2", "3")):
-                    region = "SZ"
-                else:
-                    region = "CN"
-            return region, code6
+        if errors:
+            raise DataFetchError("; ".join(errors[:2]))
+        return pd.DataFrame()
 
-        if market == "HK":
-            digits = "".join(ch for ch in symbol if ch.isdigit())
-            if not digits:
-                return None, None
-            # iTick examples use non-zero-padded codes for HK.
-            return "HK", (digits.lstrip("0") or "0")
-
-        if market == "US":
-            ticker = symbol.upper()
-            if not ticker:
-                return None, None
-            return "US", ticker
-
-        custom_region = str(
-            inst.get("itick_region") or inst.get("region") or ""
-        ).strip().upper()
-        custom_code = str(
-            inst.get("itick_code") or inst.get("symbol") or ""
-        ).strip()
-        if custom_region and custom_code:
-            return custom_region, custom_code
-        return None, None
-
-    def _fetch_paged_kline(
-        self,
-        *,
-        region: str,
-        code: str,
-        ktype: str,
-        target_rows: int,
-    ) -> pd.DataFrame:
-        target = max(1, int(target_rows))
-        seen_ms: set[int] = set()
-        parts: list[pd.DataFrame] = []
-        next_end_ms: int | None = None
-        max_pages = int(
-            max(1, min(self._MAX_PAGES, math.ceil(target / self._MAX_PAGE_LIMIT) + 4))
-        )
-
-        for page_idx in range(max_pages):
-            remaining = max(1, target - len(seen_ms))
-            limit = int(min(self._MAX_PAGE_LIMIT, max(120, remaining + 20)))
-            rows = self._request_kline_batch(
-                region=region,
-                code=code,
-                ktype=ktype,
-                limit=limit,
-                end_ts_ms=next_end_ms,
-            )
-            if not rows:
-                break
-
-            frame = self._parse_kline_rows(rows)
-            if frame.empty:
-                break
-
-            batch_ms = [int(v // 1_000_000) for v in frame.index.asi8]
-            if seen_ms:
-                keep_mask = [ms not in seen_ms for ms in batch_ms]
-                if not any(keep_mask):
-                    break
-                frame = frame.iloc[keep_mask]
-                batch_ms = [batch_ms[i] for i, keep in enumerate(keep_mask) if keep]
-
-            if frame.empty:
-                break
-
-            seen_ms.update(batch_ms)
-            parts.append(frame)
-
-            oldest_ms = int(min(batch_ms))
-            if oldest_ms <= 1:
-                break
-            next_end_ms = oldest_ms - 1
-
-            if len(seen_ms) >= target:
-                break
-            if len(rows) < limit:
-                break
-            if page_idx < (max_pages - 1) and self._PAGE_DELAY_SECONDS > 0:
-                time.sleep(float(self._PAGE_DELAY_SECONDS))
-
-        if not parts:
+    def _parse_kline_payload(self, payload_text: str) -> pd.DataFrame:
+        text = str(payload_text or "").strip()
+        if not text:
             return pd.DataFrame()
 
-        out = pd.concat(parts, axis=0)
-        out = out[~out.index.duplicated(keep="first")].sort_index()
-        return out.tail(target)
+        parsed = self._parse_json_like(text)
+        if parsed is None:
+            return pd.DataFrame()
 
-    def _request_kline_batch(
-        self,
-        *,
-        region: str,
-        code: str,
-        ktype: str,
-        limit: int,
-        end_ts_ms: int | None,
-    ) -> list[dict]:
-        params: dict[str, object] = {
-            "region": str(region),
-            "code": str(code),
-            "kType": str(ktype),
-            "limit": int(max(1, min(limit, self._MAX_PAGE_LIMIT))),
-        }
-        if end_ts_ms is not None and int(end_ts_ms) > 0:
-            params["et"] = int(end_ts_ms)
+        rows: list[dict] = []
+        if isinstance(parsed, dict):
+            result = parsed.get("result")
+            if isinstance(result, dict):
+                data = result.get("data")
+                if isinstance(data, list):
+                    rows = [r for r in data if isinstance(r, dict)]
+            if not rows:
+                data2 = parsed.get("data")
+                if isinstance(data2, list):
+                    rows = [r for r in data2 if isinstance(r, dict)]
+        elif isinstance(parsed, list):
+            rows = [r for r in parsed if isinstance(r, dict)]
 
-        url = f"{self._base_url}/kline"
-        self._wait_client_rate_slot()
-        resp = self._session.get(
-            url,
-            params=params,
-            headers=self._headers(),
-            timeout=12,
-        )
-        status = int(resp.status_code)
-        if status == 429:
-            retry_s = self._retry_after_seconds(getattr(resp, "headers", None))
-            cool = retry_s if retry_s > 0 else max(15.0, self._min_call_spacing_s * 1.5)
-            self._mark_itick_cooldown(seconds=cool, reason="HTTP 429 rate limited")
-            raise DataFetchError("iTick rate limited")
-        if status in (401, 403):
-            self._mark_itick_cooldown(
-                seconds=600.0,
-                reason=f"HTTP {status} auth/permission",
-                hard_disable=True,
-            )
-            raise DataSourceUnavailableError(f"iTick HTTP {status}")
-        if status >= 500:
-            self._mark_itick_cooldown(
-                seconds=max(10.0, self._min_call_spacing_s),
-                reason=f"HTTP {status} upstream",
-            )
-            raise DataFetchError(f"iTick HTTP {status}")
-        if status != 200:
-            raise DataFetchError(f"iTick HTTP {status}")
-
-        try:
-            payload = resp.json()
-        except Exception as exc:
-            raise DataFetchError(f"iTick JSON parse failed: {exc}") from exc
-
-        if not isinstance(payload, dict):
-            raise DataFetchError("iTick returned non-dict payload")
-
-        raw_code = payload.get("code", 0)
-        if str(raw_code) not in ("0", "200", "") and raw_code is not None:
-            msg = str(
-                payload.get("msg")
-                or payload.get("message")
-                or payload.get("error")
-                or ""
-            ).strip()
-            code_txt = str(raw_code).strip().upper()
-            if code_txt == "E002":
-                self._mark_itick_cooldown(
-                    seconds=900.0,
-                    reason=f"iTick token invalid ({code_txt}) {msg}",
-                    hard_disable=True,
-                )
-                raise DataSourceUnavailableError("iTick token invalid")
-            if code_txt == "E003":
-                self._mark_itick_cooldown(
-                    seconds=300.0,
-                    reason=f"iTick subscription insufficient ({code_txt}) {msg}",
-                )
-                raise DataFetchError("iTick subscription insufficient")
-            if self._is_rate_limit_text(msg) or code_txt in ("429", "TOO_MANY_REQUESTS"):
-                self._mark_itick_cooldown(
-                    seconds=max(20.0, self._min_call_spacing_s * 2.0),
-                    reason=f"iTick quota/rate {code_txt} {msg}",
-                )
-                raise DataFetchError("iTick quota/rate limited")
-            raise DataFetchError(f"iTick API error code={raw_code} {msg}".strip())
-
-        rows = payload.get("data")
-        if isinstance(rows, dict):
-            rows = (
-                rows.get("list")
-                or rows.get("items")
-                or rows.get("kline")
-                or rows.get("rows")
-            )
-        if not isinstance(rows, list):
-            return []
-        return [r for r in rows if isinstance(r, dict)]
+        if not rows:
+            return pd.DataFrame()
+        return self._rows_to_frame(rows)
 
     @staticmethod
-    def _parse_kline_rows(rows: list[dict]) -> pd.DataFrame:
+    def _parse_json_like(text: str) -> object | None:
+        try:
+            return json.loads(text)
+        except Exception:
+            pass
+
+        # Handle JSONP wrappers or assignment wrappers.
+        for left_char, right_char in (("{", "}"), ("[", "]")):
+            left = text.find(left_char)
+            right = text.rfind(right_char)
+            if left < 0 or right <= left:
+                continue
+            frag = text[left : right + 1]
+            try:
+                return json.loads(frag)
+            except Exception:
+                continue
+        return None
+
+    @staticmethod
+    def _rows_to_frame(rows: list[dict]) -> pd.DataFrame:
         out_rows: list[dict] = []
         for row in rows:
             try:
-                ts_ms = to_int(row.get("t"))
-                if ts_ms is None or int(ts_ms) <= 0:
-                    continue
-                ts = pd.to_datetime(int(ts_ms), unit="ms", errors="coerce", utc=True)
+                ts_raw = (
+                    row.get("day")
+                    or row.get("date")
+                    or row.get("time")
+                    or row.get("d")
+                    or ""
+                )
+                ts = pd.to_datetime(str(ts_raw), errors="coerce")
                 if pd.isna(ts):
                     continue
 
-                close_px = to_float(row.get("c"))
-                if close_px is None or close_px <= 0:
+                open_px = float(to_float(row.get("open") or row.get("o") or 0) or 0.0)
+                high_px = float(to_float(row.get("high") or row.get("h") or 0) or 0.0)
+                low_px = float(to_float(row.get("low") or row.get("l") or 0) or 0.0)
+                close_px = float(to_float(row.get("close") or row.get("c") or 0) or 0.0)
+                if close_px <= 0:
                     continue
-                open_px = to_float(row.get("o"))
-                high_px = to_float(row.get("h"))
-                low_px = to_float(row.get("l"))
-                if open_px is None or open_px <= 0:
-                    open_px = close_px
-                if high_px is None or high_px <= 0:
-                    high_px = max(open_px, close_px)
-                if low_px is None or low_px <= 0:
-                    low_px = min(open_px, close_px)
 
+                if open_px <= 0:
+                    open_px = close_px
+                if high_px <= 0:
+                    high_px = max(open_px, close_px)
+                if low_px <= 0:
+                    low_px = min(open_px, close_px)
                 high_px = max(high_px, open_px, close_px)
                 low_px = min(low_px, open_px, close_px)
                 if high_px < low_px:
                     continue
 
-                volume = float(to_float(row.get("v")) or 0.0)
-                amount = to_float(row.get("tu"))
-                if amount is None:
-                    amount = to_float(row.get("amount"))
-                if amount is None:
-                    amount = float(close_px) * max(0.0, volume)
+                vol = float(to_float(row.get("volume") or row.get("v") or 0) or 0.0)
+                amount = float(
+                    to_float(row.get("amount") or row.get("money") or row.get("tu") or 0)
+                    or 0.0
+                )
+                if amount <= 0:
+                    amount = close_px * max(0.0, vol)
 
                 out_rows.append(
                     {
@@ -1371,8 +1012,8 @@ class ITickSource(DataSource):
                         "high": float(high_px),
                         "low": float(low_px),
                         "close": float(close_px),
-                        "volume": max(0.0, float(volume)),
-                        "amount": max(0.0, float(amount)),
+                        "volume": max(0.0, vol),
+                        "amount": max(0.0, amount),
                     }
                 )
             except Exception:
@@ -1380,16 +1021,12 @@ class ITickSource(DataSource):
 
         if not out_rows:
             return pd.DataFrame()
-
         df = pd.DataFrame(out_rows).set_index("date").sort_index()
-        df = df[~df.index.duplicated(keep="first")]
-        return df
+        return df[~df.index.duplicated(keep="last")]
 
     @staticmethod
     def _resample_to_2m(df: pd.DataFrame) -> pd.DataFrame:
-        if df is None or df.empty:
-            return pd.DataFrame()
-        if not isinstance(df.index, pd.DatetimeIndex):
+        if df is None or df.empty or not isinstance(df.index, pd.DatetimeIndex):
             return pd.DataFrame()
 
         agg: dict[str, str] = {}
@@ -1409,6 +1046,32 @@ class ITickSource(DataSource):
             return pd.DataFrame()
 
         out = df.resample("2min").agg(agg)
+        out = out.dropna(subset=["close"]) if "close" in out.columns else out
+        return out[out["close"] > 0] if "close" in out.columns else out
+
+    @staticmethod
+    def _resample_daily(df: pd.DataFrame, interval: str) -> pd.DataFrame:
+        if df is None or df.empty or not isinstance(df.index, pd.DatetimeIndex):
+            return pd.DataFrame()
+
+        rule = "W-FRI" if str(interval).lower() == "1wk" else "ME"
+        agg: dict[str, str] = {}
+        if "open" in df.columns:
+            agg["open"] = "first"
+        if "high" in df.columns:
+            agg["high"] = "max"
+        if "low" in df.columns:
+            agg["low"] = "min"
+        if "close" in df.columns:
+            agg["close"] = "last"
+        if "volume" in df.columns:
+            agg["volume"] = "sum"
+        if "amount" in df.columns:
+            agg["amount"] = "sum"
+        if not agg:
+            return pd.DataFrame()
+
+        out = df.resample(rule).agg(agg)
         out = out.dropna(subset=["close"]) if "close" in out.columns else out
         return out[out["close"] > 0] if "close" in out.columns else out
 
@@ -1647,6 +1310,7 @@ class TencentQuoteSource(DataSource):
 
         vendor_symbols: list[str] = []
         vendor_to_code: dict[str, str] = {}
+        vendor_to_exchange: dict[str, str] = {}
         for c in codes:
             code6 = str(c).zfill(6)
             ex = get_exchange(code6)
@@ -1657,6 +1321,7 @@ class TencentQuoteSource(DataSource):
             sym = f"{prefix}{code6}"
             vendor_symbols.append(sym)
             vendor_to_code[sym] = code6
+            vendor_to_exchange[sym] = str(ex or "").upper()
 
         if not vendor_symbols:
             return {}
@@ -1671,7 +1336,21 @@ class TencentQuoteSource(DataSource):
                 resp = self._session.get(url, timeout=6)
                 resp.encoding = "gbk"  # Tencent returns GBK encoded content
 
-                for line in resp.text.splitlines():
+                raw_lines: list[str] = []
+                for block in str(resp.text or "").splitlines():
+                    block_txt = str(block or "").strip()
+                    if not block_txt:
+                        continue
+                    if ";" in block_txt:
+                        raw_lines.extend(
+                            seg.strip()
+                            for seg in block_txt.split(";")
+                            if str(seg or "").strip()
+                        )
+                    else:
+                        raw_lines.append(block_txt)
+
+                for line in raw_lines:
                     if "~" not in line or "=" not in line:
                         continue
                     try:
@@ -1712,12 +1391,21 @@ class TencentQuoteSource(DataSource):
                         # Validate price bounds (sanity check)
                         if prev_close > 0:
                             ratio = price / prev_close
-                            if ratio > 1.25 or ratio < 0.75:
+                            ex_name = str(vendor_to_exchange.get(vendor_sym, "")).upper()
+                            max_move = 0.25
+                            if ex_name == "BSE":
+                                try:
+                                    from core.constants import PRICE_LIMITS
+                                    bse_limit = float(PRICE_LIMITS.get("bse", 0.30) or 0.30)
+                                except Exception:
+                                    bse_limit = 0.30
+                                max_move = max(0.30, bse_limit) + 0.03
+                            if ratio > (1.0 + max_move) or ratio < (1.0 - max_move):
                                 # Likely bad data; skip
                                 log.debug(
                                     "Tencent: suspicious price for %s: "
-                                    "price=%.2f prev_close=%.2f",
-                                    code6, price, prev_close
+                                    "price=%.2f prev_close=%.2f cap=%.1f%%",
+                                    code6, price, prev_close, max_move * 100.0,
                                 )
                                 continue
 

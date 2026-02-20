@@ -52,6 +52,113 @@ def test_degraded_auto_pause_switches_to_manual():
     assert eng.auto_trader.set_calls
 
 
+def test_submit_blocks_when_delayed_quote_guard_enabled():
+    import trading.executor as exec_mod
+
+    eng = ExecutionEngine.__new__(ExecutionEngine)
+    eng._running = True
+    eng.mode = TradingMode.SIMULATION
+    eng._health_monitor = SimpleNamespace(
+        get_health=lambda: SimpleNamespace(status=HealthStatus.HEALTHY)
+    )
+    eng._kill_switch = SimpleNamespace(can_trade=True)
+    eng.risk_manager = SimpleNamespace(check_order=lambda *a, **k: (True, ""))
+    eng._queue = queue.Queue()
+    eng._alert_manager = SimpleNamespace(risk_alert=lambda *a, **k: None)
+    eng._reject_signal = lambda sig, reason: setattr(sig, "_rejected_reason", reason)
+    eng._recent_submit_keys = {}
+    eng._recent_submissions = {}
+    eng._recent_rejections = deque()
+
+    captured = {"block_delayed": None}
+
+    def _fake_require(symbol, max_age_seconds=15.0, block_delayed=False):  # noqa: ARG001
+        captured["block_delayed"] = bool(block_delayed)
+        if block_delayed:
+            return False, "Quote delayed/stale (source=fetcher:last_good)", 0.0
+        return True, "OK", 10.0
+
+    eng._require_fresh_quote = _fake_require
+
+    old_guard = bool(getattr(CONFIG.auto_trade, "block_on_stale_realtime", True))
+    old_is_open = CONFIG.is_market_open
+    old_access = exec_mod.get_access_control
+    old_audit = exec_mod.get_audit_log
+    CONFIG.auto_trade.block_on_stale_realtime = True
+    CONFIG.is_market_open = lambda: True
+    exec_mod.get_access_control = lambda: SimpleNamespace(check=lambda *_a, **_k: True)
+    exec_mod.get_audit_log = lambda: SimpleNamespace(log_risk_event=lambda *a, **k: None)
+    try:
+        sig = TradeSignal(
+            symbol="600519",
+            side=OrderSide.BUY,
+            quantity=100,
+            price=10.0,
+            order_type="market",
+        )
+        ok = eng.submit(sig)
+        assert ok is False
+        assert captured["block_delayed"] is True
+        assert "delayed" in str(getattr(sig, "_rejected_reason", "")).lower()
+    finally:
+        CONFIG.auto_trade.block_on_stale_realtime = old_guard
+        CONFIG.is_market_open = old_is_open
+        exec_mod.get_access_control = old_access
+        exec_mod.get_audit_log = old_audit
+
+
+def test_trigger_model_drift_alarm_forces_live_auto_manual():
+    import trading.executor as exec_mod
+
+    class DummyAutoTrader:
+        def __init__(self):
+            self._mode = AutoTradeMode.AUTO
+            self.pause_calls = []
+            self.mode_calls = []
+
+        def get_mode(self):
+            return self._mode
+
+        def set_mode(self, mode):
+            self._mode = mode
+            self.mode_calls.append(mode)
+
+        def pause(self, reason, duration_seconds=0):
+            self.pause_calls.append((str(reason), int(duration_seconds)))
+
+    eng = ExecutionEngine.__new__(ExecutionEngine)
+    eng.mode = TradingMode.LIVE
+    eng.auto_trader = DummyAutoTrader()
+    eng._alert_manager = SimpleNamespace(risk_alert=lambda *a, **k: None)
+
+    old_enabled = bool(CONFIG.auto_trade.enabled)
+    old_pause = int(getattr(CONFIG.auto_trade, "model_drift_pause_seconds", 3600))
+    old_disable = bool(getattr(CONFIG.auto_trade, "auto_disable_on_model_drift", True))
+    old_audit = exec_mod.get_audit_log
+    exec_mod.get_audit_log = lambda: SimpleNamespace(log_risk_event=lambda *a, **k: None)
+    CONFIG.auto_trade.enabled = True
+    CONFIG.auto_trade.model_drift_pause_seconds = 600
+    CONFIG.auto_trade.auto_disable_on_model_drift = True
+
+    with ExecutionEngine._ACTIVE_ENGINES_LOCK:
+        ExecutionEngine._ACTIVE_ENGINES.add(eng)
+
+    try:
+        handled = ExecutionEngine.trigger_model_drift_alarm("unit_test_drift")
+        assert handled >= 1
+        assert eng.auto_trader.get_mode() == AutoTradeMode.MANUAL
+        assert eng.auto_trader.mode_calls
+        assert eng.auto_trader.pause_calls
+        assert CONFIG.auto_trade.enabled is False
+    finally:
+        with ExecutionEngine._ACTIVE_ENGINES_LOCK:
+            ExecutionEngine._ACTIVE_ENGINES.discard(eng)
+        CONFIG.auto_trade.enabled = old_enabled
+        CONFIG.auto_trade.model_drift_pause_seconds = old_pause
+        CONFIG.auto_trade.auto_disable_on_model_drift = old_disable
+        exec_mod.get_audit_log = old_audit
+
+
 def test_submit_blocks_on_best_exec_quote_deviation():
     import trading.executor as exec_mod
 

@@ -60,6 +60,10 @@ class DataConfig:
     session_cache_max_rows_per_symbol: int = 12000
     session_cache_compact_every_writes: int = 240
     session_cache_max_file_mb: float = 8.0
+    # Daily-history quorum gate before writing internet bars into local DB.
+    history_quorum_required_sources: int = 2
+    history_quorum_tolerance_bps: float = 80.0
+    history_quorum_min_ratio: float = 0.55
 
 
 @dataclass
@@ -245,6 +249,11 @@ class AutoTradeConfig:
 
     # Paper trading safety — require explicit confirmation for live
     confirm_live_auto_trade: bool = True
+    # Reject delayed/fallback realtime quotes at submission time.
+    block_on_stale_realtime: bool = True
+    # Auto-disable live auto-trade when drift guard raises an alarm.
+    auto_disable_on_model_drift: bool = True
+    model_drift_pause_seconds: int = 3600
 
 
 @dataclass
@@ -896,6 +905,19 @@ class Config:
         if self.capital <= 0:
             self._validation_warnings.append("Capital must be positive")
 
+        if self.data.history_quorum_required_sources < 2:
+            self._validation_warnings.append(
+                "data.history_quorum_required_sources should be >= 2"
+            )
+        if self.data.history_quorum_tolerance_bps <= 0:
+            self._validation_warnings.append(
+                "data.history_quorum_tolerance_bps should be > 0"
+            )
+        if not (0.0 < self.data.history_quorum_min_ratio <= 1.0):
+            self._validation_warnings.append(
+                "data.history_quorum_min_ratio should be in (0, 1]"
+            )
+
         if not (0 < self.model.train_ratio < 1):
             self._validation_warnings.append("Invalid train ratio")
 
@@ -959,6 +981,10 @@ class Config:
             ):
                 self._validation_warnings.append(
                     "Auto-trade max_position_pct exceeds risk max_position_pct"
+                )
+            if self.auto_trade.model_drift_pause_seconds < 60:
+                self._validation_warnings.append(
+                    "auto_trade.model_drift_pause_seconds should be >= 60"
                 )
 
         if (
@@ -1110,8 +1136,8 @@ class Config:
 
             if not is_trading_day(now.date()):
                 return False
-        except ImportError:
-            pass
+        except Exception as exc:
+            _log.debug("Trading-day lookup failed in is_market_open: %s", exc)
 
         # FIX #18: Always use naive time for comparison with TradingConfig
         # time fields which are naive

@@ -1,3 +1,4 @@
+import time
 from datetime import datetime, timedelta
 from types import SimpleNamespace
 
@@ -94,6 +95,32 @@ def test_auto_trader_caps_buy_quantity_with_risk_manager():
     pending = at.state.pending_approvals[0]
     assert pending.stock_code == "600519"
     assert pending.quantity == 200
+
+
+def test_auto_trader_stop_does_not_block_on_scan_lock():
+    old_enabled = bool(CONFIG.auto_trade.enabled)
+    old_scan_interval = int(CONFIG.auto_trade.scan_interval_seconds)
+    try:
+        # Force the scan loop into the no-scan branch.
+        CONFIG.auto_trade.enabled = False
+        CONFIG.auto_trade.scan_interval_seconds = 60
+
+        at = AutoTrader(engine=_DummyEngine(), predictor=None, watch_list=["600519"])
+        at.state.mode = AutoTradeMode.AUTO
+        at.start()
+
+        deadline = time.time() + 1.0
+        while (not at._is_loop_running()) and time.time() < deadline:
+            time.sleep(0.01)
+        time.sleep(0.05)
+
+        t0 = time.perf_counter()
+        at.stop()
+        elapsed = time.perf_counter() - t0
+        assert elapsed < 1.5
+    finally:
+        CONFIG.auto_trade.enabled = old_enabled
+        CONFIG.auto_trade.scan_interval_seconds = old_scan_interval
 
 
 def test_news_aggregator_stale_cache_fallback_and_source_health(monkeypatch):

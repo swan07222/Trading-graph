@@ -13,7 +13,9 @@ from utils.logger import get_logger
 
 log = get_logger(__name__)
 
-_OFFICIAL_HISTORY_SOURCES = frozenset({"akshare", "itick"})
+_OFFICIAL_HISTORY_SOURCES = frozenset(
+    {"akshare", "tencent", "sina", "official_history"}
+)
 
 
 def _norm_symbol(symbol: str) -> str:
@@ -1133,7 +1135,7 @@ class SessionBarCache:
         """
         Upsert OHLCV rows into session cache in one batch.
 
-        Intended for writing official bars fetched from iTick/AKShare.
+        Intended for writing official bars fetched from trusted history providers.
         """
         sym = _norm_symbol(symbol)
         iv = str(interval or "1m").lower()

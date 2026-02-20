@@ -2434,6 +2434,10 @@ class ContinuousLearner:
 
             if result.get("status") == "cancelled":
                 raise CancelledException()
+            self._emit_model_drift_alarm_if_needed(
+                result,
+                context=f"auto_cycle_{cycle_number}",
+            )
 
             acc = float(result.get("best_accuracy", 0.0))
             self.progress.training_accuracy = acc
@@ -2763,6 +2767,10 @@ class ContinuousLearner:
 
             if result.get("status") == "cancelled":
                 raise CancelledException()
+            self._emit_model_drift_alarm_if_needed(
+                result,
+                context=f"targeted_cycle_{cycle_number}",
+            )
 
             acc = float(result.get("best_accuracy", 0.0))
             self.progress.training_accuracy = acc
@@ -3027,6 +3035,76 @@ class ContinuousLearner:
                 return False, f"trainer_artifact_not_deployed:{reason}"
 
         return True, "ok"
+
+    def _emit_model_drift_alarm_if_needed(
+        self,
+        result: dict[str, Any] | None,
+        *,
+        context: str = "",
+    ) -> bool:
+        """Escalate trainer drift-guard failures to runtime auto-trade controls."""
+        payload = result if isinstance(result, dict) else {}
+        drift_guard = payload.get("drift_guard", {})
+        quality_gate = payload.get("quality_gate", {})
+        if not isinstance(drift_guard, dict):
+            drift_guard = {}
+        if not isinstance(quality_gate, dict):
+            quality_gate = {}
+
+        action = str(drift_guard.get("action", "") or "").strip().lower()
+        failed_reasons = {
+            str(x).strip().lower()
+            for x in list(quality_gate.get("failed_reasons", []) or [])
+            if str(x).strip()
+        }
+        drift_blocked = (
+            action == "rollback_recommended"
+            or "drift_guard_block" in failed_reasons
+        )
+        if not drift_blocked:
+            return False
+
+        try:
+            score_drop = float(drift_guard.get("score_drop", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            score_drop = 0.0
+        try:
+            accuracy_drop = float(drift_guard.get("accuracy_drop", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            accuracy_drop = 0.0
+
+        ctx = str(context).strip()
+        prefix = f"{ctx}: " if ctx else ""
+        reason = (
+            f"{prefix}model drift guard triggered "
+            f"(action={action or 'unknown'}, "
+            f"score_drop={score_drop:.3f}, accuracy_drop={accuracy_drop:.3f})"
+        )
+        self.progress.add_warning(reason)
+        log.warning("Trainer drift alarm: %s", reason)
+
+        try:
+            from trading.executor import ExecutionEngine
+
+            handled = int(
+                ExecutionEngine.trigger_model_drift_alarm(
+                    reason=reason,
+                    severity="critical",
+                    metadata={
+                        "context": str(ctx),
+                        "action": str(action),
+                        "score_drop": float(score_drop),
+                        "accuracy_drop": float(accuracy_drop),
+                    },
+                )
+            )
+            if handled <= 0:
+                log.warning(
+                    "Model drift alarm raised but no active execution engine handled it"
+                )
+        except Exception as e:
+            log.warning("Failed to raise model drift runtime alarm: %s", e)
+        return True
 
     def _train(
         self, ok_codes, epochs, interval, horizon, lookback, incremental, lr,

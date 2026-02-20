@@ -59,3 +59,61 @@ def test_discovery_tencent_semicolon_response(monkeypatch):
     out = d._discover_via_tencent()
     codes = sorted(s.code for s in out)
     assert codes == ["000858", "600519"]
+
+
+def test_tencent_realtime_bse_30pct_move_not_filtered():
+    src = TencentQuoteSource()
+
+    parts = ["0"] * 40
+    parts[1] = "BSE_SAMPLE"
+    parts[3] = "13.00"   # latest
+    parts[4] = "10.00"   # prev close (+30%)
+    parts[5] = "10.10"   # open
+    parts[6] = "2.00"    # lots
+    parts[9] = "12.95"   # bid
+    parts[19] = "13.05"  # ask
+    parts[33] = "13.20"  # high
+    parts[34] = "10.00"  # low
+    parts[37] = "26000"  # amount
+    payload = "~".join(parts)
+
+    class _Resp:
+        status_code = 200
+        text = f'v_bj430001="{payload}";\\n'
+
+    src._session.get = lambda *args, **kwargs: _Resp()  # type: ignore[method-assign]
+
+    out = src.get_realtime_batch(["430001"])
+    assert "430001" in out
+    assert float(out["430001"].price) == 13.0
+
+
+def test_tencent_realtime_batch_parses_semicolon_single_line_payload():
+    src = TencentQuoteSource()
+
+    def _make_payload(name: str, price: float, prev_close: float) -> str:
+        parts = ["0"] * 40
+        parts[1] = name
+        parts[3] = f"{price:.2f}"
+        parts[4] = f"{prev_close:.2f}"
+        parts[5] = f"{prev_close:.2f}"
+        parts[6] = "1.00"
+        parts[9] = f"{price:.2f}"
+        parts[19] = f"{price:.2f}"
+        parts[33] = f"{max(price, prev_close):.2f}"
+        parts[34] = f"{min(price, prev_close):.2f}"
+        parts[37] = "10000"
+        return "~".join(parts)
+
+    p1 = _make_payload("A", 1500.0, 1490.0)
+    p2 = _make_payload("B", 12.0, 11.8)
+
+    class _Resp:
+        status_code = 200
+        text = f'v_sh600519="{p1}";v_sz000001="{p2}";'
+
+    src._session.get = lambda *args, **kwargs: _Resp()  # type: ignore[method-assign]
+
+    out = src.get_realtime_batch(["600519", "000001"])
+    assert "600519" in out
+    assert "000001" in out

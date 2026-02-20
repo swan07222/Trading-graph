@@ -1,9 +1,7 @@
 # ui/charts.py
 import math
-import os
 import time
 from collections import Counter
-from datetime import datetime, timezone
 
 import numpy as np
 import pandas as pd
@@ -425,10 +423,10 @@ class StockChart(QWidget):
             self._on_context_menu
         )
 
-        # === Layer 1 (BOTTOM): Prediction line - dashed green ===
+        # === Layer 1 (BOTTOM): Prediction line - dashed cyan ===
         self.predicted_line = self.plot_widget.plot(
             pen=pg.mkPen(
-                color='#35b57c',
+                color='#00d4aa',
                 width=2,
                 style=Qt.PenStyle.DashLine
             ),
@@ -568,11 +566,15 @@ class StockChart(QWidget):
             return
 
         try:
-            # Parse bar data - extract closes for line, OHLC for candles
+            # Parse bar data - extract closes for line, OHLC for candles.
+            # Data is already sanitized and filtered by app.py pipeline
+            # (_prepare_chart_bars_for_interval, _sanitize_ohlc, etc.).
+            # This layer only does basic validity checks and builds
+            # the rendering data structures.
             closes: list[float] = []
             ohlc: list[tuple] = []
             prev_close: float | None = None
-            prev_day: object | None = None
+
             default_iv_raw = str(
                 self._bars[-1].get("interval", "1m") if self._bars else "1m"
             ).lower()
@@ -599,130 +601,33 @@ class StockChart(QWidget):
             except Exception:
                 pass
 
-            # Render the full loaded window (7-day bars are prepared in app layer).
-            # Keep a high cap for safety on very large inputs.
             render_bars = self._bars[-3000:]
             diag = {
                 "rows_total": int(len(render_bars)),
                 "kept": 0,
                 "drop_nonfinite": 0,
                 "drop_interval": 0,
-                "drop_jump": 0,
-                "drop_shape": 0,
                 "drop_parse": 0,
-                "rebuild_shape": 0,
-                "clamp_shape": 0,
+                "drop_shape": 0,
+                "drop_scale": 0,
             }
-
-            def _caps(iv_token: str) -> tuple[float, float]:
-                token = str(iv_token or "1m").strip().lower()
-                if token == "1m":
-                    return 0.08, 0.006
-                if token == "5m":
-                    return 0.10, 0.012
-                if token in ("15m", "30m"):
-                    return 0.14, 0.020
-                if token in ("60m", "1h"):
-                    return 0.18, 0.040
-                if token in ("1d", "1wk", "1mo"):
-                    return 0.24, 0.22
-                return 0.20, 0.15
-
-            cap_iv = default_iv
-            if default_iv in ("1d", "1wk", "1mo") and len(render_bars) > 200:
-                # Only tighten to intraday caps when evidence of mixed intervals
-                # exists; do not punish legitimate long daily windows.
-                observed: list[str] = []
-                for row in render_bars[-min(600, len(render_bars)):]:
-                    if not isinstance(row, dict):
-                        continue
-                    raw_iv = str(row.get("interval", "") or "").strip().lower()
-                    if not raw_iv:
-                        continue
-                    observed.append(interval_aliases.get(raw_iv, raw_iv))
-                if observed:
-                    intraday_n = sum(
-                        1 for tok in observed if tok not in ("1d", "1wk", "1mo")
-                    )
-                    ratio = float(intraday_n) / float(max(1, len(observed)))
-                    if ratio >= 0.35:
-                        cap_iv = "1m"
-            jump_cap, range_cap = _caps(cap_iv)
-            intraday_mode = cap_iv not in ("1d", "1wk", "1mo")
-            if intraday_mode:
-                max_jump_guard = float(max(0.012, min(0.040, jump_cap * 0.55)))
-                body_guard = float(max(range_cap * 0.92, 0.0045))
-                span_guard = float(max(range_cap * 1.20, 0.0070))
-                wick_guard = float(max(range_cap * 0.86, 0.0055))
+            is_intraday = default_iv not in {"1d", "1wk", "1mo"}
+            if is_intraday:
+                # Render-side guard: keep intraday bars within realistic A-share
+                # movement envelopes to prevent giant block candles.
+                jump_cap = 0.14
+                body_cap = 0.12
+                span_cap = 0.18
+                scale_lo = 0.35
+                scale_hi = 3.00
             else:
-                max_jump_guard = float(max(jump_cap * 1.40, 0.05))
-                body_guard = float(max(range_cap * 0.85, 0.045))
-                span_guard = float(max(range_cap * 1.75, 0.45))
-                wick_guard = float(max(range_cap * 1.25, 0.25))
-
-            def _row_trading_day(row: dict) -> object | None:
-                ts_raw = row.get("_ts_epoch", row.get("timestamp", row.get("time")))
-                if ts_raw is None:
-                    return None
-                try:
-                    if isinstance(ts_raw, (int, float)):
-                        sec = float(ts_raw)
-                        if abs(sec) >= 1e11:
-                            sec = sec / 1000.0
-                        dt_val = datetime.fromtimestamp(sec, tz=timezone.utc)
-                    else:
-                        dt_val = datetime.fromisoformat(str(ts_raw).replace("Z", "+00:00"))
-                        if dt_val.tzinfo is None:
-                            dt_val = dt_val.replace(tzinfo=timezone.utc)
-                    try:
-                        from zoneinfo import ZoneInfo
-
-                        dt_val = dt_val.astimezone(ZoneInfo("Asia/Shanghai"))
-                    except Exception:
-                        pass
-                    return dt_val.date()
-                except Exception:
-                    return None
-
-            # Some fallback providers only give close-like OHLC bars
-            # (open/high/low ~= close), which renders as "line-form candles".
-            # Detect this pattern and reconstruct open from previous close.
-            flat_count = 0
-            flat_total = 0
-            for b in render_bars[-min(400, len(render_bars)):]:
-                if not isinstance(b, dict):
-                    continue
-                try:
-                    o0 = float(b.get("open", 0) or 0)
-                    h0 = float(b.get("high", 0) or 0)
-                    l0 = float(b.get("low", 0) or 0)
-                    c0 = float(b.get("close", 0) or 0)
-                except Exception:
-                    continue
-                if not all(math.isfinite(v) for v in (o0, h0, l0, c0)) or c0 <= 0:
-                    continue
-                if o0 <= 0:
-                    o0 = c0
-                if h0 <= 0:
-                    h0 = max(o0, c0)
-                if l0 <= 0:
-                    l0 = min(o0, c0)
-                ref0 = max(c0, 1e-8)
-                body0 = abs(o0 - c0) / ref0
-                span0 = abs(h0 - l0) / ref0
-                if body0 <= 0.00008 and span0 <= 0.00020:
-                    flat_count += 1
-                flat_total += 1
-            flat_ratio = (float(flat_count) / float(flat_total)) if flat_total > 0 else 0.0
-            rebuild_enabled = str(
-                os.environ.get("TRADING_CHART_REBUILD_DEGENERATE", "0")
-            ).strip().lower() in {"1", "true", "yes", "on"}
-            reconstruct_degenerate = bool(
-                intraday_mode and rebuild_enabled and (0.25 <= flat_ratio <= 0.75)
-            )
-            allow_degenerate_rebuild = bool(reconstruct_degenerate)
-            rebuild_count = 0
-            rows_kept = 0
+                jump_cap = 0.45
+                body_cap = 0.55
+                span_cap = 0.80
+                scale_lo = 0.10
+                scale_hi = 10.00
+            recent_closes: list[float] = []
+            rendered_bars: list[dict] = []
 
             for b in render_bars:
                 try:
@@ -742,140 +647,58 @@ class StockChart(QWidget):
                         b.get("interval", default_iv) or default_iv
                     ).lower()
                     bar_iv = interval_aliases.get(bar_iv_raw, bar_iv_raw)
-                    # Render only one interval at a time to avoid
-                    # outlier candles from mixed-frequency rows.
                     if bar_iv != default_iv:
                         diag["drop_interval"] += 1
                         continue
 
-                    bar_day = _row_trading_day(b)
-                    day_boundary = bool(
-                        intraday_mode
-                        and prev_day is not None
-                        and bar_day is not None
-                        and bar_day != prev_day
-                    )
-                    ref_prev = prev_close
-                    if day_boundary:
-                        ref_prev = None
-
-                    if ref_prev and ref_prev > 0:
-                        jump = abs(c / ref_prev - 1.0)
-                        if jump > max_jump_guard:
-                            diag["drop_jump"] += 1
-                            continue
-
                     # Fix missing OHLC values
                     if o <= 0:
-                        o = float(ref_prev if ref_prev and ref_prev > 0 else c)
+                        o = float(prev_close if prev_close and prev_close > 0 else c)
                     if h <= 0:
                         h = max(o, c)
                     if l_val <= 0:
                         l_val = min(o, c)
-                    if h < l_val:
-                        h, l_val = l_val, h
 
-                    if (
-                        allow_degenerate_rebuild
-                        and ref_prev
-                        and ref_prev > 0
-                    ):
-                        ref_local = max(float(c), float(ref_prev), 1e-8)
-                        body0 = abs(o - c) / ref_local
-                        span0 = abs(h - l_val) / ref_local
-                        jump0 = abs(c / ref_prev - 1.0)
-                        if (
-                            body0 <= 0.00008
-                            and span0 <= 0.0035
-                            and jump0 <= 0.0040
-                        ):
-                            # Rebuild candle body from prev close to avoid
-                            # a doji-only stream that looks like a line chart.
-                            o = float(ref_prev)
-                            top0 = max(o, c)
-                            bot0 = min(o, c)
-                            h = max(h, top0)
-                            l_val = min(l_val, bot0)
-                            diag["rebuild_shape"] += 1
-                            rebuild_count += 1
-                            if abs(h - l_val) / ref_local <= 0.00012:
-                                pad = float(ref_local * 0.00025)
-                                h = max(h, top0 + (pad * 0.40))
-                                l_val = min(l_val, bot0 - (pad * 0.40))
-
+                    # Ensure OHLC consistency
                     top = max(o, c)
                     bot = min(o, c)
                     if h < top:
                         h = top
                     if l_val > bot:
                         l_val = bot
+                    if h < l_val:
+                        h, l_val = l_val, h
+                    o = min(max(o, l_val), h)
+                    c = min(max(c, l_val), h)
 
-                    # Final shape guard relative to rolling local reference.
-                    ref = float(ref_prev if ref_prev and ref_prev > 0 else c)
-                    if (not day_boundary) and len(closes) >= 6:
-                        try:
-                            ref = float(
-                                np.median(
-                                    np.asarray(closes[-32:], dtype=float)
-                                )
-                            )
-                        except Exception:
-                            ref = float(ref_prev if ref_prev and ref_prev > 0 else c)
-                    if not np.isfinite(ref) or ref <= 0:
-                        ref = float(c)
-                    if ref <= 0:
+                    # Last-line defense for rendering: drop extreme-scale bars
+                    # that can still slip through upstream sanitation and would
+                    # otherwise distort chart autoscaling.
+                    if recent_closes:
+                        ref_scale = float(np.median(np.asarray(recent_closes[-120:], dtype=float)))
+                    elif prev_close is not None and prev_close > 0:
+                        ref_scale = float(prev_close)
+                    else:
+                        ref_scale = float(c)
+                    ref_scale = max(ref_scale, 1e-8)
+
+                    scale_ratio = float(c) / ref_scale
+                    if (scale_ratio < scale_lo) or (scale_ratio > scale_hi):
+                        diag["drop_scale"] += 1
                         continue
 
-                    span = abs(h - l_val) / ref
-                    top = max(o, c)
-                    bot = min(o, c)
-                    body = abs(o - c) / ref
-                    upper_wick = max(0.0, h - top) / ref
-                    lower_wick = max(0.0, bot - l_val) / ref
-                    if (
-                        body > body_guard
-                        or span > span_guard
-                        or upper_wick > wick_guard
-                        or lower_wick > wick_guard
-                    ):
-                        # Clamp extreme shape instead of dropping whole bar.
-                        diag["clamp_shape"] += 1
-                        max_span_px = float(ref * span_guard)
-                        body_px = float(max(0.0, top - bot))
-                        max_body_px = float(ref * body_guard)
-                        if body_px > max_body_px:
-                            if c >= o:
-                                o = c - max_body_px
-                            else:
-                                o = c + max_body_px
-                            top = max(o, c)
-                            bot = min(o, c)
-                            body_px = float(max(0.0, top - bot))
-                        if body_px > max_span_px:
-                            o = c
-                            top = c
-                            bot = c
-                            body_px = 0.0
-                        wick_allow = max(0.0, max_span_px - body_px)
-                        h = min(h, top + (wick_allow * 0.60))
-                        l_val = max(l_val, bot - (wick_allow * 0.60))
-                        if h < l_val:
-                            h, l_val = l_val, h
-                        span = abs(h - l_val) / max(ref, 1e-8)
-                        body = abs(o - c) / max(ref, 1e-8)
-                        upper_wick = max(0.0, h - max(o, c)) / max(ref, 1e-8)
-                        lower_wick = max(0.0, min(o, c) - l_val) / max(ref, 1e-8)
-                        if (
-                            body > (body_guard * 1.40)
-                            or span > (span_guard * 1.25)
-                            or upper_wick > (wick_guard * 1.35)
-                            or lower_wick > (wick_guard * 1.35)
-                        ):
+                    if prev_close is not None and prev_close > 0 and len(recent_closes) >= 8:
+                        jump = abs(float(c) / max(float(prev_close), 1e-8) - 1.0)
+                        if jump > jump_cap:
                             diag["drop_shape"] += 1
                             continue
 
-                    o = min(max(o, l_val), h)
-                    c = min(max(c, l_val), h)
+                    body_pct = abs(float(o) - float(c)) / ref_scale
+                    span_pct = abs(float(h) - float(l_val)) / ref_scale
+                    if body_pct > body_cap or span_pct > span_cap:
+                        diag["drop_shape"] += 1
+                        continue
+
                     try:
                         vol = float(b.get("volume", 0) or 0)
                     except Exception:
@@ -889,6 +712,20 @@ class StockChart(QWidget):
                     if not np.isfinite(amount):
                         amount = 0.0
 
+                    rendered_bars.append(
+                        {
+                            "open": float(o),
+                            "high": float(h),
+                            "low": float(l_val),
+                            "close": float(c),
+                            "volume": float(vol),
+                            "amount": float(amount),
+                            "interval": str(bar_iv),
+                            "timestamp": b.get("timestamp", b.get("time", "")),
+                            "_ts_epoch": b.get("_ts_epoch", None),
+                        }
+                    )
+
                     x_pos = len(closes)
                     ohlc.append((x_pos, o, c, l_val, h))
                     self._candle_meta.append(
@@ -901,8 +738,8 @@ class StockChart(QWidget):
                             "volume": float(vol),
                             "amount": float(amount),
                             "prev_close": (
-                                float(ref_prev)
-                                if (ref_prev is not None and ref_prev > 0)
+                                float(prev_close)
+                                if (prev_close is not None and prev_close > 0)
                                 else None
                             ),
                             "ts": self._format_bar_timestamp(b),
@@ -910,17 +747,9 @@ class StockChart(QWidget):
                         }
                     )
                     closes.append(c)
+                    recent_closes.append(float(c))
                     prev_close = c
-                    if bar_day is not None:
-                        prev_day = bar_day
                     diag["kept"] += 1
-                    rows_kept += 1
-                    if (
-                        allow_degenerate_rebuild
-                        and rows_kept >= 120
-                        and (float(rebuild_count) / float(max(1, rows_kept))) > 0.40
-                    ):
-                        allow_degenerate_rebuild = False
                 except (ValueError, TypeError):
                     diag["drop_parse"] += 1
                     continue
@@ -933,8 +762,9 @@ class StockChart(QWidget):
                         f"rows={diag['rows_total']} kept={diag['kept']} "
                         f"drop_nonfinite={diag['drop_nonfinite']} "
                         f"drop_interval={diag['drop_interval']} "
-                        f"drop_jump={diag['drop_jump']} "
-                        f"drop_shape={diag['drop_shape']} drop_parse={diag['drop_parse']}"
+                        f"drop_shape={diag['drop_shape']} "
+                        f"drop_scale={diag['drop_scale']} "
+                        f"drop_parse={diag['drop_parse']}"
                     ),
                     min_gap_seconds=0.8,
                     level="warning",
@@ -955,16 +785,28 @@ class StockChart(QWidget):
             # === Layer 1 (BOTTOM): Prediction line (guessed graph) ===
             if self.predicted_line is not None:
                 if closes and self._predicted_prices:
-                    start_x = len(closes) - 1
+                    # Start forecast one bar AFTER the last candle so
+                    # the prediction line does not overlap the last candle.
+                    start_x = len(closes)
                     x_pred = np.arange(
                         start_x,
-                        start_x + len(self._predicted_prices) + 1
+                        start_x + len(self._predicted_prices)
                     )
                     y_pred = np.array(
-                        [closes[-1]] + list(self._predicted_prices),
+                        list(self._predicted_prices),
                         dtype=float
                     )
-                    self.predicted_line.setData(x_pred, y_pred)
+                    # Draw a thin connector from last close to first
+                    # prediction point so the forecast looks attached.
+                    x_conn = np.array(
+                        [len(closes) - 1, start_x], dtype=float
+                    )
+                    y_conn = np.array(
+                        [closes[-1], self._predicted_prices[0]], dtype=float
+                    )
+                    x_full = np.concatenate([x_conn, x_pred])
+                    y_full = np.concatenate([y_conn, y_pred])
+                    self.predicted_line.setData(x_full, y_full)
                     if (
                         self.predicted_low_line is not None
                         and self.predicted_high_line is not None
@@ -972,22 +814,30 @@ class StockChart(QWidget):
                         and len(self._predicted_prices_high) == len(self._predicted_prices)
                     ):
                         y_low = np.array(
-                            [closes[-1]] + list(self._predicted_prices_low),
+                            list(self._predicted_prices_low),
                             dtype=float,
                         )
                         y_high = np.array(
-                            [closes[-1]] + list(self._predicted_prices_high),
+                            list(self._predicted_prices_high),
                             dtype=float,
                         )
-                        self.predicted_low_line.setData(x_pred, y_low)
-                        self.predicted_high_line.setData(x_pred, y_high)
+                        y_low_full = np.concatenate([
+                            np.array([closes[-1], self._predicted_prices_low[0]]),
+                            y_low,
+                        ])
+                        y_high_full = np.concatenate([
+                            np.array([closes[-1], self._predicted_prices_high[0]]),
+                            y_high,
+                        ])
+                        self.predicted_low_line.setData(x_full, y_low_full)
+                        self.predicted_high_line.setData(x_full, y_high_full)
                     else:
                         if self.predicted_low_line is not None:
                             self.predicted_low_line.clear()
                         if self.predicted_high_line is not None:
                             self.predicted_high_line.clear()
                     try:
-                        p = y_pred[1:] if y_pred.size > 1 else y_pred
+                        p = y_pred
                         if p.size > 0:
                             anchor = float(closes[-1]) if closes[-1] > 0 else float(p[0])
                             span = float(np.max(p) - np.min(p)) / max(anchor, 1e-8)
@@ -1065,16 +915,16 @@ class StockChart(QWidget):
             total_drops = int(
                 diag["drop_nonfinite"]
                 + diag["drop_interval"]
-                + diag["drop_jump"]
                 + diag["drop_shape"]
+                + diag["drop_scale"]
                 + diag["drop_parse"]
             )
             diag_msg = (
                 f"chart render iv={default_iv} rows={diag['rows_total']} "
                 f"kept={diag['kept']} drops={total_drops} "
                 f"(nf={diag['drop_nonfinite']} iv={diag['drop_interval']} "
-                f"jump={diag['drop_jump']} shape={diag['drop_shape']} parse={diag['drop_parse']}) "
-                f"rebuild={diag['rebuild_shape']} clamp={diag['clamp_shape']}"
+                f"shape={diag['drop_shape']} scale={diag['drop_scale']} "
+                f"parse={diag['drop_parse']})"
             )
             self._dbg_log(
                 f"chart_render:{default_iv}",
@@ -1090,12 +940,29 @@ class StockChart(QWidget):
                     level="warning",
                 )
 
-            self._update_overlay_lines(render_bars, closes)
+            self._update_overlay_lines(rendered_bars, closes)
             self._update_level_lines()
 
             # Auto-range unless user enabled manual zoom.
+            # Focus viewport on candle data with only a small portion of
+            # the forecast visible, so the prediction area does not
+            # compress and distort the real candles.
             if self.plot_widget is not None and not self._manual_zoom:
-                self.plot_widget.autoRange()
+                n_candles = len(closes)
+                n_pred = len(self._predicted_prices) if self._predicted_prices else 0
+                if n_candles > 0 and n_pred > 0:
+                    # Auto-range Y first, then constrain X to show
+                    # candles + 30% of forecast width.
+                    self.plot_widget.autoRange()
+                    pred_visible = max(1, int(n_pred * 0.3))
+                    visible_candles = max(120, min(n_candles, 600))
+                    x_min = max(0, n_candles - visible_candles)
+                    x_max = n_candles + pred_visible
+                    self.plot_widget.setXRange(
+                        x_min, x_max, padding=0.02
+                    )
+                else:
+                    self.plot_widget.autoRange()
 
         except Exception as e:
             log.warning(f"Chart update failed: {e}")

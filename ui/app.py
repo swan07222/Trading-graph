@@ -2043,11 +2043,24 @@ class MainApp(QMainWindow):
             "final": is_final,
             "interval": interval,
         }
-        if "volume" in bar:
-            try:
-                norm_bar["volume"] = float(bar.get("volume", 0) or 0)
-            except Exception:
-                norm_bar["volume"] = 0.0
+        try:
+            vol_val = float(bar.get("volume", 0) or 0.0)
+        except Exception:
+            vol_val = 0.0
+        if (not math.isfinite(vol_val)) or vol_val < 0:
+            vol_val = 0.0
+
+        try:
+            amt_val = float(bar.get("amount", 0) or 0.0)
+        except Exception:
+            amt_val = 0.0
+        if not math.isfinite(amt_val):
+            amt_val = 0.0
+        if amt_val <= 0 and vol_val > 0 and c > 0:
+            amt_val = float(c) * float(vol_val)
+
+        norm_bar["volume"] = float(vol_val)
+        norm_bar["amount"] = float(max(0.0, amt_val))
 
         # Guard against bad feed bars causing endpoint jumps/spikes.
         if arr:
@@ -2122,6 +2135,16 @@ class MainApp(QMainWindow):
                         except Exception:
                             n_vol = 0.0
                         merged["volume"] = float(max(0.0, e_vol) + max(0.0, n_vol))
+                    if ("amount" in norm_bar) or ("amount" in existing):
+                        try:
+                            e_amt = float(existing.get("amount", 0) or 0.0)
+                        except Exception:
+                            e_amt = 0.0
+                        try:
+                            n_amt = float(norm_bar.get("amount", 0) or 0.0)
+                        except Exception:
+                            n_amt = 0.0
+                        merged["amount"] = float(max(0.0, e_amt) + max(0.0, n_amt))
                     arr[i] = merged
                 else:
                     arr[i] = norm_bar
@@ -3682,6 +3705,10 @@ class MainApp(QMainWindow):
             if status == "cancelled":
                 self.log("Train trained stocks cancelled.", "info")
             return
+        self._handle_training_drift_alarm(
+            result,
+            context="train_trained_stocks",
+        )
 
         trained_codes = list(
             dict.fromkeys(
@@ -3712,6 +3739,69 @@ class MainApp(QMainWindow):
             )
 
         self._init_components()
+
+    def _handle_training_drift_alarm(
+        self,
+        result: dict[str, object] | None,
+        *,
+        context: str,
+    ) -> None:
+        """Escalate trainer drift alarms and force auto-trade to MANUAL."""
+        payload = result if isinstance(result, dict) else {}
+        drift_guard = payload.get("drift_guard", {})
+        quality_gate = payload.get("quality_gate", {})
+        if not isinstance(drift_guard, dict):
+            drift_guard = {}
+        if not isinstance(quality_gate, dict):
+            quality_gate = {}
+
+        action = str(drift_guard.get("action", "") or "").strip().lower()
+        failed_reasons = {
+            str(x).strip().lower()
+            for x in list(quality_gate.get("failed_reasons", []) or [])
+            if str(x).strip()
+        }
+        if (
+            action != "rollback_recommended"
+            and "drift_guard_block" not in failed_reasons
+        ):
+            return
+
+        try:
+            score_drop = float(drift_guard.get("score_drop", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            score_drop = 0.0
+        try:
+            acc_drop = float(drift_guard.get("accuracy_drop", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            acc_drop = 0.0
+
+        reason = (
+            f"{context}: model drift guard triggered "
+            f"(action={action or 'unknown'}, "
+            f"score_drop={score_drop:.3f}, accuracy_drop={acc_drop:.3f})"
+        )
+        self.log(reason, "warning")
+
+        try:
+            ExecutionEngine = _lazy_get("trading.executor", "ExecutionEngine")
+            handled = int(
+                ExecutionEngine.trigger_model_drift_alarm(
+                    reason=reason,
+                    severity="critical",
+                    metadata={
+                        "context": str(context),
+                        "action": str(action),
+                        "score_drop": float(score_drop),
+                        "accuracy_drop": float(acc_drop),
+                    },
+                )
+            )
+            if handled > 0:
+                self._auto_trade_mode = AutoTradeMode.MANUAL
+                self._apply_auto_trade_mode(AutoTradeMode.MANUAL)
+        except Exception as exc:
+            self.log(f"Drift alarm escalation failed: {exc}", "warning")
 
     def _init_auto_trader(self):
         """Initialize auto-trader on the execution engine."""
@@ -5218,13 +5308,6 @@ class MainApp(QMainWindow):
                     )
                 except Exception as e:
                     log.debug(f"Chart price refresh failed: {e}")
-                self._persist_session_bar(
-                    code,
-                    interval,
-                    arr[-1] if arr else None,
-                    channel="tick",
-                    min_gap_seconds=0.9,
-                )
 
             if arr:
                 self._persist_session_bar(
@@ -6066,7 +6149,10 @@ class MainApp(QMainWindow):
                 )
                 ref_close = prev_close
                 if day_boundary:
-                    ref_close = None
+                    # Keep prev_close as ref for the first bar of a new day
+                    # so overnight gaps are still clamped by _sanitize_ohlc
+                    # (jump_cap of 8% for 1m already covers A-share 10% limit).
+                    # Only clear rolling stats for adaptive caps.
                     recent_closes.clear()
                     recent_body.clear()
                     recent_span.clear()
@@ -6793,8 +6879,11 @@ class MainApp(QMainWindow):
             if fetcher is None:
                 return []
             requested_iv = self._normalize_interval_token(interval)
-            source_iv = "1m"
-            norm_iv = requested_iv or source_iv
+            norm_iv = requested_iv or "1m"
+            # Intraday charts are sourced from canonical 1m and resampled in UI.
+            # Daily/weekly/monthly charts should fetch native intervals directly
+            # to avoid 1m lookback/API-cap truncation.
+            source_iv = "1m" if norm_iv not in {"1d", "1wk", "1mo"} else norm_iv
             is_trained = self._is_trained_stock(symbol)
             if is_trained:
                 target_floor = int(self._trained_stock_window_bars(norm_iv))
@@ -6821,16 +6910,24 @@ class MainApp(QMainWindow):
                 allow_online = bool(force_refresh)
                 fallback_allow_online = bool(force_refresh)
 
-            source_lookback = int(
-                max(
-                    self._recommended_lookback(source_iv),
-                    self._bars_needed_from_base_interval(
-                        norm_iv,
+            if source_iv == norm_iv:
+                source_lookback = int(
+                    max(
                         int(lookback),
-                        base_interval=source_iv,
-                    ),
+                        int(self._recommended_lookback(source_iv)),
+                    )
                 )
-            )
+            else:
+                source_lookback = int(
+                    max(
+                        self._recommended_lookback(source_iv),
+                        self._bars_needed_from_base_interval(
+                            norm_iv,
+                            int(lookback),
+                            base_interval=source_iv,
+                        ),
+                    )
+                )
             source_min_floor = int(self._recommended_lookback(source_iv))
             is_intraday = norm_iv not in ("1d", "1wk", "1mo")
             market_open = bool(CONFIG.is_market_open())
@@ -6853,13 +6950,20 @@ class MainApp(QMainWindow):
                     use_cache=bool(use_cache),
                     update_db=bool(update_db),
                 )
-            min_required = int(max(20, source_min_floor if is_trained else 20))
-            if source_lookback >= 200:
-                depth_ratio = 0.55 if is_trained else 0.40
-                min_required = max(
-                    min_required,
-                    int(max(120, float(source_lookback) * float(depth_ratio))),
-                )
+            if source_iv == "1d":
+                min_required = int(max(5, min(source_lookback, 90)))
+            elif source_iv == "1wk":
+                min_required = int(max(4, min(source_lookback, 52)))
+            elif source_iv == "1mo":
+                min_required = int(max(3, min(source_lookback, 24)))
+            else:
+                min_required = int(max(20, source_min_floor if is_trained else 20))
+                if source_lookback >= 200:
+                    depth_ratio = 0.55 if is_trained else 0.40
+                    min_required = max(
+                        min_required,
+                        int(max(120, float(source_lookback) * float(depth_ratio))),
+                    )
             if (
                 (df is None or df.empty or len(df) < min_required)
                 and bool(fallback_allow_online)
@@ -6942,12 +7046,28 @@ class MainApp(QMainWindow):
                     if sanitized is None:
                         continue
                     o, h, low, c = sanitized
+                    try:
+                        vol = float(row.get("volume", 0) or 0.0)
+                    except Exception:
+                        vol = 0.0
+                    if (not math.isfinite(vol)) or vol < 0:
+                        vol = 0.0
+                    try:
+                        amount = float(row.get("amount", 0) or 0.0)
+                    except Exception:
+                        amount = 0.0
+                    if not math.isfinite(amount):
+                        amount = 0.0
+                    if amount <= 0 and vol > 0 and c > 0:
+                        amount = float(c) * float(vol)
                     out.append(
                         {
                             "open": o,
                             "high": h,
                             "low": low,
                             "close": c,
+                            "volume": float(vol),
+                            "amount": float(max(0.0, amount)),
                             "timestamp": self._epoch_to_iso(epoch),
                             "_ts_epoch": float(epoch),
                             "final": True,
@@ -6994,6 +7114,20 @@ class MainApp(QMainWindow):
                         if sanitized is None:
                             continue
                         o, h, low, c = sanitized
+                        try:
+                            vol = float(row.get("volume", 0) or 0.0)
+                        except Exception:
+                            vol = 0.0
+                        if (not math.isfinite(vol)) or vol < 0:
+                            vol = 0.0
+                        try:
+                            amount = float(row.get("amount", 0) or 0.0)
+                        except Exception:
+                            amount = 0.0
+                        if not math.isfinite(amount):
+                            amount = 0.0
+                        if amount <= 0 and vol > 0 and c > 0:
+                            amount = float(c) * float(vol)
                         is_final = bool(row.get("is_final", True))
                         if (
                             is_intraday
@@ -7011,6 +7145,8 @@ class MainApp(QMainWindow):
                                 "high": h,
                                 "low": low,
                                 "close": c,
+                                "volume": float(vol),
+                                "amount": float(max(0.0, amount)),
                                 "timestamp": self._epoch_to_iso(epoch),
                                 "_ts_epoch": float(epoch),
                                 "final": is_final,
@@ -8740,6 +8876,10 @@ class MainApp(QMainWindow):
             result = getattr(dialog, "training_result", None)
             if isinstance(result, dict):
                 if str(result.get("status", "")).strip().lower() == "complete":
+                    self._handle_training_drift_alarm(
+                        result,
+                        context="training_dialog",
+                    )
                     trained_codes = list(
                         dict.fromkeys(
                             self._ui_norm(x)
@@ -9255,7 +9395,7 @@ class MainApp(QMainWindow):
         btn_layout.setContentsMargins(2, 2, 2, 2)
 
         approve_btn = QPushButton("Approve")
-        approve_btn.setFixedWidth(30)
+        approve_btn.setFixedWidth(84)
         approve_btn.setToolTip("Approve this trade")
         action_id = action.id
 
@@ -9267,7 +9407,7 @@ class MainApp(QMainWindow):
         approve_btn.clicked.connect(do_approve)
 
         reject_btn = QPushButton("Reject")
-        reject_btn.setFixedWidth(30)
+        reject_btn.setFixedWidth(84)
         reject_btn.setToolTip("Reject this trade")
 
         def do_reject():
@@ -9654,4 +9794,3 @@ def _restore_sigint_handler(previous_handler) -> None:
 
 if __name__ == "__main__":
     run_app()
-

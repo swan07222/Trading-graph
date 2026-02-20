@@ -1,3 +1,4 @@
+import threading
 from types import SimpleNamespace
 
 from data.fetcher import AkShareSource, DataFetcher, DataSourceStatus
@@ -59,3 +60,38 @@ def test_source_health_prefers_tencent_when_eastmoney_down():
     t_score = fetcher._source_health_score(tencent, env)
     a_score = fetcher._source_health_score(akshare, env)
     assert t_score > a_score
+
+
+def test_get_active_sources_filters_network_unsuitable_source(monkeypatch):
+    fetcher = DataFetcher.__new__(DataFetcher)
+    fetcher._last_network_mode = (True, True, False)
+    fetcher._rate_lock = threading.Lock()
+    fetcher._request_times = {}
+
+    class _Source:
+        def __init__(self, name: str, suitable: bool):
+            self.name = name
+            self.priority = 0
+            self.status = DataSourceStatus(name=name)
+            self._suitable = bool(suitable)
+
+        def is_available(self):
+            return True
+
+        def is_suitable_for_network(self):
+            return self._suitable
+
+    good = _Source("tencent", True)
+    bad = _Source("sina", False)
+    fetcher._all_sources = [good, bad]
+
+    env = SimpleNamespace(
+        is_china_direct=True,
+        eastmoney_ok=True,
+        yahoo_ok=False,
+    )
+    monkeypatch.setattr("core.network.get_network_env", lambda: env)
+
+    out = fetcher._get_active_sources()
+    names = [s.name for s in out]
+    assert names == ["tencent"]

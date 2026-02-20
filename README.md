@@ -1,72 +1,97 @@
 # Trading Graph
 
-AI-assisted desktop trading system focused on China A-share equities.
+Desktop AI trading system for China A-shares with:
+- multi-source market data (Tencent, AkShare/EastMoney, Sina, Yahoo fallback)
+- model training and prediction
+- auto-trade execution and risk controls
+- PyQt real-time charting and operations UI
 
-It combines:
-- multi-source market data ingestion with failover
-- model training and auto-learning
-- execution and risk controls
-- health monitoring and audit trails
-- a PyQt desktop UI
+## Scope
 
-## Project Status
+This project is desktop-first and single-node. It is suitable for personal and small-team workflows, not full institutional deployment.
 
-- Maturity: advanced independent / pre-production grade
-- Best fit: personal and small-team desktop trading workflows
-- Institutional stack parity: partial (not full enterprise HA/DR + regulated ops stack)
+## Key Capabilities
 
-## Key Features
+- Robust history/realtime data fetch with source health scoring and network-aware routing
+- Daily history quorum checks before persisting internet data to local DB
+- Session cache + SQLite persistence with cleanup/sanitization guards
+- Live signal monitor + auto-trade policy controls
+- Replay/backtest utilities and operations scripts
 
-- Unified desktop workflow: data, models, risk, execution, and monitoring in one app.
-- Data resilience: source health scoring, failover routing, VPN-aware behavior.
-- Risk-first execution: quote staleness checks, pre-trade controls, kill switch, policy checks.
-- Replay and backtest support for safer strategy validation.
-- Auto-learning pipeline with session cache integration.
-- Tamper-evident audit chain and governance hooks for live controls.
+## Data Source Policy
 
-## Runtime Flow
+For CN equities:
+- Realtime: Tencent primary, then controlled fallbacks (`spot_cache`, recent last-good, local last close)
+- Intraday history: best-source selection by quality score, stale-bar detection, cross-validation
+- Daily history: multi-source consensus merge (Tencent/AkShare/Sina when available) + quorum gate before DB write
 
-1. Entry via `main.py` (UI or CLI mode)
-2. `data/fetcher.py` selects sources by network mode + source health
-3. Data is cleaned and stored in cache/SQLite (`data/database.py`)
-4. `models/predictor.py` generates model outputs/signals
-5. `trading/executor.py` enforces market/risk/governance gates
-6. `trading/oms.py` persists and reconciles order lifecycle
-7. `trading/health.py` tracks runtime health and degraded-mode actions
-8. `utils/security.py` records audited security-sensitive events
+`AkShareSource` availability depends on EastMoney reachability (`env.eastmoney_ok`) and China-direct network conditions.
 
-## Installation
+## Candle Rendering Pipeline
 
-Core:
+1. Load bars from fetcher/database/session cache
+2. Normalize interval and bucket timestamps
+3. Sanitize OHLC shape and scale
+4. Drop mixed-interval / malformed bars
+5. Render candles + overlays + forecast
+
+## Recent Reliability Fixes
+
+- Fixed history loading to use native `1d/1wk/1mo` fetch intervals (instead of forcing all chart history through `1m` resampling)
+- Tightened render-side intraday guardrails to block oversized outlier candles
+- Overlays are now computed from the same filtered candles that are actually rendered
+- Fixed chart viewport bug where X-range always started at `0`
+- Removed duplicate tick session-cache persistence path
+- Fixed pending-approval button sizing in UI action table
+
+## Why Candles Can Display Incorrectly
+
+Common root causes:
+- mixed intervals merged into one chart window
+- malformed intraday OHLC from provider partial rows
+- scale mismatch (for example provider rows in wrong magnitude)
+- stale/flat bars dominating when network/source is degraded
+- UI loading daily/weekly/monthly from truncated minute windows
+
+Current code addresses these with:
+- interval filtering and bucket normalization
+- OHLC sanitization and outlier-drop guards
+- source quality scoring and consensus merge
+- fallback layering with explicit source tagging
+- native interval fetch for higher-timeframe charts
+
+## Quick Start
+
+Install:
 
 ```bash
 pip install -r requirements.txt
 ```
 
-Development tools:
-
-```bash
-pip install -r requirements-dev.txt
-```
-
-Optional GPU example (CUDA 11.8):
-
-```bash
-pip3 install torch torchvision --index-url https://download.pytorch.org/whl/cu118
-```
-
-## Quick Start
-
-Desktop UI:
+Run UI:
 
 ```bash
 python main.py
 ```
 
-Auto-learning (headless):
+## Useful Commands
+
+Train:
 
 ```bash
-python main.py --auto-learn --max-stocks 200 --continuous
+python main.py --train --epochs 100
+```
+
+Predict:
+
+```bash
+python main.py --predict 600519
+```
+
+Auto-learn:
+
+```bash
+python main.py --auto-learn --max-stocks 50 --continuous
 ```
 
 Backtest:
@@ -75,132 +100,35 @@ Backtest:
 python main.py --backtest
 ```
 
-Replay:
+## Validation
 
-```bash
-python main.py --replay-file path/to/replay.csv --replay-speed 20
-```
-
-Health report:
-
-```bash
-python main.py --health
-```
-
-## Common CLI Commands
-
-```bash
-python main.py --train --epochs 100
-python main.py --predict 600519
-python main.py --auto-learn --max-stocks 50 --epochs 50 --continuous
-python main.py --recovery-drill
-```
-
-## Configuration
-
-Primary config:
-- `config/settings.py`
-
-Optional overrides:
-- `config.json`
-- selected environment variables
-
-Main config groups:
-- `data`
-- `model`
-- `risk`
-- `security`
-- `auto_trade`
-
-## Testing
-
-Run all tests:
+Run tests:
 
 ```bash
 pytest -q
 ```
 
-Focused regression pack:
+Lint:
 
 ```bash
-pytest -q tests/test_data.py tests/test_data_leakage.py tests/test_models.py tests/test_oms_fills.py tests/test_replay.py tests/test_audit_integrity.py tests/test_executor_health_guard.py
+ruff check .
 ```
 
-Typecheck gate:
+Type gate:
 
 ```bash
 python scripts/typecheck_gate.py
 ```
 
-## Strategy Extensibility
+## Main Directories
 
-Custom strategies are loaded from `strategies/*.py`.
-
-Required function contract:
-- `generate_signal(df, indicators, context) -> dict`
-- return fields: `action` (`buy`/`sell`/`hold`), `score` (`0..1`), optional `reason`
-
-Reference example:
-- `strategies/momentum_breakout.py`
-
-Marketplace files:
-- `strategies/marketplace.json`
-- `strategies/enabled.json`
-
-## Operations
-
-Playbook:
-- `docs/OPERATIONS_PLAYBOOK.md`
-
-Preflight checks:
-
-```bash
-python scripts/release_preflight.py --observability-url http://127.0.0.1:9090
-```
-
-Regulatory readiness:
-
-```bash
-python scripts/regulatory_readiness.py
-```
-
-HA/DR lease drill:
-
-```bash
-python scripts/ha_dr_drill.py --backend sqlite --ttl-seconds 5
-```
-
-Deployment snapshot:
-
-```bash
-python scripts/deployment_snapshot.py create --snapshot-dir backups
-```
-
-Rollback dry-run then confirm:
-
-```bash
-python scripts/deployment_snapshot.py restore --archive backups/snapshot_<tag>.tar.gz --dry-run
-python scripts/deployment_snapshot.py restore --archive backups/snapshot_<tag>.tar.gz --confirm
-```
-
-## Known Disadvantages
-
-1. Desktop-first, single-node architecture: this is strong for local control but weaker for cloud-native scaling and team collaboration.
-2. External data-provider and network dependency: quote quality and timeliness still depend on third-party endpoints and connectivity conditions.
-
-## Repository Layout (Top-Level)
-
-- `analysis/`: backtest, replay, sentiment, strategy engine helpers
-- `config/`: typed settings and policy config
-- `core/`: shared types, symbols, network/env, constants
-- `data/`: fetch, clean, cache, store, validate, discover
-- `models/`: networks, ensemble, trainer, predictor, auto-learner
-- `trading/`: broker, executor, OMS, risk, health, alerts
-- `ui/`: PyQt application and widgets
-- `utils/`: logging, metrics, security, helper utilities
-- `tests/`: regression and integration test coverage
+- `data/`: data fetch, cache, persistence, validation
+- `models/`: model training/prediction/auto-learning
+- `trading/`: execution, risk, OMS, health
+- `ui/`: PyQt application and chart rendering
+- `analysis/`: replay, backtest, strategy/sentiment modules
+- `tests/`: regression and integration coverage
 
 ## Safety Note
 
-This system is a decision and risk framework, not a guaranteed-profit engine.
-Always validate strategies with backtest + replay + paper/shadow operation before scaling real capital.
+This is a decision-support and execution framework, not a guaranteed-profit system. Use paper/simulation and replay/backtest validation before scaling real capital.

@@ -1,6 +1,7 @@
 import builtins
 from datetime import date, datetime, timedelta, timezone
 
+from config.settings import Config
 from core.constants import get_price_limit, is_st_stock, is_trading_day
 from data.fetcher import DataFetcher
 
@@ -40,3 +41,23 @@ def test_fetcher_now_shanghai_fallback_keeps_utc_plus_8(monkeypatch):
     got = DataFetcher._now_shanghai_naive()
     expected = datetime.now(tz=timezone(timedelta(hours=8))).replace(tzinfo=None)
     assert abs((got - expected).total_seconds()) < 2.0
+
+
+def test_is_market_open_tolerates_trading_day_runtime_error(monkeypatch):
+    class _FixedDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            base = datetime(2026, 2, 18, 10, 0, 0)
+            if tz is not None:
+                return base.replace(tzinfo=tz)
+            return base
+
+    def _boom(_d):
+        raise RuntimeError("calendar failure")
+
+    monkeypatch.setattr("config.settings.datetime", _FixedDatetime)
+    monkeypatch.setattr("core.constants.is_trading_day", _boom)
+
+    cfg = Config()
+    out = cfg.is_market_open()
+    assert isinstance(out, bool)

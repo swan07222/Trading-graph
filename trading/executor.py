@@ -8,6 +8,7 @@ import socket
 import threading
 import time
 import uuid
+import weakref
 from collections import deque
 from collections.abc import Callable
 from datetime import date, datetime, timedelta
@@ -92,6 +93,7 @@ class AutoTrader:
         self._lock = threading.RLock()
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
+        self._loop_lock = threading.RLock()
 
         self.state = AutoTradeState()
 
@@ -104,20 +106,28 @@ class AutoTrader:
 
     def set_mode(self, mode: AutoTradeMode):
         """Change trading mode. Stops/starts scan loop as needed."""
+        should_stop = False
+        should_start = False
         with self._lock:
             old_mode = self.state.mode
             self.state.mode = mode
 
             if mode == AutoTradeMode.MANUAL:
-                if self._is_loop_running():
-                    self._stop_loop()
-                self.state.is_running = False
+                should_stop = self._is_loop_running()
             else:
                 # AUTO or SEMI_AUTO — start loop if not running
-                if not self._is_loop_running():
-                    self._start_loop()
-                self.state.is_running = True
+                should_start = not self._is_loop_running()
 
+        if should_stop:
+            self._stop_loop()
+        elif should_start:
+            self._start_loop()
+
+        with self._lock:
+            self.state.is_running = (
+                self.state.mode != AutoTradeMode.MANUAL
+                and self._is_loop_running()
+            )
             log.info(f"Auto-trade mode changed: {old_mode.value} -> {mode.value}")
             self._notify_state_changed()
 
@@ -143,8 +153,8 @@ class AutoTrader:
 
     def stop(self):
         """Stop the auto-trader scan loop."""
+        self._stop_loop()
         with self._lock:
-            self._stop_loop()
             self.state.is_running = False
             self._notify_state_changed()
             log.info("Auto-trader stopped")
@@ -337,20 +347,27 @@ class AutoTrader:
 
     def _start_loop(self):
         """Start the scan loop thread."""
-        self._stop_event.clear()
-        self._thread = threading.Thread(
-            target=self._scan_loop,
-            name="auto_trader",
-            daemon=True,
-        )
-        self._thread.start()
+        with self._loop_lock:
+            if self._thread and self._thread.is_alive():
+                return
+            self._stop_event.clear()
+            self._thread = threading.Thread(
+                target=self._scan_loop,
+                name="auto_trader",
+                daemon=True,
+            )
+            self._thread.start()
 
     def _stop_loop(self):
         """Stop the scan loop thread."""
-        self._stop_event.set()
-        if self._thread and self._thread.is_alive():
-            self._thread.join(timeout=10)
-        self._thread = None
+        with self._loop_lock:
+            self._stop_event.set()
+            thread = self._thread
+        if thread and thread.is_alive():
+            thread.join(timeout=10)
+        with self._loop_lock:
+            if self._thread is thread:
+                self._thread = None
 
     # -----------------------------------------------------------------
     # Internal: main scan loop
@@ -374,17 +391,20 @@ class AutoTrader:
             cycle_start = time.time()
 
             try:
+                should_scan = False
                 with self._lock:
                     today = date.today()
                     if self.state.session_date != today:
                         self.state.reset_daily()
                         log.info("Auto-trader: new trading day, counters reset")
 
-                    if not self._should_scan():
-                        self._sleep_interruptible(5)
-                        continue
+                    should_scan = self._should_scan()
+                    if should_scan:
+                        self.state.last_scan_time = datetime.now()
 
-                    self.state.last_scan_time = datetime.now()
+                if not should_scan:
+                    self._sleep_interruptible(5)
+                    continue
 
                 self._run_scan_cycle()
 
@@ -880,6 +900,8 @@ class ExecutionEngine:
     _RUNTIME_LEASE_FILE: str = "execution_runtime_lease.json"
     _RUNTIME_LEASE_DB_FILE: str = "execution_runtime_lease.db"
     _SYNTHETIC_EXITS_FILE: str = "synthetic_exits_state.json"
+    _ACTIVE_ENGINES_LOCK = threading.RLock()
+    _ACTIVE_ENGINES: weakref.WeakSet[ExecutionEngine] = weakref.WeakSet()
 
     def __init__(self, mode: TradingMode = None):
         self.mode = mode or CONFIG.trading_mode
@@ -974,6 +996,115 @@ class ExecutionEngine:
         self._snapshot_provider_name = "execution_engine"
         self._restore_runtime_state()
         self._restore_synthetic_exits()
+        with self.__class__._ACTIVE_ENGINES_LOCK:
+            self.__class__._ACTIVE_ENGINES.add(self)
+
+    @classmethod
+    def trigger_model_drift_alarm(
+        cls,
+        reason: str,
+        *,
+        severity: str = "critical",
+        metadata: dict[str, Any] | None = None,
+    ) -> int:
+        """
+        Raise a runtime model-drift alarm and disable live auto-trading.
+
+        Returns the number of engine instances that handled the alarm.
+        """
+        sev = str(severity or "critical").strip().lower()
+        status = (
+            HealthStatus.UNHEALTHY
+            if sev in {"critical", "unhealthy", "block"}
+            else HealthStatus.DEGRADED
+        )
+        msg = str(reason or "model_drift_alarm").strip() or "model_drift_alarm"
+
+        try:
+            get_health_monitor().report_component_health(
+                ComponentType.MODEL,
+                status,
+                error=msg,
+            )
+        except Exception as e:
+            log.debug("Model drift health-report update failed: %s", e)
+
+        handled = 0
+        with cls._ACTIVE_ENGINES_LOCK:
+            engines = list(cls._ACTIVE_ENGINES)
+        for eng in engines:
+            try:
+                if eng._apply_model_drift_alarm(  # noqa: SLF001
+                    msg,
+                    status=status,
+                    metadata=metadata,
+                ):
+                    handled += 1
+            except Exception as e:
+                log.debug("Model drift alarm delivery failed: %s", e)
+        return int(handled)
+
+    def _apply_model_drift_alarm(
+        self,
+        reason: str,
+        *,
+        status: HealthStatus = HealthStatus.UNHEALTHY,
+        metadata: dict[str, Any] | None = None,
+    ) -> bool:
+        """Apply drift alarm policy to this engine instance."""
+        del metadata
+        if self.mode != TradingMode.LIVE:
+            return False
+        cfg = getattr(CONFIG, "auto_trade", None)
+        if not bool(getattr(cfg, "auto_disable_on_model_drift", True)):
+            return False
+
+        pause_seconds = int(
+            max(
+                60,
+                float(getattr(cfg, "model_drift_pause_seconds", 3600) or 3600),
+            )
+        )
+        action_taken = False
+        if self.auto_trader is not None:
+            try:
+                if self.auto_trader.get_mode() != AutoTradeMode.MANUAL:
+                    self.auto_trader.set_mode(AutoTradeMode.MANUAL)
+                    action_taken = True
+                self.auto_trader.pause(
+                    f"Model drift alarm: {reason}",
+                    duration_seconds=pause_seconds,
+                )
+            except Exception as e:
+                log.debug("Model drift auto-trader pause failed: %s", e)
+
+        try:
+            CONFIG.auto_trade.enabled = False
+        except Exception:
+            pass
+
+        try:
+            self._alert_manager.risk_alert(
+                "Model drift alarm",
+                f"Auto-trade forced to MANUAL ({status.value}): {reason}",
+            )
+        except Exception as e:
+            log.debug("Model drift alert dispatch failed: %s", e)
+
+        try:
+            get_audit_log().log_risk_event(
+                "model_drift_auto_disable",
+                {
+                    "mode": str(getattr(self.mode, "value", self.mode)),
+                    "status": str(status.value),
+                    "reason": str(reason),
+                    "pause_seconds": int(pause_seconds),
+                    "auto_trader_present": bool(self.auto_trader is not None),
+                },
+            )
+        except Exception as e:
+            log.debug("Model drift audit log failed: %s", e)
+        return bool(action_taken)
 
     # -----------------------------------------------------------------
     # Auto-trade public API
@@ -1417,6 +1548,8 @@ class ExecutionEngine:
     def stop(self):
         if not self._running:
             self._release_runtime_lease()
+            with self.__class__._ACTIVE_ENGINES_LOCK:
+                self.__class__._ACTIVE_ENGINES.discard(self)
             return
 
         # Stop auto-trader first
@@ -1463,6 +1596,8 @@ class ExecutionEngine:
         self._persist_synthetic_exits(force=True)
         self._persist_runtime_state(clean_shutdown=True)
         self._release_runtime_lease()
+        with self.__class__._ACTIVE_ENGINES_LOCK:
+            self.__class__._ACTIVE_ENGINES.discard(self)
 
         log.info("Execution engine stopped")
 
@@ -1829,9 +1964,9 @@ class ExecutionEngine:
 
     def _get_quote_snapshot(
         self, symbol: str
-    ) -> tuple[float, datetime | None, str]:
+    ) -> tuple[float, datetime | None, str, bool]:
         """
-        Returns (price, timestamp, source).
+        Returns (price, timestamp, source, is_delayed).
         """
         # 1) feed cache
         try:
@@ -1841,7 +1976,8 @@ class ExecutionEngine:
             q = fm.get_quote(symbol)
             if q and float(getattr(q, "price", 0.0) or 0.0) > 0:
                 ts = getattr(q, "timestamp", None)
-                return float(q.price), ts, "feed"
+                delayed = bool(getattr(q, "is_delayed", False))
+                return float(q.price), ts, "feed", delayed
         except Exception as e:
             log.debug("Feed quote snapshot failed for %s: %s", symbol, e)
 
@@ -1849,7 +1985,7 @@ class ExecutionEngine:
         try:
             px = self.broker.get_quote(symbol)
             if px and float(px) > 0:
-                return float(px), None, "broker"
+                return float(px), None, "broker", False
         except Exception as e:
             log.debug("Broker quote snapshot failed for %s: %s", symbol, e)
 
@@ -1859,35 +1995,84 @@ class ExecutionEngine:
 
             q = get_fetcher().get_realtime(symbol)
             if q and float(getattr(q, "price", 0.0) or 0.0) > 0:
+                delayed = bool(getattr(q, "is_delayed", False))
                 return (
                     float(q.price),
                     getattr(q, "timestamp", None),
                     f"fetcher:{getattr(q, 'source', '')}",
+                    delayed,
                 )
         except Exception as e:
             log.debug("Fetcher quote snapshot failed for %s: %s", symbol, e)
 
-        return 0.0, None, "none"
+        return 0.0, None, "none", True
+
+    @staticmethod
+    def _coerce_quote_snapshot(
+        snapshot: object,
+    ) -> tuple[float, datetime | None, str, bool]:
+        """
+        Backward-compatible snapshot parser.
+
+        Accepts both legacy 3-tuple ``(px, ts, src)`` and current 4-tuple.
+        """
+        if isinstance(snapshot, tuple):
+            if len(snapshot) >= 4:
+                px, ts, src, delayed = snapshot[:4]
+                try:
+                    return (
+                        float(px or 0.0),
+                        ts if isinstance(ts, datetime) else ts,
+                        str(src or ""),
+                        bool(delayed),
+                    )
+                except Exception:
+                    return 0.0, None, "none", True
+            if len(snapshot) == 3:
+                px, ts, src = snapshot
+                try:
+                    return (
+                        float(px or 0.0),
+                        ts if isinstance(ts, datetime) else ts,
+                        str(src or ""),
+                        False,
+                    )
+                except Exception:
+                    return 0.0, None, "none", True
+        return 0.0, None, "none", True
 
     def _require_fresh_quote(
-        self, symbol: str, max_age_seconds: float = 15.0
+        self,
+        symbol: str,
+        max_age_seconds: float = 15.0,
+        block_delayed: bool = False,
     ) -> tuple[bool, str, float]:
         """
         Strict quote freshness gate for order submission.
         Returns (ok, message, price).
         """
-        px, ts, src = self._get_quote_snapshot(symbol)
+        px, ts, src, delayed = self._coerce_quote_snapshot(
+            self._get_quote_snapshot(symbol)
+        )
         if px <= 0:
             return False, "No valid quote", 0.0
 
+        if block_delayed and delayed:
+            return False, f"Quote delayed/stale (source={src})", 0.0
+
         # If no timestamp, be conservative in LIVE mode
         if ts is None:
-            if str(self.mode.value).lower() == "live":
+            if block_delayed or str(self.mode.value).lower() == "live":
                 return False, f"No timestamped quote (source={src})", 0.0
             return True, "OK", px
 
         try:
-            age = (datetime.now() - ts).total_seconds()
+            now_ts = (
+                datetime.now(tz=ts.tzinfo)
+                if getattr(ts, "tzinfo", None) is not None
+                else datetime.now()
+            )
+            age = (now_ts - ts).total_seconds()
         except Exception as e:
             log.debug("Quote timestamp age calculation failed for %s: %s", symbol, e)
             age = 0.0
@@ -2146,10 +2331,24 @@ class ExecutionEngine:
         max_age = 15.0
         if hasattr(CONFIG, "risk") and hasattr(CONFIG.risk, "quote_staleness_seconds"):
             max_age = float(CONFIG.risk.quote_staleness_seconds)
-
-        ok, msg, fresh_px = self._require_fresh_quote(
-            signal.symbol, max_age_seconds=max_age
+        block_delayed = bool(
+            getattr(
+                getattr(CONFIG, "auto_trade", None),
+                "block_on_stale_realtime",
+                True,
+            )
         )
+
+        try:
+            ok, msg, fresh_px = self._require_fresh_quote(
+                signal.symbol,
+                max_age_seconds=max_age,
+                block_delayed=block_delayed,
+            )
+        except TypeError:
+            ok, msg, fresh_px = self._require_fresh_quote(
+                signal.symbol, max_age_seconds=max_age
+            )
         if not ok:
             self._reject_signal(signal, msg)
             return False
@@ -2865,7 +3064,9 @@ class ExecutionEngine:
             if not symbol or qty <= 0:
                 continue
 
-            px, _, _ = self._get_quote_snapshot(symbol)
+            px, _, _, _ = self._coerce_quote_snapshot(
+                self._get_quote_snapshot(symbol)
+            )
             if px <= 0:
                 continue
 

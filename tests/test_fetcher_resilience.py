@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import threading
 from datetime import datetime, timedelta
+from types import SimpleNamespace
 
 import pandas as pd
 
-from data.fetcher import DataFetcher, DataSource, ITickSource, Quote
+from data.fetcher import DataFetcher, DataSource, Quote, SinaHistorySource
 
 
 class _DummyCache:
@@ -218,7 +219,7 @@ def test_data_source_half_open_probe_during_cooldown(monkeypatch):
     src._next_half_open_probe_ts = 100.0
 
     now = {"t": 99.0}
-    monkeypatch.setattr("data.fetcher.time.monotonic", lambda: float(now["t"]))
+    monkeypatch.setattr("data.fetcher_sources.time.monotonic", lambda: float(now["t"]))
 
     assert src.is_available() is False
     now["t"] = 100.0
@@ -261,7 +262,7 @@ def test_fetch_history_with_depth_retry_uses_larger_windows():
     assert any(x > 5 for x in calls)
 
 
-def test_fetch_history_policy_prefers_itick_when_available():
+def test_fetch_history_policy_tries_online_before_localdb():
     fetcher = DataFetcher.__new__(DataFetcher)
     fetcher._rate_limiter = threading.Semaphore(1)
     fetcher._rate_limit = lambda source, interval: None  # noqa: ARG005
@@ -272,21 +273,23 @@ def test_fetch_history_policy_prefers_itick_when_available():
             "open": [10.0] * len(idx),
             "high": [10.2] * len(idx),
             "low": [9.8] * len(idx),
-            "close": [10.1] * len(idx),
+            "close": [10.0 + (i * 0.1) for i in range(len(idx))],
             "volume": [100] * len(idx),
             "amount": [1010.0] * len(idx),
         },
         index=idx,
     )
+    call_order: list[str] = []
 
-    class _Itick:
-        name = "itick"
+    class _Tencent:
+        name = "tencent"
 
         def __init__(self):
             self.called = 0
 
         def get_history_instrument(self, inst, days, interval="1d"):  # noqa: ARG002
             self.called += 1
+            call_order.append(self.name)
             return frame.copy()
 
     class _Akshare:
@@ -297,6 +300,7 @@ def test_fetch_history_policy_prefers_itick_when_available():
 
         def get_history_instrument(self, inst, days, interval="1d"):  # noqa: ARG002
             self.called += 1
+            call_order.append(self.name)
             return frame.copy()
 
     class _Local:
@@ -307,14 +311,15 @@ def test_fetch_history_policy_prefers_itick_when_available():
 
         def get_history_instrument(self, inst, days, interval="1d"):  # noqa: ARG002
             self.called += 1
+            call_order.append(self.name)
             return frame.copy()
 
-    itick = _Itick()
+    tencent = _Tencent()
     akshare = _Akshare()
     localdb = _Local()
 
-    fetcher._get_active_sources = lambda: [localdb, itick, akshare]
-    fetcher._all_sources = [localdb, itick, akshare]
+    fetcher._get_active_sources = lambda: [localdb, tencent, akshare]
+    fetcher._all_sources = [localdb, tencent, akshare]
 
     out = fetcher._fetch_from_sources_instrument(
         inst={"market": "CN", "asset": "EQUITY", "symbol": "600519"},
@@ -324,11 +329,11 @@ def test_fetch_history_policy_prefers_itick_when_available():
     )
 
     assert not out.empty
-    assert int(itick.called) == 1
-    assert int(akshare.called) == 0
+    assert call_order
+    assert call_order[0] == "tencent"
 
 
-def test_history_policy_keeps_nonlocal_fallback_when_itick_missing():
+def test_history_policy_keeps_nonlocal_fallback_when_single_online_source():
     fetcher = DataFetcher.__new__(DataFetcher)
     fetcher._rate_limiter = threading.Semaphore(1)
     fetcher._rate_limit = lambda source, interval: None  # noqa: ARG005
@@ -365,42 +370,206 @@ def test_history_policy_keeps_nonlocal_fallback_when_itick_missing():
     assert not out.empty
 
 
-def test_itick_source_parses_kline_payload(monkeypatch):
-    monkeypatch.setenv("TRADING_ITICK_ALLOW_ANON", "1")
-    monkeypatch.delenv("TRADING_ITICK_TOKEN", raising=False)
-    monkeypatch.delenv("ITICK_TOKEN", raising=False)
-    monkeypatch.delenv("ITICK_API_KEY", raising=False)
+def test_fetch_history_daily_collects_multiple_sources_for_consensus():
+    fetcher = DataFetcher.__new__(DataFetcher)
+    fetcher._rate_limiter = threading.Semaphore(1)
+    fetcher._rate_limit = lambda source, interval: None  # noqa: ARG005
 
-    src = ITickSource()
+    idx = pd.date_range("2024-01-01", periods=420, freq="D")
+    close_a = pd.Series([20.0 + (i * 0.03) for i in range(len(idx))], index=idx)
+    close_b = close_a * 1.001
+
+    frame_a = pd.DataFrame(
+        {
+            "open": close_a.shift(1).fillna(close_a.iloc[0]),
+            "high": close_a + 0.2,
+            "low": close_a - 0.2,
+            "close": close_a,
+            "volume": [1000] * len(idx),
+            "amount": (close_a * 1000.0).values,
+        },
+        index=idx,
+    )
+    frame_b = pd.DataFrame(
+        {
+            "open": close_b.shift(1).fillna(close_b.iloc[0]),
+            "high": close_b + 0.2,
+            "low": close_b - 0.2,
+            "close": close_b,
+            "volume": [1100] * len(idx),
+            "amount": (close_b * 1100.0).values,
+        },
+        index=idx,
+    )
+
+    class _Tencent:
+        name = "tencent"
+
+        def __init__(self):
+            self.called = 0
+
+        def get_history_instrument(self, inst, days, interval="1d"):  # noqa: ARG002
+            self.called += 1
+            return frame_a.copy()
+
+    class _Sina:
+        name = "sina"
+
+        def __init__(self):
+            self.called = 0
+
+        def get_history_instrument(self, inst, days, interval="1d"):  # noqa: ARG002
+            self.called += 1
+            return frame_b.copy()
+
+    tencent = _Tencent()
+    sina = _Sina()
+    fetcher._get_active_sources = lambda: [tencent, sina]
+    fetcher._all_sources = [tencent, sina]
+
+    out = fetcher._fetch_from_sources_instrument(
+        inst={"market": "CN", "asset": "EQUITY", "symbol": "600519"},
+        days=420,
+        interval="1d",
+        include_localdb=False,
+    )
+
+    assert not out.empty
+    assert tencent.called == 1
+    assert sina.called == 1
+
+
+def test_get_history_cn_daily_skips_db_upsert_when_quorum_fails():
+    fetcher = DataFetcher.__new__(DataFetcher)
+    fetcher._cache = _DummyCache()
+
+    idx = pd.date_range("2026-01-01", periods=40, freq="D")
+    online_df = pd.DataFrame(
+        {
+            "open": [10.0] * len(idx),
+            "high": [10.2] * len(idx),
+            "low": [9.8] * len(idx),
+            "close": [10.1] * len(idx),
+            "volume": [1000] * len(idx),
+            "amount": [10100.0] * len(idx),
+        },
+        index=idx,
+    )
+
+    class _DB:
+        def __init__(self):
+            self.upsert_calls = 0
+
+        @staticmethod
+        def get_bars(code, limit=1000):  # noqa: ARG002
+            return pd.DataFrame()
+
+        def upsert_bars(self, code, df):  # noqa: ARG002
+            self.upsert_calls += 1
+
+    db = _DB()
+    fetcher._db = db
+    fetcher._fetch_history_with_depth_retry = lambda **kwargs: (  # type: ignore[method-assign]
+        online_df.copy(),
+        {
+            "quorum_passed": False,
+            "agreeing_points": 3,
+            "compared_points": 20,
+            "agreeing_ratio": 0.15,
+            "required_sources": 2,
+            "sources": ["tencent", "akshare", "sina"],
+            "reason": "insufficient_consensus",
+        },
+    )
+
+    out = fetcher._get_history_cn_daily(
+        inst={"market": "CN", "asset": "EQUITY", "symbol": "600519"},
+        count=20,
+        fetch_days=30,
+        cache_key="history:test:600519:1d",
+        offline=False,
+        update_db=True,
+        session_df=pd.DataFrame(),
+        interval="1d",
+    )
+
+    assert not out.empty
+    assert db.upsert_calls == 0
+
+
+def test_get_history_cn_daily_upserts_when_quorum_passes():
+    fetcher = DataFetcher.__new__(DataFetcher)
+    fetcher._cache = _DummyCache()
+
+    idx = pd.date_range("2026-01-01", periods=30, freq="D")
+    online_df = pd.DataFrame(
+        {
+            "open": [10.0] * len(idx),
+            "high": [10.2] * len(idx),
+            "low": [9.8] * len(idx),
+            "close": [10.1] * len(idx),
+            "volume": [1000] * len(idx),
+            "amount": [10100.0] * len(idx),
+        },
+        index=idx,
+    )
+
+    class _DB:
+        def __init__(self):
+            self.upsert_calls = 0
+
+        @staticmethod
+        def get_bars(code, limit=1000):  # noqa: ARG002
+            return pd.DataFrame()
+
+        def upsert_bars(self, code, df):  # noqa: ARG002
+            self.upsert_calls += 1
+
+    db = _DB()
+    fetcher._db = db
+    fetcher._fetch_history_with_depth_retry = lambda **kwargs: (  # type: ignore[method-assign]
+        online_df.copy(),
+        {
+            "quorum_passed": True,
+            "agreeing_points": 24,
+            "compared_points": 27,
+            "agreeing_ratio": 0.89,
+            "required_sources": 2,
+            "sources": ["tencent", "akshare", "sina"],
+            "reason": "",
+        },
+    )
+
+    out = fetcher._get_history_cn_daily(
+        inst={"market": "CN", "asset": "EQUITY", "symbol": "600519"},
+        count=20,
+        fetch_days=30,
+        cache_key="history:test:600519:1d",
+        offline=False,
+        update_db=True,
+        session_df=pd.DataFrame(),
+        interval="1d",
+    )
+
+    assert not out.empty
+    assert db.upsert_calls == 1
+
+
+def test_sina_source_parses_kline_payload(monkeypatch):
+    monkeypatch.setattr(
+        "core.network.get_network_env",
+        lambda: SimpleNamespace(is_china_direct=True),
+    )
+    src = SinaHistorySource()
 
     class _Resp:
         status_code = 200
-
-        @staticmethod
-        def json():
-            return {
-                "code": 0,
-                "data": [
-                    {
-                        "t": 1700000000000,
-                        "o": "10.0",
-                        "h": "10.5",
-                        "l": "9.8",
-                        "c": "10.2",
-                        "v": "1000",
-                        "tu": "10200",
-                    },
-                    {
-                        "t": 1700000060000,
-                        "o": "10.2",
-                        "h": "10.6",
-                        "l": "10.1",
-                        "c": "10.4",
-                        "v": "900",
-                        "tu": "9360",
-                    },
-                ],
-            }
+        text = (
+            '{"result":{"data":['
+            '{"day":"2026-02-10 09:31:00","open":"10.0","high":"10.5","low":"9.8","close":"10.2","volume":"1000"},'
+            '{"day":"2026-02-11 09:31:00","open":"10.2","high":"10.6","low":"10.1","close":"10.4","volume":"900"}'
+            "]}}"
+        )
 
     monkeypatch.setattr(src._session, "get", lambda *args, **kwargs: _Resp())
 
@@ -415,37 +584,40 @@ def test_itick_source_parses_kline_payload(monkeypatch):
     assert float(out["close"].iloc[-1]) > 0
 
 
-def test_itick_source_defaults_free_tier_rpm(monkeypatch):
-    monkeypatch.setenv("TRADING_ITICK_ALLOW_ANON", "1")
-    monkeypatch.delenv("TRADING_ITICK_MAX_CALLS_PER_MIN", raising=False)
-    monkeypatch.delenv("TRADING_ITICK_FREE_TIER", raising=False)
-    monkeypatch.setenv("TRADING_ITICK_BASE_URL", "https://api-free.itick.io/stock")
-    src = ITickSource()
-    assert src.is_free_tier is True
-    assert int(src._max_calls_per_min) == 5
+def test_sina_source_not_available_off_china_direct(monkeypatch):
+    monkeypatch.setattr(
+        "core.network.get_network_env",
+        lambda: SimpleNamespace(is_china_direct=False),
+    )
+    src = SinaHistorySource()
+    assert src.is_available() is False
 
 
-def test_itick_source_rate_limit_triggers_cooldown(monkeypatch):
-    monkeypatch.setenv("TRADING_ITICK_ALLOW_ANON", "1")
-    src = ITickSource()
+def test_sina_source_parses_jsonp_wrapper(monkeypatch):
+    monkeypatch.setattr(
+        "core.network.get_network_env",
+        lambda: SimpleNamespace(is_china_direct=True),
+    )
+    src = SinaHistorySource()
 
     class _Resp:
-        status_code = 429
-        headers = {"Retry-After": "3"}
-
-        @staticmethod
-        def json():
-            return {}
+        status_code = 200
+        text = (
+            'cb123(['
+            '{"day":"2026-02-10 09:31:00","open":"9.0","high":"9.8","low":"8.9","close":"9.6","volume":"700"},'
+            '{"day":"2026-02-10 09:32:00","open":"9.6","high":"9.9","low":"9.5","close":"9.7","volume":"600"}'
+            ']);'
+        )
 
     monkeypatch.setattr(src._session, "get", lambda *args, **kwargs: _Resp())
 
     out = src.get_history_instrument(
         {"market": "CN", "asset": "EQUITY", "symbol": "600519"},
         days=1,
-        interval="1d",
+        interval="2m",
     )
-    assert out.empty
-    assert float(src._quota_cooldown_until_ts) > 0.0
+    assert not out.empty
+    assert "close" in out.columns
 
 
 def test_get_history_cn_intraday_does_not_use_session_shortcut():
@@ -1142,7 +1314,7 @@ def test_refresh_trained_stock_history_replaces_realtime_cache_after_close(monke
             symbol,
             interval,
             frame,
-            source="itick",
+            source="official_history",
             is_final=True,  # noqa: ARG002
         ):
             self.upsert_calls.append((str(symbol), str(interval), str(source), int(len(frame))))
@@ -1165,7 +1337,7 @@ def test_refresh_trained_stock_history_replaces_realtime_cache_after_close(monke
     assert int(calls[0]) >= 2
     assert cache.purged_calls == 1
     assert cache.upsert_calls
-    assert cache.upsert_calls[0][2] == "itick"
+    assert cache.upsert_calls[0][2] == "official_history"
     assert cache.purge_kwargs
     since_ts = cache.purge_kwargs[0]["since_ts"]
     assert since_ts is not None
@@ -1247,7 +1419,7 @@ def test_refresh_trained_stock_history_retries_pending_cache_sync(monkeypatch, t
             symbol,
             interval,
             frame,
-            source="itick",
+            source="official_history",
             is_final=True,  # noqa: ARG002
         ):
             raise RuntimeError("cache write failed")
@@ -1288,7 +1460,7 @@ def test_refresh_trained_stock_history_retries_pending_cache_sync(monkeypatch, t
             symbol,
             interval,
             frame,
-            source="itick",
+            source="official_history",
             is_final=True,  # noqa: ARG002
         ):
             self.upsert_calls += 1
@@ -1362,13 +1534,13 @@ def test_reconcile_pending_cache_sync_clears_queue_on_success(monkeypatch, tmp_p
             symbol,
             interval,
             frame,
-            source="itick",
+            source="official_history",
             is_final=True,  # noqa: ARG002
         ):
             self.upsert_calls += 1
             assert str(symbol) == "600519"
             assert str(interval) == "1m"
-            assert str(source) == "itick"
+            assert str(source) == "official_history"
             return int(len(frame))
 
         def describe_symbol_interval(self, symbol, interval):  # noqa: ARG002
