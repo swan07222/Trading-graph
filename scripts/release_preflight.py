@@ -247,6 +247,24 @@ def main() -> int:
                 [py, str(repo_root / "scripts/typecheck_gate.py")],
             )
         )
+        steps.append(
+            _run_step(
+                "typecheck_strict_gate",
+                [py, str(repo_root / "scripts/typecheck_strict_gate.py")],
+            )
+        )
+        steps.append(
+            _run_step(
+                "exception_policy_gate",
+                [py, str(repo_root / "scripts/exception_policy_gate.py")],
+            )
+        )
+        steps.append(
+            _run_step(
+                "module_size_gate",
+                [py, str(repo_root / "scripts/module_size_gate.py")],
+            )
+        )
     if not args.skip_regulatory:
         steps.append(
             _run_step(

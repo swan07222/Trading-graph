@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import csv
+import io
 import math
 import os
 import threading
@@ -148,7 +150,9 @@ def _interprocess_file_lock(path: Path, timeout_s: float = 10.0):
                 break
             except (BlockingIOError, OSError):
                 if (time.monotonic() - start) >= float(max(0.1, timeout_s)):
-                    raise TimeoutError(f"Timed out waiting for lock: {lock_path}")
+                    raise TimeoutError(
+                        f"Timed out waiting for lock: {lock_path}"
+                    ) from None
                 time.sleep(0.05)
         yield
     finally:
@@ -183,6 +187,7 @@ class SessionBarCache:
             tuple[str, float, float, float, float, bool, str],
         ] = {}
         self._last_close_hint: dict[str, float] = {}
+        self._last_ts_hint: dict[str, datetime] = {}
         self._writes_since_compact: dict[str, int] = {}
         self._global_lock = threading.Lock()
         self._cleanup_corrupt_files()
@@ -244,6 +249,11 @@ class SessionBarCache:
         """Read last cached close for outlier-write guard."""
         if not path.exists():
             return None
+        row = self._load_last_csv_row(path)
+        if row:
+            v = self._safe_float(row.get("close", 0.0), 0.0)
+            if v > 0:
+                return float(v)
         try:
             df = pd.read_csv(path, usecols=["close"])
             if df is None or df.empty:
@@ -252,6 +262,73 @@ class SessionBarCache:
             return float(v) if v > 0 else None
         except Exception:
             return None
+
+    def _load_last_timestamp_hint(self, path: Path) -> datetime | None:
+        """Read last timestamp using fast tail-line parsing first."""
+        if not path.exists():
+            return None
+        row = self._load_last_csv_row(path)
+        if row:
+            dt = self._to_shanghai_naive_datetime(row.get("timestamp"))
+            if dt is not None:
+                return dt
+        return None
+
+    @staticmethod
+    def _read_tail_lines(path: Path, *, max_bytes: int = 64 * 1024) -> list[str]:
+        """Read trailing non-empty lines from a text file."""
+        try:
+            with path.open("rb") as f:
+                f.seek(0, os.SEEK_END)
+                size = int(f.tell())
+                if size <= 0:
+                    return []
+                step = min(size, int(max(256, max_bytes)))
+                f.seek(size - step)
+                blob = f.read(step)
+        except Exception:
+            return []
+        text = str(blob.decode("utf-8", errors="ignore"))
+        lines = [ln.strip() for ln in text.splitlines() if str(ln).strip()]
+        return lines
+
+    @classmethod
+    def _load_last_csv_row(cls, path: Path) -> dict[str, str] | None:
+        """
+        Fast-path parser for the last CSV row.
+
+        Assumes cache files use the canonical column order written by
+        `_write_raw_frame_locked`.
+        """
+        lines = cls._read_tail_lines(path)
+        if not lines:
+            return None
+        data_line = lines[-1]
+        try:
+            values = next(csv.reader([data_line]))
+        except Exception:
+            return None
+        if not values:
+            return None
+        if len(values) < 5:
+            return None
+        keys = [
+            "timestamp",
+            "open",
+            "high",
+            "low",
+            "close",
+            "volume",
+            "amount",
+            "is_final",
+            "source",
+        ]
+        width = min(len(keys), len(values))
+        row = {
+            str(keys[i]): str(values[i]).strip()
+            for i in range(width)
+        }
+        return row if row else None
 
     def _reference_close_from_db(self, symbol: str) -> float:
         """
@@ -522,6 +599,7 @@ class SessionBarCache:
         path = self._path(sym, iv)
         lock = self._lock_for(path.name)
         with lock:
+            writes_now = 0
             with _interprocess_file_lock(path):
                 prev_close = self._last_close_hint.get(path.name)
                 if prev_close is None:
@@ -549,6 +627,11 @@ class SessionBarCache:
                 if dt is None:
                     return False
                 ts_key = dt.isoformat()
+                last_ts = self._last_ts_hint.get(path.name)
+                if last_ts is None and path.exists():
+                    last_ts = self._load_last_timestamp_hint(path)
+                    if last_ts is not None:
+                        self._last_ts_hint[path.name] = last_ts
 
                 # Include OHLC envelope in dedupe key so same-close updates with
                 # refined high/low are not silently dropped.
@@ -564,41 +647,126 @@ class SessionBarCache:
                 if self._last_row_fingerprint.get(path.name) == fingerprint:
                     return False
 
-                row_df = pd.DataFrame(
-                    [
-                        {
-                            "open": float(open_px),
-                            "high": float(high_px),
-                            "low": float(low_px),
-                            "close": float(close),
-                            "volume": float(volume),
-                            "amount": float(amount),
-                            "is_final": bool(is_final),
-                            "source": str(source),
-                        }
-                    ],
-                    index=pd.DatetimeIndex([pd.Timestamp(dt)]),
-                )
-
-                existing = self._read_raw_frame_locked(path)
-                if existing.empty:
-                    merged = row_df
+                if (not path.exists()) or (last_ts is not None and dt > last_ts):
+                    self._append_raw_row_locked(
+                        path=path,
+                        ts_key=ts_key,
+                        open_px=float(open_px),
+                        high_px=float(high_px),
+                        low_px=float(low_px),
+                        close=float(close),
+                        volume=float(volume),
+                        amount=float(amount),
+                        is_final=bool(is_final),
+                        source=str(source),
+                    )
                 else:
-                    merged = pd.concat([existing, row_df], axis=0)
-                    merged = merged[~merged.index.duplicated(keep="last")].sort_index()
+                    row_df = pd.DataFrame(
+                        [
+                            {
+                                "open": float(open_px),
+                                "high": float(high_px),
+                                "low": float(low_px),
+                                "close": float(close),
+                                "volume": float(volume),
+                                "amount": float(amount),
+                                "is_final": bool(is_final),
+                                "source": str(source),
+                            }
+                        ],
+                        index=pd.DatetimeIndex([pd.Timestamp(dt)]),
+                    )
+                    existing = self._read_raw_frame_locked(path)
+                    if existing.empty:
+                        merged = row_df
+                    else:
+                        merged = pd.concat([existing, row_df], axis=0)
+                        merged = merged[~merged.index.duplicated(keep="last")].sort_index()
+                    self._write_raw_frame_locked(
+                        path,
+                        merged,
+                        apply_retention=False,
+                    )
 
-                self._write_raw_frame_locked(
-                    path,
-                    merged,
-                    apply_retention=False,
-                )
                 self._last_row_fingerprint[path.name] = fingerprint
                 self._last_close_hint[path.name] = float(close)
-                self._writes_since_compact[path.name] = (
+                self._last_ts_hint[path.name] = dt
+                writes_now = (
                     int(self._writes_since_compact.get(path.name, 0)) + 1
                 )
-            self._maybe_compact_file_locked(path, iv)
+                self._writes_since_compact[path.name] = writes_now
+
+            should_compact = writes_now >= self._compact_every_writes()
+            if not should_compact and writes_now > 0 and (writes_now % 32) == 0:
+                try:
+                    size_mb = float(path.stat().st_size) / (1024.0 * 1024.0)
+                    should_compact = size_mb >= self._max_file_megabytes()
+                except Exception:
+                    should_compact = False
+            if should_compact:
+                self._maybe_compact_file_locked(path, iv)
         return True
+
+    @staticmethod
+    def _append_raw_row_locked(
+        *,
+        path: Path,
+        ts_key: str,
+        open_px: float,
+        high_px: float,
+        low_px: float,
+        close: float,
+        volume: float,
+        amount: float,
+        is_final: bool,
+        source: str,
+    ) -> None:
+        """
+        Fast append path for monotonic bars.
+
+        Caller must hold per-file + interprocess lock.
+        """
+        write_header = (not path.exists()) or bool(path.stat().st_size <= 0)
+        out = io.StringIO()
+        writer = csv.writer(out, lineterminator="\n")
+        if write_header:
+            writer.writerow(
+                [
+                    "timestamp",
+                    "open",
+                    "high",
+                    "low",
+                    "close",
+                    "volume",
+                    "amount",
+                    "is_final",
+                    "source",
+                ]
+            )
+        writer.writerow(
+            [
+                str(ts_key),
+                float(open_px),
+                float(high_px),
+                float(low_px),
+                float(close),
+                float(volume),
+                float(amount),
+                bool(is_final),
+                str(source or ""),
+            ]
+        )
+        payload = out.getvalue()
+        mode = "a"
+        if write_header:
+            mode = "w"
+        with path.open(mode, encoding="utf-8", newline="") as f:
+            f.write(payload)
+            f.flush()
+            try:
+                os.fsync(f.fileno())
+            except OSError:
+                pass
 
     def read_history(
         self,
@@ -984,6 +1152,7 @@ class SessionBarCache:
                 pass
             self._last_row_fingerprint.pop(path.name, None)
             self._last_close_hint.pop(path.name, None)
+            self._last_ts_hint.pop(path.name, None)
             return
 
         work = frame.copy()
@@ -998,6 +1167,7 @@ class SessionBarCache:
                 pass
             self._last_row_fingerprint.pop(path.name, None)
             self._last_close_hint.pop(path.name, None)
+            self._last_ts_hint.pop(path.name, None)
             return
 
         for col in ("open", "high", "low", "close", "volume", "amount"):
@@ -1027,6 +1197,7 @@ class SessionBarCache:
                 pass
             self._last_row_fingerprint.pop(path.name, None)
             self._last_close_hint.pop(path.name, None)
+            self._last_ts_hint.pop(path.name, None)
             return
 
         work = work[~work.index.duplicated(keep="last")].sort_index()
@@ -1041,6 +1212,7 @@ class SessionBarCache:
                     pass
                 self._last_row_fingerprint.pop(path.name, None)
                 self._last_close_hint.pop(path.name, None)
+                self._last_ts_hint.pop(path.name, None)
                 self._writes_since_compact.pop(path.name, None)
                 return
 
@@ -1084,6 +1256,7 @@ class SessionBarCache:
 
         try:
             last = out.iloc[-1]
+            last_ts = self._to_shanghai_naive_datetime(last.get("timestamp"))
             self._last_row_fingerprint[path.name] = (
                 str(last.get("timestamp", "")),
                 round(float(last.get("open", 0.0)), 8),
@@ -1094,6 +1267,10 @@ class SessionBarCache:
                 str(last.get("source", "")),
             )
             self._last_close_hint[path.name] = float(last.get("close", 0.0) or 0.0)
+            if last_ts is not None:
+                self._last_ts_hint[path.name] = last_ts
+            else:
+                self._last_ts_hint.pop(path.name, None)
         except Exception:
             pass
         if apply_retention:

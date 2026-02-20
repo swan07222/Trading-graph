@@ -1,0 +1,3 @@
+# strict mypy baseline for scripts/typecheck_strict_gate.py
+# Format: path:line:code:message
+

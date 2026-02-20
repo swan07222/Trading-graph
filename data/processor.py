@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import copy
-import hashlib
 import json
 import pickle
 import threading
@@ -185,66 +184,45 @@ class DataProcessor:
 
     @staticmethod
     def _artifact_checksum_path(path: Path) -> Path:
-        return path.with_suffix(path.suffix + ".sha256")
+        from utils.atomic_io import artifact_checksum_path
+
+        return artifact_checksum_path(path)
 
     @staticmethod
     def _safe_scaler_path(path: Path) -> Path:
         return path.with_suffix(path.suffix + ".safe.json")
 
-    @staticmethod
-    def _sha256_file(path: Path) -> str:
-        h = hashlib.sha256()
-        with open(path, "rb") as f:
-            while True:
-                chunk = f.read(1024 * 1024)
-                if not chunk:
-                    break
-                h.update(chunk)
-        return h.hexdigest()
-
     def _write_artifact_checksum(self, path: Path) -> None:
-        checksum_path = self._artifact_checksum_path(path)
-        digest = self._sha256_file(path)
-        payload = f"{digest}\n"
         try:
-            from utils.atomic_io import atomic_write_text
+            from utils.atomic_io import write_checksum_sidecar
 
-            atomic_write_text(checksum_path, payload)
-        except Exception:
-            checksum_path.write_text(payload, encoding="utf-8")
+            write_checksum_sidecar(path)
+        except Exception as e:
+            log.warning("Failed writing checksum sidecar for %s: %s", path, e)
 
     def _verify_artifact_checksum(self, path: Path) -> bool:
         checksum_path = self._artifact_checksum_path(path)
-        if not checksum_path.exists():
-            model_cfg = getattr(CONFIG, "model", None)
-            require_checksum = bool(
-                getattr(model_cfg, "require_artifact_checksum", True)
+        model_cfg = getattr(CONFIG, "model", None)
+        require_checksum = bool(
+            getattr(model_cfg, "require_artifact_checksum", True)
+        )
+        try:
+            from utils.atomic_io import verify_checksum_sidecar
+
+            ok = bool(
+                verify_checksum_sidecar(
+                    path,
+                    require=require_checksum,
+                )
             )
-            if require_checksum:
+            if not ok:
                 log.error(
-                    "Missing checksum sidecar for %s (expected %s)",
+                    "Checksum verification failed for %s (sidecar=%s, require=%s)",
                     path,
                     checksum_path,
+                    require_checksum,
                 )
-                return False
-            return True
-        try:
-            expected = str(
-                checksum_path.read_text(encoding="utf-8")
-            ).strip().split()[0].lower()
-            if not expected:
-                log.error("Empty checksum sidecar for %s", path)
-                return False
-            actual = self._sha256_file(path)
-            if actual != expected:
-                log.error(
-                    "Checksum mismatch for %s (expected=%s actual=%s)",
-                    path,
-                    expected,
-                    actual,
-                )
-                return False
-            return True
+            return ok
         except Exception as e:
             log.error("Checksum verification failed for %s: %s", path, e)
             return False
@@ -720,14 +698,17 @@ class DataProcessor:
             if not self._verify_artifact_checksum(path):
                 return False
 
-            try:
-                from utils.atomic_io import pickle_load
+            from utils.atomic_io import pickle_load
 
-                data = pickle_load(path, max_bytes=max_bytes)
-            except ImportError:
-                # WARNING: pickle.load is inherently unsafe for untrusted data.
-                with open(path, "rb") as f:
-                    data = pickle.load(f)  # noqa: S301
+            data = pickle_load(
+                path,
+                max_bytes=max_bytes,
+                verify_checksum=True,
+                require_checksum=bool(
+                    getattr(model_cfg, "require_artifact_checksum", True)
+                ),
+                allow_unsafe=allow_unsafe,
+            )
 
             if not isinstance(data, dict) or "scaler" not in data:
                 log.error(f"Invalid scaler file format: {path}")
@@ -755,7 +736,7 @@ class DataProcessor:
             )
             return True
 
-        except Exception as e:
+        except (OSError, ValueError, TypeError, RuntimeError, KeyError) as e:
             log.error(f"Failed to load scaler: {e}")
             return False
 
@@ -1697,8 +1678,6 @@ class RealtimePredictor:
         - requires checksum sidecar when configured
         - blocks legacy weights_only=False fallback unless explicitly enabled
         """
-        import torch
-
         from models.networks import TCNModel
 
         try:
@@ -1709,33 +1688,25 @@ class RealtimePredictor:
             allow_unsafe = bool(
                 getattr(model_cfg, "allow_unsafe_artifact_load", False)
             )
+            require_checksum = bool(
+                getattr(model_cfg, "require_artifact_checksum", True)
+            )
 
             def _load_checkpoint(weights_only: bool):
-                try:
-                    from utils.atomic_io import torch_load
+                from utils.atomic_io import torch_load
 
-                    return torch_load(
-                        path,
-                        map_location="cpu",
-                        weights_only=weights_only,
-                    )
-                except TypeError as exc:
-                    # Older torch versions may not support weights_only.
-                    if not allow_unsafe:
-                        raise RuntimeError(
-                            "Secure forecaster load requires torch weights_only support"
-                        ) from exc
-                    return torch.load(path, map_location="cpu")
-                except ImportError as exc:
-                    if not allow_unsafe:
-                        raise RuntimeError(
-                            "Secure forecaster load requires utils.atomic_io.torch_load"
-                        ) from exc
-                    return torch.load(path, map_location="cpu")
+                return torch_load(
+                    path,
+                    map_location="cpu",
+                    weights_only=weights_only,
+                    verify_checksum=True,
+                    require_checksum=require_checksum,
+                    allow_unsafe=allow_unsafe,
+                )
 
             try:
                 data = _load_checkpoint(weights_only=True)
-            except Exception as exc:
+            except (OSError, RuntimeError, TypeError, ValueError, ImportError) as exc:
                 if not allow_unsafe:
                     log.error(
                         "Forecaster secure load failed for %s and unsafe fallback is disabled: %s",
@@ -1777,7 +1748,7 @@ class RealtimePredictor:
                 f"Forecaster loaded: {path} "
                 f"(output_size={output_size}, device={self._device})"
             )
-        except Exception as e:
+        except (OSError, RuntimeError, TypeError, ValueError, KeyError) as e:
             log.warning(f"Failed to load forecaster: {e}")
             self.forecaster = None
 

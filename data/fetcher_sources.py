@@ -81,6 +81,83 @@ _INTRADAY_CAPS: dict[str, tuple[float, float, float, float]] = {
 }
 
 
+def _endpoint_candidates(
+    env_key: str,
+    defaults: tuple[str, ...] | list[str],
+) -> list[str]:
+    """
+    Resolve endpoint templates from environment with safe fallback.
+
+    Format: comma-separated URLs/templates. Empty/invalid values are ignored.
+    """
+    fallback = [str(v).strip() for v in defaults if str(v or "").strip()]
+    raw = str(os.environ.get(str(env_key), "") or "").strip()
+    if not raw:
+        return fallback
+
+    proto_hits = raw.count("http://") + raw.count("https://")
+    if ";" in raw or "\n" in raw:
+        pieces = raw.replace("\n", ";").split(";")
+    elif proto_hits <= 1:
+        # Single endpoint template may legitimately contain commas.
+        pieces = [raw]
+    else:
+        pieces = raw.split(",")
+
+    out: list[str] = []
+    for piece in pieces:
+        item = str(piece or "").strip()
+        if not item:
+            continue
+        if not (item.startswith("http://") or item.startswith("https://")):
+            continue
+        out.append(item)
+    return out or fallback
+
+
+def _build_tencent_batch_url(template: str, symbols_csv: str) -> str:
+    tpl = str(template or "").strip()
+    if not tpl:
+        return ""
+    if "{symbols}" in tpl:
+        try:
+            return tpl.format(symbols=str(symbols_csv))
+        except Exception:
+            return ""
+    if tpl.endswith("="):
+        return f"{tpl}{symbols_csv}"
+    if "q=" in tpl:
+        return f"{tpl}{symbols_csv}"
+    joiner = "&" if "?" in tpl else "?"
+    return f"{tpl}{joiner}q={symbols_csv}"
+
+
+def _build_tencent_daily_url(
+    template: str,
+    *,
+    vendor_symbol: str,
+    fetch_count: int,
+) -> str:
+    tpl = str(template or "").strip()
+    if not tpl:
+        return ""
+    if ("{vendor_symbol}" in tpl) or ("{fetch_count}" in tpl):
+        try:
+            return tpl.format(
+                vendor_symbol=str(vendor_symbol),
+                fetch_count=int(fetch_count),
+            )
+        except Exception:
+            return ""
+    param = f"{vendor_symbol},day,,,{int(fetch_count)},qfq"
+    if tpl.endswith("param="):
+        return f"{tpl}{param}"
+    if "param=" in tpl:
+        return f"{tpl}{param}"
+    joiner = "&" if "?" in tpl else "?"
+    return f"{tpl}{joiner}param={param}"
+
+
 def _run_with_timeout(
     task: Callable[[], object],
     timeout_s: float,
@@ -790,6 +867,7 @@ class SinaHistorySource(DataSource):
         "https://quotes.sina.cn/cn/api/openapi.php/CN_MarketDataService.getKLineData",
         "https://money.finance.sina.com.cn/quotes_service/api/json_v2.php/CN_MarketData.getKLineData",
     )
+    _ENDPOINTS_ENV = "TRADING_SINA_KLINE_ENDPOINTS"
 
     def is_available(self) -> bool:
         if not self.is_suitable_for_network():
@@ -898,7 +976,8 @@ class SinaHistorySource(DataSource):
         }
 
         errors: list[str] = []
-        for url in self._ENDPOINTS:
+        endpoints = _endpoint_candidates(self._ENDPOINTS_ENV, self._ENDPOINTS)
+        for url in endpoints:
             try:
                 resp = self._session.get(url, params=params, timeout=10)
                 if int(resp.status_code) != 200:
@@ -1301,6 +1380,13 @@ class TencentQuoteSource(DataSource):
     _CB_MAX_COOLDOWN = 75
     _CB_COOLDOWN_INCREMENT = 2
     _CB_HALF_OPEN_PROBE_INTERVAL = 6.0
+    _BATCH_ENDPOINTS = ("https://qt.gtimg.cn/q={symbols}",)
+    _BATCH_ENDPOINTS_ENV = "TRADING_TENCENT_BATCH_ENDPOINTS"
+    _DAILY_ENDPOINTS = (
+        "https://web.ifzq.gtimg.cn/appstock/app/fqkline/get"
+        "?param={vendor_symbol},day,,,{fetch_count},qfq",
+    )
+    _DAILY_ENDPOINTS_ENV = "TRADING_TENCENT_DAILY_ENDPOINTS"
 
     def get_realtime_batch(self, codes: list[str]) -> dict[str, Quote]:
         if not self.is_available():
@@ -1328,113 +1414,178 @@ class TencentQuoteSource(DataSource):
 
         out: dict[str, Quote] = {}
         start_all = time.time()
+        endpoint_errors: list[str] = []
+        batch_endpoints = _endpoint_candidates(
+            self._BATCH_ENDPOINTS_ENV,
+            self._BATCH_ENDPOINTS,
+        )
 
         try:
             for i in range(0, len(vendor_symbols), _TENCENT_CHUNK_SIZE):
                 chunk = vendor_symbols[i: i + _TENCENT_CHUNK_SIZE]
-                url = "https://qt.gtimg.cn/q=" + ",".join(chunk)
-                resp = self._session.get(url, timeout=6)
-                resp.encoding = "gbk"  # Tencent returns GBK encoded content
-
-                raw_lines: list[str] = []
-                for block in str(resp.text or "").splitlines():
-                    block_txt = str(block or "").strip()
-                    if not block_txt:
-                        continue
-                    if ";" in block_txt:
-                        raw_lines.extend(
-                            seg.strip()
-                            for seg in block_txt.split(";")
-                            if str(seg or "").strip()
-                        )
-                    else:
-                        raw_lines.append(block_txt)
-
-                for line in raw_lines:
-                    if "~" not in line or "=" not in line:
+                chunk_csv = ",".join(chunk)
+                chunk_ok = False
+                for endpoint in batch_endpoints:
+                    url = _build_tencent_batch_url(endpoint, chunk_csv)
+                    if not url:
                         continue
                     try:
-                        left, right = line.split("=", 1)
-                        vendor_sym = left.strip().replace("v_", "")
-                        payload = right.strip().strip('";')
-                        if not payload or payload == "":
+                        resp = self._session.get(url, timeout=6)
+                        if int(resp.status_code) != 200:
+                            endpoint_errors.append(f"{url} HTTP {resp.status_code}")
                             continue
-                        parts = payload.split("~")
-                        if len(parts) < 32:
-                            continue
+                        resp.encoding = "gbk"  # Tencent returns GBK encoded content
 
-                        code6 = vendor_to_code.get(vendor_sym)
-                        if not code6:
-                            continue
-
-                        name = str(parts[1]) if parts[1] else ""
-                        price_str = parts[3].strip()
-                        if not price_str:
-                            continue
-                        price = float(price_str)
-                        if price <= 0:
-                            continue
-
-                        prev_close = float(parts[4] or 0)
-                        open_px   = float(parts[5] or 0)
-                        # parts[6] = volume in lots (hands); multiply by 100 for shares
-                        volume    = int(float(parts[6] or 0) * 100)
-                        # parts[37] = amount in CNY (yuan)
-                        amount    = float(parts[37] or 0) if len(parts) > 37 else 0.0
-                        # parts[33] = high, parts[34] = low for the day
-                        high_px   = float(parts[33] or price) if len(parts) > 33 else price
-                        low_px    = float(parts[34] or price) if len(parts) > 34 else price
-                        # parts[30] = bid1, parts[32] = ask1
-                        bid_px    = float(parts[9] or 0)   if len(parts) > 9  else 0.0
-                        ask_px    = float(parts[19] or 0)  if len(parts) > 19 else 0.0
-
-                        # Validate price bounds (sanity check)
-                        if prev_close > 0:
-                            ratio = price / prev_close
-                            ex_name = str(vendor_to_exchange.get(vendor_sym, "")).upper()
-                            max_move = 0.25
-                            if ex_name == "BSE":
-                                try:
-                                    from core.constants import PRICE_LIMITS
-                                    bse_limit = float(PRICE_LIMITS.get("bse", 0.30) or 0.30)
-                                except Exception:
-                                    bse_limit = 0.30
-                                max_move = max(0.30, bse_limit) + 0.03
-                            if ratio > (1.0 + max_move) or ratio < (1.0 - max_move):
-                                # Likely bad data; skip
-                                log.debug(
-                                    "Tencent: suspicious price for %s: "
-                                    "price=%.2f prev_close=%.2f cap=%.1f%%",
-                                    code6, price, prev_close, max_move * 100.0,
+                        raw_lines: list[str] = []
+                        for block in str(resp.text or "").splitlines():
+                            block_txt = str(block or "").strip()
+                            if not block_txt:
+                                continue
+                            if ";" in block_txt:
+                                raw_lines.extend(
+                                    seg.strip()
+                                    for seg in block_txt.split(";")
+                                    if str(seg or "").strip()
                                 )
+                            else:
+                                raw_lines.append(block_txt)
+
+                        parsed_before = len(out)
+                        schema_mismatches = 0
+                        for line in raw_lines:
+                            if "~" not in line or "=" not in line:
+                                continue
+                            try:
+                                left, right = line.split("=", 1)
+                                vendor_sym = left.strip().replace("v_", "")
+                                payload = right.strip().strip('";')
+                                if not payload:
+                                    continue
+                                parts = payload.split("~")
+                                if len(parts) < 32:
+                                    schema_mismatches += 1
+                                    continue
+
+                                code6 = vendor_to_code.get(vendor_sym)
+                                if not code6:
+                                    continue
+
+                                name = str(parts[1]) if parts[1] else ""
+                                price_str = parts[3].strip()
+                                if not price_str:
+                                    continue
+                                price = float(price_str)
+                                if price <= 0:
+                                    continue
+
+                                prev_close = float(parts[4] or 0)
+                                open_px = float(parts[5] or 0)
+                                volume = int(float(parts[6] or 0) * 100)
+                                amount = (
+                                    float(parts[37] or 0)
+                                    if len(parts) > 37 else 0.0
+                                )
+                                high_px = (
+                                    float(parts[33] or price)
+                                    if len(parts) > 33 else price
+                                )
+                                low_px = (
+                                    float(parts[34] or price)
+                                    if len(parts) > 34 else price
+                                )
+                                bid_px = (
+                                    float(parts[9] or 0)
+                                    if len(parts) > 9 else 0.0
+                                )
+                                ask_px = (
+                                    float(parts[19] or 0)
+                                    if len(parts) > 19 else 0.0
+                                )
+
+                                # Validate price bounds (sanity check)
+                                if prev_close > 0:
+                                    ratio = price / prev_close
+                                    ex_name = str(
+                                        vendor_to_exchange.get(vendor_sym, "")
+                                    ).upper()
+                                    max_move = 0.25
+                                    if ex_name == "BSE":
+                                        try:
+                                            from core.constants import PRICE_LIMITS
+                                            bse_limit = float(
+                                                PRICE_LIMITS.get("bse", 0.30) or 0.30
+                                            )
+                                        except Exception:
+                                            bse_limit = 0.30
+                                        max_move = max(0.30, bse_limit) + 0.03
+                                    if ratio > (1.0 + max_move) or ratio < (1.0 - max_move):
+                                        log.debug(
+                                            "Tencent: suspicious price for %s: "
+                                            "price=%.2f prev_close=%.2f cap=%.1f%%",
+                                            code6, price, prev_close, max_move * 100.0,
+                                        )
+                                        continue
+
+                                # Fix OHLC bounds
+                                open_px = open_px if open_px > 0 else price
+                                high_px = max(high_px, open_px, price)
+                                low_px = min(low_px, open_px, price)
+                                if low_px <= 0:
+                                    low_px = price
+
+                                chg = price - prev_close if prev_close > 0 else 0.0
+                                chg_pct = (
+                                    (chg / prev_close * 100)
+                                    if prev_close > 0 else 0.0
+                                )
+
+                                out[code6] = Quote(
+                                    code=code6,
+                                    name=name,
+                                    price=price,
+                                    open=open_px,
+                                    high=high_px,
+                                    low=low_px,
+                                    close=prev_close,
+                                    volume=volume,
+                                    amount=amount,
+                                    change=chg,
+                                    change_pct=chg_pct,
+                                    bid=bid_px,
+                                    ask=ask_px,
+                                    source=self.name,
+                                    is_delayed=False,
+                                    latency_ms=0.0,
+                                )
+                            except Exception as exc:
+                                log.debug("Tencent parse error line: %s", exc)
                                 continue
 
-                        # Fix OHLC bounds
-                        open_px = open_px if open_px > 0 else price
-                        high_px = max(high_px, open_px, price)
-                        low_px  = min(low_px,  open_px, price)
-                        if low_px <= 0:
-                            low_px = price
-
-                        chg = price - prev_close if prev_close > 0 else 0.0
-                        chg_pct = (chg / prev_close * 100) if prev_close > 0 else 0.0
-
-                        out[code6] = Quote(
-                            code=code6, name=name,
-                            price=price,
-                            open=open_px, high=high_px, low=low_px,
-                            close=prev_close,
-                            volume=volume, amount=amount,
-                            change=chg, change_pct=chg_pct,
-                            bid=bid_px, ask=ask_px,
-                            source=self.name, is_delayed=False,
-                            latency_ms=0.0,
-                        )
+                        parsed_now = len(out)
+                        if parsed_now > parsed_before:
+                            chunk_ok = True
+                            break
+                        if schema_mismatches > 0:
+                            endpoint_errors.append(
+                                f"{url} schema_mismatch={schema_mismatches}"
+                            )
+                        else:
+                            endpoint_errors.append(f"{url} empty_payload")
                     except Exception as exc:
-                        log.debug("Tencent parse error line: %s", exc)
+                        endpoint_errors.append(f"{url} {exc}")
                         continue
+                if not chunk_ok:
+                    log.debug(
+                        "Tencent quote chunk unresolved after endpoint rotation "
+                        "(chunk=%d)",
+                        len(chunk),
+                    )
 
             latency = (time.time() - start_all) * 1000
+            if not out:
+                err = "; ".join(endpoint_errors[:2]) if endpoint_errors else "no_quotes"
+                self._record_error(err)
+                return {}
             self._record_success(latency)
             for q in out.values():
                 q.latency_ms = latency
@@ -1480,31 +1631,49 @@ class TencentQuoteSource(DataSource):
 
         vendor_symbol = f"{prefix}{code6}"
         start_t = time.time()
+        daily_endpoints = _endpoint_candidates(
+            self._DAILY_ENDPOINTS_ENV,
+            self._DAILY_ENDPOINTS,
+        )
+        errors: list[str] = []
         try:
             # Request more bars than needed to account for gaps
             fetch_count = max(100, int(days) + 60)
-            url = (
-                "https://web.ifzq.gtimg.cn/appstock/app/fqkline/get"
-                f"?param={vendor_symbol},day,,,{fetch_count},qfq"
-            )
-            resp = self._session.get(url, timeout=10)
-            resp.encoding = "utf-8"
-            if resp.status_code != 200:
-                self._record_error(f"HTTP {resp.status_code}")
-                return pd.DataFrame()
-            payload = resp.text
-            if not payload:
-                return pd.DataFrame()
-            data = self._parse_daily_kline(payload, vendor_symbol)
-            if data.empty:
-                return pd.DataFrame()
-            latency = (time.time() - start_t) * 1000.0
-            self._record_success(latency)
-            log.debug(
-                "Tencent daily %s: %d bars in %.0fms",
-                code6, len(data), latency
-            )
-            return data.tail(max(1, int(days)))
+            for endpoint in daily_endpoints:
+                url = _build_tencent_daily_url(
+                    endpoint,
+                    vendor_symbol=vendor_symbol,
+                    fetch_count=fetch_count,
+                )
+                if not url:
+                    continue
+                try:
+                    resp = self._session.get(url, timeout=10)
+                    resp.encoding = "utf-8"
+                    if int(resp.status_code) != 200:
+                        errors.append(f"{url} HTTP {resp.status_code}")
+                        continue
+                    payload = str(resp.text or "")
+                    if not payload:
+                        errors.append(f"{url} empty_payload")
+                        continue
+                    data = self._parse_daily_kline(payload, vendor_symbol)
+                    if data.empty:
+                        errors.append(f"{url} empty_bars")
+                        continue
+                    latency = (time.time() - start_t) * 1000.0
+                    self._record_success(latency)
+                    log.debug(
+                        "Tencent daily %s: %d bars in %.0fms",
+                        code6, len(data), latency
+                    )
+                    return data.tail(max(1, int(days)))
+                except Exception as exc:
+                    errors.append(f"{url} {exc}")
+                    continue
+            if errors:
+                self._record_error("; ".join(errors[:2]))
+            return pd.DataFrame()
         except Exception as exc:
             self._record_error(str(exc))
             log.debug("Tencent history failed for %s: %s", code6, exc)

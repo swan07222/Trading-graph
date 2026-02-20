@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import pickle
@@ -16,7 +17,7 @@ try:
 
     _HAS_TORCH = True
 except (ImportError, OSError):
-    torch = None  # type: ignore[assignment]
+    torch = None
     _HAS_TORCH = False
 
 __all__ = [
@@ -29,7 +30,11 @@ __all__ = [
     "read_text",
     "read_json",
     "pickle_load",
+    "pickle_load_bytes",
     "torch_load",
+    "artifact_checksum_path",
+    "write_checksum_sidecar",
+    "verify_checksum_sidecar",
     "safe_remove",
     "ensure_parent_dir",
 ]
@@ -98,7 +103,7 @@ def _make_tmp_path(path: Path) -> Path:
     suffix = f".{pid}.{tid}.tmp"
     return path.with_suffix(path.suffix + suffix)
 
-def _fsync_file(f) -> None:
+def _fsync_file(f: Any) -> None:
     """
     Flush and fsync a file object.
 
@@ -232,6 +237,7 @@ def atomic_pickle_dump(
     obj: Any,
     protocol: int | None = None,
     use_lock: bool = True,
+    write_checksum: bool = True,
 ) -> None:
     """
     Atomically pickle an object to a file.
@@ -249,11 +255,17 @@ def atomic_pickle_dump(
         protocol = pickle.HIGHEST_PROTOCOL
     data = pickle.dumps(obj, protocol=protocol)
     atomic_write_bytes(path, data, use_lock=use_lock)
+    if write_checksum:
+        try:
+            write_checksum_sidecar(path)
+        except OSError:
+            pass
 
 def atomic_torch_save(
     path: str | Path,
     obj: Any,
     use_lock: bool = True,
+    write_checksum: bool = True,
 ) -> None:
     """
     Atomically save a PyTorch object to a file.
@@ -289,6 +301,11 @@ def atomic_torch_save(
                 torch.save(obj, f)
                 _fsync_file(f)
             _safe_replace(tmp, path)
+            if write_checksum:
+                try:
+                    write_checksum_sidecar(path)
+                except OSError:
+                    pass
         except BaseException:
             _cleanup_tmp(tmp)
             raise
@@ -297,6 +314,7 @@ def atomic_torch_save(
             lock.release()
 
 _DEFAULT_MAX_PICKLE_BYTES = 500 * 1024 * 1024  # 500 MB
+_CHECKSUM_SUFFIX = ".sha256"
 
 def read_bytes(path: str | Path) -> bytes:
     """
@@ -349,9 +367,78 @@ def read_json(path: str | Path) -> Any:
     """
     return json.loads(read_text(path))
 
+def artifact_checksum_path(path: str | Path) -> Path:
+    """
+    Return sidecar checksum path for an artifact.
+
+    Example:
+        model.pt -> model.pt.sha256
+    """
+    p = Path(path)
+    return p.with_suffix(p.suffix + _CHECKSUM_SUFFIX)
+
+def _sha256_file(path: Path) -> str:
+    """Compute SHA-256 digest for a file."""
+    digest = hashlib.sha256()
+    with open(path, "rb") as f:
+        while True:
+            chunk = f.read(1024 * 1024)
+            if not chunk:
+                break
+            digest.update(chunk)
+    return digest.hexdigest()
+
+def write_checksum_sidecar(path: str | Path) -> Path:
+    """
+    Write SHA-256 sidecar for the artifact and return sidecar path.
+    """
+    src = Path(path)
+    sidecar = artifact_checksum_path(src)
+    payload = f"{_sha256_file(src)}\n"
+    atomic_write_text(sidecar, payload)
+    return sidecar
+
+def verify_checksum_sidecar(
+    path: str | Path,
+    *,
+    require: bool = True,
+) -> bool:
+    """
+    Verify artifact checksum sidecar.
+
+    Args:
+        path: Artifact file path.
+        require: When True, missing sidecar fails verification.
+
+    Returns:
+        True when verification passes, else False.
+    """
+    src = Path(path)
+    sidecar = artifact_checksum_path(src)
+
+    if not sidecar.exists():
+        return not require
+
+    try:
+        expected_raw = sidecar.read_text(encoding="utf-8").strip()
+    except OSError:
+        return False
+    expected = expected_raw.split()[0].lower() if expected_raw else ""
+    if not expected:
+        return False
+
+    try:
+        actual = _sha256_file(src)
+    except OSError:
+        return False
+    return actual == expected
+
 def pickle_load(
     path: str | Path,
     max_bytes: int = _DEFAULT_MAX_PICKLE_BYTES,
+    verify_checksum: bool = False,
+    require_checksum: bool = True,
+    allow_unsafe: bool = False,
 ) -> Any:
     """
     Load a pickled object from a file.
@@ -370,7 +457,18 @@ def pickle_load(
     Raises:
         ValueError: If file exceeds max_bytes
     """
+    if not bool(allow_unsafe):
+        raise ValueError(
+            "pickle deserialization is disabled by default; "
+            "pass allow_unsafe=True only for trusted local artifacts"
+        )
+
     path = Path(path)
+
+    if verify_checksum and not verify_checksum_sidecar(path, require=require_checksum):
+        raise ValueError(
+            f"Checksum verification failed for pickle artifact: {path}"
+        )
 
     if max_bytes > 0:
         size = path.stat().st_size
@@ -380,12 +478,44 @@ def pickle_load(
                 f"exceeding limit of {max_bytes:,} bytes"
             )
 
-    return pickle.loads(read_bytes(path))
+    return pickle_load_bytes(
+        read_bytes(path),
+        max_bytes=max_bytes,
+        allow_unsafe=allow_unsafe,
+    )
+
+
+def pickle_load_bytes(
+    data: bytes,
+    max_bytes: int = _DEFAULT_MAX_PICKLE_BYTES,
+    allow_unsafe: bool = False,
+) -> Any:
+    """
+    Load a pickled object from in-memory bytes.
+
+    This function keeps unsafe deserialization explicit at the callsite.
+    """
+    if not bool(allow_unsafe):
+        raise ValueError(
+            "pickle deserialization is disabled by default; "
+            "pass allow_unsafe=True only for trusted local artifacts"
+        )
+    if not isinstance(data, bytes):
+        raise TypeError(f"data must be bytes, got {type(data).__name__}")
+    if max_bytes > 0 and len(data) > max_bytes:
+        raise ValueError(
+            f"Pickle payload is {len(data):,} bytes, "
+            f"exceeding limit of {max_bytes:,} bytes"
+        )
+    return pickle.loads(data)
 
 def torch_load(
     path: str | Path,
     map_location: str | None = None,
     weights_only: bool = True,
+    verify_checksum: bool = False,
+    require_checksum: bool = True,
+    allow_unsafe: bool = False,
 ) -> Any:
     """
     Load a PyTorch object from a file.
@@ -406,11 +536,29 @@ def torch_load(
             "PyTorch is required for torch_load. "
             "Install with: pip install torch"
         )
-    return torch.load(
-        str(Path(path)),
-        map_location=map_location,
-        weights_only=weights_only,
-    )
+    if (not bool(weights_only)) and (not bool(allow_unsafe)):
+        raise ValueError(
+            "Unsafe torch checkpoint load requires explicit allow_unsafe=True"
+        )
+    if verify_checksum and not verify_checksum_sidecar(path, require=require_checksum):
+        raise ValueError(
+            f"Checksum verification failed for torch artifact: {path}"
+        )
+    target = str(Path(path))
+    try:
+        return torch.load(
+            target,
+            map_location=map_location,
+            weights_only=weights_only,
+        )
+    except TypeError:
+        # Older torch versions may not support the weights_only argument.
+        if not bool(allow_unsafe):
+            raise
+        return torch.load(
+            target,
+            map_location=map_location,
+        )
 
 def safe_remove(path: str | Path) -> bool:
     """

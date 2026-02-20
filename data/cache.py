@@ -6,9 +6,9 @@ import pickle
 import sys
 import tempfile
 import threading
-from copy import deepcopy
 from collections import OrderedDict
 from collections.abc import Callable
+from copy import deepcopy
 from dataclasses import dataclass, field
 from datetime import datetime
 from functools import wraps
@@ -19,12 +19,21 @@ import numpy as np
 import pandas as pd
 
 from config.settings import CONFIG
+from utils.atomic_io import (
+    artifact_checksum_path,
+    pickle_load,
+    pickle_load_bytes,
+    verify_checksum_sidecar,
+    write_checksum_sidecar,
+)
 from utils.logger import get_logger
 
 log = get_logger(__name__)
 
 T = TypeVar("T")
 _MANUAL_DELETE_ENV = "TRADING_MANUAL_CACHE_DELETE"
+_CACHE_REQUIRE_CHECKSUM_ENV = "TRADING_CACHE_REQUIRE_CHECKSUM"
+_DISK_CACHE_MAX_PICKLE_BYTES = 200 * 1024 * 1024  # 200 MB
 
 # Module-level sentinel for internal miss detection (L1/L2/L3)
 _SENTINEL = object()
@@ -35,6 +44,10 @@ MISSING = object()
 
 def _cache_delete_allowed() -> bool:
     return os.environ.get(_MANUAL_DELETE_ENV, "0") == "1"
+
+
+def _cache_checksum_required() -> bool:
+    return os.environ.get(_CACHE_REQUIRE_CHECKSUM_ENV, "0") == "1"
 
 
 @dataclass
@@ -293,19 +306,47 @@ class DiskCache:
             except OSError:
                 return _SENTINEL
 
+        require_checksum = _cache_checksum_required()
+        if not verify_checksum_sidecar(path, require=require_checksum):
+            log.warning(
+                "Cache checksum verification failed for key hash %s "
+                "(require=%s)",
+                path.stem,
+                require_checksum,
+            )
+            try:
+                path.unlink(missing_ok=True)
+                artifact_checksum_path(path).unlink(missing_ok=True)
+            except OSError:
+                pass
+            return _SENTINEL
+
         try:
             if self._compress:
                 with gzip.open(path, "rb") as f:
-                    return pickle.load(f)  # noqa: S301
+                    payload = f.read(_DISK_CACHE_MAX_PICKLE_BYTES + 1)
+                if len(payload) > _DISK_CACHE_MAX_PICKLE_BYTES:
+                    raise ValueError(
+                        f"Compressed cache payload too large ({len(payload):,} bytes)"
+                    )
+                return pickle_load_bytes(
+                    payload,
+                    max_bytes=_DISK_CACHE_MAX_PICKLE_BYTES,
+                    allow_unsafe=True,
+                )
             else:
-                with open(path, "rb") as f:
-                    return pickle.load(f)  # noqa: S301
-        except Exception as e:
+                return pickle_load(
+                    path,
+                    max_bytes=_DISK_CACHE_MAX_PICKLE_BYTES,
+                    allow_unsafe=True,
+                )
+        except (OSError, ValueError, TypeError, pickle.UnpicklingError) as e:
             log.warning(
                 f"Cache read error for key hash {path.stem}: {e}"
             )
             try:
                 path.unlink(missing_ok=True)
+                artifact_checksum_path(path).unlink(missing_ok=True)
             except OSError:
                 pass
             return _SENTINEL
@@ -345,6 +386,10 @@ class DiskCache:
                         )
 
                 tmp_path.replace(path)
+                try:
+                    write_checksum_sidecar(path)
+                except OSError as e:
+                    log.debug("Cache checksum sidecar write failed for %s: %s", path, e)
                 tmp_path = None  # Successfully moved
 
         except Exception as e:

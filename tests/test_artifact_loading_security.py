@@ -39,7 +39,14 @@ def test_ensemble_load_blocks_unsafe_legacy_fallback(monkeypatch, tmp_path: Path
 
     calls: list[bool] = []
 
-    def _fake_torch_load(_path, map_location=None, weights_only=True):
+    def _fake_torch_load(
+        _path,
+        map_location=None,
+        weights_only=True,
+        verify_checksum=False,
+        require_checksum=True,
+        allow_unsafe=False,
+    ):
         calls.append(bool(weights_only))
         if weights_only:
             raise RuntimeError("simulated weights-only failure")
@@ -74,7 +81,14 @@ def test_ensemble_load_allows_unsafe_legacy_fallback_when_opted_in(
 
     calls: list[bool] = []
 
-    def _fake_torch_load(_path, map_location=None, weights_only=True):
+    def _fake_torch_load(
+        _path,
+        map_location=None,
+        weights_only=True,
+        verify_checksum=False,
+        require_checksum=True,
+        allow_unsafe=False,
+    ):
         calls.append(bool(weights_only))
         if weights_only:
             raise RuntimeError("simulated weights-only failure")

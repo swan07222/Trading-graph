@@ -20,28 +20,33 @@ from utils.logger import get_logger
 
 log = get_logger(__name__)
 
-# Try to import cryptography; fall back with clear warning
+# Import cryptography once; SecureStorage is fail-closed when unavailable.
 try:
     from cryptography.fernet import Fernet
 
     CRYPTO_AVAILABLE = True
-except ImportError:
+except ImportError as exc:
+    Fernet = None
+    _CRYPTO_IMPORT_ERROR = exc
     CRYPTO_AVAILABLE = False
-    log.warning(
-        "cryptography package not installed — "
-        "SecureStorage will use base64 encoding (NOT encryption). "
-        "Install with: pip install cryptography"
-    )
+else:
+    _CRYPTO_IMPORT_ERROR = None
 
 class SecureStorage:
     """
     Secure storage for sensitive credentials.
 
-    Uses Fernet symmetric encryption when available,
-    logs a warning on every operation when falling back to base64.
+    Fail-closed design:
+    - requires cryptography/Fernet
+    - never falls back to plain/base64 storage
     """
 
     def __init__(self) -> None:
+        if not CRYPTO_AVAILABLE:
+            raise RuntimeError(
+                "cryptography is required for SecureStorage. "
+                "Install with: pip install cryptography"
+            ) from _CRYPTO_IMPORT_ERROR
         self._storage_path = CONFIG.data_dir / ".secure_storage.enc"
         self._key_path = CONFIG.data_dir / ".key"
         self._lock = threading.RLock()
@@ -50,16 +55,15 @@ class SecureStorage:
         self._closed = False
         self._load()
 
-    def _init_cipher(self) -> Any | None:
+    def _init_cipher(self) -> Any:
         """Initialize encryption cipher."""
-        if not CRYPTO_AVAILABLE:
-            return None
-
         try:
             if self._key_path.exists():
                 with open(self._key_path, "rb") as f:
                     key = f.read()
             else:
+                if Fernet is None:
+                    raise RuntimeError("cryptography.Fernet unavailable")
                 key = Fernet.generate_key()
                 self._key_path.parent.mkdir(parents=True, exist_ok=True)
                 with open(self._key_path, "wb") as f:
@@ -69,39 +73,21 @@ class SecureStorage:
                 except OSError as e:
                     log.warning("Cannot set key file permissions: %s", e)
 
+            if Fernet is None:
+                raise RuntimeError("cryptography.Fernet unavailable")
             return Fernet(key)
         except Exception as e:
-            log.warning("Failed to init cipher: %s", e)
-            return None
-
-    def _warn_no_encryption(self, operation: str) -> None:
-        """FIX #2: Warn on every unencrypted operation."""
-        if self._cipher is None:
-            log.warning(
-                "SecureStorage.%s: using base64 (NOT encrypted). "
-                "Install 'cryptography' for real encryption.",
-                operation,
-            )
+            raise RuntimeError(f"Failed to initialize secure cipher: {e}") from e
 
     def _encrypt(self, data: str) -> bytes:
         """Encrypt data."""
-        if self._cipher:
-            encrypted = self._cipher.encrypt(data.encode("utf-8"))
-            return bytes(encrypted)
-        else:
-            import base64
-
-            return base64.b64encode(data.encode("utf-8"))
+        encrypted = self._cipher.encrypt(data.encode("utf-8"))
+        return bytes(encrypted)
 
     def _decrypt(self, data: bytes) -> str:
         """Decrypt data."""
-        if self._cipher:
-            decrypted = self._cipher.decrypt(data)
-            return bytes(decrypted).decode("utf-8")
-        else:
-            import base64
-
-            return base64.b64decode(data).decode("utf-8")
+        decrypted = self._cipher.decrypt(data)
+        return bytes(decrypted).decode("utf-8")
 
     def _load(self) -> None:
         """Load from storage."""
@@ -141,8 +127,6 @@ class SecureStorage:
         if not isinstance(value, str):
             raise TypeError("value must be a string")
 
-        self._warn_no_encryption("set")
-
         with self._lock:
             if self._closed:
                 raise RuntimeError("SecureStorage is closed")
@@ -153,8 +137,6 @@ class SecureStorage:
         """Retrieve decrypted value."""
         if not isinstance(key, str) or not key:
             raise ValueError("key must be a non-empty string")
-
-        self._warn_no_encryption("get")
 
         with self._lock:
             return self._cache.get(key, default)
@@ -187,8 +169,7 @@ class SecureStorage:
             self._save()
 
     def __repr__(self) -> str:
-        encrypted = "encrypted" if self._cipher else "base64"
-        return f"SecureStorage(keys={len(self._cache)}, mode={encrypted})"
+        return f"SecureStorage(keys={len(self._cache)}, mode=encrypted)"
 
 @dataclass
 class AuditRecord:
@@ -217,7 +198,7 @@ class AuditRecord:
             "record_hash": self.record_hash,
         }
 
-def _atexit_close_audit(ref: weakref.ref) -> None:
+def _atexit_close_audit(ref: weakref.ReferenceType[AuditLog]) -> None:
     """
     FIX #4: atexit callback using weakref.
     If the AuditLog was already garbage collected, this is a no-op.
@@ -336,7 +317,7 @@ class AuditLog:
 
         f = self._get_file()
         if f is None:
-            # Cannot write — keep buffer for retry, but cap size
+            # Cannot write: keep buffer for retry, but cap size
             if len(self._buffer) > self._max_buffer_size:
                 dropped = len(self._buffer) - self._max_buffer_size
                 self._buffer = self._buffer[-self._max_buffer_size:]
@@ -352,7 +333,10 @@ class AuditLog:
             log.error("Audit log flush failed: %s", e)
 
     def log(
-        self, event_type: str, action: str, details: dict | None = None
+        self,
+        event_type: str,
+        action: str,
+        details: dict[str, Any] | None = None,
     ) -> None:
         """Log audit event."""
         record = AuditRecord(
@@ -433,7 +417,7 @@ class AuditLog:
             },
         )
 
-    def log_risk_event(self, event_type: str, details: dict) -> None:
+    def log_risk_event(self, event_type: str, details: dict[str, Any]) -> None:
         """Log risk management event."""
         self.log("risk", event_type, details)
 
@@ -540,7 +524,7 @@ class AuditLog:
         end_date: datetime | None = None,
         event_type: str | None = None,
         limit: int = 1000,
-    ) -> list[dict]:
+    ) -> list[dict[str, Any]]:
         """
         Query audit records.
 
@@ -550,7 +534,7 @@ class AuditLog:
         with self._lock:
             self._flush()
 
-        results: list[dict] = []
+        results: list[dict[str, Any]] = []
 
         start = (
             start_date.date()
@@ -713,7 +697,7 @@ class RateLimiter:
             if self.check(limit_type, consume=False):
                 if self.check(limit_type, consume=True):
                     return True
-                # Race: another thread consumed between peek and consume — retry
+                # Race: another thread consumed between peek and consume: retry.
                 continue
 
             if _time.monotonic() - start > timeout:
@@ -919,7 +903,7 @@ class AccessControl:
                 elif bool(getattr(CONFIG.security, "require_2fa_for_live", True)):
                     allowed = allowed and self._is_2fa_valid()
 
-        # FIX #10: Recursion guard — audit.log_access might trigger check()
+        # FIX #10: Recursion guard: audit.log_access might trigger check()
         if not self._logging_access:
             self._logging_access = True
             try:
@@ -944,7 +928,7 @@ class AccessControl:
             )
 
     @contextmanager
-    def elevate(self, role: str):
+    def elevate(self, role: str) -> Any:
         """Temporarily elevate to role."""
         with self._lock:
             if role not in self._permissions:
@@ -1021,7 +1005,7 @@ def get_access_control() -> AccessControl:
 
 def reset_security_singletons() -> None:
     """
-    Reset all singletons — for testing only.
+    Reset all singletons for testing only.
     Closes resources cleanly before discarding.
     """
     global _secure_storage, _audit_log, _rate_limiter, _access_control

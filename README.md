@@ -27,6 +27,13 @@ For CN equities:
 
 `AkShareSource` availability depends on EastMoney reachability (`env.eastmoney_ok`) and China-direct network conditions.
 
+Emergency endpoint override controls (no code change needed):
+- `TRADING_SINA_KLINE_ENDPOINTS`
+- `TRADING_TENCENT_BATCH_ENDPOINTS`
+- `TRADING_TENCENT_DAILY_ENDPOINTS`
+
+For multiple endpoints, separate entries with `;`.
+
 ## Candle Rendering Pipeline
 
 1. Load bars from fetcher/database/session cache
@@ -66,6 +73,24 @@ Install:
 
 ```bash
 pip install -r requirements.txt
+```
+
+Desktop/UI + ML + CN/VPN data providers:
+
+```bash
+pip install -r requirements-desktop.txt
+```
+
+Full optional stack (desktop + NLP extras):
+
+```bash
+pip install -r requirements-all.txt
+```
+
+Live trading profile (includes broker connector dependency):
+
+```bash
+pip install -r requirements-live.txt
 ```
 
 Run UI:
@@ -118,6 +143,18 @@ Type gate:
 
 ```bash
 python scripts/typecheck_gate.py
+```
+
+Strict type gate:
+
+```bash
+python scripts/typecheck_strict_gate.py
+```
+
+Live readiness doctor:
+
+```bash
+python main.py --doctor --doctor-live --doctor-strict
 ```
 
 ## Main Directories

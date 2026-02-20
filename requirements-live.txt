@@ -1,0 +1,5 @@
+# Live trading profile (desktop + broker connector)
+
+-r requirements-desktop.txt
+
+easytrader>=0.23.0

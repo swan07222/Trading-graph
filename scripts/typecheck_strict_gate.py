@@ -9,41 +9,17 @@ from pathlib import Path
 
 DEFAULT_TARGETS: tuple[str, ...] = (
     "main.py",
-    "config/settings.py",
-    "core/constants.py",
-    "core/instruments.py",
-    "core/network.py",
-    "data/fetcher.py",
-    "data/feeds.py",
-    "data/news.py",
-    "data/processor.py",
-    "data/session_cache.py",
-    "data/discovery.py",
-    "analysis/strategy_marketplace.py",
-    "analysis/technical.py",
-    "models/ensemble.py",
-    "models/predictor.py",
-    "models/trainer.py",
-    "trading/executor.py",
-    "trading/kill_switch.py",
-    "trading/portfolio.py",
-    "trading/alerts.py",
-    "ui/app.py",
-    "utils/logger.py",
-    "utils/metrics.py",
-    "utils/metrics_http.py",
+    "ui/background_tasks.py",
+    "utils/atomic_io.py",
     "utils/security.py",
-    "scripts/deployment_snapshot.py",
     "scripts/release_preflight.py",
-    "scripts/soak_broker_e2e.py",
-    "scripts/exception_policy_gate.py",
+    "scripts/typecheck_gate.py",
     "scripts/module_size_gate.py",
-    "scripts/typecheck_strict_gate.py",
+    "scripts/exception_policy_gate.py",
 )
 DEFAULT_FLAGS: tuple[str, ...] = (
+    "--strict",
     "--follow-imports=skip",
-    "--check-untyped-defs",
-    "--warn-return-any",
 )
 ERROR_RE = re.compile(
     r"^(?P<path>.+?):(?P<line>\d+)(?::(?P<column>\d+))?: error: "
@@ -57,12 +33,6 @@ def _normalize_path(path: str) -> str:
 
 
 def parse_mypy_errors(raw_output: str) -> set[str]:
-    """
-    Parse mypy output into stable issue keys.
-
-    Key format:
-      path:line:code:message
-    """
     issues: set[str] = set()
     for line in str(raw_output or "").splitlines():
         matched = ERROR_RE.match(line.strip())
@@ -92,7 +62,7 @@ def load_baseline_entries(path: Path) -> set[str]:
 def save_baseline_entries(path: Path, issues: set[str]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     body = [
-        "# mypy baseline for scripts/typecheck_gate.py",
+        "# strict mypy baseline for scripts/typecheck_strict_gate.py",
         "# Format: path:line:code:message",
         "",
     ]
@@ -116,11 +86,11 @@ def run_mypy(targets: tuple[str, ...], flags: tuple[str, ...]) -> tuple[int, str
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Typecheck gate with baseline support for gradual hardening"
+        description="Strict typecheck gate with baseline support."
     )
     parser.add_argument(
         "--baseline",
-        default=".ci/mypy-baseline.txt",
+        default=".ci/mypy-strict-baseline.txt",
         help="Path to baseline issue list",
     )
     parser.add_argument(
@@ -132,7 +102,7 @@ def main() -> int:
     parser.add_argument(
         "--write-baseline",
         action="store_true",
-        help="Overwrite baseline with current mypy output",
+        help="Overwrite baseline with current strict-mypy output",
     )
     args = parser.parse_args()
 
@@ -148,13 +118,13 @@ def main() -> int:
     return_code, output, issues_now = run_mypy(targets, DEFAULT_FLAGS)
 
     if return_code not in (0, 1):
-        print("mypy failed to execute successfully.")
+        print("strict mypy failed to execute successfully.")
         if output:
             print(output)
         return int(return_code or 2)
 
     if return_code == 1 and not issues_now:
-        print("mypy returned errors but no parseable issue lines were found.")
+        print("strict mypy returned errors but no parseable issue lines were found.")
         if output:
             print(output)
         return 2
@@ -169,7 +139,7 @@ def main() -> int:
         print(
             f"Baseline file is missing: {baseline_path}\n"
             "Create/update it with:\n"
-            "  python scripts/typecheck_gate.py --write-baseline"
+            "  python scripts/typecheck_strict_gate.py --write-baseline"
         )
         return 2
 
@@ -177,23 +147,23 @@ def main() -> int:
     resolved_issues = sorted(baseline - issues_now)
 
     print(
-        f"mypy issues now={len(issues_now)} baseline={len(baseline)} "
+        f"strict-mypy issues now={len(issues_now)} baseline={len(baseline)} "
         f"new={len(new_issues)} resolved={len(resolved_issues)}"
     )
 
     if resolved_issues:
-        print("Resolved baseline issues detected; consider refreshing baseline.")
+        print("Resolved strict baseline issues detected; consider refreshing baseline.")
         for row in resolved_issues[:20]:
             print(f"  RESOLVED {row}")
         if len(resolved_issues) > 20:
             print(f"  ... and {len(resolved_issues) - 20} more")
 
     if new_issues:
-        print("New mypy issues introduced:")
+        print("New strict mypy issues introduced:")
         for row in new_issues:
             print(f"  NEW {row}")
         if output:
-            print("\nRaw mypy output:")
+            print("\nRaw strict mypy output:")
             print(output)
         return 1
 

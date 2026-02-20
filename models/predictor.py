@@ -749,8 +749,6 @@ class Predictor:
     def _load_forecaster(self):
         """Load TCN forecaster for price curve prediction."""
         try:
-            import torch
-
             from models.networks import TCNModel
 
             self.forecaster = None
@@ -780,33 +778,29 @@ class Predictor:
                     False,
                 )
             )
+            require_checksum = bool(
+                getattr(
+                    getattr(CONFIG, "model", None),
+                    "require_artifact_checksum",
+                    True,
+                )
+            )
 
             def _load_checkpoint(weights_only: bool):
-                try:
-                    from utils.atomic_io import torch_load
+                from utils.atomic_io import torch_load
 
-                    return torch_load(
-                        forecast_path,
-                        map_location="cpu",
-                        weights_only=weights_only,
-                    )
-                except TypeError as exc:
-                    # Older torch versions may not support weights_only.
-                    if not allow_unsafe:
-                        raise RuntimeError(
-                            "Secure forecaster load requires torch weights_only support"
-                        ) from exc
-                    return torch.load(forecast_path, map_location="cpu")
-                except ImportError as exc:
-                    if not allow_unsafe:
-                        raise RuntimeError(
-                            "Secure forecaster load requires utils.atomic_io.torch_load"
-                        ) from exc
-                    return torch.load(forecast_path, map_location="cpu")
+                return torch_load(
+                    forecast_path,
+                    map_location="cpu",
+                    weights_only=weights_only,
+                    verify_checksum=True,
+                    require_checksum=require_checksum,
+                    allow_unsafe=allow_unsafe,
+                )
 
             try:
                 data = _load_checkpoint(weights_only=True)
-            except Exception as exc:
+            except (OSError, RuntimeError, TypeError, ValueError, ImportError) as exc:
                 if not allow_unsafe:
                     log.error(
                         "Forecaster secure load failed for %s and unsafe fallback is disabled: %s",
@@ -856,7 +850,7 @@ class Predictor:
             log.debug("TCNModel not available - forecaster disabled")
             self.forecaster = None
             self._forecaster_horizon = 0
-        except Exception as e:
+        except (OSError, RuntimeError, TypeError, ValueError, KeyError) as e:
             log.debug(f"Forecaster not loaded: {e}")
             self.forecaster = None
             self._forecaster_horizon = 0

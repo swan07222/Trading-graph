@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import os
 import threading
 from collections.abc import Callable
@@ -172,61 +171,40 @@ class EnsembleModel:
 
     @staticmethod
     def _artifact_checksum_path(path: Path) -> Path:
-        return path.with_suffix(path.suffix + ".sha256")
+        from utils.atomic_io import artifact_checksum_path
 
-    @staticmethod
-    def _sha256_file(path: Path) -> str:
-        h = hashlib.sha256()
-        with open(path, "rb") as f:
-            while True:
-                chunk = f.read(1024 * 1024)
-                if not chunk:
-                    break
-                h.update(chunk)
-        return h.hexdigest()
+        return artifact_checksum_path(path)
 
     def _write_artifact_checksum(self, path: Path) -> None:
-        checksum_path = self._artifact_checksum_path(path)
-        digest = self._sha256_file(path)
-        payload = f"{digest}\n"
         try:
-            from utils.atomic_io import atomic_write_text
+            from utils.atomic_io import write_checksum_sidecar
 
-            atomic_write_text(checksum_path, payload)
-        except Exception:
-            checksum_path.write_text(payload, encoding="utf-8")
+            write_checksum_sidecar(path)
+        except Exception as exc:
+            log.warning("Failed writing checksum sidecar for %s: %s", path, exc)
 
     def _verify_artifact_checksum(self, path: Path) -> bool:
         checksum_path = self._artifact_checksum_path(path)
         require_checksum = bool(
             getattr(getattr(CONFIG, "model", None), "require_artifact_checksum", True)
         )
-        if not checksum_path.exists():
-            if require_checksum:
+        try:
+            from utils.atomic_io import verify_checksum_sidecar
+
+            ok = bool(
+                verify_checksum_sidecar(
+                    path,
+                    require=require_checksum,
+                )
+            )
+            if not ok:
                 log.error(
-                    "Missing checksum sidecar for %s (expected %s)",
+                    "Checksum verification failed for %s (sidecar=%s, require=%s)",
                     path,
                     checksum_path,
+                    require_checksum,
                 )
-                return False
-            return True
-        try:
-            expected = str(
-                checksum_path.read_text(encoding="utf-8")
-            ).strip().split()[0].lower()
-            if not expected:
-                log.error("Empty checksum sidecar for %s", path)
-                return False
-            actual = self._sha256_file(path)
-            if actual != expected:
-                log.error(
-                    "Checksum mismatch for %s (expected=%s actual=%s)",
-                    path,
-                    expected,
-                    actual,
-                )
-                return False
-            return True
+            return ok
         except Exception as exc:
             log.error("Checksum verification failed for %s: %s", path, exc)
             return False
@@ -1036,33 +1014,25 @@ class EnsembleModel:
             allow_unsafe = bool(
                 getattr(getattr(CONFIG, "model", None), "allow_unsafe_artifact_load", False)
             )
+            require_checksum = bool(
+                getattr(getattr(CONFIG, "model", None), "require_artifact_checksum", True)
+            )
 
             def _load_checkpoint(weights_only: bool):
-                try:
-                    from utils.atomic_io import torch_load
+                from utils.atomic_io import torch_load
 
-                    return torch_load(
-                        path_obj,
-                        map_location=self.device,
-                        weights_only=weights_only,
-                    )
-                except TypeError as exc:
-                    # Older torch versions may not support weights_only.
-                    if not allow_unsafe:
-                        raise RuntimeError(
-                            "Secure ensemble load requires torch weights_only support"
-                        ) from exc
-                    return torch.load(path_obj, map_location=self.device)
-                except ImportError as exc:
-                    if not allow_unsafe:
-                        raise RuntimeError(
-                            "Secure ensemble load requires utils.atomic_io.torch_load"
-                        ) from exc
-                    return torch.load(path_obj, map_location=self.device)
+                return torch_load(
+                    path_obj,
+                    map_location=self.device,
+                    weights_only=weights_only,
+                    verify_checksum=True,
+                    require_checksum=require_checksum,
+                    allow_unsafe=allow_unsafe,
+                )
 
             try:
                 state = _load_checkpoint(weights_only=True)
-            except Exception as exc:
+            except (OSError, RuntimeError, TypeError, ValueError, ImportError) as exc:
                 if not allow_unsafe:
                     log.error(
                         "Ensemble secure load failed for %s and unsafe fallback is disabled: %s",

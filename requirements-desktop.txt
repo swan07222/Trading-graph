@@ -1,0 +1,12 @@
+# Desktop workstation profile:
+# - GUI
+# - CN/VPN market data providers
+# - ML runtime
+
+-r requirements.txt
+
+torch>=2.0.0,<3.0.0
+akshare>=1.10.0
+yfinance>=0.2.40
+PyQt6>=6.5.0,<7.0.0
+pyqtgraph>=0.13.0,<1.0.0

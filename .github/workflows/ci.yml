@@ -37,6 +37,8 @@ jobs:
           cache: "pip"
           cache-dependency-path: |
             requirements.txt
+            requirements-desktop.txt
+            requirements-all.txt
             requirements-dev.txt
             pyproject.toml
 
@@ -45,7 +47,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
           pip install -r requirements-dev.txt
-          pip install -e .
+          pip install -e ".[ml,china,vpn,gui,nlp,security]"
 
       - name: Preflight Gates
         run: |
@@ -79,6 +81,8 @@ jobs:
           cache: "pip"
           cache-dependency-path: |
             requirements.txt
+            requirements-desktop.txt
+            requirements-all.txt
             requirements-dev.txt
             pyproject.toml
 
@@ -87,7 +91,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
           pip install -r requirements-dev.txt
-          pip install -e .
+          pip install -e ".[ml,china,vpn,gui,nlp,security]"
 
       - name: Run tests with coverage
         run: |

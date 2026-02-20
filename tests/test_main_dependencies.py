@@ -10,7 +10,7 @@ def test_check_dependencies_gui_mode_skips_ml_stack(monkeypatch):
 
     def fake_find_spec(name):
         seen.append(name)
-        if name in {"psutil", "PyQt6"}:
+        if name in {"psutil", "PyQt6", "cryptography"}:
             return types.SimpleNamespace()
         return None
 
@@ -26,7 +26,7 @@ def test_check_dependencies_gui_mode_skips_ml_stack(monkeypatch):
 
 def test_check_dependencies_ml_mode_requires_ml_stack(monkeypatch, capsys):
     def fake_find_spec(name):
-        if name in {"psutil", "numpy", "pandas", "sklearn"}:
+        if name in {"psutil", "numpy", "pandas", "sklearn", "cryptography"}:
             return types.SimpleNamespace()
         return None
 
@@ -36,6 +36,20 @@ def test_check_dependencies_ml_mode_requires_ml_stack(monkeypatch, capsys):
     assert ok is False
     out = capsys.readouterr().out
     assert "torch" in out
+
+
+def test_check_dependencies_live_mode_requires_easytrader(monkeypatch, capsys):
+    def fake_find_spec(name):
+        if name in {"psutil", "cryptography"}:
+            return types.SimpleNamespace()
+        return None
+
+    monkeypatch.setattr(main, "find_spec", fake_find_spec)
+
+    ok = main.check_dependencies(require_live=True)
+    assert ok is False
+    out = capsys.readouterr().out
+    assert "easytrader" in out
 
 
 def test_parse_positive_int_csv_rejects_invalid_values():
@@ -89,6 +103,7 @@ def test_doctor_gate_violations_detect_missing_readiness():
                 "pandas": False,
                 "sklearn": True,
                 "requests": True,
+                "cryptography": True,
             },
             "paths": {
                 "data_dir": {"exists": True, "writable": True},
@@ -100,3 +115,32 @@ def test_doctor_gate_violations_detect_missing_readiness():
     assert any(v.startswith("missing_dependencies=") for v in violations)
     assert any(v.startswith("path_issues=") for v in violations)
     assert any(v.startswith("config_warnings=") for v in violations)
+
+
+def test_doctor_gate_violations_detect_live_readiness_failures():
+    violations = main._doctor_gate_violations(
+        {
+            "dependencies": {
+                "psutil": True,
+                "numpy": True,
+                "pandas": True,
+                "sklearn": True,
+                "requests": True,
+                "cryptography": True,
+            },
+            "paths": {
+                "data_dir": {"exists": True, "writable": True},
+            },
+            "config_validation_warnings": [],
+            "institutional_readiness": {"pass": True},
+            "doctor_live_enforced": True,
+            "live_readiness": {
+                "enforced": True,
+                "pass": False,
+                "missing_dependencies": ["easytrader"],
+                "broker_path_exists": False,
+            },
+        }
+    )
+    assert "live_missing_dependencies=easytrader" in violations
+    assert "live_broker_path_missing" in violations

@@ -4,6 +4,7 @@ import json
 import sys
 from importlib.util import find_spec
 from pathlib import Path
+from typing import Any
 
 sys.path.insert(0, str(Path(__file__).parent))
 
@@ -15,7 +16,12 @@ def _module_exists(module: str) -> bool:
         return False
 
 
-def check_dependencies(require_gui: bool = False, require_ml: bool = False) -> bool:
+def check_dependencies(
+    require_gui: bool = False,
+    require_ml: bool = False,
+    require_security: bool = True,
+    require_live: bool = False,
+) -> bool:
     """
     Check required dependencies.
 
@@ -24,6 +30,8 @@ def check_dependencies(require_gui: bool = False, require_ml: bool = False) -> b
     - Only require ML stack for ML-heavy modes.
     """
     required = [("psutil", "psutil")]
+    if require_security:
+        required.append(("cryptography", "cryptography"))
     if require_ml:
         required.extend([
             ("torch", "torch"),
@@ -31,6 +39,8 @@ def check_dependencies(require_gui: bool = False, require_ml: bool = False) -> b
             ("pandas", "pandas"),
             ("sklearn", "scikit-learn"),
         ])
+    if require_live:
+        required.append(("easytrader", "easytrader"))
 
     optional = []
     if require_gui:
@@ -169,7 +179,7 @@ def _require_positive_int(value: int, arg_name: str) -> int:
     return parsed
 
 
-def _ensure_backtest_optimize_success(summary: dict) -> None:
+def _ensure_backtest_optimize_success(summary: dict[str, Any]) -> None:
     """Raise if optimization did not produce a successful result."""
     status = str(summary.get("status", "")).strip().lower()
     if status in {"ok", "success"}:
@@ -181,7 +191,7 @@ def _ensure_backtest_optimize_success(summary: dict) -> None:
     raise RuntimeError("Backtest optimization failed")
 
 
-def _health_gate_violations(report: dict) -> list[str]:
+def _health_gate_violations(report: dict[str, Any]) -> list[str]:
     """Return health gate violations for production readiness checks."""
     violations: list[str] = []
     status = str(report.get("status", "")).strip().lower()
@@ -210,13 +220,13 @@ def _ensure_health_gate_from_json(raw_health_json: str) -> None:
         raise RuntimeError(f"Health gate failed: {', '.join(violations)}")
 
 
-def _doctor_gate_violations(report: dict) -> list[str]:
+def _doctor_gate_violations(report: dict[str, Any]) -> list[str]:
     """Return doctor gate violations for production readiness checks."""
     violations: list[str] = []
 
     deps = report.get("dependencies")
     if isinstance(deps, dict):
-        required_modules = ("psutil", "numpy", "pandas", "sklearn", "requests")
+        required_modules = ("psutil", "numpy", "pandas", "sklearn", "requests", "cryptography")
         missing = [name for name in required_modules if not bool(deps.get(name, False))]
         if missing:
             violations.append(f"missing_dependencies={','.join(missing)}")
@@ -254,17 +264,31 @@ def _doctor_gate_violations(report: dict) -> list[str]:
     else:
         violations.append("institutional_readiness_missing")
 
+    live_readiness = report.get("live_readiness")
+    if isinstance(live_readiness, dict):
+        enforced = bool(live_readiness.get("enforced", False))
+        if enforced and not bool(live_readiness.get("pass", False)):
+            missing = live_readiness.get("missing_dependencies", [])
+            if isinstance(missing, list) and missing:
+                violations.append(
+                    f"live_missing_dependencies={','.join(str(x) for x in missing)}"
+                )
+            if live_readiness.get("broker_path_exists") is False:
+                violations.append("live_broker_path_missing")
+    elif report.get("doctor_live_enforced") is True:
+        violations.append("live_readiness_missing")
+
     return violations
 
 
-def _ensure_doctor_gate(report: dict) -> None:
+def _ensure_doctor_gate(report: dict[str, Any]) -> None:
     """Raise if doctor report fails production readiness gate checks."""
     violations = _doctor_gate_violations(report)
     if violations:
         raise RuntimeError(f"Doctor gate failed: {', '.join(violations)}")
 
 
-def main():
+def main() -> int:
     """Main entry point"""
     import os
 
@@ -286,6 +310,7 @@ def main():
     parser.add_argument('--recovery-drill', action='store_true', help='Run crash recovery drill')
     parser.add_argument('--doctor', action='store_true', help='Run system diagnostics')
     parser.add_argument('--doctor-strict', action='store_true', help='Fail when doctor readiness gate is not met (use with --doctor)')
+    parser.add_argument('--doctor-live', action='store_true', help='Enforce live-trading dependency/path checks (use with --doctor)')
     parser.add_argument('--opt-train-months', type=str, default='6,9,12,18', help='Backtest optimization train months list')
     parser.add_argument('--opt-test-months', type=str, default='1,2,3', help='Backtest optimization test months list')
     parser.add_argument('--opt-min-confidence', type=str, default='0.55,0.60,0.65,0.70', help='Backtest optimization confidence list')
@@ -301,6 +326,8 @@ def main():
         parser.error("--health-strict requires --health")
     if args.doctor_strict and not args.doctor:
         parser.error("--doctor-strict requires --doctor")
+    if args.doctor_live and not args.doctor:
+        parser.error("--doctor-live requires --doctor")
 
     require_gui = not any([
         args.train, args.auto_learn, args.predict, args.backtest, args.backtest_optimize, args.replay_file,
@@ -310,8 +337,18 @@ def main():
         args.train, args.auto_learn, args.predict, args.backtest, args.backtest_optimize, args.replay_file,
     ])
 
-    if not check_dependencies(require_gui=require_gui, require_ml=require_ml):
-        sys.exit(1)
+    from config.settings import CONFIG
+
+    config_live_mode = str(getattr(getattr(CONFIG, "trading_mode", None), "value", "")).lower() == "live"
+    require_live = bool((require_gui and config_live_mode) or args.doctor_live)
+
+    if not check_dependencies(
+        require_gui=require_gui,
+        require_ml=require_ml,
+        require_security=True,
+        require_live=require_live,
+    ):
+        return 1
 
     from utils.logger import get_logger
     log = get_logger()
@@ -345,6 +382,7 @@ def main():
     from trading.kill_switch import get_kill_switch
     _ = get_kill_switch()
 
+    exit_code = 0
     try:
         if args.health:
             from trading.health import get_health_monitor
@@ -355,7 +393,7 @@ def main():
                 _ensure_health_gate_from_json(health_json)
 
         elif args.doctor:
-            report = run_system_doctor()
+            report = run_system_doctor(check_live=bool(args.doctor_live or config_live_mode))
             if args.doctor_strict:
                 _ensure_doctor_gate(report)
 
@@ -465,9 +503,10 @@ def main():
 
     except KeyboardInterrupt:
         log.info("Interrupted by user")
+        exit_code = 130
     except Exception as e:
         log.exception(f"Error: {e}")
-        sys.exit(1)
+        exit_code = 1
     finally:
         if metrics_server is not None:
             try:
@@ -477,8 +516,9 @@ def main():
         EVENT_BUS.stop()
         from utils.security import get_audit_log
         get_audit_log().close()
+    return exit_code
 
-def run_recovery_drill():
+def run_recovery_drill() -> None:
     """
     Recovery drill:
     1) Create isolated OMS DB in temp folder
@@ -520,7 +560,7 @@ def run_recovery_drill():
     print("[DRILL] PASS: fill dedup + recovery OK")
 
 
-def run_system_doctor() -> dict:
+def run_system_doctor(*, check_live: bool = False) -> dict[str, Any]:
     """One-shot system diagnostics for setup and runtime readiness."""
     import os
     from datetime import datetime
@@ -539,6 +579,8 @@ def run_system_doctor() -> dict:
         "PyQt6",
         "websocket",
         "requests",
+        "cryptography",
+        "easytrader",
     ]
     deps = {m: bool(_module_exists(m)) for m in modules}
 
@@ -559,10 +601,29 @@ def run_system_doctor() -> dict:
         }
 
     model_dir = CONFIG.model_dir
-    report = {
+
+    broker_path = str(getattr(CONFIG, "broker_path", "") or "").strip()
+    trading_mode = str(getattr(getattr(CONFIG, "trading_mode", None), "value", "")).lower()
+    doctor_live_enforced = bool(check_live or trading_mode == "live")
+    live_missing_deps = [
+        name for name in ("easytrader", "cryptography") if not bool(deps.get(name, False))
+    ]
+    broker_path_exists = bool(broker_path and Path(broker_path).exists())
+    live_readiness = {
+        "enforced": doctor_live_enforced,
+        "trading_mode": trading_mode or "unknown",
+        "missing_dependencies": live_missing_deps,
+        "broker_path": broker_path,
+        "broker_path_exists": broker_path_exists,
+        "pass": (len(live_missing_deps) == 0 and broker_path_exists),
+    }
+
+    report: dict[str, Any] = {
         "timestamp": datetime.now().isoformat(),
+        "doctor_live_enforced": doctor_live_enforced,
         "dependencies": deps,
         "paths": path_report,
+        "live_readiness": live_readiness,
         "models": {
             "ensembles": len(list(model_dir.glob("ensemble_*.pt"))),
             "forecasters": len(list(model_dir.glob("forecast_*.pt"))),
@@ -575,4 +636,4 @@ def run_system_doctor() -> dict:
     return report
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

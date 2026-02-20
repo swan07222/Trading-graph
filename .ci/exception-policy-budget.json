@@ -1,0 +1,24 @@
+{
+  "data/feeds.py": {
+    "broad-except": 54,
+    "silent-pass": 24
+  },
+  "data/fetcher.py": {
+    "broad-except": 59,
+    "silent-pass": 3
+  },
+  "models/auto_learner.py": {
+    "broad-except": 46
+  },
+  "models/predictor.py": {
+    "broad-except": 37
+  },
+  "trading/executor.py": {
+    "broad-except": 79,
+    "silent-pass": 1
+  },
+  "ui/app.py": {
+    "broad-except": 185,
+    "silent-pass": 52
+  }
+}

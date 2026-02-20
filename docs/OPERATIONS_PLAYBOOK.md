@@ -32,6 +32,7 @@ Standalone governance/HA checks:
 ```bash
 python scripts/regulatory_readiness.py
 python scripts/ha_dr_drill.py --backend sqlite --ttl-seconds 5
+python main.py --doctor --doctor-live --doctor-strict
 ```
 
 ## 2) Soak Testing (Including Live Broker Conditions)
