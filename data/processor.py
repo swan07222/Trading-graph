@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import copy
+import hashlib
+import json
 import pickle
 import threading
 import time
@@ -21,6 +23,7 @@ log = get_logger(__name__)
 
 # Module-level constant for feature scaling clamp
 FEATURE_CLIP_VALUE = 5.0
+_DEFAULT_MAX_SCALER_PICKLE_BYTES = 100 * 1024 * 1024  # 100 MB
 
 # Class label names — dynamically generated if NUM_CLASSES != 3
 _DEFAULT_LABEL_NAMES = {0: "DOWN", 1: "NEUTRAL", 2: "UP"}
@@ -179,6 +182,158 @@ class DataProcessor:
 
     # =========================================================================
     # =========================================================================
+
+    @staticmethod
+    def _artifact_checksum_path(path: Path) -> Path:
+        return path.with_suffix(path.suffix + ".sha256")
+
+    @staticmethod
+    def _safe_scaler_path(path: Path) -> Path:
+        return path.with_suffix(path.suffix + ".safe.json")
+
+    @staticmethod
+    def _sha256_file(path: Path) -> str:
+        h = hashlib.sha256()
+        with open(path, "rb") as f:
+            while True:
+                chunk = f.read(1024 * 1024)
+                if not chunk:
+                    break
+                h.update(chunk)
+        return h.hexdigest()
+
+    def _write_artifact_checksum(self, path: Path) -> None:
+        checksum_path = self._artifact_checksum_path(path)
+        digest = self._sha256_file(path)
+        payload = f"{digest}\n"
+        try:
+            from utils.atomic_io import atomic_write_text
+
+            atomic_write_text(checksum_path, payload)
+        except Exception:
+            checksum_path.write_text(payload, encoding="utf-8")
+
+    def _verify_artifact_checksum(self, path: Path) -> bool:
+        checksum_path = self._artifact_checksum_path(path)
+        if not checksum_path.exists():
+            model_cfg = getattr(CONFIG, "model", None)
+            require_checksum = bool(
+                getattr(model_cfg, "require_artifact_checksum", True)
+            )
+            if require_checksum:
+                log.error(
+                    "Missing checksum sidecar for %s (expected %s)",
+                    path,
+                    checksum_path,
+                )
+                return False
+            return True
+        try:
+            expected = str(
+                checksum_path.read_text(encoding="utf-8")
+            ).strip().split()[0].lower()
+            if not expected:
+                log.error("Empty checksum sidecar for %s", path)
+                return False
+            actual = self._sha256_file(path)
+            if actual != expected:
+                log.error(
+                    "Checksum mismatch for %s (expected=%s actual=%s)",
+                    path,
+                    expected,
+                    actual,
+                )
+                return False
+            return True
+        except Exception as e:
+            log.error("Checksum verification failed for %s: %s", path, e)
+            return False
+
+    @staticmethod
+    def _build_safe_scaler_payload(data: dict[str, Any]) -> dict[str, Any]:
+        scaler = data.get("scaler")
+        if not isinstance(scaler, RobustScaler):
+            raise TypeError("scaler must be RobustScaler")
+
+        center = np.asarray(getattr(scaler, "center_", []), dtype=float).reshape(-1)
+        scale = np.asarray(getattr(scaler, "scale_", []), dtype=float).reshape(-1)
+        if center.size == 0 or scale.size == 0:
+            raise ValueError("Scaler must be fitted before serialization")
+        if center.size != scale.size:
+            raise ValueError("Scaler center/scale size mismatch")
+
+        n_features = data.get("n_features")
+        try:
+            n_features_i = int(n_features) if n_features is not None else int(center.size)
+        except (TypeError, ValueError):
+            n_features_i = int(center.size)
+        n_features_i = max(1, n_features_i)
+
+        return {
+            "format": "robust_scaler_v1",
+            "saved_at": str(data.get("saved_at", "")),
+            "metadata": {
+                "n_features": int(n_features_i),
+                "fit_samples": int(data.get("fit_samples", 0) or 0),
+                "fitted": bool(data.get("fitted", True)),
+                "interval": str(data.get("interval", "1m")),
+                "horizon": int(data.get("horizon", CONFIG.PREDICTION_HORIZON)),
+                "version": str(data.get("version", "") or ""),
+            },
+            "scaler": {
+                "with_centering": bool(getattr(scaler, "with_centering", True)),
+                "with_scaling": bool(getattr(scaler, "with_scaling", True)),
+                "unit_variance": bool(getattr(scaler, "unit_variance", False)),
+                "quantile_range": list(
+                    getattr(scaler, "quantile_range", (25.0, 75.0))
+                ),
+                "center": center.tolist(),
+                "scale": scale.tolist(),
+                "n_features_in": int(
+                    getattr(scaler, "n_features_in_", int(center.size))
+                ),
+            },
+        }
+
+    @staticmethod
+    def _safe_scaler_from_payload(
+        payload: dict[str, Any],
+    ) -> tuple[RobustScaler, dict[str, Any]] | None:
+        if not isinstance(payload, dict):
+            return None
+        if str(payload.get("format", "")).strip() != "robust_scaler_v1":
+            return None
+
+        meta = payload.get("metadata")
+        scaler_blob = payload.get("scaler")
+        if not isinstance(meta, dict) or not isinstance(scaler_blob, dict):
+            return None
+
+        center = np.asarray(scaler_blob.get("center", []), dtype=float).reshape(-1)
+        scale = np.asarray(scaler_blob.get("scale", []), dtype=float).reshape(-1)
+        if center.size == 0 or scale.size == 0 or center.size != scale.size:
+            return None
+
+        try:
+            quantile_range_raw = scaler_blob.get("quantile_range", [25.0, 75.0])
+            quantile_range = tuple(float(x) for x in quantile_range_raw)
+            if len(quantile_range) != 2:
+                return None
+            scaler = RobustScaler(
+                with_centering=bool(scaler_blob.get("with_centering", True)),
+                with_scaling=bool(scaler_blob.get("with_scaling", True)),
+                quantile_range=quantile_range,
+                unit_variance=bool(scaler_blob.get("unit_variance", False)),
+            )
+            scaler.center_ = center.astype(np.float64)
+            scaler.scale_ = scale.astype(np.float64)
+            scaler.n_features_in_ = int(
+                scaler_blob.get("n_features_in", int(center.size))
+            )
+        except Exception:
+            return None
+
+        return scaler, dict(meta)
 
     def create_labels(
         self,
@@ -421,10 +576,12 @@ class DataProcessor:
             }
 
         # Now safe to serialize outside lock — data is a snapshot
+        atomic_write_json = None
         try:
-            from utils.atomic_io import atomic_pickle_dump
+            from utils.atomic_io import atomic_pickle_dump, atomic_write_json
             atomic_pickle_dump(path, data)
         except ImportError:
+            atomic_write_json = None
             tmp_path = path.with_suffix(".pkl.tmp")
             with open(tmp_path, "wb") as f:
                 pickle.dump(data, f, protocol=pickle.HIGHEST_PROTOCOL)
@@ -435,6 +592,25 @@ class DataProcessor:
                 except OSError:
                     pass
             tmp_path.replace(path)
+
+        try:
+            self._write_artifact_checksum(path)
+        except Exception as e:
+            log.debug("Failed writing scaler checksum sidecar for %s: %s", path, e)
+
+        safe_path = self._safe_scaler_path(path)
+        try:
+            safe_payload = self._build_safe_scaler_payload(data)
+            if atomic_write_json is not None:
+                atomic_write_json(safe_path, safe_payload)
+            else:
+                safe_path.write_text(
+                    json.dumps(safe_payload, ensure_ascii=False, indent=2) + "\n",
+                    encoding="utf-8",
+                )
+            self._write_artifact_checksum(safe_path)
+        except Exception as e:
+            log.debug("Failed writing safe scaler sidecar for %s: %s", path, e)
 
         log.info(
             f"Scaler saved: {path} (interval={save_interval}, horizon={save_horizon})"
@@ -449,8 +625,10 @@ class DataProcessor:
         """
         Load saved scaler for inference.
 
-        WARNING: Uses pickle.load which can execute arbitrary code.
-        Only load scalers from trusted sources.
+        Secure-by-default behavior:
+        - prefers ``*.safe.json`` sidecar generated by save_scaler()
+        - verifies checksum sidecars when required by config
+        - blocks unsafe pickle fallback unless explicitly enabled
         """
         if path is None:
             interval = interval or "1m"
@@ -460,14 +638,96 @@ class DataProcessor:
             )
 
         path = Path(path)
-        if not path.exists():
+        if not path.exists() or not path.is_file():
             log.warning(f"Scaler not found: {path}")
             return False
 
         try:
-            # WARNING: pickle.load is inherently unsafe for untrusted data.
-            with open(path, "rb") as f:
-                data = pickle.load(f)  # noqa: S301
+            model_cfg = getattr(CONFIG, "model", None)
+            allow_unsafe = bool(
+                getattr(model_cfg, "allow_unsafe_artifact_load", False)
+            )
+            max_bytes = int(
+                getattr(model_cfg, "max_scaler_pickle_bytes", 0)
+                or _DEFAULT_MAX_SCALER_PICKLE_BYTES
+            )
+
+            safe_path = self._safe_scaler_path(path)
+            if safe_path.exists():
+                if not self._verify_artifact_checksum(safe_path):
+                    return False
+                try:
+                    from utils.atomic_io import read_json
+
+                    safe_payload = read_json(safe_path)
+                except ImportError:
+                    safe_payload = json.loads(
+                        safe_path.read_text(encoding="utf-8")
+                    )
+                restored = self._safe_scaler_from_payload(safe_payload)
+                if restored is not None:
+                    scaler, meta = restored
+                    with self._lock:
+                        self.scaler = scaler
+                        self._n_features = int(
+                            meta.get("n_features", scaler.n_features_in_)
+                        )
+                        self._fit_samples = int(meta.get("fit_samples", 0) or 0)
+                        self._fitted = bool(meta.get("fitted", True))
+                        self._interval = str(meta.get("interval", "1m"))
+                        self._horizon = int(
+                            meta.get("horizon", CONFIG.PREDICTION_HORIZON)
+                        )
+                        self._scaler_version = str(meta.get("version", "") or "")
+
+                    log.info(
+                        "Scaler loaded from safe sidecar: %s "
+                        "(%s features, interval=%s, horizon=%s)",
+                        safe_path,
+                        self._n_features,
+                        self._interval,
+                        self._horizon,
+                    )
+                    return True
+
+                if not allow_unsafe:
+                    log.error(
+                        "Invalid safe scaler sidecar and unsafe pickle load disabled: %s",
+                        safe_path,
+                    )
+                    return False
+
+            if not allow_unsafe:
+                log.error(
+                    "Unsafe pickle scaler load disabled and no safe sidecar found: %s",
+                    safe_path,
+                )
+                return False
+
+            size = int(path.stat().st_size)
+            if size <= 0:
+                log.error(f"Scaler file is empty: {path}")
+                return False
+            if max_bytes > 0 and size > max_bytes:
+                log.error(
+                    "Scaler file too large: %s bytes (limit=%s) for %s",
+                    size,
+                    max_bytes,
+                    path,
+                )
+                return False
+
+            if not self._verify_artifact_checksum(path):
+                return False
+
+            try:
+                from utils.atomic_io import pickle_load
+
+                data = pickle_load(path, max_bytes=max_bytes)
+            except ImportError:
+                # WARNING: pickle.load is inherently unsafe for untrusted data.
+                with open(path, "rb") as f:
+                    data = pickle.load(f)  # noqa: S301
 
             if not isinstance(data, dict) or "scaler" not in data:
                 log.error(f"Invalid scaler file format: {path}")
@@ -489,7 +749,7 @@ class DataProcessor:
                 self._scaler_version = data.get("version", "")
 
             log.info(
-                f"Scaler loaded: {path} "
+                f"Scaler loaded (unsafe pickle path): {path} "
                 f"({self._n_features} features, "
                 f"interval={self._interval}, horizon={self._horizon})"
             )
@@ -1433,17 +1693,63 @@ class RealtimePredictor:
         probabilities), so ``num_classes`` in the TCN is set to the
         horizon value from the saved checkpoint.
 
-        WARNING: Uses weights_only=False which can execute arbitrary code.
-        Only load from trusted model files.
+        Secure-by-default:
+        - requires checksum sidecar when configured
+        - blocks legacy weights_only=False fallback unless explicitly enabled
         """
         import torch
 
         from models.networks import TCNModel
 
         try:
-            data = torch.load(
-                path, map_location="cpu", weights_only=False
+            if not self.processor._verify_artifact_checksum(path):
+                return
+
+            model_cfg = getattr(CONFIG, "model", None)
+            allow_unsafe = bool(
+                getattr(model_cfg, "allow_unsafe_artifact_load", False)
             )
+
+            def _load_checkpoint(weights_only: bool):
+                try:
+                    from utils.atomic_io import torch_load
+
+                    return torch_load(
+                        path,
+                        map_location="cpu",
+                        weights_only=weights_only,
+                    )
+                except TypeError as exc:
+                    # Older torch versions may not support weights_only.
+                    if not allow_unsafe:
+                        raise RuntimeError(
+                            "Secure forecaster load requires torch weights_only support"
+                        ) from exc
+                    return torch.load(path, map_location="cpu")
+                except ImportError as exc:
+                    if not allow_unsafe:
+                        raise RuntimeError(
+                            "Secure forecaster load requires utils.atomic_io.torch_load"
+                        ) from exc
+                    return torch.load(path, map_location="cpu")
+
+            try:
+                data = _load_checkpoint(weights_only=True)
+            except Exception as exc:
+                if not allow_unsafe:
+                    log.error(
+                        "Forecaster secure load failed for %s and unsafe fallback is disabled: %s",
+                        path,
+                        exc,
+                    )
+                    return
+                log.warning(
+                    "Forecaster weights-only load failed for %s; "
+                    "falling back to unsafe legacy checkpoint load: %s",
+                    path,
+                    exc,
+                )
+                data = _load_checkpoint(weights_only=False)
 
             required_keys = {"input_size", "horizon", "arch", "state_dict"}
             if not required_keys.issubset(data.keys()):

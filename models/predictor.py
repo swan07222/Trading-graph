@@ -767,9 +767,60 @@ class Predictor:
                 )
                 return
 
-            data = torch.load(
-                forecast_path, map_location="cpu", weights_only=False
+            if (
+                self.processor is not None
+                and not self.processor._verify_artifact_checksum(forecast_path)
+            ):
+                return
+
+            allow_unsafe = bool(
+                getattr(
+                    getattr(CONFIG, "model", None),
+                    "allow_unsafe_artifact_load",
+                    False,
+                )
             )
+
+            def _load_checkpoint(weights_only: bool):
+                try:
+                    from utils.atomic_io import torch_load
+
+                    return torch_load(
+                        forecast_path,
+                        map_location="cpu",
+                        weights_only=weights_only,
+                    )
+                except TypeError as exc:
+                    # Older torch versions may not support weights_only.
+                    if not allow_unsafe:
+                        raise RuntimeError(
+                            "Secure forecaster load requires torch weights_only support"
+                        ) from exc
+                    return torch.load(forecast_path, map_location="cpu")
+                except ImportError as exc:
+                    if not allow_unsafe:
+                        raise RuntimeError(
+                            "Secure forecaster load requires utils.atomic_io.torch_load"
+                        ) from exc
+                    return torch.load(forecast_path, map_location="cpu")
+
+            try:
+                data = _load_checkpoint(weights_only=True)
+            except Exception as exc:
+                if not allow_unsafe:
+                    log.error(
+                        "Forecaster secure load failed for %s and unsafe fallback is disabled: %s",
+                        forecast_path,
+                        exc,
+                    )
+                    return
+                log.warning(
+                    "Forecaster weights-only load failed for %s; "
+                    "falling back to unsafe legacy checkpoint load: %s",
+                    forecast_path,
+                    exc,
+                )
+                data = _load_checkpoint(weights_only=False)
 
             required_keys = {"input_size", "horizon", "arch", "state_dict"}
             if not required_keys.issubset(data.keys()):

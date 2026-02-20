@@ -1,5 +1,6 @@
 # data/news.py
 import copy
+import html
 import json
 import math
 import os
@@ -94,6 +95,150 @@ NEGATIVE_WORDS: dict[str, float] = {
 # Max times a single keyword is counted (prevents spam amplification)
 _MAX_KEYWORD_COUNT: int = 3
 
+_NEGATION_PREFIX_HINTS: tuple[str, ...] = (
+    "\u4e0d",
+    "\u6ca1",
+    "\u65e0",
+    "\u672a",
+    "\u5e76\u975e",
+    "\u4e0d\u662f",
+    "\u5426\u8ba4",
+    "not",
+    "no ",
+    "without",
+    "lack ",
+)
+
+_NEGATION_SUFFIX_HINTS: tuple[str, ...] = (
+    "\u4e0d\u53ca\u9884\u671f",
+    "\u4e0d\u53ca",
+    "\u4e0d\u4f73",
+    "\u4e0d\u632f",
+    "miss",
+    "weaker than expected",
+)
+
+_UNCERTAINTY_HINTS: tuple[str, ...] = (
+    "\u4f20\u95fb",
+    "\u6216\u5c06",
+    "\u6216\u8bb8",
+    "\u53ef\u80fd",
+    "\u62df",
+    "\u9884\u8ba1",
+    "\u9884\u671f",
+    "rumor",
+    "maybe",
+    "might",
+    "could",
+)
+
+_AMPLIFIER_HINTS: tuple[str, ...] = (
+    "\u91cd\u5927",
+    "\u5927\u5e45",
+    "\u663e\u8457",
+    "\u5f3a\u52b2",
+    "\u660e\u663e",
+    "\u975e\u5e38",
+    "strong",
+    "sharply",
+    "significant",
+)
+
+_DIMINISHER_HINTS: tuple[str, ...] = (
+    "\u5c0f\u5e45",
+    "\u7565",
+    "\u8f7b\u5fae",
+    "\u6682\u65f6",
+    "\u6709\u9650",
+    "slightly",
+    "mild",
+    "limited",
+)
+
+_CONTRAST_HINT_RE = re.compile(
+    r"(?:\u4f46\u662f|\u4f46|\u7136\u800c|\u4e0d\u8fc7|\u53ef\u662f|but|however|yet)",
+    flags=re.IGNORECASE,
+)
+
+
+def _contains_any_token(text: str, tokens: tuple[str, ...]) -> bool:
+    """Return True if any token exists in text."""
+    if not text:
+        return False
+    return any(tok in text for tok in tokens)
+
+
+def _iter_keyword_positions(
+    text: str,
+    keyword: str,
+    max_count: int,
+) -> list[int]:
+    """Find up to max_count non-overlapping occurrences of keyword in text."""
+    out: list[int] = []
+    if not text or not keyword or max_count <= 0:
+        return out
+
+    start = 0
+    while len(out) < max_count:
+        idx = text.find(keyword, start)
+        if idx < 0:
+            break
+        out.append(int(idx))
+        start = idx + len(keyword)
+    return out
+
+
+def _contrast_boost_for_position(
+    text: str,
+    position: int,
+) -> float:
+    """Boost keywords that appear after contrast markers (e.g., 'but')."""
+    if not text:
+        return 1.0
+    contrast_count = sum(
+        1 for m in _CONTRAST_HINT_RE.finditer(text) if int(m.start()) < int(position)
+    )
+    return float(min(1.35, 1.0 + (0.14 * contrast_count)))
+
+
+def _context_adjusted_weight(
+    text: str,
+    start: int,
+    end: int,
+    base_weight: float,
+) -> float:
+    """
+    Adjust keyword weight with local context heuristics.
+
+    This keeps the scorer lightweight while improving handling of:
+    - negation near a keyword (e.g., "not bullish", "\u4e0d\u662f\u5229\u597d")
+    - uncertainty/rumor phrasing
+    - emphasis/dampening words
+    """
+    left = text[max(0, int(start) - 16) : int(start)]
+    left_tail = left[-8:]
+    right = text[int(end) : min(len(text), int(end) + 16)]
+    near = f"{left} {right}"
+
+    weight = float(base_weight)
+    negated = (
+        _contains_any_token(left_tail, _NEGATION_PREFIX_HINTS)
+        or _contains_any_token(right, _NEGATION_SUFFIX_HINTS)
+    )
+    if negated:
+        weight *= -0.85
+
+    if _contains_any_token(near, _UNCERTAINTY_HINTS):
+        weight *= 0.75
+
+    if _contains_any_token(near, _AMPLIFIER_HINTS):
+        weight *= 1.18
+
+    if _contains_any_token(near, _DIMINISHER_HINTS):
+        weight *= 0.82
+
+    return float(weight)
+
 
 def _safe_age_seconds_from_now(
     publish_time: datetime | None,
@@ -143,20 +288,42 @@ def analyze_sentiment(text: str) -> tuple[float, str]:
     if not text:
         return 0.0, "neutral"
 
+    normalized_text = str(text).lower()
+
     raw_score = 0.0
     abs_contrib = 0.0
 
     for word, weight in POSITIVE_WORDS.items():
-        c = min(text.count(word), _MAX_KEYWORD_COUNT)
-        if c > 0:
-            raw_score += weight * c
-            abs_contrib += abs(weight) * c
+        for pos in _iter_keyword_positions(
+            normalized_text,
+            word,
+            _MAX_KEYWORD_COUNT,
+        ):
+            adj_weight = _context_adjusted_weight(
+                normalized_text,
+                start=pos,
+                end=pos + len(word),
+                base_weight=float(weight),
+            )
+            adj_weight *= _contrast_boost_for_position(normalized_text, pos)
+            raw_score += float(adj_weight)
+            abs_contrib += abs(float(adj_weight))
 
     for word, weight in NEGATIVE_WORDS.items():
-        c = min(text.count(word), _MAX_KEYWORD_COUNT)
-        if c > 0:
-            raw_score += weight * c
-            abs_contrib += abs(weight) * c
+        for pos in _iter_keyword_positions(
+            normalized_text,
+            word,
+            _MAX_KEYWORD_COUNT,
+        ):
+            adj_weight = _context_adjusted_weight(
+                normalized_text,
+                start=pos,
+                end=pos + len(word),
+                base_weight=float(weight),
+            )
+            adj_weight *= _contrast_boost_for_position(normalized_text, pos)
+            raw_score += float(adj_weight)
+            abs_contrib += abs(float(adj_weight))
 
     if abs_contrib < 1e-9:
         return 0.0, "neutral"
@@ -223,6 +390,15 @@ class NewsItem:
 
 class _BaseNewsFetcher:
     """Shared session setup for news fetchers."""
+
+    _JSONP_WRAPPER_RE = re.compile(
+        r"^[\w\.\$]+\((?P<body>[\s\S]*)\)\s*;?\s*$",
+        flags=re.IGNORECASE,
+    )
+    _ASSIGNMENT_WRAPPER_RE = re.compile(
+        r"^[\w\.\$]+\s*=\s*(?P<body>[\s\S]*)\s*;?\s*$",
+        flags=re.IGNORECASE,
+    )
 
     @staticmethod
     def _allow_insecure_tls() -> bool:
@@ -301,6 +477,133 @@ class _BaseNewsFetcher:
                 "(TRADING_NEWS_ALLOW_INSECURE_TLS=1)"
             )
 
+    @staticmethod
+    def _clean_text(value: object) -> str:
+        """Strip tags/entities and normalize whitespace."""
+        text = str(value or "")
+        if not text:
+            return ""
+        text = re.sub(r"<[^>]+>", " ", text)
+        text = html.unescape(text)
+        text = re.sub(r"\s+", " ", text)
+        return text.strip()
+
+    @staticmethod
+    def _parse_datetime(value: object) -> datetime | None:
+        """Best-effort datetime parser supporting epoch and common formats."""
+        if value is None:
+            return None
+        if isinstance(value, datetime):
+            return value
+
+        raw = str(value).strip()
+        if not raw:
+            return None
+
+        if raw.isdigit():
+            try:
+                iv = int(raw)
+                if iv > 2_000_000_000_000:
+                    return datetime.fromtimestamp(iv / 1000.0)
+                if iv > 0:
+                    return datetime.fromtimestamp(iv)
+            except (ValueError, OSError):
+                pass
+
+        for fmt in (
+            "%Y-%m-%d %H:%M:%S",
+            "%Y-%m-%d %H:%M",
+            "%Y/%m/%d %H:%M:%S",
+            "%Y/%m/%d %H:%M",
+            "%Y-%m-%d",
+        ):
+            try:
+                return datetime.strptime(raw[:19], fmt)
+            except ValueError:
+                continue
+        return None
+
+    @classmethod
+    def _decode_json_payload(cls, payload: object) -> object | None:
+        """Parse direct JSON, JSONP, and assignment wrappers."""
+        text = str(payload or "").strip()
+        if not text:
+            return None
+
+        candidates: list[str] = [text]
+
+        m_jsonp = cls._JSONP_WRAPPER_RE.match(text)
+        if m_jsonp:
+            body = str(m_jsonp.group("body") or "").strip()
+            if body:
+                candidates.append(body)
+
+        m_assign = cls._ASSIGNMENT_WRAPPER_RE.match(text)
+        if m_assign:
+            body = str(m_assign.group("body") or "").strip()
+            if body:
+                candidates.append(body)
+
+        for left_char, right_char in (("{", "}"), ("[", "]")):
+            left = text.find(left_char)
+            right = text.rfind(right_char)
+            if left >= 0 and right > left:
+                candidates.append(text[left : right + 1])
+
+        seen: set[str] = set()
+        for candidate in candidates:
+            chunk = str(candidate or "").strip().lstrip("\ufeff")
+            if not chunk or chunk in seen:
+                continue
+            seen.add(chunk)
+            try:
+                return json.loads(chunk)
+            except Exception:
+                continue
+        return None
+
+    def _response_to_json(self, response: object) -> object | None:
+        """Best-effort JSON decode for provider responses."""
+        try:
+            return response.json()  # type: ignore[attr-defined]
+        except Exception:
+            pass
+        raw_text = str(getattr(response, "text", "") or "")
+        return self._decode_json_payload(raw_text)
+
+    def _extract_titles_from_html(
+        self,
+        html_text: str,
+        *,
+        max_items: int,
+    ) -> list[str]:
+        """Extract title candidates from mixed HTML/script payloads."""
+        text = str(html_text or "")
+        if not text:
+            return []
+
+        patterns = (
+            r"<h[1-4][^>]*>\s*<a[^>]*>(.*?)</a>\s*</h[1-4]>",
+            r"<a[^>]*class=[\"'][^\"']*(?:title|news|headline)[^\"']*[\"'][^>]*>(.*?)</a>",
+            r"\"title\"\s*:\s*\"([^\"]{4,240})\"",
+            r"'title'\s*:\s*'([^']{4,240})'",
+        )
+        titles: list[str] = []
+        seen: set[str] = set()
+        for pat in patterns:
+            for raw in re.findall(pat, text, flags=re.IGNORECASE | re.DOTALL):
+                title = self._clean_text(raw)
+                if len(title) < 4:
+                    continue
+                key = title.lower()
+                if key in seen:
+                    continue
+                seen.add(key)
+                titles.append(title)
+                if len(titles) >= int(max_items):
+                    return titles
+        return titles
+
 
 class SinaNewsFetcher(_BaseNewsFetcher):
     """Fetch news from Sina Finance (works on China IP)."""
@@ -320,31 +623,32 @@ class SinaNewsFetcher(_BaseNewsFetcher):
                 "page": "1",
             }
             r = self._session.get(url, params=params, timeout=_FETCH_TIMEOUT)
-            data = r.json()
+            data = self._response_to_json(r)
+            if not isinstance(data, dict):
+                return []
 
             items: list[NewsItem] = []
             for article in data.get("result", {}).get("data", []):
-                title = article.get("title", "").strip()
+                if not isinstance(article, dict):
+                    continue
+
+                title = self._clean_text(article.get("title", ""))
                 if not title:
                     continue
 
                 pub_time = datetime.now()
-                ctime = article.get("ctime", "")
-                if ctime:
-                    try:
-                        pub_time = datetime.fromtimestamp(int(ctime))
-                    except (ValueError, OSError):
-                        pass
+                parsed_time = self._parse_datetime(article.get("ctime"))
+                if parsed_time is not None:
+                    pub_time = parsed_time
 
                 items.append(NewsItem(
                     title=title,
                     content=(
-                        article.get("summary", "")
-                        or article.get("intro", "")
-                        or ""
+                        self._clean_text(article.get("summary", ""))
+                        or self._clean_text(article.get("intro", ""))
                     ),
                     source="sina",
-                    url=article.get("url", ""),
+                    url=str(article.get("url", "") or ""),
                     publish_time=pub_time,
                     category="market",
                 ))
@@ -359,7 +663,7 @@ class SinaNewsFetcher(_BaseNewsFetcher):
     def fetch_stock_news(
         self, stock_code: str, count: int = 10
     ) -> list[NewsItem]:
-        """Fetch news for a specific stock via Sina search."""
+        """Fetch news for a specific stock via Sina search/API payloads."""
         try:
             code6 = str(stock_code).zfill(6)
             url = "https://search.sina.com.cn/news"
@@ -373,18 +677,80 @@ class SinaNewsFetcher(_BaseNewsFetcher):
             r = self._session.get(url, params=params, timeout=_FETCH_TIMEOUT)
 
             items: list[NewsItem] = []
-            titles = re.findall(r"<h2><a[^>]*>(.+?)</a></h2>", r.text)
-            for raw_title in titles[:count]:
-                title = re.sub(r"<[^>]+>", "", raw_title).strip()
-                if title:
+            seen_titles: set[str] = set()
+
+            payload = self._response_to_json(r)
+            if isinstance(payload, dict):
+                candidate_lists = (
+                    payload.get("result", {}).get("data", []),
+                    payload.get("result", {}).get("list", []),
+                    payload.get("data", []),
+                    payload.get("list", []),
+                    payload.get("news", []),
+                )
+                for group in candidate_lists:
+                    if not isinstance(group, list):
+                        continue
+                    for article in group:
+                        if not isinstance(article, dict):
+                            continue
+                        title = self._clean_text(
+                            article.get("title")
+                            or article.get("name")
+                            or article.get("headline")
+                            or ""
+                        )
+                        if not title:
+                            continue
+                        key = title.lower()
+                        if key in seen_titles:
+                            continue
+                        seen_titles.add(key)
+
+                        pub_time = self._parse_datetime(
+                            article.get("ctime")
+                            or article.get("time")
+                            or article.get("date")
+                            or article.get("publish_time")
+                        ) or datetime.now()
+
+                        items.append(NewsItem(
+                            title=title,
+                            content=self._clean_text(
+                                article.get("summary")
+                                or article.get("intro")
+                                or article.get("content")
+                                or ""
+                            ),
+                            source="sina",
+                            url=str(article.get("url", "") or ""),
+                            publish_time=pub_time,
+                            stock_codes=[code6],
+                            category="company",
+                        ))
+                        if len(items) >= int(count):
+                            return items[:count]
+
+            if len(items) < int(count):
+                title_candidates = self._extract_titles_from_html(
+                    str(getattr(r, "text", "") or ""),
+                    max_items=max(6, int(count) * 3),
+                )
+                for title in title_candidates:
+                    key = title.lower()
+                    if key in seen_titles:
+                        continue
+                    seen_titles.add(key)
                     items.append(NewsItem(
                         title=title,
                         source="sina",
                         stock_codes=[code6],
                         category="company",
                     ))
+                    if len(items) >= int(count):
+                        break
 
-            return items
+            return items[:count]
 
         except Exception as exc:
             log.debug(f"Sina stock news failed for {stock_code}: {exc}")
@@ -425,57 +791,78 @@ class EastmoneyNewsFetcher(_BaseNewsFetcher):
             }
 
             r = self._session.get(url, params=params, timeout=_FETCH_TIMEOUT)
-            text = r.text
-
-            lparen = text.index("(")
-            rparen = text.rindex(")")
-            json_str = text[lparen + 1 : rparen]
-            data = json.loads(json_str)
+            data = self._response_to_json(r)
+            if not isinstance(data, dict):
+                return []
 
             items: list[NewsItem] = []
-            articles = (
-                data.get("result", {})
-                .get("cmsArticleWebOld", {})
-                .get("list", [])
+            articles: list[dict] = []
+            candidate_lists = (
+                data.get("result", {}).get("cmsArticleWebOld", {}).get("list", []),
+                data.get("result", {}).get("cmsArticleWeb", {}).get("list", []),
+                data.get("result", {}).get("news", {}).get("list", []),
+                data.get("data", {}).get("list", []),
+                data.get("list", []),
             )
+            for group in candidate_lists:
+                if isinstance(group, list):
+                    articles = [row for row in group if isinstance(row, dict)]
+                    if articles:
+                        break
 
             for article in articles:
-                title = re.sub(
-                    r"<[^>]+>", "", article.get("title", "")
-                ).strip()
+                title = self._clean_text(article.get("title", ""))
                 if not title:
                     continue
 
-                pub_time = datetime.now()
-                date_str = article.get("date", "")
-                if date_str:
-                    try:
-                        pub_time = datetime.strptime(
-                            date_str[:19], "%Y-%m-%d %H:%M:%S"
-                        )
-                    except ValueError:
-                        pass
+                pub_time = self._parse_datetime(
+                    article.get("date")
+                    or article.get("publish_time")
+                    or article.get("showTime")
+                    or article.get("ctime")
+                ) or datetime.now()
 
-                content = re.sub(
-                    r"<[^>]+>",
-                    "",
+                content = self._clean_text(
                     article.get("content", "")
+                    or article.get("summary", "")
                     or article.get("mediaName", "")
-                    or "",
+                    or ""
                 )
 
                 items.append(NewsItem(
                     title=title,
                     content=content[:500],
                     source="eastmoney",
-                    url=article.get("url", ""),
+                    url=str(article.get("url") or article.get("link") or ""),
                     publish_time=pub_time,
                     stock_codes=[code6],
                     category="company",
                 ))
+                if len(items) >= int(count):
+                    break
+
+            if len(items) < int(count):
+                fallback_titles = self._extract_titles_from_html(
+                    str(getattr(r, "text", "") or ""),
+                    max_items=max(6, int(count) * 3),
+                )
+                seen = {str(it.title).strip().lower() for it in items}
+                for title in fallback_titles:
+                    key = title.lower()
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    items.append(NewsItem(
+                        title=title,
+                        source="eastmoney",
+                        stock_codes=[code6],
+                        category="company",
+                    ))
+                    if len(items) >= int(count):
+                        break
 
             log.debug(f"Eastmoney: fetched {len(items)} news for {code6}")
-            return items
+            return items[:count]
 
         except Exception as exc:
             log.debug(f"Eastmoney news failed for {stock_code}: {exc}")
@@ -491,17 +878,27 @@ class EastmoneyNewsFetcher(_BaseNewsFetcher):
                 "pageIndex": "1",
             }
             r = self._session.get(url, params=params, timeout=_FETCH_TIMEOUT)
-            data = r.json()
+            data = self._response_to_json(r)
+            if not isinstance(data, dict):
+                return []
 
             items: list[NewsItem] = []
             for article in data.get("data", {}).get("list", []):
+                if not isinstance(article, dict):
+                    continue
                 title = article.get("title", "").strip()
                 if not title:
                     continue
                 items.append(NewsItem(
-                    title=title,
+                    title=self._clean_text(title),
                     source="eastmoney_policy",
-                    publish_time=datetime.now(),
+                    publish_time=(
+                        self._parse_datetime(
+                            article.get("showtime")
+                            or article.get("date")
+                            or article.get("ctime")
+                        ) or datetime.now()
+                    ),
                     category="policy",
                     importance=0.8,
                 ))
@@ -528,27 +925,32 @@ class TencentNewsFetcher(_BaseNewsFetcher):
                 "num": str(min(count, 30)),
             }
             r = self._session.get(url, params=params, timeout=_FETCH_TIMEOUT)
-            data = r.json()
+            data = self._response_to_json(r)
+            if not isinstance(data, dict):
+                return []
 
             items: list[NewsItem] = []
             for article in data.get("newslist", []):
-                title = article.get("title", "").strip()
+                if not isinstance(article, dict):
+                    continue
+                title = self._clean_text(article.get("title", ""))
                 if not title:
                     continue
 
                 pub_time = datetime.now()
-                ts = article.get("timestamp", "")
-                if ts:
-                    try:
-                        pub_time = datetime.fromtimestamp(int(ts))
-                    except (ValueError, OSError):
-                        pass
+                parsed_time = self._parse_datetime(
+                    article.get("timestamp")
+                    or article.get("ctime")
+                    or article.get("publish_time")
+                )
+                if parsed_time is not None:
+                    pub_time = parsed_time
 
                 items.append(NewsItem(
                     title=title,
-                    content=article.get("abstract", "") or "",
+                    content=self._clean_text(article.get("abstract", "") or ""),
                     source="tencent",
-                    url=article.get("url", ""),
+                    url=str(article.get("url", "") or ""),
                     publish_time=pub_time,
                     category="market",
                 ))

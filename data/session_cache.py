@@ -1,8 +1,10 @@
 from __future__ import annotations
 
-import csv
 import math
+import os
 import threading
+import time
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -16,6 +18,16 @@ log = get_logger(__name__)
 _OFFICIAL_HISTORY_SOURCES = frozenset(
     {"akshare", "tencent", "sina", "official_history"}
 )
+
+try:
+    import fcntl  # type: ignore[attr-defined]
+except Exception:  # pragma: no cover - Windows
+    fcntl = None
+
+try:
+    import msvcrt  # type: ignore[attr-defined]
+except Exception:  # pragma: no cover - Unix
+    msvcrt = None
 
 
 def _norm_symbol(symbol: str) -> str:
@@ -109,6 +121,50 @@ def _is_session_timestamp(ts_raw: str, interval: str) -> bool:
         return _is_cn_session_datetime(dt.replace(tzinfo=sh_tz))
     except Exception:
         return False
+
+
+@contextmanager
+def _interprocess_file_lock(path: Path, timeout_s: float = 10.0):
+    """
+    Best-effort cross-process lock for one cache file.
+
+    Uses an adjacent ``.lock`` file so read-modify-write cycles do not race
+    across multiple app processes.
+    """
+    lock_path = path.with_suffix(path.suffix + ".lock")
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    f = lock_path.open("a+b")
+    acquired = False
+    start = time.monotonic()
+    try:
+        while True:
+            try:
+                if os.name == "nt" and msvcrt is not None:
+                    f.seek(0)
+                    msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 1)
+                elif fcntl is not None:
+                    fcntl.flock(f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                acquired = True
+                break
+            except (BlockingIOError, OSError):
+                if (time.monotonic() - start) >= float(max(0.1, timeout_s)):
+                    raise TimeoutError(f"Timed out waiting for lock: {lock_path}")
+                time.sleep(0.05)
+        yield
+    finally:
+        if acquired:
+            try:
+                if os.name == "nt" and msvcrt is not None:
+                    f.seek(0)
+                    msvcrt.locking(f.fileno(), msvcrt.LK_UNLCK, 1)
+                elif fcntl is not None:
+                    fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+            except OSError:
+                pass
+        try:
+            f.close()
+        except Exception:
+            pass
 
 
 class SessionBarCache:
@@ -398,27 +454,28 @@ class SessionBarCache:
         if not path.exists():
             return False
 
-        if not force:
-            writes = int(self._writes_since_compact.get(path.name, 0))
-            over_write_budget = writes >= self._compact_every_writes()
-            over_size_budget = False
-            try:
-                size_mb = float(path.stat().st_size) / (1024.0 * 1024.0)
-                over_size_budget = size_mb >= self._max_file_megabytes()
-            except Exception:
+        with _interprocess_file_lock(path):
+            if not force:
+                writes = int(self._writes_since_compact.get(path.name, 0))
+                over_write_budget = writes >= self._compact_every_writes()
                 over_size_budget = False
-            if not (over_write_budget or over_size_budget):
-                return False
-            self._writes_since_compact[path.name] = 0
+                try:
+                    size_mb = float(path.stat().st_size) / (1024.0 * 1024.0)
+                    over_size_budget = size_mb >= self._max_file_megabytes()
+                except Exception:
+                    over_size_budget = False
+                if not (over_write_budget or over_size_budget):
+                    return False
+                self._writes_since_compact[path.name] = 0
 
-        frame = self._read_raw_frame_locked(path)
-        if frame.empty:
-            return False
-        trimmed = self._apply_retention_policy(frame, interval=interval)
-        if len(trimmed) == len(frame):
-            return False
-        self._write_raw_frame_locked(path, trimmed)
-        return True
+            frame = self._read_raw_frame_locked(path)
+            if frame.empty:
+                return False
+            trimmed = self._apply_retention_policy(frame, interval=interval)
+            if len(trimmed) == len(frame):
+                return False
+            self._write_raw_frame_locked(path, trimmed)
+            return True
 
     def append_bar(self, symbol: str, interval: str, bar: dict) -> bool:
         sym = _norm_symbol(symbol)
@@ -462,71 +519,84 @@ class SessionBarCache:
             return False
         is_final = bool(bar.get("final", True))
         source = str(bar.get("source", "") or "").strip().lower()
-        row = {
-            "timestamp": timestamp,
-            "open": open_px,
-            "high": high_px,
-            "low": low_px,
-            "close": close,
-            "volume": volume,
-            "amount": amount,
-            "is_final": is_final,
-            "source": source,
-        }
         path = self._path(sym, iv)
         lock = self._lock_for(path.name)
         with lock:
-            prev_close = self._last_close_hint.get(path.name)
-            if prev_close is None:
-                prev_close = self._load_last_close_hint(path)
+            with _interprocess_file_lock(path):
+                prev_close = self._last_close_hint.get(path.name)
+                if prev_close is None:
+                    prev_close = self._load_last_close_hint(path)
+                    if prev_close and prev_close > 0:
+                        self._last_close_hint[path.name] = float(prev_close)
                 if prev_close and prev_close > 0:
-                    self._last_close_hint[path.name] = float(prev_close)
-            if prev_close and prev_close > 0:
-                ratio = max(close, float(prev_close)) / max(
-                    min(close, float(prev_close)),
-                    1e-8,
-                )
-                if ratio >= 20.0:
-                    log.debug(
-                        "Session cache dropped extreme-scale write %s_%s: "
-                        "prev=%.6f new=%.6f ratio=%.2fx",
-                        sym,
-                        iv,
-                        float(prev_close),
-                        float(close),
-                        float(ratio),
+                    ratio = max(close, float(prev_close)) / max(
+                        min(close, float(prev_close)),
+                        1e-8,
                     )
+                    if ratio >= 20.0:
+                        log.debug(
+                            "Session cache dropped extreme-scale write %s_%s: "
+                            "prev=%.6f new=%.6f ratio=%.2fx",
+                            sym,
+                            iv,
+                            float(prev_close),
+                            float(close),
+                            float(ratio),
+                        )
+                        return False
+
+                dt = self._to_shanghai_naive_datetime(timestamp)
+                if dt is None:
                     return False
-            # Include OHLC envelope in dedupe key so same-close updates with
-            # refined high/low are not silently dropped.
-            fingerprint = (
-                timestamp,
-                round(float(open_px), 8),
-                round(float(high_px), 8),
-                round(float(low_px), 8),
-                round(float(close), 8),
-                is_final,
-                source,
-            )
-            if self._last_row_fingerprint.get(path.name) == fingerprint:
-                return False
-            write_header = not path.exists()
-            with path.open("a", newline="", encoding="utf-8") as f:
-                writer = csv.DictWriter(
-                    f,
-                    fieldnames=[
-                        "timestamp", "open", "high", "low", "close",
-                        "volume", "amount", "is_final", "source",
-                    ],
+                ts_key = dt.isoformat()
+
+                # Include OHLC envelope in dedupe key so same-close updates with
+                # refined high/low are not silently dropped.
+                fingerprint = (
+                    ts_key,
+                    round(float(open_px), 8),
+                    round(float(high_px), 8),
+                    round(float(low_px), 8),
+                    round(float(close), 8),
+                    is_final,
+                    source,
                 )
-                if write_header:
-                    writer.writeheader()
-                writer.writerow(row)
-            self._last_row_fingerprint[path.name] = fingerprint
-            self._last_close_hint[path.name] = float(close)
-            self._writes_since_compact[path.name] = (
-                int(self._writes_since_compact.get(path.name, 0)) + 1
-            )
+                if self._last_row_fingerprint.get(path.name) == fingerprint:
+                    return False
+
+                row_df = pd.DataFrame(
+                    [
+                        {
+                            "open": float(open_px),
+                            "high": float(high_px),
+                            "low": float(low_px),
+                            "close": float(close),
+                            "volume": float(volume),
+                            "amount": float(amount),
+                            "is_final": bool(is_final),
+                            "source": str(source),
+                        }
+                    ],
+                    index=pd.DatetimeIndex([pd.Timestamp(dt)]),
+                )
+
+                existing = self._read_raw_frame_locked(path)
+                if existing.empty:
+                    merged = row_df
+                else:
+                    merged = pd.concat([existing, row_df], axis=0)
+                    merged = merged[~merged.index.duplicated(keep="last")].sort_index()
+
+                self._write_raw_frame_locked(
+                    path,
+                    merged,
+                    apply_retention=False,
+                )
+                self._last_row_fingerprint[path.name] = fingerprint
+                self._last_close_hint[path.name] = float(close)
+                self._writes_since_compact[path.name] = (
+                    int(self._writes_since_compact.get(path.name, 0)) + 1
+                )
             self._maybe_compact_file_locked(path, iv)
         return True
 
@@ -894,7 +964,13 @@ class SessionBarCache:
             ["open", "high", "low", "close", "volume", "amount", "is_final", "source"]
         ].copy()
 
-    def _write_raw_frame_locked(self, path: Path, frame: pd.DataFrame) -> None:
+    def _write_raw_frame_locked(
+        self,
+        path: Path,
+        frame: pd.DataFrame,
+        *,
+        apply_retention: bool = True,
+    ) -> None:
         """
         Write normalized cache frame back to disk.
 
@@ -954,18 +1030,19 @@ class SessionBarCache:
             return
 
         work = work[~work.index.duplicated(keep="last")].sort_index()
-        iv = self._interval_from_path(path)
-        work = self._apply_retention_policy(work, interval=iv)
-        if work.empty:
-            try:
-                if path.exists():
-                    path.unlink()
-            except Exception:
-                pass
-            self._last_row_fingerprint.pop(path.name, None)
-            self._last_close_hint.pop(path.name, None)
-            self._writes_since_compact.pop(path.name, None)
-            return
+        if apply_retention:
+            iv = self._interval_from_path(path)
+            work = self._apply_retention_policy(work, interval=iv)
+            if work.empty:
+                try:
+                    if path.exists():
+                        path.unlink()
+                except Exception:
+                    pass
+                self._last_row_fingerprint.pop(path.name, None)
+                self._last_close_hint.pop(path.name, None)
+                self._writes_since_compact.pop(path.name, None)
+                return
 
         out = pd.DataFrame(
             {
@@ -980,7 +1057,30 @@ class SessionBarCache:
                 "source": work["source"].astype(str).values,
             }
         )
-        out.to_csv(path, index=False)
+        csv_text = out.to_csv(index=False, lineterminator="\n")
+        try:
+            from utils.atomic_io import atomic_write_text
+
+            atomic_write_text(path, csv_text, use_lock=False)
+        except Exception:
+            tmp = path.with_suffix(
+                path.suffix + f".{os.getpid()}.{threading.get_ident()}.tmp"
+            )
+            try:
+                with tmp.open("w", encoding="utf-8", newline="") as f:
+                    f.write(csv_text)
+                    f.flush()
+                    try:
+                        os.fsync(f.fileno())
+                    except OSError:
+                        pass
+                os.replace(tmp, path)
+            finally:
+                try:
+                    if tmp.exists():
+                        tmp.unlink()
+                except OSError:
+                    pass
 
         try:
             last = out.iloc[-1]
@@ -996,7 +1096,8 @@ class SessionBarCache:
             self._last_close_hint[path.name] = float(last.get("close", 0.0) or 0.0)
         except Exception:
             pass
-        self._writes_since_compact[path.name] = 0
+        if apply_retention:
+            self._writes_since_compact[path.name] = 0
 
     def describe_symbol_interval(
         self,
@@ -1104,24 +1205,25 @@ class SessionBarCache:
         path = self._path(sym, iv)
         lock = self._lock_for(path.name)
         with lock:
-            df = self._read_raw_frame_locked(path)
-            if df.empty:
-                return 0
-            src = df["source"].astype(str).str.strip().str.lower()
-            drop_mask = ~src.isin(_OFFICIAL_HISTORY_SOURCES)
-            anchor = self._to_shanghai_naive_datetime(since_ts)
-            if anchor is not None:
-                try:
-                    drop_mask = drop_mask & (df.index >= pd.Timestamp(anchor))
-                except Exception:
-                    pass
-            keep_mask = ~drop_mask
-            removed = int(drop_mask.sum())
-            if removed <= 0:
-                return 0
-            keep_df = df.loc[keep_mask].copy()
-            self._write_raw_frame_locked(path, keep_df)
-            return removed
+            with _interprocess_file_lock(path):
+                df = self._read_raw_frame_locked(path)
+                if df.empty:
+                    return 0
+                src = df["source"].astype(str).str.strip().str.lower()
+                drop_mask = ~src.isin(_OFFICIAL_HISTORY_SOURCES)
+                anchor = self._to_shanghai_naive_datetime(since_ts)
+                if anchor is not None:
+                    try:
+                        drop_mask = drop_mask & (df.index >= pd.Timestamp(anchor))
+                    except Exception:
+                        pass
+                keep_mask = ~drop_mask
+                removed = int(drop_mask.sum())
+                if removed <= 0:
+                    return 0
+                keep_df = df.loc[keep_mask].copy()
+                self._write_raw_frame_locked(path, keep_df)
+                return removed
 
     def upsert_history_frame(
         self,
@@ -1224,13 +1326,14 @@ class SessionBarCache:
         path = self._path(sym, iv)
         lock = self._lock_for(path.name)
         with lock:
-            existing = self._read_raw_frame_locked(path)
-            if existing.empty:
-                merged = work
-            else:
-                merged = pd.concat([existing, work], axis=0)
-                merged = merged[~merged.index.duplicated(keep="last")].sort_index()
-            self._write_raw_frame_locked(path, merged)
+            with _interprocess_file_lock(path):
+                existing = self._read_raw_frame_locked(path)
+                if existing.empty:
+                    merged = work
+                else:
+                    merged = pd.concat([existing, work], axis=0)
+                    merged = merged[~merged.index.duplicated(keep="last")].sort_index()
+                self._write_raw_frame_locked(path, merged)
         return int(len(work))
 
     def get_recent_symbols(

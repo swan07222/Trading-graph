@@ -49,3 +49,49 @@ def test_safe_member_path_rejects_traversal():
     mod = _load_snapshot_module()
     with pytest.raises(ValueError):
         mod._safe_member_path("../outside.txt")
+
+
+def test_post_restore_verification_runs_preflight(monkeypatch, tmp_path: Path):
+    mod = _load_snapshot_module()
+    captured: list[tuple[str, list[str]]] = []
+
+    def fake_run_step(name: str, cmd: list[str], cwd: Path):
+        captured.append((name, cmd))
+        return {
+            "name": name,
+            "command": cmd,
+            "exit_code": 0,
+            "duration_seconds": 0.001,
+            "ok": True,
+            "stdout": "",
+            "stderr": "",
+        }
+
+    monkeypatch.setattr(mod, "_run_step", fake_run_step, raising=True)
+    out = mod._run_post_restore_verification(
+        root=tmp_path,
+        profile="quick",
+        observability_url="http://127.0.0.1:9090",
+        soak_minutes=0.0,
+    )
+
+    assert out["status"] == "pass"
+    assert captured
+    assert captured[0][0] == "release_preflight"
+    assert "--profile" in captured[0][1]
+    assert "quick" in captured[0][1]
+
+
+def test_post_restore_live_soak_requires_allow_live(tmp_path: Path):
+    mod = _load_snapshot_module()
+    out = mod._run_post_restore_verification(
+        root=tmp_path,
+        profile="quick",
+        soak_minutes=1.0,
+        soak_mode="live",
+        allow_live=False,
+    )
+
+    assert out["status"] == "fail"
+    names = [step["name"] for step in out["steps"]]
+    assert "soak_smoke" in names

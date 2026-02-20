@@ -191,6 +191,57 @@ class TestDataProcessor:
         assert loaded
         assert processor2._fitted
 
+    def test_load_scaler_prefers_safe_sidecar(self, processor, tmp_path, monkeypatch):
+        """Safe sidecar should load without touching unsafe pickle path."""
+        features = np.random.randn(120, 8)
+        processor.fit_scaler(features)
+
+        path = tmp_path / "scaler.pkl"
+        processor.save_scaler(path)
+
+        import utils.atomic_io as atomic_io
+
+        def _fail_pickle_load(*_args, **_kwargs):
+            raise RuntimeError("pickle path should not be used")
+
+        monkeypatch.setattr(atomic_io, "pickle_load", _fail_pickle_load, raising=True)
+
+        old_allow = bool(CONFIG.model.allow_unsafe_artifact_load)
+        old_require = bool(CONFIG.model.require_artifact_checksum)
+        try:
+            CONFIG.model.allow_unsafe_artifact_load = False
+            CONFIG.model.require_artifact_checksum = True
+
+            processor2 = DataProcessor()
+            assert processor2.load_scaler(path) is True
+            assert processor2.is_fitted is True
+        finally:
+            CONFIG.model.allow_unsafe_artifact_load = old_allow
+            CONFIG.model.require_artifact_checksum = old_require
+
+    def test_load_scaler_blocks_pickle_without_safe_sidecar(self, processor, tmp_path):
+        """When unsafe fallback is disabled, missing safe sidecar must fail."""
+        features = np.random.randn(120, 8)
+        processor.fit_scaler(features)
+
+        path = tmp_path / "scaler.pkl"
+        processor.save_scaler(path)
+        safe_path = path.with_suffix(path.suffix + ".safe.json")
+        assert safe_path.exists()
+        safe_path.unlink()
+
+        old_allow = bool(CONFIG.model.allow_unsafe_artifact_load)
+        old_require = bool(CONFIG.model.require_artifact_checksum)
+        try:
+            CONFIG.model.allow_unsafe_artifact_load = False
+            CONFIG.model.require_artifact_checksum = True
+
+            processor2 = DataProcessor()
+            assert processor2.load_scaler(path) is False
+        finally:
+            CONFIG.model.allow_unsafe_artifact_load = old_allow
+            CONFIG.model.require_artifact_checksum = old_require
+
 class TestFeatureEngine:
     """Tests for FeatureEngine"""
 

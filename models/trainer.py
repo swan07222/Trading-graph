@@ -1,6 +1,7 @@
 # models/trainer.py
 from __future__ import annotations
 
+import hashlib
 import json
 import random
 from collections.abc import Callable
@@ -74,6 +75,24 @@ _TAIL_STRESS_QUANTILE = 0.90
 _MIN_TAIL_STRESS_SAMPLES = 24
 _TAIL_EVENT_SHOCK_MIN_PCT = 1.0
 _TAIL_EVENT_SHOCK_MAX_PCT = 6.0
+
+
+def _write_artifact_checksum(path: Path) -> None:
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        while True:
+            chunk = f.read(1024 * 1024)
+            if not chunk:
+                break
+            h.update(chunk)
+    checksum_path = path.with_suffix(path.suffix + ".sha256")
+    payload = f"{h.hexdigest()}\n"
+    try:
+        from utils.atomic_io import atomic_write_text
+
+        atomic_write_text(checksum_path, payload)
+    except Exception:
+        checksum_path.write_text(payload, encoding="utf-8")
 
 def _resolve_learning_rate(explicit_lr: float | None = None) -> float:
     """
@@ -2625,6 +2644,15 @@ class Trainer:
                         atomic_torch_save(target_path, payload)
                     else:
                         torch.save(payload, target_path)
+
+                    try:
+                        _write_artifact_checksum(Path(target_path))
+                    except Exception as exc:
+                        log.warning(
+                            "Failed writing forecaster checksum sidecar for %s: %s",
+                            target_path,
+                            exc,
+                        )
 
                     log.info(f"Forecaster saved: {target_path}")
 

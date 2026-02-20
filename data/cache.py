@@ -6,6 +6,7 @@ import pickle
 import sys
 import tempfile
 import threading
+from copy import deepcopy
 from collections import OrderedDict
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -450,6 +451,34 @@ class TieredCache:
                 self._compute_locks[key] = threading.Lock()
             return self._compute_locks[key]
 
+    @staticmethod
+    def _clone_cache_value(value: Any) -> Any:
+        """
+        Return a defensive clone for mutable payloads.
+
+        This prevents accidental caller mutation from corrupting cache state and
+        keeps asynchronous tier writes consistent with the snapshot at set-time.
+        """
+        if value is None or isinstance(
+            value,
+            (bool, int, float, str, bytes),
+        ):
+            return value
+
+        if isinstance(value, pd.DataFrame):
+            return value.copy(deep=True)
+
+        if isinstance(value, pd.Series):
+            return value.copy(deep=True)
+
+        if isinstance(value, np.ndarray):
+            return np.array(value, copy=True)
+
+        try:
+            return deepcopy(value)
+        except Exception:
+            return value
+
     def get(self, key: str, max_age_hours: float = None) -> Any:
         """
         Get value with tiered lookup.
@@ -463,24 +492,26 @@ class TieredCache:
         value = self._l1.get(key, max_age_hours=max_age)
         if value is not _SENTINEL:
             self._stats.increment("l1_hits")
-            return value
+            return self._clone_cache_value(value)
         self._stats.increment("l1_misses")
 
         # L2: Disk
         value = self._l2.get(key, max_age)
         if value is not _SENTINEL:
             self._stats.increment("l2_hits")
-            self._l1.set(key, value)  # Promote
-            return value
+            promoted = self._clone_cache_value(value)
+            self._l1.set(key, promoted)  # Promote immutable snapshot
+            return self._clone_cache_value(promoted)
         self._stats.increment("l2_misses")
 
         # L3: Compressed disk (longer TTL)
         value = self._l3.get(key, max_age * 24)
         if value is not _SENTINEL:
             self._stats.increment("l3_hits")
-            self._l1.set(key, value)
-            self._l2.set(key, value)
-            return value
+            promoted = self._clone_cache_value(value)
+            self._l1.set(key, promoted)
+            self._l2.set(key, self._clone_cache_value(promoted))
+            return self._clone_cache_value(promoted)
         self._stats.increment("l3_misses")
 
         return MISSING
@@ -489,17 +520,23 @@ class TieredCache:
         """Store value in cache tiers."""
         self._stats.increment("total_sets")
 
+        snapshot = self._clone_cache_value(value)
+
         # Always L1
-        self._l1.set(key, value)
+        self._l1.set(key, snapshot)
 
         if persist:
             # L2 synchronously (fast)
-            self._l2.set(key, value)
+            self._l2.set(key, self._clone_cache_value(snapshot))
             # L3 asynchronously via bounded pool
             # FIX #12: Don't submit after shutdown
             if not self._shutdown_flag:
                 try:
-                    self._l3_executor.submit(self._l3.set, key, value)
+                    self._l3_executor.submit(
+                        self._l3.set,
+                        key,
+                        self._clone_cache_value(snapshot),
+                    )
                 except RuntimeError:
                     # Pool already shut down
                     pass

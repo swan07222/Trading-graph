@@ -49,7 +49,7 @@ def _make_fetcher_for_realtime() -> DataFetcher:
     return f
 
 
-def test_realtime_batch_uses_tencent_only_and_ignores_other_sources(monkeypatch):
+def test_realtime_batch_uses_non_tencent_batch_fallback_when_tencent_partial(monkeypatch):
     monkeypatch.setenv("TRADING_OFFLINE", "0")
     fetcher = _make_fetcher_for_realtime()
 
@@ -78,8 +78,40 @@ def test_realtime_batch_uses_tencent_only_and_ignores_other_sources(monkeypatch)
 
     out = fetcher.get_realtime_batch(["600519", "000001"])
 
-    assert set(out.keys()) == {"600519"}
+    assert set(out.keys()) == {"600519", "000001"}
     assert out["600519"].source == "tencent"
+    assert out["000001"].source == "akshare"
+
+
+def test_realtime_batch_uses_non_tencent_single_quote_for_missing(monkeypatch):
+    monkeypatch.setenv("TRADING_OFFLINE", "0")
+    fetcher = _make_fetcher_for_realtime()
+
+    class _Tencent:
+        name = "tencent"
+
+        def get_realtime_batch(self, codes):  # noqa: ARG002
+            return {}
+
+    class _Yahoo:
+        name = "yahoo"
+
+        @staticmethod
+        def get_realtime(code):
+            if str(code).zfill(6) == "000001":
+                return _mk_quote("000001", 12.3, "yahoo")
+            return None
+
+    fetcher._get_active_sources = lambda: [_Tencent(), _Yahoo()]
+    fetcher._fill_from_spot_cache = lambda missing, result: None
+    fetcher._maybe_force_network_refresh = lambda: False
+    fetcher._fallback_last_good = lambda codes: {}
+    fetcher._fallback_last_close_from_db = lambda codes: {}
+
+    out = fetcher.get_realtime_batch(["000001"])
+
+    assert set(out.keys()) == {"000001"}
+    assert out["000001"].source == "yahoo"
 
 
 def test_realtime_batch_falls_back_to_localdb_last_close_when_live_unavailable(monkeypatch):

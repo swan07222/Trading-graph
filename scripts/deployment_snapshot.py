@@ -4,7 +4,10 @@ import argparse
 import hashlib
 import io
 import json
+import subprocess
+import sys
 import tarfile
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -205,6 +208,108 @@ def restore_snapshot(
     }
 
 
+def _run_step(name: str, cmd: list[str], cwd: Path) -> dict[str, Any]:
+    started = time.monotonic()
+    try:
+        proc = subprocess.run(
+            cmd,
+            cwd=str(cwd),
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+        elapsed = time.monotonic() - started
+        return {
+            "name": name,
+            "command": cmd,
+            "exit_code": int(proc.returncode),
+            "duration_seconds": round(float(elapsed), 3),
+            "ok": proc.returncode == 0,
+            "stdout": proc.stdout,
+            "stderr": proc.stderr,
+        }
+    except Exception as exc:
+        elapsed = time.monotonic() - started
+        return {
+            "name": name,
+            "command": cmd,
+            "exit_code": 2,
+            "duration_seconds": round(float(elapsed), 3),
+            "ok": False,
+            "stdout": "",
+            "stderr": str(exc),
+        }
+
+
+def _run_post_restore_verification(
+    root: Path,
+    *,
+    profile: str,
+    observability_url: str = "",
+    soak_minutes: float = 0.0,
+    soak_mode: str = "paper",
+    soak_symbols: str = "",
+    allow_live: bool = False,
+) -> dict[str, Any]:
+    py = sys.executable
+    steps: list[dict[str, Any]] = []
+
+    preflight_cmd = [
+        py,
+        str(root / "scripts/release_preflight.py"),
+        "--profile",
+        str(profile),
+    ]
+    obs = str(observability_url or "").strip()
+    if obs:
+        preflight_cmd.extend(["--observability-url", obs])
+    steps.append(_run_step("release_preflight", preflight_cmd, cwd=root))
+
+    soak_minutes_val = float(soak_minutes or 0.0)
+    if soak_minutes_val > 0.0:
+        mode = str(soak_mode or "paper").strip().lower()
+        if mode == "live" and not bool(allow_live):
+            steps.append(
+                {
+                    "name": "soak_smoke",
+                    "command": [],
+                    "exit_code": 2,
+                    "duration_seconds": 0.0,
+                    "ok": False,
+                    "stdout": "",
+                    "stderr": (
+                        "post-restore soak in live mode requires --post-allow-live"
+                    ),
+                }
+            )
+        else:
+            soak_cmd = [
+                py,
+                str(root / "scripts/soak_broker_e2e.py"),
+                "--mode",
+                mode,
+                "--duration-minutes",
+                str(soak_minutes_val),
+                "--poll-seconds",
+                "5",
+            ]
+            symbols = str(soak_symbols or "").strip()
+            if symbols:
+                soak_cmd.extend(["--symbols", symbols])
+            if mode == "live":
+                soak_cmd.append("--allow-live")
+            steps.append(_run_step("soak_smoke", soak_cmd, cwd=root))
+
+    failed = [step for step in steps if not bool(step.get("ok", False))]
+    return {
+        "status": "pass" if not failed else "fail",
+        "profile": str(profile),
+        "steps": steps,
+        "failed_steps": [str(step.get("name", "")) for step in failed],
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="Deployment snapshot + rollback helper"
@@ -250,6 +355,50 @@ def main() -> int:
         action="store_true",
         help="Required for actual restore",
     )
+    restore_parser.add_argument(
+        "--post-verify",
+        action="store_true",
+        help=(
+            "After restore, run release preflight and optional smoke soak "
+            "as a single command."
+        ),
+    )
+    restore_parser.add_argument(
+        "--post-verify-profile",
+        default="quick",
+        choices=["full", "quick"],
+        help="Preflight profile used by --post-verify",
+    )
+    restore_parser.add_argument(
+        "--post-observability-url",
+        default="",
+        help="Optional observability base URL passed to post-verify preflight",
+    )
+    restore_parser.add_argument(
+        "--post-soak-minutes",
+        type=float,
+        default=0.0,
+        help=(
+            "Optional smoke soak duration in minutes after restore "
+            "(0 disables soak)."
+        ),
+    )
+    restore_parser.add_argument(
+        "--post-soak-mode",
+        default="paper",
+        choices=["simulation", "paper", "live"],
+        help="Trading mode used by optional post-restore smoke soak",
+    )
+    restore_parser.add_argument(
+        "--post-soak-symbols",
+        default="",
+        help="Optional comma-separated symbols for post-restore smoke soak",
+    )
+    restore_parser.add_argument(
+        "--post-allow-live",
+        action="store_true",
+        help="Required when --post-soak-mode live is used",
+    )
 
     args = parser.parse_args()
     root = Path(__file__).resolve().parent.parent
@@ -272,8 +421,22 @@ def main() -> int:
             dry_run=bool(args.dry_run),
             confirm=bool(args.confirm),
         )
+        exit_code = 0
+        if bool(args.post_verify) and not bool(args.dry_run):
+            post = _run_post_restore_verification(
+                root=root,
+                profile=str(args.post_verify_profile),
+                observability_url=str(args.post_observability_url or ""),
+                soak_minutes=float(args.post_soak_minutes or 0.0),
+                soak_mode=str(args.post_soak_mode or "paper"),
+                soak_symbols=str(args.post_soak_symbols or ""),
+                allow_live=bool(args.post_allow_live),
+            )
+            result["post_verify"] = post
+            if str(post.get("status", "")).lower() != "pass":
+                exit_code = 1
         print(json.dumps(result, indent=2, ensure_ascii=False))
-        return 0
+        return int(exit_code)
 
     raise RuntimeError(f"Unknown command: {args.command}")
 

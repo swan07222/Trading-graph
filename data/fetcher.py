@@ -296,6 +296,46 @@ class DataFetcher:
         except Exception:
             return False
 
+    @staticmethod
+    def _is_tencent_source(source: object) -> bool:
+        """Return True when source name resolves to Tencent."""
+        return str(getattr(source, "name", "")).strip().lower() == "tencent"
+
+    def _fill_from_batch_sources(
+        self,
+        cleaned: list[str],
+        result: dict[str, Quote],
+        sources: list[DataSource],
+    ) -> None:
+        """Fill quotes from any batch-capable source list in order."""
+        if not cleaned:
+            return
+        for source in sources:
+            fn = getattr(source, "get_realtime_batch", None)
+            if not callable(fn):
+                continue
+
+            remaining = [c for c in cleaned if c not in result]
+            if not remaining:
+                break
+            try:
+                out = fn(remaining)
+                if not isinstance(out, dict):
+                    continue
+                for code, q in out.items():
+                    code6 = self.clean_code(code)
+                    if not code6 or code6 not in remaining:
+                        continue
+                    if q and float(getattr(q, "price", 0.0) or 0.0) > 0:
+                        result[code6] = q
+            except Exception as exc:
+                log.debug(
+                    "Batch quote source %s failed: %s",
+                    getattr(source, "name", "?"),
+                    exc,
+                )
+                continue
+
     def get_realtime_batch(self, codes: list[str]) -> dict[str, Quote]:
         """Fetch real-time quotes for multiple codes in one batch."""
         cleaned = list(dict.fromkeys(
@@ -322,67 +362,56 @@ class DataFetcher:
 
         result: dict[str, Quote] = {}
 
-        # Realtime policy: Tencent-only network path.
-        sources = [
-            s
-            for s in self._get_active_sources()
-            if str(getattr(s, "name", "")).strip().lower() == "tencent"
+        active_sources = list(self._get_active_sources())
+        tencent_sources = [
+            s for s in active_sources if self._is_tencent_source(s)
+        ]
+        fallback_sources = [
+            s for s in active_sources if not self._is_tencent_source(s)
         ]
 
-        # Batch-capable sources first
-        for source in sources:
-            fn = getattr(source, "get_realtime_batch", None)
-            if not callable(fn):
-                continue
-            remaining = [c for c in cleaned if c not in result]
-            if not remaining:
-                break
-            try:
-                out = fn(remaining)
-                if isinstance(out, dict):
-                    for code, q in out.items():
-                        code6 = self.clean_code(code)
-                        if not code6 or code6 not in remaining:
-                            continue
-                        if q and float(getattr(q, "price", 0.0) or 0.0) > 0:
-                            result[code6] = q
-            except Exception as exc:
-                log.debug("Batch quote source %s failed: %s", source.name, exc)
-                continue
-
-        # Realtime network fallback to non-Tencent providers is disabled.
+        # Prefer Tencent for CN quotes but keep multi-source realtime fallback.
+        self._fill_from_batch_sources(cleaned, result, tencent_sources)
         missing = [c for c in cleaned if c not in result]
+        if missing:
+            self._fill_from_batch_sources(cleaned, result, fallback_sources)
+
+        # Per-symbol APIs for providers without batch endpoints.
+        missing = [c for c in cleaned if c not in result]
+        if missing:
+            self._fill_from_single_source_quotes(
+                missing,
+                result,
+                fallback_sources,
+            )
 
         # Fill from spot-cache snapshot before forcing network refresh.
+        missing = [c for c in cleaned if c not in result]
         if missing:
             self._fill_from_spot_cache(missing, result)
 
-        # Force network refresh and retry once if still missing
+        # Force network refresh and retry once if still missing.
         missing = [c for c in cleaned if c not in result]
         if missing and self._maybe_force_network_refresh():
-            retry_sources = [
-                s
-                for s in self._get_active_sources()
-                if str(getattr(s, "name", "")).strip().lower() == "tencent"
+            retry_active = list(self._get_active_sources())
+            retry_tencent = [
+                s for s in retry_active if self._is_tencent_source(s)
             ]
-            for source in retry_sources:
-                fn = getattr(source, "get_realtime_batch", None)
-                if not callable(fn):
-                    continue
-                remaining = [c for c in cleaned if c not in result]
-                if not remaining:
-                    break
-                try:
-                    out = fn(remaining)
-                    if isinstance(out, dict):
-                        for code, q in out.items():
-                            code6 = self.clean_code(code)
-                            if not code6 or code6 not in remaining:
-                                continue
-                            if q and float(getattr(q, "price", 0.0) or 0.0) > 0:
-                                result[code6] = q
-                except Exception:
-                    continue
+            retry_fallback = [
+                s for s in retry_active if not self._is_tencent_source(s)
+            ]
+
+            self._fill_from_batch_sources(cleaned, result, retry_tencent)
+            missing = [c for c in cleaned if c not in result]
+            if missing:
+                self._fill_from_batch_sources(cleaned, result, retry_fallback)
+            missing = [c for c in cleaned if c not in result]
+            if missing:
+                self._fill_from_single_source_quotes(
+                    missing,
+                    result,
+                    retry_fallback,
+                )
 
         # Last-good fallback
         missing = [c for c in cleaned if c not in result]
@@ -2224,7 +2253,7 @@ class DataFetcher:
         else:
             ttl = min(float(CONFIG.data.cache_ttl_hours), 1.0 / 120.0)
 
-        cache_key = f"history:{key}:{interval}:{count}"
+        cache_key = f"history:{key}:{interval}"
         stale_cached_df = pd.DataFrame()
 
         if use_cache and (not force_exact_intraday):
@@ -2260,7 +2289,12 @@ class DataFetcher:
             and count <= 500
             and len(session_df) >= count
         ):
-            return self._cache_tail(cache_key, session_df, count)
+            return self._cache_tail(
+                cache_key,
+                session_df,
+                count,
+                interval=interval,
+            )
 
         if is_cn_equity and interval in _INTRADAY_INTERVALS:
             if force_exact_intraday:
@@ -2291,9 +2325,7 @@ class DataFetcher:
         # Non-CN instrument
         if offline:
             return (
-                stale_cached_df.tail(count)
-                if not stale_cached_df.empty
-                else pd.DataFrame()
+                stale_cached_df.tail(count) if not stale_cached_df.empty else pd.DataFrame()
             )
         df = self._fetch_history_with_depth_retry(
             inst=inst,
@@ -2303,9 +2335,15 @@ class DataFetcher:
         )
         if df.empty:
             return pd.DataFrame()
-        out = self._merge_parts(df, session_df, interval=interval).tail(count)
-        self._cache.set(cache_key, out)
-        return out
+        merged = self._merge_parts(df, session_df, interval=interval)
+        if merged.empty:
+            return pd.DataFrame()
+        return self._cache_tail(
+            cache_key,
+            merged,
+            count,
+            interval=interval,
+        )
 
     def _should_refresh_intraday_exact(
         self,
@@ -2573,14 +2611,25 @@ class DataFetcher:
         if offline or online_df.empty:
             if db_df.empty:
                 return pd.DataFrame()
-            return self._cache_tail(cache_key, db_df, count)
+            return self._cache_tail(
+                cache_key,
+                db_df,
+                count,
+                interval=interval,
+            )
 
-        merged = self._merge_parts(db_df, online_df, interval=interval)
+        # Prefer fresh online rows when timestamps overlap with local DB rows.
+        merged = self._merge_parts(online_df, db_df, interval=interval)
         merged = self._filter_cn_intraday_session(merged, interval)
         if merged.empty:
             return pd.DataFrame()
 
-        out = self._cache_tail(cache_key, merged, count)
+        out = self._cache_tail(
+            cache_key,
+            merged,
+            count,
+            interval=interval,
+        )
         if bool(persist_intraday_db):
             try:
                 self._db.upsert_intraday_bars(code6, interval, online_df)
@@ -2629,14 +2678,25 @@ class DataFetcher:
         if online_df is None or online_df.empty:
             if db_df is None or db_df.empty:
                 return pd.DataFrame()
-            return self._cache_tail(cache_key, db_df, count)
+            return self._cache_tail(
+                cache_key,
+                db_df,
+                count,
+                interval=interval,
+            )
 
-        merged = self._merge_parts(db_df, online_df, interval=interval)
+        # Prefer fresh online rows when timestamps overlap with local DB rows.
+        merged = self._merge_parts(online_df, db_df, interval=interval)
         merged = self._filter_cn_intraday_session(merged, interval)
         if merged.empty:
             return pd.DataFrame()
 
-        out = self._cache_tail(cache_key, merged, count)
+        out = self._cache_tail(
+            cache_key,
+            merged,
+            count,
+            interval=interval,
+        )
         try:
             self._db.upsert_intraday_bars(code6, interval, online_df)
         except Exception as exc:
@@ -2705,11 +2765,17 @@ class DataFetcher:
         if online_df is None or online_df.empty:
             return base_df.tail(count) if not base_df.empty else pd.DataFrame()
 
-        merged = self._merge_parts(base_df, online_df, interval=iv)
+        # Prefer fresh online rows when timestamps overlap with local DB rows.
+        merged = self._merge_parts(online_df, base_df, interval=iv)
         if merged.empty:
             return pd.DataFrame()
 
-        out = self._cache_tail(cache_key, merged, count)
+        out = self._cache_tail(
+            cache_key,
+            merged,
+            count,
+            interval=iv,
+        )
         if update_db and iv == "1d":
             if not self._history_quorum_allows_persist(
                 interval=iv,
@@ -3146,6 +3212,37 @@ class DataFetcher:
                 ):
                     db_after = db_after.loc[db_after.index >= window_start]
 
+                if (
+                    not db_after.empty
+                    and isinstance(db_after, pd.DataFrame)
+                ):
+                    try:
+                        from core.instruments import instrument_key
+
+                        hist_key = instrument_key(
+                            {
+                                "market": "CN",
+                                "asset": "EQUITY",
+                                "symbol": code6,
+                            }
+                        )
+                        cache_key = f"history:{hist_key}:{iv}"
+                        keep_rows = min(
+                            len(db_after),
+                            self._history_cache_store_rows(iv, target_bars),
+                        )
+                        self._cache.set(
+                            cache_key,
+                            db_after.tail(max(1, int(keep_rows))).copy(),
+                        )
+                    except Exception as exc:
+                        log.debug(
+                            "History cache refresh sync failed for %s (%s): %s",
+                            code6,
+                            iv,
+                            exc,
+                        )
+
                 rows = int(len(db_after.tail(target_bars)))
                 report_rows = dict(report.get("rows") or {})
                 report_rows[code6] = rows
@@ -3266,11 +3363,41 @@ class DataFetcher:
         mask = weekday & (in_morning | in_afternoon)
         return out.loc[mask]
 
+    @classmethod
+    def _history_cache_store_rows(
+        cls,
+        interval: str | None,
+        requested_rows: int,
+    ) -> int:
+        """
+        Compute how many rows to keep in the shared history cache key.
+
+        A larger shared window prevents cache-key fragmentation while still
+        bounding memory and disk usage.
+        """
+        iv = cls._normalize_interval_token(interval)
+        req = max(1, int(requested_rows or 1))
+        if iv in _INTRADAY_INTERVALS:
+            floor = max(200, min(2400, req * 3))
+        else:
+            floor = max(400, min(5000, req * 2))
+        return int(max(req, floor))
+
     def _cache_tail(
-        self, cache_key: str, df: pd.DataFrame, count: int
+        self,
+        cache_key: str,
+        df: pd.DataFrame,
+        count: int,
+        *,
+        interval: str | None = None,
     ) -> pd.DataFrame:
-        out = df.tail(count)
-        self._cache.set(cache_key, out)
+        out = df.tail(count).copy()
+        keep_rows = min(
+            len(df),
+            self._history_cache_store_rows(interval, count),
+        )
+        cache_df = df.tail(max(1, int(keep_rows))).copy()
+        self._cache.set(cache_key, cache_df)
         return out
 
     def _get_session_history(

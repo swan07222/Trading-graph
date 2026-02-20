@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "AI-assisted stock trading workstation with backtest, OMS, risk, and UI"
 requires-python = ">=3.10"
 dependencies = [
-  "numpy>=1.24.0,<2.0.0",
+  "numpy>=1.24.0,<3.0.0",
   "pandas>=2.0.0,<3.0.0",
   "scikit-learn>=1.3.0,<2.0.0",
   "scipy>=1.11.0,<2.0.0",
@@ -66,9 +66,9 @@ known-first-party = ["analysis", "config", "core", "data", "models", "trading", 
 
 [tool.mypy]
 python_version = "3.10"
-warn_return_any = false
+warn_return_any = true
 warn_unused_configs = true
-check_untyped_defs = false
+check_untyped_defs = true
 disallow_untyped_defs = false
 ignore_missing_imports = true
 no_implicit_optional = false
@@ -93,7 +93,7 @@ disable_error_code = [
   "truthy-function",
   "no-redef",
 ]
-exclude = "(^|.*[\\\\/])(venv|cache|audit|data_storage|models_saved|tests|ui|scripts)([\\\\/]|$)"
+exclude = "(^|.*[\\\\/])(venv|cache|audit|data_storage|models_saved)([\\\\/]|$)"
 
 [tool.coverage.run]
 source = ["analysis", "config", "core", "data", "models", "trading", "ui", "utils"]

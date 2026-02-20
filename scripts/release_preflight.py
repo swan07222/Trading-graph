@@ -131,6 +131,16 @@ def main() -> int:
     parser = argparse.ArgumentParser(
         description="Run deployment preflight checks (health/doctor/typecheck/observability)"
     )
+    parser.add_argument(
+        "--profile",
+        default="full",
+        choices=["full", "quick"],
+        help=(
+            "Preflight profile. "
+            "'full' runs all default gates; 'quick' keeps core runtime gates "
+            "(artifact, health, doctor, typecheck, observability) and skips long checks."
+        ),
+    )
     parser.add_argument("--skip-lint", action="store_true", help="Skip Ruff lint gate")
     parser.add_argument("--skip-tests", action="store_true", help="Skip pytest strict gate")
     parser.add_argument("--skip-health", action="store_true", help="Skip health strict check")
@@ -190,6 +200,13 @@ def main() -> int:
         help="Optional output JSON path",
     )
     args = parser.parse_args()
+
+    if str(args.profile).strip().lower() == "quick":
+        # Keep core runtime gates, skip the slower/operationally heavy checks.
+        args.skip_lint = True
+        args.skip_tests = True
+        args.skip_regulatory = True
+        args.skip_ha_dr = True
 
     repo_root = Path(__file__).resolve().parent.parent
     py = sys.executable
@@ -271,6 +288,7 @@ def main() -> int:
     report: dict[str, Any] = {
         "status": "pass" if not failed else "fail",
         "generated_at": _utc_now_iso(),
+        "profile": str(args.profile),
         "steps": steps,
         "failed_steps": [step["name"] for step in failed],
     }

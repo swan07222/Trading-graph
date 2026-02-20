@@ -9,24 +9,39 @@ from pathlib import Path
 
 DEFAULT_TARGETS: tuple[str, ...] = (
     "main.py",
+    "config/settings.py",
     "core/constants.py",
     "core/instruments.py",
     "core/network.py",
+    "data/fetcher.py",
+    "data/feeds.py",
+    "data/news.py",
+    "data/processor.py",
     "data/session_cache.py",
     "data/discovery.py",
     "analysis/strategy_marketplace.py",
     "analysis/technical.py",
     "models/ensemble.py",
+    "models/predictor.py",
+    "models/trainer.py",
+    "trading/executor.py",
     "trading/kill_switch.py",
     "trading/portfolio.py",
     "trading/alerts.py",
+    "ui/app.py",
     "utils/logger.py",
     "utils/metrics.py",
     "utils/metrics_http.py",
     "utils/security.py",
+    "scripts/deployment_snapshot.py",
     "scripts/release_preflight.py",
+    "scripts/soak_broker_e2e.py",
 )
-DEFAULT_FLAGS: tuple[str, ...] = ("--follow-imports=skip",)
+DEFAULT_FLAGS: tuple[str, ...] = (
+    "--follow-imports=skip",
+    "--check-untyped-defs",
+    "--warn-return-any",
+)
 ERROR_RE = re.compile(
     r"^(?P<path>.+?):(?P<line>\d+)(?::(?P<column>\d+))?: error: "
     r"(?P<message>.+?)\s+\[(?P<code>[^\]]+)\]$"

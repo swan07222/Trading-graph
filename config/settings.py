@@ -92,6 +92,10 @@ class ModelConfig:
     down_threshold: float = -2.0
     embargo_bars: int = 10
     min_confidence: float = 0.60
+    # Require checksum sidecars for model/scaler artifacts at load time.
+    require_artifact_checksum: bool = True
+    # Unsafe legacy checkpoint/pickle fallback is opt-in only.
+    allow_unsafe_artifact_load: bool = False
 
     strong_buy_threshold: float = 0.72
     buy_threshold: float = 0.60
@@ -734,6 +738,14 @@ class Config:
                 "auto_trade.enabled",
                 _env_bool,
             ),
+            "ALLOW_UNSAFE_ARTIFACT_LOAD": (
+                "model.allow_unsafe_artifact_load",
+                _env_bool,
+            ),
+            "REQUIRE_ARTIFACT_CHECKSUM": (
+                "model.require_artifact_checksum",
+                _env_bool,
+            ),
             "RUNTIME_LEASE_ENABLED": (
                 "security.enable_runtime_lease",
                 _env_bool,
@@ -924,6 +936,11 @@ class Config:
         if self.model.embargo_bars < self.model.prediction_horizon:
             self._validation_warnings.append(
                 "Embargo must be >= prediction horizon"
+            )
+
+        if bool(self.model.allow_unsafe_artifact_load):
+            self._validation_warnings.append(
+                "model.allow_unsafe_artifact_load=true weakens artifact security"
             )
 
         if self.model.down_threshold >= 0:

@@ -1,7 +1,15 @@
+import json
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
-from data.news import NewsAggregator, NewsItem, _BaseNewsFetcher
+from data.news import (
+    EastmoneyNewsFetcher,
+    NewsAggregator,
+    NewsItem,
+    SinaNewsFetcher,
+    _BaseNewsFetcher,
+    analyze_sentiment,
+)
 
 
 def test_sentiment_summary_uses_weighted_mode(monkeypatch):
@@ -313,3 +321,75 @@ def test_sentiment_summary_tolerates_non_numeric_fields(monkeypatch):
     assert summary["total"] == 1
     assert "overall_sentiment" in summary
     assert "news_weighted_sentiment" in features
+
+
+def test_analyze_sentiment_handles_negation_and_contrast():
+    score_pos, label_pos = analyze_sentiment(
+        "\u4e0d\u662f\u5229\u7a7a\uff0c\u800c\u662f\u91cd\u5927\u5229\u597d"
+    )
+    score_neg, label_neg = analyze_sentiment(
+        "\u4e0d\u662f\u5229\u597d\uff0c\u4f46\u662f\u91cd\u5927\u5229\u7a7a"
+    )
+
+    assert label_pos == "positive"
+    assert score_pos > 0
+    assert label_neg == "negative"
+    assert score_neg < 0
+
+
+def test_sina_stock_news_parses_jsonp_payload_without_html_h2(monkeypatch):
+    fetcher = SinaNewsFetcher()
+    payload = (
+        'cb({"result":{"list":[{"title":"<em>600519</em>\u91cd\u5927\u5229\u597d",'
+        '"summary":"\u8425\u6536\u589e\u957f",'
+        '"url":"https://example.com/a","ctime":"1700000000"}]}});'
+    )
+
+    class _Resp:
+        text = payload
+
+        @staticmethod
+        def json():
+            raise ValueError("not-json")
+
+    monkeypatch.setattr(fetcher._session, "get", lambda *args, **kwargs: _Resp())
+
+    out = fetcher.fetch_stock_news("600519", count=5)
+
+    assert len(out) == 1
+    assert "600519" in out[0].title
+    assert out[0].url == "https://example.com/a"
+
+
+def test_eastmoney_stock_news_parses_plain_json_without_jsonp_wrapper(monkeypatch):
+    fetcher = EastmoneyNewsFetcher()
+    payload_obj = {
+        "result": {
+            "cmsArticleWebOld": {
+                "list": [
+                    {
+                        "title": "<em>\u516c\u544a</em>\uff1a\u8ba2\u5355\u589e\u957f",
+                        "content": "<p>\u5408\u4f5c\u4e2d\u6807</p>",
+                        "date": "2026-02-20 10:30:00",
+                        "url": "https://example.com/b",
+                    }
+                ]
+            }
+        }
+    }
+    payload = json.dumps(payload_obj, ensure_ascii=False)
+
+    class _Resp:
+        text = payload
+
+        @staticmethod
+        def json():
+            return payload_obj
+
+    monkeypatch.setattr(fetcher._session, "get", lambda *args, **kwargs: _Resp())
+
+    out = fetcher.fetch_stock_news("600519", count=3)
+
+    assert len(out) == 1
+    assert "\u516c\u544a" in out[0].title
+    assert out[0].url == "https://example.com/b"

@@ -10,6 +10,15 @@ Run full preflight locally (or in staging) before every release:
 python scripts/release_preflight.py --observability-url http://127.0.0.1:9090
 ```
 
+Fast-path preflight for frequent deploy iterations:
+
+```bash
+python scripts/release_preflight.py --profile quick
+```
+
+`--profile quick` keeps core runtime gates (`artifact`, `health`, `doctor`, `typecheck`)
+and skips longer checks (`lint`, `pytest`, `regulatory`, `ha_dr`).
+
 What it checks:
 - `main.py --health --health-strict`
 - `main.py --doctor --doctor-strict`
@@ -81,6 +90,12 @@ Execute rollback:
 
 ```bash
 python scripts/deployment_snapshot.py restore --archive backups/snapshot_<tag>.tar.gz --confirm
+```
+
+Execute rollback + automated post-verify in one command:
+
+```bash
+python scripts/deployment_snapshot.py restore --archive backups/snapshot_<tag>.tar.gz --confirm --post-verify --post-verify-profile quick --post-observability-url http://127.0.0.1:9090 --post-soak-minutes 10 --post-soak-mode paper --post-soak-symbols 600519,000001
 ```
 
 After rollback:

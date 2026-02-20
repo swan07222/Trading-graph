@@ -113,3 +113,38 @@ def test_release_preflight_returns_failure_when_any_step_fails(monkeypatch):
     )
 
     assert module.main() == 1
+
+
+def test_release_preflight_quick_profile_skips_slow_steps(monkeypatch):
+    module = _load_release_preflight_module()
+    captured_steps: list[str] = []
+
+    def fake_run_step(name: str, cmd: list[str]):
+        captured_steps.append(name)
+        return {
+            "name": name,
+            "command": cmd,
+            "exit_code": 0,
+            "duration_seconds": 0.001,
+            "ok": True,
+            "stdout": "",
+            "stderr": "",
+        }
+
+    monkeypatch.setattr(module, "_run_step", fake_run_step)
+    monkeypatch.setattr(
+        module.sys,
+        "argv",
+        [
+            "release_preflight.py",
+            "--profile",
+            "quick",
+            "--skip-artifact-guard",
+            "--skip-health",
+            "--skip-doctor",
+            "--skip-typecheck",
+        ],
+    )
+
+    assert module.main() == 0
+    assert captured_steps == []
