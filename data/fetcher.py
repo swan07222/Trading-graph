@@ -1307,8 +1307,8 @@ class DataFetcher:
                                 iv,
                                 since_ts=rt_anchor,
                             )
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        log.debug("Suppressed exception in data/fetcher.py", exc_info=exc)
 
                 if queue.pop(key, None) is not None:
                     changed = True
@@ -2975,8 +2975,8 @@ class DataFetcher:
                     try:
                         if anchor_ts.tzinfo is not None:
                             anchor_ts = anchor_ts.tz_localize(None)
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        log.debug("Suppressed exception in data/fetcher.py", exc_info=exc)
 
                 if (
                     anchor_ts is not None
@@ -3135,8 +3135,8 @@ class DataFetcher:
                                             fetched_min_ts.isoformat(),
                                         )
                                         purge_anchor = fetched_min_ts
-                                except Exception:
-                                    pass
+                                except Exception as exc:
+                                    log.debug("Suppressed exception in data/fetcher.py", exc_info=exc)
 
                             report_anchor = dict(report.get("replacement_anchor_used") or {})
                             report_anchor[code6] = str(purge_anchor.isoformat())

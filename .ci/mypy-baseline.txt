@@ -1,3 +1,295 @@
 # mypy baseline for scripts/typecheck_gate.py
 # Format: path:line:code:message
 
+analysis/strategy_marketplace.py:31:no-untyped-def:Function is missing a return type annotation
+analysis/strategy_marketplace.py:31:no-untyped-def:Function is missing a type annotation for one or more arguments
+analysis/technical.py:60:no-untyped-def:Function is missing a return type annotation
+config/settings.py:302:no-untyped-def:Function is missing a type annotation for one or more arguments
+config/settings.py:390:no-untyped-def:Function is missing a type annotation for one or more arguments
+core/instruments.py:46:no-untyped-def:Function is missing a type annotation for one or more arguments
+core/instruments.py:52:no-untyped-def:Function is missing a type annotation for one or more arguments
+core/network.py:118:no-untyped-def:Function is missing a return type annotation
+core/network.py:178:no-untyped-def:Function is missing a type annotation
+core/network.py:266:no-untyped-def:Function is missing a return type annotation
+core/network.py:49:no-untyped-def:Function is missing a return type annotation
+core/network.py:57:no-untyped-def:Function is missing a return type annotation
+data/discovery.py:255:no-untyped-def:Function is missing a return type annotation
+data/discovery.py:287:no-untyped-def:Function is missing a return type annotation
+data/discovery.py:287:no-untyped-def:Function is missing a type annotation for one or more arguments
+data/feeds.py:1020:no-untyped-def:Function is missing a type annotation for one or more arguments
+data/feeds.py:1069:no-untyped-def:Function is missing a return type annotation
+data/feeds.py:1076:no-untyped-def:Function is missing a return type annotation
+data/feeds.py:113:no-untyped-def:Function is missing a return type annotation
+data/feeds.py:1163:no-untyped-def:Function is missing a return type annotation
+data/feeds.py:1171:no-untyped-def:Function is missing a return type annotation
+data/feeds.py:1191:no-untyped-def:Function is missing a return type annotation
+data/feeds.py:119:no-untyped-def:Function is missing a return type annotation
+data/feeds.py:135:no-untyped-def:Function is missing a return type annotation
+data/feeds.py:141:no-untyped-def:Function is missing a return type annotation
+data/feeds.py:1461:no-untyped-def:Function is missing a return type annotation
+data/feeds.py:1468:no-untyped-def:Function is missing a return type annotation
+data/feeds.py:1475:no-untyped-def:Function is missing a return type annotation
+data/feeds.py:1521:no-untyped-def:Function is missing a return type annotation
+data/feeds.py:1535:no-untyped-def:Function is missing a type annotation
+data/feeds.py:1552:no-untyped-def:Function is missing a return type annotation
+data/feeds.py:1579:no-untyped-def:Function is missing a return type annotation
+data/feeds.py:1590:no-untyped-def:Function is missing a return type annotation
+data/feeds.py:1593:no-untyped-def:Function is missing a return type annotation
+data/feeds.py:301:no-untyped-def:Function is missing a return type annotation
+data/feeds.py:354:no-untyped-def:Function is missing a return type annotation
+data/feeds.py:407:no-untyped-def:Function is missing a return type annotation
+data/feeds.py:43:no-untyped-def:Function is missing a return type annotation
+data/feeds.py:528:no-untyped-def:Function is missing a return type annotation
+data/feeds.py:547:no-untyped-def:Function is missing a return type annotation
+data/feeds.py:562:no-untyped-def:Function is missing a return type annotation
+data/feeds.py:56:no-untyped-def:Function is missing a return type annotation
+data/feeds.py:573:no-untyped-def:Function is missing a type annotation
+data/feeds.py:590:no-untyped-def:Function is missing a type annotation
+data/feeds.py:645:no-untyped-def:Function is missing a type annotation
+data/feeds.py:64:no-untyped-def:Function is missing a return type annotation
+data/feeds.py:67:no-untyped-def:Function is missing a return type annotation
+data/feeds.py:688:no-untyped-def:Function is missing a type annotation
+data/feeds.py:724:no-untyped-def:Function is missing a return type annotation
+data/feeds.py:72:no-untyped-def:Function is missing a return type annotation
+data/feeds.py:744:no-untyped-def:Function is missing a return type annotation
+data/feeds.py:771:no-untyped-def:Function is missing a return type annotation
+data/feeds.py:777:no-untyped-def:Function is missing a return type annotation
+data/feeds.py:77:no-untyped-def:Function is missing a type annotation
+data/feeds.py:797:no-untyped-def:Function is missing a return type annotation
+data/feeds.py:821:no-untyped-def:Function is missing a return type annotation
+data/feeds.py:830:no-untyped-def:Function is missing a type annotation
+data/feeds.py:862:no-untyped-def:Function is missing a type annotation for one or more arguments
+data/feeds.py:914:no-untyped-def:Function is missing a return type annotation
+data/feeds.py:919:no-untyped-def:Function is missing a return type annotation
+data/feeds.py:924:no-untyped-def:Function is missing a return type annotation
+data/feeds.py:929:no-untyped-def:Function is missing a type annotation
+data/feeds.py:995:no-untyped-def:Function is missing a return type annotation
+data/feeds.py:995:no-untyped-def:Function is missing a type annotation for one or more arguments
+data/fetcher.py:133:no-untyped-def:Function is missing a type annotation
+data/fetcher.py:214:no-untyped-def:Function is missing a type annotation for one or more arguments
+data/fetcher.py:61:no-untyped-def:Function is missing a return type annotation
+data/news.py:360:no-untyped-def:Function is missing a return type annotation
+data/news.py:611:no-untyped-def:Function is missing a return type annotation
+data/news.py:763:no-untyped-def:Function is missing a return type annotation
+data/news.py:916:no-untyped-def:Function is missing a return type annotation
+data/news.py:999:no-untyped-def:Function is missing a return type annotation
+data/processor.py:1695:no-untyped-def:Function is missing a return type annotation
+data/session_cache.py:1049:no-untyped-def:Function is missing a type annotation for one or more arguments
+data/session_cache.py:129:no-untyped-def:Function is missing a return type annotation
+data/session_cache.py:239:no-untyped-def:Function is missing a type annotation for one or more arguments
+data/session_cache.py:50:no-untyped-def:Function is missing a return type annotation
+models/ensemble.py:1021:no-untyped-def:Function is missing a return type annotation
+models/ensemble.py:1172:no-untyped-def:Function is missing a return type annotation
+models/ensemble.py:1178:no-untyped-def:Function is missing a return type annotation
+models/ensemble.py:234:no-untyped-def:Function is missing a return type annotation
+models/ensemble.py:256:no-untyped-def:Function is missing a return type annotation
+models/ensemble.py:297:no-untyped-def:Function is missing a return type annotation
+models/ensemble.py:658:no-untyped-def:Function is missing a return type annotation
+models/ensemble.py:79:no-untyped-def:Function is missing a return type annotation
+models/ensemble.py:899:no-untyped-def:Function is missing a return type annotation
+models/predictor.py:1650:no-untyped-def:Function is missing a return type annotation
+models/predictor.py:1657:no-untyped-def:Function is missing a return type annotation
+models/predictor.py:1657:no-untyped-def:Function is missing a type annotation for one or more arguments
+models/predictor.py:2022:no-untyped-def:Function is missing a return type annotation
+models/predictor.py:2481:no-untyped-def:Function is missing a return type annotation
+models/predictor.py:3076:no-untyped-def:Function is missing a type annotation for one or more arguments
+models/predictor.py:3108:no-untyped-def:Function is missing a type annotation for one or more arguments
+models/predictor.py:3303:no-untyped-def:Function is missing a return type annotation
+models/predictor.py:3358:no-untyped-def:Function is missing a return type annotation
+models/predictor.py:378:no-untyped-def:Function is missing a type annotation
+models/predictor.py:749:no-untyped-def:Function is missing a return type annotation
+models/predictor.py:789:no-untyped-def:Function is missing a return type annotation
+models/trainer.py:126:no-untyped-def:Function is missing a return type annotation
+models/trainer.py:1890:no-untyped-def:Function is missing a type annotation
+models/trainer.py:2879:no-untyped-def:Function is missing a type annotation
+models/trainer.py:2891:no-untyped-def:Function is missing a type annotation
+models/trainer.py:3318:no-untyped-def:Function is missing a return type annotation
+models/trainer.py:3324:no-untyped-def:Function is missing a type annotation
+scripts/soak_broker_e2e.py:48:no-untyped-def:Function is missing a type annotation for one or more arguments
+trading/alerts.py:120:no-untyped-def:Function is missing a return type annotation
+trading/alerts.py:135:no-untyped-def:Function is missing a return type annotation
+trading/alerts.py:157:no-untyped-def:Function is missing a return type annotation
+trading/alerts.py:165:no-untyped-def:Function is missing a return type annotation
+trading/alerts.py:173:no-untyped-def:Function is missing a return type annotation
+trading/alerts.py:178:no-untyped-def:Function is missing a return type annotation
+trading/alerts.py:181:no-untyped-def:Function is missing a return type annotation
+trading/alerts.py:193:no-untyped-def:Function is missing a return type annotation
+trading/alerts.py:258:no-untyped-def:Function is missing a return type annotation
+trading/alerts.py:268:no-untyped-def:Function is missing a return type annotation
+trading/alerts.py:278:no-untyped-def:Function is missing a return type annotation
+trading/alerts.py:304:no-untyped-def:Function is missing a return type annotation
+trading/alerts.py:340:no-untyped-def:Function is missing a return type annotation
+trading/alerts.py:425:no-untyped-def:Function is missing a return type annotation
+trading/alerts.py:428:no-untyped-def:Function is missing a return type annotation
+trading/alerts.py:437:no-untyped-def:Function is missing a return type annotation
+trading/alerts.py:460:no-untyped-def:Function is missing a return type annotation
+trading/alerts.py:473:no-untyped-def:Function is missing a return type annotation
+trading/alerts.py:486:no-untyped-def:Function is missing a return type annotation
+trading/alerts.py:503:no-untyped-def:Function is missing a return type annotation
+trading/alerts.py:67:no-untyped-def:Function is missing a return type annotation
+trading/broker.py:1192:no-untyped-def:Function is missing a return type annotation
+trading/broker.py:1212:no-untyped-def:Function is missing a return type annotation
+trading/broker.py:1235:no-untyped-def:Function is missing a return type annotation
+trading/broker.py:1261:no-untyped-def:Function is missing a return type annotation
+trading/broker.py:1274:no-untyped-def:Function is missing a type annotation for one or more arguments
+trading/broker.py:158:no-untyped-def:Function is missing a return type annotation
+trading/broker.py:184:no-untyped-def:Function is missing a type annotation for one or more arguments
+trading/broker.py:188:no-untyped-def:Function is missing a return type annotation
+trading/broker.py:237:no-untyped-def:Function is missing a return type annotation
+trading/broker.py:277:no-untyped-def:Function is missing a return type annotation
+trading/broker.py:281:no-untyped-def:Function is missing a return type annotation
+trading/broker.py:281:no-untyped-def:Function is missing a type annotation for one or more arguments
+trading/broker.py:339:no-untyped-def:Function is missing a return type annotation
+trading/broker.py:36:no-untyped-def:Function is missing a type annotation for one or more arguments
+trading/broker.py:40:no-untyped-def:Function is missing a type annotation
+trading/broker.py:428:no-untyped-def:Function is missing a type annotation for one or more arguments
+trading/broker.py:437:no-untyped-def:Function is missing a return type annotation
+trading/broker.py:533:no-untyped-def:Function is missing a return type annotation
+trading/broker.py:537:no-untyped-def:Function is missing a return type annotation
+trading/broker.py:850:no-untyped-def:Function is missing a return type annotation
+trading/broker_live.py:28:no-untyped-def:Function is missing a return type annotation
+trading/broker_live.py:472:no-untyped-def:Function is missing a return type annotation
+trading/broker_live.py:550:no-untyped-def:Function is missing a type annotation for one or more arguments
+trading/broker_live.py:564:no-untyped-def:Function is missing a return type annotation
+trading/broker_live.py:61:no-untyped-def:Function is missing a type annotation for one or more arguments
+trading/broker_live.py:743:no-untyped-def:Function is missing a return type annotation
+trading/broker_live.py:743:no-untyped-def:Function is missing a type annotation for one or more arguments
+trading/broker_live.py:92:no-untyped-def:Function is missing a return type annotation
+trading/executor.py:1039:no-untyped-def:Function is missing a return type annotation
+trading/executor.py:1048:no-untyped-def:Function is missing a return type annotation
+trading/executor.py:1068:no-untyped-def:Function is missing a return type annotation
+trading/executor.py:1083:no-untyped-def:Function is missing a return type annotation
+trading/executor.py:1110:no-untyped-def:Function is missing a return type annotation
+trading/executor.py:1371:no-untyped-def:Function is missing a return type annotation
+trading/executor.py:1667:no-untyped-def:Function is missing a type annotation
+trading/executor.py:1683:no-untyped-def:Function is missing a type annotation for one or more arguments
+trading/executor.py:1711:no-untyped-def:Function is missing a return type annotation
+trading/executor.py:1748:no-untyped-def:Function is missing a return type annotation
+trading/executor.py:1753:no-untyped-def:Function is missing a return type annotation
+trading/executor.py:1932:no-untyped-def:Function is missing a return type annotation
+trading/executor.py:1956:no-untyped-def:Function is missing a return type annotation
+trading/executor.py:2057:no-untyped-def:Function is missing a return type annotation
+trading/executor.py:2074:no-untyped-def:Function is missing a type annotation for one or more arguments
+trading/executor.py:2149:no-untyped-def:Function is missing a return type annotation
+trading/executor.py:2367:no-untyped-def:Function is missing a return type annotation
+trading/executor.py:2394:no-untyped-def:Function is missing a return type annotation
+trading/executor.py:2518:no-untyped-def:Function is missing a return type annotation
+trading/executor.py:2571:no-untyped-def:Function is missing a return type annotation
+trading/executor.py:2608:no-untyped-def:Function is missing a return type annotation
+trading/executor.py:2642:no-untyped-def:Function is missing a return type annotation
+trading/executor.py:2666:no-untyped-def:Function is missing a return type annotation
+trading/executor.py:2671:no-untyped-def:Function is missing a return type annotation
+trading/executor.py:287:no-untyped-def:Function is missing a return type annotation
+trading/executor.py:287:no-untyped-def:Function is missing a type annotation for one or more arguments
+trading/executor.py:300:no-untyped-def:Function is missing a return type annotation
+trading/executor.py:326:no-untyped-def:Function is missing a return type annotation
+trading/executor.py:332:no-untyped-def:Function is missing a return type annotation
+trading/executor.py:710:no-untyped-def:Function is missing a type annotation
+trading/executor.py:753:no-untyped-def:Function is missing a return type annotation
+trading/executor.py:891:no-untyped-def:Function is missing a return type annotation
+trading/kill_switch.py:183:no-untyped-def:Function is missing a return type annotation
+trading/kill_switch.py:253:no-untyped-def:Function is missing a return type annotation
+trading/kill_switch.py:324:no-untyped-def:Function is missing a return type annotation
+trading/kill_switch.py:360:no-untyped-def:Function is missing a return type annotation
+trading/kill_switch.py:39:no-untyped-def:Function is missing a return type annotation
+trading/kill_switch.py:420:no-untyped-def:Function is missing a return type annotation
+trading/kill_switch.py:423:no-untyped-def:Function is missing a return type annotation
+trading/kill_switch.py:58:no-untyped-def:Function is missing a return type annotation
+trading/portfolio.py:45:no-untyped-def:Function is missing a return type annotation
+ui/app.py:111:no-untyped-def:Function is missing a return type annotation
+ui/app.py:1372:no-untyped-def:Function is missing a return type annotation
+ui/app.py:1453:no-untyped-def:Function is missing a return type annotation
+ui/app.py:1526:no-untyped-def:Function is missing a return type annotation
+ui/app.py:1549:no-untyped-def:Function is missing a return type annotation
+ui/app.py:1568:no-untyped-def:Function is missing a type annotation
+ui/app.py:1591:no-untyped-def:Function is missing a return type annotation
+ui/app.py:1939:no-untyped-def:Function is missing a return type annotation
+ui/app.py:1982:no-untyped-def:Function is missing a return type annotation
+ui/app.py:1997:no-untyped-def:Function is missing a return type annotation
+ui/app.py:2001:no-untyped-def:Function is missing a return type annotation
+ui/app.py:2001:no-untyped-def:Function is missing a type annotation for one or more arguments
+ui/app.py:2122:no-untyped-def:Function is missing a return type annotation
+ui/app.py:2129:no-untyped-def:Function is missing a return type annotation
+ui/app.py:2136:no-untyped-def:Function is missing a return type annotation
+ui/app.py:2143:no-untyped-def:Function is missing a return type annotation
+ui/app.py:2157:no-untyped-def:Function is missing a return type annotation
+ui/app.py:2181:no-untyped-def:Function is missing a return type annotation
+ui/app.py:2214:no-untyped-def:Function is missing a return type annotation
+ui/app.py:2220:no-untyped-def:Function is missing a return type annotation
+ui/app.py:2395:no-untyped-def:Function is missing a return type annotation
+ui/app.py:2438:no-untyped-def:Function is missing a type annotation
+ui/app.py:2530:no-untyped-def:Function is missing a return type annotation
+ui/app.py:2555:no-untyped-def:Function is missing a return type annotation
+ui/app.py:2599:no-untyped-def:Function is missing a return type annotation
+ui/app.py:2856:no-untyped-def:Function is missing a return type annotation
+ui/app.py:2879:no-untyped-def:Function is missing a return type annotation
+ui/app.py:3085:no-untyped-def:Function is missing a return type annotation
+ui/app.py:320:no-untyped-def:Function is missing a type annotation
+ui/app.py:3628:no-untyped-def:Function is missing a type annotation for one or more arguments
+ui/app.py:3885:no-untyped-def:Function is missing a type annotation
+ui/app.py:3892:no-untyped-def:Function is missing a return type annotation
+ui/app.py:3998:no-untyped-def:Function is missing a return type annotation
+ui/app.py:4012:no-untyped-def:Function is missing a type annotation
+ui/app.py:4071:no-untyped-def:Function is missing a return type annotation
+ui/app.py:4074:no-untyped-def:Function is missing a return type annotation
+ui/app.py:4419:no-untyped-def:Function is missing a type annotation
+ui/app.py:4427:no-untyped-def:Function is missing a return type annotation
+ui/app.py:4476:no-untyped-def:Function is missing a return type annotation
+ui/app.py:4520:no-untyped-def:Function is missing a return type annotation
+ui/app.py:4555:no-untyped-def:Function is missing a return type annotation
+ui/app.py:4576:no-untyped-def:Function is missing a return type annotation
+ui/app.py:4704:no-untyped-def:Function is missing a return type annotation
+ui/app.py:4735:no-untyped-def:Function is missing a type annotation
+ui/app.py:5000:no-untyped-def:Function is missing a return type annotation
+ui/app.py:5011:no-untyped-def:Function is missing a type annotation
+ui/app.py:5029:no-untyped-def:Function is missing a type annotation
+ui/app.py:5264:no-untyped-def:Function is missing a type annotation
+ui/app.py:5343:no-untyped-def:Function is missing a return type annotation
+ui/app.py:5439:no-untyped-def:Function is missing a return type annotation
+ui/app.py:5473:no-untyped-def:Function is missing a return type annotation
+ui/app.py:5483:no-untyped-def:Function is missing a return type annotation
+ui/app.py:5503:no-untyped-def:Function is missing a type annotation
+ui/app.py:5533:no-untyped-def:Function is missing a return type annotation
+ui/app.py:5542:no-untyped-def:Function is missing a return type annotation
+ui/app.py:5549:no-untyped-def:Function is missing a return type annotation
+ui/app.py:5596:no-untyped-def:Function is missing a return type annotation
+ui/app.py:5716:no-untyped-def:Function is missing a return type annotation
+ui/app.py:5896:no-untyped-def:Function is missing a return type annotation
+ui/app.py:6101:no-untyped-def:Function is missing a return type annotation
+ui/app.py:6174:no-untyped-def:Function is missing a return type annotation
+ui/app.py:6245:no-untyped-def:Function is missing a type annotation
+ui/app.py:6261:no-untyped-def:Function is missing a type annotation
+ui/app.py:6267:no-untyped-def:Function is missing a return type annotation
+ui/app.py:6304:no-untyped-def:Function is missing a return type annotation
+ui/app.py:6352:no-untyped-def:Function is missing a return type annotation
+ui/app.py:6374:no-untyped-def:Function is missing a return type annotation
+ui/app.py:6383:no-untyped-def:Function is missing a return type annotation
+ui/app.py:6392:no-untyped-def:Function is missing a return type annotation
+ui/app.py:6418:no-untyped-def:Function is missing a return type annotation
+ui/app.py:6484:no-untyped-def:Function is missing a return type annotation
+ui/app.py:6525:no-untyped-def:Function is missing a return type annotation
+ui/app.py:6543:no-untyped-def:Function is missing a return type annotation
+ui/app.py:6558:no-untyped-def:Function is missing a return type annotation
+ui/app.py:6585:no-untyped-def:Function is missing a return type annotation
+ui/app.py:6597:no-untyped-def:Function is missing a return type annotation
+ui/app.py:6707:no-untyped-def:Function is missing a return type annotation
+ui/app.py:6739:no-untyped-def:Function is missing a return type annotation
+ui/app.py:6743:no-untyped-def:Function is missing a return type annotation
+ui/app.py:6811:no-untyped-def:Function is missing a return type annotation
+ui/app.py:6815:no-untyped-def:Function is missing a return type annotation
+ui/app.py:6852:no-untyped-def:Function is missing a return type annotation
+ui/app.py:6863:no-untyped-def:Function is missing a return type annotation
+ui/app.py:6881:no-untyped-def:Function is missing a return type annotation
+ui/app.py:6892:no-untyped-def:Function is missing a return type annotation
+ui/app.py:6994:no-untyped-def:Function is missing a return type annotation
+ui/app.py:7000:no-untyped-def:Function is missing a return type annotation
+ui/app.py:7024:no-untyped-def:Function is missing a return type annotation
+ui/app.py:7052:no-untyped-def:Function is missing a type annotation
+ui/app.py:7112:no-untyped-def:Function is missing a return type annotation
+ui/app.py:7139:no-untyped-def:Function is missing a return type annotation
+ui/app.py:7186:no-untyped-def:Function is missing a return type annotation
+ui/app.py:7225:no-untyped-def:Function is missing a return type annotation
+ui/app.py:7236:no-untyped-def:Function is missing a type annotation for one or more arguments
+ui/app.py:89:no-untyped-def:Function is missing a return type annotation
+utils/metrics_http.py:413:no-untyped-def:Function is missing a type annotation for one or more arguments
+utils/metrics_http.py:770:no-untyped-def:Function is missing a type annotation for one or more arguments

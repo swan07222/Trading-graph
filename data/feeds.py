@@ -367,8 +367,8 @@ class WebSocketFeed(DataFeed):
         if ws is not None:
             try:
                 ws.close()
-            except Exception:
-                pass
+            except Exception as exc:
+                log.debug("Suppressed exception in data/feeds.py", exc_info=exc)
         if (prev_until - now) <= 1.0:
             mins = max(1, int(round(duration / 60.0)))
             log.warning(
@@ -530,8 +530,8 @@ class WebSocketFeed(DataFeed):
         if self._ws:
             try:
                 self._ws.close()
-            except Exception:
-                pass
+            except Exception as exc:
+                log.debug("Suppressed exception in data/feeds.py", exc_info=exc)
         self.status = FeedStatus.DISCONNECTED
 
     def subscribe(self, symbol: str, data_type: str = "quote") -> bool:
@@ -556,8 +556,8 @@ class WebSocketFeed(DataFeed):
                             "symbols": [symbol]
                         })
                     )
-                except Exception:
-                    pass
+                except Exception as exc:
+                    log.debug("Suppressed exception in data/feeds.py", exc_info=exc)
 
     def _send_subscribe(self, symbol: str):
         try:
@@ -567,8 +567,8 @@ class WebSocketFeed(DataFeed):
                     "symbols": [symbol]
                 })
             )
-        except Exception:
-            pass
+        except Exception as exc:
+            log.debug("Suppressed exception in data/feeds.py", exc_info=exc)
 
     def _on_open(self, ws):
         self.status = FeedStatus.CONNECTED
@@ -682,8 +682,8 @@ class WebSocketFeed(DataFeed):
         try:
             if ws is not None:
                 ws.close()
-        except Exception:
-            pass
+        except Exception as exc:
+            log.debug("Suppressed exception in data/feeds.py", exc_info=exc)
 
     def _on_close(self, ws, close_status_code, close_msg):
         if (
@@ -799,8 +799,8 @@ class AggregatedFeed(DataFeed):
         for feed in self._feeds:
             try:
                 feed.disconnect()
-            except Exception:
-                pass
+            except Exception as exc:
+                log.debug("Suppressed exception in data/feeds.py", exc_info=exc)
         self.status = FeedStatus.DISCONNECTED
 
     def subscribe(self, symbol: str, data_type: str = "quote") -> bool:
@@ -809,8 +809,8 @@ class AggregatedFeed(DataFeed):
             try:
                 if feed.subscribe(symbol, data_type):
                     success = True
-            except Exception:
-                pass
+            except Exception as exc:
+                log.debug("Suppressed exception in data/feeds.py", exc_info=exc)
         if success:
             with self._lock:
                 self._subscriptions[symbol] = Subscription(
@@ -822,8 +822,8 @@ class AggregatedFeed(DataFeed):
         for feed in self._feeds:
             try:
                 feed.unsubscribe(symbol)
-            except Exception:
-                pass
+            except Exception as exc:
+                log.debug("Suppressed exception in data/feeds.py", exc_info=exc)
         with self._lock:
             self._subscriptions.pop(symbol, None)
 
@@ -939,8 +939,8 @@ class BarAggregator:
         ts = self._to_shanghai_naive(getattr(quote, "timestamp", None))
         try:
             quote.timestamp = ts
-        except Exception:
-            pass
+        except Exception as exc:
+            log.debug("Suppressed exception in data/feeds.py", exc_info=exc)
         px = float(getattr(quote, "price", 0) or 0)
         if px <= 0:
             return
@@ -952,8 +952,8 @@ class BarAggregator:
                 if stale is not None:
                     try:
                         self._emit_bar(symbol, stale, final=True)
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        log.debug("Suppressed exception in data/feeds.py", exc_info=exc)
                 self._last_partial_emit_ts.pop(symbol, None)
                 return
 
@@ -1210,8 +1210,8 @@ class FeedManager:
         for feed in old_feeds:
             try:
                 feed.disconnect()
-            except Exception:
-                pass
+            except Exception as exc:
+                log.debug("Suppressed exception in data/feeds.py", exc_info=exc)
 
         interval = float(CONFIG.data.poll_interval_seconds)
         bar_seconds = 60
@@ -1260,34 +1260,34 @@ class FeedManager:
         for feed in list(self._feeds.values()):
             try:
                 feed.remove_callback(self._cache_quote)
-            except Exception:
-                pass
+            except Exception as exc:
+                log.debug("Suppressed exception in data/feeds.py", exc_info=exc)
             try:
                 feed.remove_callback(self._bar_aggregator.on_tick)
-            except Exception:
-                pass
+            except Exception as exc:
+                log.debug("Suppressed exception in data/feeds.py", exc_info=exc)
             for cb in list(self._tick_callbacks):
                 try:
                     feed.remove_callback(cb)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    log.debug("Suppressed exception in data/feeds.py", exc_info=exc)
 
         feed = self._active_feed
         if feed is None:
             return
         try:
             feed.add_callback(self._cache_quote)
-        except Exception:
-            pass
+        except Exception as exc:
+            log.debug("Suppressed exception in data/feeds.py", exc_info=exc)
         try:
             feed.add_callback(self._bar_aggregator.on_tick)
-        except Exception:
-            pass
+        except Exception as exc:
+            log.debug("Suppressed exception in data/feeds.py", exc_info=exc)
         for cb in list(self._tick_callbacks):
             try:
                 feed.add_callback(cb)
-            except Exception:
-                pass
+            except Exception as exc:
+                log.debug("Suppressed exception in data/feeds.py", exc_info=exc)
 
     def _resubscribe_active(self) -> None:
         feed = self._active_feed
@@ -1394,8 +1394,8 @@ class FeedManager:
         if t is not None:
             try:
                 t.join(timeout=max(2.0, float(self._health_poll_interval_s) + 1.0))
-            except Exception:
-                pass
+            except Exception as exc:
+                log.debug("Suppressed exception in data/feeds.py", exc_info=exc)
 
     def _health_loop(self, generation: int) -> None:
         """Monitor feed health and switch between websocket/polling as needed."""
@@ -1427,8 +1427,8 @@ class FeedManager:
                         ):
                             try:
                                 ws.connect()
-                            except Exception:
-                                pass
+                            except Exception as exc:
+                                log.debug("Suppressed exception in data/feeds.py", exc_info=exc)
                         cooldown_ok = (
                             time.monotonic() - self._last_feed_switch_ts
                         ) >= (self._feed_switch_cooldown_s * 2.0)
@@ -1462,15 +1462,15 @@ class FeedManager:
         """Change bar aggregation interval."""
         try:
             self._bar_aggregator.set_interval(int(seconds))
-        except Exception:
-            pass
+        except Exception as exc:
+            log.debug("Suppressed exception in data/feeds.py", exc_info=exc)
 
     def set_bar_volume_mode(self, mode: VolumeMode):
         """Change bar volume interpretation mode."""
         try:
             self._bar_aggregator.set_volume_mode(mode)
-        except Exception:
-            pass
+        except Exception as exc:
+            log.debug("Suppressed exception in data/feeds.py", exc_info=exc)
 
     def ensure_initialized(self, async_init: bool = True):
         if self._initialized_runtime:
@@ -1546,8 +1546,8 @@ class FeedManager:
                 return
             with self._quotes_lock:
                 self._last_quotes[str(code)] = data
-        except Exception:
-            pass
+        except Exception as exc:
+            log.debug("Suppressed exception in data/feeds.py", exc_info=exc)
 
     def subscribe_many(self, symbols: list[str]):
         for symbol in symbols:
@@ -1584,8 +1584,8 @@ class FeedManager:
         if active:
             try:
                 active.add_callback(callback)
-            except Exception:
-                pass
+            except Exception as exc:
+                log.debug("Suppressed exception in data/feeds.py", exc_info=exc)
 
     def add_bar_callback(self, callback: Callable):
         self._bar_aggregator.add_callback(callback)
@@ -1598,8 +1598,8 @@ class FeedManager:
         for feed in feeds:
             try:
                 feed.disconnect()
-            except Exception:
-                pass
+            except Exception as exc:
+                log.debug("Suppressed exception in data/feeds.py", exc_info=exc)
 
         self._feeds.clear()
         self._active_feed = None

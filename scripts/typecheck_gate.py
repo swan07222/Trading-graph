@@ -24,11 +24,15 @@ DEFAULT_TARGETS: tuple[str, ...] = (
     "models/ensemble.py",
     "models/predictor.py",
     "models/trainer.py",
+    "trading/broker.py",
+    "trading/broker_live.py",
     "trading/executor.py",
     "trading/kill_switch.py",
     "trading/portfolio.py",
     "trading/alerts.py",
     "ui/app.py",
+    "ui/app_panels.py",
+    "ui/app_chart_pipeline.py",
     "utils/logger.py",
     "utils/metrics.py",
     "utils/metrics_http.py",
@@ -44,6 +48,7 @@ DEFAULT_FLAGS: tuple[str, ...] = (
     "--follow-imports=skip",
     "--check-untyped-defs",
     "--warn-return-any",
+    "--warn-redundant-casts",
 )
 ERROR_RE = re.compile(
     r"^(?P<path>.+?):(?P<line>\d+)(?::(?P<column>\d+))?: error: "

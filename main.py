@@ -1,12 +1,9 @@
-
 import argparse
 import json
-import sys
 from importlib.util import find_spec
 from pathlib import Path
 from typing import Any
 
-sys.path.insert(0, str(Path(__file__).parent))
 
 def _module_exists(module: str) -> bool:
     """Fast dependency probe without importing heavy modules."""

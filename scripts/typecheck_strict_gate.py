@@ -9,6 +9,13 @@ from pathlib import Path
 
 DEFAULT_TARGETS: tuple[str, ...] = (
     "main.py",
+    "data/feeds.py",
+    "data/fetcher.py",
+    "models/predictor.py",
+    "trading/executor.py",
+    "ui/app.py",
+    "ui/app_chart_pipeline.py",
+    "ui/app_panels.py",
     "ui/background_tasks.py",
     "utils/atomic_io.py",
     "utils/security.py",

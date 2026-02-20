@@ -254,8 +254,8 @@ class ExecutionEngine:
 
         try:
             CONFIG.auto_trade.enabled = False
-        except Exception:
-            pass
+        except Exception as exc:
+            log.debug("Suppressed exception in trading/executor.py", exc_info=exc)
 
         try:
             self._alert_manager.risk_alert(

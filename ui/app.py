@@ -73,6 +73,16 @@ from ui.background_tasks import (
     validate_stock_code as _validate_stock_code,
 )
 from utils.logger import get_logger
+from ui.app_chart_pipeline import (
+    _load_chart_history_bars as _load_chart_history_bars_impl,
+    _on_price_updated as _on_price_updated_impl,
+    _prepare_chart_bars_for_interval as _prepare_chart_bars_for_interval_impl,
+)
+from ui.app_panels import (
+    _apply_professional_style as _apply_professional_style_impl,
+    _create_left_panel as _create_left_panel_impl,
+    _create_right_panel as _create_right_panel_impl,
+)
 
 log = get_logger(__name__)
 
@@ -172,8 +182,8 @@ class MainApp(QMainWindow):
         try:
             self._load_state()
             self._update_watchlist()
-        except Exception:
-            pass
+        except Exception as exc:
+            log.debug("Suppressed exception in ui/app.py", exc_info=exc)
 
         QTimer.singleShot(0, self._init_components)
 
@@ -267,8 +277,8 @@ class MainApp(QMainWindow):
                         ens.trained_stock_last_train = dict(
                             self._trained_stock_last_train
                         )
-            except Exception:
-                pass
+            except Exception as exc:
+                log.debug("Suppressed exception in ui/app.py", exc_info=exc)
             self._save_trained_stock_last_train_meta()
 
     @staticmethod
@@ -363,8 +373,8 @@ class MainApp(QMainWindow):
                 self.log(txt, level=level)
             else:
                 log.warning(txt)
-        except Exception:
-            pass
+        except Exception as exc:
+            log.debug("Suppressed exception in ui/app.py", exc_info=exc)
 
     def _sync_ui_to_loaded_model(
         self,
@@ -1098,20 +1108,20 @@ class MainApp(QMainWindow):
                 uncertainty = float(
                     np.clip(getattr(pred, "uncertainty_score", uncertainty), 0.0, 1.0)
                 )
-            except Exception:
-                pass
+            except Exception as exc:
+                log.debug("Suppressed exception in ui/app.py", exc_info=exc)
             try:
                 tail_risk = float(
                     np.clip(getattr(pred, "tail_risk_score", tail_risk), 0.0, 1.0)
                 )
-            except Exception:
-                pass
+            except Exception as exc:
+                log.debug("Suppressed exception in ui/app.py", exc_info=exc)
             try:
                 confidence = float(
                     np.clip(getattr(pred, "confidence", confidence), 0.0, 1.0)
                 )
-            except Exception:
-                pass
+            except Exception as exc:
+                log.debug("Suppressed exception in ui/app.py", exc_info=exc)
 
         return uncertainty, tail_risk, confidence
 
@@ -1310,8 +1320,8 @@ class MainApp(QMainWindow):
         ):
             try:
                 self.chart.reset_view()
-            except Exception:
-                pass
+            except Exception as exc:
+                log.debug("Suppressed exception in ui/app.py", exc_info=exc)
 
         rendered = False
         if hasattr(self.chart, "update_chart"):
@@ -1552,8 +1562,8 @@ class MainApp(QMainWindow):
                 if iv:
                     payload["interval"] = iv
             self.bar_received.emit(str(symbol), payload)
-        except Exception:
-            pass
+        except Exception as exc:
+            log.debug("Suppressed exception in ui/app.py", exc_info=exc)
 
     def _on_tick_from_feed(self, quote):
         """Forward feed quote updates to UI thread safely."""
@@ -1575,8 +1585,8 @@ class MainApp(QMainWindow):
                         return
                 self._last_quote_ui_emit[symbol] = (now, price)
                 self.quote_received.emit(symbol, price)
-        except Exception:
-            pass
+        except Exception as exc:
+            log.debug("Suppressed exception in ui/app.py", exc_info=exc)
 
     def _on_bar_ui(self, symbol: str, bar: dict):
         """
@@ -1765,8 +1775,8 @@ class MainApp(QMainWindow):
                         min_gap_seconds=0.6,
                     )
                     return
-            except Exception:
-                pass
+            except Exception as exc:
+                log.debug("Suppressed exception in ui/app.py", exc_info=exc)
 
         replaced = False
         if ts:
@@ -1841,8 +1851,8 @@ class MainApp(QMainWindow):
                     )
                     if int(prev_bucket) != ts_key and not bool(arr[-1].get("final", True)):
                         arr[-1]["final"] = True
-                except Exception:
-                    pass
+                except Exception as exc:
+                    log.debug("Suppressed exception in ui/app.py", exc_info=exc)
             arr.append(norm_bar)
 
         arr.sort(
@@ -1920,8 +1930,8 @@ class MainApp(QMainWindow):
                 label.setText(
                     f"Latest {symbol} | Price {float(price):.2f} | waiting for OHLC bar"
                 )
-        except Exception:
-            pass
+        except Exception as exc:
+            log.debug("Suppressed exception in ui/app.py", exc_info=exc)
 
     # =========================================================================
     # =========================================================================
@@ -1967,168 +1977,7 @@ class MainApp(QMainWindow):
         layout.addWidget(main_splitter)
 
     def _create_left_panel(self) -> QWidget:
-        """Create left control panel with interval/forecast settings"""
-        panel = QWidget()
-        panel.setMinimumWidth(250)
-        panel.setMaximumWidth(320)
-        layout = QVBoxLayout(panel)
-        layout.setSpacing(10)
-
-        watchlist_group = QGroupBox("Watchlist")
-        watchlist_layout = QVBoxLayout()
-
-        self.watchlist = self._make_table(
-            ["Code", "Price", "Change", "Signal"], max_height=250
-        )
-        self.watchlist.cellClicked.connect(self._on_watchlist_click)
-
-        self._update_watchlist()
-        watchlist_layout.addWidget(self.watchlist)
-
-        btn_layout = QHBoxLayout()
-        add_btn = QPushButton("+ Add")
-        add_btn.clicked.connect(self._add_to_watchlist)
-        remove_btn = QPushButton("- Remove")
-        remove_btn.clicked.connect(self._remove_from_watchlist)
-        btn_layout.addWidget(add_btn)
-        btn_layout.addWidget(remove_btn)
-        watchlist_layout.addLayout(btn_layout)
-
-        watchlist_group.setLayout(watchlist_layout)
-        layout.addWidget(watchlist_group)
-
-        settings_group = QGroupBox("Trading Settings")
-        settings_layout = QGridLayout()
-
-        self.mode_combo = QComboBox()
-        self.mode_combo.addItems(["Paper Trading", "Live Trading"])
-        self.mode_combo.currentIndexChanged.connect(self._on_mode_combo_changed)
-        self._add_labeled(settings_layout, 0, "Mode:", self.mode_combo)
-
-        self.capital_spin = QDoubleSpinBox()
-        self.capital_spin.setRange(10000, 100000000)
-        self.capital_spin.setValue(CONFIG.CAPITAL)
-        self.capital_spin.setPrefix("CNY ")
-        self._add_labeled(settings_layout, 1, "Capital:", self.capital_spin)
-
-        self.risk_spin = QDoubleSpinBox()
-        self.risk_spin.setRange(0.5, 5.0)
-        self.risk_spin.setValue(CONFIG.RISK_PER_TRADE)
-        self.risk_spin.setSuffix(" %")
-        self._add_labeled(settings_layout, 2, "Risk/Trade:", self.risk_spin)
-
-        self.interval_combo = QComboBox()
-        self.interval_combo.addItems(["1m", "5m", "15m", "30m", "60m", "1d"])
-        self.interval_combo.setCurrentText("1m")
-        self.interval_combo.currentTextChanged.connect(
-            self._on_interval_changed
-        )
-        self._add_labeled(settings_layout, 3, "Interval:", self.interval_combo)
-
-        self.forecast_spin = QSpinBox()
-        self.forecast_spin.setRange(5, 120)
-        self.forecast_spin.setValue(self.GUESS_FORECAST_BARS)
-        self.forecast_spin.setSuffix(" min")
-        self.forecast_spin.setToolTip("Minutes to forecast ahead")
-        self._add_labeled(settings_layout, 4, "Forecast:", self.forecast_spin)
-
-        self.lookback_spin = QSpinBox()
-        self.lookback_spin.setRange(7, 5000)
-        self.lookback_spin.setValue(self._recommended_lookback("1m"))
-        self.lookback_spin.setSuffix(" bars")
-        self.lookback_spin.setToolTip("Historical bars to use for analysis")
-        self._add_labeled(settings_layout, 5, "Lookback:", self.lookback_spin)
-
-        settings_group.setLayout(settings_layout)
-        layout.addWidget(settings_group)
-
-        connection_group = QGroupBox("Connection")
-        connection_layout = QVBoxLayout()
-
-        self.connection_status = QLabel("Disconnected")
-        self.connection_status.setStyleSheet(
-            "color: #FF5252; font-weight: bold;"
-        )
-        connection_layout.addWidget(self.connection_status)
-
-        self.connect_btn = QPushButton("Connect to Broker")
-        self.connect_btn.clicked.connect(self._toggle_trading)
-        self.connect_btn.setStyleSheet("""
-            QPushButton {
-                background: #4CAF50;
-                color: white;
-                border: none;
-                padding: 12px;
-                border-radius: 6px;
-                font-weight: bold;
-            }
-            QPushButton:hover { background: #388E3C; }
-        """)
-        connection_layout.addWidget(self.connect_btn)
-
-        connection_group.setLayout(connection_layout)
-        layout.addWidget(connection_group)
-
-        ai_group = QGroupBox("AI Model")
-        ai_layout = QVBoxLayout()
-
-        self.model_status = QLabel("Model: Loading...")
-        ai_layout.addWidget(self.model_status)
-
-        self.model_info = QLabel("")
-        self.model_info.setStyleSheet("color: #888; font-size: 10px;")
-        ai_layout.addWidget(self.model_info)
-
-        self.trained_stocks_label = QLabel("Trained Stocks: --")
-        self.trained_stocks_label.setStyleSheet("color: #9aa4b8; font-size: 10px;")
-        ai_layout.addWidget(self.trained_stocks_label)
-
-        self.trained_stocks_hint = QLabel(
-            "Full trained stock list is in the right panel tab:\n"
-            "Trained Stocks"
-        )
-        self.trained_stocks_hint.setStyleSheet("color: #6e7681; font-size: 10px;")
-        ai_layout.addWidget(self.trained_stocks_hint)
-
-        self.open_trained_tab_btn = QPushButton("Open Trained Stocks")
-        self.open_trained_tab_btn.clicked.connect(
-            self._focus_trained_stocks_tab
-        )
-        ai_layout.addWidget(self.open_trained_tab_btn)
-
-        self.get_infor_btn = QPushButton("Get Infor (29d)")
-        self.get_infor_btn.setToolTip(
-            "Fetch 29-day history for all trained stocks from AKShare.\n"
-            "If market is closed, replaces saved realtime rows with AKShare rows.\n"
-            "Otherwise fetches incrementally from the last saved AKShare point."
-        )
-        self.get_infor_btn.clicked.connect(self._get_infor_trained_stocks)
-        ai_layout.addWidget(self.get_infor_btn)
-
-        self.train_btn = QPushButton("Train Model")
-        self.train_btn.clicked.connect(self._start_training)
-        ai_layout.addWidget(self.train_btn)
-
-        self.train_trained_btn = QPushButton("Train Trained Stocks")
-        self.train_trained_btn.setToolTip(
-            "Train only already-trained stocks using newly synced cache data."
-        )
-        self.train_trained_btn.clicked.connect(self._train_trained_stocks)
-        ai_layout.addWidget(self.train_trained_btn)
-
-        self.auto_learn_btn = QPushButton("Auto Learn")
-        self.auto_learn_btn.clicked.connect(self._show_auto_learn)
-        ai_layout.addWidget(self.auto_learn_btn)
-
-        self.train_progress = QProgressBar()
-        self.train_progress.setVisible(False)
-        ai_layout.addWidget(self.train_progress)
-
-        ai_group.setLayout(ai_layout)
-        layout.addWidget(ai_group)
-
-        layout.addStretch()
-        return panel
+        return _create_left_panel_impl(self)
 
     def _make_table(self, headers: list[str], max_height: int | None = None):
         table = QTableWidget()
@@ -2274,248 +2123,32 @@ class MainApp(QMainWindow):
         if hasattr(self.chart, "zoom_in"):
             try:
                 self.chart.zoom_in()
-            except Exception:
-                pass
+            except Exception as exc:
+                log.debug("Suppressed exception in ui/app.py", exc_info=exc)
 
     def _zoom_chart_out(self):
         if hasattr(self.chart, "zoom_out"):
             try:
                 self.chart.zoom_out()
-            except Exception:
-                pass
+            except Exception as exc:
+                log.debug("Suppressed exception in ui/app.py", exc_info=exc)
 
     def _zoom_chart_reset(self):
         if hasattr(self.chart, "reset_view"):
             try:
                 self.chart.reset_view()
-            except Exception:
-                pass
+            except Exception as exc:
+                log.debug("Suppressed exception in ui/app.py", exc_info=exc)
 
     def _set_chart_overlay(self, key: str, enabled: bool):
         if hasattr(self.chart, "set_overlay_enabled"):
             try:
                 self.chart.set_overlay_enabled(str(key), bool(enabled))
-            except Exception:
-                pass
+            except Exception as exc:
+                log.debug("Suppressed exception in ui/app.py", exc_info=exc)
 
     def _create_right_panel(self) -> QWidget:
-        """Create right panel with portfolio, news, orders, and auto-trade"""
-        panel = QWidget()
-        layout = QVBoxLayout(panel)
-        layout.setSpacing(10)
-
-        self.right_tabs = QTabWidget()
-        tabs = self.right_tabs
-
-        portfolio_tab = QWidget()
-        portfolio_layout = QVBoxLayout(portfolio_tab)
-
-        self.account_labels = {}
-        labels = [
-            ('equity', 'Total Equity', 0, 0),
-            ('cash', 'Available Cash', 0, 1),
-            ('positions', 'Positions Value', 1, 0),
-            ('pnl', 'Total P&L', 1, 1),
-        ]
-        account_frame, self.account_labels = self._build_stat_frame(
-            labels, "color: #00E5FF; font-size: 18px; font-weight: bold;", 15
-        )
-
-        portfolio_layout.addWidget(account_frame)
-
-        try:
-            from .widgets import PositionTable
-            self.positions_table = PositionTable()
-        except ImportError:
-            self.positions_table = self._make_table(
-                ["Code", "Qty", "Price", "Value", "P&L"]
-            )
-        portfolio_layout.addWidget(self.positions_table)
-
-        tabs.addTab(portfolio_tab, "Portfolio")
-
-        news_tab = QWidget()
-        news_layout = QVBoxLayout(news_tab)
-        try:
-            NewsPanel = _lazy_get("ui.news_widget", "NewsPanel")
-            self.news_panel = NewsPanel()
-            news_layout.addWidget(self.news_panel)
-        except Exception as e:
-            log.warning(f"News panel not available: {e}")
-            self.news_panel = QLabel("News panel unavailable")
-            news_layout.addWidget(self.news_panel)
-        tabs.addTab(news_tab, "News and Policy")
-
-        signals_tab = QWidget()
-        signals_layout = QVBoxLayout(signals_tab)
-        self.signals_table = self._make_table([
-            "Time", "Code", "Signal", "Confidence", "Price", "Action"
-        ])
-        signals_layout.addWidget(self.signals_table)
-        tabs.addTab(signals_tab, "Live Signals")
-
-        history_tab = QWidget()
-        history_layout = QVBoxLayout(history_tab)
-        self.history_table = self._make_table([
-            "Time", "Code", "Signal", "Prob UP", "Confidence", "Result"
-        ])
-        history_layout.addWidget(self.history_table)
-        tabs.addTab(history_tab, "History")
-
-        trained_tab = QWidget()
-        trained_layout = QVBoxLayout(trained_tab)
-
-        trained_top = QHBoxLayout()
-        self.trained_stock_count_label = QLabel("Trained: --")
-        self.trained_stock_count_label.setStyleSheet(
-            "color: #9aa4b8; font-size: 10px;"
-        )
-        trained_top.addWidget(self.trained_stock_count_label)
-        trained_top.addStretch(1)
-        trained_layout.addLayout(trained_top)
-
-        self.trained_stock_search = QLineEdit()
-        self.trained_stock_search.setPlaceholderText(
-            "Search trained stock code..."
-        )
-        self.trained_stock_search.textChanged.connect(
-            self._filter_trained_stocks_ui
-        )
-        trained_layout.addWidget(self.trained_stock_search)
-
-        self.trained_stock_list = QListWidget()
-        self.trained_stock_list.itemClicked.connect(
-            self._on_trained_stock_activated
-        )
-        self.trained_stock_list.itemDoubleClicked.connect(
-            self._on_trained_stock_activated
-        )
-        self.trained_stock_list.setToolTip(
-            "Click a stock to load and analyze it"
-        )
-        trained_layout.addWidget(self.trained_stock_list, 1)
-        self._trained_tab_index = tabs.addTab(trained_tab, "Trained Stocks")
-
-        # ==================== AUTO-TRADE TAB ====================
-        auto_trade_tab = QWidget()
-        auto_trade_layout = QVBoxLayout(auto_trade_tab)
-
-        # Auto-trade status frame
-        self.auto_trade_labels = {}
-        auto_labels = [
-            ('mode', 'Mode', 0, 0),
-            ('trades', 'Trades Today', 0, 1),
-            ('pnl', 'Auto P&L', 1, 0),
-            ('status', 'Status', 1, 1),
-            ('guess_profit', 'Correct Guess P&L', 2, 0),
-            ('guess_rate', 'Guess Hit Rate', 2, 1),
-        ]
-        auto_status_frame, self.auto_trade_labels = self._build_stat_frame(
-            auto_labels, "color: #00E5FF; font-size: 16px; font-weight: bold;", 10
-        )
-
-        auto_trade_layout.addWidget(auto_status_frame)
-
-        # Pending approvals section (for semi-auto)
-        pending_group = QGroupBox("Pending Approvals")
-        pending_layout = QVBoxLayout()
-        self.pending_table = self._make_table([
-            "Time", "Code", "Signal", "Confidence", "Price", "Action"
-        ], max_height=150)
-        pending_layout.addWidget(self.pending_table)
-        pending_group.setLayout(pending_layout)
-        auto_trade_layout.addWidget(pending_group)
-
-        # Auto-trade action history
-        actions_group = QGroupBox("Auto-Trade Actions")
-        actions_layout = QVBoxLayout()
-        self.auto_actions_table = self._make_table([
-            "Time", "Code", "Signal", "Confidence",
-            "Decision", "Qty", "Reason"
-        ])
-        actions_layout.addWidget(self.auto_actions_table)
-        actions_group.setLayout(actions_layout)
-        auto_trade_layout.addWidget(actions_group)
-
-        # Auto-trade control buttons
-        auto_btn_frame = QFrame()
-        auto_btn_layout = QHBoxLayout(auto_btn_frame)
-
-        self.auto_pause_btn = QPushButton("Pause Auto")
-        self.auto_pause_btn.clicked.connect(self._toggle_auto_pause)
-        self.auto_pause_btn.setEnabled(False)
-        auto_btn_layout.addWidget(self.auto_pause_btn)
-
-        self.auto_approve_all_btn = QPushButton("Approve All")
-        self.auto_approve_all_btn.clicked.connect(self._approve_all_pending)
-        self.auto_approve_all_btn.setEnabled(False)
-        auto_btn_layout.addWidget(self.auto_approve_all_btn)
-
-        self.auto_reject_all_btn = QPushButton("Reject All")
-        self.auto_reject_all_btn.clicked.connect(self._reject_all_pending)
-        self.auto_reject_all_btn.setEnabled(False)
-        auto_btn_layout.addWidget(self.auto_reject_all_btn)
-
-        auto_trade_layout.addWidget(auto_btn_frame)
-
-        tabs.addTab(auto_trade_tab, "Auto-Trade")
-
-        layout.addWidget(tabs)
-
-        log_group = QGroupBox("System Log")
-        log_layout = QVBoxLayout()
-        try:
-            from .widgets import LogWidget
-            self.log_widget = LogWidget()
-        except ImportError:
-            self.log_widget = QTextEdit()
-            self.log_widget.setReadOnly(True)
-            self.log_widget.setMaximumHeight(150)
-        log_layout.addWidget(self.log_widget)
-        log_group.setLayout(log_layout)
-        layout.addWidget(log_group)
-
-        action_frame = QFrame()
-        action_frame.setStyleSheet("""
-            QFrame {
-                background: #1a1a3e;
-                border-radius: 8px;
-                padding: 10px;
-            }
-        """)
-        action_layout = QHBoxLayout(action_frame)
-
-        self.buy_btn = QPushButton("BUY")
-        self.buy_btn.setStyleSheet("""
-            QPushButton {
-                background: #4CAF50; color: white; border: none;
-                padding: 15px 40px; border-radius: 6px;
-                font-weight: bold; font-size: 16px;
-            }
-            QPushButton:hover { background: #388E3C; }
-            QPushButton:disabled { background: #333; color: #666; }
-        """)
-        self.buy_btn.clicked.connect(self._execute_buy)
-        self.buy_btn.setEnabled(False)
-
-        self.sell_btn = QPushButton("SELL")
-        self.sell_btn.setStyleSheet("""
-            QPushButton {
-                background: #F44336; color: white; border: none;
-                padding: 15px 40px; border-radius: 6px;
-                font-weight: bold; font-size: 16px;
-            }
-            QPushButton:hover { background: #D32F2F; }
-            QPushButton:disabled { background: #333; color: #666; }
-        """)
-        self.sell_btn.clicked.connect(self._execute_sell)
-        self.sell_btn.setEnabled(False)
-
-        action_layout.addWidget(self.buy_btn)
-        action_layout.addWidget(self.sell_btn)
-        layout.addWidget(action_frame)
-
-        return panel
+        return _create_right_panel_impl(self)
 
         # =========================================================================
         # STATUS BAR & TIMERS
@@ -2579,272 +2212,7 @@ class MainApp(QMainWindow):
     # =========================================================================
 
     def _apply_professional_style(self):
-        """Apply a modern, clean desktop trading theme without changing behavior."""
-        self.setFont(QFont("Segoe UI", 10))
-        self.setStyleSheet("""
-            QMainWindow, QWidget {
-                background: #0b1422;
-                color: #dbe4f3;
-            }
-
-            QMenuBar {
-                background: #0f1b2e;
-                color: #dbe4f3;
-                border-bottom: 1px solid #253754;
-                padding: 3px 6px;
-            }
-            QMenuBar::item {
-                padding: 6px 11px;
-                border-radius: 7px;
-                margin: 2px 2px;
-            }
-            QMenuBar::item:selected { background: #172742; }
-            QMenu {
-                background: #0f1b2e;
-                color: #dbe4f3;
-                border: 1px solid #2d4263;
-                padding: 6px;
-            }
-            QMenu::item {
-                padding: 7px 16px;
-                border-radius: 6px;
-            }
-            QMenu::item:selected { background: #1a2c49; }
-
-            QToolBar {
-                background: #0f1b2e;
-                border: none;
-                border-bottom: 1px solid #253754;
-                spacing: 8px;
-                padding: 6px 8px;
-            }
-            QToolButton {
-                background: #15243d;
-                color: #dbe4f3;
-                border: 1px solid #2f4466;
-                border-radius: 8px;
-                padding: 6px 11px;
-                font-weight: 600;
-            }
-            QToolButton:hover {
-                background: #1b2f50;
-                border-color: #4a7bff;
-            }
-            QToolButton:pressed { background: #233a61; }
-
-            QGroupBox {
-                font-weight: 700;
-                font-size: 12px;
-                border: 1px solid #253754;
-                border-radius: 11px;
-                margin-top: 12px;
-                padding-top: 12px;
-                color: #9ab8ea;
-                background: #0f1b2e;
-            }
-            QGroupBox::title {
-                subcontrol-origin: margin;
-                left: 12px;
-                padding: 0 6px;
-            }
-
-            QLabel {
-                color: #dbe4f3;
-                font-size: 12px;
-                background: transparent;
-            }
-
-            QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox, QListWidget {
-                min-height: 31px;
-                padding: 4px 8px;
-                border: 1px solid #324968;
-                border-radius: 8px;
-                background: #13223a;
-                color: #dbe4f3;
-                selection-background-color: #2f5fda;
-                selection-color: #f8fbff;
-            }
-            QLineEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus, QComboBox:focus, QListWidget:focus {
-                border-color: #4a7bff;
-                background: #182b47;
-            }
-
-            QComboBox::drop-down {
-                border: none;
-                width: 22px;
-            }
-
-            QTableWidget, QTableView, QTreeView {
-                background: #0e1a2d;
-                color: #dbe4f3;
-                border: 1px solid #253754;
-                border-radius: 9px;
-                gridline-color: #23334e;
-                selection-background-color: #22406d;
-                selection-color: #f7fbff;
-                alternate-background-color: #101f34;
-                outline: none;
-            }
-            QTableWidget::item, QTableView::item {
-                padding: 6px;
-                border: none;
-            }
-            QHeaderView::section {
-                background: #172840;
-                color: #aac3ec;
-                padding: 8px 10px;
-                border: none;
-                border-right: 1px solid #253754;
-                border-bottom: 1px solid #253754;
-                font-weight: 700;
-            }
-
-            QTabWidget::pane {
-                border: 1px solid #253754;
-                background: #0e1a2d;
-                border-radius: 9px;
-                top: -1px;
-            }
-            QTabBar::tab {
-                background: #13223a;
-                color: #9db1d6;
-                padding: 9px 16px;
-                border-top-left-radius: 7px;
-                border-top-right-radius: 7px;
-                margin-right: 3px;
-                min-width: 72px;
-            }
-            QTabBar::tab:selected {
-                background: #1b3150;
-                color: #e8f0ff;
-                border: 1px solid #38537a;
-                border-bottom: 1px solid #1b3150;
-            }
-            QTabBar::tab:hover:!selected {
-                color: #c9daf7;
-                background: #172a45;
-            }
-
-            QPushButton {
-                background: #1c3253;
-                color: #eaf1ff;
-                border: 1px solid #3d5f8f;
-                border-radius: 8px;
-                padding: 8px 14px;
-                font-weight: 700;
-            }
-            QPushButton:hover {
-                background: #24416b;
-                border-color: #4a7bff;
-            }
-            QPushButton:pressed { background: #2a4977; }
-            QPushButton:disabled {
-                background: #12223a;
-                color: #6b7d9c;
-                border-color: #253754;
-            }
-
-            QCheckBox, QRadioButton {
-                spacing: 7px;
-                color: #dbe4f3;
-                background: transparent;
-            }
-            QCheckBox::indicator, QRadioButton::indicator {
-                width: 16px;
-                height: 16px;
-            }
-            QCheckBox::indicator {
-                border: 1px solid #3b5479;
-                border-radius: 4px;
-                background: #13223a;
-            }
-            QCheckBox::indicator:checked {
-                background: #2f5fda;
-                border-color: #2f5fda;
-            }
-
-            QTextEdit, QPlainTextEdit {
-                background: #0c1728;
-                color: #cde8d7;
-                border: 1px solid #253754;
-                border-radius: 9px;
-                font-family: 'Consolas', 'Cascadia Mono', monospace;
-                padding: 6px;
-                selection-background-color: #2f5fda;
-                selection-color: #f8fbff;
-            }
-
-            QProgressBar {
-                border: 1px solid #304968;
-                background: #101f34;
-                border-radius: 7px;
-                text-align: center;
-                color: #dbe4f3;
-                min-height: 18px;
-            }
-            QProgressBar::chunk {
-                border-radius: 6px;
-                background: qlineargradient(
-                    x1:0, y1:0, x2:1, y2:0,
-                    stop:0 #2f6be0, stop:1 #39b982
-                );
-            }
-
-            QStatusBar {
-                background: #0f1b2e;
-                color: #9db1d6;
-                border-top: 1px solid #253754;
-            }
-
-            QScrollBar:vertical {
-                background: #0f1b2e;
-                width: 11px;
-                margin: 2px;
-                border-radius: 5px;
-            }
-            QScrollBar::handle:vertical {
-                background: #34507a;
-                border-radius: 5px;
-                min-height: 24px;
-            }
-            QScrollBar::handle:vertical:hover { background: #45669c; }
-            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
-                border: none;
-                background: none;
-                height: 0;
-            }
-            QScrollBar:horizontal {
-                background: #0f1b2e;
-                height: 11px;
-                margin: 2px;
-                border-radius: 5px;
-            }
-            QScrollBar::handle:horizontal {
-                background: #34507a;
-                border-radius: 5px;
-                min-width: 24px;
-            }
-            QScrollBar::handle:horizontal:hover { background: #45669c; }
-            QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {
-                border: none;
-                background: none;
-                width: 0;
-            }
-
-            QSplitter::handle {
-                background: #1a2c47;
-            }
-            QSplitter::handle:hover {
-                background: #2b456b;
-            }
-
-            QToolTip {
-                background: #1a2c49;
-                color: #e9f0ff;
-                border: 1px solid #3b5479;
-                padding: 6px 8px;
-            }
-        """)
+        _apply_professional_style_impl(self)
 
     # =========================================================================
     # =========================================================================
@@ -2940,8 +2308,8 @@ class MainApp(QMainWindow):
                         for x in out
                         if str(x).strip()
                     ]
-        except Exception:
-            pass
+        except Exception as exc:
+            log.debug("Suppressed exception in ui/app.py", exc_info=exc)
         return []
 
     def _sync_trained_stock_last_train_from_model(self) -> None:
@@ -3054,8 +2422,8 @@ class MainApp(QMainWindow):
             if self.executor and self.executor.auto_trader:
                 try:
                     self.executor.auto_trader.update_watchlist(self.watch_list)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    log.debug("Suppressed exception in ui/app.py", exc_info=exc)
 
         # Keep selection aligned with the active symbol.
         try:
@@ -3064,8 +2432,8 @@ class MainApp(QMainWindow):
                 if item and self._ui_norm(item.text()) == normalized:
                     self.watchlist.setCurrentCell(row, 0)
                     break
-        except Exception:
-            pass
+        except Exception as exc:
+            log.debug("Suppressed exception in ui/app.py", exc_info=exc)
 
     def _on_trained_stock_activated(self, item):
         """Load selected trained stock from right-panel list."""
@@ -3086,8 +2454,8 @@ class MainApp(QMainWindow):
         )
         try:
             self._queue_history_refresh(code, interval)
-        except Exception:
-            pass
+        except Exception as exc:
+            log.debug("Suppressed exception in ui/app.py", exc_info=exc)
         try:
             target_lookback = int(
                 max(
@@ -3097,14 +2465,14 @@ class MainApp(QMainWindow):
             )
             if int(self.lookback_spin.value()) < target_lookback:
                 self.lookback_spin.setValue(target_lookback)
-        except Exception:
-            pass
+        except Exception as exc:
+            log.debug("Suppressed exception in ui/app.py", exc_info=exc)
         self._pin_watchlist_symbol(code)
         self.stock_input.setText(code)
         try:
             self._ensure_feed_subscription(code)
-        except Exception:
-            pass
+        except Exception as exc:
+            log.debug("Suppressed exception in ui/app.py", exc_info=exc)
         self._on_watchlist_click(-1, -1, code_override=code)
 
     def _refresh_trained_stock_list(
@@ -3293,8 +2661,8 @@ class MainApp(QMainWindow):
                 iv = self._normalize_interval_token(self.interval_combo.currentText())
                 if sym:
                     self._queue_history_refresh(sym, iv)
-            except Exception:
-                pass
+            except Exception as exc:
+                log.debug("Suppressed exception in ui/app.py", exc_info=exc)
 
         def _on_error(err: str) -> None:
             _finalize()
@@ -3525,8 +2893,8 @@ class MainApp(QMainWindow):
                 self.chart.clear()
             if hasattr(self, "chart_latest_label"):
                 self.chart_latest_label.setText("Latest --")
-        except Exception:
-            pass
+        except Exception as exc:
+            log.debug("Suppressed exception in ui/app.py", exc_info=exc)
 
         was_monitoring = bool(self.monitor and self.monitor.isRunning())
         if was_monitoring:
@@ -3742,8 +3110,8 @@ class MainApp(QMainWindow):
                 if abs(v) >= 1e11:
                     v = v / 1000.0
                 return v
-        except Exception:
-            pass
+        except Exception as exc:
+            log.debug("Suppressed exception in ui/app.py", exc_info=exc)
 
         try:
             if isinstance(ts_raw, datetime):
@@ -3913,8 +3281,8 @@ class MainApp(QMainWindow):
                 return max(1, int(float(iv[:-1])) * 60)
             if iv.endswith("s"):
                 return max(1, int(float(iv[:-1])))
-        except Exception:
-            pass
+        except Exception as exc:
+            log.debug("Suppressed exception in ui/app.py", exc_info=exc)
         return 60
 
     def _interval_token_from_seconds(self, seconds: Any) -> str | None:
@@ -4068,8 +3436,8 @@ class MainApp(QMainWindow):
                     0.0,
                     float(row.get("volume", 0) or 0.0),
                 )
-            except Exception:
-                pass
+            except Exception as exc:
+                log.debug("Suppressed exception in ui/app.py", exc_info=exc)
 
         out: list[dict[str, Any]] = []
         for val in buckets.values():
@@ -4575,8 +3943,8 @@ class MainApp(QMainWindow):
                     normalized = self._ui_norm(code)
                     if normalized:
                         self._ensure_feed_subscription(normalized)
-            except Exception:
-                pass
+            except Exception as exc:
+                log.debug("Suppressed exception in ui/app.py", exc_info=exc)
             self.log(
                 f"Subscribed to feeds for {len(self.watch_list)} stocks",
                 "info"
@@ -4701,701 +4069,7 @@ class MainApp(QMainWindow):
         QApplication.alert(self)
 
     def _on_price_updated(self, code: str, price: float):
-        """
-        Handle price update from monitor.
-
-        FIXED: No longer calls update_data() which was overwriting candles.
-        Instead, updates the current bar's close price so the candle
-        reflects the live price.
-        """
-        if not CONFIG.is_market_open():
-            return
-
-        code = self._ui_norm(code)
-        try:
-            price = float(price)
-        except Exception:
-            return
-        if not code or price <= 0:
-            return
-
-        row = self._watchlist_row_by_code.get(code)
-        if row is None:
-            # Lazy rebuild if row map was invalidated by table reset.
-            for r in range(self.watchlist.rowCount()):
-                item = self.watchlist.item(r, 0)
-                if not item:
-                    continue
-                mapped = self._ui_norm(item.text())
-                if not mapped:
-                    continue
-                self._watchlist_row_by_code[mapped] = int(r)
-            row = self._watchlist_row_by_code.get(code)
-
-        if row is not None:
-            now_ui = time.monotonic()
-            prev_ui = self._last_watchlist_price_ui.get(code)
-            refresh_price = True
-            if prev_ui is not None:
-                prev_ts, prev_px = float(prev_ui[0]), float(prev_ui[1])
-                if (
-                    (now_ui - prev_ts) < 0.12
-                    and abs(price - prev_px)
-                    <= max(0.001, abs(prev_px) * 0.00004)
-                ):
-                    refresh_price = False
-
-            if refresh_price:
-                text = f"CNY {price:.2f}"
-                cell = self.watchlist.item(int(row), 1)
-                if cell is None:
-                    self.watchlist.setItem(int(row), 1, QTableWidgetItem(text))
-                elif cell.text() != text:
-                    cell.setText(text)
-                self._last_watchlist_price_ui[code] = (now_ui, price)
-
-        self._refresh_guess_rows_for_symbol(code, price)
-
-        current_code = self._ui_norm(self.stock_input.text())
-        ui_interval = self._normalize_interval_token(
-            self.interval_combo.currentText()
-        )
-        inferred_interval = ui_interval
-
-        # Update the last bar's close price for live candle display.
-        arr = self._bars_by_symbol.get(code)
-        if arr and code == current_code:
-            same_interval = [
-                b for b in arr
-                if self._normalize_interval_token(
-                    b.get("interval", ui_interval), fallback=ui_interval
-                ) == ui_interval
-            ]
-            if same_interval and len(same_interval) != len(arr):
-                arr = same_interval
-                self._bars_by_symbol[code] = arr
-            elif not same_interval:
-                # Rebuild on UI interval instead of mutating stale bars from a
-                # different timeframe (can create giant synthetic candles).
-                inferred_interval = ui_interval
-                self._queue_history_refresh(code, ui_interval)
-                self._debug_console(
-                    f"tick_iv_rebuild:{code}:{ui_interval}",
-                    (
-                        f"rebuild bars on ui interval for {code}: "
-                        f"existing interval mismatch -> using {ui_interval}"
-                    ),
-                    min_gap_seconds=1.0,
-                    level="info",
-                )
-        if arr and len(arr) > 1:
-            arr.sort(
-                key=lambda x: float(
-                    x.get("_ts_epoch", self._ts_to_epoch(x.get("timestamp", "")))
-                )
-            )
-        if code == current_code:
-            if arr and inferred_interval != ui_interval:
-                interval = inferred_interval
-            else:
-                interval = ui_interval
-        else:
-            interval = self._normalize_interval_token(
-                (arr[-1].get("interval") if arr else None),
-                fallback=ui_interval,
-            )
-        interval_s = self._interval_seconds(interval)
-        now_ts = time.time()
-        feed_age = now_ts - float(self._last_bar_feed_ts.get(code, 0.0))
-        has_recent_feed_bar = (
-            bool(arr)
-            and feed_age <= max(2.0, float(interval_s) * 1.2)
-        )
-        if has_recent_feed_bar:
-            if arr:
-                try:
-                    last = arr[-1]
-                    last_bucket = self._bar_bucket_epoch(
-                        last.get("_ts_epoch", last.get("timestamp", now_ts)),
-                        interval,
-                    )
-                    prev_ref: float | None = None
-                    if len(arr) >= 2:
-                        try:
-                            prev_bar = arr[-2]
-                            prev_bucket = self._bar_bucket_epoch(
-                                prev_bar.get("_ts_epoch", prev_bar.get("timestamp", last_bucket)),
-                                interval,
-                            )
-                            if not self._is_intraday_day_boundary(
-                                prev_bucket,
-                                last_bucket,
-                                interval,
-                            ):
-                                prev_ref = float(prev_bar.get("close", price) or price)
-                        except Exception:
-                            prev_ref = None
-                    if prev_ref is None:
-                        prev_ref = float(last.get("close", price) or price)
-                    bar_price = float(price)
-                    if prev_ref and prev_ref > 0:
-                        clamp_cap = float(self._synthetic_tick_jump_cap(interval))
-                        raw_jump = abs(bar_price / float(prev_ref) - 1.0)
-                        if raw_jump > clamp_cap:
-                            sign = 1.0 if bar_price >= float(prev_ref) else -1.0
-                            clamped = float(prev_ref) * (1.0 + (sign * clamp_cap))
-                            self._debug_console(
-                                f"tick_clamp_recent:{code}:{interval}",
-                                (
-                                    f"clamped synthetic tick {code} {interval}: "
-                                    f"raw={bar_price:.4f} prev={float(prev_ref):.4f} "
-                                    f"jump={raw_jump:.2%} -> {clamped:.4f}"
-                                ),
-                                min_gap_seconds=1.0,
-                                level="warning",
-                            )
-                            bar_price = float(clamped)
-                    if (not prev_ref) or (not self._is_outlier_tick(
-                        float(prev_ref), bar_price, interval=interval
-                    )):
-                        now_bucket = self._bar_bucket_epoch(now_ts, interval)
-                        if int(last_bucket) == int(now_bucket):
-                            s = self._sanitize_ohlc(
-                                float(last.get("open", price) or price),
-                                max(float(last.get("high", bar_price) or bar_price), bar_price),
-                                min(float(last.get("low", bar_price) or bar_price), bar_price),
-                                bar_price,
-                                interval=interval,
-                                ref_close=float(prev_ref) if prev_ref and prev_ref > 0 else None,
-                            )
-                            if s is not None:
-                                o, h, low, c = s
-                                last["open"] = o
-                                last["high"] = h
-                                last["low"] = low
-                                last["close"] = c
-                                last["final"] = False
-                                last["_ts_epoch"] = float(last_bucket)
-                                last["timestamp"] = self._epoch_to_iso(last_bucket)
-                        else:
-                            # Feed bars can arrive slightly late around bucket
-                            # boundaries. Roll to a synthetic new bucket so the
-                            # live candle and guessed graph do not freeze.
-                            last_close = float(last.get("close", bar_price) or bar_price)
-                            day_boundary = self._is_intraday_day_boundary(
-                                last_bucket,
-                                now_bucket,
-                                interval,
-                            )
-                            ref_close_new = (
-                                float(last_close)
-                                if (last_close > 0 and not day_boundary)
-                                else None
-                            )
-
-                            if not bool(last.get("final", False)):
-                                last["final"] = True
-                                finalized_bar = dict(last)
-                                finalized_bar["interval"] = interval
-                                finalized_bar["_ts_epoch"] = float(last_bucket)
-                                finalized_bar["timestamp"] = self._epoch_to_iso(last_bucket)
-                                self._persist_session_bar(
-                                    code,
-                                    interval,
-                                    finalized_bar,
-                                    channel="tick_final",
-                                    min_gap_seconds=0.0,
-                                )
-
-                            new_price = float(bar_price)
-                            if ref_close_new and ref_close_new > 0:
-                                clamp_cap_new = float(self._synthetic_tick_jump_cap(interval))
-                                raw_jump_new = abs(new_price / float(ref_close_new) - 1.0)
-                                if raw_jump_new > clamp_cap_new:
-                                    sign_new = (
-                                        1.0
-                                        if new_price >= float(ref_close_new)
-                                        else -1.0
-                                    )
-                                    new_price = float(ref_close_new) * (
-                                        1.0 + (sign_new * clamp_cap_new)
-                                    )
-
-                            if (
-                                (not ref_close_new)
-                                or (
-                                    not self._is_outlier_tick(
-                                        float(ref_close_new),
-                                        new_price,
-                                        interval=interval,
-                                    )
-                                )
-                            ):
-                                bucket_open = float(
-                                    ref_close_new
-                                    if ref_close_new and ref_close_new > 0
-                                    else new_price
-                                )
-                                s_new = self._sanitize_ohlc(
-                                    bucket_open,
-                                    max(bucket_open, new_price),
-                                    min(bucket_open, new_price),
-                                    new_price,
-                                    interval=interval,
-                                    ref_close=ref_close_new,
-                                )
-                                if s_new is None:
-                                    s_new = (
-                                        bucket_open,
-                                        bucket_open,
-                                        bucket_open,
-                                        bucket_open,
-                                    )
-                                o_new, h_new, low_new, c_new = s_new
-                                arr.append(
-                                    {
-                                        "open": o_new,
-                                        "high": h_new,
-                                        "low": low_new,
-                                        "close": c_new,
-                                        "timestamp": self._epoch_to_iso(now_bucket),
-                                        "final": False,
-                                        "interval": interval,
-                                        "_ts_epoch": float(now_bucket),
-                                    }
-                                )
-                                arr.sort(
-                                    key=lambda x: float(
-                                        x.get(
-                                            "_ts_epoch",
-                                            self._ts_to_epoch(x.get("timestamp", "")),
-                                        )
-                                    )
-                                )
-                                keep = self._history_window_bars(interval)
-                                if len(arr) > keep:
-                                    del arr[:-keep]
-                except Exception:
-                    pass
-
-            if current_code == code and arr:
-                try:
-                    arr = self._render_chart_state(
-                        symbol=code,
-                        interval=interval,
-                        bars=arr,
-                        context="tick_recent",
-                        current_price=price,
-                        update_latest_label=True,
-                    )
-                except Exception as e:
-                    log.debug(f"Chart price refresh failed: {e}")
-
-            if arr:
-                self._persist_session_bar(
-                    code,
-                    interval,
-                    arr[-1],
-                    channel="tick",
-                    min_gap_seconds=0.9,
-                )
-
-        if not has_recent_feed_bar:
-            bucket_s = float(max(interval_s, 1))
-            bucket_epoch = float(int(now_ts // bucket_s) * int(bucket_s))
-            bucket_iso = self._epoch_to_iso(bucket_epoch)
-
-            if not arr:
-                arr = [{
-                    "open": price,
-                    "high": price,
-                    "low": price,
-                    "close": price,
-                    "timestamp": bucket_iso,
-                    "final": False,
-                    "interval": interval,
-                    "_ts_epoch": bucket_epoch,
-                }]
-                self._bars_by_symbol[code] = arr
-            if arr and len(arr) > 0:
-                last = arr[-1]
-                prev_close = float(last.get("close", price) or price)
-                last_epoch = self._ts_to_epoch(
-                    last.get("_ts_epoch", last.get("timestamp", bucket_iso))
-                )
-                last_bucket = float(int(last_epoch // bucket_s) * int(bucket_s))
-                day_boundary = self._is_intraday_day_boundary(
-                    last_bucket,
-                    bucket_epoch,
-                    interval,
-                )
-                ref_close = float(prev_close) if (prev_close > 0 and not day_boundary) else None
-                price_for_bar = float(price)
-                if ref_close and ref_close > 0:
-                    clamp_cap = float(self._synthetic_tick_jump_cap(interval))
-                    raw_jump = abs(price_for_bar / float(ref_close) - 1.0)
-                    if raw_jump > clamp_cap:
-                        sign = 1.0 if price_for_bar >= float(ref_close) else -1.0
-                        clamped = float(ref_close) * (1.0 + (sign * clamp_cap))
-                        self._debug_console(
-                            f"tick_clamp_bucket:{code}:{interval}",
-                            (
-                                f"clamped synthetic bucket tick {code} {interval}: "
-                                f"raw={price_for_bar:.4f} prev={float(ref_close):.4f} "
-                                f"jump={raw_jump:.2%} -> {clamped:.4f}"
-                            ),
-                            min_gap_seconds=1.0,
-                            level="warning",
-                        )
-                        price_for_bar = float(clamped)
-                if (
-                    ref_close
-                    and ref_close > 0
-                    and self._is_outlier_tick(ref_close, price_for_bar, interval=interval)
-                ):
-                    log.debug(
-                        f"Skip outlier tick for {code}: prev={float(ref_close):.2f} new={price_for_bar:.2f}"
-                    )
-                    return
-
-                if int(last_bucket) != int(bucket_epoch):
-                    if not bool(last.get("final", False)):
-                        last["final"] = True
-                    finalized_bar = dict(last)
-                    finalized_bar["interval"] = interval
-                    finalized_bar["_ts_epoch"] = float(last_bucket)
-                    finalized_bar["timestamp"] = self._epoch_to_iso(last_bucket)
-                    self._persist_session_bar(
-                        code,
-                        interval,
-                        finalized_bar,
-                        channel="tick_final",
-                        min_gap_seconds=0.0,
-                    )
-                    bucket_open = float(ref_close if ref_close and ref_close > 0 else price)
-                    s_new = self._sanitize_ohlc(
-                        bucket_open,
-                        max(bucket_open, price_for_bar),
-                        min(bucket_open, price_for_bar),
-                        price_for_bar,
-                        interval=interval,
-                        ref_close=ref_close,
-                    )
-                    if s_new is None:
-                        # Keep continuity when tick is still unusable after clamp.
-                        s_new = (bucket_open, bucket_open, bucket_open, bucket_open)
-                    o_new, h_new, l_new, c_new = s_new
-                    last = {
-                        "open": o_new,
-                        "high": h_new,
-                        "low": l_new,
-                        "close": c_new,
-                        "timestamp": bucket_iso,
-                        "final": False,
-                        "interval": interval,
-                        "_ts_epoch": bucket_epoch,
-                    }
-                    arr.append(last)
-                    keep = self._history_window_bars(interval)
-                    if len(arr) > keep:
-                        del arr[:-keep]
-                else:
-                    if float(last.get("open", 0) or 0) <= 0:
-                        last["open"] = price_for_bar
-                    s = self._sanitize_ohlc(
-                        float(last.get("open", price_for_bar) or price_for_bar),
-                        max(float(last.get("high", price_for_bar) or price_for_bar), price_for_bar),
-                        min(float(last.get("low", price_for_bar) or price_for_bar), price_for_bar),
-                        price_for_bar,
-                        interval=interval,
-                        ref_close=ref_close,
-                    )
-                    if s is None:
-                        return
-                    o, h, low, c = s
-                    last["open"] = o
-                    last["close"] = c
-                    last["high"] = h
-                    last["low"] = low
-                    last["final"] = False
-                    last["timestamp"] = bucket_iso
-                    last["_ts_epoch"] = bucket_epoch
-
-                arr.sort(
-                    key=lambda x: float(
-                        x.get("_ts_epoch", self._ts_to_epoch(x.get("timestamp", "")))
-                    )
-                )
-                keep = self._history_window_bars(interval)
-                if len(arr) > keep:
-                    del arr[:-keep]
-                last = arr[-1]
-
-                if current_code == code:
-                    try:
-                        arr = self._render_chart_state(
-                            symbol=code,
-                            interval=interval,
-                            bars=arr,
-                            context="tick_bucket",
-                            current_price=price,
-                            update_latest_label=True,
-                        )
-                    except Exception as e:
-                        log.debug(f"Chart price update failed: {e}")
-
-                self._persist_session_bar(
-                    code,
-                    interval,
-                    last,
-                    channel="tick",
-                    min_gap_seconds=0.9,
-                )
-
-        # Only refresh guessed graph for the currently selected symbol.
-        if current_code != code:
-            return
-
-        # =====================================================================
-        # THROTTLED FORECAST REFRESH (keep existing logic but simplified)
-        # =====================================================================
-
-        if not self.predictor:
-            return
-
-        ui_interval = self._normalize_interval_token(
-            self.interval_combo.currentText()
-        )
-        ui_horizon = int(self.forecast_spin.value())
-        exact_artifacts = self._has_exact_model_artifacts(ui_interval, ui_horizon)
-        refresh_gap = 1.0 if exact_artifacts else 2.2
-        now = time.time()
-        if (now - self._last_forecast_refresh_ts) < float(refresh_gap):
-            return
-        self._last_forecast_refresh_ts = now
-
-        interval = ui_interval
-        horizon = int(ui_horizon)
-        lookback = max(
-            120,
-            int(self.lookback_spin.value()),
-            int(self._recommended_lookback(interval)),
-        )
-        use_realtime = bool(CONFIG.is_market_open())
-        infer_interval = "1m"
-        infer_horizon = int(horizon)
-        infer_lookback = int(
-            max(
-                self._recommended_lookback("1m"),
-                self._bars_needed_from_base_interval(
-                    interval,
-                    int(lookback),
-                    base_interval="1m",
-                ),
-            )
-        )
-        history_allow_online = True
-        if not self._has_exact_model_artifacts(infer_interval, infer_horizon):
-            self._debug_console(
-                f"forecast_model_fallback:{code}:{interval}:{horizon}",
-                (
-                    f"forecast inference locked to 1m for {code}: "
-                    f"ui={interval}/{horizon} infer={infer_interval}/{infer_horizon} "
-                    f"lookback={infer_lookback} online=1"
-                ),
-                min_gap_seconds=2.0,
-                level="info",
-            )
-
-        def do_forecast():
-            if hasattr(self.predictor, "get_realtime_forecast_curve"):
-                return self.predictor.get_realtime_forecast_curve(
-                    stock_code=code,
-                    interval=infer_interval,
-                    horizon_steps=infer_horizon,
-                    lookback_bars=infer_lookback,
-                    use_realtime_price=use_realtime,
-                    history_allow_online=history_allow_online,
-                )
-            return None
-
-        w_old = self.workers.get("forecast_refresh")
-        if w_old and w_old.isRunning():
-            if (
-                self._forecast_refresh_symbol
-                and self._forecast_refresh_symbol != code
-            ):
-                w_old.cancel()
-            else:
-                return
-
-        worker = WorkerThread(do_forecast, timeout_seconds=30)
-        self._track_worker(worker)
-        self.workers["forecast_refresh"] = worker
-        self._forecast_refresh_symbol = code
-
-        def on_done(res):
-            try:
-                if not res:
-                    self._debug_console(
-                        f"forecast_empty:{code}:{interval}",
-                        f"forecast worker returned empty for {code} {interval}",
-                        min_gap_seconds=1.0,
-                    )
-                    return
-                actual_prices, predicted_prices = res
-                selected = self._ui_norm(self.stock_input.text())
-                if selected != code:
-                    return
-                _ = actual_prices  # chart bars are maintained by feed/history path.
-
-                stable_predicted = [
-                    float(v)
-                    for v in self._safe_list(predicted_prices)
-                    if float(v) > 0 and math.isfinite(float(v))
-                ]
-                if not stable_predicted:
-                    if (
-                        self.current_prediction
-                        and self.current_prediction.stock_code == code
-                    ):
-                        stable_predicted = [
-                            float(v)
-                            for v in self._safe_list(
-                                getattr(
-                                    self.current_prediction,
-                                    "predicted_prices",
-                                    [],
-                                )
-                            )
-                            if float(v) > 0 and math.isfinite(float(v))
-                        ]
-                predicted_prices = stable_predicted
-
-                try:
-                    pvals = [
-                        float(v) for v in (predicted_prices or [])
-                        if float(v) > 0
-                    ]
-                except Exception:
-                    pvals = []
-                if pvals:
-                    diffs = []
-                    for i in range(1, len(pvals)):
-                        prev = float(pvals[i - 1])
-                        cur = float(pvals[i])
-                        if prev > 0:
-                            diffs.append(abs(cur / prev - 1.0))
-                    max_step = max(diffs) if diffs else 0.0
-                    flip_ratio = 0.0
-                    if len(diffs) >= 3:
-                        try:
-                            s = []
-                            for i in range(1, len(pvals)):
-                                s.append(1 if pvals[i] >= pvals[i - 1] else -1)
-                            flips = 0
-                            for i in range(1, len(s)):
-                                if s[i] != s[i - 1]:
-                                    flips += 1
-                            flip_ratio = float(flips) / float(max(1, len(s) - 1))
-                        except Exception:
-                            flip_ratio = 0.0
-
-                    if max_step > 0.02 or flip_ratio > 0.80:
-                        self._debug_console(
-                            f"forecast_shape:{code}:{infer_interval}",
-                            (
-                                f"forecast anomaly {code} {infer_interval}: len={len(pvals)} "
-                                f"max_step={max_step:.2%} flip_ratio={flip_ratio:.2f} "
-                                f"first={pvals[0]:.4f} last={pvals[-1]:.4f}"
-                            ),
-                            min_gap_seconds=1.0,
-                        )
-
-                display_current = 0.0
-                try:
-                    if (
-                        self.current_prediction
-                        and self.current_prediction.stock_code == code
-                    ):
-                        display_current = float(
-                            getattr(self.current_prediction, "current_price", 0.0) or 0.0
-                        )
-                except Exception:
-                    display_current = 0.0
-                if display_current <= 0:
-                    try:
-                        arr_tmp = self._bars_by_symbol.get(code) or []
-                        if arr_tmp:
-                            display_current = float(arr_tmp[-1].get("close", 0.0) or 0.0)
-                    except Exception:
-                        display_current = 0.0
-                display_predicted = self._prepare_chart_predicted_prices(
-                    symbol=code,
-                    chart_interval=interval,
-                    predicted_prices=predicted_prices,
-                    source_interval=infer_interval,
-                    current_price=display_current if display_current > 0 else None,
-                    target_steps=int(self.forecast_spin.value()),
-                )
-
-                # Update current_prediction with new forecast
-                if (
-                    self.current_prediction
-                    and self.current_prediction.stock_code == code
-                ):
-                    self.current_prediction.predicted_prices = display_predicted
-                    low_band, high_band = self._build_chart_prediction_bands(
-                        symbol=code,
-                        predicted_prices=display_predicted,
-                        anchor_price=display_current if display_current > 0 else None,
-                    )
-                    self.current_prediction.predicted_prices_low = low_band
-                    self.current_prediction.predicted_prices_high = high_band
-
-                arr = self._bars_by_symbol.get(code)
-                if arr:
-                    iv = self._normalize_interval_token(
-                        self.interval_combo.currentText()
-                    )
-                    anchor_px = 0.0
-                    try:
-                        if (
-                            self.current_prediction
-                            and self.current_prediction.stock_code == code
-                        ):
-                            anchor_px = float(
-                                getattr(
-                                    self.current_prediction,
-                                    "current_price",
-                                    0.0,
-                                ) or 0.0
-                            )
-                    except Exception:
-                        anchor_px = 0.0
-                    arr = self._render_chart_state(
-                        symbol=code,
-                        interval=iv,
-                        bars=arr,
-                        context="forecast_refresh",
-                        current_price=anchor_px if anchor_px > 0 else None,
-                        predicted_prices=display_predicted,
-                        source_interval=iv,
-                        target_steps=int(self.forecast_spin.value()),
-                        predicted_prepared=True,
-                    )
-            finally:
-                self.workers.pop("forecast_refresh", None)
-                if self._forecast_refresh_symbol == code:
-                    self._forecast_refresh_symbol = ""
-
-        worker.result.connect(on_done)
-        def on_error(_e):
-            self.workers.pop("forecast_refresh", None)
-            if self._forecast_refresh_symbol == code:
-                self._forecast_refresh_symbol = ""
-        worker.error.connect(on_error)
-        worker.start()
+        _on_price_updated_impl(self, code, price)
 
     def _refresh_live_chart_forecast(self):
         """
@@ -5421,15 +4095,15 @@ class MainApp(QMainWindow):
             if q and float(getattr(q, "price", 0) or 0) > 0:
                 self._on_price_updated(code, float(q.price))
                 return
-        except Exception:
-            pass
+        except Exception as exc:
+            log.debug("Suppressed exception in ui/app.py", exc_info=exc)
         try:
             from data.fetcher import get_fetcher
             q2 = get_fetcher().get_realtime(code)
             if q2 and float(getattr(q2, "price", 0) or 0) > 0:
                 self._on_price_updated(code, float(q2.price))
-        except Exception:
-            pass
+        except Exception as exc:
+            log.debug("Suppressed exception in ui/app.py", exc_info=exc)
 
     def _get_levels_dict(self) -> dict[str, float] | None:
         """Get trading levels as dict"""
@@ -5735,514 +4409,12 @@ class MainApp(QMainWindow):
         *,
         symbol: str = "",
     ) -> list[dict[str, Any]]:
-        """
-        Final chart-only scrub to enforce one interval and normalized buckets.
-        Prevents malformed/mixed bars from rendering giant candle bodies.
-        """
-        iv = self._normalize_interval_token(interval)
-        sym = self._ui_norm(symbol)
-        source_rows = list(bars or [])
-        raw_count = len(source_rows)
-        mixed_count = 0
-        aligned_rows: list[dict[str, Any]] = []
-        for row in source_rows:
-            if not isinstance(row, dict):
-                continue
-            row_iv = self._normalize_interval_token(
-                row.get("interval", iv),
-                fallback=iv,
-            )
-            if row_iv != iv:
-                mixed_count += 1
-                continue
-            aligned_rows.append(row)
-        if mixed_count > 0:
-            self._debug_console(
-                f"chart_mixed_iv:{sym or 'active'}:{iv}",
-                (
-                    f"chart scrub dropped mixed interval rows: "
-                    f"symbol={sym or '--'} target_iv={iv} "
-                    f"dropped={mixed_count}/{raw_count}"
-                ),
-                min_gap_seconds=1.0,
-            )
-
-        merged = self._merge_bars([], aligned_rows, iv)
-        merged = self._filter_bars_to_market_session(merged, iv)
-        out: list[dict[str, Any]] = []
-        for row in merged:
-            epoch = self._bar_bucket_epoch(
-                row.get("_ts_epoch", row.get("timestamp")),
-                iv,
-            )
-            item = dict(row)
-            item["_ts_epoch"] = float(epoch)
-            item["timestamp"] = self._epoch_to_iso(epoch)
-            item["interval"] = iv
-            out.append(item)
-        keep = self._history_window_bars(iv)
-        out = out[-keep:]
-
-        # Final intraday pass: drop malformed rows that can still slip through
-        # bootstrap sanitation (for example open=0 vendor rows around interval switches).
-        if out and iv not in ("1d", "1wk", "1mo"):
-            jump_cap, range_cap = self._bar_safety_caps(iv)
-            # Tighter intraday caps to suppress giant block candles.
-            body_cap = float(max(0.004, min(0.014, (range_cap * 0.92))))
-            span_cap = float(max(0.006, min(0.022, (range_cap * 1.10))))
-            wick_cap = float(max(0.004, min(0.013, (range_cap * 0.82))))
-            ref_jump_cap = float(max(0.012, min(0.035, jump_cap * 0.45)))
-            iv_s = float(max(1, self._interval_seconds(iv)))
-
-            filtered: list[dict[str, Any]] = []
-            recent_closes: list[float] = []
-            recent_body: list[float] = []
-            recent_span: list[float] = []
-            dropped_shape = 0
-            dropped_extreme_body = 0
-            repaired_shape = 0
-            repaired_gap = 0
-            processed_count = 0
-            allow_shape_rebuild = True
-            rebuild_disabled = False
-            rebuild_streak = 0
-            prev_close: float | None = None
-            prev_epoch: float | None = None
-
-            for row in out:
-                try:
-                    c_raw = float(row.get("close", 0) or 0)
-                    o_raw = float(row.get("open", c_raw) or c_raw)
-                    h_raw = float(row.get("high", c_raw) or c_raw)
-                    l_raw = float(row.get("low", c_raw) or c_raw)
-                except Exception:
-                    dropped_shape += 1
-                    continue
-
-                row_epoch = float(
-                    self._bar_bucket_epoch(
-                        row.get("_ts_epoch", row.get("timestamp")),
-                        iv,
-                    )
-                )
-                day_boundary = bool(
-                    prev_epoch is not None
-                    and self._is_intraday_day_boundary(prev_epoch, row_epoch, iv)
-                )
-                ref_close = prev_close
-                if day_boundary:
-                    # Keep prev_close as ref for the first bar of a new day
-                    # so overnight gaps are still clamped by _sanitize_ohlc
-                    # (jump_cap of 8% for 1m already covers A-share 10% limit).
-                    # Only clear rolling stats for adaptive caps.
-                    recent_closes.clear()
-                    recent_body.clear()
-                    recent_span.clear()
-
-                sanitized = self._sanitize_ohlc(
-                    o_raw,
-                    h_raw,
-                    l_raw,
-                    c_raw,
-                    interval=iv,
-                    ref_close=ref_close,
-                )
-                if sanitized is None:
-                    dropped_shape += 1
-                    continue
-                o, h, low, c = sanitized
-                processed_count += 1
-                rebuilt_now = False
-                if (
-                    allow_shape_rebuild
-                    and ref_close
-                    and float(ref_close) > 0
-                ):
-                    ref_prev = max(float(ref_close), float(c), 1e-8)
-                    body_prev = abs(o - c) / ref_prev
-                    span_prev = abs(h - low) / ref_prev
-                    jump_prev = abs(c / float(ref_close) - 1.0)
-                    # Many fallback sources emit close-only intraday bars
-                    # (open ~= close). Rebuild open from previous close so
-                    # candles are readable without inventing large moves.
-                    if (
-                        body_prev <= 0.00008
-                        and span_prev <= 0.0018
-                        and jump_prev <= 0.0025
-                    ):
-                        o = float(ref_close)
-                        top0 = max(o, c)
-                        bot0 = min(o, c)
-                        h = max(h, top0)
-                        low = min(low, bot0)
-                        repaired_shape += 1
-                        rebuilt_now = True
-                        rebuild_streak += 1
-                        if (
-                            allow_shape_rebuild
-                            and (
-                                rebuild_streak >= 8
-                                or (
-                                    processed_count >= 60
-                                    and (
-                                        float(repaired_shape)
-                                        / float(max(1, processed_count))
-                                    ) > 0.22
-                                )
-                            )
-                        ):
-                            allow_shape_rebuild = False
-                            rebuild_disabled = True
-                if not rebuilt_now:
-                    rebuild_streak = 0
-
-                ref_values = [
-                    float(v) for v in recent_closes[-32:]
-                    if float(v) > 0 and math.isfinite(float(v))
-                ]
-                if ref_values:
-                    ref = float(median(ref_values))
-                elif ref_close and float(ref_close) > 0:
-                    ref = float(ref_close)
-                else:
-                    ref = float(c)
-
-                if not math.isfinite(ref) or ref <= 0:
-                    ref = float(c)
-                if not math.isfinite(ref) or ref <= 0:
-                    dropped_shape += 1
-                    continue
-
-                body = abs(o - c) / ref
-                span = abs(h - low) / ref
-                top = max(o, c)
-                bot = min(o, c)
-                upper_wick = max(0.0, h - top) / ref
-                lower_wick = max(0.0, bot - low) / ref
-                ref_jump = abs(c / ref - 1.0)
-                eff_body_cap = float(body_cap)
-                eff_span_cap = float(span_cap)
-                eff_wick_cap = float(wick_cap)
-                if recent_body:
-                    med_body = float(median(recent_body[-48:]))
-                    if med_body > 0 and math.isfinite(med_body):
-                        eff_body_cap = min(
-                            eff_body_cap,
-                            float(max(0.0035, med_body * 6.0)),
-                        )
-                if recent_span:
-                    med_span = float(median(recent_span[-48:]))
-                    if med_span > 0 and math.isfinite(med_span):
-                        eff_span_cap = min(
-                            eff_span_cap,
-                            float(max(0.0050, med_span * 5.5)),
-                        )
-                        eff_wick_cap = min(
-                            eff_wick_cap,
-                            float(max(0.0035, med_span * 3.8)),
-                        )
-
-                if (
-                    ref_jump > ref_jump_cap
-                    or body > eff_body_cap
-                    or span > eff_span_cap
-                    or upper_wick > eff_wick_cap
-                    or lower_wick > eff_wick_cap
-                ):
-                    if body > eff_body_cap:
-                        dropped_extreme_body += 1
-                    dropped_shape += 1
-                    continue
-
-                if (
-                    ref_close
-                    and float(ref_close) > 0
-                    and self._is_outlier_tick(ref_close, c, interval=iv)
-                ):
-                    dropped_shape += 1
-                    continue
-
-                if prev_epoch is not None:
-                    gap = max(0.0, row_epoch - float(prev_epoch))
-                    if (not day_boundary) and gap > (iv_s * 3.0):
-                        # First bar after lunch/day gaps: repair extreme boundary bars
-                        # before deciding to drop them.
-                        boundary_body_cap = float(max(0.004, min(eff_body_cap, 0.008)))
-                        boundary_span_cap = float(max(0.006, min(eff_span_cap, 0.012)))
-                        boundary_wick_cap = float(max(0.004, min(eff_wick_cap, 0.008)))
-                        boundary_jump_cap = float(max(0.008, min(ref_jump_cap, 0.018)))
-                        if (
-                            span > boundary_span_cap
-                            or body > boundary_body_cap
-                            or ref_jump > boundary_jump_cap
-                        ):
-                            if ref_close and float(ref_close) > 0:
-                                o = float(ref_close)
-                                jump_now = abs(c / max(float(ref_close), 1e-8) - 1.0)
-                                if jump_now > boundary_jump_cap:
-                                    sign = 1.0 if c >= float(ref_close) else -1.0
-                                    c = float(ref_close) * (
-                                        1.0 + (sign * boundary_jump_cap)
-                                    )
-                                top = max(o, c)
-                                bot = min(o, c)
-                                ref_local = max(ref, c, o)
-                                wick_allow = float(ref_local) * float(boundary_wick_cap)
-                                h = min(max(h, top), top + wick_allow)
-                                low = max(min(low, bot), bot - wick_allow)
-                                if h < low:
-                                    h, low = low, h
-                                span = abs(h - low) / max(ref_local, 1e-8)
-                                upper_wick = max(0.0, h - top) / max(ref_local, 1e-8)
-                                lower_wick = max(0.0, bot - low) / max(ref_local, 1e-8)
-                                body = abs(o - c) / max(ref_local, 1e-8)
-                                ref_jump = abs(c / max(ref_local, 1e-8) - 1.0)
-                                repaired_gap += 1
-                            if (
-                                body > (boundary_body_cap * 1.45)
-                                or span > (boundary_span_cap * 1.45)
-                                or upper_wick > (boundary_wick_cap * 1.60)
-                                or lower_wick > (boundary_wick_cap * 1.60)
-                                or ref_jump > (boundary_jump_cap * 1.80)
-                            ):
-                                dropped_shape += 1
-                                continue
-
-                row_out = dict(row)
-                row_out["open"] = o
-                row_out["high"] = h
-                row_out["low"] = low
-                row_out["close"] = c
-                filtered.append(row_out)
-                recent_closes.append(float(c))
-                recent_body.append(float(body))
-                recent_span.append(float(span))
-                prev_close = float(c)
-                prev_epoch = float(row_epoch)
-
-            if dropped_shape > 0:
-                self._debug_console(
-                    f"chart_shape_drop:{sym or 'active'}:{iv}",
-                    (
-                        f"chart shape filter dropped {dropped_shape} bars: "
-                        f"symbol={sym or '--'} iv={iv} kept={len(filtered)} raw={len(out)}"
-                    ),
-                    min_gap_seconds=1.0,
-                )
-            if dropped_extreme_body > 0:
-                self._debug_console(
-                    f"chart_shape_body_drop:{sym or 'active'}:{iv}",
-                    (
-                        f"chart body outlier drop symbol={sym or '--'} iv={iv} "
-                        f"count={dropped_extreme_body} caps(body={body_cap:.2%},span={span_cap:.2%},wick={wick_cap:.2%})"
-                    ),
-                    min_gap_seconds=1.0,
-                    level="warning",
-                )
-            if repaired_shape > 0 or repaired_gap > 0:
-                self._debug_console(
-                    f"chart_shape_repair:{sym or 'active'}:{iv}",
-                    (
-                        f"chart shape repair symbol={sym or '--'} iv={iv} "
-                        f"repaired={repaired_shape} gap_repaired={repaired_gap} "
-                        f"kept={len(filtered)}"
-                    ),
-                    min_gap_seconds=1.0,
-                    level="info",
-                )
-            if rebuild_disabled:
-                self._debug_console(
-                    f"chart_shape_repair_disable:{sym or 'active'}:{iv}",
-                    (
-                        f"disabled close-only candle rebuild for {sym or '--'} {iv}: "
-                        f"repaired={repaired_shape} processed={processed_count}"
-                    ),
-                    min_gap_seconds=1.0,
-                    level="warning",
-                )
-            out = filtered[-keep:]
-
-        if out and iv in ("1d", "1wk", "1mo"):
-            if iv == "1d":
-                daily_jump_cap = 0.18
-                daily_body_cap = 0.12
-                daily_span_cap = 0.20
-                daily_wick_cap = 0.10
-            elif iv == "1wk":
-                daily_jump_cap = 0.26
-                daily_body_cap = 0.20
-                daily_span_cap = 0.34
-                daily_wick_cap = 0.18
-            else:
-                daily_jump_cap = 0.35
-                daily_body_cap = 0.28
-                daily_span_cap = 0.45
-                daily_wick_cap = 0.24
-
-            daily_filtered: list[dict[str, Any]] = []
-            recent_daily: list[float] = []
-            prev_close_daily: float | None = None
-            dropped_daily = 0
-            repaired_daily = 0
-
-            for row in out:
-                try:
-                    c_raw = float(row.get("close", 0) or 0)
-                    o_raw = float(row.get("open", c_raw) or c_raw)
-                    h_raw = float(row.get("high", c_raw) or c_raw)
-                    l_raw = float(row.get("low", c_raw) or c_raw)
-                except Exception:
-                    dropped_daily += 1
-                    continue
-
-                sanitized = self._sanitize_ohlc(
-                    o_raw,
-                    h_raw,
-                    l_raw,
-                    c_raw,
-                    interval=iv,
-                    ref_close=prev_close_daily,
-                )
-                if sanitized is None:
-                    dropped_daily += 1
-                    continue
-                o, h, low, c = sanitized
-
-                if recent_daily:
-                    ref = float(median(recent_daily[-24:]))
-                elif prev_close_daily and float(prev_close_daily) > 0:
-                    ref = float(prev_close_daily)
-                else:
-                    ref = float(c)
-                if not math.isfinite(ref) or ref <= 0:
-                    ref = float(c)
-                if not math.isfinite(ref) or ref <= 0:
-                    dropped_daily += 1
-                    continue
-
-                if prev_close_daily and float(prev_close_daily) > 0:
-                    jump_prev = abs(c / float(prev_close_daily) - 1.0)
-                    if jump_prev > daily_jump_cap:
-                        sign = 1.0 if c >= float(prev_close_daily) else -1.0
-                        c = float(prev_close_daily) * (1.0 + (sign * daily_jump_cap))
-                        o = float(prev_close_daily)
-                        repaired_daily += 1
-
-                top = max(o, c)
-                bot = min(o, c)
-                h = max(h, top)
-                low = min(low, bot)
-                body = abs(o - c) / max(ref, 1e-8)
-                span = abs(h - low) / max(ref, 1e-8)
-                upper_wick = max(0.0, h - top) / max(ref, 1e-8)
-                lower_wick = max(0.0, bot - low) / max(ref, 1e-8)
-
-                if (
-                    body > daily_body_cap
-                    or span > daily_span_cap
-                    or upper_wick > daily_wick_cap
-                    or lower_wick > daily_wick_cap
-                ):
-                    max_span_px = float(ref) * float(daily_span_cap)
-                    max_body_px = float(ref) * float(daily_body_cap)
-                    body_px = float(max(0.0, top - bot))
-                    if body_px > max_body_px:
-                        if c >= o:
-                            o = c - max_body_px
-                        else:
-                            o = c + max_body_px
-                        top = max(o, c)
-                        bot = min(o, c)
-                        body_px = float(max(0.0, top - bot))
-                    if body_px > max_span_px:
-                        o = c
-                        top = c
-                        bot = c
-                        body_px = 0.0
-                    wick_allow = max(0.0, max_span_px - body_px)
-                    h = min(h, top + (wick_allow * 0.60))
-                    low = max(low, bot - (wick_allow * 0.60))
-                    if h < low:
-                        h, low = low, h
-                    span = abs(h - low) / max(ref, 1e-8)
-                    body = abs(o - c) / max(ref, 1e-8)
-                    upper_wick = max(0.0, h - max(o, c)) / max(ref, 1e-8)
-                    lower_wick = max(0.0, min(o, c) - low) / max(ref, 1e-8)
-                    repaired_daily += 1
-                    if (
-                        body > (daily_body_cap * 1.35)
-                        or span > (daily_span_cap * 1.35)
-                        or upper_wick > (daily_wick_cap * 1.40)
-                        or lower_wick > (daily_wick_cap * 1.40)
-                    ):
-                        dropped_daily += 1
-                        continue
-
-                row_out = dict(row)
-                row_out["open"] = float(o)
-                row_out["high"] = float(h)
-                row_out["low"] = float(low)
-                row_out["close"] = float(c)
-                daily_filtered.append(row_out)
-                recent_daily.append(float(c))
-                prev_close_daily = float(c)
-
-            if dropped_daily > 0 or repaired_daily > 0:
-                self._debug_console(
-                    f"chart_daily_filter:{sym or 'active'}:{iv}",
-                    (
-                        f"daily filter symbol={sym or '--'} iv={iv} "
-                        f"repaired={repaired_daily} dropped={dropped_daily} "
-                        f"kept={len(daily_filtered)} raw={len(out)}"
-                    ),
-                    min_gap_seconds=1.0,
-                    level="info",
-                )
-            out = daily_filtered[-keep:]
-
-        if out:
-            max_body = 0.0
-            max_range = 0.0
-            for row in out:
-                try:
-                    c = float(row.get("close", 0) or 0)
-                    if c <= 0:
-                        continue
-                    o = float(row.get("open", c) or c)
-                    h = float(row.get("high", c) or c)
-                    low = float(row.get("low", c) or c)
-                    body = abs(o - c) / c
-                    span = abs(h - low) / c
-                    if body > max_body:
-                        max_body = body
-                    if span > max_range:
-                        max_range = span
-                except Exception:
-                    continue
-            if iv not in ("1d", "1wk", "1mo") and (
-                max_body > 0.08 or max_range > 0.12
-            ):
-                self._debug_console(
-                    f"chart_shape_anomaly:{sym or 'active'}:{iv}",
-                    (
-                        f"chart shape anomaly symbol={sym or '--'} iv={iv} "
-                        f"bars={len(out)} max_body={max_body:.2%} max_range={max_range:.2%}"
-                    ),
-                    min_gap_seconds=1.0,
-                )
-
-        drop_count = max(0, raw_count - len(out))
-        if raw_count > 0 and drop_count >= max(5, int(raw_count * 0.20)):
-            self._debug_console(
-                f"chart_drop_ratio:{sym or 'active'}:{iv}",
-                (
-                    f"chart scrub high drop ratio symbol={sym or '--'} "
-                    f"iv={iv} kept={len(out)} raw={raw_count}"
-                ),
-                min_gap_seconds=1.0,
-            )
-
-        return out
+        return _prepare_chart_bars_for_interval_impl(
+            self,
+            bars,
+            interval,
+            symbol=symbol,
+        )
 
     def _quick_trade(self, pred):
         """Quick trade from signal"""
@@ -6332,16 +4504,16 @@ class MainApp(QMainWindow):
             try:
                 if hasattr(self.chart, "reset_view"):
                     self.chart.reset_view()
-            except Exception:
-                pass
+            except Exception as exc:
+                log.debug("Suppressed exception in ui/app.py", exc_info=exc)
 
         try:
             self._queue_history_refresh(
                 code,
                 self._normalize_interval_token(self.interval_combo.currentText()),
             )
-        except Exception:
-            pass
+        except Exception as exc:
+            log.debug("Suppressed exception in ui/app.py", exc_info=exc)
 
         self._analyze_stock()
 
@@ -6553,416 +4725,12 @@ class MainApp(QMainWindow):
         interval: str,
         lookback_bars: int,
     ) -> list[dict[str, Any]]:
-        """Load historical OHLC bars for chart rendering."""
-        if not self.predictor:
-            return []
-        try:
-            fetcher = getattr(self.predictor, "fetcher", None)
-            if fetcher is None:
-                return []
-            requested_iv = self._normalize_interval_token(interval)
-            norm_iv = requested_iv or "1m"
-            # Intraday charts are sourced from canonical 1m and resampled in UI.
-            # Daily/weekly/monthly charts should fetch native intervals directly
-            # to avoid 1m lookback/API-cap truncation.
-            source_iv = "1m" if norm_iv not in {"1d", "1wk", "1mo"} else norm_iv
-            is_trained = self._is_trained_stock(symbol)
-            if is_trained:
-                target_floor = int(self._trained_stock_window_bars(norm_iv))
-                lookback = max(target_floor, int(lookback_bars))
-                refresh_requested = bool(
-                    self._consume_history_refresh(symbol, norm_iv)
-                )
-                force_refresh = bool(refresh_requested)
-                use_cache = not force_refresh
-                update_db = bool(force_refresh)
-                allow_online = bool(force_refresh)
-                fallback_allow_online = bool(force_refresh)
-            else:
-                if norm_iv in {"1d", "1wk", "1mo"}:
-                    lookback = max(7, int(min(max(lookback_bars, 7), 120)))
-                else:
-                    lookback = max(120, int(self._seven_day_lookback(norm_iv)))
-                refresh_requested = bool(
-                    self._consume_history_refresh(symbol, norm_iv)
-                )
-                force_refresh = bool(refresh_requested)
-                use_cache = not force_refresh
-                update_db = bool(force_refresh)
-                allow_online = bool(force_refresh)
-                fallback_allow_online = bool(force_refresh)
-
-            if source_iv == norm_iv:
-                source_lookback = int(
-                    max(
-                        int(lookback),
-                        int(self._recommended_lookback(source_iv)),
-                    )
-                )
-            else:
-                source_lookback = int(
-                    max(
-                        self._recommended_lookback(source_iv),
-                        self._bars_needed_from_base_interval(
-                            norm_iv,
-                            int(lookback),
-                            base_interval=source_iv,
-                        ),
-                    )
-                )
-            source_min_floor = int(self._recommended_lookback(source_iv))
-            is_intraday = norm_iv not in ("1d", "1wk", "1mo")
-            market_open = bool(CONFIG.is_market_open())
-            now_bucket = self._bar_bucket_epoch(time.time(), source_iv)
-            try:
-                df = fetcher.get_history(
-                    symbol,
-                    interval=source_iv,
-                    bars=source_lookback,
-                    use_cache=bool(use_cache),
-                    update_db=bool(update_db),
-                    allow_online=bool(allow_online),
-                    refresh_intraday_after_close=bool(force_refresh),
-                )
-            except TypeError:
-                df = fetcher.get_history(
-                    symbol,
-                    interval=source_iv,
-                    bars=source_lookback,
-                    use_cache=bool(use_cache),
-                    update_db=bool(update_db),
-                )
-            if source_iv == "1d":
-                min_required = int(max(5, min(source_lookback, 90)))
-            elif source_iv == "1wk":
-                min_required = int(max(4, min(source_lookback, 52)))
-            elif source_iv == "1mo":
-                min_required = int(max(3, min(source_lookback, 24)))
-            else:
-                min_required = int(max(20, source_min_floor if is_trained else 20))
-                if source_lookback >= 200:
-                    depth_ratio = 0.55 if is_trained else 0.40
-                    min_required = max(
-                        min_required,
-                        int(max(120, float(source_lookback) * float(depth_ratio))),
-                    )
-            if (
-                (df is None or df.empty or len(df) < min_required)
-                and bool(fallback_allow_online)
-            ):
-                try:
-                    df_online = fetcher.get_history(
-                        symbol,
-                        interval=source_iv,
-                        bars=source_lookback,
-                        # Bypass in-memory short windows when depth is too thin.
-                        use_cache=False,
-                        update_db=True,
-                        allow_online=True,
-                        refresh_intraday_after_close=bool(force_refresh),
-                    )
-                except TypeError:
-                    df_online = fetcher.get_history(
-                        symbol,
-                        interval=source_iv,
-                        bars=source_lookback,
-                        use_cache=False,
-                        update_db=True,
-                    )
-                if df_online is not None and not df_online.empty:
-                    df = df_online
-            if df is None or df.empty:
-                # Fallback query path when primary history window is empty.
-                try:
-                    df = fetcher.get_history(
-                        symbol,
-                        interval=source_iv,
-                        bars=source_lookback,
-                        use_cache=True,
-                        update_db=False,
-                        allow_online=bool(allow_online),
-                        refresh_intraday_after_close=bool(force_refresh),
-                    )
-                except TypeError:
-                    df = fetcher.get_history(
-                        symbol,
-                        interval=source_iv,
-                        bars=source_lookback,
-                        use_cache=True,
-                        update_db=False,
-                    )
-            out: list[dict[str, Any]] = []
-            prev_close: float | None = None
-            prev_epoch: float | None = None
-
-            if df is not None and not df.empty:
-                for idx, row in df.tail(source_lookback).iterrows():
-                    c = float(row.get("close", 0) or 0)
-                    if c <= 0:
-                        continue
-                    ts_obj = row.get("datetime", idx)
-                    epoch = self._bar_bucket_epoch(ts_obj, source_iv)
-                    ref_close = prev_close
-                    if (
-                        prev_epoch is not None
-                        and self._is_intraday_day_boundary(prev_epoch, epoch, source_iv)
-                    ):
-                        ref_close = None
-                    o_raw = row.get("open", None)
-                    try:
-                        o = float(o_raw or 0)
-                    except Exception:
-                        o = 0.0
-                    if o <= 0:
-                        o = float(ref_close if ref_close and ref_close > 0 else c)
-                    h = float(row.get("high", max(o, c)) or max(o, c))
-                    low = float(row.get("low", min(o, c)) or min(o, c))
-                    sanitized = self._sanitize_ohlc(
-                        o,
-                        h,
-                        low,
-                        c,
-                        interval=source_iv,
-                        ref_close=ref_close,
-                    )
-                    if sanitized is None:
-                        continue
-                    o, h, low, c = sanitized
-                    try:
-                        vol = float(row.get("volume", 0) or 0.0)
-                    except Exception:
-                        vol = 0.0
-                    if (not math.isfinite(vol)) or vol < 0:
-                        vol = 0.0
-                    try:
-                        amount = float(row.get("amount", 0) or 0.0)
-                    except Exception:
-                        amount = 0.0
-                    if not math.isfinite(amount):
-                        amount = 0.0
-                    if amount <= 0 and vol > 0 and c > 0:
-                        amount = float(c) * float(vol)
-                    out.append(
-                        {
-                            "open": o,
-                            "high": h,
-                            "low": low,
-                            "close": c,
-                            "volume": float(vol),
-                            "amount": float(max(0.0, amount)),
-                            "timestamp": self._epoch_to_iso(epoch),
-                            "_ts_epoch": float(epoch),
-                            "final": True,
-                            "interval": source_iv,
-                        }
-                    )
-                    prev_close = c
-                    prev_epoch = float(epoch)
-
-            # Include session-persisted bars so refresh/restart keeps data continuity.
-            if self._session_bar_cache is not None and not force_refresh:
-                sdf = self._session_bar_cache.read_history(
-                    symbol, source_iv, bars=source_lookback, final_only=False
-                )
-                if sdf is not None and not sdf.empty:
-                    for idx, row in sdf.tail(source_lookback).iterrows():
-                        c = float(row.get("close", 0) or 0)
-                        if c <= 0:
-                            continue
-                        epoch = self._bar_bucket_epoch(idx, source_iv)
-                        ref_close = prev_close
-                        if (
-                            prev_epoch is not None
-                            and self._is_intraday_day_boundary(prev_epoch, epoch, source_iv)
-                        ):
-                            ref_close = None
-                        o_raw = row.get("open", None)
-                        try:
-                            o = float(o_raw or 0)
-                        except Exception:
-                            o = 0.0
-                        if o <= 0:
-                            o = float(ref_close if ref_close and ref_close > 0 else c)
-                        h = float(row.get("high", max(o, c)) or max(o, c))
-                        low = float(row.get("low", min(o, c)) or min(o, c))
-                        sanitized = self._sanitize_ohlc(
-                            o,
-                            h,
-                            low,
-                            c,
-                            interval=source_iv,
-                            ref_close=ref_close,
-                        )
-                        if sanitized is None:
-                            continue
-                        o, h, low, c = sanitized
-                        try:
-                            vol = float(row.get("volume", 0) or 0.0)
-                        except Exception:
-                            vol = 0.0
-                        if (not math.isfinite(vol)) or vol < 0:
-                            vol = 0.0
-                        try:
-                            amount = float(row.get("amount", 0) or 0.0)
-                        except Exception:
-                            amount = 0.0
-                        if not math.isfinite(amount):
-                            amount = 0.0
-                        if amount <= 0 and vol > 0 and c > 0:
-                            amount = float(c) * float(vol)
-                        is_final = bool(row.get("is_final", True))
-                        if (
-                            is_intraday
-                            and not is_final
-                            and (
-                                (not market_open)
-                                or int(epoch) != int(now_bucket)
-                            )
-                        ):
-                            # Keep only the current bucket partial bar while market is open.
-                            continue
-                        out.append(
-                            {
-                                "open": o,
-                                "high": h,
-                                "low": low,
-                                "close": c,
-                                "volume": float(vol),
-                                "amount": float(max(0.0, amount)),
-                                "timestamp": self._epoch_to_iso(epoch),
-                                "_ts_epoch": float(epoch),
-                                "final": is_final,
-                                "interval": source_iv,
-                            }
-                        )
-                        prev_close = c
-                        prev_epoch = float(epoch)
-
-            out = self._filter_bars_to_market_session(out, source_iv)
-
-            # Deduplicate by normalized epoch and keep latest.
-            merged: dict[int, dict[str, Any]] = {}
-            for b in out:
-                epoch = self._bar_bucket_epoch(
-                    b.get("_ts_epoch", b.get("timestamp", "")),
-                    source_iv,
-                )
-                row = dict(b)
-                row["_ts_epoch"] = float(epoch)
-                row["timestamp"] = self._epoch_to_iso(epoch)
-                key = int(epoch)
-                existing = merged.get(key)
-                if existing is None:
-                    merged[key] = row
-                    continue
-
-                existing_final = bool(existing.get("final", True))
-                row_final = bool(row.get("final", True))
-                if existing_final and not row_final:
-                    continue
-                if row_final and not existing_final:
-                    merged[key] = row
-                    continue
-
-                # Same finality: prefer richer bar (volume) then later row.
-                try:
-                    e_vol = float(existing.get("volume", 0) or 0)
-                except Exception:
-                    e_vol = 0.0
-                try:
-                    r_vol = float(row.get("volume", 0) or 0)
-                except Exception:
-                    r_vol = 0.0
-                if r_vol >= e_vol:
-                    merged[key] = row
-            out = list(merged.values())
-            out.sort(
-                key=lambda x: float(
-                    x.get("_ts_epoch", self._ts_to_epoch(x.get("timestamp", "")))
-                )
-            )
-            # One more unified scrub pass to drop residual malformed bars.
-            out = self._merge_bars([], out, source_iv)
-            out = out[-source_lookback:]
-
-            # Chart intervals are display-only; source stream remains 1m.
-            if norm_iv != source_iv:
-                out = self._resample_chart_bars(
-                    out,
-                    source_interval=source_iv,
-                    target_interval=norm_iv,
-                )
-            out = out[-lookback:]
-
-            if out and is_intraday and not force_refresh:
-                sample = out[-min(520, len(out)):]
-                total_q = 0
-                degenerate_q = 0
-                epochs: list[float] = []
-                for row in sample:
-                    try:
-                        c_q = float(row.get("close", 0) or 0)
-                        o_q = float(row.get("open", c_q) or c_q)
-                        h_q = float(row.get("high", c_q) or c_q)
-                        l_q = float(row.get("low", c_q) or c_q)
-                    except Exception:
-                        continue
-                    if c_q <= 0 or (not all(math.isfinite(v) for v in (o_q, h_q, l_q, c_q))):
-                        continue
-                    ref_q = max(c_q, 1e-8)
-                    body_q = abs(o_q - c_q) / ref_q
-                    span_q = abs(h_q - l_q) / ref_q
-                    if body_q <= 0.00012 and span_q <= 0.00120:
-                        degenerate_q += 1
-                    total_q += 1
-                    try:
-                        ep_q = float(
-                            self._bar_bucket_epoch(
-                                row.get("_ts_epoch", row.get("timestamp")),
-                                norm_iv,
-                            )
-                        )
-                        if math.isfinite(ep_q):
-                            epochs.append(ep_q)
-                    except Exception:
-                        pass
-
-                deg_ratio = (
-                    float(degenerate_q) / float(max(1, total_q))
-                    if total_q > 0
-                    else 0.0
-                )
-                med_step = 0.0
-                if len(epochs) >= 3:
-                    epochs = sorted(epochs)
-                    diffs = [
-                        float(epochs[i] - epochs[i - 1])
-                        for i in range(1, len(epochs))
-                        if float(epochs[i] - epochs[i - 1]) > 0
-                    ]
-                    if diffs:
-                        med_step = float(median(diffs))
-
-                expected_step = float(max(1, self._interval_seconds(norm_iv)))
-                bad_degenerate = total_q >= 180 and deg_ratio >= 0.50
-                bad_cadence = med_step > (expected_step * 3.5)
-                if bad_degenerate or bad_cadence:
-                    self._debug_console(
-                        f"chart_history_refresh:{self._ui_norm(symbol)}:{norm_iv}",
-                        (
-                            f"forcing one-shot online history refresh for {self._ui_norm(symbol)} {norm_iv}: "
-                            f"degenerate={deg_ratio:.1%} cadence={med_step:.0f}s expected={expected_step:.0f}s "
-                            f"bars={len(out)}"
-                        ),
-                        min_gap_seconds=1.0,
-                        level="warning",
-                    )
-                    self._queue_history_refresh(symbol, norm_iv)
-                    return self._load_chart_history_bars(symbol, norm_iv, lookback)
-            return out
-        except Exception as e:
-            log.debug(f"Historical chart load failed for {symbol}: {e}")
-            return []
+        return _load_chart_history_bars_impl(
+            self,
+            symbol,
+            interval,
+            lookback_bars,
+        )
 
     def _on_analysis_done(self, pred):
         """Handle analysis completion; also triggers news fetch."""
@@ -7158,14 +4926,14 @@ class MainApp(QMainWindow):
 
         try:
             self._ensure_feed_subscription(pred.stock_code)
-        except Exception:
-            pass
+        except Exception as exc:
+            log.debug("Suppressed exception in ui/app.py", exc_info=exc)
         if not (self.monitor and self.monitor.isRunning()):
             try:
                 self.monitor_action.setChecked(True)
                 self._start_monitoring()
-            except Exception:
-                pass
+            except Exception as exc:
+                log.debug("Suppressed exception in ui/app.py", exc_info=exc)
 
         Signal = _lazy_get("models.predictor", "Signal")
         if hasattr(pred, 'signal'):
@@ -7458,8 +5226,8 @@ class MainApp(QMainWindow):
                     ({spread_pct:.1f}% width at horizon)
                 </div>
                 """
-            except Exception:
-                pass
+            except Exception as exc:
+                log.debug("Suppressed exception in ui/app.py", exc_info=exc)
 
         if position:
             shares = safe_get(position, 'shares', 0)
@@ -7851,8 +5619,8 @@ class MainApp(QMainWindow):
                     if reply != QMessageBox.StandardButton.Yes:
                         self.mode_combo.setCurrentIndex(0)
                         return
-            except Exception:
-                pass
+            except Exception as exc:
+                log.debug("Suppressed exception in ui/app.py", exc_info=exc)
 
             failed_controls = _collect_live_readiness_failures()
             if failed_controls:
@@ -7950,8 +5718,8 @@ class MainApp(QMainWindow):
         if self.executor:
             try:
                 self.executor.stop()
-            except Exception:
-                pass
+            except Exception as exc:
+                log.debug("Suppressed exception in ui/app.py", exc_info=exc)
             self.executor = None
 
         self.connection_status.setText("Disconnected")
@@ -8358,8 +6126,8 @@ class MainApp(QMainWindow):
                     "Market is currently closed. Live orders are blocked."
                 )
                 return
-        except Exception:
-            pass
+        except Exception as exc:
+            log.debug("Suppressed exception in ui/app.py", exc_info=exc)
 
         try:
             ok, msg, fresh_px = self.executor.check_quote_freshness(pred.stock_code)
@@ -8371,8 +6139,8 @@ class MainApp(QMainWindow):
                 return
             if fresh_px > 0:
                 entry = float(fresh_px)
-        except Exception:
-            pass
+        except Exception as exc:
+            log.debug("Suppressed exception in ui/app.py", exc_info=exc)
 
         reply = QMessageBox.question(
             self, "Confirm Buy Order",
@@ -8417,8 +6185,8 @@ class MainApp(QMainWindow):
                     "Market is currently closed. Live orders are blocked."
                 )
                 return
-        except Exception:
-            pass
+        except Exception as exc:
+            log.debug("Suppressed exception in ui/app.py", exc_info=exc)
 
         try:
             ok, msg, fresh_px = self.executor.check_quote_freshness(pred.stock_code)
@@ -8956,8 +6724,8 @@ class MainApp(QMainWindow):
 
             try:
                 CONFIG.save()
-            except Exception:
-                pass
+            except Exception as exc:
+                log.debug("Suppressed exception in ui/app.py", exc_info=exc)
 
             self.log("Auto-trade settings saved", "success")
             dialog.accept()
@@ -9287,16 +7055,16 @@ class MainApp(QMainWindow):
             try:
                 self.monitor.stop()
                 self.monitor.wait(3000)
-            except Exception:
-                pass
+            except Exception as exc:
+                log.debug("Suppressed exception in ui/app.py", exc_info=exc)
             self.monitor = None
 
         # Stop auto-trader
         if self.executor and self.executor.auto_trader:
             try:
                 self.executor.auto_trader.stop()
-            except Exception:
-                pass
+            except Exception as exc:
+                log.debug("Suppressed exception in ui/app.py", exc_info=exc)
 
         all_workers = set(self._active_workers) | set(self.workers.values())
         for worker in list(all_workers):
@@ -9306,16 +7074,16 @@ class MainApp(QMainWindow):
                 if not worker.wait(3000):
                     worker.terminate()
                     worker.wait(1000)
-            except Exception:
-                pass
+            except Exception as exc:
+                log.debug("Suppressed exception in ui/app.py", exc_info=exc)
         self._active_workers.clear()
         self.workers.clear()
 
         if self.executor:
             try:
                 self.executor.stop()
-            except Exception:
-                pass
+            except Exception as exc:
+                log.debug("Suppressed exception in ui/app.py", exc_info=exc)
             self.executor = None
 
         for timer_name in (
@@ -9327,13 +7095,13 @@ class MainApp(QMainWindow):
             try:
                 if timer:
                     timer.stop()
-            except Exception:
-                pass
+            except Exception as exc:
+                log.debug("Suppressed exception in ui/app.py", exc_info=exc)
 
         try:
             self._save_state()
-        except Exception:
-            pass
+        except Exception as exc:
+            log.debug("Suppressed exception in ui/app.py", exc_info=exc)
 
         event.accept()
         super().closeEvent(event)
@@ -9447,8 +7215,8 @@ def run_app():
     finally:
         try:
             heartbeat.stop()
-        except Exception:
-            pass
+        except Exception as exc:
+            log.debug("Suppressed exception in ui/app.py", exc_info=exc)
         _restore_sigint_handler(previous_sigint)
 
     sys.exit(exit_code)
@@ -9471,8 +7239,8 @@ def _restore_sigint_handler(previous_handler) -> None:
         return
     try:
         signal.signal(signal.SIGINT, previous_handler)
-    except Exception:
-        pass
+    except Exception as exc:
+        log.debug("Suppressed exception in ui/app.py", exc_info=exc)
 
 if __name__ == "__main__":
     run_app()

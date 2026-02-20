@@ -9,6 +9,7 @@ Desktop AI trading system for China A-shares with:
 ## Scope
 
 This project is desktop-first and single-node. It is suitable for personal and small-team workflows, not full institutional deployment.
+Tooling is Python-only (`pyproject.toml` + `pip` requirements); no Node/NPM step is required.
 
 ## Key Capabilities
 

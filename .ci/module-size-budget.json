@@ -8,9 +8,9 @@
   "models/auto_learner.py": 3722,
   "models/predictor.py": 3492,
   "models/trainer.py": 3350,
-  "trading/broker.py": 2253,
   "trading/executor.py": 2673,
   "trading/oms.py": 1828,
-  "ui/app.py": 9500,
+  "ui/app.py": 7246,
+  "ui/app_chart_pipeline.py": 1649,
   "ui/auto_learn_dialog.py": 1864
 }
