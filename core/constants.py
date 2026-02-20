@@ -1,4 +1,5 @@
 # core/constants.py
+import importlib
 import re
 from datetime import date, datetime, time
 from enum import Enum
@@ -94,6 +95,7 @@ HOLIDAYS_2026: set[date] = {
 }
 
 _HOLIDAYS_BUILTIN = HOLIDAYS_2024 | HOLIDAYS_2025 | HOLIDAYS_2026
+_BUILTIN_HOLIDAY_YEARS = frozenset(int(d.year) for d in _HOLIDAYS_BUILTIN)
 
 # Keep the old name for backward compat but don't use it for lookups
 HOLIDAYS = _HOLIDAYS_BUILTIN
@@ -234,7 +236,7 @@ def get_exchange(code: str) -> str:
 
 
 @lru_cache(maxsize=1)
-def _load_external_holidays() -> frozenset:
+def _load_external_holidays() -> frozenset[date]:
     """
     Load optional external holidays file once and cache as frozenset.
 
@@ -250,27 +252,108 @@ def _load_external_holidays() -> frozenset:
             import json
 
             data = json.loads(path.read_text(encoding="utf-8"))
-            for s in data if isinstance(data, list) else []:
+            rows: list[object]
+            if isinstance(data, list):
+                rows = list(data)
+            elif isinstance(data, dict):
+                maybe_rows = data.get("holidays", [])
+                rows = list(maybe_rows) if isinstance(maybe_rows, list) else []
+            else:
+                rows = []
+            for s in rows:
                 try:
                     y, m, d = map(int, str(s).split("-"))
                     extra.add(date(y, m, d))
-                except Exception:
+                except (TypeError, ValueError):
                     continue
-    except Exception:
-        pass
+    except (ImportError, OSError, TypeError, ValueError):
+        return frozenset()
 
     return frozenset(extra)
 
 
-@lru_cache(maxsize=1)
-def get_holidays() -> frozenset:
+@lru_cache(maxsize=32)
+def _load_dynamic_holidays_for_year(year: int) -> frozenset[date]:
     """
-    Return combined holiday set (built-in + external file).
+    Best-effort dynamic CN holiday provider for years beyond static constants.
 
-    FIX: Returns frozenset instead of set so the result is hashable
-    and the lru_cache actually works.  Also allows O(1) ``in`` checks.
+    Uses optional `holidays` package when available.
     """
-    return frozenset(_HOLIDAYS_BUILTIN) | _load_external_holidays()
+    y = int(year)
+    if y < 1990 or y > 2100:
+        return frozenset()
+
+    try:
+        module = importlib.import_module("holidays")
+    except ImportError:
+        return frozenset()
+
+    country_holidays = getattr(module, "country_holidays", None)
+    if not callable(country_holidays):
+        return frozenset()
+
+    try:
+        rows = country_holidays("CN", years=[y])
+    except (TypeError, ValueError, RuntimeError):
+        return frozenset()
+
+    out: set[date] = set()
+    keys_attr = getattr(rows, "keys", None)
+    if callable(keys_attr):
+        try:
+            iterator = keys_attr()
+        except (TypeError, ValueError):
+            return frozenset()
+    else:
+        iterator = rows
+
+    for item in iterator:
+        if isinstance(item, date):
+            out.add(item)
+
+    return frozenset(out)
+
+
+@lru_cache(maxsize=128)
+def _holidays_for_year(year: int) -> frozenset[date]:
+    y = int(year)
+    out = {d for d in _HOLIDAYS_BUILTIN if int(d.year) == y}
+    out.update(d for d in _load_external_holidays() if int(d.year) == y)
+    if (y not in _BUILTIN_HOLIDAY_YEARS) or (not out):
+        out.update(_load_dynamic_holidays_for_year(y))
+    return frozenset(out)
+
+
+def _holiday_window_years(anchor_year: int) -> tuple[int, ...]:
+    years = {
+        int(anchor_year) - 1,
+        int(anchor_year),
+        int(anchor_year) + 1,
+        int(anchor_year) + 2,
+    }
+    years.update(int(y) for y in _BUILTIN_HOLIDAY_YEARS)
+    years.update(int(d.year) for d in _load_external_holidays())
+    return tuple(sorted(y for y in years if y >= 1990))
+
+
+@lru_cache(maxsize=8)
+def _holiday_window(anchor_year: int) -> frozenset[date]:
+    out: set[date] = set()
+    for year in _holiday_window_years(anchor_year):
+        out.update(_holidays_for_year(year))
+    return frozenset(out)
+
+
+def get_holidays() -> frozenset[date]:
+    """
+    Return holiday set for current runtime window.
+
+    Includes:
+    - built-in constants
+    - optional external holidays file
+    - optional dynamic provider for years outside built-in coverage
+    """
+    return _holiday_window(datetime.now().year)
 
 
 def get_price_limit(code: str, name: str | None = None) -> float:
@@ -318,11 +401,12 @@ def is_trading_day(d: date) -> bool:
     """
     Check if date is a trading day (weekend + holiday aware).
 
-    FIX: Uses cached frozenset for O(1) lookup.
+    Uses year-scoped holiday cache so future years can be resolved via
+    optional dynamic providers when static constants are outdated.
     """
     if d.weekday() >= 5:
         return False
-    return d not in get_holidays()
+    return d not in _holidays_for_year(int(d.year))
 
 
 def is_trading_time(exchange: str = "SSE") -> bool:

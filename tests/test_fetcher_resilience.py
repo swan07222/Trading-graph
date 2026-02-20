@@ -232,6 +232,53 @@ def test_realtime_batch_uses_spot_cache_when_tencent_missing(monkeypatch):
     assert float(out["600519"].price) == 1888.8
 
 
+def test_realtime_batch_spot_cache_tolerates_malformed_values(monkeypatch):
+    import data.fetcher as fetcher_mod
+
+    monkeypatch.setenv("TRADING_OFFLINE", "0")
+    fetcher = _make_fetcher_for_realtime()
+
+    class _Spot:
+        @staticmethod
+        def get_quote(code):
+            code6 = str(code).zfill(6)
+            if code6 == "600519":
+                return {
+                    "name": "KWEICHOW MOUTAI",
+                    "price": "1888.8",
+                    "open": "1870.0",
+                    "high": "1899.0",
+                    "low": "1866.0",
+                    "close": "1880.0",
+                    "volume": "1200",
+                    "amount": "2266560.0",
+                }
+            if code6 == "000001":
+                return {
+                    "name": "BROKEN",
+                    "price": "12.3",
+                    "volume": "not-a-number",
+                    "amount": object(),
+                }
+            return None
+
+    fetcher._get_active_sources = lambda: []
+    fetcher._maybe_force_network_refresh = lambda: False
+    fetcher._fallback_last_good = lambda codes: {}
+    fetcher._fallback_last_close_from_db = lambda codes: {}
+
+    monkeypatch.setattr(fetcher_mod, "get_spot_cache", lambda: _Spot())
+
+    out = fetcher.get_realtime_batch(["600519", "000001"])
+
+    assert "600519" in out
+    assert "000001" in out
+    assert out["600519"].source == "spot_cache"
+    assert float(out["600519"].price) == 1888.8
+    assert out["000001"].source == "spot_cache"
+    assert int(out["000001"].volume) == 0
+
+
 def test_last_good_fallback_marks_quote_delayed():
     fetcher = _make_fetcher_for_realtime()
     fetcher._last_good_quotes = {"600519": _mk_quote("600519", 101.0, "tencent")}

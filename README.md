@@ -10,6 +10,7 @@ Desktop AI trading system for China A-shares with:
 
 This project is desktop-first and single-node. It is suitable for personal and small-team workflows, not full institutional deployment.
 Tooling is Python-only (`pyproject.toml` + `pip` requirements); no Node/NPM step is required.
+Runtime singleton behavior can be disabled with `TRADING_DISABLE_SINGLETONS=1` to create isolated in-process instances for testing/multi-run tooling.
 
 ## Key Capabilities
 
@@ -34,6 +35,11 @@ Emergency endpoint override controls (no code change needed):
 - `TRADING_TENCENT_DAILY_ENDPOINTS`
 
 For multiple endpoints, separate entries with `;`.
+
+Provider/fallback policy controls:
+- `TRADING_ENABLED_SOURCES` overrides provider set/order (comma/semicolon list, e.g. `yahoo,tencent`).
+- `TRADING_STRICT_REALTIME_QUOTES=1` disables quote fallback layers (spot cache, last-good, DB last-close).
+- `TRADING_INTRADAY_SESSION_POLICY=none` disables CN-only intraday session clipping for non-CN markets.
 
 ## Candle Rendering Pipeline
 

@@ -46,7 +46,7 @@ except (ImportError, OSError):  # pragma: no cover - optional runtime integratio
     unregister_snapshot_provider = None
 
 log = get_logger(__name__)
-
+_SOFT_FAIL_EXCEPTIONS = (AttributeError, ImportError, OSError, RuntimeError, TypeError, ValueError)
 # AUTO-TRADER
 
 class ExecutionEngine:
@@ -200,7 +200,7 @@ class ExecutionEngine:
                 status,
                 error=msg,
             )
-        except Exception as e:
+        except _SOFT_FAIL_EXCEPTIONS as e:
             log.debug("Model drift health-report update failed: %s", e)
 
         handled = 0
@@ -214,7 +214,7 @@ class ExecutionEngine:
                     metadata=metadata,
                 ):
                     handled += 1
-            except Exception as e:
+            except _SOFT_FAIL_EXCEPTIONS as e:
                 log.debug("Model drift alarm delivery failed: %s", e)
         return int(handled)
 
@@ -249,12 +249,12 @@ class ExecutionEngine:
                     f"Model drift alarm: {reason}",
                     duration_seconds=pause_seconds,
                 )
-            except Exception as e:
+            except _SOFT_FAIL_EXCEPTIONS as e:
                 log.debug("Model drift auto-trader pause failed: %s", e)
 
         try:
             CONFIG.auto_trade.enabled = False
-        except Exception as exc:
+        except _SOFT_FAIL_EXCEPTIONS as exc:
             log.debug("Suppressed exception in trading/executor.py", exc_info=exc)
 
         try:
@@ -262,7 +262,7 @@ class ExecutionEngine:
                 "Model drift alarm",
                 f"Auto-trade forced to MANUAL ({status.value}): {reason}",
             )
-        except Exception as e:
+        except _SOFT_FAIL_EXCEPTIONS as e:
             log.debug("Model drift alert dispatch failed: %s", e)
 
         try:
@@ -276,7 +276,7 @@ class ExecutionEngine:
                     "auto_trader_present": bool(self.auto_trader is not None),
                 },
             )
-        except Exception as e:
+        except _SOFT_FAIL_EXCEPTIONS as e:
             log.debug("Model drift audit log failed: %s", e)
         return bool(action_taken)
 
@@ -382,7 +382,7 @@ class ExecutionEngine:
 
             log.warning("%s (strict_live_governance=False; continuing)", msg)
             return True, msg
-        except Exception as e:
+        except _SOFT_FAIL_EXCEPTIONS as e:
             msg = f"Institutional readiness check error: {e}"
             if strict:
                 return False, msg
@@ -483,7 +483,7 @@ class ExecutionEngine:
                     self._snapshot_provider_name,
                     self._build_execution_snapshot,
                 )
-            except Exception as e:
+            except _SOFT_FAIL_EXCEPTIONS as e:
                 log.debug(f"Execution snapshot provider registration failed: {e}")
 
         log.info(f"Execution engine started ({self.mode.value})")
@@ -536,7 +536,7 @@ class ExecutionEngine:
                 if fid:
                     out.add(str(fid))
             return out
-        except Exception as e:
+        except _SOFT_FAIL_EXCEPTIONS as e:
             log.warning(f"Could not load processed fills: {e}")
             return set()
 
@@ -584,7 +584,7 @@ class ExecutionEngine:
                 "highest_price": highest_price,
                 "armed_at": armed_at,
             }
-        except Exception as e:
+        except (TypeError, ValueError) as e:
             log.debug("Synthetic exit plan normalize failed for %r: %s", plan, e)
             return None
 

@@ -1,6 +1,7 @@
 import builtins
 from datetime import date, datetime, timedelta, timezone
 
+import core.constants as constants
 from config.settings import Config
 from core.constants import get_price_limit, is_st_stock, is_trading_day
 from data.fetcher import DataFetcher
@@ -26,6 +27,31 @@ def test_get_price_limit_uses_st_band_for_cn_st_names():
 def test_is_trading_day_marks_2026_new_year_closed():
     # 2026-01-01 should not be considered a trading day.
     assert is_trading_day(date(2026, 1, 1)) is False
+
+
+def test_is_trading_day_future_year_uses_dynamic_provider(monkeypatch):
+    class _FakeHolidaysModule:
+        @staticmethod
+        def country_holidays(country: str, years: list[int]):
+            assert country == "CN"
+            assert years == [2027]
+            return {date(2027, 1, 4): "new-year-observed"}
+
+    original_import_module = constants.importlib.import_module
+
+    def _fake_import_module(name: str):
+        if name == "holidays":
+            return _FakeHolidaysModule()
+        return original_import_module(name)
+
+    constants._load_external_holidays.cache_clear()
+    constants._load_dynamic_holidays_for_year.cache_clear()
+    constants._holidays_for_year.cache_clear()
+    constants._holiday_window.cache_clear()
+    monkeypatch.setattr(constants.importlib, "import_module", _fake_import_module)
+
+    assert constants.is_trading_day(date(2027, 1, 4)) is False
+    assert constants.is_trading_day(date(2027, 1, 5)) is True
 
 
 def test_fetcher_now_shanghai_fallback_keeps_utc_plus_8(monkeypatch):

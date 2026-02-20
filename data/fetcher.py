@@ -1,6 +1,7 @@
 # data/fetcher.py
 import json
 import math
+import os
 import threading
 import time
 from collections.abc import Callable
@@ -15,6 +16,31 @@ import pandas as pd
 from config.settings import CONFIG
 from data.cache import get_cache
 from data.database import get_database
+from data.fetcher_frame_ops import (
+    filter_cn_intraday_session as _filter_cn_intraday_session_impl,
+)
+from data.fetcher_frame_ops import (
+    history_cache_store_rows as _history_cache_store_rows_impl,
+)
+from data.fetcher_frame_ops import (
+    merge_parts as _merge_parts_impl,
+)
+from data.fetcher_frame_ops import (
+    resample_daily_to_interval as _resample_daily_to_interval_impl,
+)
+from data.fetcher_realtime_ops import fill_from_spot_cache as _fill_from_spot_cache_impl
+from data.fetcher_source_ops import (
+    create_local_database_source as _create_local_database_source,
+)
+from data.fetcher_source_ops import (
+    normalize_source_name as _normalize_source_name_impl,
+)
+from data.fetcher_source_ops import (
+    resolve_source_order as _resolve_source_order_impl,
+)
+from data.fetcher_source_ops import (
+    source_health_score as _source_health_score_impl,
+)
 from data.fetcher_sources import (
     _INTRADAY_CAPS,
     _INTRADAY_INTERVALS,
@@ -37,7 +63,6 @@ from data.session_cache import get_session_bar_cache
 from utils.logger import get_logger
 
 log = get_logger(__name__)
-
 __all__ = [
     "AkShareSource",
     "DataFetcher",
@@ -48,28 +73,46 @@ __all__ = [
     "TencentQuoteSource",
     "YahooSource",
     "bars_to_days",
+    "create_fetcher",
     "get_fetcher",
     "get_spot_cache",
+    "reset_fetcher",
 ]
+_TRUTHY_ENV = frozenset({"1", "true", "yes", "on"})
+_SOURCE_CLASSES: dict[str, type[DataSource]] = {
+    "tencent": TencentQuoteSource,
+    "akshare": AkShareSource,
+    "sina": SinaHistorySource,
+    "yahoo": YahooSource,
+}
+def _env_flag(name: str, default: str = "0") -> bool:
+    return str(os.environ.get(name, default)).strip().lower() in _TRUTHY_ENV
 
 class DataFetcher:
-    """
-    High-performance data fetcher with automatic network-aware source
-    selection, local DB caching, and multi-source fallback.
-    """
+    """Network-aware fetcher with local cache/DB and fallback sources."""
 
     def __init__(self):
         self._all_sources: list[DataSource] = []
         self._cache = get_cache()
         self._db = get_database()
+        self._strict_errors = _env_flag("TRADING_STRICT_ERRORS", "0")
+        self._strict_realtime_quotes = _env_flag(
+            "TRADING_STRICT_REALTIME_QUOTES",
+            "0",
+        )
+        self._is_live_mode = self._detect_live_mode()
+        self._allow_last_close_fallback = _env_flag(
+            "TRADING_ALLOW_LAST_CLOSE_FALLBACK",
+            "0" if self._is_live_mode else "1",
+        )
+        self._last_good_max_age_s = self._resolve_last_good_max_age()
+        self._source_order = self._resolve_source_order()
         self._rate_limiter = threading.Semaphore(CONFIG.data.parallel_downloads)
         self._request_times: dict[str, float] = {}
         self._min_interval: float = 0.5
         self._intraday_interval: float = 1.2
-
         self._last_good_quotes: dict[str, Quote] = {}
         self._last_good_lock = threading.RLock()
-
         # Micro-caches
         self._rt_cache_lock = threading.RLock()
         self._rt_batch_microcache: dict[str, object] = {
@@ -89,19 +132,46 @@ class DataFetcher:
         self._refresh_reconcile_path = Path(CONFIG.data_dir) / "refresh_reconcile_queue.json"
         self._init_sources()
 
+    @staticmethod
+    def _detect_live_mode() -> bool:
+        mode = getattr(CONFIG, "trading_mode", "")
+        raw = str(getattr(mode, "value", mode) or "").strip().lower()
+        return raw == "live"
+
+    @staticmethod
+    def _resolve_last_good_max_age() -> float:
+        default_age = float(_LAST_GOOD_MAX_AGE)
+        risk_cfg = getattr(CONFIG, "risk", None)
+        raw = getattr(risk_cfg, "quote_staleness_seconds", default_age)
+        try:
+            return max(1.0, min(default_age, float(raw)))
+        except (TypeError, ValueError):
+            return default_age
+
+    @staticmethod
+    def _normalize_source_name(name: str) -> str:
+        return _normalize_source_name_impl(name)
+
+    def _resolve_source_order(self) -> list[str]:
+        return _resolve_source_order_impl(
+            raw_value=str(os.environ.get("TRADING_ENABLED_SOURCES", "") or ""),
+            source_classes=_SOURCE_CLASSES,
+            default_order=("tencent", "akshare", "sina", "yahoo"),
+            logger=log,
+        )
+
     def _init_sources(self) -> None:
         self._all_sources = []
         self._init_local_db_source()
 
         # Runtime policy:
-        # - historical data: Tencent/AkShare/Sina (China IP), Yahoo (foreign)
-        # - realtime data: Tencent primary
-        for source_cls in (
-            TencentQuoteSource,
-            AkShareSource,
-            SinaHistorySource,
-            YahooSource,
-        ):
+        # - market profile selects default provider order
+        # - TRADING_ENABLED_SOURCES can override provider set/order
+        for source_name in self._source_order:
+            source_cls = _SOURCE_CLASSES.get(source_name)
+            if source_cls is None:
+                log.warning("Unknown data source skipped: %s", source_name)
+                continue
             try:
                 source = source_cls()
                 if source.status.available:
@@ -114,6 +184,8 @@ class DataFetcher:
                         source.needs_vpn,
                     )
             except Exception as exc:
+                if self._strict_errors:
+                    raise
                 log.warning("Failed to init %s: %s", source_cls.__name__, exc)
 
         if not self._all_sources:
@@ -122,40 +194,12 @@ class DataFetcher:
     def _init_local_db_source(self) -> None:
         """Create and register the local database source."""
         try:
-            db = self._db
-
-            class LocalDatabaseSource(DataSource):
-                name = "localdb"
-                priority = -1
-                needs_china_direct = False
-                needs_vpn = False
-
-                def __init__(self, db_ref):
-                    super().__init__()
-                    self._db = db_ref
-
-                def get_history(self, code: str, days: int) -> pd.DataFrame:
-                    return self._db.get_bars(str(code).zfill(6), limit=int(days))
-
-                def get_history_instrument(
-                    self, inst: dict, days: int, interval: str = "1d"
-                ) -> pd.DataFrame:
-                    sym = str(inst.get("symbol") or "").zfill(6)
-                    if not sym:
-                        return pd.DataFrame()
-                    if interval == "1d":
-                        return self._db.get_bars(sym, limit=int(days))
-                    return self._db.get_intraday_bars(
-                        sym, interval=interval, limit=int(days)
-                    )
-
-                def get_realtime(self, code: str) -> Quote | None:
-                    return None
-
-            self._all_sources.append(LocalDatabaseSource(db))
+            self._all_sources.append(_create_local_database_source(self._db))
             log.info("Data source localdb initialized")
 
         except Exception as exc:
+            if self._strict_errors:
+                raise
             log.warning("Failed to init localdb source: %s", exc)
 
     @property
@@ -212,52 +256,7 @@ class DataFetcher:
         return ranked
 
     def _source_health_score(self, source: DataSource, env) -> float:
-        """Score a source by network suitability + recent health."""
-        score = 0.0
-
-        if source.name == "localdb":
-            score += 120.0
-        elif env.is_china_direct:
-            eastmoney_ok = bool(getattr(env, "eastmoney_ok", False))
-            if source.name == "tencent":
-                score += 92.0
-            elif source.name == "akshare":
-                score += 88.0 if eastmoney_ok else 24.0
-            elif source.name == "sina":
-                score += 82.0
-            elif source.name == "yahoo":
-                score += 6.0
-        else:
-            if source.name == "yahoo":
-                score += 90.0
-            elif source.name == "tencent":
-                score += 68.0
-            elif source.name == "akshare":
-                score += 8.0
-            elif source.name == "sina":
-                score += 6.0
-
-        try:
-            if source.is_suitable_for_network():
-                score += 15.0
-            else:
-                score -= 40.0
-        except Exception:
-            score -= 5.0
-
-        st = source.status
-        attempts = max(1, int(st.success_count + st.error_count))
-        success_rate = float(st.success_count) / attempts
-        score += 30.0 * success_rate
-
-        if st.avg_latency_ms > 0:
-            score -= min(25.0, st.avg_latency_ms / 200.0)
-
-        score -= min(20.0, float(st.consecutive_errors) * 1.5)
-        if st.disabled_until and datetime.now() < st.disabled_until:
-            score -= 50.0
-
-        return score
+        return _source_health_score_impl(source, env)
 
     def _rate_limit(self, source: str, interval: str = "1d") -> None:
         with self._rate_lock:
@@ -295,12 +294,10 @@ class DataFetcher:
             return lag <= max_lag_days
         except Exception:
             return False
-
     @staticmethod
     def _is_tencent_source(source: object) -> bool:
         """Return True when source name resolves to Tencent."""
         return str(getattr(source, "name", "")).strip().lower() == "tencent"
-
     def _fill_from_batch_sources(
         self,
         cleaned: list[str],
@@ -314,7 +311,6 @@ class DataFetcher:
             fn = getattr(source, "get_realtime_batch", None)
             if not callable(fn):
                 continue
-
             remaining = [c for c in cleaned if c not in result]
             if not remaining:
                 break
@@ -335,7 +331,6 @@ class DataFetcher:
                     exc,
                 )
                 continue
-
     def get_realtime_batch(self, codes: list[str]) -> dict[str, Quote]:
         """Fetch real-time quotes for multiple codes in one batch."""
         cleaned = list(dict.fromkeys(
@@ -345,10 +340,8 @@ class DataFetcher:
             return {}
         if _is_offline():
             return {}
-
         now = time.time()
         key = ",".join(cleaned)
-
         # Micro-cache read
         with self._rt_cache_lock:
             mc = self._rt_batch_microcache
@@ -359,9 +352,10 @@ class DataFetcher:
                 data = mc["data"]
                 if isinstance(data, dict) and data:
                     return dict(data)
-
         result: dict[str, Quote] = {}
-
+        strict_realtime = bool(
+            getattr(self, "_strict_realtime_quotes", False)
+        )
         active_sources = list(self._get_active_sources())
         tencent_sources = [
             s for s in active_sources if self._is_tencent_source(s)
@@ -369,7 +363,6 @@ class DataFetcher:
         fallback_sources = [
             s for s in active_sources if not self._is_tencent_source(s)
         ]
-
         # Prefer Tencent for CN quotes but keep multi-source realtime fallback.
         self._fill_from_batch_sources(cleaned, result, tencent_sources)
         missing = [c for c in cleaned if c not in result]
@@ -385,10 +378,11 @@ class DataFetcher:
                 fallback_sources,
             )
 
-        # Fill from spot-cache snapshot before forcing network refresh.
-        missing = [c for c in cleaned if c not in result]
-        if missing:
-            self._fill_from_spot_cache(missing, result)
+        if not strict_realtime:
+            # Fill from spot-cache snapshot before forcing network refresh.
+            missing = [c for c in cleaned if c not in result]
+            if missing:
+                self._fill_from_spot_cache(missing, result)
 
         # Force network refresh and retry once if still missing.
         missing = [c for c in cleaned if c not in result]
@@ -413,27 +407,30 @@ class DataFetcher:
                     retry_fallback,
                 )
 
-        # Last-good fallback
-        missing = [c for c in cleaned if c not in result]
-        if missing:
-            last_good = self._fallback_last_good(missing)
-            for code, quote in last_good.items():
-                if code not in result:
-                    result[code] = quote
+        if not strict_realtime:
+            # Last-good fallback
+            missing = [c for c in cleaned if c not in result]
+            if missing:
+                last_good = self._fallback_last_good(missing)
+                for code, quote in last_good.items():
+                    if code not in result:
+                        result[code] = quote
 
-        # DB last-close fallback
-        missing = [c for c in cleaned if c not in result]
-        if missing:
-            last_close = self._fallback_last_close_from_db(missing)
-            for code, quote in last_close.items():
-                if code not in result:
-                    result[code] = quote
+        if not strict_realtime and bool(getattr(self, "_allow_last_close_fallback", True)):
+            # DB last-close fallback
+            missing = [c for c in cleaned if c not in result]
+            if missing:
+                last_close = self._fallback_last_close_from_db(missing)
+                for code, quote in last_close.items():
+                    if code not in result:
+                        result[code] = quote
 
         # Update last-good store
         if result:
             with self._last_good_lock:
                 for c, q in result.items():
-                    if q and q.price > 0:
+                    src = str(getattr(q, "source", "") or "")
+                    if q and q.price > 0 and src != "localdb_last_close":
                         self._last_good_quotes[c] = q
 
         # Micro-cache write
@@ -449,33 +446,18 @@ class DataFetcher:
     ) -> None:
         """Attempt to fill missing quotes from EastMoney spot cache."""
         try:
-            cache = get_spot_cache()
-            for c in missing:
-                if c in result:
-                    continue
-                q = cache.get_quote(c)
-                if q and q.get("price", 0) and q["price"] > 0:
-                    result[c] = Quote(
-                        code=c,
-                        name=q.get("name", ""),
-                        price=float(q["price"]),
-                        open=float(q.get("open") or 0),
-                        high=float(q.get("high") or 0),
-                        low=float(q.get("low") or 0),
-                        close=float(q.get("close") or 0),
-                        volume=int(q.get("volume") or 0),
-                        amount=float(q.get("amount") or 0),
-                        change=float(q.get("change") or 0),
-                        change_pct=float(q.get("change_pct") or 0),
-                        source="spot_cache",
-                        is_delayed=False,
-                        latency_ms=0.0,
-                    )
+            _fill_from_spot_cache_impl(
+                cache=get_spot_cache(),
+                missing=missing,
+                result=result,
+            )
         except Exception as exc:
             log.debug(
                 "Spot-cache quote fill failed (symbols=%d): %s",
                 len(missing), exc
             )
+            if bool(getattr(self, "_strict_errors", False)):
+                raise
 
     def _fill_from_single_source_quotes(
         self,
@@ -521,12 +503,13 @@ class DataFetcher:
     def _fallback_last_good(self, codes: list[str]) -> dict[str, Quote]:
         """Return last-good quotes if they are recent enough."""
         result: dict[str, Quote] = {}
+        max_age = float(getattr(self, "_last_good_max_age_s", _LAST_GOOD_MAX_AGE))
         with self._last_good_lock:
             for c in codes:
                 q = self._last_good_quotes.get(c)
                 if q and q.price > 0:
                     age = self._quote_age_seconds(q)
-                    if age <= _LAST_GOOD_MAX_AGE:
+                    if age <= max_age:
                         result[c] = self._mark_quote_as_delayed(q)
         return result
 
@@ -597,7 +580,8 @@ class DataFetcher:
                     is_delayed=True, latency_ms=0.0,
                     timestamp=ts,
                 )
-            except Exception:
+            except Exception as exc:
+                log.debug("DB last-close fallback failed for %s: %s", code6, exc)
                 continue
         return out
 
@@ -3268,10 +3252,13 @@ class DataFetcher:
                 report_errors = dict(report.get("errors") or {})
                 report_errors[code6] = str(exc)
                 report["errors"] = report_errors
-                log.warning(
-                    "Trained-stock history refresh failed for %s (%s): %s",
-                    code6, iv, exc,
+                log.exception(
+                    "Trained-stock history refresh failed for %s (%s)",
+                    code6,
+                    iv,
                 )
+                if self._strict_errors:
+                    raise
             finally:
                 report["completed"] = int(idx)
 
@@ -3288,54 +3275,22 @@ class DataFetcher:
         df: pd.DataFrame,
         interval: str,
     ) -> pd.DataFrame:
-        """Resample daily OHLCV bars to weekly/monthly bars when requested."""
-        iv = cls._normalize_interval_token(interval)
-        if iv == "1d":
-            return cls._clean_dataframe(df, interval="1d")
-        if iv not in {"1wk", "1mo"}:
-            return cls._clean_dataframe(df, interval=iv)
-
-        daily = cls._clean_dataframe(df, interval="1d")
-        if daily.empty or not isinstance(daily.index, pd.DatetimeIndex):
-            return pd.DataFrame()
-
-        rule = "W-FRI" if iv == "1wk" else "ME"
-        agg: dict[str, str] = {}
-        if "open" in daily.columns:
-            agg["open"] = "first"
-        if "high" in daily.columns:
-            agg["high"] = "max"
-        if "low" in daily.columns:
-            agg["low"] = "min"
-        if "close" in daily.columns:
-            agg["close"] = "last"
-        if "volume" in daily.columns:
-            agg["volume"] = "sum"
-        if "amount" in daily.columns:
-            agg["amount"] = "sum"
-        if not agg:
-            return pd.DataFrame()
-
-        resampled = daily.resample(rule).agg(agg)
-        return cls._clean_dataframe(resampled, interval=iv)
+        return _resample_daily_to_interval_impl(
+            df=df,
+            interval=interval,
+            normalize_interval_token=cls._normalize_interval_token,
+            clean_dataframe=cls._clean_dataframe,
+        )
 
     def _merge_parts(
         self,
         *dfs: pd.DataFrame,
         interval: str | None = None,
     ) -> pd.DataFrame:
-        """Merge and deduplicate non-empty dataframes."""
-        parts = [
-            p for p in dfs
-            if isinstance(p, pd.DataFrame) and not p.empty
-        ]
-        if not parts:
-            return pd.DataFrame()
-        if len(parts) == 1:
-            return self._clean_dataframe(parts[0], interval=interval)
-        return self._clean_dataframe(
-            pd.concat(parts, axis=0),
+        return _merge_parts_impl(
+            *dfs,
             interval=interval,
+            clean_dataframe=self._clean_dataframe,
         )
 
     @classmethod
@@ -3344,24 +3299,12 @@ class DataFetcher:
         df: pd.DataFrame,
         interval: str,
     ) -> pd.DataFrame:
-        """Keep only regular CN A-share intraday session rows."""
-        iv = cls._normalize_interval_token(interval)
-        if iv in {"1d", "1wk", "1mo"}:
-            return df if isinstance(df, pd.DataFrame) else pd.DataFrame()
-        if df is None or df.empty:
-            return pd.DataFrame()
-
-        out = cls._clean_dataframe(df, interval=iv)
-        if out.empty or not isinstance(out.index, pd.DatetimeIndex):
-            return out
-
-        idx  = out.index
-        hhmm = (idx.hour * 100) + idx.minute
-        in_morning   = (hhmm >= 930)  & (hhmm <= 1130)
-        in_afternoon = (hhmm >= 1300) & (hhmm <= 1500)
-        weekday      = idx.dayofweek < 5
-        mask = weekday & (in_morning | in_afternoon)
-        return out.loc[mask]
+        return _filter_cn_intraday_session_impl(
+            df=df,
+            interval=interval,
+            normalize_interval_token=cls._normalize_interval_token,
+            clean_dataframe=cls._clean_dataframe,
+        )
 
     @classmethod
     def _history_cache_store_rows(
@@ -3369,19 +3312,11 @@ class DataFetcher:
         interval: str | None,
         requested_rows: int,
     ) -> int:
-        """
-        Compute how many rows to keep in the shared history cache key.
-
-        A larger shared window prevents cache-key fragmentation while still
-        bounding memory and disk usage.
-        """
-        iv = cls._normalize_interval_token(interval)
-        req = max(1, int(requested_rows or 1))
-        if iv in _INTRADAY_INTERVALS:
-            floor = max(200, min(2400, req * 3))
-        else:
-            floor = max(400, min(5000, req * 2))
-        return int(max(req, floor))
+        return _history_cache_store_rows_impl(
+            interval=interval,
+            requested_rows=requested_rows,
+            normalize_interval_token=cls._normalize_interval_token,
+        )
 
     def _cache_tail(
         self,
@@ -3449,12 +3384,16 @@ class DataFetcher:
                 return q
         except Exception as exc:
             log.debug("CN realtime batch fetch failed for %s: %s", code6, exc)
+            if bool(getattr(self, "_strict_errors", False)):
+                raise
 
+        if bool(getattr(self, "_strict_realtime_quotes", False)):
+            return None
         with self._last_good_lock:
             q = self._last_good_quotes.get(code6)
             if q and q.price > 0:
                 age = self._quote_age_seconds(q)
-                if age <= _LAST_GOOD_MAX_AGE:
+                if age <= float(getattr(self, "_last_good_max_age_s", _LAST_GOOD_MAX_AGE)):
                     return self._mark_quote_as_delayed(q)
         return None
 
@@ -3576,15 +3515,47 @@ class DataFetcher:
         log.info("All data sources reset, network cache invalidated")
 
 
-_fetcher: DataFetcher | None = None
+_fetcher_instances: dict[str, DataFetcher] = {}
 _fetcher_lock = threading.Lock()
 
 
-def get_fetcher() -> DataFetcher:
-    """Double-checked locking singleton for DataFetcher."""
-    global _fetcher
-    if _fetcher is None:
-        with _fetcher_lock:
-            if _fetcher is None:
-                _fetcher = DataFetcher()
-    return _fetcher
+def _resolve_fetcher_instance_key(*, instance: str | None = None) -> str:
+    key = str(instance or "").strip()
+    return key if key else "default"
+
+
+def create_fetcher() -> DataFetcher:
+    """Create a new fetcher instance without touching singleton registry."""
+    return DataFetcher()
+
+
+def get_fetcher(
+    *,
+    instance: str | None = None,
+    force_new: bool = False,
+) -> DataFetcher:
+    """Get/create fetcher instance by key (default singleton if key omitted)."""
+    if force_new or _env_flag("TRADING_DISABLE_SINGLETONS", "0"):
+        return create_fetcher()
+
+    key = _resolve_fetcher_instance_key(instance=instance)
+    inst = _fetcher_instances.get(key)
+    if inst is not None:
+        return inst
+
+    with _fetcher_lock:
+        inst = _fetcher_instances.get(key)
+        if inst is None:
+            inst = create_fetcher()
+            _fetcher_instances[key] = inst
+        return inst
+
+
+def reset_fetcher(*, instance: str | None = None) -> None:
+    """Reset fetcher singleton(s); defaults to clearing all instances."""
+    with _fetcher_lock:
+        if instance is None:
+            _fetcher_instances.clear()
+            return
+        key = _resolve_fetcher_instance_key(instance=instance)
+        _fetcher_instances.pop(key, None)

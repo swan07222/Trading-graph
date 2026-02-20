@@ -1,14 +1,14 @@
 # ui/app.py
-import json
 import math
 import os
 import signal
 import sys
 import threading
 import time
+from concurrent.futures import Future, ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FuturesTimeout
 from datetime import datetime, timedelta, timezone
 from importlib import import_module
-from pathlib import Path
 from statistics import median
 from typing import Any
 
@@ -27,7 +27,6 @@ from PyQt6.QtWidgets import (
     QHeaderView,
     QLabel,
     QLineEdit,
-    QListWidget,
     QListWidgetItem,
     QMainWindow,
     QMessageBox,
@@ -40,7 +39,6 @@ from PyQt6.QtWidgets import (
     QStatusBar,
     QTableWidget,
     QTableWidgetItem,
-    QTabWidget,
     QTextEdit,
     QToolBar,
     QVBoxLayout,
@@ -55,6 +53,25 @@ from core.types import (
     OrderSide,
     OrderType,
     TradeSignal,
+)
+from ui.app_chart_pipeline import (
+    _load_chart_history_bars as _load_chart_history_bars_impl,
+)
+from ui.app_chart_pipeline import (
+    _on_price_updated as _on_price_updated_impl,
+)
+from ui.app_chart_pipeline import (
+    _prepare_chart_bars_for_interval as _prepare_chart_bars_for_interval_impl,
+)
+from ui.app_common import MainAppCommonMixin
+from ui.app_panels import (
+    _apply_professional_style as _apply_professional_style_impl,
+)
+from ui.app_panels import (
+    _create_left_panel as _create_left_panel_impl,
+)
+from ui.app_panels import (
+    _create_right_panel as _create_right_panel_impl,
 )
 from ui.background_tasks import (
     RealTimeMonitor,
@@ -73,23 +90,15 @@ from ui.background_tasks import (
     validate_stock_code as _validate_stock_code,
 )
 from utils.logger import get_logger
-from ui.app_chart_pipeline import (
-    _load_chart_history_bars as _load_chart_history_bars_impl,
-    _on_price_updated as _on_price_updated_impl,
-    _prepare_chart_bars_for_interval as _prepare_chart_bars_for_interval_impl,
-)
-from ui.app_panels import (
-    _apply_professional_style as _apply_professional_style_impl,
-    _create_left_panel as _create_left_panel_impl,
-    _create_right_panel as _create_right_panel_impl,
-)
 
 log = get_logger(__name__)
+
 
 def _lazy_get(module: str, name: str):
     return getattr(import_module(module), name)
 
-class MainApp(QMainWindow):
+
+class MainApp(MainAppCommonMixin, QMainWindow):
     """
     Professional AI Stock Trading Application
 
@@ -131,7 +140,14 @@ class MainApp(QMainWindow):
         self._forecast_refresh_symbol: str = ""
         self._live_price_series: dict[str, list[float]] = {}
         self._price_series_lock = threading.Lock()
+        self._session_cache_write_lock = threading.Lock()
         self._last_session_cache_write_ts: dict[str, float] = {}
+        self._session_cache_io_pool = ThreadPoolExecutor(
+            max_workers=1,
+            thread_name_prefix="session-cache-io",
+        )
+        self._session_cache_io_lock = threading.Lock()
+        self._session_cache_io_futures: set[Future[object]] = set()
         self._last_analyze_request: dict[str, Any] = {}
         self._last_analysis_log: dict[str, Any] = {}
         self._analysis_recovery_attempt_ts: dict[str, float] = {}
@@ -148,6 +164,9 @@ class MainApp(QMainWindow):
         self._last_bar_feed_ts: dict[str, float] = {}
         self._chart_symbol: str = ""
         self._history_refresh_once: set[tuple[str, str]] = set()
+        self._strict_startup = str(
+            os.environ.get("TRADING_STRICT_STARTUP", "0")
+        ).strip().lower() in ("1", "true", "yes", "on")
         self._debug_console_enabled: bool = str(
             os.environ.get("TRADING_DEBUG_CONSOLE", "1")
         ).strip().lower() in ("1", "true", "yes", "on")
@@ -157,8 +176,11 @@ class MainApp(QMainWindow):
         try:
             from data.session_cache import get_session_bar_cache
             self._session_bar_cache = get_session_bar_cache()
-        except Exception:
+        except Exception as exc:
+            log.warning("Session cache unavailable at startup: %s", exc)
             self._session_bar_cache = None
+            if self._strict_startup:
+                raise
         self._load_trained_stock_last_train_meta()
 
         # Auto-trade state
@@ -182,199 +204,12 @@ class MainApp(QMainWindow):
         try:
             self._load_state()
             self._update_watchlist()
-        except Exception as exc:
-            log.debug("Suppressed exception in ui/app.py", exc_info=exc)
+        except Exception:
+            log.exception("Startup state restore failed")
+            if self._strict_startup:
+                raise
 
         QTimer.singleShot(0, self._init_components)
-
-    # =========================================================================
-    # UI NORMALIZATION (FIX #1 - was missing entirely)
-    # =========================================================================
-
-    def _ui_norm(self, text: str) -> str:
-        """Normalize stock code for UI comparison."""
-        return _normalize_stock_code(text)
-
-    @staticmethod
-    def _safe_list(values: Any) -> list[Any]:
-        """Convert optional iterables to list without truthiness checks."""
-        if values is None:
-            return []
-        try:
-            return list(values)
-        except Exception:
-            return []
-
-    def _trained_stock_last_train_meta_path(self) -> Path:
-        return Path(CONFIG.data_dir) / "trained_stock_last_train.json"
-
-    def _load_trained_stock_last_train_meta(self) -> None:
-        """Load trained-stock last-train timestamps from disk."""
-        self._trained_stock_last_train = {}
-        path = self._trained_stock_last_train_meta_path()
-        if not path.exists():
-            return
-        try:
-            raw = json.loads(path.read_text(encoding="utf-8"))
-            payload = raw.get("last_train", raw) if isinstance(raw, dict) else {}
-            if not isinstance(payload, dict):
-                return
-            out: dict[str, str] = {}
-            for k, v in payload.items():
-                code = self._ui_norm(str(k or ""))
-                if not code:
-                    continue
-                ts = str(v or "").strip()
-                if not ts:
-                    continue
-                out[code] = ts
-            self._trained_stock_last_train = out
-        except Exception as exc:
-            log.debug("Failed to load trained-stock last-train metadata: %s", exc)
-            self._trained_stock_last_train = {}
-
-    def _save_trained_stock_last_train_meta(self) -> None:
-        """Persist trained-stock last-train timestamps to disk."""
-        path = self._trained_stock_last_train_meta_path()
-        payload = {
-            "updated_at": datetime.now().isoformat(timespec="seconds"),
-            "last_train": dict(self._trained_stock_last_train or {}),
-        }
-        try:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(
-                json.dumps(payload, ensure_ascii=True, indent=2),
-                encoding="utf-8",
-            )
-        except Exception as exc:
-            log.debug("Failed to save trained-stock last-train metadata: %s", exc)
-
-    def _record_trained_stock_last_train(
-        self,
-        codes: list[str],
-        *,
-        trained_at: str | None = None,
-    ) -> None:
-        """Update last-train timestamps for the provided stock codes."""
-        when = str(trained_at or datetime.now().isoformat(timespec="seconds"))
-        changed = False
-        for raw in list(codes or []):
-            code = self._ui_norm(raw)
-            if not code:
-                continue
-            if self._trained_stock_last_train.get(code) != when:
-                self._trained_stock_last_train[code] = when
-                changed = True
-        if changed:
-            try:
-                if self.predictor is not None:
-                    if hasattr(self.predictor, "_trained_stock_last_train"):
-                        self.predictor._trained_stock_last_train = dict(  # type: ignore[attr-defined]
-                            self._trained_stock_last_train
-                        )
-                    ens = getattr(self.predictor, "ensemble", None)
-                    if ens is not None and hasattr(ens, "trained_stock_last_train"):
-                        ens.trained_stock_last_train = dict(
-                            self._trained_stock_last_train
-                        )
-            except Exception as exc:
-                log.debug("Suppressed exception in ui/app.py", exc_info=exc)
-            self._save_trained_stock_last_train_meta()
-
-    @staticmethod
-    def _format_last_train_text(ts_text: str | None) -> str:
-        """Format ISO timestamp into short display text."""
-        if not ts_text:
-            return "--"
-        text = str(ts_text).strip()
-        if not text:
-            return "--"
-        try:
-            dt = datetime.fromisoformat(text.replace("Z", "+00:00"))
-            if dt.tzinfo is not None:
-                dt = dt.astimezone().replace(tzinfo=None)
-            return dt.strftime("%Y-%m-%d %H:%M")
-        except Exception:
-            return text[:16]
-
-    def _set_initial_window_geometry(self) -> None:
-        """Fit initial window to available screen so bottom controls remain visible."""
-        try:
-            screen = QApplication.primaryScreen()
-            if screen is None:
-                self.setGeometry(80, 60, 1360, 780)
-                return
-            avail = screen.availableGeometry()
-            width = min(max(1120, int(avail.width() * 0.90)), int(avail.width()))
-            height = min(max(700, int(avail.height() * 0.90)), int(avail.height()))
-            x = int(avail.left() + ((avail.width() - width) / 2))
-            y = int(avail.top() + ((avail.height() - height) / 2))
-            self.setGeometry(x, y, width, height)
-        except Exception:
-            self.setGeometry(80, 60, 1360, 780)
-
-    def _track_worker(self, worker: WorkerThread) -> None:
-        """Track worker lifecycle so threads are never orphaned."""
-        self._active_workers.add(worker)
-
-        def _drop(*_args):
-            self._active_workers.discard(worker)
-
-        worker.finished.connect(_drop)
-
-    def _model_interval_to_ui_token(self, interval: str) -> str:
-        """Normalize model interval metadata to available UI tokens."""
-        iv = str(interval or "").strip().lower()
-        if iv == "1h":
-            return "60m"
-        return iv
-
-    def _normalize_interval_token(
-        self,
-        interval: str | None,
-        *,
-        fallback: str = "1m",
-    ) -> str:
-        """Normalize interval aliases used across feed/cache/UI paths."""
-        iv = str(interval or "").strip().lower()
-        if not iv:
-            return str(fallback or "1m").strip().lower()
-
-        aliases = {
-            "1h": "60m",
-            "60min": "60m",
-            "60mins": "60m",
-            "1day": "1d",
-            "day": "1d",
-            "daily": "1d",
-            "1440m": "1d",
-        }
-        return aliases.get(iv, iv)
-
-    def _debug_console(
-        self,
-        key: str,
-        message: str,
-        *,
-        min_gap_seconds: float = 2.0,
-        level: str = "warning",
-    ) -> None:
-        """Throttled debug message to UI system-log + backend logger."""
-        if not bool(getattr(self, "_debug_console_enabled", False)):
-            return
-        try:
-            now = time.monotonic()
-            prev = float(self._debug_console_last_emit.get(key, 0.0))
-            if (now - prev) < float(max(0.0, min_gap_seconds)):
-                return
-            self._debug_console_last_emit[key] = now
-            txt = f"[DBG] {message}"
-            if hasattr(self, "log"):
-                self.log(txt, level=level)
-            else:
-                log.warning(txt)
-        except Exception as exc:
-            log.debug("Suppressed exception in ui/app.py", exc_info=exc)
 
     def _sync_ui_to_loaded_model(
         self,
@@ -1366,9 +1201,6 @@ class MainApp(QMainWindow):
             return arr
         return arr
 
-    # =========================================================================
-    # =========================================================================
-
     def _setup_menubar(self):
         """Setup professional menu bar"""
         menubar = self.menuBar()
@@ -1446,9 +1278,6 @@ class MainApp(QMainWindow):
         about_action = QAction("&About", self)
         about_action.triggered.connect(self._show_about)
         help_menu.addAction(about_action)
-
-    # =========================================================================
-    # =========================================================================
 
     def _setup_toolbar(self):
         """Setup professional toolbar with auto-trade controls"""
@@ -1562,8 +1391,8 @@ class MainApp(QMainWindow):
                 if iv:
                     payload["interval"] = iv
             self.bar_received.emit(str(symbol), payload)
-        except Exception as exc:
-            log.debug("Suppressed exception in ui/app.py", exc_info=exc)
+        except Exception:
+            log.exception("Failed to forward feed bar to UI (symbol=%s)", symbol)
 
     def _on_tick_from_feed(self, quote):
         """Forward feed quote updates to UI thread safely."""
@@ -1585,8 +1414,8 @@ class MainApp(QMainWindow):
                         return
                 self._last_quote_ui_emit[symbol] = (now, price)
                 self.quote_received.emit(symbol, price)
-        except Exception as exc:
-            log.debug("Suppressed exception in ui/app.py", exc_info=exc)
+        except Exception:
+            log.exception("Failed to forward feed quote to UI")
 
     def _on_bar_ui(self, symbol: str, bar: dict):
         """
@@ -1865,35 +1694,45 @@ class MainApp(QMainWindow):
             del arr[:-keep]
         self._last_bar_feed_ts[symbol] = time.time()
 
-        try:
-            if self._session_bar_cache is not None:
-                key = f"{symbol}:{interval}"
-                now_ts = time.time()
-                # Avoid excessive disk writes for partial updates.
-                min_gap = 0.9 if not is_final else 0.0
-                last_ts = float(self._last_session_cache_write_ts.get(key, 0.0))
-                if interval == "1m" and (now_ts - last_ts) >= min_gap:
-                    self._session_bar_cache.append_bar(symbol, interval, norm_bar)
-                    self._last_session_cache_write_ts[key] = now_ts
-        except Exception as e:
-            log.debug(f"Session cache write failed: {e}")
+        # Avoid excessive disk writes for partial updates.
+        min_gap = 0.9 if not is_final else 0.0
+        self._persist_session_bar(
+            symbol,
+            interval,
+            norm_bar,
+            channel="bar_ui",
+            min_gap_seconds=min_gap,
+        )
 
         current_code = self._ui_norm(self.stock_input.text())
         if current_code != symbol:
             return
 
+        self._render_live_bar_update(
+            symbol=symbol,
+            interval=interval,
+            bars=arr,
+            norm_bar=norm_bar,
+        )
+
+    def _render_live_bar_update(
+        self,
+        *,
+        symbol: str,
+        interval: str,
+        bars: list[dict[str, Any]],
+        norm_bar: dict[str, Any],
+    ) -> None:
         predicted, pred_source_interval = self._resolve_chart_prediction_series(
             symbol=symbol,
             fallback_interval=interval,
         )
-
-        # UNIFIED chart update - draws candles + line + prediction
         try:
             current_price = float(norm_bar.get("close", 0) or 0)
             self._render_chart_state(
                 symbol=symbol,
                 interval=interval,
-                bars=arr,
+                bars=bars,
                 context="bar_ui",
                 current_price=current_price if current_price > 0 else None,
                 predicted_prices=predicted,
@@ -1932,9 +1771,6 @@ class MainApp(QMainWindow):
                 )
         except Exception as exc:
             log.debug("Suppressed exception in ui/app.py", exc_info=exc)
-
-    # =========================================================================
-    # =========================================================================
 
     def _setup_ui(self):
         """Setup main UI with professional layout"""
@@ -2380,17 +2216,105 @@ class MainApp(QMainWindow):
                 return
             now_ts = time.time()
             key = f"{symbol}:{iv}:{channel}"
-            prev_ts = float(self._last_session_cache_write_ts.get(key, 0.0))
-            if (now_ts - prev_ts) < float(max(0.0, min_gap_seconds)):
-                return
+            min_gap = float(max(0.0, min_gap_seconds))
+            lock = getattr(self, "_session_cache_write_lock", None)
+            if lock is None:
+                prev_ts = float(self._last_session_cache_write_ts.get(key, 0.0))
+                if (now_ts - prev_ts) < min_gap:
+                    return
+                self._last_session_cache_write_ts[key] = now_ts
+            else:
+                with lock:
+                    prev_ts = float(self._last_session_cache_write_ts.get(key, 0.0))
+                    if (now_ts - prev_ts) < min_gap:
+                        return
+                    self._last_session_cache_write_ts[key] = now_ts
             payload = dict(bar)
             payload["interval"] = iv
             payload["source"] = str(payload.get("source", "") or "tencent_rt")
-            wrote = self._session_bar_cache.append_bar(symbol, iv, payload)
-            if wrote:
-                self._last_session_cache_write_ts[key] = now_ts
+            submit = getattr(self, "_submit_session_cache_write", None)
+            if callable(submit):
+                submit(symbol, iv, payload)
+            else:
+                self._session_bar_cache.append_bar(symbol, iv, payload)
         except Exception as e:
             log.debug(f"Session cache persist failed for {symbol}: {e}")
+
+    def _submit_session_cache_write(
+        self,
+        symbol: str,
+        interval: str,
+        payload: dict[str, Any],
+    ) -> None:
+        cache = self._session_bar_cache
+        pool = getattr(self, "_session_cache_io_pool", None)
+        if cache is None:
+            return
+        if pool is None:
+            try:
+                cache.append_bar(symbol, interval, dict(payload))
+            except Exception as exc:
+                log.debug("Session cache write failed for %s: %s", symbol, exc)
+            return
+        lock = getattr(self, "_session_cache_io_lock", None)
+        futures = getattr(self, "_session_cache_io_futures", None)
+        if lock is None or futures is None:
+            try:
+                pool.submit(cache.append_bar, symbol, interval, dict(payload))
+            except Exception as exc:
+                log.debug("Failed to enqueue session cache write for %s: %s", symbol, exc)
+            return
+        with lock:
+            if len(futures) >= 256:
+                log.debug(
+                    "Session cache write queue full; dropping %s (%s)",
+                    symbol,
+                    interval,
+                )
+                return
+        try:
+            future = pool.submit(cache.append_bar, symbol, interval, dict(payload))
+        except Exception as exc:
+            log.debug("Failed to enqueue session cache write for %s: %s", symbol, exc)
+            return
+        with lock:
+            futures.add(future)
+        future.add_done_callback(self._on_session_cache_write_done)
+
+    def _on_session_cache_write_done(self, future: Future[object]) -> None:
+        lock = getattr(self, "_session_cache_io_lock", None)
+        futures = getattr(self, "_session_cache_io_futures", None)
+        if lock is not None and futures is not None:
+            with lock:
+                futures.discard(future)
+        try:
+            future.result()
+        except Exception as exc:
+            log.debug("Async session cache write failed: %s", exc)
+
+    def _shutdown_session_cache_writer(self) -> None:
+        pool = getattr(self, "_session_cache_io_pool", None)
+        if pool is None:
+            return
+        lock = getattr(self, "_session_cache_io_lock", None)
+        futures = getattr(self, "_session_cache_io_futures", None)
+        if lock is not None and futures is not None:
+            with lock:
+                pending = list(futures)
+        else:
+            pending = []
+        for fut in pending:
+            try:
+                fut.result(timeout=0.3)
+            except FuturesTimeout:
+                break
+            except Exception as exc:
+                log.debug("Session cache writer flush failed: %s", exc)
+        try:
+            pool.shutdown(wait=False, cancel_futures=True)
+        except Exception as exc:
+            log.debug("Session cache writer shutdown failed: %s", exc)
+        self._session_cache_io_pool = None
 
     def _filter_trained_stocks_ui(self, text: str):
         """Filter right-panel trained stock list by search query."""
@@ -4420,9 +4344,6 @@ class MainApp(QMainWindow):
         """Quick trade from signal"""
         self.stock_input.setText(pred.stock_code)
         self._analyze_stock()
-
-    # =========================================================================
-    # =========================================================================
 
     def _update_watchlist(self):
         """Update watchlist display"""
@@ -7097,6 +7018,11 @@ class MainApp(QMainWindow):
                     timer.stop()
             except Exception as exc:
                 log.debug("Suppressed exception in ui/app.py", exc_info=exc)
+
+        try:
+            self._shutdown_session_cache_writer()
+        except Exception as exc:
+            log.debug("Suppressed exception in ui/app.py", exc_info=exc)
 
         try:
             self._save_state()
