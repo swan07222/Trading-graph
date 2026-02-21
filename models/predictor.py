@@ -2880,18 +2880,22 @@ class Predictor:
                     )
                     prices.append(float(next_price))
 
-                out = prices[1:]
+                forecast_prices = prices[1:]
                 if neutral_mode:
                     neutral_cap = max(float(atr_pct) * 0.55, 0.0045)
                     lo = current_price * (1.0 - neutral_cap)
                     hi = current_price * (1.0 + neutral_cap)
-                    out = [float(np.clip(p, lo, hi)) for p in out]
-                    if len(out) >= 2:
-                        for i in range(1, len(out)):
-                            out[i] = float((0.68 * out[i]) + (0.32 * out[i - 1]))
-                        out = [float(np.clip(p, lo, hi)) for p in out]
+                    forecast_prices = [float(np.clip(p, lo, hi)) for p in forecast_prices]
+                    if len(forecast_prices) >= 2:
+                        for i in range(1, len(forecast_prices)):
+                            forecast_prices[i] = float(
+                                (0.68 * forecast_prices[i]) + (0.32 * forecast_prices[i - 1])
+                            )
+                        forecast_prices = [
+                            float(np.clip(p, lo, hi)) for p in forecast_prices
+                        ]
 
-                return out
+                return forecast_prices
 
             except Exception as e:
                 log.debug(f"Forecaster failed: {e}")
@@ -3053,7 +3057,7 @@ class Predictor:
         )
         rng = np.random.RandomState(seed)
 
-        out: list[float] = []
+        fallback_prices: list[float] = []
         price = float(current_price)
         prev_eps = 0.0
         for i in range(horizon):
@@ -3067,8 +3071,8 @@ class Predictor:
             if abs(change) < 1e-7:
                 change = float(((-1.0) ** i) * max_step * 0.03)
             price = float(np.clip(price * (1.0 + change), current_price * 0.5, current_price * 2.0))
-            out.append(price)
-        return out
+            fallback_prices.append(price)
+        return fallback_prices
 
     # =========================================================================
     # =========================================================================

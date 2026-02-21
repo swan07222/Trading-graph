@@ -26,6 +26,9 @@ data/*.db
 data/*.db-shm
 data/*.db-wal
 backups/
+tmp_ens.pt
+data/alert_history.json
+data/learner_state.json
 
 # Local OS/editor files
 .DS_Store

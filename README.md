@@ -38,8 +38,11 @@ For multiple endpoints, separate entries with `;`.
 
 Provider/fallback policy controls:
 - `TRADING_ENABLED_SOURCES` overrides provider set/order (comma/semicolon list, e.g. `yahoo,tencent`).
-- `TRADING_STRICT_REALTIME_QUOTES=1` disables quote fallback layers (spot cache, last-good, DB last-close).
+- `TRADING_STRICT_REALTIME_QUOTES=1` disables quote fallback layers (spot cache, last-good, DB last-close). Live mode defaults to strict realtime.
+- `TRADING_ALLOW_LAST_CLOSE_FALLBACK=1` opt-in for DB last-close fallback (disabled by default).
+- `TRADING_ALLOW_STALE_REALTIME_FALLBACK=1` allows stale fallback quotes to pass through as delayed (disabled by default).
 - `TRADING_INTRADAY_SESSION_POLICY=none` disables CN-only intraday session clipping for non-CN markets.
+- `TRADING_FETCHER_SCOPE=thread|process` controls singleton isolation (`thread` default to avoid cross-thread mutable-cache coupling).
 
 ## Candle Rendering Pipeline
 

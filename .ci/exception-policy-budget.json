@@ -1,21 +1,12 @@
 {
-  "data/feeds.py": {
-    "broad-except": 54
-  },
-  "data/fetcher.py": {
-    "broad-except": 59
-  },
   "models/auto_learner.py": {
-    "broad-except": 46
+    "broad-except": 39
   },
   "models/predictor.py": {
     "broad-except": 37
   },
-  "trading/executor.py": {
-    "broad-except": 79
-  },
   "ui/app.py": {
-    "broad-except": 154
+    "broad-except": 139
   },
   "ui/app_chart_pipeline.py": {
     "broad-except": 24

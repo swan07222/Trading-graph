@@ -11,6 +11,7 @@ DEFAULT_TARGETS: tuple[str, ...] = (
     "main.py",
     "data/feeds.py",
     "data/fetcher.py",
+    "data/fetcher_registry.py",
     "models/predictor.py",
     "trading/executor.py",
     "ui/app.py",

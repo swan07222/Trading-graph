@@ -1,99 +1,68 @@
 # strict mypy baseline for scripts/typecheck_strict_gate.py
 # Format: path:line:code:message
 
-data/feeds.py:1020:no-untyped-def:Function is missing a type annotation for one or more arguments
-data/feeds.py:1020:type-arg:Missing type parameters for generic type "dict"
-data/feeds.py:1069:no-untyped-def:Function is missing a return type annotation
-data/feeds.py:1076:no-untyped-def:Function is missing a return type annotation
-data/feeds.py:1076:type-arg:Missing type parameters for generic type "dict"
-data/feeds.py:113:no-untyped-def:Function is missing a return type annotation
-data/feeds.py:1163:no-untyped-def:Function is missing a return type annotation
-data/feeds.py:1171:no-untyped-def:Function is missing a return type annotation
-data/feeds.py:1178:type-arg:Missing type parameters for generic type "Callable"
-data/feeds.py:1191:no-untyped-def:Function is missing a return type annotation
-data/feeds.py:1198:type-arg:Missing type parameters for generic type "Callable"
-data/feeds.py:119:no-untyped-def:Function is missing a return type annotation
-data/feeds.py:1212:no-untyped-call:Call to untyped function "disconnect" of "DataFeed" in typed context
-data/feeds.py:1228:no-untyped-call:Call to untyped function "WebSocketFeed" in typed context
-data/feeds.py:135:no-untyped-def:Function is missing a return type annotation
-data/feeds.py:141:no-untyped-def:Function is missing a return type annotation
-data/feeds.py:1461:no-untyped-def:Function is missing a return type annotation
-data/feeds.py:1468:no-untyped-def:Function is missing a return type annotation
-data/feeds.py:1475:no-untyped-def:Function is missing a return type annotation
-data/feeds.py:1521:no-untyped-def:Function is missing a return type annotation
-data/feeds.py:1535:no-untyped-def:Function is missing a type annotation
-data/feeds.py:1552:no-untyped-def:Function is missing a return type annotation
-data/feeds.py:1579:no-untyped-def:Function is missing a return type annotation
-data/feeds.py:1579:type-arg:Missing type parameters for generic type "Callable"
-data/feeds.py:1590:no-untyped-def:Function is missing a return type annotation
-data/feeds.py:1590:type-arg:Missing type parameters for generic type "Callable"
-data/feeds.py:1593:no-untyped-def:Function is missing a return type annotation
-data/feeds.py:1600:no-untyped-call:Call to untyped function "disconnect" of "DataFeed" in typed context
-data/feeds.py:1626:no-untyped-call:Call to untyped function "FeedManager" in typed context
-data/feeds.py:169:no-untyped-call:Call to untyped function "_notify" in typed context
-data/feeds.py:225:no-untyped-call:Call to untyped function "_get_fetcher" in typed context
-data/feeds.py:301:no-untyped-def:Function is missing a return type annotation
-data/feeds.py:302:no-untyped-call:Call to untyped function "__init__" in typed context
-data/feeds.py:354:no-untyped-def:Function is missing a return type annotation
-data/feeds.py:35:type-arg:Missing type parameters for generic type "Callable"
-data/feeds.py:407:no-untyped-def:Function is missing a return type annotation
-data/feeds.py:43:no-untyped-def:Function is missing a return type annotation
-data/feeds.py:46:type-arg:Missing type parameters for generic type "Callable"
-data/feeds.py:528:no-untyped-def:Function is missing a return type annotation
-data/feeds.py:547:no-untyped-def:Function is missing a return type annotation
-data/feeds.py:562:no-untyped-def:Function is missing a return type annotation
+data/feeds.py:105:no-untyped-call:Call to untyped function "__init__" in typed context
+data/feeds.py:1200:no-untyped-def:Function is missing a return type annotation
+data/feeds.py:1207:no-untyped-def:Function is missing a return type annotation
+data/feeds.py:1221:no-untyped-def:Function is missing a return type annotation
+data/feeds.py:1273:no-untyped-def:Function is missing a return type annotation
+data/feeds.py:1287:no-untyped-def:Function is missing a type annotation
+data/feeds.py:128:no-untyped-def:Function is missing a return type annotation
+data/feeds.py:1304:no-untyped-def:Function is missing a return type annotation
+data/feeds.py:1331:no-untyped-def:Function is missing a return type annotation
+data/feeds.py:1331:type-arg:Missing type parameters for generic type "Callable"
+data/feeds.py:1342:no-untyped-def:Function is missing a return type annotation
+data/feeds.py:1342:type-arg:Missing type parameters for generic type "Callable"
+data/feeds.py:1345:no-untyped-def:Function is missing a return type annotation
+data/feeds.py:134:no-untyped-def:Function is missing a return type annotation
+data/feeds.py:1357:no-untyped-call:Call to untyped function "disconnect" of "DataFeed" in typed context
+data/feeds.py:1383:no-untyped-call:Call to untyped function "FeedManager" in typed context
+data/feeds.py:153:no-untyped-def:Function is missing a return type annotation
+data/feeds.py:159:no-untyped-def:Function is missing a return type annotation
+data/feeds.py:187:no-untyped-call:Call to untyped function "_notify" in typed context
+data/feeds.py:245:no-untyped-call:Call to untyped function "_get_fetcher" in typed context
+data/feeds.py:321:no-untyped-def:Function is missing a return type annotation
+data/feeds.py:322:no-untyped-call:Call to untyped function "__init__" in typed context
+data/feeds.py:405:no-untyped-def:Function is missing a return type annotation
+data/feeds.py:460:no-untyped-def:Function is missing a return type annotation
+data/feeds.py:48:type-arg:Missing type parameters for generic type "Callable"
 data/feeds.py:56:no-untyped-def:Function is missing a return type annotation
-data/feeds.py:573:no-untyped-def:Function is missing a type annotation
-data/feeds.py:590:no-untyped-def:Function is missing a type annotation
-data/feeds.py:631:no-untyped-call:Call to untyped function "_notify" in typed context
-data/feeds.py:645:no-untyped-def:Function is missing a type annotation
-data/feeds.py:64:no-untyped-def:Function is missing a return type annotation
-data/feeds.py:67:no-untyped-def:Function is missing a return type annotation
-data/feeds.py:67:type-arg:Missing type parameters for generic type "Callable"
-data/feeds.py:688:no-untyped-def:Function is missing a type annotation
-data/feeds.py:724:no-untyped-def:Function is missing a return type annotation
-data/feeds.py:72:no-untyped-def:Function is missing a return type annotation
-data/feeds.py:72:type-arg:Missing type parameters for generic type "Callable"
-data/feeds.py:744:no-untyped-def:Function is missing a return type annotation
-data/feeds.py:771:no-untyped-def:Function is missing a return type annotation
-data/feeds.py:772:no-untyped-call:Call to untyped function "__init__" in typed context
-data/feeds.py:775:type-arg:Missing type parameters for generic type "Queue"
-data/feeds.py:777:no-untyped-def:Function is missing a return type annotation
-data/feeds.py:77:no-untyped-def:Function is missing a type annotation
-data/feeds.py:797:no-untyped-def:Function is missing a return type annotation
-data/feeds.py:801:no-untyped-call:Call to untyped function "disconnect" of "DataFeed" in typed context
-data/feeds.py:821:no-untyped-def:Function is missing a return type annotation
-data/feeds.py:830:no-untyped-def:Function is missing a type annotation
-data/feeds.py:831:no-untyped-call:Call to untyped function "_notify" in typed context
-data/feeds.py:855:type-arg:Missing type parameters for generic type "dict"
-data/feeds.py:856:type-arg:Missing type parameters for generic type "Callable"
-data/feeds.py:862:no-untyped-def:Function is missing a type annotation for one or more arguments
-data/feeds.py:914:no-untyped-def:Function is missing a return type annotation
-data/feeds.py:914:type-arg:Missing type parameters for generic type "Callable"
-data/feeds.py:919:no-untyped-def:Function is missing a return type annotation
-data/feeds.py:919:type-arg:Missing type parameters for generic type "Callable"
-data/feeds.py:924:no-untyped-def:Function is missing a return type annotation
-data/feeds.py:929:no-untyped-def:Function is missing a type annotation
-data/feeds.py:92:no-untyped-call:Call to untyped function "__init__" in typed context
-data/feeds.py:995:no-untyped-def:Function is missing a return type annotation
-data/feeds.py:995:no-untyped-def:Function is missing a type annotation for one or more arguments
-data/feeds.py:995:type-arg:Missing type parameters for generic type "dict"
-data/fetcher.py:1556:type-arg:Missing type parameters for generic type "dict"
-data/fetcher.py:1726:type-arg:Missing type parameters for generic type "dict"
-data/fetcher.py:2202:type-arg:Missing type parameters for generic type "dict"
-data/fetcher.py:2397:type-arg:Missing type parameters for generic type "dict"
-data/fetcher.py:2550:type-arg:Missing type parameters for generic type "dict"
-data/fetcher.py:258:no-untyped-def:Function is missing a type annotation for one or more arguments
-data/fetcher.py:2629:type-arg:Missing type parameters for generic type "dict"
-data/fetcher.py:2695:type-arg:Missing type parameters for generic type "dict"
-data/fetcher.py:3354:type-arg:Missing type parameters for generic type "dict"
-data/fetcher.py:3376:unused-ignore:Unused "type: ignore" comment
-data/fetcher.py:3400:type-arg:Missing type parameters for generic type "dict"
-data/fetcher.py:3529:no-untyped-call:Call to untyped function "DataFetcher" in typed context
-data/fetcher.py:606:type-arg:Missing type parameters for generic type "dict"
-data/fetcher.py:678:type-arg:Missing type parameters for generic type "dict"
-data/fetcher.py:928:type-arg:Missing type parameters for generic type "dict"
-data/fetcher.py:94:no-untyped-def:Function is missing a return type annotation
+data/feeds.py:581:no-untyped-def:Function is missing a return type annotation
+data/feeds.py:59:type-arg:Missing type parameters for generic type "Callable"
+data/feeds.py:606:no-untyped-def:Function is missing a return type annotation
+data/feeds.py:621:no-untyped-def:Function is missing a return type annotation
+data/feeds.py:632:no-untyped-def:Function is missing a type annotation
+data/feeds.py:649:no-untyped-def:Function is missing a type annotation
+data/feeds.py:690:no-untyped-call:Call to untyped function "_notify" in typed context
+data/feeds.py:69:no-untyped-def:Function is missing a return type annotation
+data/feeds.py:704:no-untyped-def:Function is missing a type annotation
+data/feeds.py:747:no-untyped-def:Function is missing a type annotation
+data/feeds.py:77:no-untyped-def:Function is missing a return type annotation
+data/feeds.py:783:no-untyped-def:Function is missing a return type annotation
+data/feeds.py:806:no-untyped-def:Function is missing a return type annotation
+data/feeds.py:80:no-untyped-def:Function is missing a return type annotation
+data/feeds.py:80:type-arg:Missing type parameters for generic type "Callable"
+data/feeds.py:838:no-untyped-def:Function is missing a return type annotation
+data/feeds.py:839:no-untyped-call:Call to untyped function "__init__" in typed context
+data/feeds.py:842:type-arg:Missing type parameters for generic type "Queue"
+data/feeds.py:844:no-untyped-def:Function is missing a return type annotation
+data/feeds.py:85:no-untyped-def:Function is missing a return type annotation
+data/feeds.py:85:type-arg:Missing type parameters for generic type "Callable"
+data/feeds.py:864:no-untyped-def:Function is missing a return type annotation
+data/feeds.py:868:no-untyped-call:Call to untyped function "disconnect" of "DataFeed" in typed context
+data/feeds.py:888:no-untyped-def:Function is missing a return type annotation
+data/feeds.py:897:no-untyped-def:Function is missing a type annotation
+data/feeds.py:898:no-untyped-call:Call to untyped function "_notify" in typed context
+data/feeds.py:908:no-untyped-def:Function is missing a return type annotation
+data/feeds.py:90:no-untyped-def:Function is missing a type annotation
+data/feeds.py:916:no-untyped-def:Function is missing a return type annotation
+data/feeds.py:923:type-arg:Missing type parameters for generic type "Callable"
+data/feeds.py:938:no-untyped-def:Function is missing a return type annotation
+data/feeds.py:945:type-arg:Missing type parameters for generic type "Callable"
+data/feeds.py:959:no-untyped-call:Call to untyped function "disconnect" of "DataFeed" in typed context
+data/feeds.py:975:no-untyped-call:Call to untyped function "WebSocketFeed" in typed context
+data/fetcher_registry.py:58:type-arg:Missing type parameters for generic type "Token"
+data/fetcher_registry.py:62:type-arg:Missing type parameters for generic type "Token"
 main.py:499:no-untyped-call:Call to untyped function "run_app" in typed context
 models/predictor.py:1257:type-arg:Missing type parameters for generic type "ndarray"
 models/predictor.py:1650:no-untyped-def:Function is missing a return type annotation
@@ -108,225 +77,214 @@ models/predictor.py:2481:no-untyped-def:Function is missing a return type annota
 models/predictor.py:2605:type-arg:Missing type parameters for generic type "ndarray"
 models/predictor.py:2664:type-arg:Missing type parameters for generic type "ndarray"
 models/predictor.py:277:no-untyped-call:Call to untyped function "_find_best_model_pair" in typed context
-models/predictor.py:3076:no-untyped-def:Function is missing a type annotation for one or more arguments
-models/predictor.py:3108:no-untyped-def:Function is missing a type annotation for one or more arguments
-models/predictor.py:3303:no-untyped-def:Function is missing a return type annotation
-models/predictor.py:3358:no-untyped-def:Function is missing a return type annotation
+models/predictor.py:3080:no-untyped-def:Function is missing a type annotation for one or more arguments
+models/predictor.py:3112:no-untyped-def:Function is missing a type annotation for one or more arguments
+models/predictor.py:3307:no-untyped-def:Function is missing a return type annotation
+models/predictor.py:3362:no-untyped-def:Function is missing a return type annotation
 models/predictor.py:367:no-untyped-call:Call to untyped function "_load_forecaster" in typed context
 models/predictor.py:378:no-untyped-def:Function is missing a type annotation
 models/predictor.py:749:no-untyped-def:Function is missing a return type annotation
 models/predictor.py:789:no-untyped-def:Function is missing a return type annotation
-trading/executor.py:1039:no-untyped-def:Function is missing a return type annotation
-trading/executor.py:1048:no-untyped-def:Function is missing a return type annotation
-trading/executor.py:1068:no-untyped-def:Function is missing a return type annotation
-trading/executor.py:1083:no-untyped-def:Function is missing a return type annotation
+trading/executor.py:1045:no-untyped-def:Function is missing a return type annotation
+trading/executor.py:1054:no-untyped-def:Function is missing a return type annotation
+trading/executor.py:1074:no-untyped-def:Function is missing a return type annotation
+trading/executor.py:107:type-arg:Missing type parameters for generic type "deque"
+trading/executor.py:1089:no-untyped-def:Function is missing a return type annotation
 trading/executor.py:108:type-arg:Missing type parameters for generic type "deque"
-trading/executor.py:109:type-arg:Missing type parameters for generic type "deque"
-trading/executor.py:1110:no-untyped-def:Function is missing a return type annotation
-trading/executor.py:1371:no-untyped-def:Function is missing a return type annotation
-trading/executor.py:159:type-arg:Missing type parameters for generic type "dict"
-trading/executor.py:1667:no-untyped-def:Function is missing a type annotation
-trading/executor.py:1683:no-untyped-def:Function is missing a type annotation for one or more arguments
-trading/executor.py:1711:no-untyped-def:Function is missing a return type annotation
-trading/executor.py:171:no-untyped-call:Call to untyped function "_restore_runtime_state" in typed context
-trading/executor.py:1748:no-untyped-def:Function is missing a return type annotation
-trading/executor.py:1753:no-untyped-def:Function is missing a return type annotation
-trading/executor.py:1905:no-untyped-call:Call to untyped function "_process_pending_fills" in typed context
-trading/executor.py:1932:no-untyped-def:Function is missing a return type annotation
-trading/executor.py:1938:no-untyped-call:Call to untyped function "_rebuild_broker_mappings" in typed context
-trading/executor.py:1940:no-untyped-call:Call to untyped function "_process_pending_fills" in typed context
-trading/executor.py:1956:no-untyped-def:Function is missing a return type annotation
-trading/executor.py:2057:no-untyped-def:Function is missing a return type annotation
-trading/executor.py:2074:no-untyped-def:Function is missing a type annotation for one or more arguments
-trading/executor.py:2149:no-untyped-def:Function is missing a return type annotation
-trading/executor.py:2157:no-untyped-call:Call to untyped function "_process_pending_fills" in typed context
-trading/executor.py:2367:no-untyped-def:Function is missing a return type annotation
-trading/executor.py:2394:no-untyped-def:Function is missing a return type annotation
-trading/executor.py:2451:no-untyped-call:Call to untyped function "_process_pending_fills" in typed context
-trading/executor.py:2518:no-untyped-def:Function is missing a return type annotation
-trading/executor.py:2571:no-untyped-def:Function is missing a return type annotation
-trading/executor.py:2600:no-untyped-call:Call to untyped function "_startup_sync" in typed context
-trading/executor.py:2608:no-untyped-def:Function is missing a return type annotation
-trading/executor.py:2642:no-untyped-def:Function is missing a return type annotation
-trading/executor.py:2666:no-untyped-def:Function is missing a return type annotation
-trading/executor.py:2671:no-untyped-def:Function is missing a return type annotation
-trading/executor.py:287:no-untyped-def:Function is missing a return type annotation
-trading/executor.py:287:no-untyped-def:Function is missing a type annotation for one or more arguments
-trading/executor.py:297:no-untyped-call:Call to untyped function "_restore_auto_trader_state" in typed context
-trading/executor.py:300:no-untyped-def:Function is missing a return type annotation
-trading/executor.py:326:no-untyped-def:Function is missing a return type annotation
-trading/executor.py:332:no-untyped-def:Function is missing a return type annotation
-trading/executor.py:431:no-untyped-call:Call to untyped function "_rebuild_broker_mappings" in typed context
+trading/executor.py:1117:no-untyped-def:Function is missing a return type annotation
+trading/executor.py:1379:no-untyped-def:Function is missing a return type annotation
+trading/executor.py:158:type-arg:Missing type parameters for generic type "dict"
+trading/executor.py:1675:no-untyped-def:Function is missing a type annotation
+trading/executor.py:1691:no-untyped-def:Function is missing a type annotation for one or more arguments
+trading/executor.py:170:no-untyped-call:Call to untyped function "_restore_runtime_state" in typed context
+trading/executor.py:1719:no-untyped-def:Function is missing a return type annotation
+trading/executor.py:1757:no-untyped-def:Function is missing a return type annotation
+trading/executor.py:1762:no-untyped-def:Function is missing a return type annotation
+trading/executor.py:1914:no-untyped-call:Call to untyped function "_process_pending_fills" in typed context
+trading/executor.py:1941:no-untyped-def:Function is missing a return type annotation
+trading/executor.py:1947:no-untyped-call:Call to untyped function "_rebuild_broker_mappings" in typed context
+trading/executor.py:1949:no-untyped-call:Call to untyped function "_process_pending_fills" in typed context
+trading/executor.py:1965:no-untyped-def:Function is missing a return type annotation
+trading/executor.py:2066:no-untyped-def:Function is missing a return type annotation
+trading/executor.py:2083:no-untyped-def:Function is missing a type annotation for one or more arguments
+trading/executor.py:2158:no-untyped-def:Function is missing a return type annotation
+trading/executor.py:2167:no-untyped-call:Call to untyped function "_process_pending_fills" in typed context
+trading/executor.py:2377:no-untyped-def:Function is missing a return type annotation
+trading/executor.py:2404:no-untyped-def:Function is missing a return type annotation
+trading/executor.py:2462:no-untyped-call:Call to untyped function "_process_pending_fills" in typed context
+trading/executor.py:2529:no-untyped-def:Function is missing a return type annotation
+trading/executor.py:2584:no-untyped-def:Function is missing a return type annotation
+trading/executor.py:2615:no-untyped-call:Call to untyped function "_startup_sync" in typed context
+trading/executor.py:2623:no-untyped-def:Function is missing a return type annotation
+trading/executor.py:2657:no-untyped-def:Function is missing a return type annotation
+trading/executor.py:2681:no-untyped-def:Function is missing a return type annotation
+trading/executor.py:2686:no-untyped-def:Function is missing a return type annotation
+trading/executor.py:286:no-untyped-def:Function is missing a return type annotation
+trading/executor.py:286:no-untyped-def:Function is missing a type annotation for one or more arguments
+trading/executor.py:296:no-untyped-call:Call to untyped function "_restore_auto_trader_state" in typed context
+trading/executor.py:299:no-untyped-def:Function is missing a return type annotation
+trading/executor.py:325:no-untyped-def:Function is missing a return type annotation
+trading/executor.py:331:no-untyped-def:Function is missing a return type annotation
+trading/executor.py:430:no-untyped-call:Call to untyped function "_rebuild_broker_mappings" in typed context
 trading/executor.py:502:no-untyped-call:Call to untyped function "_startup_sync" in typed context
 trading/executor.py:710:no-untyped-def:Function is missing a type annotation
 trading/executor.py:753:no-untyped-def:Function is missing a return type annotation
-trading/executor.py:891:no-untyped-def:Function is missing a return type annotation
-ui/app.py:1204:no-untyped-def:Function is missing a return type annotation
-ui/app.py:120:no-untyped-def:Function is missing a return type annotation
-ui/app.py:1282:no-untyped-def:Function is missing a return type annotation
-ui/app.py:1355:no-untyped-def:Function is missing a return type annotation
-ui/app.py:1378:no-untyped-def:Function is missing a return type annotation
-ui/app.py:1378:type-arg:Missing type parameters for generic type "dict"
-ui/app.py:1397:no-untyped-def:Function is missing a type annotation
-ui/app.py:1420:no-untyped-def:Function is missing a return type annotation
-ui/app.py:1420:type-arg:Missing type parameters for generic type "dict"
-ui/app.py:161:type-arg:Missing type parameters for generic type "dict"
-ui/app.py:1775:no-untyped-def:Function is missing a return type annotation
-ui/app.py:1818:no-untyped-def:Function is missing a return type annotation
-ui/app.py:1833:no-untyped-def:Function is missing a return type annotation
-ui/app.py:1837:no-untyped-def:Function is missing a return type annotation
-ui/app.py:1837:no-untyped-def:Function is missing a type annotation for one or more arguments
-ui/app.py:189:no-untyped-call:Call to untyped function "_setup_menubar" in typed context
-ui/app.py:190:no-untyped-call:Call to untyped function "_setup_toolbar" in typed context
-ui/app.py:191:no-untyped-call:Call to untyped function "_setup_ui" in typed context
-ui/app.py:1958:no-untyped-def:Function is missing a return type annotation
-ui/app.py:1965:no-untyped-def:Function is missing a return type annotation
-ui/app.py:1972:no-untyped-def:Function is missing a return type annotation
-ui/app.py:1979:no-untyped-def:Function is missing a return type annotation
-ui/app.py:198:no-untyped-call:Call to untyped function "_setup_statusbar" in typed context
-ui/app.py:1993:no-untyped-def:Function is missing a return type annotation
-ui/app.py:199:no-untyped-call:Call to untyped function "_setup_timers" in typed context
-ui/app.py:200:no-untyped-call:Call to untyped function "_apply_professional_style" in typed context
-ui/app.py:2017:no-untyped-def:Function is missing a return type annotation
-ui/app.py:2045:no-untyped-call:Call to untyped function "_update_market_status" in typed context
+trading/executor.py:893:no-untyped-def:Function is missing a return type annotation
+ui/app.py:1237:no-untyped-def:Function is missing a return type annotation
+ui/app.py:130:no-untyped-def:Function is missing a return type annotation
+ui/app.py:1315:no-untyped-def:Function is missing a return type annotation
+ui/app.py:1388:no-untyped-def:Function is missing a return type annotation
+ui/app.py:1411:no-untyped-def:Function is missing a return type annotation
+ui/app.py:1411:type-arg:Missing type parameters for generic type "dict"
+ui/app.py:1430:no-untyped-def:Function is missing a type annotation
+ui/app.py:1453:no-untyped-def:Function is missing a return type annotation
+ui/app.py:1453:type-arg:Missing type parameters for generic type "dict"
+ui/app.py:153:no-untyped-def:Function is missing a return type annotation
+ui/app.py:1808:no-untyped-def:Function is missing a return type annotation
+ui/app.py:1851:no-untyped-def:Function is missing a return type annotation
+ui/app.py:1866:no-untyped-def:Function is missing a return type annotation
+ui/app.py:1870:no-untyped-def:Function is missing a return type annotation
+ui/app.py:1870:no-untyped-def:Function is missing a type annotation for one or more arguments
+ui/app.py:194:type-arg:Missing type parameters for generic type "dict"
+ui/app.py:1991:no-untyped-def:Function is missing a return type annotation
+ui/app.py:1998:no-untyped-def:Function is missing a return type annotation
+ui/app.py:2005:no-untyped-def:Function is missing a return type annotation
+ui/app.py:2012:no-untyped-def:Function is missing a return type annotation
+ui/app.py:2026:no-untyped-def:Function is missing a return type annotation
 ui/app.py:2050:no-untyped-def:Function is missing a return type annotation
-ui/app.py:2056:no-untyped-def:Function is missing a return type annotation
-ui/app.py:205:no-untyped-call:Call to untyped function "_load_state" in typed context
-ui/app.py:206:no-untyped-call:Call to untyped function "_update_watchlist" in typed context
-ui/app.py:2116:no-untyped-call:Call to untyped function "_init_auto_trader" in typed context
-ui/app.py:2122:no-untyped-call:Call to untyped function "_start_monitoring" in typed context
-ui/app.py:2319:no-untyped-def:Function is missing a return type annotation
-ui/app.py:2345:no-untyped-call:Call to untyped function "_update_watchlist" in typed context
-ui/app.py:2362:no-untyped-def:Function is missing a type annotation
-ui/app.py:2454:no-untyped-def:Function is missing a return type annotation
-ui/app.py:2479:no-untyped-def:Function is missing a return type annotation
-ui/app.py:2523:no-untyped-def:Function is missing a return type annotation
-ui/app.py:2715:no-untyped-call:Call to untyped function "_init_components" in typed context
-ui/app.py:2780:no-untyped-def:Function is missing a return type annotation
-ui/app.py:2803:no-untyped-def:Function is missing a return type annotation
-ui/app.py:2825:no-untyped-call:Call to untyped function "_stop_monitoring" in typed context
-ui/app.py:2878:no-untyped-call:Call to untyped function "_start_monitoring" in typed context
-ui/app.py:2895:no-untyped-call:Call to untyped function "_analyze_stock" in typed context
-ui/app.py:3009:no-untyped-def:Function is missing a return type annotation
-ui/app.py:3013:no-untyped-call:Call to untyped function "_analyze_stock" in typed context
-ui/app.py:3552:no-untyped-def:Function is missing a type annotation for one or more arguments
-ui/app.py:3809:no-untyped-def:Function is missing a type annotation
-ui/app.py:3812:no-untyped-call:Call to untyped function "_start_monitoring" in typed context
-ui/app.py:3814:no-untyped-call:Call to untyped function "_stop_monitoring" in typed context
-ui/app.py:3816:no-untyped-def:Function is missing a return type annotation
-ui/app.py:3819:no-untyped-call:Call to untyped function "_stop_monitoring" in typed context
-ui/app.py:3922:no-untyped-def:Function is missing a return type annotation
-ui/app.py:3936:no-untyped-def:Function is missing a type annotation
-ui/app.py:3979:no-untyped-call:Call to untyped function "_quick_trade" in typed context
-ui/app.py:3995:no-untyped-def:Function is missing a return type annotation
-ui/app.py:3998:no-untyped-def:Function is missing a return type annotation
-ui/app.py:4343:no-untyped-def:Function is missing a type annotation
-ui/app.py:4346:no-untyped-call:Call to untyped function "_analyze_stock" in typed context
-ui/app.py:4348:no-untyped-def:Function is missing a return type annotation
-ui/app.py:4397:no-untyped-def:Function is missing a return type annotation
-ui/app.py:4439:no-untyped-call:Call to untyped function "_analyze_stock" in typed context
-ui/app.py:4441:no-untyped-def:Function is missing a return type annotation
-ui/app.py:4466:no-untyped-call:Call to untyped function "_update_watchlist" in typed context
-ui/app.py:4476:no-untyped-def:Function is missing a return type annotation
-ui/app.py:4485:no-untyped-call:Call to untyped function "_update_watchlist" in typed context
-ui/app.py:4497:no-untyped-def:Function is missing a return type annotation
-ui/app.py:4625:no-untyped-def:Function is missing a return type annotation
-ui/app.py:4656:no-untyped-def:Function is missing a type annotation
-ui/app.py:4835:no-untyped-call:Call to untyped function "_update_details" in typed context
-ui/app.py:4846:no-untyped-call:Call to untyped function "_add_to_history" in typed context
-ui/app.py:4855:no-untyped-call:Call to untyped function "_start_monitoring" in typed context
-ui/app.py:4921:no-untyped-def:Function is missing a return type annotation
-ui/app.py:4932:no-untyped-def:Function is missing a type annotation
-ui/app.py:4950:no-untyped-def:Function is missing a type annotation
-ui/app.py:4956:no-untyped-call:Call to untyped function "safe_get" in typed context
-ui/app.py:4957:no-untyped-call:Call to untyped function "safe_get" in typed context
-ui/app.py:4958:no-untyped-call:Call to untyped function "safe_get" in typed context
-ui/app.py:4959:no-untyped-call:Call to untyped function "safe_get" in typed context
-ui/app.py:4960:no-untyped-call:Call to untyped function "safe_get" in typed context
-ui/app.py:4961:no-untyped-call:Call to untyped function "safe_get" in typed context
-ui/app.py:4962:no-untyped-call:Call to untyped function "safe_get" in typed context
-ui/app.py:4963:no-untyped-call:Call to untyped function "safe_get" in typed context
-ui/app.py:4964:no-untyped-call:Call to untyped function "safe_get" in typed context
-ui/app.py:4965:no-untyped-call:Call to untyped function "safe_get" in typed context
-ui/app.py:4966:no-untyped-call:Call to untyped function "safe_get" in typed context
-ui/app.py:4967:no-untyped-call:Call to untyped function "safe_get" in typed context
-ui/app.py:4968:no-untyped-call:Call to untyped function "safe_get" in typed context
-ui/app.py:5115:no-untyped-call:Call to untyped function "safe_get" in typed context
-ui/app.py:5116:no-untyped-call:Call to untyped function "safe_get" in typed context
-ui/app.py:5117:no-untyped-call:Call to untyped function "safe_get" in typed context
-ui/app.py:5118:no-untyped-call:Call to untyped function "safe_get" in typed context
-ui/app.py:5119:no-untyped-call:Call to untyped function "safe_get" in typed context
-ui/app.py:5120:no-untyped-call:Call to untyped function "safe_get" in typed context
-ui/app.py:5121:no-untyped-call:Call to untyped function "safe_get" in typed context
+ui/app.py:2078:no-untyped-call:Call to untyped function "_update_market_status" in typed context
+ui/app.py:2083:no-untyped-def:Function is missing a return type annotation
+ui/app.py:2089:no-untyped-def:Function is missing a return type annotation
+ui/app.py:2149:no-untyped-call:Call to untyped function "_init_auto_trader" in typed context
+ui/app.py:2155:no-untyped-call:Call to untyped function "_start_monitoring" in typed context
+ui/app.py:222:no-untyped-call:Call to untyped function "_setup_menubar" in typed context
+ui/app.py:223:no-untyped-call:Call to untyped function "_setup_toolbar" in typed context
+ui/app.py:224:no-untyped-call:Call to untyped function "_setup_ui" in typed context
+ui/app.py:231:no-untyped-call:Call to untyped function "_setup_statusbar" in typed context
+ui/app.py:232:no-untyped-call:Call to untyped function "_setup_timers" in typed context
+ui/app.py:233:no-untyped-call:Call to untyped function "_apply_professional_style" in typed context
+ui/app.py:2352:no-untyped-def:Function is missing a return type annotation
+ui/app.py:2378:no-untyped-call:Call to untyped function "_update_watchlist" in typed context
+ui/app.py:238:no-untyped-call:Call to untyped function "_load_state" in typed context
+ui/app.py:2395:no-untyped-def:Function is missing a type annotation
+ui/app.py:239:no-untyped-call:Call to untyped function "_update_watchlist" in typed context
+ui/app.py:2487:no-untyped-def:Function is missing a return type annotation
+ui/app.py:2512:no-untyped-def:Function is missing a return type annotation
+ui/app.py:2556:no-untyped-def:Function is missing a return type annotation
+ui/app.py:2748:no-untyped-call:Call to untyped function "_init_components" in typed context
+ui/app.py:2813:no-untyped-def:Function is missing a return type annotation
+ui/app.py:2836:no-untyped-def:Function is missing a return type annotation
+ui/app.py:2858:no-untyped-call:Call to untyped function "_stop_monitoring" in typed context
+ui/app.py:2911:no-untyped-call:Call to untyped function "_start_monitoring" in typed context
+ui/app.py:2928:no-untyped-call:Call to untyped function "_analyze_stock" in typed context
+ui/app.py:3042:no-untyped-def:Function is missing a return type annotation
+ui/app.py:3046:no-untyped-call:Call to untyped function "_analyze_stock" in typed context
+ui/app.py:3585:no-untyped-def:Function is missing a type annotation for one or more arguments
+ui/app.py:3842:no-untyped-def:Function is missing a type annotation
+ui/app.py:3845:no-untyped-call:Call to untyped function "_start_monitoring" in typed context
+ui/app.py:3847:no-untyped-call:Call to untyped function "_stop_monitoring" in typed context
+ui/app.py:3849:no-untyped-def:Function is missing a return type annotation
+ui/app.py:3852:no-untyped-call:Call to untyped function "_stop_monitoring" in typed context
+ui/app.py:3955:no-untyped-def:Function is missing a return type annotation
+ui/app.py:3969:no-untyped-def:Function is missing a type annotation
+ui/app.py:4012:no-untyped-call:Call to untyped function "_quick_trade" in typed context
+ui/app.py:4028:no-untyped-def:Function is missing a return type annotation
+ui/app.py:4031:no-untyped-def:Function is missing a return type annotation
+ui/app.py:4376:no-untyped-def:Function is missing a type annotation
+ui/app.py:4379:no-untyped-call:Call to untyped function "_analyze_stock" in typed context
+ui/app.py:4381:no-untyped-def:Function is missing a return type annotation
+ui/app.py:4430:no-untyped-def:Function is missing a return type annotation
+ui/app.py:4472:no-untyped-call:Call to untyped function "_analyze_stock" in typed context
+ui/app.py:4474:no-untyped-def:Function is missing a return type annotation
+ui/app.py:4499:no-untyped-call:Call to untyped function "_update_watchlist" in typed context
+ui/app.py:4509:no-untyped-def:Function is missing a return type annotation
+ui/app.py:4518:no-untyped-call:Call to untyped function "_update_watchlist" in typed context
+ui/app.py:4530:no-untyped-def:Function is missing a return type annotation
+ui/app.py:4658:no-untyped-def:Function is missing a return type annotation
+ui/app.py:4689:no-untyped-def:Function is missing a type annotation
+ui/app.py:4868:no-untyped-call:Call to untyped function "_update_details" in typed context
+ui/app.py:4879:no-untyped-call:Call to untyped function "_add_to_history" in typed context
+ui/app.py:4888:no-untyped-call:Call to untyped function "_start_monitoring" in typed context
+ui/app.py:4954:no-untyped-def:Function is missing a return type annotation
+ui/app.py:4965:no-untyped-def:Function is missing a type annotation
+ui/app.py:4983:no-untyped-def:Function is missing a type annotation
+ui/app.py:4989:no-untyped-call:Call to untyped function "safe_get" in typed context
+ui/app.py:4990:no-untyped-call:Call to untyped function "safe_get" in typed context
+ui/app.py:4991:no-untyped-call:Call to untyped function "safe_get" in typed context
+ui/app.py:4992:no-untyped-call:Call to untyped function "safe_get" in typed context
+ui/app.py:4993:no-untyped-call:Call to untyped function "safe_get" in typed context
+ui/app.py:4994:no-untyped-call:Call to untyped function "safe_get" in typed context
+ui/app.py:4995:no-untyped-call:Call to untyped function "safe_get" in typed context
+ui/app.py:4996:no-untyped-call:Call to untyped function "safe_get" in typed context
+ui/app.py:4997:no-untyped-call:Call to untyped function "safe_get" in typed context
+ui/app.py:4998:no-untyped-call:Call to untyped function "safe_get" in typed context
+ui/app.py:4999:no-untyped-call:Call to untyped function "safe_get" in typed context
+ui/app.py:5000:no-untyped-call:Call to untyped function "safe_get" in typed context
+ui/app.py:5001:no-untyped-call:Call to untyped function "safe_get" in typed context
+ui/app.py:5148:no-untyped-call:Call to untyped function "safe_get" in typed context
+ui/app.py:5149:no-untyped-call:Call to untyped function "safe_get" in typed context
+ui/app.py:5150:no-untyped-call:Call to untyped function "safe_get" in typed context
+ui/app.py:5151:no-untyped-call:Call to untyped function "safe_get" in typed context
+ui/app.py:5152:no-untyped-call:Call to untyped function "safe_get" in typed context
+ui/app.py:5153:no-untyped-call:Call to untyped function "safe_get" in typed context
 ui/app.py:5154:no-untyped-call:Call to untyped function "safe_get" in typed context
-ui/app.py:5155:no-untyped-call:Call to untyped function "safe_get" in typed context
-ui/app.py:5156:no-untyped-call:Call to untyped function "safe_get" in typed context
-ui/app.py:5185:no-untyped-def:Function is missing a type annotation
-ui/app.py:5264:no-untyped-def:Function is missing a return type annotation
-ui/app.py:5311:no-untyped-call:Call to untyped function "_update_correct_guess_profit_ui" in typed context
-ui/app.py:5360:no-untyped-def:Function is missing a return type annotation
-ui/app.py:5394:no-untyped-def:Function is missing a return type annotation
-ui/app.py:5404:no-untyped-def:Function is missing a return type annotation
-ui/app.py:5424:no-untyped-def:Function is missing a type annotation
-ui/app.py:5450:no-untyped-call:Call to untyped function "_analyze_stock" in typed context
-ui/app.py:5454:no-untyped-def:Function is missing a return type annotation
-ui/app.py:5456:no-untyped-call:Call to untyped function "_update_watchlist" in typed context
-ui/app.py:5457:no-untyped-call:Call to untyped function "_refresh_portfolio" in typed context
-ui/app.py:5463:no-untyped-def:Function is missing a return type annotation
-ui/app.py:5466:no-untyped-call:Call to untyped function "_connect_trading" in typed context
-ui/app.py:5468:no-untyped-call:Call to untyped function "_disconnect_trading" in typed context
-ui/app.py:5470:no-untyped-def:Function is missing a return type annotation
-ui/app.py:5514:no-untyped-call:Call to untyped function "_disconnect_trading" in typed context
-ui/app.py:5515:no-untyped-call:Call to untyped function "_connect_trading" in typed context
-ui/app.py:5517:no-untyped-def:Function is missing a return type annotation
-ui/app.py:5624:no-untyped-call:Call to untyped function "_refresh_portfolio" in typed context
-ui/app.py:5627:no-untyped-call:Call to untyped function "_init_auto_trader" in typed context
-ui/app.py:5637:no-untyped-def:Function is missing a return type annotation
-ui/app.py:5817:no-untyped-def:Function is missing a return type annotation
-ui/app.py:5849:no-untyped-call:Call to untyped function "_sync_widgets" in typed context
-ui/app.py:6022:no-untyped-def:Function is missing a return type annotation
-ui/app.py:6095:no-untyped-def:Function is missing a return type annotation
-ui/app.py:6166:no-untyped-def:Function is missing a type annotation
-ui/app.py:6180:no-untyped-call:Call to untyped function "_refresh_portfolio" in typed context
-ui/app.py:6182:no-untyped-def:Function is missing a type annotation
-ui/app.py:6188:no-untyped-def:Function is missing a return type annotation
-ui/app.py:6225:no-untyped-def:Function is missing a return type annotation
-ui/app.py:6271:no-untyped-call:Call to untyped function "_init_components" in typed context
-ui/app.py:6273:no-untyped-def:Function is missing a return type annotation
-ui/app.py:6293:no-untyped-call:Call to untyped function "_init_components" in typed context
-ui/app.py:6295:no-untyped-def:Function is missing a return type annotation
-ui/app.py:6304:no-untyped-def:Function is missing a return type annotation
-ui/app.py:6313:no-untyped-def:Function is missing a return type annotation
-ui/app.py:6339:no-untyped-def:Function is missing a return type annotation
-ui/app.py:6405:no-untyped-def:Function is missing a return type annotation
-ui/app.py:6420:no-untyped-call:Call to untyped function "_init_auto_trader" in typed context
-ui/app.py:6446:no-untyped-def:Function is missing a return type annotation
-ui/app.py:6464:no-untyped-def:Function is missing a return type annotation
-ui/app.py:6479:no-untyped-def:Function is missing a return type annotation
-ui/app.py:6506:no-untyped-def:Function is missing a return type annotation
-ui/app.py:6518:no-untyped-def:Function is missing a return type annotation
-ui/app.py:6628:no-untyped-def:Function is missing a return type annotation
-ui/app.py:6660:no-untyped-def:Function is missing a return type annotation
-ui/app.py:6664:no-untyped-def:Function is missing a return type annotation
-ui/app.py:6732:no-untyped-def:Function is missing a return type annotation
-ui/app.py:6736:no-untyped-def:Function is missing a return type annotation
-ui/app.py:6773:no-untyped-def:Function is missing a return type annotation
-ui/app.py:6776:no-untyped-call:Call to untyped function "_refresh_pending_table" in typed context
-ui/app.py:6784:no-untyped-def:Function is missing a return type annotation
-ui/app.py:6787:no-untyped-call:Call to untyped function "_refresh_pending_table" in typed context
-ui/app.py:6802:no-untyped-def:Function is missing a return type annotation
-ui/app.py:6813:no-untyped-def:Function is missing a return type annotation
-ui/app.py:6815:no-untyped-call:Call to untyped function "_update_correct_guess_profit_ui" in typed context
-ui/app.py:6915:no-untyped-def:Function is missing a return type annotation
-ui/app.py:6921:no-untyped-def:Function is missing a return type annotation
-ui/app.py:6945:no-untyped-def:Function is missing a return type annotation
-ui/app.py:6973:no-untyped-def:Function is missing a type annotation
-ui/app.py:7028:no-untyped-call:Call to untyped function "_save_state" in typed context
-ui/app.py:7038:no-untyped-def:Function is missing a return type annotation
-ui/app.py:7065:no-untyped-def:Function is missing a return type annotation
-ui/app.py:7112:no-untyped-def:Function is missing a return type annotation
-ui/app.py:7126:no-untyped-call:Call to untyped function "MainApp" in typed context
-ui/app.py:7151:no-untyped-def:Function is missing a return type annotation
-ui/app.py:7162:no-untyped-def:Function is missing a type annotation for one or more arguments
-ui/app.py:7172:no-untyped-call:Call to untyped function "run_app" in typed context
-ui/app.py:97:no-untyped-def:Function is missing a return type annotation
+ui/app.py:5187:no-untyped-call:Call to untyped function "safe_get" in typed context
+ui/app.py:5188:no-untyped-call:Call to untyped function "safe_get" in typed context
+ui/app.py:5189:no-untyped-call:Call to untyped function "safe_get" in typed context
+ui/app.py:5218:no-untyped-def:Function is missing a type annotation
+ui/app.py:5297:no-untyped-def:Function is missing a return type annotation
+ui/app.py:5344:no-untyped-call:Call to untyped function "_update_correct_guess_profit_ui" in typed context
+ui/app.py:5393:no-untyped-def:Function is missing a return type annotation
+ui/app.py:5427:no-untyped-def:Function is missing a return type annotation
+ui/app.py:5437:no-untyped-def:Function is missing a return type annotation
+ui/app.py:5457:no-untyped-def:Function is missing a type annotation
+ui/app.py:5483:no-untyped-call:Call to untyped function "_analyze_stock" in typed context
+ui/app.py:5487:no-untyped-def:Function is missing a return type annotation
+ui/app.py:5493:no-untyped-def:Function is missing a return type annotation
+ui/app.py:5496:no-untyped-def:Function is missing a return type annotation
+ui/app.py:5510:no-untyped-def:Function is missing a return type annotation
+ui/app.py:5513:no-untyped-def:Function is missing a return type annotation
+ui/app.py:5567:no-untyped-def:Function is missing a return type annotation
+ui/app.py:5570:no-untyped-def:Function is missing a return type annotation
+ui/app.py:5573:no-untyped-def:Function is missing a type annotation
+ui/app.py:5576:no-untyped-def:Function is missing a type annotation
+ui/app.py:5579:no-untyped-def:Function is missing a return type annotation
+ui/app.py:5585:no-untyped-def:Function is missing a return type annotation
+ui/app.py:5631:no-untyped-call:Call to untyped function "_init_components" in typed context
+ui/app.py:5633:no-untyped-def:Function is missing a return type annotation
+ui/app.py:5653:no-untyped-call:Call to untyped function "_init_components" in typed context
+ui/app.py:5655:no-untyped-def:Function is missing a return type annotation
+ui/app.py:5664:no-untyped-def:Function is missing a return type annotation
+ui/app.py:5673:no-untyped-def:Function is missing a return type annotation
+ui/app.py:5699:no-untyped-def:Function is missing a return type annotation
+ui/app.py:5765:no-untyped-def:Function is missing a return type annotation
+ui/app.py:5780:no-untyped-call:Call to untyped function "_init_auto_trader" in typed context
+ui/app.py:5806:no-untyped-def:Function is missing a return type annotation
+ui/app.py:5824:no-untyped-def:Function is missing a return type annotation
+ui/app.py:5839:no-untyped-def:Function is missing a return type annotation
+ui/app.py:5866:no-untyped-def:Function is missing a return type annotation
+ui/app.py:5878:no-untyped-def:Function is missing a return type annotation
+ui/app.py:5988:no-untyped-def:Function is missing a return type annotation
+ui/app.py:6020:no-untyped-def:Function is missing a return type annotation
+ui/app.py:6024:no-untyped-def:Function is missing a return type annotation
+ui/app.py:6092:no-untyped-def:Function is missing a return type annotation
+ui/app.py:6096:no-untyped-def:Function is missing a return type annotation
+ui/app.py:6133:no-untyped-def:Function is missing a return type annotation
+ui/app.py:6136:no-untyped-call:Call to untyped function "_refresh_pending_table" in typed context
+ui/app.py:6144:no-untyped-def:Function is missing a return type annotation
+ui/app.py:6147:no-untyped-call:Call to untyped function "_refresh_pending_table" in typed context
+ui/app.py:6162:no-untyped-def:Function is missing a return type annotation
+ui/app.py:6173:no-untyped-def:Function is missing a return type annotation
+ui/app.py:6175:no-untyped-call:Call to untyped function "_update_correct_guess_profit_ui" in typed context
+ui/app.py:6275:no-untyped-def:Function is missing a return type annotation
+ui/app.py:6281:no-untyped-def:Function is missing a return type annotation
+ui/app.py:6305:no-untyped-def:Function is missing a return type annotation
+ui/app.py:6333:no-untyped-def:Function is missing a type annotation
+ui/app.py:6388:no-untyped-call:Call to untyped function "_save_state" in typed context
+ui/app.py:6398:no-untyped-def:Function is missing a return type annotation
+ui/app.py:6425:no-untyped-def:Function is missing a return type annotation
+ui/app.py:6472:no-untyped-def:Function is missing a return type annotation
+ui/app.py:6486:no-untyped-call:Call to untyped function "MainApp" in typed context
+ui/app.py:6511:no-untyped-def:Function is missing a return type annotation
+ui/app.py:6522:no-untyped-def:Function is missing a type annotation for one or more arguments
+ui/app.py:6532:no-untyped-call:Call to untyped function "run_app" in typed context

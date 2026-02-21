@@ -114,7 +114,7 @@ def test_realtime_batch_uses_non_tencent_single_quote_for_missing(monkeypatch):
     assert out["000001"].source == "yahoo"
 
 
-def test_realtime_batch_falls_back_to_localdb_last_close_when_live_unavailable(monkeypatch):
+def test_realtime_batch_drops_stale_localdb_last_close_by_default(monkeypatch):
     monkeypatch.setenv("TRADING_OFFLINE", "0")
     fetcher = _make_fetcher_for_realtime()
 
@@ -144,13 +144,10 @@ def test_realtime_batch_falls_back_to_localdb_last_close_when_live_unavailable(m
 
     out = fetcher.get_realtime_batch(["600519"])
 
-    assert "600519" in out
-    assert out["600519"].price == 101.5
-    assert out["600519"].source == "localdb_last_close"
-    assert out["600519"].is_delayed is True
+    assert "600519" not in out
 
 
-def test_realtime_batch_partial_missing_uses_last_good_then_localdb(monkeypatch):
+def test_realtime_batch_partial_missing_keeps_fresh_last_good_only(monkeypatch):
     monkeypatch.setenv("TRADING_OFFLINE", "0")
     fetcher = _make_fetcher_for_realtime()
 
@@ -188,10 +185,46 @@ def test_realtime_batch_partial_missing_uses_last_good_then_localdb(monkeypatch)
 
     out = fetcher.get_realtime_batch(["600519", "000001", "000002"])
 
-    assert set(out.keys()) == {"600519", "000001", "000002"}
+    assert set(out.keys()) == {"600519", "000001"}
     assert out["600519"].source == "s1"
     assert out["000001"].source == "last_good"
-    assert out["000002"].source == "localdb_last_close"
+
+
+def test_realtime_batch_allows_stale_localdb_when_explicitly_opted_in(monkeypatch):
+    monkeypatch.setenv("TRADING_OFFLINE", "0")
+    fetcher = _make_fetcher_for_realtime()
+    fetcher._allow_stale_realtime_fallback = True
+
+    class _DB:
+        def get_bars(self, code: str, limit: int = 1):  # noqa: ARG002
+            if str(code).zfill(6) != "600519":
+                return pd.DataFrame()
+            idx = pd.DatetimeIndex([pd.Timestamp("2026-02-10 15:00:00")])
+            return pd.DataFrame(
+                {
+                    "open": [100.0],
+                    "high": [103.0],
+                    "low": [99.0],
+                    "close": [101.5],
+                    "volume": [1000],
+                    "amount": [101500.0],
+                },
+                index=idx,
+            )
+
+    fetcher._db = _DB()
+    fetcher._get_active_sources = lambda: []
+    fetcher._fill_from_spot_cache = lambda missing, result: None
+    fetcher._fill_from_single_source_quotes = lambda missing, result, sources: None
+    fetcher._maybe_force_network_refresh = lambda: False
+    fetcher._fallback_last_good = lambda codes: {}
+
+    out = fetcher.get_realtime_batch(["600519"])
+
+    assert "600519" in out
+    assert out["600519"].price == 101.5
+    assert out["600519"].source == "localdb_last_close"
+    assert out["600519"].is_delayed is True
 
 
 def test_realtime_batch_uses_spot_cache_when_tencent_missing(monkeypatch):
@@ -277,6 +310,44 @@ def test_realtime_batch_spot_cache_tolerates_malformed_values(monkeypatch):
     assert float(out["600519"].price) == 1888.8
     assert out["000001"].source == "spot_cache"
     assert int(out["000001"].volume) == 0
+
+
+def test_realtime_batch_drops_stale_spot_cache_snapshot(monkeypatch):
+    import data.fetcher as fetcher_mod
+
+    monkeypatch.setenv("TRADING_OFFLINE", "0")
+    fetcher = _make_fetcher_for_realtime()
+
+    class _Spot:
+        _cache_time = pd.Timestamp("2026-02-01 09:30:00", tz="UTC").timestamp()
+
+        @staticmethod
+        def get_quote(code):  # noqa: ARG002
+            return {
+                "name": "KWEICHOW MOUTAI",
+                "price": 1888.8,
+                "open": 1870.0,
+                "high": 1899.0,
+                "low": 1866.0,
+                "close": 1880.0,
+                "volume": 1200,
+                "amount": 2266560.0,
+                "change": 8.8,
+                "change_pct": 0.47,
+            }
+
+    fetcher._get_active_sources = lambda: []
+    fetcher._maybe_force_network_refresh = lambda: False
+    fetcher._fallback_last_good = lambda codes: {}
+    fetcher._fallback_last_close_from_db = lambda codes: {}
+    fetcher._realtime_quote_max_age_s = 5.0
+    fetcher._allow_stale_realtime_fallback = False
+
+    monkeypatch.setattr(fetcher_mod, "get_spot_cache", lambda: _Spot())
+
+    out = fetcher.get_realtime_batch(["600519"])
+
+    assert "600519" not in out
 
 
 def test_last_good_fallback_marks_quote_delayed():

@@ -44,11 +44,9 @@ try:
 except (ImportError, OSError):  # pragma: no cover - optional runtime integration
     register_snapshot_provider = None
     unregister_snapshot_provider = None
-
 log = get_logger(__name__)
-_SOFT_FAIL_EXCEPTIONS = (AttributeError, ImportError, OSError, RuntimeError, TypeError, ValueError)
+_SOFT_FAIL_EXCEPTIONS = (AttributeError, ConnectionError, ImportError, IndexError, KeyError, LookupError, OSError, OverflowError, RuntimeError, TimeoutError, TypeError, ValueError, ZeroDivisionError, queue.Empty, queue.Full)
 # AUTO-TRADER
-
 class ExecutionEngine:
     """
     Production execution engine with correct broker synchronization.
@@ -89,6 +87,7 @@ class ExecutionEngine:
 
         self._queue: queue.Queue[TradeSignal | None] = queue.Queue()
         self._running = False
+        self._stop_event = threading.Event()
 
         self._exec_thread: threading.Thread | None = None
         self._fill_sync_thread: threading.Thread | None = None
@@ -314,7 +313,7 @@ class ExecutionEngine:
             and mode != AutoTradeMode.MANUAL
         ):
             log.warning(
-                "Live auto-trading requested 鈥?"
+                "Live auto-trading requested 閳?"
                 "CONFIG.auto_trade.confirm_live_auto_trade is True. "
                 "UI must confirm before proceeding."
             )
@@ -440,6 +439,7 @@ class ExecutionEngine:
         self._alert_manager.start()
 
         self._running = True
+        self._stop_event.clear()
         self._heartbeat("main")
         self._persist_runtime_state(clean_shutdown=False)
 
@@ -628,7 +628,7 @@ class ExecutionEngine:
         try:
             atomic_write_json(path, payload, indent=2)
             self._last_synthetic_persist_ts = now
-        except Exception as e:
+        except _SOFT_FAIL_EXCEPTIONS as e:
             log.debug(f"Synthetic exit state persist failed: {e}")
 
     def _restore_synthetic_exits(self) -> None:
@@ -665,7 +665,7 @@ class ExecutionEngine:
                     len(restored),
                     path.name,
                 )
-        except Exception as e:
+        except _SOFT_FAIL_EXCEPTIONS as e:
             log.debug(f"Synthetic exit state restore failed: {e}")
 
     def _resolve_price(self, symbol: str, hinted_price: float = 0.0) -> float:
@@ -676,7 +676,7 @@ class ExecutionEngine:
             px = float(hinted_price or 0.0)
             if px > 0:
                 return px
-        except Exception as e:
+        except _SOFT_FAIL_EXCEPTIONS as e:
             log.debug("Hinted price parse failed for %s: %s", symbol, e)
 
         try:
@@ -686,14 +686,14 @@ class ExecutionEngine:
             q = fm.get_quote(symbol)
             if q and getattr(q, "price", 0) and float(q.price) > 0:
                 return float(q.price)
-        except Exception as e:
+        except _SOFT_FAIL_EXCEPTIONS as e:
             log.debug("Feed price resolve failed for %s: %s", symbol, e)
 
         try:
             px = self.broker.get_quote(symbol)
             if px and float(px) > 0:
                 return float(px)
-        except Exception as e:
+        except _SOFT_FAIL_EXCEPTIONS as e:
             log.debug("Broker price resolve failed for %s: %s", symbol, e)
 
         try:
@@ -702,7 +702,7 @@ class ExecutionEngine:
             q = get_fetcher().get_realtime(symbol)
             if q and getattr(q, "price", 0) and float(q.price) > 0:
                 return float(q.price)
-        except Exception as e:
+        except _SOFT_FAIL_EXCEPTIONS as e:
             log.debug("Fetcher price resolve failed for %s: %s", symbol, e)
 
         return 0.0
@@ -716,7 +716,7 @@ class ExecutionEngine:
                     self.broker.register_order_mapping(order.id, order.broker_id)
                     log.debug(f"Recovered mapping: {order.id} -> {order.broker_id}")
             log.info(f"Recovered {len(active_orders)} order mappings from DB")
-        except Exception as e:
+        except _SOFT_FAIL_EXCEPTIONS as e:
             log.warning(f"Failed to rebuild broker mappings: {e}")
 
     def _join_worker_threads(self, timeout_seconds: float = 5.0) -> None:
@@ -752,6 +752,7 @@ class ExecutionEngine:
 
     def stop(self):
         if not self._running:
+            self._stop_event.set()
             self._release_runtime_lease()
             with self.__class__._ACTIVE_ENGINES_LOCK:
                 self.__class__._ACTIVE_ENGINES.discard(self)
@@ -761,10 +762,11 @@ class ExecutionEngine:
         if self.auto_trader:
             try:
                 self.auto_trader.stop()
-            except Exception as e:
+            except _SOFT_FAIL_EXCEPTIONS as e:
                 log.warning(f"Auto-trader stop error: {e}")
 
         self._running = False
+        self._stop_event.set()
 
         try:
             self._queue.put_nowait(None)
@@ -775,18 +777,18 @@ class ExecutionEngine:
 
         try:
             self.broker.disconnect()
-        except Exception as e:
+        except _SOFT_FAIL_EXCEPTIONS as e:
             log.warning(f"Broker disconnect error: {e}")
 
         try:
             self._health_monitor.stop()
             self._alert_manager.stop()
-        except Exception as e:
+        except _SOFT_FAIL_EXCEPTIONS as e:
             log.warning("Shutdown monitor stop error: %s", e)
         if unregister_snapshot_provider is not None:
             try:
                 unregister_snapshot_provider(self._snapshot_provider_name)
-            except Exception as e:
+            except _SOFT_FAIL_EXCEPTIONS as e:
                 log.debug("Execution snapshot provider unregister failed: %s", e)
         self._persist_synthetic_exits(force=True)
         self._persist_runtime_state(clean_shutdown=True)
@@ -802,7 +804,7 @@ class ExecutionEngine:
         if self.auto_trader is not None:
             try:
                 auto_state = self.auto_trader.get_state()
-            except Exception as e:
+            except _SOFT_FAIL_EXCEPTIONS as e:
                 log.debug("Auto-trader state snapshot unavailable: %s", e)
                 auto_state = None
 
@@ -826,7 +828,7 @@ class ExecutionEngine:
         if hasattr(broker, "get_health_snapshot"):
             try:
                 snapshot["broker"]["routing"] = broker.get_health_snapshot()
-            except Exception as e:
+            except _SOFT_FAIL_EXCEPTIONS as e:
                 log.debug("Broker health snapshot unavailable: %s", e)
         try:
             with self._thread_hb_lock:
@@ -858,7 +860,7 @@ class ExecutionEngine:
                     record = lease_client.read()
                     if isinstance(record, dict) and record:
                         snapshot["runtime"]["lease_record"] = record
-            except Exception as e:
+            except _SOFT_FAIL_EXCEPTIONS as e:
                 log.debug("Runtime lease snapshot read failed: %s", e)
             snapshot["execution_quality"] = self._get_execution_quality_snapshot()
             with self._synthetic_exit_lock:
@@ -869,7 +871,7 @@ class ExecutionEngine:
                         getattr(self, "_synthetic_exit_state_path", "")
                     ),
                 }
-        except Exception as e:
+        except _SOFT_FAIL_EXCEPTIONS as e:
             log.warning("Execution snapshot build degraded: %s", e)
         return snapshot
 
@@ -893,13 +895,17 @@ class ExecutionEngine:
         with self._thread_hb_lock:
             self._thread_heartbeats[str(name)] = time.time()
 
+    def _wait_or_stop(self, timeout_seconds: float) -> bool:
+        """Wait for timeout or stop request. Returns True when stopping."""
+        return bool(self._stop_event.wait(timeout=max(0.0, float(timeout_seconds))))
+
     def _runtime_state_payload(self, clean_shutdown: bool) -> dict[str, object]:
         """Persistable runtime checkpoint for crash recovery."""
         auto_state = None
         if self.auto_trader is not None:
             try:
                 auto_state = self.auto_trader.get_state()
-            except Exception as e:
+            except _SOFT_FAIL_EXCEPTIONS as e:
                 log.debug("Auto-trader runtime-state snapshot unavailable: %s", e)
                 auto_state = None
         with self._thread_hb_lock:
@@ -956,7 +962,7 @@ class ExecutionEngine:
             )
             self._runtime_lease_client = client
             return client
-        except Exception as e:
+        except _SOFT_FAIL_EXCEPTIONS as e:
             log.warning("Runtime lease client init failed: %s", e)
             return None
 
@@ -989,7 +995,7 @@ class ExecutionEngine:
                 self._runtime_lease_fencing_token = int(row.get("generation", 0) or 0)
                 self._runtime_lease_owner_hint = None
                 return True
-        except Exception as e:
+        except _SOFT_FAIL_EXCEPTIONS as e:
             log.warning(f"Runtime lease acquire failed: {e}")
             return False
 
@@ -1018,7 +1024,7 @@ class ExecutionEngine:
                 self._runtime_lease_owner_hint = None
                 return True
             return False
-        except Exception as e:
+        except _SOFT_FAIL_EXCEPTIONS as e:
             log.warning(f"Runtime lease refresh failed: {e}")
             return False
 
@@ -1033,7 +1039,7 @@ class ExecutionEngine:
                 owner_id=self._runtime_lease_id,
                 metadata={"released_by": self._runtime_lease_id},
             )
-        except Exception as e:
+        except _SOFT_FAIL_EXCEPTIONS as e:
             log.warning("Runtime lease release failed: %s", e)
 
     def _persist_runtime_state(self, clean_shutdown: bool = False):
@@ -1042,7 +1048,7 @@ class ExecutionEngine:
             payload = self._runtime_state_payload(clean_shutdown=clean_shutdown)
             atomic_write_json(self._runtime_state_path, payload, indent=2)
             self._last_checkpoint_ts = time.time()
-        except Exception as e:
+        except _SOFT_FAIL_EXCEPTIONS as e:
             log.debug(f"Runtime checkpoint write failed: {e}")
 
     def _restore_runtime_state(self):
@@ -1062,7 +1068,7 @@ class ExecutionEngine:
                     "Recovered unclean runtime state from previous session; "
                     "autonomous trading will start in safe mode until reviewed."
                 )
-        except Exception as e:
+        except _SOFT_FAIL_EXCEPTIONS as e:
             log.debug(f"Runtime checkpoint restore failed: {e}")
 
     def _restore_auto_trader_state(self):
@@ -1077,7 +1083,7 @@ class ExecutionEngine:
                     duration_seconds=0,
                 )
                 self.auto_trader.set_mode(AutoTradeMode.MANUAL)
-        except Exception as e:
+        except _SOFT_FAIL_EXCEPTIONS as e:
             log.debug(f"Auto-trader recovery state apply failed: {e}")
 
     def _checkpoint_loop(self):
@@ -1098,14 +1104,15 @@ class ExecutionEngine:
                         log.critical(msg)
                         try:
                             self._kill_switch.activate(msg, activated_by="runtime_lease")
-                        except Exception as e:
+                        except _SOFT_FAIL_EXCEPTIONS as e:
                             log.critical(
                                 "Kill switch activation failed after lease loss: %s", e
                             )
                     last_lease = now
-            except Exception as e:
+            except _SOFT_FAIL_EXCEPTIONS as e:
                 log.debug(f"Checkpoint loop error: {e}")
-            time.sleep(interval)
+            if self._wait_or_stop(interval):
+                break
 
     def _watchdog_loop(self):
         """
@@ -1115,7 +1122,8 @@ class ExecutionEngine:
         stall_seconds = float(getattr(CONFIG, "runtime_watchdog_stall_seconds", 25.0) or 25.0)
         stall_seconds = max(8.0, stall_seconds)
         while self._running:
-            time.sleep(2.0)
+            if self._wait_or_stop(2.0):
+                break
             now = time.time()
             self._heartbeat("watchdog")
             stalled: list[str] = []
@@ -1145,16 +1153,16 @@ class ExecutionEngine:
                     HealthStatus.DEGRADED,
                     error=msg,
                 )
-            except Exception as e:
+            except _SOFT_FAIL_EXCEPTIONS as e:
                 log.debug("Watchdog health-report update failed: %s", e)
             try:
                 if self.auto_trader is not None:
                     self.auto_trader.pause(msg, duration_seconds=300)
-            except Exception as e:
+            except _SOFT_FAIL_EXCEPTIONS as e:
                 log.debug("Watchdog auto-trader pause failed: %s", e)
             try:
                 self._alert_manager.risk_alert("Runtime watchdog", msg)
-            except Exception as e:
+            except _SOFT_FAIL_EXCEPTIONS as e:
                 log.debug("Watchdog alert dispatch failed: %s", e)
 
     def _get_quote_snapshot(
@@ -1173,7 +1181,7 @@ class ExecutionEngine:
                 ts = getattr(q, "timestamp", None)
                 delayed = bool(getattr(q, "is_delayed", False))
                 return float(q.price), ts, "feed", delayed
-        except Exception as e:
+        except _SOFT_FAIL_EXCEPTIONS as e:
             log.debug("Feed quote snapshot failed for %s: %s", symbol, e)
 
         # 2) broker quote
@@ -1181,7 +1189,7 @@ class ExecutionEngine:
             px = self.broker.get_quote(symbol)
             if px and float(px) > 0:
                 return float(px), None, "broker", False
-        except Exception as e:
+        except _SOFT_FAIL_EXCEPTIONS as e:
             log.debug("Broker quote snapshot failed for %s: %s", symbol, e)
 
         # 3) fetcher realtime
@@ -1197,7 +1205,7 @@ class ExecutionEngine:
                     f"fetcher:{getattr(q, 'source', '')}",
                     delayed,
                 )
-        except Exception as e:
+        except _SOFT_FAIL_EXCEPTIONS as e:
             log.debug("Fetcher quote snapshot failed for %s: %s", symbol, e)
 
         return 0.0, None, "none", True
@@ -1221,7 +1229,7 @@ class ExecutionEngine:
                         str(src or ""),
                         bool(delayed),
                     )
-                except Exception:
+                except _SOFT_FAIL_EXCEPTIONS:
                     return 0.0, None, "none", True
             if len(snapshot) == 3:
                 px, ts, src = snapshot
@@ -1232,7 +1240,7 @@ class ExecutionEngine:
                         str(src or ""),
                         False,
                     )
-                except Exception:
+                except _SOFT_FAIL_EXCEPTIONS:
                     return 0.0, None, "none", True
         return 0.0, None, "none", True
 
@@ -1268,7 +1276,7 @@ class ExecutionEngine:
                 else datetime.now()
             )
             age = (now_ts - ts).total_seconds()
-        except Exception as e:
+        except _SOFT_FAIL_EXCEPTIONS as e:
             log.debug("Quote timestamp age calculation failed for %s: %s", symbol, e)
             age = 0.0
 
@@ -1387,7 +1395,7 @@ class ExecutionEngine:
                     "execution_reject_kill_switch",
                     {"count": int(len(self._recent_rejections)), "last_reason": str(reason)},
                 )
-        except Exception as e:
+        except _SOFT_FAIL_EXCEPTIONS as e:
             log.debug(f"Reject kill-switch guard failed: {e}")
 
     def submit(self, signal: TradeSignal) -> bool:
@@ -1418,7 +1426,7 @@ class ExecutionEngine:
             if block_degraded and h.status == HealthStatus.DEGRADED:
                 self._reject_signal(signal, "System degraded: trading paused by policy")
                 return False
-        except Exception as e:
+        except _SOFT_FAIL_EXCEPTIONS as e:
             log.warning("Health policy guard failed for signal=%s: %s", signal.symbol, e)
 
         # Institutional controls: permission gating + optional dual-control.
@@ -1498,14 +1506,14 @@ class ExecutionEngine:
                         },
                     )
                     return False
-        except Exception as e:
+        except _SOFT_FAIL_EXCEPTIONS as e:
             log.debug(f"Security governance check skipped due to error: {e}")
 
         try:
             if not CONFIG.is_market_open():
                 self._reject_signal(signal, "Market closed")
                 return False
-        except Exception as e:
+        except _SOFT_FAIL_EXCEPTIONS as e:
             log.warning("Market-open check failed for signal=%s: %s", signal.symbol, e)
 
         if not self._kill_switch.can_trade:
@@ -1520,7 +1528,7 @@ class ExecutionEngine:
             from data.fetcher import DataFetcher
 
             signal.symbol = DataFetcher.clean_code(signal.symbol)
-        except Exception as e:
+        except _SOFT_FAIL_EXCEPTIONS as e:
             log.debug("Signal symbol normalization failed for %s: %s", signal.symbol, e)
 
         max_age = 15.0
@@ -1591,14 +1599,14 @@ class ExecutionEngine:
                                 "limit_bps": float(max_bps),
                             },
                         )
-                    except Exception as e:
+                    except _SOFT_FAIL_EXCEPTIONS as e:
                         log.warning(
                             "Audit log write failed for best-exec rejection on %s: %s",
                             signal.symbol,
                             e,
                         )
                     return False
-        except Exception as e:
+        except _SOFT_FAIL_EXCEPTIONS as e:
             log.warning(
                 "Best-exec guard evaluation failed for %s: %s",
                 signal.symbol,
@@ -1641,7 +1649,7 @@ class ExecutionEngine:
                         signal, f"At/near limit-down ({lim * 100:.0f}%)"
                     )
                     return False
-        except Exception as e:
+        except _SOFT_FAIL_EXCEPTIONS as e:
             log.warning("CN price-limit sanity check failed for %s: %s", signal.symbol, e)
 
         passed, rmsg = self.risk_manager.check_order(
@@ -1677,7 +1685,7 @@ class ExecutionEngine:
                     "Auto-trader paused",
                     f"System degraded (status={health.status.value})",
                 )
-        except Exception as e:
+        except _SOFT_FAIL_EXCEPTIONS as e:
             log.debug(f"Degraded health handler failed: {e}")
 
     def submit_from_prediction(self, pred) -> bool:
@@ -1721,7 +1729,7 @@ class ExecutionEngine:
                 self._execute(signal)
             except queue.Empty:
                 pass
-            except Exception as e:
+            except _SOFT_FAIL_EXCEPTIONS as e:
                 log.error(f"Execution loop error: {e}")
                 self._alert_manager.system_alert(
                     "Execution Loop Error", str(e), AlertPriority.HIGH
@@ -1740,10 +1748,11 @@ class ExecutionEngine:
                     set_gauge("account_cash", account.cash)
                     set_gauge("positions_count", len(account.positions))
                     last_risk_update = now
-                except Exception as e:
+                except _SOFT_FAIL_EXCEPTIONS as e:
                     log.warning(f"Risk update error: {e}")
 
-            time.sleep(0.05)
+            if self._wait_or_stop(0.05):
+                break
 
     def get_risk_metrics(self):
         if self.risk_manager:
@@ -1910,14 +1919,14 @@ class ExecutionEngine:
                 f"{' [AUTO]' if signal.auto_generated else ''}"
             )
 
-        except Exception as e:
+        except _SOFT_FAIL_EXCEPTIONS as e:
             log.error(f"Execution error: {e}")
             if order:
                 try:
                     oms.update_order_status(
                         order.id, OrderStatus.REJECTED, message=str(e)
                     )
-                except Exception as status_err:
+                except _SOFT_FAIL_EXCEPTIONS as status_err:
                     log.warning(
                         "Failed to mark order rejected in OMS (order_id=%s): %s",
                         getattr(order, "id", ""),
@@ -1949,7 +1958,7 @@ class ExecutionEngine:
                         message="Startup sync",
                         broker_id=synced.broker_id or order.broker_id or "",
                     )
-            except Exception as e:
+            except _SOFT_FAIL_EXCEPTIONS as e:
                 log.debug("Startup order sync failed for order=%s: %s", order.id, e)
                 continue
 
@@ -2001,7 +2010,7 @@ class ExecutionEngine:
                             order = oms.get_order_by_broker_id(fill.order_id)
                             if order:
                                 fill.order_id = order.id
-                        except Exception as e:
+                        except _SOFT_FAIL_EXCEPTIONS as e:
                             log.debug(
                                 "Fallback order lookup by broker_id failed for %s: %s",
                                 fill.order_id,
@@ -2026,7 +2035,7 @@ class ExecutionEngine:
                     if self.on_fill:
                         try:
                             self.on_fill(order, fill)
-                        except Exception as e:
+                        except _SOFT_FAIL_EXCEPTIONS as e:
                             log.warning(f"Fill callback error: {e}")
 
                     # Update auto-trader state if this was an auto-trade
@@ -2049,7 +2058,7 @@ class ExecutionEngine:
                         ),
                     )
 
-            except Exception as e:
+            except _SOFT_FAIL_EXCEPTIONS as e:
                 log.error(f"Fill processing error: {e}")
 
             self._prune_processed_fills_unlocked(max_size=50000)
@@ -2079,7 +2088,7 @@ class ExecutionEngine:
 
         try:
             siblings = oms.get_orders(filled_order.symbol)
-        except Exception as e:
+        except _SOFT_FAIL_EXCEPTIONS as e:
             log.debug(f"OCO sibling scan failed for {filled_order.symbol}: {e}")
             return
 
@@ -2112,7 +2121,7 @@ class ExecutionEngine:
                     if bool(self.broker.cancel_order(oid)):
                         cancel_ok = True
                         break
-                except Exception as e:
+                except _SOFT_FAIL_EXCEPTIONS as e:
                     log.debug("OCO sibling cancel attempt failed for %s: %s", oid, e)
                     continue
 
@@ -2135,7 +2144,7 @@ class ExecutionEngine:
                     message=f"OCO cancelled after fill {filled_order.id}",
                 )
                 cancelled += 1
-            except Exception as e:
+            except _SOFT_FAIL_EXCEPTIONS as e:
                 log.warning(f"OCO sibling OMS cancel update failed: {sibling.id}: {e}")
 
         if cancelled > 0:
@@ -2151,12 +2160,13 @@ class ExecutionEngine:
         while self._running:
             self._heartbeat("fill_sync")
             try:
-                time.sleep(1.0)
+                if self._wait_or_stop(1.0):
+                    break
                 if not self.broker.is_connected:
                     continue
                 self._process_pending_fills()
                 self._evaluate_synthetic_exits()
-            except Exception as e:
+            except _SOFT_FAIL_EXCEPTIONS as e:
                 log.error(f"Fill sync loop error: {e}")
 
     def _record_execution_quality(self, order: Order, fill: Fill) -> None:
@@ -2193,7 +2203,7 @@ class ExecutionEngine:
                 float(slip_bps),
                 labels={"side": fill.side.value},
             )
-        except Exception as e:
+        except _SOFT_FAIL_EXCEPTIONS as e:
             log.debug(f"Execution quality accounting failed: {e}")
 
     def _maybe_register_synthetic_exit(self, order: Order, fill: Fill) -> None:
@@ -2360,7 +2370,7 @@ class ExecutionEngine:
                 float(trigger_price or 0.0),
             )
             return True
-        except Exception as e:
+        except _SOFT_FAIL_EXCEPTIONS as e:
             log.error(f"Synthetic exit submit failed: {symbol} {reason}: {e}")
             return False
 
@@ -2379,7 +2389,7 @@ class ExecutionEngine:
 
             oms = get_oms()
             fills = oms.get_fills()
-        except Exception as e:
+        except _SOFT_FAIL_EXCEPTIONS as e:
             log.debug("Processed-fill pruning fallback (OMS unavailable): %s", e)
             fills = []
 
@@ -2408,7 +2418,8 @@ class ExecutionEngine:
         while self._running:
             self._heartbeat("status_sync")
             try:
-                time.sleep(3.0)
+                if self._wait_or_stop(3.0):
+                    break
                 if not self.broker.is_connected:
                     continue
 
@@ -2422,7 +2433,7 @@ class ExecutionEngine:
                     broker_status = None
                     try:
                         broker_status = self.broker.get_order_status(order.id)
-                    except Exception as e:
+                    except _SOFT_FAIL_EXCEPTIONS as e:
                         log.debug("Broker order status fetch failed for %s: %s", order.id, e)
                         broker_status = None
 
@@ -2442,7 +2453,7 @@ class ExecutionEngine:
                                     broker_id=synced.broker_id,
                                     message="Recovered broker_id",
                                 )
-                        except Exception as e:
+                        except _SOFT_FAIL_EXCEPTIONS as e:
                             log.debug("Broker sync_order fallback failed for %s: %s", order.id, e)
                             broker_status = None
 
@@ -2505,14 +2516,14 @@ class ExecutionEngine:
                         if self.AUTO_CANCEL_STUCK_ORDERS:
                             try:
                                 self.broker.cancel_order(order.id)
-                            except Exception as cancel_err:
+                            except _SOFT_FAIL_EXCEPTIONS as cancel_err:
                                 log.warning(
                                     "Auto-cancel of stuck order failed (order_id=%s): %s",
                                     order.id,
                                     cancel_err,
                                 )
 
-            except Exception as e:
+            except _SOFT_FAIL_EXCEPTIONS as e:
                 log.error(f"Status sync error: {e}")
 
     def _reconciliation_loop(self):
@@ -2524,7 +2535,8 @@ class ExecutionEngine:
         while self._running:
             self._heartbeat("recon")
             try:
-                time.sleep(300)
+                if self._wait_or_stop(300.0):
+                    break
                 if not self.broker.is_connected:
                     continue
 
@@ -2545,7 +2557,7 @@ class ExecutionEngine:
                         f"Cash diff: {discrepancies.get('cash_diff', 0):.2f}",
                         discrepancies,
                     )
-            except Exception as e:
+            except _SOFT_FAIL_EXCEPTIONS as e:
                 log.error(f"Reconciliation error: {e}")
 
     def _submit_with_retry(self, order: Order, attempts: int = 3) -> Order:
@@ -2561,9 +2573,10 @@ class ExecutionEngine:
                 if getattr(result, "status", None) == OrderStatus.REJECTED:
                     return result
                 return result
-            except Exception as e:
+            except _SOFT_FAIL_EXCEPTIONS as e:
                 last_exc = e
-                time.sleep(delay)
+                if self._wait_or_stop(delay):
+                    break
                 delay = min(delay * 2.0, 5.0)
 
         raise last_exc if last_exc else RuntimeError("submit_order failed")
@@ -2574,7 +2587,8 @@ class ExecutionEngine:
         while self._running:
             self._heartbeat("reconnect")
             try:
-                time.sleep(2.0)
+                if self._wait_or_stop(2.0):
+                    break
                 if self.broker.is_connected:
                     backoff = 1.0
                     continue
@@ -2582,7 +2596,8 @@ class ExecutionEngine:
                 log.warning(
                     f"Broker disconnected. Reconnecting in {backoff:.0f}s..."
                 )
-                time.sleep(backoff)
+                if self._wait_or_stop(backoff):
+                    break
 
                 try:
                     ok = self.broker.connect(
@@ -2601,7 +2616,7 @@ class ExecutionEngine:
                 else:
                     backoff = min(backoff * 2.0, 60.0)
 
-            except Exception as e:
+            except _SOFT_FAIL_EXCEPTIONS as e:
                 log.warning(f"Reconnect loop error: {e}")
                 backoff = min(backoff * 2.0, 60.0)
 
@@ -2613,26 +2628,26 @@ class ExecutionEngine:
         if self.auto_trader:
             try:
                 self.auto_trader.pause(f"Kill switch: {reason}")
-            except Exception as e:
+            except _SOFT_FAIL_EXCEPTIONS as e:
                 log.warning("Failed to pause auto-trader during kill switch: %s", e)
 
         try:
             for order in self.broker.get_orders(active_only=True):
                 try:
                     self.broker.cancel_order(order.id)
-                except Exception as cancel_err:
+                except _SOFT_FAIL_EXCEPTIONS as cancel_err:
                     log.warning(
                         "Kill-switch cancel failed for order_id=%s: %s",
                         order.id,
                         cancel_err,
                     )
-        except Exception as e:
+        except _SOFT_FAIL_EXCEPTIONS as e:
             log.error(f"Failed to cancel orders: {e}")
 
         try:
             while not self._queue.empty():
                 self._queue.get_nowait()
-        except Exception as e:
+        except _SOFT_FAIL_EXCEPTIONS as e:
             log.debug("Kill-switch queue drain interrupted: %s", e)
 
         self._alert_manager.critical_alert(
@@ -2670,4 +2685,6 @@ class ExecutionEngine:
 
     def get_orders(self):
         return self.broker.get_orders()
+
+
 

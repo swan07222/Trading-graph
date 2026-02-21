@@ -554,12 +554,15 @@ class DataProcessor:
             }
 
         # Now safe to serialize outside lock — data is a snapshot
-        atomic_write_json = None
+        atomic_write_json_fn = None
         try:
-            from utils.atomic_io import atomic_pickle_dump, atomic_write_json
+            from utils.atomic_io import atomic_pickle_dump
+            from utils.atomic_io import atomic_write_json as _atomic_write_json
+
+            atomic_write_json_fn = _atomic_write_json
             atomic_pickle_dump(path, data)
         except ImportError:
-            atomic_write_json = None
+            atomic_write_json_fn = None
             tmp_path = path.with_suffix(".pkl.tmp")
             with open(tmp_path, "wb") as f:
                 pickle.dump(data, f, protocol=pickle.HIGHEST_PROTOCOL)
@@ -579,8 +582,8 @@ class DataProcessor:
         safe_path = self._safe_scaler_path(path)
         try:
             safe_payload = self._build_safe_scaler_payload(data)
-            if atomic_write_json is not None:
-                atomic_write_json(safe_path, safe_payload)
+            if atomic_write_json_fn is not None:
+                atomic_write_json_fn(safe_path, safe_payload)
             else:
                 safe_path.write_text(
                     json.dumps(safe_payload, ensure_ascii=False, indent=2) + "\n",

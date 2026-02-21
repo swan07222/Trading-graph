@@ -14,6 +14,7 @@ DEFAULT_TARGETS: tuple[str, ...] = (
     "core/instruments.py",
     "core/network.py",
     "data/fetcher.py",
+    "data/fetcher_registry.py",
     "data/feeds.py",
     "data/news.py",
     "data/processor.py",

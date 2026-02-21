@@ -32,6 +32,9 @@ gui = [
   "PyQt6>=6.5.0,<7.0.0",
   "pyqtgraph>=0.13.0,<1.0.0",
 ]
+security = [
+  "cryptography>=42.0.0",
+]
 live = [
   "easytrader>=0.23.0",
 ]
@@ -81,19 +84,13 @@ disable_error_code = [
   "attr-defined",
   "index",
   "operator",
-  "return-value",
-  "var-annotated",
-  "call-arg",
   "import",
+  "var-annotated",
   "union-attr",
-  "method-assign",
   "has-type",
   "no-any-return",
   "call-overload",
   "misc",
-  "func-returns-value",
-  "truthy-function",
-  "no-redef",
 ]
 exclude = "(^|.*[\\\\/])(venv|cache|audit|data_storage|models_saved)([\\\\/]|$)"
 
