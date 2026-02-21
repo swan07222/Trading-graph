@@ -6,14 +6,14 @@ from statistics import median
 from typing import Any
 
 from PyQt6.QtWidgets import QTableWidgetItem
-
 from config.settings import CONFIG
 from ui.background_tasks import WorkerThread
 from utils.logger import get_logger
+from utils.recoverable import COMMON_RECOVERABLE_EXCEPTIONS
 
 log = get_logger(__name__)
 
-
+_APP_CHART_RECOVERABLE_EXCEPTIONS = COMMON_RECOVERABLE_EXCEPTIONS
 def _on_price_updated(self: Any, code: str, price: float) -> None:
     """
     Handle price update from monitor.
@@ -28,7 +28,7 @@ def _on_price_updated(self: Any, code: str, price: float) -> None:
     code = self._ui_norm(code)
     try:
         price = float(price)
-    except Exception:
+    except _APP_CHART_RECOVERABLE_EXCEPTIONS:
         return
     if not code or price <= 0:
         return
@@ -147,7 +147,7 @@ def _on_price_updated(self: Any, code: str, price: float) -> None:
                             interval,
                         ):
                             prev_ref = float(prev_bar.get("close", price) or price)
-                    except Exception:
+                    except _APP_CHART_RECOVERABLE_EXCEPTIONS:
                         prev_ref = None
                 if prev_ref is None:
                     prev_ref = float(last.get("close", price) or price)
@@ -289,7 +289,7 @@ def _on_price_updated(self: Any, code: str, price: float) -> None:
                             keep = self._history_window_bars(interval)
                             if len(arr) > keep:
                                 del arr[:-keep]
-            except Exception as exc:
+            except _APP_CHART_RECOVERABLE_EXCEPTIONS as exc:
                 log.debug("Suppressed exception in ui/app.py", exc_info=exc)
 
         if current_code == code and arr:
@@ -302,7 +302,7 @@ def _on_price_updated(self: Any, code: str, price: float) -> None:
                     current_price=price,
                     update_latest_label=True,
                 )
-            except Exception as e:
+            except _APP_CHART_RECOVERABLE_EXCEPTIONS as e:
                 log.debug(f"Chart price refresh failed: {e}")
 
         if arr:
@@ -455,7 +455,7 @@ def _on_price_updated(self: Any, code: str, price: float) -> None:
                         current_price=price,
                         update_latest_label=True,
                     )
-                except Exception as e:
+                except _APP_CHART_RECOVERABLE_EXCEPTIONS as e:
                     log.debug(f"Chart price update failed: {e}")
 
             self._persist_session_bar(
@@ -591,7 +591,7 @@ def _on_price_updated(self: Any, code: str, price: float) -> None:
                     float(v) for v in (predicted_prices or [])
                     if float(v) > 0
                 ]
-            except Exception:
+            except _APP_CHART_RECOVERABLE_EXCEPTIONS:
                 pvals = []
             if pvals:
                 diffs = []
@@ -612,7 +612,7 @@ def _on_price_updated(self: Any, code: str, price: float) -> None:
                             if s[i] != s[i - 1]:
                                 flips += 1
                         flip_ratio = float(flips) / float(max(1, len(s) - 1))
-                    except Exception:
+                    except _APP_CHART_RECOVERABLE_EXCEPTIONS:
                         flip_ratio = 0.0
 
                 if max_step > 0.02 or flip_ratio > 0.80:
@@ -635,14 +635,14 @@ def _on_price_updated(self: Any, code: str, price: float) -> None:
                     display_current = float(
                         getattr(self.current_prediction, "current_price", 0.0) or 0.0
                     )
-            except Exception:
+            except _APP_CHART_RECOVERABLE_EXCEPTIONS:
                 display_current = 0.0
             if display_current <= 0:
                 try:
                     arr_tmp = self._bars_by_symbol.get(code) or []
                     if arr_tmp:
                         display_current = float(arr_tmp[-1].get("close", 0.0) or 0.0)
-                except Exception:
+                except _APP_CHART_RECOVERABLE_EXCEPTIONS:
                     display_current = 0.0
             display_predicted = self._prepare_chart_predicted_prices(
                 symbol=code,
@@ -685,7 +685,7 @@ def _on_price_updated(self: Any, code: str, price: float) -> None:
                                 0.0,
                             ) or 0.0
                         )
-                except Exception:
+                except _APP_CHART_RECOVERABLE_EXCEPTIONS:
                     anchor_px = 0.0
                 arr = self._render_chart_state(
                     symbol=code,
@@ -800,7 +800,7 @@ def _prepare_chart_bars_for_interval(
                 o_raw = float(row.get("open", c_raw) or c_raw)
                 h_raw = float(row.get("high", c_raw) or c_raw)
                 l_raw = float(row.get("low", c_raw) or c_raw)
-            except Exception:
+            except _APP_CHART_RECOVERABLE_EXCEPTIONS:
                 dropped_shape += 1
                 continue
 
@@ -1076,7 +1076,7 @@ def _prepare_chart_bars_for_interval(
                 o_raw = float(row.get("open", c_raw) or c_raw)
                 h_raw = float(row.get("high", c_raw) or c_raw)
                 l_raw = float(row.get("low", c_raw) or c_raw)
-            except Exception:
+            except _APP_CHART_RECOVERABLE_EXCEPTIONS:
                 dropped_daily += 1
                 continue
 
@@ -1202,7 +1202,7 @@ def _prepare_chart_bars_for_interval(
                     max_body = body
                 if span > max_range:
                     max_range = span
-            except Exception:
+            except _APP_CHART_RECOVERABLE_EXCEPTIONS:
                 continue
         if iv not in ("1d", "1wk", "1mo") and (
             max_body > 0.08 or max_range > 0.12
@@ -1395,7 +1395,7 @@ def _load_chart_history_bars(
                 o_raw = row.get("open", None)
                 try:
                     o = float(o_raw or 0)
-                except Exception:
+                except _APP_CHART_RECOVERABLE_EXCEPTIONS:
                     o = 0.0
                 if o <= 0:
                     o = float(ref_close if ref_close and ref_close > 0 else c)
@@ -1414,13 +1414,13 @@ def _load_chart_history_bars(
                 o, h, low, c = sanitized
                 try:
                     vol = float(row.get("volume", 0) or 0.0)
-                except Exception:
+                except _APP_CHART_RECOVERABLE_EXCEPTIONS:
                     vol = 0.0
                 if (not math.isfinite(vol)) or vol < 0:
                     vol = 0.0
                 try:
                     amount = float(row.get("amount", 0) or 0.0)
-                except Exception:
+                except _APP_CHART_RECOVERABLE_EXCEPTIONS:
                     amount = 0.0
                 if not math.isfinite(amount):
                     amount = 0.0
@@ -1463,7 +1463,7 @@ def _load_chart_history_bars(
                     o_raw = row.get("open", None)
                     try:
                         o = float(o_raw or 0)
-                    except Exception:
+                    except _APP_CHART_RECOVERABLE_EXCEPTIONS:
                         o = 0.0
                     if o <= 0:
                         o = float(ref_close if ref_close and ref_close > 0 else c)
@@ -1482,13 +1482,13 @@ def _load_chart_history_bars(
                     o, h, low, c = sanitized
                     try:
                         vol = float(row.get("volume", 0) or 0.0)
-                    except Exception:
+                    except _APP_CHART_RECOVERABLE_EXCEPTIONS:
                         vol = 0.0
                     if (not math.isfinite(vol)) or vol < 0:
                         vol = 0.0
                     try:
                         amount = float(row.get("amount", 0) or 0.0)
-                    except Exception:
+                    except _APP_CHART_RECOVERABLE_EXCEPTIONS:
                         amount = 0.0
                     if not math.isfinite(amount):
                         amount = 0.0
@@ -1551,11 +1551,11 @@ def _load_chart_history_bars(
             # Same finality: prefer richer bar (volume) then later row.
             try:
                 e_vol = float(existing.get("volume", 0) or 0)
-            except Exception:
+            except _APP_CHART_RECOVERABLE_EXCEPTIONS:
                 e_vol = 0.0
             try:
                 r_vol = float(row.get("volume", 0) or 0)
-            except Exception:
+            except _APP_CHART_RECOVERABLE_EXCEPTIONS:
                 r_vol = 0.0
             if r_vol >= e_vol:
                 merged[key] = row
@@ -1589,7 +1589,7 @@ def _load_chart_history_bars(
                     o_q = float(row.get("open", c_q) or c_q)
                     h_q = float(row.get("high", c_q) or c_q)
                     l_q = float(row.get("low", c_q) or c_q)
-                except Exception:
+                except _APP_CHART_RECOVERABLE_EXCEPTIONS:
                     continue
                 if c_q <= 0 or (not all(math.isfinite(v) for v in (o_q, h_q, l_q, c_q))):
                     continue
@@ -1608,7 +1608,7 @@ def _load_chart_history_bars(
                     )
                     if math.isfinite(ep_q):
                         epochs.append(ep_q)
-                except Exception as exc:
+                except _APP_CHART_RECOVERABLE_EXCEPTIONS as exc:
                     log.debug("Suppressed exception in ui/app.py", exc_info=exc)
 
             deg_ratio = (
@@ -1644,6 +1644,6 @@ def _load_chart_history_bars(
                 self._queue_history_refresh(symbol, norm_iv)
                 return self._load_chart_history_bars(symbol, norm_iv, lookback)
         return out
-    except Exception as e:
+    except _APP_CHART_RECOVERABLE_EXCEPTIONS as e:
         log.debug(f"Historical chart load failed for {symbol}: {e}")
         return []

@@ -287,8 +287,6 @@ def _ensure_doctor_gate(report: dict[str, Any]) -> None:
 
 def main() -> int:
     """Main entry point"""
-    import os
-
     parser = argparse.ArgumentParser(description='AI Stock Trading System')
 
     parser.add_argument('--train', action='store_true', help='Train model')
@@ -362,11 +360,13 @@ def main() -> int:
 
     metrics_server = None
     # Optional metrics + local API endpoint
-    port = os.environ.get("TRADING_METRICS_PORT")
+    from config.runtime_env import env_text
+
+    port = env_text("TRADING_METRICS_PORT", "").strip()
     if port:
         try:
             from utils.metrics_http import serve
-            host = os.environ.get("TRADING_METRICS_HOST", "127.0.0.1")
+            host = env_text("TRADING_METRICS_HOST", "127.0.0.1").strip() or "127.0.0.1"
             metrics_server = serve(port=int(port), host=host)
             log.info(
                 "Metrics/API server started at %s "

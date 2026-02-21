@@ -1,5 +1,4 @@
 # trading/oms.py
-import os
 import sqlite3
 import threading
 from collections.abc import Callable
@@ -7,6 +6,7 @@ from datetime import date, datetime
 from pathlib import Path
 
 from config.settings import CONFIG
+from config.runtime_env import env_flag
 from core.events import EVENT_BUS, EventType, OrderEvent
 from core.exceptions import (
     InsufficientFundsError,
@@ -17,9 +17,12 @@ from core.exceptions import (
 from core.types import Account, Fill, Order, OrderSide, OrderStatus, Position
 from trading.oms_db import OrderDatabase
 from utils.logger import get_logger
+from utils.recoverable import COMMON_RECOVERABLE_EXCEPTIONS
 from utils.security import get_audit_log
 
 log = get_logger(__name__)
+
+_OMS_RECOVERABLE_EXCEPTIONS = COMMON_RECOVERABLE_EXCEPTIONS
 
 class OrderStateMachine:
     """
@@ -603,7 +606,7 @@ class OrderManagementSystem:
 
     def process_fill(self, order: Order, fill: Fill):
         """
-        Process order fill — IDEMPOTENT.
+        Process order fill 鈥?IDEMPOTENT.
         All mutations happen inside the transaction block.
         """
         with self._lock:
@@ -656,7 +659,7 @@ class OrderManagementSystem:
             else:
                 new_status = OrderStatus.PARTIAL
 
-            # Begin atomic transaction — all mutations inside
+            # Begin atomic transaction 鈥?all mutations inside
             with self._db.transaction() as conn:
                 if not self._db.save_fill(fill, conn):
                     log.debug(
@@ -974,7 +977,7 @@ class OrderManagementSystem:
         for callback in self._on_order_update:
             try:
                 callback(order)
-            except Exception:
+            except _OMS_RECOVERABLE_EXCEPTIONS:
                 name = getattr(callback, "__qualname__", repr(callback))
                 log.exception(
                     "Order callback failed (callback=%s, order_id=%s)",
@@ -986,7 +989,7 @@ class OrderManagementSystem:
         for callback in self._on_fill:
             try:
                 callback(fill)
-            except Exception:
+            except _OMS_RECOVERABLE_EXCEPTIONS:
                 name = getattr(callback, "__qualname__", repr(callback))
                 log.exception(
                     "Fill callback failed (callback=%s, fill_id=%s)",
@@ -1112,7 +1115,7 @@ class OrderManagementSystem:
         """Cleanup resources."""
         try:
             self._db.close_connection()
-        except Exception as e:
+        except _OMS_RECOVERABLE_EXCEPTIONS as e:
             log.warning(f"Error closing OMS: {e}")
 
 _oms_instances: dict[str, OrderManagementSystem] = {}
@@ -1121,12 +1124,7 @@ _oms_lock = threading.Lock()
 
 def _singletons_disabled() -> bool:
     """Allow callers to opt out of process-global OMS singleton behavior."""
-    return str(os.environ.get("TRADING_DISABLE_SINGLETONS", "0")).strip().lower() in (
-        "1",
-        "true",
-        "yes",
-        "on",
-    )
+    return env_flag("TRADING_DISABLE_SINGLETONS", "0")
 
 
 def _resolve_oms_instance_key(
@@ -1140,7 +1138,7 @@ def _resolve_oms_instance_key(
     if db_path is not None:
         try:
             return str(Path(db_path).expanduser().resolve())
-        except Exception:
+        except _OMS_RECOVERABLE_EXCEPTIONS:
             return str(Path(db_path))
     return "default"
 
@@ -1196,7 +1194,7 @@ def reset_oms(
             for inst in to_close:
                 try:
                     inst.close()
-                except Exception as exc:
+                except _OMS_RECOVERABLE_EXCEPTIONS as exc:
                     log.warning("OMS close failed during reset: %s", exc)
             return
 
@@ -1205,5 +1203,5 @@ def reset_oms(
         if inst is not None:
             try:
                 inst.close()
-            except Exception as exc:
+            except _OMS_RECOVERABLE_EXCEPTIONS as exc:
                 log.warning("OMS close failed during reset for %s: %s", key, exc)

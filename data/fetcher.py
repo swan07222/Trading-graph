@@ -1,6 +1,5 @@
 # data/fetcher.py
 import json
-import os
 import threading
 import time
 from collections.abc import Callable
@@ -12,6 +11,8 @@ from typing import Any, cast
 import numpy as np
 import pandas as pd
 
+from config.runtime_env import env_flag as _read_env_flag
+from config.runtime_env import env_text as _read_env_text
 from config.settings import CONFIG
 from data.cache import get_cache
 from data.database import get_database
@@ -217,7 +218,6 @@ __all__ = [
     "reset_fetcher",
     "use_fetcher_registry",
 ]
-_TRUTHY_ENV = frozenset({"1", "true", "yes", "on"})
 _RECOVERABLE_FETCH_EXCEPTIONS = (
     AttributeError,
     ImportError,
@@ -237,7 +237,7 @@ _SOURCE_CLASSES: dict[str, type[DataSource]] = {
     "yahoo": YahooSource,
 }
 def _env_flag(name: str, default: str = "0") -> bool:
-    return str(os.environ.get(name, default)).strip().lower() in _TRUTHY_ENV
+    return _read_env_flag(name, default)
 
 class DataFetcher:
     """Network-aware fetcher with local cache/DB and fallback sources."""
@@ -319,7 +319,7 @@ class DataFetcher:
 
     def _resolve_source_order(self) -> list[str]:
         return _resolve_source_order_impl(
-            raw_value=str(os.environ.get("TRADING_ENABLED_SOURCES", "") or ""),
+            raw_value=_read_env_text("TRADING_ENABLED_SOURCES", ""),
             source_classes=_SOURCE_CLASSES,
             default_order=("tencent", "akshare", "sina", "yahoo"),
             logger=log,

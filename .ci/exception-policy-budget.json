@@ -1,17 +1,1 @@
-{
-  "models/auto_learner.py": {
-    "broad-except": 39
-  },
-  "models/predictor.py": {
-    "broad-except": 37
-  },
-  "ui/app.py": {
-    "broad-except": 84
-  },
-  "ui/app_chart_pipeline.py": {
-    "broad-except": 24
-  },
-  "ui/app_panels.py": {
-    "broad-except": 1
-  }
-}
+{}

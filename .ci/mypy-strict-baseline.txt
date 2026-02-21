@@ -63,27 +63,6 @@ data/feeds.py:959:no-untyped-call:Call to untyped function "disconnect" of "Data
 data/feeds.py:975:no-untyped-call:Call to untyped function "WebSocketFeed" in typed context
 data/fetcher_registry.py:58:type-arg:Missing type parameters for generic type "Token"
 data/fetcher_registry.py:62:type-arg:Missing type parameters for generic type "Token"
-models/predictor.py:1257:type-arg:Missing type parameters for generic type "ndarray"
-models/predictor.py:1650:no-untyped-def:Function is missing a return type annotation
-models/predictor.py:1651:type-arg:Missing type parameters for generic type "ndarray"
-models/predictor.py:1657:no-untyped-def:Function is missing a return type annotation
-models/predictor.py:1657:no-untyped-def:Function is missing a type annotation for one or more arguments
-models/predictor.py:2022:no-untyped-def:Function is missing a return type annotation
-models/predictor.py:2336:type-arg:Missing type parameters for generic type "ndarray"
-models/predictor.py:2422:type-arg:Missing type parameters for generic type "dict"
-models/predictor.py:2423:type-arg:Missing type parameters for generic type "list"
-models/predictor.py:2481:no-untyped-def:Function is missing a return type annotation
-models/predictor.py:2605:type-arg:Missing type parameters for generic type "ndarray"
-models/predictor.py:2664:type-arg:Missing type parameters for generic type "ndarray"
-models/predictor.py:277:no-untyped-call:Call to untyped function "_find_best_model_pair" in typed context
-models/predictor.py:3080:no-untyped-def:Function is missing a type annotation for one or more arguments
-models/predictor.py:3112:no-untyped-def:Function is missing a type annotation for one or more arguments
-models/predictor.py:3307:no-untyped-def:Function is missing a return type annotation
-models/predictor.py:3362:no-untyped-def:Function is missing a return type annotation
-models/predictor.py:367:no-untyped-call:Call to untyped function "_load_forecaster" in typed context
-models/predictor.py:378:no-untyped-def:Function is missing a type annotation
-models/predictor.py:749:no-untyped-def:Function is missing a return type annotation
-models/predictor.py:789:no-untyped-def:Function is missing a return type annotation
 trading/executor.py:1045:no-untyped-def:Function is missing a return type annotation
 trading/executor.py:1054:no-untyped-def:Function is missing a return type annotation
 trading/executor.py:1074:no-untyped-def:Function is missing a return type annotation

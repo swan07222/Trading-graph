@@ -25,8 +25,11 @@ from PyQt6.QtWidgets import (
 
 from config.settings import CONFIG
 from utils.logger import get_logger
+from utils.recoverable import COMMON_RECOVERABLE_EXCEPTIONS
 
 log = get_logger(__name__)
+
+_APP_PANELS_RECOVERABLE_EXCEPTIONS = COMMON_RECOVERABLE_EXCEPTIONS
 
 
 def _lazy_get(module: str, name: str) -> Any:
@@ -241,7 +244,7 @@ def _create_right_panel(self: Any) -> QWidget:
         NewsPanel = _lazy_get("ui.news_widget", "NewsPanel")
         self.news_panel = NewsPanel()
         news_layout.addWidget(self.news_panel)
-    except Exception as e:
+    except _APP_PANELS_RECOVERABLE_EXCEPTIONS as e:
         log.warning(f"News panel not available: {e}")
         self.news_panel = QLabel("News panel unavailable")
         news_layout.addWidget(self.news_panel)

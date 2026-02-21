@@ -9,14 +9,19 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
+from typing import Any, TypeAlias
 
 import numpy as np
 import pandas as pd
+from numpy.typing import NDArray
 
 from config.settings import CONFIG
 from utils.logger import get_logger
+from utils.recoverable import JSON_RECOVERABLE_EXCEPTIONS
 
 log = get_logger(__name__)
+
+FloatArray: TypeAlias = NDArray[np.float64]
 
 class Signal(Enum):
     """Trading signal types"""
@@ -194,7 +199,7 @@ class Predictor:
                 return float(default)
             try:
                 return float(raw)
-            except Exception as e:
+            except _PREDICTOR_RECOVERABLE_EXCEPTIONS as e:
                 log.debug("Invalid float env override %s=%r: %s", name, raw, e)
                 return float(default)
 
@@ -235,7 +240,7 @@ class Predictor:
                             if key in prof:
                                 cfg[key] = float(prof[key])
                         cfg["profile_loaded"] = 1.0
-        except Exception as e:
+        except _PREDICTOR_RECOVERABLE_EXCEPTIONS as e:
             log.debug("High precision profile load failed: %s", e)
 
         # Final environment override (highest priority)
@@ -371,11 +376,11 @@ class Predictor:
         except ImportError as e:
             log.error(f"Missing dependency for models: {e}")
             return False
-        except Exception as e:
+        except _PREDICTOR_RECOVERABLE_EXCEPTIONS as e:
             log.error(f"Failed to load models: {e}")
             return False
 
-    def _find_best_model_pair(self, model_dir):
+    def _find_best_model_pair(self, model_dir: Path) -> tuple[Path | None, Path | None]:
         """Find the best ensemble + scaler file pair."""
 
         req_ens = model_dir / f"ensemble_{self.interval}_{self.horizon}.pt"
@@ -518,7 +523,7 @@ class Predictor:
                         continue
                 parts.append(f"{pattern}:{len(files)}:{latest:.3f}")
             return "|".join(parts)
-        except Exception as e:
+        except _PREDICTOR_RECOVERABLE_EXCEPTIONS as e:
             log.debug("Model artifact signature check failed: %s", e)
             return ""
 
@@ -592,7 +597,7 @@ class Predictor:
                 if str(x).strip()
             ]
             return out
-        except Exception as e:
+        except _PREDICTOR_RECOVERABLE_EXCEPTIONS as e:
             log.debug("Failed reading trained stocks from ensemble metadata: %s", e)
             return []
 
@@ -626,7 +631,7 @@ class Predictor:
             return self._sanitize_last_train_map(
                 info.get("trained_stock_last_train", {})
             )
-        except Exception as e:
+        except _PREDICTOR_RECOVERABLE_EXCEPTIONS as e:
             log.debug(
                 "Failed reading trained-stock last-train from ensemble metadata: %s",
                 e,
@@ -649,7 +654,7 @@ class Predictor:
                 if str(x).strip()
             ]
             return out
-        except Exception as e:
+        except _PREDICTOR_RECOVERABLE_EXCEPTIONS as e:
             log.debug("Failed reading trained stocks from manifest %s: %s", ensemble_path, e)
             return []
 
@@ -669,7 +674,7 @@ class Predictor:
             return self._sanitize_last_train_map(
                 data.get("trained_stock_last_train", {})
             )
-        except Exception as e:
+        except _PREDICTOR_RECOVERABLE_EXCEPTIONS as e:
             log.debug(
                 "Failed reading trained-stock last-train from manifest %s: %s",
                 ensemble_path,
@@ -725,7 +730,7 @@ class Predictor:
                 seen.add(code)
                 out.append(code)
             return out
-        except Exception as e:
+        except _PREDICTOR_RECOVERABLE_EXCEPTIONS as e:
             log.debug("Failed reading trained stocks from learner state: %s", e)
             return []
 
@@ -746,7 +751,7 @@ class Predictor:
         """Return per-stock last-train timestamps from loaded model artifacts."""
         return dict(self._trained_stock_last_train or {})
 
-    def _load_forecaster(self):
+    def _load_forecaster(self) -> None:
         """Load TCN forecaster for price curve prediction."""
         try:
             from models.networks import TCNModel
@@ -786,7 +791,7 @@ class Predictor:
                 )
             )
 
-            def _load_checkpoint(weights_only: bool):
+            def _load_checkpoint(weights_only: bool) -> dict[str, Any]:
                 from utils.atomic_io import torch_load
 
                 return torch_load(
@@ -1003,7 +1008,7 @@ class Predictor:
 
                 self._set_cached_prediction(cache_key, pred)
 
-            except Exception as e:
+            except _PREDICTOR_RECOVERABLE_EXCEPTIONS as e:
                 log.error(
                     f"Prediction failed for {code}: {e}",
                     exc_info=True
@@ -1020,7 +1025,7 @@ class Predictor:
             return False
         try:
             return int(len(df)) >= int(max(1, required_rows))
-        except Exception as e:
+        except _PREDICTOR_RECOVERABLE_EXCEPTIONS as e:
             log.debug("Failed required-row check (required=%r): %s", required_rows, e)
             return False
 
@@ -1037,7 +1042,7 @@ class Predictor:
 
         try:
             quote = fetcher.get_realtime(code)
-        except Exception as e:
+        except _PREDICTOR_RECOVERABLE_EXCEPTIONS as e:
             log.debug("Realtime quote unavailable for %s: %s", code, e)
             quote = None
 
@@ -1074,7 +1079,7 @@ class Predictor:
                 use_cache=True,
                 update_db=False,
             )
-        except Exception as e:
+        except _PREDICTOR_RECOVERABLE_EXCEPTIONS as e:
             log.debug("Fallback history fetch failed for %s: %s", code, e)
             df = None
 
@@ -1208,7 +1213,7 @@ class Predictor:
 
         try:
             pred.levels = self._calculate_levels(pred)
-        except Exception as e:
+        except _PREDICTOR_RECOVERABLE_EXCEPTIONS as e:
             log.debug(
                 "Short-history levels calculation failed for %s: %s",
                 pred.stock_code,
@@ -1216,7 +1221,7 @@ class Predictor:
             )
         try:
             pred.position = self._calculate_position(pred)
-        except Exception as e:
+        except _PREDICTOR_RECOVERABLE_EXCEPTIONS as e:
             log.debug(
                 "Short-history position calculation failed for %s: %s",
                 pred.stock_code,
@@ -1224,7 +1229,7 @@ class Predictor:
             )
         try:
             self._generate_reasons(pred)
-        except Exception as e:
+        except _PREDICTOR_RECOVERABLE_EXCEPTIONS as e:
             log.debug(
                 "Short-history reason generation failed for %s: %s",
                 pred.stock_code,
@@ -1254,7 +1259,7 @@ class Predictor:
             )
 
             predictions: list[Prediction] = []
-            prepared: list[tuple[Prediction, np.ndarray]] = []
+            prepared: list[tuple[Prediction, FloatArray]] = []
 
             for stock_code in stock_codes:
                 try:
@@ -1305,7 +1310,7 @@ class Predictor:
                     )
                     prepared.append((pred, X))
 
-                except Exception as e:
+                except _PREDICTOR_RECOVERABLE_EXCEPTIONS as e:
                     log.debug(
                         f"Quick prediction failed for {stock_code}: {e}"
                     )
@@ -1331,7 +1336,7 @@ class Predictor:
                         ):
                             try:
                                 self._apply_ensemble_result(ens_pred, pred)
-                            except Exception as e:
+                            except _PREDICTOR_RECOVERABLE_EXCEPTIONS as e:
                                 log.debug(
                                     "Quick batch ensemble apply failed "
                                     f"for {pred.stock_code}: {e}"
@@ -1342,7 +1347,7 @@ class Predictor:
                         "Quick batch ensemble size mismatch: "
                         f"got {len(ensemble_results)}, expected {len(prepared)}"
                     )
-                except Exception as e:
+                except _PREDICTOR_RECOVERABLE_EXCEPTIONS as e:
                     log.debug(
                         "Quick batch ensemble inference failed; "
                         f"falling back to single predict: {e}"
@@ -1353,7 +1358,7 @@ class Predictor:
                 if self.ensemble:
                     try:
                         self._apply_ensemble_prediction(X, pred)
-                    except Exception as e:
+                    except _PREDICTOR_RECOVERABLE_EXCEPTIONS as e:
                         log.debug(
                             f"Quick single fallback failed for {pred.stock_code}: {e}"
                         )
@@ -1361,2136 +1366,52 @@ class Predictor:
 
             return predictions
 
-    def get_realtime_forecast_curve(
-        self,
-        stock_code: str,
-        interval: str = None,
-        horizon_steps: int = None,
-        lookback_bars: int = None,
-        use_realtime_price: bool = True,
-        history_allow_online: bool = True,
-    ) -> tuple[list[float], list[float]]:
-        """
-        Get real-time forecast curve for charting.
-
-        Returns:
-            (actual_prices, predicted_prices)
-        """
-        with self._predict_lock:
-            self._maybe_reload_models(reason="forecast_curve")
-            interval = self._normalize_interval_token(interval)
-            horizon = max(
-                1,
-                int(horizon_steps if horizon_steps is not None else 30),
-            )
-            lookback = max(
-                120,
-                int(
-                    lookback_bars
-                    if lookback_bars is not None
-                    else self._default_lookback_bars(interval)
-                ),
-            )
-
-            code = self._clean_code(stock_code)
-
-            try:
-                min_rows = getattr(
-                    self.feature_engine, 'MIN_ROWS',
-                    CONFIG.SEQUENCE_LENGTH
-                )
-                window = int(
-                    max(lookback, int(min_rows), int(CONFIG.SEQUENCE_LENGTH))
-                )
-
-                try:
-                    df = self.fetcher.get_history(
-                        code,
-                        interval=interval,
-                        bars=window,
-                        use_cache=True,
-                        update_db=False,
-                        allow_online=bool(history_allow_online),
-                    )
-                except TypeError:
-                    df = self.fetcher.get_history(
-                        code,
-                        interval=interval,
-                        bars=window,
-                        use_cache=True,
-                        update_db=False,
-                    )
-
-                # Merge latest session bars (including partial intraday bars)
-                # so realtime guessed curve follows the current live candle.
-                if interval in {"1m", "3m", "5m", "15m", "30m", "60m", "1h"}:
-                    try:
-                        from data.session_cache import get_session_bar_cache
-
-                        s_df = get_session_bar_cache().read_history(
-                            symbol=code,
-                            interval=interval,
-                            bars=window,
-                            final_only=False,
-                        )
-                        if s_df is not None and not s_df.empty:
-                            parts: list[pd.DataFrame] = []
-                            for part in (df, s_df):
-                                if part is None or part.empty:
-                                    continue
-                                p = part.copy()
-                                if not isinstance(p.index, pd.DatetimeIndex):
-                                    if "datetime" in p.columns:
-                                        p["datetime"] = pd.to_datetime(
-                                            p["datetime"],
-                                            errors="coerce",
-                                        )
-                                        p = p.dropna(subset=["datetime"]).set_index("datetime")
-                                    elif "timestamp" in p.columns:
-                                        p["datetime"] = pd.to_datetime(
-                                            p["timestamp"],
-                                            errors="coerce",
-                                        )
-                                        p = p.dropna(subset=["datetime"]).set_index("datetime")
-                                parts.append(p)
-                            if parts:
-                                merged = pd.concat(parts, axis=0)
-                                if isinstance(merged.index, pd.DatetimeIndex):
-                                    merged = merged[~merged.index.duplicated(keep="last")]
-                                    merged = merged.sort_index()
-                                df = merged
-                    except Exception as e:
-                        log.debug("Realtime session-merge skipped for %s: %s", code, e)
-
-                if (
-                    df is None
-                    or df.empty
-                    or len(df) < CONFIG.SEQUENCE_LENGTH
-                    or len(df) < min_rows
-                ):
-                    return [], []
-
-                # Real-time guess should follow the latest candles window.
-                df = df.tail(window).copy()
-
-                if use_realtime_price:
-                    try:
-                        quote = self.fetcher.get_realtime(code)
-                        if quote and float(getattr(quote, "price", 0) or 0) > 0:
-                            px = float(quote.price)
-                            df.loc[df.index[-1], "close"] = px
-                            df.loc[df.index[-1], "high"] = max(
-                                float(df["high"].iloc[-1]),
-                                px,
-                            )
-                            df.loc[df.index[-1], "low"] = min(
-                                float(df["low"].iloc[-1]),
-                                px,
-                            )
-                    except Exception as e:
-                        log.debug(
-                            "Realtime tail merge skipped while building forecast curve for %s: %s",
-                            code,
-                            e,
-                        )
-
-                df = self._sanitize_history_df(df, interval)
-                if (
-                    df is None
-                    or df.empty
-                    or len(df) < CONFIG.SEQUENCE_LENGTH
-                    or len(df) < min_rows
-                ):
-                    return [], []
-
-                actual = df["close"].tail(min(lookback, len(df))).tolist()
-                current_price = float(df["close"].iloc[-1])
-
-                scaler_ready = bool(
-                    self.processor is not None
-                    and getattr(self.processor, "is_fitted", True)
-                )
-                if not scaler_ready:
-                    self._maybe_reload_models(reason="forecast_curve_scaler_missing")
-                    scaler_ready = bool(
-                        self.processor is not None
-                        and getattr(self.processor, "is_fitted", True)
-                    )
-                if not scaler_ready:
-                    log.debug(
-                        "Realtime forecast skipped for %s/%s: scaler unavailable",
-                        code,
-                        interval,
-                    )
-                    return actual, []
-
-                df = self.feature_engine.create_features(df)
-                X = self.processor.prepare_inference_sequence(
-                    df, self._feature_cols
-                )
-
-                atr_pct = self._get_atr_pct(df)
-                news_score, news_conf, news_count = self._get_news_sentiment(
-                    code,
-                    interval,
-                )
-                news_bias = self._compute_news_bias(
-                    news_score,
-                    news_conf,
-                    news_count,
-                    interval,
-                )
-
-                try:
-                    predicted = self._generate_forecast(
-                        X,
-                        current_price,
-                        horizon,
-                        atr_pct,
-                        sequence_signature=self._sequence_signature(X),
-                        seed_context=f"{code}:{interval}",
-                        recent_prices=actual,
-                        news_bias=news_bias,
-                    )
-                except TypeError:
-                    predicted = self._generate_forecast(
-                        X,
-                        current_price,
-                        horizon,
-                        atr_pct,
-                        sequence_signature=self._sequence_signature(X),
-                        seed_context=f"{code}:{interval}",
-                        recent_prices=actual,
-                    )
-                predicted = self._stabilize_forecast_curve(
-                    predicted,
-                    current_price=current_price,
-                    atr_pct=atr_pct,
-                )
-
-                return actual, predicted
-
-            except Exception as e:
-                log.warning(f"Forecast curve failed for {code}: {e}")
-                return [], []
-
-    @staticmethod
-    def _stabilize_forecast_curve(
-        values: list[float],
-        *,
-        current_price: float,
-        atr_pct: float,
-    ) -> list[float]:
-        """
-        Clamp/smooth forecast curve so one noisy step cannot create
-        unrealistic V-shapes in real-time chart updates.
-        """
-        if not values:
-            return []
-        px0 = float(current_price or 0.0)
-        if px0 <= 0:
-            return [float(v) for v in values if float(v) > 0]
-
-        vol = float(np.nan_to_num(atr_pct, nan=0.02, posinf=0.02, neginf=0.02))
-        if vol <= 0:
-            vol = 0.02
-
-        # Per-step clamp for intraday visualization stability.
-        max_step = float(np.clip(vol * 0.55, 0.0025, 0.015))
-        prev = px0
-        out: list[float] = []
-        for raw in values:
-            try:
-                p = float(raw)
-            except (TypeError, ValueError):
-                p = prev
-            if not np.isfinite(p) or p <= 0:
-                p = prev
-
-            lo = prev * (1.0 - max_step)
-            hi = prev * (1.0 + max_step)
-            p = float(np.clip(p, lo, hi))
-
-            # Mild EMA smoothing to reduce sawtooth artifacts.
-            p = float((0.70 * p) + (0.30 * prev))
-            out.append(p)
-            prev = p
-        return out
-
-    def get_top_picks(
-        self,
-        stock_codes: list[str],
-        n: int = 10,
-        signal_type: str = "buy",
-    ) -> list[Prediction]:
-        """Get top N stock picks based on signal type."""
-        with self._predict_lock:
-            predictions = self.predict_quick_batch(stock_codes)
-
-            if signal_type.lower() == "buy":
-                filtered = [
-                    p for p in predictions
-                    if p.signal in [Signal.STRONG_BUY, Signal.BUY]
-                    and p.confidence >= CONFIG.MIN_CONFIDENCE
-                ]
-            else:
-                filtered = [
-                    p for p in predictions
-                    if p.signal in [Signal.STRONG_SELL, Signal.SELL]
-                    and p.confidence >= CONFIG.MIN_CONFIDENCE
-                ]
-
-            filtered.sort(key=lambda x: x.confidence, reverse=True)
-
-            return filtered[:n]
-
-    # =========================================================================
-    # =========================================================================
-
-    def _apply_ensemble_prediction(
-        self, X: np.ndarray, pred: Prediction
-    ):
-        """Apply ensemble prediction with bounds checking."""
-        ensemble_pred = self.ensemble.predict(X)
-        self._apply_ensemble_result(ensemble_pred, pred)
-
-    def _apply_ensemble_result(
-        self, ensemble_pred, pred: Prediction
-    ):
-        """Apply a precomputed ensemble result to a prediction object."""
-
-        probs = np.asarray(
-            getattr(ensemble_pred, "probabilities", [0.33, 0.34, 0.33]),
-            dtype=float,
-        ).reshape(-1)
-        n_classes = len(probs)
-
-        pred.prob_down = float(probs[0]) if n_classes > 0 else 0.33
-        pred.prob_neutral = float(probs[1]) if n_classes > 1 else 0.34
-        pred.prob_up = float(probs[2]) if n_classes > 2 else 0.33
-
-        pred.prob_down = max(0.0, min(1.0, pred.prob_down))
-        pred.prob_neutral = max(0.0, min(1.0, pred.prob_neutral))
-        pred.prob_up = max(0.0, min(1.0, pred.prob_up))
-        p_sum = pred.prob_down + pred.prob_neutral + pred.prob_up
-        if p_sum > 0:
-            pred.prob_down /= p_sum
-            pred.prob_neutral /= p_sum
-            pred.prob_up /= p_sum
-        else:
-            pred.prob_down, pred.prob_neutral, pred.prob_up = (
-                0.33,
-                0.34,
-                0.33,
-            )
-
-        pred.confidence = float(
-            max(0.0, min(1.0, getattr(ensemble_pred, "confidence", 0.0)))
-        )
-        pred.raw_confidence = float(
-            max(
-                0.0,
-                min(
-                    1.0,
-                    getattr(
-                        ensemble_pred,
-                        "raw_confidence",
-                        getattr(ensemble_pred, "confidence", 0.0),
-                    ),
-                ),
-            )
-        )
-
-        pred.model_agreement = float(
-            getattr(ensemble_pred, "agreement", 1.0)
-        )
-        pred.entropy = float(
-            getattr(ensemble_pred, "entropy", 0.0)
-        )
-        pred.model_margin = float(
-            getattr(ensemble_pred, "margin", 0.10)
-        )
-        pred.brier_score = float(
-            max(0.0, getattr(ensemble_pred, "brier_score", 0.0))
-        )
-
-        pred.signal = self._determine_signal(ensemble_pred, pred)
-        pred.signal_strength = self._calculate_signal_strength(
-            ensemble_pred, pred
-        )
-        self._refresh_prediction_uncertainty(pred)
-        self._apply_high_precision_gate(pred)
-        self._apply_runtime_signal_quality_gate(pred)
-        self._apply_tail_risk_guard(pred)
-
-    @staticmethod
-    def _append_warning_once(pred: Prediction, message: str) -> None:
-        """Append warning only once to avoid noisy duplicates."""
-        text = str(message).strip()
-        if not text:
-            return
-        existing = [str(x) for x in list(pred.warnings or [])]
-        if text in existing:
-            return
-        pred.warnings.append(text)
-
-    def _refresh_prediction_uncertainty(self, pred: Prediction) -> None:
-        """
-        Derive uncertainty and tail-risk from signal quality metrics.
-
-        Also moderates confidence when entropy/adverse-risk is high to avoid
-        over-confident chart narratives.
-        """
-        conf = float(np.clip(getattr(pred, "confidence", 0.0), 0.0, 1.0))
-        raw_conf = float(np.clip(getattr(pred, "raw_confidence", conf), 0.0, 1.0))
-        agreement = float(np.clip(getattr(pred, "model_agreement", 1.0), 0.0, 1.0))
-        entropy = float(np.clip(getattr(pred, "entropy", 0.0), 0.0, 1.0))
-        margin = float(np.clip(getattr(pred, "model_margin", 0.10), 0.0, 1.0))
-        edge = float(abs(float(pred.prob_up) - float(pred.prob_down)))
-
-        atr = float(np.nan_to_num(getattr(pred, "atr_pct_value", 0.02), nan=0.02))
-        atr = float(np.clip(atr, 0.003, 0.12))
-        vol_scale = float(np.clip(atr / 0.030, 0.0, 2.0))
-
-        if pred.signal in (Signal.BUY, Signal.STRONG_BUY):
-            adverse_prob = float(np.clip(pred.prob_down, 0.0, 1.0))
-        elif pred.signal in (Signal.SELL, Signal.STRONG_SELL):
-            adverse_prob = float(np.clip(pred.prob_up, 0.0, 1.0))
-        else:
-            adverse_prob = float(
-                np.clip(max(pred.prob_up, pred.prob_down), 0.0, 1.0)
-            )
-
-        quality = (
-            (0.46 * conf)
-            + (0.22 * agreement)
-            + (0.20 * (1.0 - entropy))
-            + (0.12 * margin)
-        )
-        uncertainty = float(
-            np.clip(
-                (1.0 - quality)
-                + (0.18 * (1.0 - edge))
-                + (0.14 * vol_scale),
-                0.0,
-                1.0,
-            )
-        )
-        tail_risk = float(
-            np.clip(
-                (0.58 * adverse_prob)
-                + (0.24 * entropy)
-                + (0.18 * max(0.0, vol_scale - 1.0)),
-                0.0,
-                1.0,
-            )
-        )
-
-        # Confidence moderation only when risk is materially elevated.
-        penalty = (
-            (max(0.0, entropy - 0.62) * 0.35)
-            + (max(0.0, tail_risk - 0.58) * 0.30)
-            + (max(0.0, 0.55 - agreement) * 0.28)
-        )
-        if margin < 0.04:
-            penalty += 0.05
-        if penalty > 0.0:
-            old_conf = conf
-            conf = float(np.clip(conf - penalty, 0.0, 1.0))
-            pred.confidence = conf
-            if (old_conf - conf) >= 0.08:
-                self._append_warning_once(
-                    pred,
-                    "Confidence moderated due to uncertainty/tail-risk conditions",
-                )
-
-        if raw_conf > 0 and conf > raw_conf:
-            pred.confidence = raw_conf
-
-        pred.uncertainty_score = float(uncertainty)
-        pred.tail_risk_score = float(tail_risk)
-
-    def _apply_tail_risk_guard(self, pred: Prediction) -> None:
-        """
-        Block actionable signals when adverse-tail probability is too high.
-        """
-        if pred.signal == Signal.HOLD:
-            return
-        conf = float(np.clip(getattr(pred, "confidence", 0.0), 0.0, 1.0))
-        tail_risk = float(np.clip(getattr(pred, "tail_risk_score", 0.0), 0.0, 1.0))
-        uncertainty = float(
-            np.clip(getattr(pred, "uncertainty_score", 0.0), 0.0, 1.0)
-        )
-
-        reasons: list[str] = []
-        if tail_risk >= 0.72 and conf < 0.88:
-            reasons.append(f"tail_risk {tail_risk:.2f}")
-        if uncertainty >= 0.82 and conf < 0.86:
-            reasons.append(f"uncertainty {uncertainty:.2f}")
-
-        if not reasons:
-            return
-
-        old_signal = pred.signal.value
-        pred.signal = Signal.HOLD
-        pred.signal_strength = min(float(pred.signal_strength), 0.49)
-        self._append_warning_once(
-            pred,
-            "Tail-risk guard filtered signal "
-            f"{old_signal} -> HOLD ({'; '.join(reasons[:2])})",
-        )
-
-    def _build_prediction_bands(self, pred: Prediction) -> None:
-        """
-        Build per-step prediction intervals to visualize uncertainty.
-        """
-        values = [
-            float(v)
-            for v in list(getattr(pred, "predicted_prices", []) or [])
-            if float(v) > 0 and np.isfinite(float(v))
-        ]
-        if not values:
-            pred.predicted_prices_low = []
-            pred.predicted_prices_high = []
-            return
-
-        uncertainty = float(
-            np.clip(getattr(pred, "uncertainty_score", 0.5), 0.0, 1.0)
-        )
-        tail_risk = float(np.clip(getattr(pred, "tail_risk_score", 0.5), 0.0, 1.0))
-        conf = float(np.clip(getattr(pred, "confidence", 0.0), 0.0, 1.0))
-        atr = float(
-            np.clip(
-                np.nan_to_num(getattr(pred, "atr_pct_value", 0.02), nan=0.02),
-                0.003,
-                0.12,
-            )
-        )
-        n = max(1, len(values))
-
-        base_width = float(
-            np.clip(
-                atr
-                * (0.60 + (1.10 * uncertainty) + (0.75 * tail_risk))
-                * (1.05 + (0.35 * (1.0 - conf))),
-                0.004,
-                0.30,
-            )
-        )
-
-        lows: list[float] = []
-        highs: list[float] = []
-        for i, px in enumerate(values, start=1):
-            growth = 1.0 + (float(i) / float(n)) * (0.85 + (0.65 * uncertainty))
-            width = float(np.clip(base_width * growth, 0.004, 0.35))
-            lo = max(0.01, float(px) * (1.0 - width))
-            hi = max(lo + 1e-6, float(px) * (1.0 + width))
-            lows.append(float(lo))
-            highs.append(float(hi))
-
-        pred.predicted_prices_low = lows
-        pred.predicted_prices_high = highs
-
-    def _apply_high_precision_gate(self, pred: Prediction) -> None:
-        """Optionally downgrade weak actionable predictions to HOLD."""
-        cfg = self._high_precision
-        if not cfg or cfg.get("enabled", 0.0) <= 0:
-            return
-        if pred.signal == Signal.HOLD:
-            return
-
-        reasons: list[str] = []
-
-        # Regime-aware confidence floor: range/high-vol require stronger evidence.
-        required_conf = float(cfg["min_confidence"])
-        if cfg.get("regime_routing", 0.0) > 0:
-            if str(pred.trend).upper() == "SIDEWAYS":
-                required_conf += float(cfg.get("range_conf_boost", 0.0))
-            if float(pred.atr_pct_value) >= float(cfg.get("high_vol_atr_pct", 0.035)):
-                required_conf += float(cfg.get("high_vol_conf_boost", 0.0))
-
-        if pred.confidence < required_conf:
-            reasons.append(
-                f"confidence {pred.confidence:.2f} < {required_conf:.2f}"
-            )
-        if pred.model_agreement < cfg["min_agreement"]:
-            reasons.append(
-                f"agreement {pred.model_agreement:.2f} < {cfg['min_agreement']:.2f}"
-            )
-        if pred.entropy > cfg["max_entropy"]:
-            reasons.append(
-                f"entropy {pred.entropy:.2f} > {cfg['max_entropy']:.2f}"
-            )
-        edge = abs(float(pred.prob_up) - float(pred.prob_down))
-        if edge < cfg["min_edge"]:
-            reasons.append(f"edge {edge:.2f} < {cfg['min_edge']:.2f}")
-
-        if not reasons:
-            return
-
-        old_signal = pred.signal.value
-        pred.signal = Signal.HOLD
-        pred.signal_strength = min(float(pred.signal_strength), 0.49)
-        pred.warnings.append(
-            "High Precision Mode filtered signal "
-            f"{old_signal} -> HOLD ({'; '.join(reasons[:3])})"
-        )
-
-    def _apply_runtime_signal_quality_gate(self, pred: Prediction) -> None:
-        """
-        Always-on runtime guard to reduce low-quality actionable signals.
-        This improves precision by preferring HOLD when edge quality is weak.
-        """
-        if pred.signal == Signal.HOLD:
-            return
-
-        reasons: list[str] = []
-        conf = float(np.clip(pred.confidence, 0.0, 1.0))
-        agreement = float(np.clip(pred.model_agreement, 0.0, 1.0))
-        entropy = float(np.clip(pred.entropy, 0.0, 1.0))
-        edge = float(pred.prob_up) - float(pred.prob_down)
-        trend = str(pred.trend).upper()
-
-        if pred.signal in (Signal.BUY, Signal.STRONG_BUY) and edge < 0.03:
-            reasons.append(f"edge {edge:.2f} too weak for long")
-        if pred.signal in (Signal.SELL, Signal.STRONG_SELL) and edge > -0.03:
-            reasons.append(f"edge {edge:.2f} too weak for short")
-        if agreement < 0.50 and conf < 0.78:
-            reasons.append(
-                f"agreement/conf weak ({agreement:.2f}/{conf:.2f})"
-            )
-        if entropy > 0.78 and conf < 0.80:
-            reasons.append(f"high entropy {entropy:.2f}")
-        if trend == "SIDEWAYS" and conf < 0.72:
-            reasons.append("sideways regime with low confidence")
-        if (
-            trend == "UPTREND"
-            and pred.signal in (Signal.SELL, Signal.STRONG_SELL)
-            and conf < 0.86
-        ):
-            reasons.append("counter-trend short lacks conviction")
-        if (
-            trend == "DOWNTREND"
-            and pred.signal in (Signal.BUY, Signal.STRONG_BUY)
-            and conf < 0.86
-        ):
-            reasons.append("counter-trend long lacks conviction")
-        if pred.atr_pct_value >= 0.04 and conf < 0.76:
-            reasons.append("high volatility requires stronger confidence")
-
-        if not reasons:
-            return
-
-        old_signal = pred.signal.value
-        pred.signal = Signal.HOLD
-        pred.signal_strength = min(float(pred.signal_strength), 0.49)
-        pred.warnings.append(
-            "Runtime quality gate filtered signal "
-            f"{old_signal} -> HOLD ({'; '.join(reasons[:3])})"
-        )
-
-    # =========================================================================
-    # =========================================================================
-
-    def _get_cache_ttl(self, use_realtime: bool, interval: str) -> float:
-        """
-        Adaptive cache TTL.
-        Real-time paths get shorter TTL to reduce stale guesses.
-        """
-        base = float(self._CACHE_TTL)
-        if not use_realtime:
-            return base
-        intraday = str(interval).lower() in {"1m", "3m", "5m", "15m", "30m", "60m"}
-        if intraday:
-            return float(max(0.2, min(base, self._CACHE_TTL_REALTIME)))
-        return float(max(0.2, min(base, 2.0)))
-
-    def _get_cached_prediction(
-        self, cache_key: str, ttl: float | None = None
-    ) -> Prediction | None:
-        """Get cached prediction if still valid."""
-        ttl_s = float(self._CACHE_TTL if ttl is None else ttl)
-        with self._cache_lock:
-            entry = self._pred_cache.get(cache_key)
-            if entry is not None:
-                ts, pred = entry
-                if (time.time() - ts) < ttl_s:
-                    return copy.deepcopy(pred)
-                del self._pred_cache[cache_key]
-        return None
-
-    def _set_cached_prediction(self, cache_key: str, pred: Prediction):
-        """Cache a prediction result with bounded size."""
-        with self._cache_lock:
-            self._pred_cache[cache_key] = (time.time(), copy.deepcopy(pred))
-
-            if len(self._pred_cache) > self._MAX_CACHE_SIZE:
-                now = time.time()
-                expired = [
-                    k for k, (ts, _) in self._pred_cache.items()
-                    if (now - ts) > self._CACHE_TTL
-                ]
-                for k in expired:
-                    del self._pred_cache[k]
-
-                # If still too large, evict oldest
-                if len(self._pred_cache) > self._MAX_CACHE_SIZE:
-                    sorted_keys = sorted(
-                        self._pred_cache.keys(),
-                        key=lambda k: self._pred_cache[k][0]
-                    )
-                    for k in sorted_keys[:len(sorted_keys) // 2]:
-                        del self._pred_cache[k]
-
-    def _news_cache_ttl(self, interval: str) -> float:
-        """News sentiment cache TTL by interval profile."""
-        if self._is_intraday_interval(interval):
-            return float(self._NEWS_CACHE_TTL_INTRADAY)
-        return float(self._NEWS_CACHE_TTL_SWING)
-
-    def _ensure_news_cache_state(self) -> None:
-        """Lazy-init news cache fields for tests using Predictor.__new__()."""
-        if not hasattr(self, "_news_cache") or self._news_cache is None:
-            self._news_cache = {}
-        if not hasattr(self, "_news_cache_lock") or self._news_cache_lock is None:
-            self._news_cache_lock = threading.Lock()
-
-    def _get_news_sentiment(
-        self,
-        stock_code: str,
-        interval: str,
-    ) -> tuple[float, float, int]:
-        """
-        Return (sentiment, confidence, count) for stock news.
-        Sentiment is in [-1, 1], confidence in [0, 1].
-        """
-        self._ensure_news_cache_state()
-        code = self._clean_code(stock_code)
-        if not code:
-            return 0.0, 0.0, 0
-
-        ttl = self._news_cache_ttl(interval)
-        now = time.time()
-        with self._news_cache_lock:
-            rec = self._news_cache.get(code)
-            if rec is not None:
-                ts, s, conf, cnt = rec
-                if (now - float(ts)) < ttl:
-                    return float(s), float(conf), int(cnt)
-
-        try:
-            from data.news import get_news_aggregator
-
-            agg = get_news_aggregator()
-            summary = agg.get_sentiment_summary(code)
-            score = float(summary.get("overall_sentiment", 0.0) or 0.0)
-            conf = float(summary.get("confidence", 0.0) or 0.0)
-            cnt = int(summary.get("total", 0) or 0)
-
-            score = float(np.clip(score, -1.0, 1.0))
-            conf = float(np.clip(conf, 0.0, 1.0))
-            cnt = max(0, int(cnt))
-
-        except Exception as e:
-            log.debug("News sentiment lookup failed for %s: %s", code, e)
-            score, conf, cnt = 0.0, 0.0, 0
-
-        with self._news_cache_lock:
-            self._news_cache[code] = (now, float(score), float(conf), int(cnt))
-            if len(self._news_cache) > 500:
-                oldest = sorted(
-                    self._news_cache.items(),
-                    key=lambda kv: float(kv[1][0]),
-                )[:180]
-                for k, _ in oldest:
-                    self._news_cache.pop(k, None)
-
-        return float(score), float(conf), int(cnt)
-
-    def _compute_news_bias(
-        self,
-        sentiment: float,
-        confidence: float,
-        count: int,
-        interval: str,
-    ) -> float:
-        """
-        Convert news metrics into a bounded directional bias.
-        Positive => bullish tilt, negative => bearish tilt.
-        """
-        s = float(np.clip(np.nan_to_num(sentiment, nan=0.0), -1.0, 1.0))
-        conf = float(np.clip(np.nan_to_num(confidence, nan=0.0), 0.0, 1.0))
-        cnt = max(0, int(count))
-
-        coverage = float(np.clip(cnt / 24.0, 0.0, 1.0))
-        eff_conf = conf * (0.30 + (0.70 * coverage))
-        raw = s * eff_conf
-        cap = 0.14 if self._is_intraday_interval(interval) else 0.20
-        return float(np.clip(raw, -cap, cap))
-
-    def _apply_news_influence(
-        self,
-        pred: Prediction,
-        stock_code: str,
-        interval: str,
-    ) -> float:
-        """
-        Blend news sentiment into class probabilities and confidence.
-        Returns the directional bias used for forecast shaping.
-        """
-        sentiment, conf, count = self._get_news_sentiment(stock_code, interval)
-        pred.news_sentiment = float(sentiment)
-        pred.news_confidence = float(conf)
-        pred.news_count = int(count)
-
-        news_bias = self._compute_news_bias(sentiment, conf, count, interval)
-        if abs(news_bias) <= 1e-8:
-            return 0.0
-
-        shift = float(min(0.18, abs(news_bias) * 0.55))
-        if news_bias > 0:
-            moved = min(float(pred.prob_down), shift)
-            pred.prob_down = float(pred.prob_down - moved)
-            pred.prob_up = float(pred.prob_up + moved)
-        else:
-            moved = min(float(pred.prob_up), shift)
-            pred.prob_up = float(pred.prob_up - moved)
-            pred.prob_down = float(pred.prob_down + moved)
-
-        # Keep probabilities normalized.
-        pred.prob_down = float(np.clip(pred.prob_down, 0.0, 1.0))
-        pred.prob_neutral = float(np.clip(pred.prob_neutral, 0.0, 1.0))
-        pred.prob_up = float(np.clip(pred.prob_up, 0.0, 1.0))
-        p_sum = float(pred.prob_down + pred.prob_neutral + pred.prob_up)
-        if p_sum <= 0:
-            pred.prob_down, pred.prob_neutral, pred.prob_up = 0.33, 0.34, 0.33
-        else:
-            pred.prob_down /= p_sum
-            pred.prob_neutral /= p_sum
-            pred.prob_up /= p_sum
-
-        edge = float(pred.prob_up - pred.prob_down)
-        aligned = (edge == 0.0) or ((edge > 0) == (news_bias > 0))
-        conf_delta = min(0.10, abs(news_bias) * (0.35 if aligned else 0.18))
-        if aligned:
-            pred.confidence = float(np.clip(pred.confidence + conf_delta, 0.0, 1.0))
-        else:
-            pred.confidence = float(np.clip(pred.confidence - (conf_delta * 0.6), 0.0, 1.0))
-
-        # News can upgrade HOLD when the post-blend edge is meaningful.
-        if pred.signal == Signal.HOLD and pred.confidence >= 0.56:
-            if edge >= 0.08:
-                pred.signal = Signal.BUY
-            elif edge <= -0.08:
-                pred.signal = Signal.SELL
-
-        # News can also dampen contradictory directional signals.
-        if pred.signal in (Signal.BUY, Signal.STRONG_BUY) and edge < 0:
-            pred.signal = Signal.HOLD
-        elif pred.signal in (Signal.SELL, Signal.STRONG_SELL) and edge > 0:
-            pred.signal = Signal.HOLD
-
-        if count > 0:
-            direction = "bullish" if news_bias > 0 else "bearish"
-            msg = (
-                f"News sentiment tilt: {direction} "
-                f"({sentiment:+.2f}, conf {conf:.2f}, n={count})"
-            )
-            if msg not in pred.reasons:
-                pred.reasons.append(msg)
-
-        return float(news_bias)
-
-    def _normalize_interval_token(self, interval: str | None) -> str:
-        """Normalize common provider/UI aliases."""
-        iv = str(interval or self.interval).strip().lower()
-        aliases = {
-            "1h": "60m",
-            "60min": "60m",
-            "60mins": "60m",
-            "daily": "1d",
-            "day": "1d",
-            "1day": "1d",
-            "1440m": "1d",
-        }
-        return aliases.get(iv, iv)
-
-    def _is_intraday_interval(self, interval: str) -> bool:
-        iv = self._normalize_interval_token(interval)
-        return iv not in {"1d", "1wk", "1mo"}
-
-    def _bar_safety_caps(self, interval: str) -> tuple[float, float]:
-        """Return (max_jump_pct, max_range_pct) for OHLC history cleaning."""
-        iv = self._normalize_interval_token(interval)
-        if iv == "1m":
-            return 0.08, 0.03
-        if iv == "5m":
-            return 0.10, 0.05
-        if iv in ("15m", "30m"):
-            return 0.14, 0.08
-        if iv in ("60m",):
-            return 0.18, 0.12
-        if iv in ("1d", "1wk", "1mo"):
-            return 0.24, 0.22
-        return 0.20, 0.15
-
-    def _sanitize_ohlc_row(
-        self,
-        o: float,
-        h: float,
-        low: float,
-        c: float,
-        *,
-        interval: str,
-        ref_close: float | None = None,
-    ) -> tuple[float, float, float, float] | None:
-        """Clean one OHLC row and reject malformed spikes."""
-        try:
-            o = float(o or 0.0)
-            h = float(h or 0.0)
-            low = float(low or 0.0)
-            c = float(c or 0.0)
-        except (TypeError, ValueError):
-            return None
-        if not all(np.isfinite(v) for v in (o, h, low, c)):
-            return None
-        if c <= 0:
-            return None
-
-        if o <= 0:
-            o = c
-        if h <= 0:
-            h = max(o, c)
-        if low <= 0:
-            low = min(o, c)
-        if h < low:
-            h, low = low, h
-
-        jump_cap, range_cap = self._bar_safety_caps(interval)
-        ref = float(ref_close or 0.0)
-        if not np.isfinite(ref) or ref <= 0:
-            ref = 0.0
-
-        if ref > 0:
-            jump = abs(c / ref - 1.0)
-            hard_jump_cap = max(
-                jump_cap * 1.7,
-                0.12 if self._is_intraday_interval(interval) else jump_cap,
-            )
-            if jump > hard_jump_cap:
-                return None
-
-        anchor = ref if ref > 0 else c
-        if anchor <= 0:
-            anchor = c
-        if ref > 0:
-            effective_range_cap = float(range_cap)
-        else:
-            bootstrap_cap = (
-                0.30
-                if not self._is_intraday_interval(interval)
-                else float(min(0.24, max(jump_cap, range_cap * 2.0)))
-            )
-            effective_range_cap = float(max(range_cap, bootstrap_cap))
-
-        max_body = float(anchor) * float(
-            max(jump_cap * 1.25, effective_range_cap * 0.9)
-        )
-        if max_body > 0 and abs(o - c) > max_body:
-            if ref > 0 and abs(c / ref - 1.0) <= max(jump_cap * 1.2, 0.10):
-                o = ref
-            else:
-                o = c
-
-        top = max(o, c)
-        bot = min(o, c)
-        if h < top:
-            h = top
-        if low > bot:
-            low = bot
-        if h < low:
-            h, low = low, h
-
-        max_range = float(anchor) * float(effective_range_cap)
-        curr_range = max(0.0, h - low)
-        if max_range > 0 and curr_range > max_range:
-            body = max(0.0, top - bot)
-            if body > max_range:
-                o = c
-                top = c
-                bot = c
-                body = 0.0
-            wick_allow = max(0.0, max_range - body)
-            h = min(h, top + (wick_allow * 0.5))
-            low = max(low, bot - (wick_allow * 0.5))
-            if h < low:
-                h, low = low, h
-
-        if anchor > 0 and (h - low) > (float(anchor) * float(effective_range_cap) * 1.05):
-            return None
-
-        o = min(max(o, low), h)
-        c = min(max(c, low), h)
-        return o, h, low, c
-
-    def _intraday_session_mask(self, idx: pd.DatetimeIndex) -> np.ndarray:
-        """Best-effort CN intraday trading-session filter."""
-        if idx.size <= 0:
-            return np.zeros(0, dtype=bool)
-
-        ts = idx
-        try:
-            if ts.tz is None:
-                ts = ts.tz_localize("Asia/Shanghai", ambiguous="NaT", nonexistent="shift_forward")
-            else:
-                ts = ts.tz_convert("Asia/Shanghai")
-        except Exception as e:
-            log.debug("Session mask timezone conversion fallback triggered: %s", e)
-            try:
-                ts = idx.tz_localize(None)
-            except Exception as inner_e:
-                log.debug("Session mask timezone fallback failed: %s", inner_e)
-                ts = idx
-
-        weekday = np.asarray(ts.weekday, dtype=int)
-        mins = (np.asarray(ts.hour, dtype=int) * 60) + np.asarray(ts.minute, dtype=int)
-
-        t_cfg = CONFIG.trading
-        am_open = (int(t_cfg.market_open_am.hour) * 60) + int(t_cfg.market_open_am.minute)
-        am_close = (int(t_cfg.market_close_am.hour) * 60) + int(t_cfg.market_close_am.minute)
-        pm_open = (int(t_cfg.market_open_pm.hour) * 60) + int(t_cfg.market_open_pm.minute)
-        pm_close = (int(t_cfg.market_close_pm.hour) * 60) + int(t_cfg.market_close_pm.minute)
-
-        is_weekday = weekday < 5
-        in_am = (mins >= am_open) & (mins <= am_close)
-        in_pm = (mins >= pm_open) & (mins <= pm_close)
-        return np.asarray(is_weekday & (in_am | in_pm), dtype=bool)
-
-    def _sanitize_history_df(
-        self,
-        df: pd.DataFrame | None,
-        interval: str,
-    ) -> pd.DataFrame:
-        """
-        Normalize history rows before features/inference.
-        Fixes malformed open=0 intraday rows and drops out-of-session noise.
-        """
-        if df is None or df.empty:
-            return pd.DataFrame()
-
-        iv = self._normalize_interval_token(interval)
-        work = df.copy()
-        has_dt_index = isinstance(work.index, pd.DatetimeIndex)
-
-        if not has_dt_index:
-            dt = None
-            if "datetime" in work.columns:
-                dt = pd.to_datetime(work["datetime"], errors="coerce")
-            elif "timestamp" in work.columns:
-                dt = pd.to_datetime(work["timestamp"], errors="coerce")
-            if dt is not None:
-                valid_dt = dt.notna()
-                valid_count = int(valid_dt.sum())
-                valid_ratio = (
-                    float(valid_count) / float(len(work))
-                    if len(work) > 0
-                    else 0.0
-                )
-                if valid_count > 0 and valid_ratio >= 0.80:
-                    work = work.assign(_dt=dt).dropna(subset=["_dt"]).set_index("_dt")
-                    has_dt_index = isinstance(work.index, pd.DatetimeIndex)
-
-        if has_dt_index:
-            work = work[~work.index.duplicated(keep="last")].sort_index()
-
-        for col in ("open", "high", "low", "close", "volume", "amount"):
-            if col not in work.columns:
-                work[col] = 0.0
-            work[col] = pd.to_numeric(work[col], errors="coerce").fillna(0.0)
-
-        work = work[np.isfinite(work["close"]) & (work["close"] > 0)].copy()
-        if work.empty:
-            return pd.DataFrame()
-
-        if self._is_intraday_interval(iv) and has_dt_index:
-            mask = self._intraday_session_mask(work.index)
-            if mask.size == len(work):
-                work = work.loc[mask].copy()
-            if work.empty:
-                return pd.DataFrame()
-
-        cleaned_rows: list[dict] = []
-        cleaned_idx: list = []
-        prev_close: float | None = None
-        prev_date = None
-
-        for idx, row in work.iterrows():
-            try:
-                c = float(row.get("close", 0) or 0)
-                o = float(row.get("open", c) or c)
-                h = float(row.get("high", c) or c)
-                low = float(row.get("low", c) or c)
-            except (TypeError, ValueError):
-                continue
-
-            idx_date = idx.date() if hasattr(idx, "date") else None
-            ref_close = prev_close
-            if (
-                self._is_intraday_interval(iv)
-                and has_dt_index
-                and prev_date is not None
-                and idx_date is not None
-                and idx_date != prev_date
-            ):
-                # First bar of a new day can gap against prior close.
-                ref_close = None
-
-            sanitized = self._sanitize_ohlc_row(
-                o,
-                h,
-                low,
-                c,
-                interval=iv,
-                ref_close=ref_close,
-            )
-            if sanitized is None:
-                continue
-            o, h, low, c = sanitized
-
-            row_out = row.to_dict()
-            row_out["open"] = float(o)
-            row_out["high"] = float(h)
-            row_out["low"] = float(low)
-            row_out["close"] = float(c)
-            cleaned_rows.append(row_out)
-            cleaned_idx.append(idx)
-            prev_close = float(c)
-            prev_date = idx_date
-
-        if not cleaned_rows:
-            return pd.DataFrame()
-
-        out = pd.DataFrame(cleaned_rows)
-        if has_dt_index:
-            out.index = pd.DatetimeIndex(cleaned_idx)
-            out = out[~out.index.duplicated(keep="last")].sort_index()
-        else:
-            out.index = pd.Index(cleaned_idx)
-        return out
-
-    def invalidate_cache(self, code: str = None):
-        """Invalidate cache for a specific code or all codes."""
-        with self._cache_lock:
-            if code:
-                key = str(code).strip()
-                code6 = self._clean_code(key)
-                for k in list(self._pred_cache.keys()):
-                    if k == key or (code6 and str(k).startswith(f"{code6}:")):
-                        self._pred_cache.pop(k, None)
-            else:
-                self._pred_cache.clear()
-
-    # =========================================================================
-    # =========================================================================
-
-    def _fetch_data(
-        self,
-        code: str,
-        interval: str,
-        lookback: int,
-        use_realtime: bool,
-        history_allow_online: bool = True,
-    ) -> pd.DataFrame | None:
-        """Fetch stock data with minimum data requirement."""
-        try:
-            from data.fetcher import BARS_PER_DAY
-
-            interval = self._normalize_interval_token(interval)
-            bpd = float(BARS_PER_DAY.get(interval, 1))
-            min_days = (
-                7
-                if interval in {"1m", "2m", "3m", "5m", "15m", "30m", "60m", "1h"}
-                else 14
-            )
-            min_bars = int(max(min_days * bpd, min_days))
-            bars = int(max(int(lookback), int(min_bars)))
-
-            try:
-                df = self.fetcher.get_history(
-                    code,
-                    interval=interval,
-                    bars=bars,
-                    use_cache=True,
-                    update_db=True,
-                    allow_online=bool(history_allow_online),
-                )
-            except TypeError:
-                df = self.fetcher.get_history(
-                    code,
-                    interval=interval,
-                    bars=bars,
-                    use_cache=True,
-                    update_db=True,
-                )
-            if df is None or df.empty:
-                return None
-
-            df = self._sanitize_history_df(df, interval)
-            if df is None or df.empty:
-                return None
-
-            if use_realtime:
-                try:
-                    quote = self.fetcher.get_realtime(code)
-                    if quote and quote.price > 0:
-                        df.loc[df.index[-1], "close"] = float(
-                            quote.price
-                        )
-                        df.loc[df.index[-1], "high"] = max(
-                            float(df["high"].iloc[-1]),
-                            float(quote.price)
-                        )
-                        df.loc[df.index[-1], "low"] = min(
-                            float(df["low"].iloc[-1]),
-                            float(quote.price)
-                        )
-                except Exception as e:
-                    log.debug("Realtime quote merge failed for %s: %s", code, e)
-
-            df = self._sanitize_history_df(df, interval)
-            if df is None or df.empty:
-                return None
-
-            return df
-
-        except Exception as e:
-            log.warning(f"Failed to fetch data for {code}: {e}")
-            return None
-
-    def _default_lookback_bars(self, interval: str | None) -> int:
-        """
-        Default history depth for inference.
-        Intraday intervals use a true 7-day window (e.g. 1m => 1680 bars).
-        """
-        iv = self._normalize_interval_token(interval)
-        try:
-            from data.fetcher import BARS_PER_DAY, INTERVAL_MAX_DAYS
-            bpd = float(BARS_PER_DAY.get(iv, 1.0))
-            max_days = int(INTERVAL_MAX_DAYS.get(iv, 7))
-        except Exception as e:
-            log.debug("Falling back to default lookback constants for interval=%s: %s", iv, e)
-            bpd = float({
-                "1m": 240.0,
-                "2m": 120.0,
-                "3m": 80.0,
-                "5m": 48.0,
-                "15m": 16.0,
-                "30m": 8.0,
-                "60m": 4.0,
-                "1h": 4.0,
-                "1d": 1.0,
-            }.get(iv, 1.0))
-            max_days = 7 if iv in {"1m", "2m", "3m", "5m", "15m", "30m", "60m", "1h"} else 365
-
-        if iv in {"1d", "1wk", "1mo"}:
-            return max(60, int(round(min(365, max_days) * max(1.0, bpd))))
-
-        days = max(1, min(7, max_days))
-        bars = int(round(float(days) * max(1.0, bpd)))
-        return max(120, bars)
-
-    # =========================================================================
-    # =========================================================================
-
-    def _sequence_signature(self, X: np.ndarray) -> float:
-        """Stable numeric signature for the latest feature sequence."""
-        try:
-            arr = np.asarray(X, dtype=float).reshape(-1)
-            if arr.size <= 0:
-                return 0.0
-            tail = arr[-min(64, arr.size):]
-            weights = np.arange(1, tail.size + 1, dtype=float)
-            return float(np.sum(np.round(tail, 5) * weights))
-        except (TypeError, ValueError):
-            return 0.0
-
-    def _forecast_seed(
-        self,
-        current_price: float,
-        sequence_signature: float,
-        direction_hint: float,
-        horizon: int,
-        seed_context: str = "",
-        recent_prices: list[float] | None = None,
-    ) -> int:
-        """
-        Deterministic seed for forecast noise.
-        Includes symbol/interval context to avoid repeated template curves
-        when feature signatures are similar across symbols.
-        """
-        ctx_hash = 0
-        for ch in str(seed_context or ""):
-            ctx_hash = ((ctx_hash * 131) + ord(ch)) & 0x7FFFFFFF
-
-        recent_hash = 0
-        if recent_prices is not None:
-            try:
-                rp = np.array(
-                    [float(p) for p in recent_prices if float(p) > 0],
-                    dtype=float,
-                )
-                if rp.size > 0:
-                    tail = rp[-min(12, rp.size):]
-                    weights = np.arange(1, tail.size + 1, dtype=float)
-                    recent_hash = int(
-                        abs(np.sum(np.round(tail, 4) * weights) * 10.0)
-                    )
-            except (TypeError, ValueError):
-                recent_hash = 0
-
-        seed = (
-            int(abs(float(current_price)) * 100)
-            ^ int(abs(float(sequence_signature)) * 1000)
-            ^ int((float(direction_hint) + 1.0) * 100000)
-            ^ int(max(1, int(horizon)) * 131)
-            ^ int(ctx_hash)
-            ^ int(recent_hash)
-        ) % (2**31 - 1)
-
-        return 1 if seed == 0 else int(seed)
-
-    def _generate_forecast(
-        self,
-        X: np.ndarray,
-        current_price: float,
-        horizon: int,
-        atr_pct: float = 0.02,
-        sequence_signature: float = 0.0,
-        seed_context: str = "",
-        recent_prices: list[float] | None = None,
-        news_bias: float = 0.0,
-    ) -> list[float]:
-        """Generate price forecast using forecaster or ensemble."""
-        if current_price <= 0:
-            return []
-        horizon = max(1, int(horizon))
-        atr_pct = float(np.nan_to_num(atr_pct, nan=0.02, posinf=0.02, neginf=0.02))
-        if atr_pct <= 0:
-            atr_pct = 0.02
-        news_bias = float(
-            np.clip(
-                np.nan_to_num(news_bias, nan=0.0, posinf=0.0, neginf=0.0),
-                -0.50,
-                0.50,
-            )
-        )
-
-        direction_hint = 0.0
-        hint_confidence = 0.5
-        hint_entropy = 0.5
-        if self.ensemble is not None:
-            try:
-                hint_pred = self.ensemble.predict(X)
-                probs_hint = getattr(hint_pred, "probabilities", None)
-                if probs_hint is not None and len(probs_hint) >= 3:
-                    direction_hint = (
-                        float(probs_hint[2]) - float(probs_hint[0])
-                    )
-                hint_confidence = float(
-                    np.clip(getattr(hint_pred, "confidence", 0.5), 0.0, 1.0)
-                )
-                hint_entropy = float(
-                    np.clip(getattr(hint_pred, "entropy", 0.5), 0.0, 1.0)
-                )
-            except Exception as e:
-                log.debug("Ensemble direction hint unavailable: %s", e)
-                direction_hint = 0.0
-                hint_confidence = 0.5
-                hint_entropy = 0.5
-        direction_hint = float(
-            np.nan_to_num(direction_hint, nan=0.0, posinf=0.0, neginf=0.0)
-        )
-        if abs(news_bias) > 1e-8:
-            direction_hint = float(
-                np.clip(direction_hint + (news_bias * 0.65), -1.0, 1.0)
-            )
-        hint_confidence = float(
-            np.clip(
-                np.nan_to_num(hint_confidence, nan=0.5, posinf=1.0, neginf=0.0),
-                0.0,
-                1.0,
-            )
-        )
-        hint_entropy = float(
-            np.clip(
-                np.nan_to_num(hint_entropy, nan=0.5, posinf=1.0, neginf=0.0),
-                0.0,
-                1.0,
-            )
-        )
-
-        quality_scale = float(
-            np.clip(
-                (0.35 + (0.65 * hint_confidence)) * (1.0 - (0.55 * hint_entropy)),
-                0.35,
-                1.0,
-            )
-        )
-
-        if self.forecaster is not None:
-            try:
-                import torch
-
-                self.forecaster.eval()
-                with torch.inference_mode():
-                    X_tensor = torch.FloatTensor(X)
-                    returns, _ = self.forecaster(X_tensor)
-                    returns_arr = np.asarray(
-                        returns[0].detach().cpu().numpy(), dtype=float
-                    ).reshape(-1)
-
-                if returns_arr.size <= 0:
-                    raise ValueError("Forecaster produced empty output")
-
-                returns_arr = np.nan_to_num(
-                    returns_arr, nan=0.0, posinf=0.0, neginf=0.0
-                )
-
-                neutral_mode = abs(direction_hint) < 0.10
-                neutral_bias = 0.0
-                if neutral_mode and returns_arr.size > 0:
-                    neutral_bias = float(
-                        np.mean(returns_arr[:min(8, returns_arr.size)])
-                    )
-
-                prices_arr = np.array(
-                    [float(p) for p in (recent_prices or []) if float(p) > 0],
-                    dtype=float,
-                )
-                recent_mu_pct = 0.0
-                if prices_arr.size >= 6:
-                    rets = np.diff(np.log(prices_arr[-min(90, prices_arr.size):]))
-                    if rets.size > 0:
-                        recent_mu_pct = float(
-                            np.clip(np.mean(rets) * 100.0, -0.25, 0.25)
-                        )
-
-                step_cap_pct = float(
-                    np.clip(max(float(atr_pct), 0.0035) * 140.0, 0.18, 3.0)
-                )
-                if neutral_mode:
-                    step_cap_pct = min(
-                        step_cap_pct,
-                        float(max(float(atr_pct) * 70.0, 0.35)),
-                    )
-                step_cap_pct = max(
-                    step_cap_pct * quality_scale,
-                    0.12 if neutral_mode else 0.20,
-                )
-                news_drift_pct = float(
-                    news_bias
-                    * step_cap_pct
-                    * (0.14 if neutral_mode else 0.28)
-                )
-
-                # Deterministic symbol-specific residual to avoid template-like tails.
-                seed = self._forecast_seed(
-                    current_price=current_price,
-                    sequence_signature=sequence_signature,
-                    direction_hint=direction_hint,
-                    horizon=horizon,
-                    seed_context=seed_context,
-                    recent_prices=recent_prices,
-                )
-                rng = np.random.RandomState(seed)
-
-                tail_window = returns_arr[-min(10, returns_arr.size):]
-                tail_mu = float(np.mean(tail_window)) if tail_window.size > 0 else 0.0
-                tail_sigma = float(np.std(tail_window)) if tail_window.size > 0 else 0.0
-                tail_sigma_floor = step_cap_pct * (0.05 if neutral_mode else 0.10)
-                tail_sigma = float(
-                    np.clip(
-                        tail_sigma,
-                        max(0.01, tail_sigma_floor),
-                        max(0.06, step_cap_pct * 0.45),
-                    )
-                )
-
-                prev_eps = 0.0
-                prev_ret = 0.0
-                prev_model_ret = 0.0
-
-                prices = [current_price]
-                for i in range(horizon):
-                    if i < returns_arr.size:
-                        raw_ret = float(returns_arr[i])
-                    else:
-                        extra_i = i - returns_arr.size + 1
-                        decay = float(
-                            np.exp(
-                                -extra_i / max(4.0, float(horizon) * 0.22)
-                            )
-                        )
-                        tail_target = (
-                            (tail_mu * (0.55 + (0.45 * decay)))
-                            + (recent_mu_pct * (0.45 * (1.0 - decay)))
-                        )
-                        tail_noise = float(
-                            rng.normal(
-                                0.0,
-                                tail_sigma * (0.35 + (0.65 * decay)),
-                            )
-                        )
-                        raw_ret = (
-                            (0.74 * prev_model_ret)
-                            + (0.26 * tail_target)
-                            + tail_noise
-                        )
-                    prev_model_ret = raw_ret
-                    r_val = raw_ret
-
-                    if neutral_mode:
-                        r_val = ((r_val - neutral_bias) * 0.45) + (recent_mu_pct * 0.35)
-                        mean_pull_pct = (-(prices[-1] / current_price - 1.0)) * 22.0
-                        r_val += mean_pull_pct
-                    else:
-                        r_val = (r_val * 0.84) + (recent_mu_pct * 0.16)
-
-                    if abs(news_drift_pct) > 1e-9:
-                        news_decay = max(
-                            0.35,
-                            1.0 - (float(i) / max(3.0, float(horizon) * 1.25)),
-                        )
-                        r_val += float(news_drift_pct * news_decay)
-
-                    noise_scale = 0.55 + (0.45 * quality_scale)
-                    eps_scale = step_cap_pct * (0.06 if neutral_mode else 0.10) * noise_scale
-                    eps = (0.62 * prev_eps) + float(rng.normal(0.0, eps_scale))
-                    prev_eps = eps
-                    r_val += eps
-                    r_val = (0.78 * r_val) + (0.22 * prev_ret)
-                    r_val = float(np.clip(r_val, -step_cap_pct, step_cap_pct))
-                    prev_ret = r_val
-                    next_price = prices[-1] * (1 + r_val / 100)
-                    next_price = max(
-                        next_price, current_price * 0.5
-                    )
-                    next_price = min(
-                        next_price, current_price * 2.0
-                    )
-                    prices.append(float(next_price))
-
-                forecast_prices = prices[1:]
-                if neutral_mode:
-                    neutral_cap = max(float(atr_pct) * 0.55, 0.0045)
-                    lo = current_price * (1.0 - neutral_cap)
-                    hi = current_price * (1.0 + neutral_cap)
-                    forecast_prices = [float(np.clip(p, lo, hi)) for p in forecast_prices]
-                    if len(forecast_prices) >= 2:
-                        for i in range(1, len(forecast_prices)):
-                            forecast_prices[i] = float(
-                                (0.68 * forecast_prices[i]) + (0.32 * forecast_prices[i - 1])
-                            )
-                        forecast_prices = [
-                            float(np.clip(p, lo, hi)) for p in forecast_prices
-                        ]
-
-                return forecast_prices
-
-            except Exception as e:
-                log.debug(f"Forecaster failed: {e}")
-
-        # Fallback: ensemble-guided path shaped by recent symbol behavior.
-        if self.ensemble:
-            try:
-                pred = self.ensemble.predict(X)
-
-                probs = np.asarray(
-                    getattr(pred, "probabilities", [0.33, 0.34, 0.33]),
-                    dtype=float,
-                ).reshape(-1)
-                probs = np.nan_to_num(probs, nan=0.0, posinf=0.0, neginf=0.0)
-                if probs.size < 3:
-                    probs = np.pad(probs, (0, 3 - probs.size), constant_values=0.0)
-                prob_sum = float(np.sum(probs[:3]))
-                if prob_sum <= 0:
-                    probs = np.array([0.33, 0.34, 0.33], dtype=float)
-                else:
-                    probs = probs[:3] / prob_sum
-                direction = (
-                    (float(probs[2]) if len(probs) > 2 else 0.33)
-                    - (float(probs[0]) if len(probs) > 0 else 0.33)
-                )
-                if abs(news_bias) > 1e-8:
-                    direction = float(
-                        np.clip(direction + (news_bias * 0.70), -1.0, 1.0)
-                    )
-                confidence = float(np.clip(getattr(pred, "confidence", 0.5), 0.0, 1.0))
-                entropy = float(np.clip(getattr(pred, "entropy", 0.5), 0.0, 1.0))
-                quality_scale = float(
-                    np.clip(
-                        (0.35 + (0.65 * confidence)) * (1.0 - (0.55 * entropy)),
-                        0.35,
-                        1.0,
-                    )
-                )
-                neutral_mode = abs(direction) < 0.10
-
-                volatility = max(float(atr_pct), 0.005) * quality_scale
-                if neutral_mode:
-                    volatility = min(volatility, 0.012)
-
-                prices_arr = np.array(
-                    [float(p) for p in (recent_prices or []) if float(p) > 0],
-                    dtype=float,
-                )
-                if prices_arr.size >= 4:
-                    rets = np.diff(np.log(prices_arr[-min(80, prices_arr.size):]))
-                    ret_mu = float(np.clip(np.mean(rets), -0.02, 0.02))
-                    ret_sigma = float(
-                        np.clip(
-                            np.std(rets),
-                            0.0006,
-                            max(volatility * 0.8, 0.03),
-                        )
-                    )
-                else:
-                    ret_mu = 0.0
-                    ret_sigma = float(max(volatility * 0.45, 0.001))
-                if neutral_mode:
-                    ret_mu *= 0.35
-                    ret_sigma = max(ret_sigma * 0.55, 0.0004)
-                else:
-                    ret_sigma *= (0.70 + (0.30 * quality_scale))
-
-                prices = []
-                price = current_price
-
-                # Deterministic seed using sequence signature to keep each symbol distinct.
-                seed = self._forecast_seed(
-                    current_price=current_price,
-                    sequence_signature=sequence_signature,
-                    direction_hint=direction,
-                    horizon=horizon,
-                    seed_context=seed_context,
-                    recent_prices=recent_prices,
-                )
-                rng = np.random.RandomState(seed)
-
-                for i in range(horizon):
-                    decay = 1.0 - (i / (horizon * 1.8))
-                    drift_scale = 0.10 if neutral_mode else 0.20
-                    mu_scale = 0.20 if neutral_mode else 0.35
-                    drift = (direction * volatility * drift_scale) + (ret_mu * mu_scale)
-                    if abs(news_bias) > 1e-8:
-                        drift += (
-                            news_bias
-                            * volatility
-                            * (0.10 if neutral_mode else 0.22)
-                            * decay
-                        )
-                    noise = float(
-                        rng.normal(
-                            0.0,
-                            ret_sigma * ((0.35 if neutral_mode else 0.55) + (0.45 * decay)),
-                        )
-                    )
-                    mean_revert = (-(0.18 if neutral_mode else 0.10)) * (
-                        (price / current_price) - 1.0
-                    )
-                    change = drift + noise + mean_revert
-                    if neutral_mode:
-                        max_step = max(volatility * 1.3, 0.007)
-                    else:
-                        max_step = max(volatility * 2.2, 0.02)
-                    change = float(np.clip(change, -max_step, max_step))
-                    price = price * (1 + change)
-
-                    price = max(price, current_price * 0.5)
-                    price = min(price, current_price * 2.0)
-                    if neutral_mode:
-                        neutral_cap = max(volatility, 0.008)
-                        price = float(
-                            np.clip(
-                                price,
-                                current_price * (1.0 - neutral_cap),
-                                current_price * (1.0 + neutral_cap),
-                            )
-                        )
-
-                    prices.append(float(price))
-
-                return prices
-
-            except Exception as e:
-                log.debug(f"Ensemble forecast failed: {e}")
-
-        # Last resort: deterministic micro-trajectory from recent volatility
-        # instead of a flat line when model artifacts are unavailable.
-        prices_arr = np.array(
-            [float(p) for p in (recent_prices or []) if float(p) > 0],
-            dtype=float,
-        )
-        if prices_arr.size >= 4:
-            rets = np.diff(np.log(prices_arr[-min(120, prices_arr.size):]))
-            ret_mu = float(np.clip(np.mean(rets), -0.01, 0.01))
-            ret_sigma = float(
-                np.clip(
-                    np.std(rets),
-                    max(float(atr_pct) * 0.02, 0.0003),
-                    max(float(atr_pct) * 0.18, 0.0060),
-                )
-            )
-        else:
-            ret_mu = 0.0
-            ret_sigma = float(max(float(atr_pct) * 0.05, 0.0006))
-
-        max_step = float(max(float(atr_pct) * 0.22, 0.0012))
-        drift = float(np.clip(ret_mu + (news_bias * 0.0012), -max_step * 0.45, max_step * 0.45))
-        seed = self._forecast_seed(
-            current_price=current_price,
-            sequence_signature=sequence_signature,
-            direction_hint=direction_hint,
-            horizon=horizon,
-            seed_context=seed_context,
-            recent_prices=recent_prices,
-        )
-        rng = np.random.RandomState(seed)
-
-        fallback_prices: list[float] = []
-        price = float(current_price)
-        prev_eps = 0.0
-        for i in range(horizon):
-            decay = max(0.25, 1.0 - (float(i) / float(max(horizon, 1))) * 0.65)
-            eps = (0.55 * prev_eps) + float(
-                rng.normal(0.0, ret_sigma * (0.45 + (0.55 * decay)))
-            )
-            prev_eps = eps
-            mean_revert = -0.08 * ((price / max(float(current_price), 1e-8)) - 1.0)
-            change = float(np.clip(drift + eps + mean_revert, -max_step, max_step))
-            if abs(change) < 1e-7:
-                change = float(((-1.0) ** i) * max_step * 0.03)
-            price = float(np.clip(price * (1.0 + change), current_price * 0.5, current_price * 2.0))
-            fallback_prices.append(price)
-        return fallback_prices
-
-    # =========================================================================
-    # =========================================================================
-
-    def _determine_signal(
-        self, ensemble_pred, pred: Prediction
-    ) -> Signal:
-        """Determine trading signal from prediction."""
-        confidence = float(ensemble_pred.confidence)
-        predicted_class = int(ensemble_pred.predicted_class)
-        edge = float(np.clip(pred.prob_up - pred.prob_down, -1.0, 1.0))
-        is_sideways = str(pred.trend).upper() == "SIDEWAYS"
-        edge_floor = 0.06 if is_sideways else 0.04
-        strong_edge_floor = max(0.12, edge_floor * 2.0)
-
-        if predicted_class == 2:  # UP
-            if edge < edge_floor:
-                return Signal.HOLD
-            if confidence >= CONFIG.STRONG_BUY_THRESHOLD:
-                if edge >= strong_edge_floor:
-                    return Signal.STRONG_BUY
-                return Signal.BUY
-            elif confidence >= CONFIG.BUY_THRESHOLD:
-                return Signal.BUY
-        elif predicted_class == 0:  # DOWN
-            if edge > -edge_floor:
-                return Signal.HOLD
-            if confidence >= CONFIG.STRONG_SELL_THRESHOLD:
-                if edge <= -strong_edge_floor:
-                    return Signal.STRONG_SELL
-                return Signal.SELL
-            elif confidence >= CONFIG.SELL_THRESHOLD:
-                return Signal.SELL
-
-        return Signal.HOLD
-
-    def _calculate_signal_strength(
-        self, ensemble_pred, pred: Prediction
-    ) -> float:
-        """Calculate signal strength 0-1."""
-        confidence = float(ensemble_pred.confidence)
-        agreement = float(getattr(ensemble_pred, "agreement", 1.0))
-        entropy_inv = 1.0 - float(
-            getattr(ensemble_pred, "entropy", 0.0)
-        )
-
-        return float(
-            np.clip(
-                (confidence + agreement + entropy_inv) / 3.0,
-                0.0, 1.0
-            )
-        )
-
-    # =========================================================================
-    # =========================================================================
-
-    def _calculate_levels(self, pred: Prediction) -> TradingLevels:
-        """Calculate trading levels using actual ATR from features."""
-        price = pred.current_price
-
-        if price <= 0:
-            return TradingLevels()
-
-        # Use actual ATR percentage from features, with floor
-        atr_pct = max(pred.atr_pct_value, 0.005)
-
-        levels = TradingLevels(entry=price)
-
-        if pred.signal in [Signal.STRONG_BUY, Signal.BUY]:
-            levels.stop_loss = price * (1 - atr_pct * 1.5)
-            levels.target_1 = price * (1 + atr_pct * 1.5)
-            levels.target_2 = price * (1 + atr_pct * 3.0)
-            levels.target_3 = price * (1 + atr_pct * 5.0)
-        elif pred.signal in [Signal.STRONG_SELL, Signal.SELL]:
-            levels.stop_loss = price * (1 + atr_pct * 1.5)
-            levels.target_1 = price * (1 - atr_pct * 1.5)
-            levels.target_2 = price * (1 - atr_pct * 3.0)
-            levels.target_3 = price * (1 - atr_pct * 5.0)
-        else:
-            levels.stop_loss = price * (1 - atr_pct)
-            levels.target_1 = price * (1 + atr_pct)
-            levels.target_2 = price * (1 + atr_pct * 2.0)
-            levels.target_3 = price * (1 + atr_pct * 3.5)
-
-        if price > 0:
-            levels.stop_loss_pct = (levels.stop_loss / price - 1) * 100
-            levels.target_1_pct = (levels.target_1 / price - 1) * 100
-            levels.target_2_pct = (levels.target_2 / price - 1) * 100
-            levels.target_3_pct = (levels.target_3 / price - 1) * 100
-
-        return levels
-
-    # =========================================================================
-    # =========================================================================
-
-    def _calculate_position(self, pred: Prediction) -> PositionSize:
-        """Calculate position size using risk, quality and expected-edge gating."""
-        price = pred.current_price
-
-        if price <= 0:
-            return PositionSize()
-
-        stop_distance, reward_distance = self._resolve_trade_distances(pred)
-        if stop_distance <= 0 or reward_distance <= 0:
-            return PositionSize()
-
-        risk_pct = float(CONFIG.RISK_PER_TRADE) / 100.0
-        quality_scale = self._quality_scale(pred)
-        edge = self._expected_edge(pred, price, stop_distance, reward_distance)
-        rr_ratio = reward_distance / max(stop_distance, 1e-9)
-        min_edge = max(0.0, float(CONFIG.risk.min_expected_edge_pct) / 100.0)
-        min_rr = max(0.1, float(CONFIG.risk.min_risk_reward_ratio))
-
-        if rr_ratio < min_rr or edge <= 0.0:
-            return PositionSize(
-                expected_edge_pct=edge * 100.0,
-                risk_reward_ratio=rr_ratio,
-            )
-
-        edge_scale = 1.0
-        if min_edge > 0:
-            edge_scale = float(np.clip(edge / min_edge, 0.0, CONFIG.risk.max_position_scale))
-
-        risk_amount = self.capital * risk_pct * quality_scale * edge_scale
-
-        lot_size = max(1, CONFIG.LOT_SIZE)
-
-        shares = int(risk_amount / stop_distance)
-        shares = (shares // lot_size) * lot_size
-
-        if shares < lot_size:
-            shares = lot_size
-
-        max_value = self.capital * (CONFIG.MAX_POSITION_PCT / 100)
-        if shares * price > max_value:
-            shares = int(max_value / price)
-            shares = (shares // lot_size) * lot_size
-
-        # Final guard: ensure shares > 0 and affordable
-        if shares <= 0:
-            shares = lot_size
-
-        if shares * price > self.capital:
-            # Can't afford even one lot
-            return PositionSize()
-
-        return PositionSize(
-            shares=int(shares),
-            value=float(shares * price),
-            risk_amount=float(shares * stop_distance),
-            risk_pct=float(
-                (shares * stop_distance / self.capital) * 100
-            ),
-            expected_edge_pct=float(edge * 100.0),
-            risk_reward_ratio=float(rr_ratio),
-        )
-
-    def _resolve_trade_distances(self, pred: Prediction) -> tuple[float, float]:
-        """Resolve stop and reward distances from level plan."""
-        price = float(pred.current_price)
-        if price <= 0:
-            return 0.0, 0.0
-
-        stop_distance = abs(price - float(pred.levels.stop_loss))
-        if stop_distance <= 0:
-            stop_distance = price * 0.02
-
-        d1 = abs(float(pred.levels.target_1) - price)
-        d2 = abs(float(pred.levels.target_2) - price)
-        # Weighted reward estimate: partial at target_1 plus runner to target_2.
-        reward_distance = (0.7 * d1) + (0.3 * d2)
-        if reward_distance <= 0:
-            reward_distance = d1 if d1 > 0 else stop_distance
-
-        return stop_distance, reward_distance
-
-    def _quality_scale(self, pred: Prediction) -> float:
-        """Scale risk by signal quality (confidence and strength)."""
-        conf = float(np.clip(pred.confidence, 0.0, 1.0))
-        strength = float(np.clip(pred.signal_strength, 0.0, 1.0))
-        agreement = float(np.clip(pred.model_agreement, 0.0, 1.0))
-        quality = (0.5 * conf) + (0.35 * strength) + (0.15 * agreement)
-        return float(np.clip(quality, 0.25, CONFIG.risk.max_position_scale))
-
-    def _expected_edge(
-        self,
-        pred: Prediction,
-        price: float,
-        stop_distance: float,
-        reward_distance: float,
-    ) -> float:
-        """
-        Estimate expected edge after costs.
-
-        Returns decimal edge (e.g. 0.003 means +0.3% expected value).
-        """
-        if price <= 0:
-            return 0.0
-
-        if pred.signal in (Signal.BUY, Signal.STRONG_BUY):
-            p_win = float(np.clip(pred.prob_up, 0.0, 1.0))
-            p_loss = float(np.clip(pred.prob_down, 0.0, 1.0))
-            side = "buy"
-        elif pred.signal in (Signal.SELL, Signal.STRONG_SELL):
-            p_win = float(np.clip(pred.prob_down, 0.0, 1.0))
-            p_loss = float(np.clip(pred.prob_up, 0.0, 1.0))
-            side = "sell"
-        else:
-            return 0.0
-
-        reward_pct = reward_distance / price
-        risk_pct = stop_distance / price
-        gross_edge = (p_win * reward_pct) - (p_loss * risk_pct)
-        cost_pct = self._round_trip_cost_pct(side)
-        return float(gross_edge - cost_pct)
-
-    def _round_trip_cost_pct(self, side: str) -> float:
-        """Estimate round-trip friction cost as decimal percentage."""
-        commission = max(float(CONFIG.COMMISSION), 0.0)
-        slippage = max(float(CONFIG.SLIPPAGE), 0.0)
-        stamp_tax = max(float(CONFIG.STAMP_TAX), 0.0)
-
-        if side == "sell":
-            # Short-cover path includes one sell leg with stamp tax.
-            return (2.0 * commission) + (2.0 * slippage) + stamp_tax
-        # Long round trip: buy then sell, stamp tax on sell leg.
-        return (2.0 * commission) + (2.0 * slippage) + stamp_tax
-
-    # =========================================================================
-    # =========================================================================
-
-    def _extract_technicals(self, df: pd.DataFrame, pred: Prediction):
-        """
-        Extract technical indicators from dataframe.
-
-        IMPORTANT: FeatureEngine normalizes indicators:
-        - rsi_14 = raw_rsi/100 - 0.5  (range: -0.5 to 0.5)
-        - macd_hist = hist/close*100   (scale-invariant percentage)
-        - ma_ratio_5_20 = (ma5/ma20 - 1) * 100
-        """
-        try:
-            # RSI: reverse FeatureEngine normalization
-            if "rsi_14" in df.columns:
-                normalized_rsi = float(df["rsi_14"].iloc[-1])
-                # FeatureEngine does: rsi_14 = raw_rsi/100 - 0.5
-                # So: raw_rsi = (normalized_rsi + 0.5) * 100
-                raw_rsi = (normalized_rsi + 0.5) * 100.0
-                pred.rsi = float(np.clip(raw_rsi, 0.0, 100.0))
-
-            if "macd_hist" in df.columns:
-                macd_hist = float(df["macd_hist"].iloc[-1])
-                if macd_hist > 0.001:
-                    pred.macd_signal = "BULLISH"
-                elif macd_hist < -0.001:
-                    pred.macd_signal = "BEARISH"
-                else:
-                    pred.macd_signal = "NEUTRAL"
-
-            if "ma_ratio_5_20" in df.columns:
-                ma_ratio = float(df["ma_ratio_5_20"].iloc[-1])
-                if ma_ratio > 1.0:
-                    pred.trend = "UPTREND"
-                elif ma_ratio < -1.0:
-                    pred.trend = "DOWNTREND"
-                else:
-                    pred.trend = "SIDEWAYS"
-
-            pred.atr_pct_value = self._get_atr_pct(df)
-
-        except Exception as e:
-            log.debug(f"Technical extraction error: {e}")
-
-    def _get_atr_pct(self, df: pd.DataFrame) -> float:
-        """Get ATR as a decimal fraction (e.g., 0.02 for 2%)."""
-        try:
-            if "atr_pct" in df.columns:
-                atr = float(df["atr_pct"].iloc[-1])
-                # atr_pct from FeatureEngine is: atr_14 / close * 100
-                return max(atr / 100.0, 0.005)
-        except Exception as e:
-            log.debug("ATR extraction failed; using default: %s", e)
-        return 0.02  # default 2%
-
-    # =========================================================================
-    # =========================================================================
-
-    def _generate_reasons(self, pred: Prediction):
-        """Generate analysis reasons and warnings."""
-        existing_reasons = list(pred.reasons or [])
-        existing_warnings = list(pred.warnings or [])
-        reasons = []
-        warnings = []
-
-        if pred.confidence >= 0.7:
-            reasons.append(
-                f"High AI confidence: {pred.confidence:.0%}"
-            )
-        elif pred.confidence >= 0.6:
-            reasons.append(
-                f"Moderate AI confidence: {pred.confidence:.0%}"
-            )
-        else:
-            warnings.append(
-                f"Low AI confidence: {pred.confidence:.0%}"
-            )
-
-        if pred.model_agreement < 0.6:
-            warnings.append(
-                f"Low model agreement: {pred.model_agreement:.0%}"
-            )
-
-        if pred.prob_up > 0.5:
-            reasons.append(
-                f"AI predicts UP with {pred.prob_up:.0%} probability"
-            )
-        elif pred.prob_down > 0.5:
-            reasons.append(
-                f"AI predicts DOWN with {pred.prob_down:.0%} probability"
-            )
-
-        if pred.rsi > 70:
-            warnings.append(f"RSI overbought: {pred.rsi:.0f}")
-        elif pred.rsi < 30:
-            warnings.append(f"RSI oversold: {pred.rsi:.0f}")
-        else:
-            reasons.append(f"RSI neutral: {pred.rsi:.0f}")
-
-        # Signal-trend alignment
-        if (
-            pred.signal in [Signal.STRONG_BUY, Signal.BUY]
-            and pred.trend == "UPTREND"
-        ):
-            reasons.append("Signal aligned with uptrend")
-        elif (
-            pred.signal in [Signal.STRONG_SELL, Signal.SELL]
-            and pred.trend == "DOWNTREND"
-        ):
-            reasons.append("Signal aligned with downtrend")
-        elif (
-            pred.trend != "SIDEWAYS"
-            and pred.signal != Signal.HOLD
-        ):
-            warnings.append(f"Signal against trend ({pred.trend})")
-
-        if pred.macd_signal != "NEUTRAL":
-            reasons.append(f"MACD: {pred.macd_signal}")
-
-        if pred.entropy > 0.8:
-            warnings.append(
-                f"High prediction uncertainty "
-                f"(entropy: {pred.entropy:.2f})"
-            )
-
-        uncertainty = float(np.clip(getattr(pred, "uncertainty_score", 0.5), 0.0, 1.0))
-        tail_risk = float(np.clip(getattr(pred, "tail_risk_score", 0.5), 0.0, 1.0))
-        if uncertainty >= 0.70:
-            warnings.append(f"Wide uncertainty regime (score: {uncertainty:.2f})")
-        else:
-            reasons.append(f"Uncertainty score: {uncertainty:.2f}")
-
-        if tail_risk >= 0.60:
-            warnings.append(f"Elevated tail-event risk ({tail_risk:.2f})")
-        else:
-            reasons.append(f"Tail-event risk: {tail_risk:.2f}")
-
-        low_band = list(getattr(pred, "predicted_prices_low", []) or [])
-        high_band = list(getattr(pred, "predicted_prices_high", []) or [])
-        if low_band and high_band and len(low_band) == len(high_band):
-            try:
-                lo_last = float(low_band[-1])
-                hi_last = float(high_band[-1])
-                ref = max(float(pred.current_price), 1e-8)
-                spread_pct = float((hi_last - lo_last) / ref * 100.0)
-                if spread_pct >= 6.0:
-                    warnings.append(
-                        f"Forecast interval is wide ({spread_pct:.1f}% at horizon)"
-                    )
-                else:
-                    reasons.append(
-                        f"Forecast interval width: {spread_pct:.1f}% at horizon"
-                    )
-            except Exception as e:
-                log.debug("Failed computing forecast interval reason for %s: %s", pred.stock_code, e)
-
-        pred.reasons = existing_reasons + [
-            msg for msg in reasons if msg not in existing_reasons
-        ]
-        pred.warnings = existing_warnings + [
-            msg for msg in warnings if msg not in existing_warnings
-        ]
-
-    # =========================================================================
-    # =========================================================================
-
-    def _get_stock_name(self, code: str, df: pd.DataFrame) -> str:
-        """Get stock name from fetcher."""
-        del df
-        try:
-            quote = self.fetcher.get_realtime(code)
-            if quote and quote.name:
-                return str(quote.name)
-        except Exception as e:
-            log.debug("Stock name lookup failed for %s: %s", code, e)
-        return ""
-
-    def _clean_code(self, code: str) -> str:
-        """
-        Clean and normalize stock code.
-        Delegates to DataFetcher when available.
-        """
-        if self.fetcher is not None:
-            try:
-                return self.fetcher.clean_code(code)
-            except Exception as e:
-                log.debug("Fetcher clean_code failed for %r: %s", code, e)
-
-        if not code:
-            return ""
-        code = str(code).strip()
-        code = "".join(c for c in code if c.isdigit())
-        return code.zfill(6) if code else ""
+_PREDICTOR_RECOVERABLE_EXCEPTIONS = JSON_RECOVERABLE_EXCEPTIONS
+
+from models import predictor_forecast_ops as _predictor_forecast_ops
+from models import predictor_runtime_ops as _predictor_runtime_ops
+
+Predictor.get_realtime_forecast_curve = _predictor_forecast_ops.get_realtime_forecast_curve
+Predictor._stabilize_forecast_curve = staticmethod(_predictor_forecast_ops._stabilize_forecast_curve)
+Predictor.get_top_picks = _predictor_forecast_ops.get_top_picks
+Predictor._apply_ensemble_prediction = _predictor_forecast_ops._apply_ensemble_prediction
+Predictor._apply_ensemble_result = _predictor_forecast_ops._apply_ensemble_result
+Predictor._append_warning_once = staticmethod(_predictor_forecast_ops._append_warning_once)
+Predictor._refresh_prediction_uncertainty = _predictor_forecast_ops._refresh_prediction_uncertainty
+Predictor._apply_tail_risk_guard = _predictor_forecast_ops._apply_tail_risk_guard
+Predictor._build_prediction_bands = _predictor_forecast_ops._build_prediction_bands
+Predictor._apply_high_precision_gate = _predictor_forecast_ops._apply_high_precision_gate
+Predictor._apply_runtime_signal_quality_gate = _predictor_forecast_ops._apply_runtime_signal_quality_gate
+Predictor._get_cache_ttl = _predictor_forecast_ops._get_cache_ttl
+Predictor._get_cached_prediction = _predictor_forecast_ops._get_cached_prediction
+Predictor._set_cached_prediction = _predictor_forecast_ops._set_cached_prediction
+Predictor._news_cache_ttl = _predictor_forecast_ops._news_cache_ttl
+Predictor._ensure_news_cache_state = _predictor_forecast_ops._ensure_news_cache_state
+Predictor._get_news_sentiment = _predictor_forecast_ops._get_news_sentiment
+Predictor._compute_news_bias = _predictor_forecast_ops._compute_news_bias
+Predictor._apply_news_influence = _predictor_forecast_ops._apply_news_influence
+Predictor._normalize_interval_token = _predictor_runtime_ops._normalize_interval_token
+Predictor._is_intraday_interval = _predictor_runtime_ops._is_intraday_interval
+Predictor._bar_safety_caps = _predictor_runtime_ops._bar_safety_caps
+Predictor._sanitize_ohlc_row = _predictor_runtime_ops._sanitize_ohlc_row
+Predictor._intraday_session_mask = _predictor_runtime_ops._intraday_session_mask
+Predictor._sanitize_history_df = _predictor_runtime_ops._sanitize_history_df
+Predictor.invalidate_cache = _predictor_runtime_ops.invalidate_cache
+Predictor._fetch_data = _predictor_runtime_ops._fetch_data
+Predictor._default_lookback_bars = _predictor_runtime_ops._default_lookback_bars
+Predictor._sequence_signature = _predictor_runtime_ops._sequence_signature
+Predictor._forecast_seed = _predictor_runtime_ops._forecast_seed
+Predictor._generate_forecast = _predictor_runtime_ops._generate_forecast
+Predictor._determine_signal = _predictor_runtime_ops._determine_signal
+Predictor._calculate_signal_strength = _predictor_runtime_ops._calculate_signal_strength
+Predictor._calculate_levels = _predictor_runtime_ops._calculate_levels
+Predictor._calculate_position = _predictor_runtime_ops._calculate_position
+Predictor._resolve_trade_distances = _predictor_runtime_ops._resolve_trade_distances
+Predictor._quality_scale = _predictor_runtime_ops._quality_scale
+Predictor._expected_edge = _predictor_runtime_ops._expected_edge
+Predictor._round_trip_cost_pct = _predictor_runtime_ops._round_trip_cost_pct
+Predictor._extract_technicals = _predictor_runtime_ops._extract_technicals
+Predictor._get_atr_pct = _predictor_runtime_ops._get_atr_pct
+Predictor._generate_reasons = _predictor_runtime_ops._generate_reasons
+Predictor._get_stock_name = _predictor_runtime_ops._get_stock_name
+Predictor._clean_code = _predictor_runtime_ops._clean_code
