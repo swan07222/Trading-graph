@@ -7,7 +7,7 @@ import threading
 import time
 from concurrent.futures import Future, ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FuturesTimeout
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 from importlib import import_module
 from statistics import median
 from typing import Any
@@ -19,7 +19,6 @@ from PyQt6.QtWidgets import (
     QApplication,
     QCheckBox,
     QComboBox,
-    QDoubleSpinBox,
     QFrame,
     QGridLayout,
     QGroupBox,
@@ -34,7 +33,6 @@ from PyQt6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSizePolicy,
-    QSpinBox,
     QSplitter,
     QStatusBar,
     QTableWidget,
@@ -51,6 +49,49 @@ from core.types import (
     AutoTradeMode,
     OrderSide,
 )
+from ui import app_bar_ops as _app_bar_ops
+from ui.app_auto_trade_ops import (
+    _apply_auto_trade_mode as _apply_auto_trade_mode_impl,
+)
+from ui.app_auto_trade_ops import (
+    _approve_all_pending as _approve_all_pending_impl,
+)
+from ui.app_auto_trade_ops import (
+    _init_auto_trader as _init_auto_trader_impl,
+)
+from ui.app_auto_trade_ops import (
+    _on_auto_trade_action as _on_auto_trade_action_impl,
+)
+from ui.app_auto_trade_ops import (
+    _on_auto_trade_action_safe as _on_auto_trade_action_safe_impl,
+)
+from ui.app_auto_trade_ops import (
+    _on_pending_approval as _on_pending_approval_impl,
+)
+from ui.app_auto_trade_ops import (
+    _on_pending_approval_safe as _on_pending_approval_safe_impl,
+)
+from ui.app_auto_trade_ops import (
+    _on_trade_mode_changed as _on_trade_mode_changed_impl,
+)
+from ui.app_auto_trade_ops import (
+    _refresh_auto_trade_ui as _refresh_auto_trade_ui_impl,
+)
+from ui.app_auto_trade_ops import (
+    _refresh_pending_table as _refresh_pending_table_impl,
+)
+from ui.app_auto_trade_ops import (
+    _reject_all_pending as _reject_all_pending_impl,
+)
+from ui.app_auto_trade_ops import (
+    _show_auto_trade_settings as _show_auto_trade_settings_impl,
+)
+from ui.app_auto_trade_ops import (
+    _toggle_auto_pause as _toggle_auto_pause_impl,
+)
+from ui.app_auto_trade_ops import (
+    _update_auto_trade_status_label as _update_auto_trade_status_label_impl,
+)
 from ui.app_chart_pipeline import (
     _load_chart_history_bars as _load_chart_history_bars_impl,
 )
@@ -61,6 +102,48 @@ from ui.app_chart_pipeline import (
     _prepare_chart_bars_for_interval as _prepare_chart_bars_for_interval_impl,
 )
 from ui.app_common import MainAppCommonMixin
+from ui.app_lifecycle_ops import (
+    _close_event as _close_event_impl,
+)
+from ui.app_lifecycle_ops import (
+    _load_state as _load_state_impl,
+)
+from ui.app_lifecycle_ops import (
+    _log as _log_impl,
+)
+from ui.app_lifecycle_ops import (
+    _save_state as _save_state_impl,
+)
+from ui.app_lifecycle_ops import (
+    _show_about as _show_about_impl,
+)
+from ui.app_lifecycle_ops import (
+    _show_auto_learn as _show_auto_learn_impl,
+)
+from ui.app_lifecycle_ops import (
+    _show_backtest as _show_backtest_impl,
+)
+from ui.app_lifecycle_ops import (
+    _show_strategy_marketplace as _show_strategy_marketplace_impl,
+)
+from ui.app_lifecycle_ops import (
+    _start_training as _start_training_impl,
+)
+from ui.app_monitoring_ops import (
+    _on_signal_detected as _on_signal_detected_impl,
+)
+from ui.app_monitoring_ops import (
+    _refresh_live_chart_forecast as _refresh_live_chart_forecast_impl,
+)
+from ui.app_monitoring_ops import (
+    _start_monitoring as _start_monitoring_impl,
+)
+from ui.app_monitoring_ops import (
+    _stop_monitoring as _stop_monitoring_impl,
+)
+from ui.app_monitoring_ops import (
+    _toggle_monitoring as _toggle_monitoring_impl,
+)
 from ui.app_panels import (
     _apply_professional_style as _apply_professional_style_impl,
 )
@@ -126,10 +209,8 @@ from utils.logger import get_logger
 
 log = get_logger(__name__)
 
-
-def _lazy_get(module: str, name: str):
+def _lazy_get(module: str, name: str) -> Any:
     return getattr(import_module(module), name)
-
 
 class MainApp(MainAppCommonMixin, QMainWindow):
     """
@@ -150,7 +231,7 @@ class MainApp(MainAppCommonMixin, QMainWindow):
     bar_received = pyqtSignal(str, dict)
     quote_received = pyqtSignal(str, float)
 
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__()
 
         self.setWindowTitle("AI Stock Trading System v2.0")
@@ -191,7 +272,7 @@ class MainApp(MainAppCommonMixin, QMainWindow):
             1, int(getattr(CONFIG, "LOT_SIZE", 100) or 100)
         )
 
-        self._bars_by_symbol: dict[str, list[dict]] = {}
+        self._bars_by_symbol: dict[str, list[dict[str, Any]]] = {}
         self._trained_stock_codes_cache: list[str] = []
         self._trained_stock_last_train: dict[str, str] = {}
         self._last_bar_feed_ts: dict[str, float] = {}
@@ -1234,7 +1315,7 @@ class MainApp(MainAppCommonMixin, QMainWindow):
             return arr
         return arr
 
-    def _setup_menubar(self):
+    def _setup_menubar(self) -> None:
         """Setup professional menu bar"""
         menubar = self.menuBar()
 
@@ -1312,7 +1393,7 @@ class MainApp(MainAppCommonMixin, QMainWindow):
         about_action.triggered.connect(self._show_about)
         help_menu.addAction(about_action)
 
-    def _setup_toolbar(self):
+    def _setup_toolbar(self) -> None:
         """Setup professional toolbar with auto-trade controls"""
         toolbar = QToolBar("Main Toolbar")
         toolbar.setIconSize(QSize(24, 24))
@@ -1385,7 +1466,7 @@ class MainApp(MainAppCommonMixin, QMainWindow):
         # =========================================================================
     # =========================================================================
 
-    def _ensure_feed_subscription(self, code: str):
+    def _ensure_feed_subscription(self, code: str) -> None:
         """Subscribe symbol to realtime feed using 1m source bars."""
         if not CONFIG.is_market_open():
             return
@@ -1408,7 +1489,7 @@ class MainApp(MainAppCommonMixin, QMainWindow):
         except Exception as e:
             log.debug(f"Feed subscription failed: {e}")
 
-    def _on_bar_from_feed(self, symbol: str, bar: dict):
+    def _on_bar_from_feed(self, symbol: str, bar: dict[str, Any]) -> None:
         """
         Called from feed thread (NOT UI thread).
         Emit signal to update UI safely.
@@ -1427,7 +1508,7 @@ class MainApp(MainAppCommonMixin, QMainWindow):
         except Exception:
             log.exception("Failed to forward feed bar to UI (symbol=%s)", symbol)
 
-    def _on_tick_from_feed(self, quote):
+    def _on_tick_from_feed(self, quote: Any) -> None:
         """Forward feed quote updates to UI thread safely."""
         if not CONFIG.is_market_open():
             return
@@ -1450,7 +1531,7 @@ class MainApp(MainAppCommonMixin, QMainWindow):
         except Exception:
             log.exception("Failed to forward feed quote to UI")
 
-    def _on_bar_ui(self, symbol: str, bar: dict):
+    def _on_bar_ui(self, symbol: str, bar: dict[str, Any]) -> None:
         """
         Handle bar data on UI thread.
 
@@ -1805,7 +1886,7 @@ class MainApp(MainAppCommonMixin, QMainWindow):
         except Exception as exc:
             log.debug("Suppressed exception in ui/app.py", exc_info=exc)
 
-    def _setup_ui(self):
+    def _setup_ui(self) -> None:
         """Setup main UI with professional layout"""
         central = QWidget()
         self.setCentralWidget(central)
@@ -1848,7 +1929,9 @@ class MainApp(MainAppCommonMixin, QMainWindow):
     def _create_left_panel(self) -> QWidget:
         return _create_left_panel_impl(self)
 
-    def _make_table(self, headers: list[str], max_height: int | None = None):
+    def _make_table(
+        self, headers: list[str], max_height: int | None = None
+    ) -> QTableWidget:
         table = QTableWidget()
         table.setColumnCount(len(headers))
         table.setHorizontalHeaderLabels(headers)
@@ -1863,11 +1946,22 @@ class MainApp(MainAppCommonMixin, QMainWindow):
             table.setMaximumHeight(int(max_height))
         return table
 
-    def _add_labeled(self, layout: QGridLayout, row: int, text: str, widget: QWidget):
+    def _add_labeled(
+        self,
+        layout: QGridLayout,
+        row: int,
+        text: str,
+        widget: QWidget,
+    ) -> None:
         layout.addWidget(QLabel(text), row, 0)
         layout.addWidget(widget, row, 1)
 
-    def _build_stat_frame(self, labels, value_style: str, padding: int = 15):
+    def _build_stat_frame(
+        self,
+        labels: list[tuple[str, str, int, int]],
+        value_style: str,
+        padding: int = 15,
+    ) -> tuple[QFrame, dict[str, QLabel]]:
         frame = QFrame()
         frame.setStyleSheet(
             "QFrame {"
@@ -1988,28 +2082,28 @@ class MainApp(MainAppCommonMixin, QMainWindow):
 
         return panel
 
-    def _zoom_chart_in(self):
+    def _zoom_chart_in(self) -> None:
         if hasattr(self.chart, "zoom_in"):
             try:
                 self.chart.zoom_in()
             except Exception as exc:
                 log.debug("Suppressed exception in ui/app.py", exc_info=exc)
 
-    def _zoom_chart_out(self):
+    def _zoom_chart_out(self) -> None:
         if hasattr(self.chart, "zoom_out"):
             try:
                 self.chart.zoom_out()
             except Exception as exc:
                 log.debug("Suppressed exception in ui/app.py", exc_info=exc)
 
-    def _zoom_chart_reset(self):
+    def _zoom_chart_reset(self) -> None:
         if hasattr(self.chart, "reset_view"):
             try:
                 self.chart.reset_view()
             except Exception as exc:
                 log.debug("Suppressed exception in ui/app.py", exc_info=exc)
 
-    def _set_chart_overlay(self, key: str, enabled: bool):
+    def _set_chart_overlay(self, key: str, enabled: bool) -> None:
         if hasattr(self.chart, "set_overlay_enabled"):
             try:
                 self.chart.set_overlay_enabled(str(key), bool(enabled))
@@ -2023,7 +2117,7 @@ class MainApp(MainAppCommonMixin, QMainWindow):
         # STATUS BAR & TIMERS
     # =========================================================================
 
-    def _setup_statusbar(self):
+    def _setup_statusbar(self) -> None:
         """Setup status bar"""
         self._status_bar = QStatusBar()
         self.setStatusBar(self._status_bar)
@@ -2047,7 +2141,7 @@ class MainApp(MainAppCommonMixin, QMainWindow):
         self.time_label = QLabel("")
         self._status_bar.addWidget(self.time_label)
 
-    def _setup_timers(self):
+    def _setup_timers(self) -> None:
         """Setup update timers"""
         self.clock_timer = QTimer()
         self.clock_timer.timeout.connect(self._update_clock)
@@ -2080,13 +2174,13 @@ class MainApp(MainAppCommonMixin, QMainWindow):
         # =========================================================================
     # =========================================================================
 
-    def _apply_professional_style(self):
+    def _apply_professional_style(self) -> None:
         _apply_professional_style_impl(self)
 
     # =========================================================================
     # =========================================================================
 
-    def _init_components(self):
+    def _init_components(self) -> None:
         """Initialize trading components"""
         try:
             Predictor = _lazy_get("models.predictor", "Predictor")
@@ -2349,7 +2443,7 @@ class MainApp(MainAppCommonMixin, QMainWindow):
             log.debug("Session cache writer shutdown failed: %s", exc)
         self._session_cache_io_pool = None
 
-    def _filter_trained_stocks_ui(self, text: str):
+    def _filter_trained_stocks_ui(self, text: str) -> None:
         """Filter right-panel trained stock list by search query."""
         self._refresh_trained_stock_list(
             list(getattr(self, "_trained_stock_codes_cache", [])),
@@ -2392,7 +2486,7 @@ class MainApp(MainAppCommonMixin, QMainWindow):
         except Exception as exc:
             log.debug("Suppressed exception in ui/app.py", exc_info=exc)
 
-    def _on_trained_stock_activated(self, item):
+    def _on_trained_stock_activated(self, item: QListWidgetItem) -> None:
         """Load selected trained stock from right-panel list."""
         if item is None:
             return
@@ -2484,7 +2578,7 @@ class MainApp(MainAppCommonMixin, QMainWindow):
         if tabs is not None and idx >= 0:
             tabs.setTabText(idx, f"Trained Stocks ({len(all_codes)})")
 
-    def _update_trained_stocks_ui(self, codes: list[str] | None = None):
+    def _update_trained_stocks_ui(self, codes: list[str] | None = None) -> None:
         """Refresh trained-stock metadata section in AI panel."""
         self._sync_trained_stock_last_train_from_model()
         stocks = list(codes) if isinstance(codes, list) else self._get_trained_stock_codes()
@@ -2509,7 +2603,7 @@ class MainApp(MainAppCommonMixin, QMainWindow):
         if not stocks:
             return
 
-    def _focus_trained_stocks_tab(self):
+    def _focus_trained_stocks_tab(self) -> None:
         """Focus the right-panel trained-stocks tab."""
         tabs = getattr(self, "right_tabs", None)
         idx = int(getattr(self, "_trained_tab_index", -1))
@@ -2553,7 +2647,7 @@ class MainApp(MainAppCommonMixin, QMainWindow):
             "info",
         )
 
-        def _task():
+        def _task() -> Any:
             from data.fetcher import get_fetcher
 
             fetcher = get_fetcher()
@@ -2810,30 +2904,10 @@ class MainApp(MainAppCommonMixin, QMainWindow):
         except Exception as exc:
             self.log(f"Drift alarm escalation failed: {exc}", "warning")
 
-    def _init_auto_trader(self):
-        """Initialize auto-trader on the execution engine."""
-        if self.executor and self.predictor:
-            try:
-                self.executor.init_auto_trader(
-                    self.predictor, self.watch_list
-                )
+    def _init_auto_trader(self) -> None:
+        _init_auto_trader_impl(self)
 
-                if self.executor.auto_trader:
-                    self.executor.auto_trader.on_action = (
-                        self._on_auto_trade_action_safe
-                    )
-                    self.executor.auto_trader.on_pending_approval = (
-                        self._on_pending_approval_safe
-                    )
-
-                self.log("Auto-trader initialized", "info")
-            except Exception as e:
-                log.warning(f"Auto-trader init failed: {e}")
-        elif self.predictor and not self.executor:
-            # Executor not connected yet; will init when connected.
-            pass
-
-    def _on_interval_changed(self, interval: str):
+    def _on_interval_changed(self, interval: str) -> None:
         """Handle interval change - reload model and restart monitor."""
         interval = self._normalize_interval_token(interval)
         horizon = self.forecast_spin.value()
@@ -2927,1437 +3001,27 @@ class MainApp(MainAppCommonMixin, QMainWindow):
             self.stock_input.setText(selected)
             self._analyze_stock()
 
-    def _seven_day_lookback(self, interval: str) -> int:
-        """Return lookback bars representing ~7 trading days for interval."""
-        iv = self._normalize_interval_token(interval)
-        try:
-            from data.fetcher import BARS_PER_DAY
-            bpd = float(BARS_PER_DAY.get(iv, 1.0))
-        except Exception:
-            fallback = {"1m": 240.0, "5m": 48.0, "15m": 16.0, "30m": 8.0, "60m": 4.0, "1h": 4.0, "1d": 1.0}
-            bpd = float(fallback.get(iv, 1.0))
-        bars = int(max(7, round(7.0 * bpd)))
-        return max(50, bars) if iv != "1d" else 7
-
-    def _trained_stock_window_bars(
-        self, interval: str, window_days: int = 29
-    ) -> int:
-        """Return lookback bars representing the trained-stock refresh window."""
-        iv = self._normalize_interval_token(interval)
-        wd = max(1, int(window_days or 29))
-        try:
-            from data.fetcher import BARS_PER_DAY
-            bpd = float(BARS_PER_DAY.get(iv, 1.0))
-        except Exception:
-            fallback = {
-                "1m": 240.0,
-                "2m": 120.0,
-                "5m": 48.0,
-                "15m": 16.0,
-                "30m": 8.0,
-                "60m": 4.0,
-                "1h": 4.0,
-                "1d": 1.0,
-                "1wk": 0.2,
-                "1mo": 0.05,
-            }
-            bpd = float(fallback.get(iv, 1.0))
-        return int(max(1, round(float(wd) * max(0.01, bpd))))
-
-    def _recommended_lookback(self, interval: str) -> int:
-        """
-        Recommended lookback for analysis/forecast per interval.
-        Startup 1m uses a true 7-day 1m window; higher intervals keep a
-        minimum depth for feature generation stability.
-        """
-        iv = self._normalize_interval_token(interval)
-        base = int(self._seven_day_lookback(iv))
-        if iv in ("1d", "1wk", "1mo"):
-            return max(60, base)
-        return max(120, base)
-
-    def _queue_history_refresh(self, symbol: str, interval: str) -> None:
-        """Force next history load to bypass memory/session cache once."""
-        iv = self._normalize_interval_token(interval)
-        sym = self._ui_norm(symbol)
-        key = (sym if sym else "*", iv)
-        self._history_refresh_once.add(key)
-
-    def _consume_history_refresh(self, symbol: str, interval: str) -> bool:
-        """Consume one queued history refresh request for symbol/interval."""
-        iv = self._normalize_interval_token(interval)
-        sym = self._ui_norm(symbol)
-        direct = (sym, iv)
-        wildcard = ("*", iv)
-        if direct in self._history_refresh_once:
-            self._history_refresh_once.discard(direct)
-            return True
-        if wildcard in self._history_refresh_once:
-            self._history_refresh_once.discard(wildcard)
-            return True
-        return False
-
-    def _schedule_analysis_recovery(
-        self,
-        symbol: str,
-        interval: str,
-        warnings: list[str] | None = None,
-    ) -> None:
-        """
-        Retry analysis once with a forced history refresh when output is partial.
-        Throttled per symbol/interval to avoid retry loops.
-        """
-        sym = self._ui_norm(symbol)
-        if not sym:
-            return
-        iv = self._normalize_interval_token(interval)
-        key = f"{sym}:{iv}"
-        now_ts = time.monotonic()
-        last_ts = float(self._analysis_recovery_attempt_ts.get(key, 0.0) or 0.0)
-        if (now_ts - last_ts) < 25.0:
-            return
-        self._analysis_recovery_attempt_ts[key] = now_ts
-
-        self._queue_history_refresh(sym, iv)
-
-        reason = ""
-        warn_list = list(warnings or [])
-        if warn_list:
-            for item in warn_list:
-                txt = str(item).strip()
-                if txt:
-                    reason = txt
-                    break
-        if reason:
-            self.log(
-                f"Data warm-up retry for {sym}: {reason}",
-                "info",
-            )
-        else:
-            self.log(
-                f"Data warm-up retry for {sym}: refreshing history",
-                "info",
-            )
-
-        def _retry_once():
-            selected = self._ui_norm(self.stock_input.text())
-            if selected != sym:
-                return
-            self._analyze_stock()
-
-        QTimer.singleShot(1800, _retry_once)
-
-    def _history_window_bars(self, interval: str) -> int:
-        """Rolling chart/session window size (7-day equivalent)."""
-        iv = self._normalize_interval_token(interval)
-        bars = int(self._seven_day_lookback(iv))
-        if iv == "1d":
-            return max(7, bars)
-        return max(120, bars)
-
-    def _ts_to_epoch(self, ts_raw: Any) -> float:
-        """Normalize timestamp-like values to epoch seconds."""
-        if ts_raw is None:
-            return float(time.time())
-
-        try:
-            if isinstance(ts_raw, (int, float)):
-                v = float(ts_raw)
-                # Treat large numeric timestamps as milliseconds.
-                if abs(v) >= 1e11:
-                    v = v / 1000.0
-                return v
-        except Exception as exc:
-            log.debug("Suppressed exception in ui/app.py", exc_info=exc)
-
-        try:
-            if isinstance(ts_raw, datetime):
-                dt = ts_raw
-            else:
-                txt = str(ts_raw).strip()
-                if not txt:
-                    return float(time.time())
-                dt = datetime.fromisoformat(txt.replace("Z", "+00:00"))
-            if dt.tzinfo is None:
-                # Most provider timestamps without tz are China local time.
-                try:
-                    from zoneinfo import ZoneInfo
-                    dt = dt.replace(tzinfo=ZoneInfo("Asia/Shanghai"))
-                except Exception:
-                    dt = dt.replace(tzinfo=timezone.utc)
-            return float(dt.timestamp())
-        except Exception:
-            return float(time.time())
-
-    def _epoch_to_iso(self, epoch: float) -> str:
-        """Canonical ISO timestamp for chart bars."""
-        try:
-            return datetime.fromtimestamp(
-                float(epoch), tz=timezone.utc
-            ).isoformat(timespec="seconds")
-        except Exception:
-            return datetime.now(timezone.utc).isoformat(timespec="seconds")
-
-    def _now_iso(self) -> str:
-        """Consistent sortable timestamp for live bars."""
-        return datetime.now(timezone.utc).isoformat(timespec="seconds")
-
-    def _merge_bars(
-        self,
-        base: list[dict[str, Any]],
-        extra: list[dict[str, Any]],
-        interval: str,
-    ) -> list[dict[str, Any]]:
-        """Merge+deduplicate bars by timestamp and keep a 7-day rolling window."""
-        merged: dict[int, dict[str, Any]] = {}
-        iv = self._normalize_interval_token(interval)
-
-        def _upsert(row_in: dict[str, Any]) -> None:
-            epoch = self._bar_bucket_epoch(
-                row_in.get("_ts_epoch", row_in.get("timestamp", "")),
-                iv,
-            )
-            row = dict(row_in)
-            row["_ts_epoch"] = float(epoch)
-            row["timestamp"] = self._epoch_to_iso(epoch)
-
-            # Never merge out-of-session intraday rows.
-            if not self._is_market_session_timestamp(row["_ts_epoch"], iv):
-                return
-
-            key = int(epoch)
-            existing = merged.get(key)
-            if existing is None:
-                merged[key] = row
-                return
-
-            existing_final = bool(existing.get("final", True))
-            row_final = bool(row.get("final", True))
-            if existing_final and not row_final:
-                return
-            if row_final and not existing_final:
-                merged[key] = row
-                return
-
-            # Same finality: keep richer bar by volume, otherwise prefer newer row.
-            try:
-                e_vol = float(existing.get("volume", 0) or 0)
-            except Exception:
-                e_vol = 0.0
-            try:
-                r_vol = float(row.get("volume", 0) or 0)
-            except Exception:
-                r_vol = 0.0
-            if r_vol >= e_vol:
-                merged[key] = row
-
-        for b in (base or []):
-            _upsert(b)
-        for b in (extra or []):
-            _upsert(b)
-        out = list(merged.values())
-        out.sort(
-            key=lambda x: float(
-                x.get(
-                    "_ts_epoch",
-                    self._ts_to_epoch(x.get("timestamp", "")),
-                )
-            )
-        )
-
-        # Final pass: sanitize OHLC and drop abrupt jumps.
-        cleaned: list[dict[str, Any]] = []
-        prev_close: float | None = None
-        prev_epoch: float | None = None
-        for row in out:
-            try:
-                c = float(row.get("close", 0) or 0)
-                o = float(row.get("open", c) or c)
-                h = float(row.get("high", c) or c)
-                low = float(row.get("low", c) or c)
-            except Exception:
-                continue
-            row_epoch = float(
-                self._bar_bucket_epoch(
-                    row.get("_ts_epoch", row.get("timestamp")),
-                    iv,
-                )
-            )
-            ref_close = prev_close
-            if (
-                prev_epoch is not None
-                and self._is_intraday_day_boundary(prev_epoch, row_epoch, iv)
-            ):
-                ref_close = None
-
-            sanitized = self._sanitize_ohlc(
-                o,
-                h,
-                low,
-                c,
-                interval=iv,
-                ref_close=ref_close,
-            )
-            if sanitized is None:
-                continue
-
-            o, h, low, c = sanitized
-            if ref_close and ref_close > 0 and self._is_outlier_tick(
-                ref_close, c, interval=iv
-            ):
-                continue
-
-            row_out = dict(row)
-            row_out["open"] = o
-            row_out["high"] = h
-            row_out["low"] = low
-            row_out["close"] = c
-            cleaned.append(row_out)
-            prev_close = c
-            prev_epoch = row_epoch
-
-        keep = self._history_window_bars(interval)
-        return cleaned[-keep:]
-
-    def _interval_seconds(self, interval: str) -> int:
-        """Map UI interval token to candle duration in seconds."""
-        iv = self._normalize_interval_token(interval)
-        mapping = {
-            "1m": 60,
-            "5m": 300,
-            "15m": 900,
-            "30m": 1800,
-            "60m": 3600,
-            "1d": 86400,
-        }
-        if iv in mapping:
-            return int(mapping[iv])
-        # Generic support for provider labels like "90m" / "30s".
-        try:
-            if iv.endswith("m"):
-                return max(1, int(float(iv[:-1])) * 60)
-            if iv.endswith("s"):
-                return max(1, int(float(iv[:-1])))
-        except Exception as exc:
-            log.debug("Suppressed exception in ui/app.py", exc_info=exc)
-        return 60
-
-    def _interval_token_from_seconds(self, seconds: Any) -> str | None:
-        """Best-effort inverse mapping from seconds to interval token."""
-        try:
-            sec = max(1, int(float(seconds)))
-        except Exception:
-            return None
-        known = {
-            60: "1m",
-            300: "5m",
-            900: "15m",
-            1800: "30m",
-            3600: "60m",
-            86400: "1d",
-        }
-        if sec in known:
-            return known[sec]
-        if sec % 60 == 0:
-            return f"{int(sec // 60)}m"
-        return f"{sec}s"
-
-    def _bars_needed_from_base_interval(
-        self,
-        target_interval: str,
-        target_bars: int,
-        base_interval: str = "1m",
-    ) -> int:
-        """
-        Estimate how many base-interval bars are needed to render
-        `target_bars` in `target_interval`.
-        """
-        tgt = self._normalize_interval_token(target_interval)
-        base = self._normalize_interval_token(base_interval)
-        tgt_n = max(1, int(target_bars))
-
-        try:
-            src_sec = float(max(1, self._interval_seconds(base)))
-            tgt_sec = float(max(1, self._interval_seconds(tgt)))
-            factor = int(max(1, math.ceil(tgt_sec / src_sec)))
-        except Exception:
-            factor = 1
-
-        # CN market has about 240 one-minute bars per full session day.
-        if tgt == "1d":
-            factor = max(factor, 240)
-        elif tgt == "1wk":
-            factor = max(factor, 240 * 5)
-        elif tgt == "1mo":
-            factor = max(factor, 240 * 20)
-
-        return int(max(tgt_n, (tgt_n * factor) + factor))
-
-    def _resample_chart_bars(
-        self,
-        bars: list[dict[str, Any]],
-        source_interval: str,
-        target_interval: str,
-    ) -> list[dict[str, Any]]:
-        """
-        Aggregate OHLC bars from source interval to target interval.
-        Keeps candle integrity (open/close ordering, high/low envelope).
-        """
-        src = self._normalize_interval_token(source_interval)
-        tgt = self._normalize_interval_token(target_interval)
-        if src == tgt:
-            return list(bars or [])
-        if not bars:
-            return []
-
-        src_sec = int(max(1, self._interval_seconds(src)))
-        tgt_sec = int(max(1, self._interval_seconds(tgt)))
-        if tgt_sec <= src_sec:
-            return list(bars or [])
-
-        ranked = sorted(
-            list(bars or []),
-            key=lambda row: float(
-                self._ts_to_epoch(
-                    row.get("_ts_epoch", row.get("timestamp", row.get("time")))
-                )
-            ),
-        )
-
-        buckets: dict[str, dict[str, Any]] = {}
-        for row in ranked:
-            try:
-                ep = float(
-                    self._ts_to_epoch(
-                        row.get("_ts_epoch", row.get("timestamp", row.get("time")))
-                    )
-                )
-            except Exception:
-                continue
-            if not math.isfinite(ep):
-                continue
-
-            day_key = self._bar_trading_date(ep)
-            if tgt == "1d":
-                key = str(day_key) if day_key is not None else str(int(ep // 86400))
-            elif tgt == "1wk":
-                if day_key is None:
-                    key = f"week:{int(ep // (86400 * 7))}"
-                else:
-                    iso = day_key.isocalendar()
-                    key = f"week:{int(iso.year)}-{int(iso.week):02d}"
-            elif tgt == "1mo":
-                if day_key is None:
-                    dt = datetime.fromtimestamp(ep)
-                    key = f"month:{dt.year}-{dt.month:02d}"
-                else:
-                    key = f"month:{day_key.year}-{day_key.month:02d}"
-            else:
-                key = f"slot:{int(self._bar_bucket_epoch(ep, tgt))}"
-
-            try:
-                o = float(row.get("open", 0) or 0)
-                h = float(row.get("high", 0) or 0)
-                low = float(row.get("low", 0) or 0)
-                c = float(row.get("close", 0) or 0)
-            except Exception:
-                continue
-            if c <= 0 or not all(math.isfinite(v) for v in (o, h, low, c)):
-                continue
-
-            if key not in buckets:
-                try:
-                    vol = float(row.get("volume", 0) or 0.0)
-                except Exception:
-                    vol = 0.0
-                buckets[key] = {
-                    "open": o if o > 0 else c,
-                    "high": max(h, o, c),
-                    "low": min(low, o, c),
-                    "close": c,
-                    "volume": max(0.0, vol),
-                    "_ts_epoch": float(ep),
-                    "final": bool(row.get("final", True)),
-                    "interval": tgt,
-                }
-                continue
-
-            cur = buckets[key]
-            cur["high"] = float(max(float(cur["high"]), h, o, c))
-            cur["low"] = float(min(float(cur["low"]), low, o, c))
-            cur["close"] = float(c)
-            cur["_ts_epoch"] = float(max(float(cur["_ts_epoch"]), ep))
-            cur["final"] = bool(cur.get("final", True) and bool(row.get("final", True)))
-            try:
-                cur["volume"] = float(cur.get("volume", 0.0)) + max(
-                    0.0,
-                    float(row.get("volume", 0) or 0.0),
-                )
-            except Exception as exc:
-                log.debug("Suppressed exception in ui/app.py", exc_info=exc)
-
-        out: list[dict[str, Any]] = []
-        for val in buckets.values():
-            row_out = dict(val)
-            row_out["timestamp"] = self._epoch_to_iso(float(row_out["_ts_epoch"]))
-            out.append(row_out)
-
-        out.sort(key=lambda row: float(row.get("_ts_epoch", 0.0)))
-        return self._merge_bars([], out, tgt)
-
-    def _dominant_bar_interval(
-        self,
-        bars: list[dict[str, Any]] | None,
-        fallback: str = "1m",
-    ) -> str:
-        """Most frequent interval token in bar list (best effort)."""
-        counts: dict[str, int] = {}
-        for row in (bars or []):
-            if not isinstance(row, dict):
-                continue
-            iv = self._normalize_interval_token(
-                row.get("interval"),
-                fallback="",
-            )
-            if not iv:
-                continue
-            counts[iv] = int(counts.get(iv, 0)) + 1
-        if not counts:
-            return self._normalize_interval_token(fallback)
-        best_iv = max(counts.items(), key=lambda kv: kv[1])[0]
-        return self._normalize_interval_token(best_iv, fallback=fallback)
-
-    def _effective_anchor_price(
-        self,
-        symbol: str,
-        candidate: float | None = None,
-    ) -> float:
-        """
-        Resolve a robust anchor price for chart scale repair.
-        Prefers live/watchlist quote when candidate is obviously off-scale.
-        """
-        sym = self._ui_norm(symbol)
-        try:
-            base = float(candidate or 0.0)
-        except Exception:
-            base = 0.0
-        if not math.isfinite(base) or base <= 0:
-            base = 0.0
-
-        alt = 0.0
-        try:
-            rec = self._last_watchlist_price_ui.get(sym)
-            if rec is not None:
-                alt = float(rec[1] or 0.0)
-        except Exception:
-            alt = 0.0
-        if not math.isfinite(alt) or alt <= 0:
-            alt = 0.0
-
-        # Try live quote only when needed to avoid excess calls.
-        if alt <= 0 and (base <= 0 or base < 5.0):
-            fetcher = None
-            try:
-                if self.predictor is not None:
-                    fetcher = getattr(self.predictor, "fetcher", None)
-            except Exception:
-                fetcher = None
-            if fetcher is not None and sym:
-                try:
-                    q = fetcher.get_realtime(sym)
-                    alt = float(getattr(q, "price", 0) or 0.0) if q is not None else 0.0
-                except Exception:
-                    alt = 0.0
-                if not math.isfinite(alt) or alt <= 0:
-                    alt = 0.0
-
-        if base > 0 and alt > 0:
-            ratio = max(base, alt) / max(min(base, alt), 1e-8)
-            # If candidate differs by 30x+, trust live/watchlist anchor.
-            if ratio >= 30.0:
-                return float(alt)
-            return float(base)
-        if alt > 0:
-            return float(alt)
-        return float(base)
-
-    def _stabilize_chart_depth(
-        self,
-        symbol: str,
-        interval: str,
-        candidate: list[dict[str, Any]] | None,
-    ) -> list[dict[str, Any]]:
-        """
-        Avoid replacing a healthy deep window with a transient tiny window.
-        """
-        cand = list(candidate or [])
-        if not cand:
-            return cand
-
-        sym = self._ui_norm(symbol)
-        iv = self._normalize_interval_token(interval)
-        existing_all = list(self._bars_by_symbol.get(sym) or [])
-        if not existing_all:
-            return cand
-        existing = [
-            b for b in existing_all
-            if self._normalize_interval_token(
-                b.get("interval", iv),
-                fallback=iv,
-            ) == iv
-        ]
-        if not existing:
-            return cand
-
-        old_len = len(existing)
-        new_len = len(cand)
-        # Protect even medium-depth windows (for example 20-40 bars) from
-        # being replaced by transient 1-5 bar snapshots.
-        if old_len < 12 or new_len >= max(6, int(old_len * 0.45)):
-            return cand
-
-        merged = self._merge_bars(existing, cand, iv)
-        if len(merged) >= max(new_len, int(old_len * 0.62)):
-            out = merged
-        else:
-            out = existing
-
-        self._debug_console(
-            f"chart_depth_stabilize:{sym}:{iv}",
-            (
-                f"depth stabilization for {sym} {iv}: "
-                f"new={new_len} old={old_len} final={len(out)}"
-            ),
-            min_gap_seconds=1.0,
-            level="info",
-        )
-        return out
-
-    def _bar_bucket_epoch(self, ts_raw: Any, interval: str) -> float:
-        """Floor any timestamp to the interval bucket start (epoch seconds)."""
-        epoch = self._ts_to_epoch(ts_raw)
-        step = float(max(1, self._interval_seconds(interval)))
-        return float(int(epoch // step) * int(step))
-
-    def _bar_trading_date(self, ts_raw: Any) -> object | None:
-        """Best-effort Shanghai trading date for a timestamp-like value."""
-        try:
-            epoch = float(self._ts_to_epoch(ts_raw))
-        except Exception:
-            return None
-        try:
-            from zoneinfo import ZoneInfo
-            dt_val = datetime.fromtimestamp(epoch, tz=ZoneInfo("Asia/Shanghai"))
-        except Exception:
-            try:
-                dt_val = datetime.fromtimestamp(epoch)
-            except Exception:
-                return None
-        try:
-            return dt_val.date()
-        except Exception:
-            return None
-
-    def _is_intraday_day_boundary(
-        self,
-        prev_ts_raw: Any,
-        cur_ts_raw: Any,
-        interval: str,
-    ) -> bool:
-        """True when two intraday bars fall on different Shanghai trading dates."""
-        iv = self._normalize_interval_token(interval)
-        if iv in ("1d", "1wk", "1mo"):
-            return False
-        prev_day = self._bar_trading_date(prev_ts_raw)
-        cur_day = self._bar_trading_date(cur_ts_raw)
-        if prev_day is None or cur_day is None:
-            return False
-        return bool(cur_day != prev_day)
-
-    def _shanghai_now(self) -> datetime:
-        """Current time in Asia/Shanghai when zoneinfo is available."""
-        try:
-            from zoneinfo import ZoneInfo
-            return datetime.now(tz=ZoneInfo("Asia/Shanghai"))
-        except Exception:
-            return datetime.now()
-
-    def _is_cn_trading_day(self, day_obj) -> bool:
-        """Best-effort CN trading-day check (weekday + optional holiday calendar)."""
-        try:
-            if day_obj.weekday() >= 5:
-                return False
-        except Exception:
-            return False
-
-        try:
-            from core.constants import is_trading_day
-            return bool(is_trading_day(day_obj))
-        except Exception:
-            return True
-
-    def _market_hours_text(self) -> str:
-        """Human-readable CN session hours."""
-        t = CONFIG.trading
-        return (
-            f"{t.market_open_am.strftime('%H:%M')}-{t.market_close_am.strftime('%H:%M')}, "
-            f"{t.market_open_pm.strftime('%H:%M')}-{t.market_close_pm.strftime('%H:%M')} CST"
-        )
-
-    def _next_market_open(self, now_sh: datetime | None = None) -> datetime | None:
-        """Next CN market open timestamp in Shanghai time."""
-        now_val = now_sh or self._shanghai_now()
-        t = CONFIG.trading
-
-        for days_ahead in range(0, 15):
-            day_val = (now_val + timedelta(days=days_ahead)).date()
-            if not self._is_cn_trading_day(day_val):
-                continue
-
-            open_am = now_val.replace(
-                year=day_val.year,
-                month=day_val.month,
-                day=day_val.day,
-                hour=t.market_open_am.hour,
-                minute=t.market_open_am.minute,
-                second=0,
-                microsecond=0,
-            )
-            open_pm = now_val.replace(
-                year=day_val.year,
-                month=day_val.month,
-                day=day_val.day,
-                hour=t.market_open_pm.hour,
-                minute=t.market_open_pm.minute,
-                second=0,
-                microsecond=0,
-            )
-
-            if days_ahead > 0:
-                return open_am
-
-            cur_time = now_val.time()
-            if cur_time < t.market_open_am:
-                return open_am
-            if t.market_close_am < cur_time < t.market_open_pm:
-                return open_pm
-            if cur_time > t.market_close_pm:
-                continue
-
-        return None
-
-    def _is_market_session_timestamp(self, ts_raw: Any, interval: str) -> bool:
-        """True when timestamp falls inside CN trading session for intraday intervals."""
-        iv = self._normalize_interval_token(interval)
-        if iv in ("1d", "1wk", "1mo"):
-            return True
-
-        epoch = self._ts_to_epoch(ts_raw)
-        try:
-            from zoneinfo import ZoneInfo
-            dt_val = datetime.fromtimestamp(float(epoch), tz=ZoneInfo("Asia/Shanghai"))
-        except Exception:
-            dt_val = datetime.fromtimestamp(float(epoch))
-
-        if not self._is_cn_trading_day(dt_val.date()):
-            return False
-
-        cur_time = dt_val.time()
-        t = CONFIG.trading
-        morning = t.market_open_am <= cur_time <= t.market_close_am
-        afternoon = t.market_open_pm <= cur_time <= t.market_close_pm
-        return bool(morning or afternoon)
-
-    def _filter_bars_to_market_session(
-        self,
-        bars: list[dict[str, Any]],
-        interval: str,
-    ) -> list[dict[str, Any]]:
-        """Drop out-of-session intraday bars before chart rendering."""
-        iv = self._normalize_interval_token(interval)
-        if iv in ("1d", "1wk", "1mo"):
-            return list(bars or [])
-
-        out: list[dict[str, Any]] = []
-        for b in (bars or []):
-            ts_raw = b.get("_ts_epoch", b.get("timestamp", b.get("time")))
-            if self._is_market_session_timestamp(ts_raw, iv):
-                out.append(b)
-        return out
-
-    def _bar_safety_caps(self, interval: str) -> tuple[float, float]:
-        """
-        Return (max_jump_pct, max_range_pct) for bar sanitization.
-        Values are intentionally conservative for intraday feeds.
-        """
-        iv = self._normalize_interval_token(interval)
-        if iv == "1m":
-            return 0.08, 0.006
-        if iv == "5m":
-            return 0.10, 0.012
-        if iv in ("15m", "30m"):
-            return 0.14, 0.020
-        if iv in ("60m", "1h"):
-            return 0.18, 0.040
-        if iv in ("1d", "1wk", "1mo"):
-            return 0.24, 0.22
-        return 0.20, 0.15
-
-    def _synthetic_tick_jump_cap(self, interval: str) -> float:
-        """
-        Stricter jump cap for tick-driven synthetic bar updates.
-        Prevents stale or spiky quotes from creating giant intraday bodies.
-        """
-        iv = self._normalize_interval_token(interval)
-        if iv == "1m":
-            return 0.012
-        if iv == "5m":
-            return 0.018
-        if iv in ("15m", "30m"):
-            return 0.028
-        if iv in ("60m", "1h"):
-            return 0.045
-        if iv in ("1d", "1wk", "1mo"):
-            return 0.12
-        return 0.03
-
-    def _sanitize_ohlc(
-        self,
-        o: float,
-        h: float,
-        low: float,
-        c: float,
-        interval: str,
-        ref_close: float | None = None,
-    ) -> tuple[float, float, float, float] | None:
-        """
-        Normalize and clamp OHLC values to avoid malformed long candles
-        from bad ticks/partial bars.
-        """
-        try:
-            o = float(o or 0.0)
-            h = float(h or 0.0)
-            low = float(low or 0.0)
-            c = float(c or 0.0)
-        except Exception:
-            return None
-        if not all(math.isfinite(v) for v in (o, h, low, c)):
-            return None
-        if c <= 0:
-            return None
-
-        ref = float(ref_close or 0.0)
-        if not math.isfinite(ref) or ref <= 0:
-            ref = 0.0
-
-        if o <= 0:
-            o = c
-        if h <= 0:
-            h = max(o, c)
-        if low <= 0:
-            low = min(o, c)
-        if h < low:
-            h, low = low, h
-
-        jump_cap, range_cap = self._bar_safety_caps(interval)
-        iv = self._normalize_interval_token(interval)
-        if ref > 0:
-            effective_range_cap = float(range_cap)
-        else:
-            bootstrap_cap = (
-                0.30
-                if iv in ("1d", "1wk", "1mo")
-                else float(max(0.008, min(0.020, range_cap * 2.0)))
-            )
-            effective_range_cap = float(max(range_cap, bootstrap_cap))
-        if ref > 0:
-            jump = abs(c / ref - 1.0)
-            if jump > jump_cap:
-                return None
-
-        # Keep malformed opens from inflating body/range caps.
-        anchor = ref if ref > 0 else c
-        if anchor <= 0:
-            anchor = c
-        max_body = float(anchor) * float(max(jump_cap * 1.25, effective_range_cap * 0.9))
-        if max_body > 0 and abs(o - c) > max_body:
-            if ref > 0 and abs(c / ref - 1.0) <= jump_cap:
-                o = ref
-            else:
-                o = c
-
-        top = max(o, c)
-        bot = min(o, c)
-        if h < top:
-            h = top
-        if low > bot:
-            low = bot
-        if h < low:
-            h, low = low, h
-
-        max_range = float(anchor) * float(effective_range_cap)
-        curr_range = max(0.0, h - low)
-        if max_range > 0 and curr_range > max_range:
-            body = max(0.0, top - bot)
-            if body > max_range:
-                # Body this large is likely a corrupt open/close pair.
-                o = c
-                top = c
-                bot = c
-                body = 0.0
-            wick_allow = max(0.0, max_range - body)
-            h = min(h, top + (wick_allow * 0.5))
-            low = max(low, bot - (wick_allow * 0.5))
-            if h < low:
-                h, low = low, h
-
-        o = min(max(o, low), h)
-        c = min(max(c, low), h)
-
-        # Final hard-stop: drop anything still outside allowed envelope.
-        if anchor > 0 and (h - low) > (float(anchor) * float(effective_range_cap) * 1.05):
-            return None
-
-        return o, h, low, c
-
-    def _is_outlier_tick(
-        self, prev_price: float, new_price: float, interval: str = "1m"
-    ) -> bool:
-        """
-        Guard against bad ticks creating abnormal long candles.
-        Uses interval-aware thresholds to avoid rejecting valid fast moves.
-        """
-        prev = float(prev_price or 0.0)
-        new = float(new_price or 0.0)
-        if prev <= 0 or new <= 0:
-            return False
-        jump_cap, _ = self._bar_safety_caps(interval)
-        jump_pct = abs(new / prev - 1.0)
-        return jump_pct > float(jump_cap)
-
         # =========================================================================
         # REAL-TIME MONITORING
     # =========================================================================
 
-    def _toggle_monitoring(self, checked):
-        """Toggle real-time monitoring"""
-        if checked:
-            self._start_monitoring()
-        else:
-            self._stop_monitoring()
+    def _toggle_monitoring(self, checked: bool) -> None:
+        _toggle_monitoring_impl(self, checked)
 
-    def _start_monitoring(self):
-        """Start real-time monitoring safely (no orphan threads)."""
-        if self.monitor and self.monitor.isRunning():
-            self._stop_monitoring()
+    def _start_monitoring(self) -> None:
+        _start_monitoring_impl(self)
 
-        if self.predictor is None or self.predictor.ensemble is None:
-            self.log("Cannot start monitoring: No model loaded", "error")
-            self.monitor_action.setChecked(False)
-            return
+    def _stop_monitoring(self) -> None:
+        _stop_monitoring_impl(self)
 
-        requested_interval = self._normalize_interval_token(
-            self.interval_combo.currentText()
-        )
-        requested_horizon = int(self.forecast_spin.value())
-        lookback = max(
-            int(self.lookback_spin.value()),
-            int(self._recommended_lookback(requested_interval)),
-        )
-        monitor_interval = "1m"
-        monitor_horizon = int(requested_horizon)
-        monitor_lookback = int(
-            max(
-                self._recommended_lookback("1m"),
-                self._bars_needed_from_base_interval(
-                    requested_interval,
-                    int(lookback),
-                    base_interval="1m",
-                ),
-            )
-        )
-        monitor_history_allow_online = True
-        if not self._has_exact_model_artifacts(monitor_interval, requested_horizon):
-            self._debug_console(
-                f"monitor_model_fallback:{requested_interval}:{requested_horizon}",
-                (
-                    "monitor inference locked to 1m source stream: "
-                    f"ui={requested_interval}/{requested_horizon} "
-                    f"infer={monitor_interval}/{requested_horizon} "
-                    f"lookback={monitor_lookback} online=1"
-                ),
-                min_gap_seconds=2.0,
-                level="info",
-            )
+    def _on_signal_detected(self, pred: Any) -> None:
+        _on_signal_detected_impl(self, pred)
 
-        try:
-            from data.feeds import get_feed_manager
-            fm = get_feed_manager(auto_init=True, async_init=True)
-            fm.subscribe_many(self.watch_list)
-            try:
-                code = self.stock_input.text().strip()
-                if code:
-                    normalized = self._ui_norm(code)
-                    if normalized:
-                        self._ensure_feed_subscription(normalized)
-            except Exception as exc:
-                log.debug("Suppressed exception in ui/app.py", exc_info=exc)
-            self.log(
-                f"Subscribed to feeds for {len(self.watch_list)} stocks",
-                "info"
-            )
-        except Exception as e:
-            self.log(f"Feed subscription warning: {e}", "warning")
-
-        self.monitor = RealTimeMonitor(
-            self.predictor,
-            self.watch_list,
-            interval=monitor_interval,
-            forecast_minutes=monitor_horizon,
-            lookback_bars=monitor_lookback,
-            history_allow_online=monitor_history_allow_online,
-        )
-        self.monitor.signal_detected.connect(self._on_signal_detected)
-        self.monitor.price_updated.connect(self._on_price_updated)
-        self.monitor.error_occurred.connect(
-            lambda e: self.log(f"Monitor: {e}", "warning")
-        )
-        self.monitor.status_changed.connect(
-            lambda s: self.monitor_label.setText(f"Monitoring: {s}")
-        )
-        self.monitor.start()
-
-        self.monitor_label.setText("Monitoring: ACTIVE")
-        self.monitor_label.setStyleSheet(
-            "color: #4CAF50; font-weight: bold;"
-        )
-        self.monitor_action.setText("Stop Monitoring")
-
-        if (
-            monitor_interval != requested_interval
-            or int(monitor_horizon) != int(requested_horizon)
-        ):
-            self.log(
-                (
-                    f"Monitoring started: {requested_interval} interval, "
-                    f"{requested_horizon} bar forecast "
-                    f"(compute={monitor_interval}/{monitor_horizon}, cache-first)"
-                ),
-                "success",
-            )
-        else:
-            self.log(
-                f"Monitoring started: {requested_interval} interval, "
-                f"{requested_horizon} bar forecast",
-                "success"
-            )
-
-    def _stop_monitoring(self):
-        """Stop real-time monitoring"""
-        if self.monitor:
-            self.monitor.stop()
-            self.monitor.wait(3000)
-            self.monitor = None
-
-        self.monitor_label.setText("Monitoring: OFF")
-        self.monitor_label.setStyleSheet("color: #888;")
-        self.monitor_action.setText("Start Monitoring")
-        self.monitor_action.setChecked(False)
-
-        self.log("Real-time monitoring stopped", "info")
-
-    def _on_signal_detected(self, pred):
-        """Handle detected trading signal"""
-        Signal = _lazy_get("models.predictor", "Signal")
-
-        row = 0
-        self.signals_table.insertRow(row)
-
-        self.signals_table.setItem(row, 0, QTableWidgetItem(
-            pred.timestamp.strftime("%H:%M:%S")
-            if hasattr(pred, 'timestamp') else "--"
-        ))
-
-        stock_text = f"{pred.stock_code}"
-        if hasattr(pred, 'stock_name') and pred.stock_name:
-            stock_text += f" - {pred.stock_name}"
-        self.signals_table.setItem(row, 1, QTableWidgetItem(stock_text))
-
-        signal_text = (
-            pred.signal.value
-            if hasattr(pred.signal, 'value')
-            else str(pred.signal)
-        )
-        signal_item = QTableWidgetItem(signal_text)
-
-        if hasattr(pred, 'signal') and pred.signal in [
-            Signal.STRONG_BUY, Signal.BUY
-        ]:
-            signal_item.setForeground(QColor("#4CAF50"))
-        else:
-            signal_item.setForeground(QColor("#F44336"))
-        self.signals_table.setItem(row, 2, signal_item)
-
-        conf = pred.confidence if hasattr(pred, 'confidence') else 0
-        self.signals_table.setItem(
-            row, 3, QTableWidgetItem(f"{conf:.0%}")
-        )
-
-        price = pred.current_price if hasattr(pred, 'current_price') else 0
-        self.signals_table.setItem(
-            row, 4, QTableWidgetItem(f"CNY {price:.2f}")
-        )
-
-        action_btn = QPushButton("Trade")
-        action_btn.clicked.connect(lambda: self._quick_trade(pred))
-        self.signals_table.setCellWidget(row, 5, action_btn)
-
-        # Keep only last 50 signals
-        while self.signals_table.rowCount() > 50:
-            self.signals_table.removeRow(
-                self.signals_table.rowCount() - 1
-            )
-
-        self.log(
-            f"SIGNAL: {signal_text} - {pred.stock_code} @ CNY {price:.2f}",
-            "success"
-        )
-
-        QApplication.alert(self)
-
-    def _on_price_updated(self, code: str, price: float):
+    def _on_price_updated(self, code: str, price: float) -> None:
         _on_price_updated_impl(self, code, price)
 
-    def _refresh_live_chart_forecast(self):
-        """
-        Periodic chart refresh for selected symbol.
-        Ensures guessed graph updates in real time even with sparse feed ticks.
-        """
-        analyze_worker = self.workers.get("analyze")
-        if analyze_worker and analyze_worker.isRunning():
-            # Avoid creating transient single-bar placeholders while a
-            # full history analysis for the selected symbol is in-flight.
-            return
-        if not CONFIG.is_market_open():
-            return
-        if not self.predictor:
-            return
-        code = self._ui_norm(self.stock_input.text())
-        if not code:
-            return
-        try:
-            from data.feeds import get_feed_manager
-            fm = get_feed_manager(auto_init=True, async_init=True)
-            q = fm.get_quote(code)
-            if q and float(getattr(q, "price", 0) or 0) > 0:
-                self._on_price_updated(code, float(q.price))
-                return
-        except Exception as exc:
-            log.debug("Suppressed exception in ui/app.py", exc_info=exc)
-        try:
-            from data.fetcher import get_fetcher
-            q2 = get_fetcher().get_realtime(code)
-            if q2 and float(getattr(q2, "price", 0) or 0) > 0:
-                self._on_price_updated(code, float(q2.price))
-        except Exception as exc:
-            log.debug("Suppressed exception in ui/app.py", exc_info=exc)
-
-    def _get_levels_dict(self) -> dict[str, float] | None:
-        """Get trading levels as dict"""
-        if (
-            not self.current_prediction
-            or not hasattr(self.current_prediction, 'levels')
-        ):
-            return None
-
-        levels = self.current_prediction.levels
-        return {
-            "stop_loss": getattr(levels, 'stop_loss', 0),
-            "target_1": getattr(levels, 'target_1', 0),
-            "target_2": getattr(levels, 'target_2', 0),
-            "target_3": getattr(levels, 'target_3', 0),
-        }
-
-    def _scrub_chart_bars(
-        self,
-        bars: list[dict[str, Any]] | None,
-        interval: str,
-        *,
-        symbol: str = "",
-        anchor_price: float | None = None,
-    ) -> list[dict[str, Any]]:
-        """
-        Prepare bars for charting and never fall back to unsanitized rows.
-        """
-        arr_in = list(bars or [])
-        arr_out = self._prepare_chart_bars_for_interval(
-            arr_in,
-            interval,
-            symbol=symbol,
-        )
-        if arr_in and len(arr_in) >= 25 and len(arr_out) <= 2:
-            recovered = self._recover_chart_bars_from_close(
-                arr_in,
-                interval=interval,
-                symbol=symbol,
-                anchor_price=anchor_price,
-            )
-            if len(recovered) > len(arr_out):
-                arr_out = recovered
-        if arr_out:
-            arr_out = self._rescale_chart_bars_to_anchor(
-                arr_out,
-                anchor_price=anchor_price,
-                interval=interval,
-                symbol=symbol,
-            )
-        if arr_in and not arr_out:
-            recovered = self._recover_chart_bars_from_close(
-                arr_in,
-                interval=interval,
-                symbol=symbol,
-                anchor_price=anchor_price,
-            )
-            if recovered:
-                return recovered
-            iv = self._normalize_interval_token(interval)
-            sym = self._ui_norm(symbol)
-            self._debug_console(
-                f"chart_scrub_empty:{sym or 'active'}:{iv}",
-                (
-                    f"chart scrub removed all rows: symbol={sym or '--'} "
-                    f"iv={iv} raw={len(arr_in)}"
-                ),
-                min_gap_seconds=1.0,
-            )
-        return arr_out
-
-    def _rescale_chart_bars_to_anchor(
-        self,
-        bars: list[dict[str, Any]],
-        *,
-        anchor_price: float | None,
-        interval: str,
-        symbol: str = "",
-    ) -> list[dict[str, Any]]:
-        """
-        Repair obvious price-scale mismatches (e.g., 1.5 vs 1500) so bars
-        are not fully dropped by jump filters.
-        """
-        arr = list(bars or [])
-        if not arr:
-            return []
-        try:
-            anchor = float(anchor_price or 0.0)
-        except Exception:
-            anchor = 0.0
-        if not math.isfinite(anchor) or anchor <= 0:
-            return arr
-
-        closes: list[float] = []
-        for row in arr:
-            try:
-                c = float(row.get("close", 0) or 0)
-            except Exception:
-                c = 0.0
-            if c > 0 and math.isfinite(c):
-                closes.append(c)
-        if len(closes) < 5:
-            return arr
-
-        med = float(median(closes[-min(80, len(closes)):]))
-        if med <= 0 or not math.isfinite(med):
-            return arr
-
-        raw_ratio = anchor / med
-        if 0.2 <= raw_ratio <= 5.0:
-            return arr
-
-        candidates = [0.001, 0.01, 0.1, 1.0, 10.0, 100.0, 1000.0]
-        best_scale = 1.0
-        best_err = float("inf")
-        for s in candidates:
-            try:
-                ratio = (med * float(s)) / anchor
-                if ratio <= 0 or not math.isfinite(ratio):
-                    continue
-                err = abs(math.log(ratio))
-                if err < best_err:
-                    best_err = err
-                    best_scale = float(s)
-            except Exception:
-                continue
-
-        scaled_ratio = (med * best_scale) / anchor if anchor > 0 else 1.0
-        if not (0.2 <= scaled_ratio <= 5.0):
-            return arr
-        if abs(best_scale - 1.0) < 1e-9:
-            return arr
-
-        out: list[dict[str, Any]] = []
-        for row in arr:
-            item = dict(row)
-            for key in ("open", "high", "low", "close"):
-                try:
-                    v = float(item.get(key, 0) or 0)
-                except Exception:
-                    v = 0.0
-                if v > 0 and math.isfinite(v):
-                    item[key] = float(v * best_scale)
-            out.append(item)
-
-        iv = self._normalize_interval_token(interval)
-        sym = self._ui_norm(symbol)
-        self._debug_console(
-            f"chart_scale_fix:{sym or 'active'}:{iv}",
-            (
-                f"applied scale fix x{best_scale:g} for {sym or '--'} {iv}: "
-                f"median={med:.6f} anchor={anchor:.6f}"
-            ),
-            min_gap_seconds=1.0,
-            level="info",
-        )
-        return out
-
-    def _recover_chart_bars_from_close(
-        self,
-        bars: list[dict[str, Any]],
-        *,
-        interval: str,
-        symbol: str = "",
-        anchor_price: float | None = None,
-    ) -> list[dict[str, Any]]:
-        """
-        Minimal recovery path when strict scrub drops all bars.
-        Builds stable OHLC from close/prev-close so chart remains usable.
-        """
-        iv = self._normalize_interval_token(interval)
-        def _build(enforce_session: bool) -> list[dict[str, Any]]:
-            merged: dict[int, dict[str, Any]] = {}
-            prev_close: float | None = None
-            prev_epoch: float | None = None
-            for row in list(bars or []):
-                if not isinstance(row, dict):
-                    continue
-                row_iv = self._normalize_interval_token(
-                    row.get("interval", iv),
-                    fallback=iv,
-                )
-                if row_iv != iv:
-                    continue
-                epoch = self._bar_bucket_epoch(
-                    row.get("_ts_epoch", row.get("timestamp")),
-                    iv,
-                )
-                if enforce_session and (not self._is_market_session_timestamp(epoch, iv)):
-                    continue
-                ref_close = prev_close
-                if (
-                    prev_epoch is not None
-                    and self._is_intraday_day_boundary(prev_epoch, epoch, iv)
-                ):
-                    ref_close = None
-                try:
-                    c = float(
-                        row.get("close", row.get("price", 0)) or 0
-                    )
-                except Exception:
-                    c = 0.0
-                if c <= 0 or not math.isfinite(c):
-                    continue
-
-                try:
-                    o = float(row.get("open", 0) or 0)
-                except Exception:
-                    o = 0.0
-                if o <= 0 and ref_close and ref_close > 0:
-                    o = float(ref_close)
-                if o <= 0:
-                    o = c
-
-                try:
-                    h = float(row.get("high", max(o, c)) or max(o, c))
-                except Exception:
-                    h = max(o, c)
-                try:
-                    low = float(row.get("low", min(o, c)) or min(o, c))
-                except Exception:
-                    low = min(o, c)
-                if iv not in ("1d", "1wk", "1mo"):
-                    # Recovery mode should avoid carrying forward vendor day-range
-                    # highs/lows into minute bars.
-                    h = max(o, c)
-                    low = min(o, c)
-
-                s = self._sanitize_ohlc(
-                    o,
-                    h,
-                    low,
-                    c,
-                    interval=iv,
-                    ref_close=ref_close,
-                )
-                if s is None:
-                    continue
-                o, h, low, c = s
-
-                key = int(epoch)
-                item = {
-                    "open": o,
-                    "high": h,
-                    "low": low,
-                    "close": c,
-                    "_ts_epoch": float(epoch),
-                    "timestamp": self._epoch_to_iso(epoch),
-                    "final": bool(row.get("final", True)),
-                    "interval": iv,
-                }
-                existing = merged.get(key)
-                if existing is None:
-                    merged[key] = item
-                else:
-                    if bool(item.get("final", True)) and not bool(existing.get("final", True)):
-                        merged[key] = item
-                prev_close = c
-                prev_epoch = float(epoch)
-
-            out_local = list(merged.values())
-            out_local.sort(key=lambda x: float(x.get("_ts_epoch", 0.0)))
-            return out_local[-self._history_window_bars(iv):]
-
-        out = _build(enforce_session=True)
-        if not out:
-            out = _build(enforce_session=False)
-            if out:
-                sym = self._ui_norm(symbol)
-                self._debug_console(
-                    f"chart_recover_lenient:{sym or 'active'}:{iv}",
-                    (
-                        f"lenient timestamp recovery enabled for {sym or '--'} {iv}: "
-                        f"bars={len(out)}"
-                    ),
-                    min_gap_seconds=1.0,
-                    level="warning",
-                )
-
-        out = self._rescale_chart_bars_to_anchor(
-            out,
-            anchor_price=anchor_price,
-            interval=iv,
-            symbol=symbol,
-        )
-        if out:
-            sym = self._ui_norm(symbol)
-            self._debug_console(
-                f"chart_recover:{sym or 'active'}:{iv}",
-                (
-                    f"recovered chart bars from close-only path: "
-                    f"symbol={sym or '--'} iv={iv} bars={len(out)}"
-                ),
-                min_gap_seconds=1.0,
-                level="warning",
-            )
-        return out
+    def _refresh_live_chart_forecast(self) -> None:
+        _refresh_live_chart_forecast_impl(self)
 
     def _prepare_chart_bars_for_interval(
         self,
@@ -4373,12 +3037,12 @@ class MainApp(MainAppCommonMixin, QMainWindow):
             symbol=symbol,
         )
 
-    def _quick_trade(self, pred):
+    def _quick_trade(self, pred: Any) -> None:
         """Quick trade from signal"""
         self.stock_input.setText(pred.stock_code)
         self._analyze_stock()
 
-    def _update_watchlist(self):
+    def _update_watchlist(self) -> None:
         """Update watchlist display"""
         sanitized = _sanitize_watch_list(
             self.watch_list,
@@ -4429,7 +3093,7 @@ class MainApp(MainAppCommonMixin, QMainWindow):
 
     def _on_watchlist_click(
         self, row: int, col: int, code_override: str | None = None
-    ):
+    ) -> None:
         """Handle watchlist click and load selected stock reliably."""
         _ = col
         code = self._ui_norm(code_override or "")
@@ -4471,7 +3135,7 @@ class MainApp(MainAppCommonMixin, QMainWindow):
 
         self._analyze_stock()
 
-    def _add_to_watchlist(self):
+    def _add_to_watchlist(self) -> None:
         """Add stock to watchlist with validation"""
         code = self.stock_input.text().strip()
         normalized = self._ui_norm(code)
@@ -4506,7 +3170,7 @@ class MainApp(MainAppCommonMixin, QMainWindow):
         else:
             self.log(f"{normalized} already in watchlist", "info")
 
-    def _remove_from_watchlist(self):
+    def _remove_from_watchlist(self) -> None:
         """Remove selected stock from watchlist"""
         row = self.watchlist.currentRow()
         if row >= 0 and row < self.watchlist.rowCount():
@@ -4527,7 +3191,7 @@ class MainApp(MainAppCommonMixin, QMainWindow):
     # =========================================================================
     # =========================================================================
 
-    def _analyze_stock(self):
+    def _analyze_stock(self) -> None:
         """Analyze stock with validation"""
         code = self.stock_input.text().strip()
         if not code:
@@ -4686,7 +3350,7 @@ class MainApp(MainAppCommonMixin, QMainWindow):
             lookback_bars,
         )
 
-    def _on_analysis_done(self, pred):
+    def _on_analysis_done(self, pred: Any) -> None:
         """Handle analysis completion; also triggers news fetch."""
         self.analyze_action.setEnabled(True)
         self.progress.hide()
@@ -4951,7 +3615,7 @@ class MainApp(MainAppCommonMixin, QMainWindow):
 
         self.workers.pop('analyze', None)
 
-    def _on_analysis_error(self, error: str):
+    def _on_analysis_error(self, error: str) -> None:
         """Handle analysis error"""
         self.analyze_action.setEnabled(True)
         self.progress.hide()
@@ -4962,7 +3626,7 @@ class MainApp(MainAppCommonMixin, QMainWindow):
 
         self.workers.pop('analyze', None)
 
-    def _update_details(self, pred):
+    def _update_details(self, pred: Any) -> None:
         """Update analysis details with news sentiment"""
         Signal = _lazy_get("models.predictor", "Signal")
 
@@ -4980,7 +3644,7 @@ class MainApp(MainAppCommonMixin, QMainWindow):
             signal.value if hasattr(signal, 'value') else str(signal)
         )
 
-        def safe_get(obj, attr, default=0):
+        def safe_get(obj: Any, attr: str, default: Any = 0) -> Any:
             return (
                 getattr(obj, attr, default)
                 if hasattr(obj, attr) else default
@@ -5215,7 +3879,7 @@ class MainApp(MainAppCommonMixin, QMainWindow):
 
         self.details_text.setHtml(html)
 
-    def _add_to_history(self, pred):
+    def _add_to_history(self, pred: Any) -> None:
         """Add prediction to history"""
         row = 0
         self.history_table.insertRow(row)
@@ -5294,7 +3958,7 @@ class MainApp(MainAppCommonMixin, QMainWindow):
             return (entry - mark) * qty
         return 0.0
 
-    def _refresh_guess_rows_for_symbol(self, code: str, price: float):
+    def _refresh_guess_rows_for_symbol(self, code: str, price: float) -> None:
         """Update history result for this symbol using latest real-time price."""
         symbol = self._ui_norm(code)
         mark_price = float(price or 0.0)
@@ -5390,7 +4054,7 @@ class MainApp(MainAppCommonMixin, QMainWindow):
             "hit_rate": (float(correct) / float(total)) if total > 0 else 0.0,
         }
 
-    def _update_correct_guess_profit_ui(self):
+    def _update_correct_guess_profit_ui(self) -> None:
         """Display real-time directional-guess P&L and hit rate in UI."""
         if not hasattr(self, "auto_trade_labels"):
             return
@@ -5424,7 +4088,7 @@ class MainApp(MainAppCommonMixin, QMainWindow):
                 "color: #79a6ff; font-size: 16px; font-weight: bold;"
             )
 
-    def _scan_stocks(self):
+    def _scan_stocks(self) -> None:
         """Scan all stocks for signals"""
         if self.predictor is None or self.predictor.ensemble is None:
             self.log("No model loaded", "error")
@@ -5453,8 +4117,7 @@ class MainApp(MainAppCommonMixin, QMainWindow):
         self.workers['scan'] = worker
         worker.start()
 
-
-    def _on_scan_done(self, picks):
+    def _on_scan_done(self, picks: list[Any]) -> None:
         """Handle scan completion"""
         self.progress.hide()
 
@@ -5484,16 +4147,16 @@ class MainApp(MainAppCommonMixin, QMainWindow):
 
         self.workers.pop('scan', None)
 
-    def _refresh_all(self):
+    def _refresh_all(self) -> None:
         _refresh_all_impl(self)
 
     # =========================================================================
     # =========================================================================
 
-    def _toggle_trading(self):
+    def _toggle_trading(self) -> None:
         _toggle_trading_impl(self)
 
-    def _on_mode_combo_changed(self, index: int):
+    def _on_mode_combo_changed(self, index: int) -> None:
         _on_mode_combo_changed_impl(self, index)
 
     def _set_trading_mode(
@@ -5507,10 +4170,10 @@ class MainApp(MainAppCommonMixin, QMainWindow):
             prompt_reconnect=prompt_reconnect,
         )
 
-    def _connect_trading(self):
+    def _connect_trading(self) -> None:
         _connect_trading_impl(self)
 
-    def _disconnect_trading(self):
+    def _disconnect_trading(self) -> None:
         _disconnect_trading_impl(self)
 
     def _on_chart_trade_requested(self, side: str, price: float) -> None:
@@ -5564,721 +4227,92 @@ class MainApp(MainAppCommonMixin, QMainWindow):
             bracket=bracket,
         )
 
-    def _execute_buy(self):
+    def _execute_buy(self) -> None:
         _execute_buy_impl(self)
 
-    def _execute_sell(self):
+    def _execute_sell(self) -> None:
         _execute_sell_impl(self)
 
-    def _on_order_filled(self, order, fill):
+    def _on_order_filled(self, order: Any, fill: Any) -> None:
         _on_order_filled_impl(self, order, fill)
 
-    def _on_order_rejected(self, order, reason):
+    def _on_order_rejected(self, order: Any, reason: Any) -> None:
         _on_order_rejected_impl(self, order, reason)
 
-    def _refresh_portfolio(self):
+    def _refresh_portfolio(self) -> None:
         _refresh_portfolio_impl(self)
 
     # =========================================================================
     # =========================================================================
 
-    def _start_training(self):
-        """Start model training (UI dialog)."""
-        interval = self.interval_combo.currentText().strip()
-        horizon = self.forecast_spin.value()
+    def _start_training(self) -> None:
+        _start_training_impl(self)
 
-        reply = QMessageBox.question(
-            self, "Train AI Model",
-            f"Start training with the following settings?\n\n"
-            f"Interval: {interval}\n"
-            f"Horizon: {horizon} bars\n\n"
-            f"This may take time.\n\nContinue?",
-            QMessageBox.StandardButton.Yes
-            | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No
-        )
-        if reply != QMessageBox.StandardButton.Yes:
-            return
+    def _show_auto_learn(self) -> None:
+        _show_auto_learn_impl(self)
 
-        try:
-            from .dialogs import TrainingDialog
-            dialog = TrainingDialog(self)
-            dialog.exec()
-            result = getattr(dialog, "training_result", None)
-            if isinstance(result, dict):
-                if str(result.get("status", "")).strip().lower() == "complete":
-                    self._handle_training_drift_alarm(
-                        result,
-                        context="training_dialog",
-                    )
-                    trained_codes = list(
-                        dict.fromkeys(
-                            self._ui_norm(x)
-                            for x in list(result.get("trained_stock_codes", []) or [])
-                            if self._ui_norm(x)
-                        )
-                    )
-                    if trained_codes:
-                        self._record_trained_stock_last_train(
-                            trained_codes,
-                            trained_at=datetime.now().isoformat(timespec="seconds"),
-                        )
-                        self._update_trained_stocks_ui()
-        except Exception as e:
-            self.log(f"Training dialog failed: {e}", "error")
-            return
+    def _show_strategy_marketplace(self) -> None:
+        _show_strategy_marketplace_impl(self)
 
-        self._init_components()
+    def _show_backtest(self) -> None:
+        _show_backtest_impl(self)
 
-    def _show_auto_learn(self):
-        """Show auto-learning dialog"""
-        try:
-            from .auto_learn_dialog import show_auto_learn_dialog
-            seed_codes: list[str] = []
-            try:
-                if self._session_bar_cache is not None:
-                    interval = self._normalize_interval_token(
-                        self.interval_combo.currentText()
-                    )
-                    seed_codes = self._session_bar_cache.get_recent_symbols(
-                        interval=interval, min_rows=10
-                    )
-            except Exception:
-                seed_codes = []
-            show_auto_learn_dialog(self, seed_stock_codes=seed_codes)
-        except ImportError:
-            self.log("Auto-learn dialog not available", "error")
-            return
-
-        self._init_components()
-
-    def _show_strategy_marketplace(self):
-        """Show strategy marketplace manager."""
-        try:
-            from .strategy_marketplace_dialog import StrategyMarketplaceDialog
-            dialog = StrategyMarketplaceDialog(self)
-            dialog.exec()
-        except Exception as e:
-            self.log(f"Strategy marketplace unavailable: {e}", "error")
-
-    def _show_backtest(self):
-        """Show backtest dialog"""
-        try:
-            from .dialogs import BacktestDialog
-            dialog = BacktestDialog(self)
-            dialog.exec()
-        except ImportError:
-            self.log("Backtest dialog not available", "error")
-
-    def _show_about(self):
-        """Show about dialog"""
-        QMessageBox.about(
-            self,
-            "About AI Stock Trading System",
-            "<h2>AI Stock Trading System v2.0</h2>"
-            "<p>Professional AI-powered stock trading application</p>"
-            "<h3>Features:</h3>"
-            "<ul>"
-            "<li>Custom AI model with ensemble neural networks</li>"
-            "<li>Real-time signal monitoring (1m, 5m, 1d intervals)</li>"
-            "<li>Automatic stock discovery from internet</li>"
-            "<li>AI-generated price forecast curves</li>"
-            "<li>Paper and live trading support</li>"
-            "<li>Comprehensive risk management</li>"
-            "</ul>"
-            "<p><b>Risk Warning:</b></p>"
-            "<p>Stock trading involves risk. Past performance does not "
-            "guarantee future results. Only trade with money you can "
-            "afford to lose.</p>"
-        )
+    def _show_about(self) -> None:
+        _show_about_impl(self)
 
     # =========================================================================
     # AUTO-TRADE CONTROLS
     # =========================================================================
 
-    def _on_trade_mode_changed(self, index: int):
-        """Handle trade mode combo box change"""
-        mode_map = {
-            0: AutoTradeMode.MANUAL,
-            1: AutoTradeMode.AUTO,
-            2: AutoTradeMode.SEMI_AUTO,
-        }
-        new_mode = mode_map.get(index, AutoTradeMode.MANUAL)
+    def _on_trade_mode_changed(self, index: int) -> None:
+        _on_trade_mode_changed_impl(self, index)
 
-        if new_mode == AutoTradeMode.AUTO:
-            if self.predictor is None or (
-                self.predictor and self.predictor.ensemble is None
-            ):
-                QMessageBox.warning(
-                    self, "Cannot Enable Auto-Trade",
-                    "No AI model loaded. Train a model first."
-                )
-                self.trade_mode_combo.setCurrentIndex(0)
-                return
+    def _apply_auto_trade_mode(self, mode: AutoTradeMode) -> None:
+        _apply_auto_trade_mode_impl(self, mode)
 
-            if self.executor is None:
-                QMessageBox.warning(
-                    self, "Cannot Enable Auto-Trade",
-                    "Not connected to broker. Connect first."
-                )
-                self.trade_mode_combo.setCurrentIndex(0)
-                return
+    def _update_auto_trade_status_label(self, mode: AutoTradeMode) -> None:
+        _update_auto_trade_status_label_impl(self, mode)
 
-            if (
-                self.executor
-                and self.executor.mode == TradingMode.LIVE
-                and CONFIG.auto_trade.confirm_live_auto_trade
-            ):
-                reply = QMessageBox.warning(
-                    self, "LIVE Auto-Trading",
-                    "You are enabling AUTOMATIC trading with REAL MONEY!\n\n"
-                    "The AI will execute trades WITHOUT your confirmation.\n\n"
-                    "Risk limits still apply, but trades happen automatically.\n\n"
-                    "Are you absolutely sure?",
-                    QMessageBox.StandardButton.Yes
-                    | QMessageBox.StandardButton.No,
-                    QMessageBox.StandardButton.No
-                )
-                if reply != QMessageBox.StandardButton.Yes:
-                    self.trade_mode_combo.setCurrentIndex(0)
-                    return
+    def _toggle_auto_pause(self) -> None:
+        _toggle_auto_pause_impl(self)
 
-            reply = QMessageBox.question(
-                self, "Enable Auto-Trading",
-                "Enable fully automatic trading?\n\n"
-                f"- Min confidence: {CONFIG.auto_trade.min_confidence:.0%}\n"
-                f"- Max trades/day: {CONFIG.auto_trade.max_trades_per_day}\n"
-                f"- Max order value: CNY {CONFIG.auto_trade.max_auto_order_value:,.0f}\n"
-                f"- Max auto positions: {CONFIG.auto_trade.max_auto_positions}\n\n"
-                "You can pause or switch to Manual at any time.",
-                QMessageBox.StandardButton.Yes
-                | QMessageBox.StandardButton.No,
-                QMessageBox.StandardButton.No
-            )
-            if reply != QMessageBox.StandardButton.Yes:
-                self.trade_mode_combo.setCurrentIndex(0)
-                return
+    def _approve_all_pending(self) -> None:
+        _approve_all_pending_impl(self)
 
-        self._auto_trade_mode = new_mode
-        self._apply_auto_trade_mode(new_mode)
+    def _reject_all_pending(self) -> None:
+        _reject_all_pending_impl(self)
 
-    def _apply_auto_trade_mode(self, mode: AutoTradeMode):
-        """Apply the auto-trade mode to the system."""
-        CONFIG.auto_trade.enabled = (mode != AutoTradeMode.MANUAL)
+    def _show_auto_trade_settings(self) -> None:
+        _show_auto_trade_settings_impl(self)
 
-        # Update executor auto-trader
-        if self.executor and self.executor.auto_trader:
-            self.executor.set_auto_mode(mode)
+    def _on_auto_trade_action_safe(self, action: AutoTradeAction) -> None:
+        _on_auto_trade_action_safe_impl(self, action)
 
-            # Update watchlist on auto-trader
-            self.executor.auto_trader.update_watchlist(self.watch_list)
+    def _on_auto_trade_action(self, action: AutoTradeAction) -> None:
+        _on_auto_trade_action_impl(self, action)
 
-            if self.predictor:
-                self.executor.auto_trader.update_predictor(self.predictor)
-        elif mode != AutoTradeMode.MANUAL:
-            # Need to initialize auto-trader first
-            self._init_auto_trader()
-            if self.executor and self.executor.auto_trader:
-                self.executor.set_auto_mode(mode)
+    def _on_pending_approval_safe(self, action: AutoTradeAction) -> None:
+        _on_pending_approval_safe_impl(self, action)
 
-        self._update_auto_trade_status_label(mode)
+    def _on_pending_approval(self, action: AutoTradeAction) -> None:
+        _on_pending_approval_impl(self, action)
 
-        # Enable/disable manual trade buttons based on mode
-        if mode == AutoTradeMode.AUTO:
-            self.buy_btn.setEnabled(False)
-            self.sell_btn.setEnabled(False)
-            self.auto_pause_btn.setEnabled(True)
-            self.log("AUTO mode enabled: AI executes trades automatically", "success")
-        elif mode == AutoTradeMode.SEMI_AUTO:
-            self.auto_pause_btn.setEnabled(True)
-            self.auto_approve_all_btn.setEnabled(True)
-            self.auto_reject_all_btn.setEnabled(True)
-            self.log(
-                "SEMI-AUTO mode enabled: AI suggests and you approve",
-                "success"
-            )
-        else:
-            self.auto_pause_btn.setEnabled(False)
-            self.auto_approve_all_btn.setEnabled(False)
-            self.auto_reject_all_btn.setEnabled(False)
-            self.log("MANUAL mode enabled: you control all trades", "info")
+    def _refresh_pending_table(self) -> None:
+        _refresh_pending_table_impl(self)
 
-    def _update_auto_trade_status_label(self, mode: AutoTradeMode):
-        """Update the toolbar status label."""
-        if mode == AutoTradeMode.AUTO:
-            self.auto_trade_status_label.setText("  AUTO  ")
-            self.auto_trade_status_label.setStyleSheet(
-                "color: #4CAF50; font-weight: bold; padding: 0 8px;"
-            )
-        elif mode == AutoTradeMode.SEMI_AUTO:
-            self.auto_trade_status_label.setText("  SEMI-AUTO  ")
-            self.auto_trade_status_label.setStyleSheet(
-                "color: #FFD54F; font-weight: bold; padding: 0 8px;"
-            )
-        else:
-            self.auto_trade_status_label.setText("  MANUAL  ")
-            self.auto_trade_status_label.setStyleSheet(
-                "color: #aac3ec; font-weight: bold; padding: 0 8px;"
-            )
-
-    def _toggle_auto_pause(self):
-        """Pause/resume auto-trading."""
-        if not self.executor or not self.executor.auto_trader:
-            return
-
-        state = self.executor.auto_trader.get_state()
-        if state.is_safety_paused or state.is_paused:
-            self.executor.auto_trader.resume()
-            self.auto_pause_btn.setText("Pause Auto")
-            self.log("Auto-trading resumed", "info")
-        else:
-            self.executor.auto_trader.pause("Manually paused by user")
-            self.auto_pause_btn.setText("Resume Auto")
-            self.log("Auto-trading paused", "warning")
-
-    def _approve_all_pending(self):
-        """Approve all pending auto-trade actions."""
-        if not self.executor or not self.executor.auto_trader:
-            return
-
-        pending = self.executor.auto_trader.get_pending_approvals()
-        if not pending:
-            self.log("No pending approvals", "info")
-            return
-
-        reply = QMessageBox.question(
-            self, "Approve All",
-            f"Approve all {len(pending)} pending trades?",
-            QMessageBox.StandardButton.Yes
-            | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No
-        )
-        if reply != QMessageBox.StandardButton.Yes:
-            return
-
-        approved = 0
-        for action in pending:
-            if self.executor.auto_trader.approve_pending(action.id):
-                approved += 1
-
-        self.log(f"Approved {approved}/{len(pending)} pending trades", "success")
-
-    def _reject_all_pending(self):
-        """Reject all pending auto-trade actions."""
-        if not self.executor or not self.executor.auto_trader:
-            return
-
-        pending = self.executor.auto_trader.get_pending_approvals()
-        for action in pending:
-            self.executor.auto_trader.reject_pending(action.id)
-
-        if pending:
-            self.log(f"Rejected {len(pending)} pending trades", "warning")
-
-    def _show_auto_trade_settings(self):
-        """Show auto-trade settings dialog."""
-        from PyQt6.QtWidgets import QDialog, QDialogButtonBox, QFormLayout
-
-        dialog = QDialog(self)
-        dialog.setWindowTitle("Auto-Trade Settings")
-        dialog.setMinimumWidth(500)
-
-        layout = QVBoxLayout(dialog)
-
-        group = QGroupBox("Auto-Trade Parameters")
-        form = QFormLayout(group)
-
-        cfg = CONFIG.auto_trade
-
-        min_conf_spin = QDoubleSpinBox()
-        min_conf_spin.setRange(0.50, 0.99)
-        min_conf_spin.setValue(cfg.min_confidence)
-        min_conf_spin.setSingleStep(0.05)
-        min_conf_spin.setSuffix(" ")
-        form.addRow("Min Confidence:", min_conf_spin)
-
-        min_strength_spin = QDoubleSpinBox()
-        min_strength_spin.setRange(0.30, 0.99)
-        min_strength_spin.setValue(cfg.min_signal_strength)
-        min_strength_spin.setSingleStep(0.05)
-        form.addRow("Min Signal Strength:", min_strength_spin)
-
-        min_agreement_spin = QDoubleSpinBox()
-        min_agreement_spin.setRange(0.30, 0.99)
-        min_agreement_spin.setValue(cfg.min_model_agreement)
-        min_agreement_spin.setSingleStep(0.05)
-        form.addRow("Min Model Agreement:", min_agreement_spin)
-
-        max_positions_spin = QSpinBox()
-        max_positions_spin.setRange(1, 20)
-        max_positions_spin.setValue(cfg.max_auto_positions)
-        form.addRow("Max Auto Positions:", max_positions_spin)
-
-        max_order_spin = QDoubleSpinBox()
-        max_order_spin.setRange(1000, 1000000)
-        max_order_spin.setValue(cfg.max_auto_order_value)
-        max_order_spin.setPrefix("CNY ")
-        max_order_spin.setSingleStep(5000)
-        form.addRow("Max Order Value:", max_order_spin)
-
-        max_trades_spin = QSpinBox()
-        max_trades_spin.setRange(1, 50)
-        max_trades_spin.setValue(cfg.max_trades_per_day)
-        form.addRow("Max Trades/Day:", max_trades_spin)
-
-        max_per_stock_spin = QSpinBox()
-        max_per_stock_spin.setRange(1, 10)
-        max_per_stock_spin.setValue(cfg.max_trades_per_stock_per_day)
-        form.addRow("Max Trades/Stock/Day:", max_per_stock_spin)
-
-        cooldown_spin = QSpinBox()
-        cooldown_spin.setRange(30, 3600)
-        cooldown_spin.setValue(cfg.cooldown_after_trade_seconds)
-        cooldown_spin.setSuffix(" sec")
-        form.addRow("Cooldown After Trade:", cooldown_spin)
-
-        scan_interval_spin = QSpinBox()
-        scan_interval_spin.setRange(10, 600)
-        scan_interval_spin.setValue(cfg.scan_interval_seconds)
-        scan_interval_spin.setSuffix(" sec")
-        form.addRow("Scan Interval:", scan_interval_spin)
-
-        max_pos_pct_spin = QDoubleSpinBox()
-        max_pos_pct_spin.setRange(1.0, 30.0)
-        max_pos_pct_spin.setValue(cfg.max_auto_position_pct)
-        max_pos_pct_spin.setSuffix(" %")
-        form.addRow("Max Auto Position %:", max_pos_pct_spin)
-
-        vol_pause_check = QCheckBox("Pause on high volatility")
-        vol_pause_check.setChecked(cfg.pause_on_high_volatility)
-        form.addRow("", vol_pause_check)
-
-        auto_stop_check = QCheckBox("Auto stop-loss")
-        auto_stop_check.setChecked(cfg.auto_stop_loss)
-        form.addRow("", auto_stop_check)
-
-        layout.addWidget(group)
-
-        signals_group = QGroupBox("Allowed Signals")
-        signals_layout = QGridLayout(signals_group)
-
-        strong_buy_check = QCheckBox("STRONG_BUY")
-        strong_buy_check.setChecked(cfg.allow_strong_buy)
-        signals_layout.addWidget(strong_buy_check, 0, 0)
-
-        buy_check = QCheckBox("BUY")
-        buy_check.setChecked(cfg.allow_buy)
-        signals_layout.addWidget(buy_check, 0, 1)
-
-        sell_check = QCheckBox("SELL")
-        sell_check.setChecked(cfg.allow_sell)
-        signals_layout.addWidget(sell_check, 1, 0)
-
-        strong_sell_check = QCheckBox("STRONG_SELL")
-        strong_sell_check.setChecked(cfg.allow_strong_sell)
-        signals_layout.addWidget(strong_sell_check, 1, 1)
-
-        layout.addWidget(signals_group)
-
-        btns = QDialogButtonBox(
-            QDialogButtonBox.StandardButton.Save
-            | QDialogButtonBox.StandardButton.Cancel
-        )
-
-        def save_settings():
-            cfg.min_confidence = min_conf_spin.value()
-            cfg.min_signal_strength = min_strength_spin.value()
-            cfg.min_model_agreement = min_agreement_spin.value()
-            cfg.max_auto_positions = max_positions_spin.value()
-            cfg.max_auto_order_value = max_order_spin.value()
-            cfg.max_trades_per_day = max_trades_spin.value()
-            cfg.max_trades_per_stock_per_day = max_per_stock_spin.value()
-            cfg.cooldown_after_trade_seconds = cooldown_spin.value()
-            cfg.scan_interval_seconds = scan_interval_spin.value()
-            cfg.max_auto_position_pct = max_pos_pct_spin.value()
-            cfg.pause_on_high_volatility = vol_pause_check.isChecked()
-            cfg.auto_stop_loss = auto_stop_check.isChecked()
-            cfg.allow_strong_buy = strong_buy_check.isChecked()
-            cfg.allow_buy = buy_check.isChecked()
-            cfg.allow_sell = sell_check.isChecked()
-            cfg.allow_strong_sell = strong_sell_check.isChecked()
-
-            try:
-                CONFIG.save()
-            except Exception as exc:
-                log.debug("Suppressed exception in ui/app.py", exc_info=exc)
-
-            self.log("Auto-trade settings saved", "success")
-            dialog.accept()
-
-        btns.accepted.connect(save_settings)
-        btns.rejected.connect(dialog.reject)
-        layout.addWidget(btns)
-
-        dialog.exec()
-
-    def _on_auto_trade_action_safe(self, action: AutoTradeAction):
-        """Thread-safe callback from auto-trader action."""
-        QTimer.singleShot(0, lambda: self._on_auto_trade_action(action))
-
-    def _on_auto_trade_action(self, action: AutoTradeAction):
-        """Handle auto-trade action on UI thread."""
-        row = 0
-        self.auto_actions_table.insertRow(row)
-
-        self.auto_actions_table.setItem(row, 0, QTableWidgetItem(
-            action.timestamp.strftime("%H:%M:%S")
-            if action.timestamp else "--"
-        ))
-
-        code_text = action.stock_code
-        if action.stock_name:
-            code_text += f" {action.stock_name}"
-        self.auto_actions_table.setItem(row, 1, QTableWidgetItem(code_text))
-
-        signal_item = QTableWidgetItem(action.signal_type)
-        if action.signal_type in ("STRONG_BUY", "BUY"):
-            signal_item.setForeground(QColor("#4CAF50"))
-        elif action.signal_type in ("STRONG_SELL", "SELL"):
-            signal_item.setForeground(QColor("#F44336"))
-        self.auto_actions_table.setItem(row, 2, signal_item)
-
-        self.auto_actions_table.setItem(
-            row, 3, QTableWidgetItem(f"{action.confidence:.0%}")
-        )
-
-        decision_item = QTableWidgetItem(action.decision)
-        if action.decision == "EXECUTED":
-            decision_item.setForeground(QColor("#4CAF50"))
-        elif action.decision == "SKIPPED":
-            decision_item.setForeground(QColor("#FFD54F"))
-        elif action.decision == "REJECTED":
-            decision_item.setForeground(QColor("#F44336"))
-        self.auto_actions_table.setItem(row, 4, decision_item)
-
-        self.auto_actions_table.setItem(
-            row, 5, QTableWidgetItem(
-                f"{action.quantity:,}" if action.quantity else "--"
-            )
-        )
-
-        self.auto_actions_table.setItem(
-            row, 6, QTableWidgetItem(
-                action.skip_reason if action.skip_reason else "--"
-            )
-        )
-
-        while self.auto_actions_table.rowCount() > 100:
-            self.auto_actions_table.removeRow(
-                self.auto_actions_table.rowCount() - 1
-            )
-
-        if action.decision == "EXECUTED":
-            self.log(
-                f"AUTO-TRADE: {action.side.upper()} "
-                f"{action.quantity} {action.stock_code} "
-                f"@ CNY {action.price:.2f} ({action.confidence:.0%})",
-                "success"
-            )
-        elif action.decision == "SKIPPED":
-            self.log(
-                f"Auto-trade skipped {action.stock_code}: {action.skip_reason}",
-                "info"
-            )
-
-        if action.decision == "EXECUTED":
-            QApplication.alert(self)
-
-    def _on_pending_approval_safe(self, action: AutoTradeAction):
-        """Thread-safe callback for pending approval."""
-        QTimer.singleShot(0, lambda: self._on_pending_approval(action))
-
-    def _on_pending_approval(self, action: AutoTradeAction):
-        """Handle pending approval on UI thread."""
-        row = self.pending_table.rowCount()
-        self.pending_table.insertRow(row)
-
-        self.pending_table.setItem(row, 0, QTableWidgetItem(
-            action.timestamp.strftime("%H:%M:%S")
-            if action.timestamp else "--"
-        ))
-        self.pending_table.setItem(
-            row, 1, QTableWidgetItem(action.stock_code)
-        )
-
-        signal_item = QTableWidgetItem(action.signal_type)
-        if action.signal_type in ("STRONG_BUY", "BUY"):
-            signal_item.setForeground(QColor("#4CAF50"))
-        else:
-            signal_item.setForeground(QColor("#F44336"))
-        self.pending_table.setItem(row, 2, signal_item)
-
-        self.pending_table.setItem(
-            row, 3, QTableWidgetItem(f"{action.confidence:.0%}")
-        )
-        self.pending_table.setItem(
-            row, 4, QTableWidgetItem(f"CNY {action.price:.2f}")
-        )
-
-        # Approve/Reject buttons
-        btn_widget = QWidget()
-        btn_layout = QHBoxLayout(btn_widget)
-        btn_layout.setContentsMargins(2, 2, 2, 2)
-
-        approve_btn = QPushButton("Approve")
-        approve_btn.setFixedWidth(84)
-        approve_btn.setToolTip("Approve this trade")
-        action_id = action.id
-
-        def do_approve():
-            if self.executor and self.executor.auto_trader:
-                self.executor.auto_trader.approve_pending(action_id)
-                self._refresh_pending_table()
-
-        approve_btn.clicked.connect(do_approve)
-
-        reject_btn = QPushButton("Reject")
-        reject_btn.setFixedWidth(84)
-        reject_btn.setToolTip("Reject this trade")
-
-        def do_reject():
-            if self.executor and self.executor.auto_trader:
-                self.executor.auto_trader.reject_pending(action_id)
-                self._refresh_pending_table()
-
-        reject_btn.clicked.connect(do_reject)
-
-        btn_layout.addWidget(approve_btn)
-        btn_layout.addWidget(reject_btn)
-        self.pending_table.setCellWidget(row, 5, btn_widget)
-
-        self.log(
-            f"PENDING: {action.signal_type} {action.stock_code} "
-            f"@ CNY {action.price:.2f} - approve or reject",
-            "warning"
-        )
-        QApplication.alert(self)
-
-    def _refresh_pending_table(self):
-        """Rebuild pending table from auto-trader state."""
-        self.pending_table.setRowCount(0)
-
-        if not self.executor or not self.executor.auto_trader:
-            return
-
-        pending = self.executor.auto_trader.get_pending_approvals()
-        for action in pending:
-            self._on_pending_approval(action)
-
-    def _refresh_auto_trade_ui(self):
-        """Periodic refresh of auto-trade status display."""
-        self._update_correct_guess_profit_ui()
-
-        if not self.executor or not self.executor.auto_trader:
-            self.auto_trade_labels.get('mode', QLabel()).setText(
-                self._auto_trade_mode.value.upper()
-            )
-            self.auto_trade_labels.get('trades', QLabel()).setText("0")
-            self.auto_trade_labels.get('pnl', QLabel()).setText("--")
-            self.auto_trade_labels.get('status', QLabel()).setText("--")
-            self.auto_pause_btn.setText("Pause Auto")
-            self.auto_pause_btn.setEnabled(False)
-            self.auto_approve_all_btn.setText("Approve All")
-            self.auto_approve_all_btn.setEnabled(False)
-            self.auto_reject_all_btn.setEnabled(False)
-            return
-
-        state = self.executor.auto_trader.get_state()
-
-        mode_label = self.auto_trade_labels.get('mode')
-        if mode_label:
-            mode_text = state.mode.value.upper()
-            if state.is_safety_paused:
-                mode_text += " (PAUSED)"
-            mode_label.setText(mode_text)
-
-            if state.mode == AutoTradeMode.AUTO:
-                color = "#F44336" if state.is_safety_paused else "#4CAF50"
-            elif state.mode == AutoTradeMode.SEMI_AUTO:
-                color = "#FFD54F"
-            else:
-                color = "#aac3ec"
-            mode_label.setStyleSheet(
-                f"color: {color}; font-size: 16px; font-weight: bold;"
-            )
-
-        trades_label = self.auto_trade_labels.get('trades')
-        if trades_label:
-            trades_label.setText(
-                f"{state.trades_today} "
-                f"(B:{state.buys_today} S:{state.sells_today})"
-            )
-
-        # P&L
-        pnl_label = self.auto_trade_labels.get('pnl')
-        if pnl_label:
-            pnl = state.auto_trade_pnl
-            pnl_color = "#35b57c" if pnl >= 0 else "#e5534b"
-            pnl_label.setText(f"CNY {pnl:+,.2f}")
-            pnl_label.setStyleSheet(
-                f"color: {pnl_color}; font-size: 16px; font-weight: bold;"
-            )
-
-        status_label = self.auto_trade_labels.get('status')
-        if status_label:
-            if state.is_safety_paused:
-                status_label.setText(f"Paused: {state.pause_reason}")
-                status_label.setStyleSheet(
-                    "color: #F44336; font-size: 14px; font-weight: bold;"
-                )
-            elif state.is_running:
-                last_scan = ""
-                if state.last_scan_time:
-                    elapsed = (
-                        datetime.now() - state.last_scan_time
-                    ).total_seconds()
-                    last_scan = f" ({elapsed:.0f}s ago)"
-                status_label.setText(f"Running{last_scan}")
-                status_label.setStyleSheet(
-                    "color: #4CAF50; font-size: 14px; font-weight: bold;"
-                )
-            else:
-                status_label.setText("Idle")
-                status_label.setStyleSheet(
-                    "color: #aac3ec; font-size: 14px;"
-                )
-
-        if state.is_safety_paused or state.is_paused:
-            self.auto_pause_btn.setText("Resume Auto")
-        else:
-            self.auto_pause_btn.setText("Pause Auto")
-        self.auto_pause_btn.setEnabled(state.mode != AutoTradeMode.MANUAL)
-
-        pending_count = len(state.pending_approvals)
-        can_bulk_decide = (
-            state.mode == AutoTradeMode.SEMI_AUTO and pending_count > 0
-        )
-        if can_bulk_decide:
-            self.auto_approve_all_btn.setText(
-                f"Approve All ({pending_count})"
-            )
-            self.auto_approve_all_btn.setEnabled(True)
-            self.auto_reject_all_btn.setEnabled(True)
-        else:
-            self.auto_approve_all_btn.setText("Approve All")
-            self.auto_approve_all_btn.setEnabled(False)
-            self.auto_reject_all_btn.setEnabled(False)
+    def _refresh_auto_trade_ui(self) -> None:
+        _refresh_auto_trade_ui_impl(self)
 
     # =========================================================================
     # =========================================================================
 
-    def _update_clock(self):
+    def _update_clock(self) -> None:
         """Update clock"""
         self.time_label.setText(
             datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         )
 
-    def _update_market_status(self):
+    def _update_market_status(self) -> None:
         """Update market status"""
         is_open = CONFIG.is_market_open()
         hours_text = self._market_hours_text()
@@ -6302,174 +4336,64 @@ class MainApp(MainAppCommonMixin, QMainWindow):
             )
             self.market_label.setStyleSheet("color: #e5534b;")
 
-    def log(self, message: str, level: str = "info"):
-        """Log message to UI"""
-        timestamp = datetime.now().strftime("%H:%M:%S")
-
-        colors = {
-            "info": "#dbe4f3",
-            "success": "#35b57c",
-            "warning": "#d8a03a",
-            "error": "#e5534b",
-        }
-        color = colors.get(level, "#dbe4f3")
-
-        formatted = (
-            f'<span style="color: #888;">[{timestamp}]</span> '
-            f'<span style="color: {color};">{message}</span>'
-        )
-
-        if hasattr(self.log_widget, 'log'):
-            self.log_widget.log(message, level)
-        elif hasattr(self.log_widget, 'append'):
-            self.log_widget.append(formatted)
-
-        log.info(message)
+    def log(self, message: str, level: str = "info") -> None:
+        _log_impl(self, message, level)
 
     # =========================================================================
     # CLOSE EVENT (FIX #3 - calls super)
     # =========================================================================
 
-    def closeEvent(self, event):
-        """Handle window close safely."""
-        if self.monitor:
-            try:
-                self.monitor.stop()
-                self.monitor.wait(3000)
-            except Exception as exc:
-                log.debug("Suppressed exception in ui/app.py", exc_info=exc)
-            self.monitor = None
-
-        # Stop auto-trader
-        if self.executor and self.executor.auto_trader:
-            try:
-                self.executor.auto_trader.stop()
-            except Exception as exc:
-                log.debug("Suppressed exception in ui/app.py", exc_info=exc)
-
-        all_workers = set(self._active_workers) | set(self.workers.values())
-        for worker in list(all_workers):
-            try:
-                worker.cancel()
-                worker.quit()
-                if not worker.wait(3000):
-                    worker.terminate()
-                    worker.wait(1000)
-            except Exception as exc:
-                log.debug("Suppressed exception in ui/app.py", exc_info=exc)
-        self._active_workers.clear()
-        self.workers.clear()
-
-        if self.executor:
-            try:
-                self.executor.stop()
-            except Exception as exc:
-                log.debug("Suppressed exception in ui/app.py", exc_info=exc)
-            self.executor = None
-
-        for timer_name in (
-            "clock_timer", "market_timer",
-            "portfolio_timer", "watchlist_timer",
-            "auto_trade_timer", "chart_live_timer"
-        ):
-            timer = getattr(self, timer_name, None)
-            try:
-                if timer:
-                    timer.stop()
-            except Exception as exc:
-                log.debug("Suppressed exception in ui/app.py", exc_info=exc)
-
-        try:
-            self._shutdown_session_cache_writer()
-        except Exception as exc:
-            log.debug("Suppressed exception in ui/app.py", exc_info=exc)
-
-        try:
-            self._save_state()
-        except Exception as exc:
-            log.debug("Suppressed exception in ui/app.py", exc_info=exc)
-
-        event.accept()
+    def closeEvent(self, event: Any) -> None:
+        _close_event_impl(self, event)
         super().closeEvent(event)
 
     # =========================================================================
     # =========================================================================
 
-    def _save_state(self):
-        """Save application state for next session"""
-        try:
-            import json
-            safe_watch_list = _sanitize_watch_list(
-                self.watch_list,
-                max_size=self.MAX_WATCHLIST_SIZE,
-            )
-            self.watch_list = safe_watch_list
-            state = {
-                'watch_list': safe_watch_list,
-                'interval': self.interval_combo.currentText(),
-                'forecast': self.forecast_spin.value(),
-                'lookback': self.lookback_spin.value(),
-                'capital': self.capital_spin.value(),
-                'last_stock': self.stock_input.text(),
-                'auto_trade_mode': self._auto_trade_mode.value,
-            }
+    def _save_state(self) -> None:
+        _save_state_impl(self)
 
-            state_path = CONFIG.DATA_DIR / "app_state.json"
-            state_path.parent.mkdir(parents=True, exist_ok=True)
+    def _load_state(self) -> None:
+        _load_state_impl(self)
 
-            with open(state_path, 'w') as f:
-                json.dump(state, f, indent=2)
-        except Exception as e:
-            log.debug(f"Failed to save state: {e}")
+# Bind extracted bar/interval operations to MainApp.
+MainApp._seven_day_lookback = _app_bar_ops._seven_day_lookback
+MainApp._trained_stock_window_bars = _app_bar_ops._trained_stock_window_bars
+MainApp._recommended_lookback = _app_bar_ops._recommended_lookback
+MainApp._queue_history_refresh = _app_bar_ops._queue_history_refresh
+MainApp._consume_history_refresh = _app_bar_ops._consume_history_refresh
+MainApp._schedule_analysis_recovery = _app_bar_ops._schedule_analysis_recovery
+MainApp._history_window_bars = _app_bar_ops._history_window_bars
+MainApp._ts_to_epoch = _app_bar_ops._ts_to_epoch
+MainApp._epoch_to_iso = _app_bar_ops._epoch_to_iso
+MainApp._now_iso = _app_bar_ops._now_iso
+MainApp._merge_bars = _app_bar_ops._merge_bars
+MainApp._interval_seconds = _app_bar_ops._interval_seconds
+MainApp._interval_token_from_seconds = _app_bar_ops._interval_token_from_seconds
+MainApp._bars_needed_from_base_interval = _app_bar_ops._bars_needed_from_base_interval
+MainApp._resample_chart_bars = _app_bar_ops._resample_chart_bars
+MainApp._dominant_bar_interval = _app_bar_ops._dominant_bar_interval
+MainApp._effective_anchor_price = _app_bar_ops._effective_anchor_price
+MainApp._stabilize_chart_depth = _app_bar_ops._stabilize_chart_depth
+MainApp._bar_bucket_epoch = _app_bar_ops._bar_bucket_epoch
+MainApp._bar_trading_date = _app_bar_ops._bar_trading_date
+MainApp._is_intraday_day_boundary = _app_bar_ops._is_intraday_day_boundary
+MainApp._shanghai_now = _app_bar_ops._shanghai_now
+MainApp._is_cn_trading_day = _app_bar_ops._is_cn_trading_day
+MainApp._market_hours_text = _app_bar_ops._market_hours_text
+MainApp._next_market_open = _app_bar_ops._next_market_open
+MainApp._is_market_session_timestamp = _app_bar_ops._is_market_session_timestamp
+MainApp._filter_bars_to_market_session = _app_bar_ops._filter_bars_to_market_session
+MainApp._bar_safety_caps = _app_bar_ops._bar_safety_caps
+MainApp._synthetic_tick_jump_cap = _app_bar_ops._synthetic_tick_jump_cap
+MainApp._sanitize_ohlc = _app_bar_ops._sanitize_ohlc
+MainApp._is_outlier_tick = _app_bar_ops._is_outlier_tick
+MainApp._get_levels_dict = _app_bar_ops._get_levels_dict
+MainApp._scrub_chart_bars = _app_bar_ops._scrub_chart_bars
+MainApp._rescale_chart_bars_to_anchor = _app_bar_ops._rescale_chart_bars_to_anchor
+MainApp._recover_chart_bars_from_close = _app_bar_ops._recover_chart_bars_from_close
 
-    def _load_state(self):
-        """Load application state from previous session"""
-        try:
-            import json
-            state_path = CONFIG.DATA_DIR / "app_state.json"
-
-            if state_path.exists():
-                with open(state_path) as f:
-                    state = json.load(f)
-
-                if 'watch_list' in state:
-                    loaded = state['watch_list']
-                    self.watch_list = _sanitize_watch_list(
-                        loaded,
-                        max_size=self.MAX_WATCHLIST_SIZE,
-                    )
-                if 'forecast' in state:
-                    self.forecast_spin.setValue(state['forecast'])
-                # Startup should always begin on 1m with latest 7-day window.
-                self.interval_combo.blockSignals(True)
-                try:
-                    self.interval_combo.setCurrentText(self.STARTUP_INTERVAL)
-                finally:
-                    self.interval_combo.blockSignals(False)
-                self.lookback_spin.setValue(
-                    self._recommended_lookback(self.STARTUP_INTERVAL)
-                )
-                if 'capital' in state:
-                    self.capital_spin.setValue(state['capital'])
-                if 'last_stock' in state:
-                    self.stock_input.setText(state['last_stock'])
-                if 'auto_trade_mode' in state:
-                    try:
-                        self._auto_trade_mode = AutoTradeMode(
-                            state['auto_trade_mode']
-                        )
-                        # Don't auto-start AUTO mode on load for safety
-                        # User must explicitly re-enable
-                        if self._auto_trade_mode == AutoTradeMode.AUTO:
-                            self._auto_trade_mode = AutoTradeMode.MANUAL
-                    except (ValueError, KeyError):
-                        self._auto_trade_mode = AutoTradeMode.MANUAL
-
-                log.debug("Application state restored")
-        except Exception as e:
-            log.debug(f"Failed to load state: {e}")
-
-def run_app():
+def run_app() -> None:
     """Run the application"""
     os.environ.setdefault('QT_AUTO_SCREEN_SCALE_FACTOR', '1')
 
@@ -6507,8 +4431,7 @@ def run_app():
 
     sys.exit(exit_code)
 
-
-def _install_sigint_handler(app: QApplication):
+def _install_sigint_handler(app: QApplication) -> Any | None:
     """Route Ctrl+C to Qt quit for graceful terminal shutdown."""
     try:
         previous = signal.getsignal(signal.SIGINT)
@@ -6518,8 +4441,7 @@ def _install_sigint_handler(app: QApplication):
         log.debug(f"SIGINT handler install failed: {e}")
         return None
 
-
-def _restore_sigint_handler(previous_handler) -> None:
+def _restore_sigint_handler(previous_handler: Any | None) -> None:
     """Restore previous SIGINT handler after app loop exits."""
     if previous_handler is None:
         return
@@ -6530,3 +4452,4 @@ def _restore_sigint_handler(previous_handler) -> None:
 
 if __name__ == "__main__":
     run_app()
+

@@ -6,7 +6,7 @@
     "broad-except": 37
   },
   "ui/app.py": {
-    "broad-except": 139
+    "broad-except": 84
   },
   "ui/app_chart_pipeline.py": {
     "broad-except": 24

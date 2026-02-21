@@ -4,7 +4,14 @@
       "Bash(done)",
       "Bash(while read f)",
       "Bash(do wc -l \"$f\")",
-      "Bash(python -c:*)"
+      "Bash(python -c:*)",
+      "Bash(head:*)",
+      "Bash(tail:*)",
+      "Bash(cd \"F:/Trading app/Trading-graph\" && python -m pytest tests/test_data.py tests/test_models.py tests/test_main_dependencies.py tests/test_config_bool_parsing.py -x --tb=short -q 2>&1)",
+      "Bash(cd \"F:/Trading app/Trading-graph\" && python -m pytest tests/ --tb=short -q 2>&1)",
+      "Bash(wc:*)",
+      "Bash(cd \"F:/Trading app/Trading-graph\" && python -m pytest tests/test_deployment_snapshot.py tests/test_exception_policy_gate.py tests/test_executor_health_guard.py tests/test_executor_thread_lifecycle.py tests/test_feed_manager_watchdog.py --tb=short -q -v 2>&1)",
+      "Bash(grep:*)"
     ]
   }
 }

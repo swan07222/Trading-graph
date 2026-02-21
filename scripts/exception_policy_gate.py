@@ -12,6 +12,7 @@ DEFAULT_TARGETS: tuple[str, ...] = (
     "models/predictor.py",
     "models/auto_learner.py",
     "ui/app.py",
+    "ui/app_bar_ops.py",
     "ui/app_panels.py",
     "ui/app_chart_pipeline.py",
 )
