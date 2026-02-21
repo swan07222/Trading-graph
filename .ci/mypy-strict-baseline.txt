@@ -63,48 +63,28 @@ data/feeds.py:959:no-untyped-call:Call to untyped function "disconnect" of "Data
 data/feeds.py:975:no-untyped-call:Call to untyped function "WebSocketFeed" in typed context
 data/fetcher_registry.py:58:type-arg:Missing type parameters for generic type "Token"
 data/fetcher_registry.py:62:type-arg:Missing type parameters for generic type "Token"
-trading/executor.py:1045:no-untyped-def:Function is missing a return type annotation
-trading/executor.py:1054:no-untyped-def:Function is missing a return type annotation
-trading/executor.py:1074:no-untyped-def:Function is missing a return type annotation
-trading/executor.py:107:type-arg:Missing type parameters for generic type "deque"
-trading/executor.py:1089:no-untyped-def:Function is missing a return type annotation
-trading/executor.py:108:type-arg:Missing type parameters for generic type "deque"
-trading/executor.py:1117:no-untyped-def:Function is missing a return type annotation
-trading/executor.py:1379:no-untyped-def:Function is missing a return type annotation
-trading/executor.py:158:type-arg:Missing type parameters for generic type "dict"
-trading/executor.py:1675:no-untyped-def:Function is missing a type annotation
-trading/executor.py:1691:no-untyped-def:Function is missing a type annotation for one or more arguments
-trading/executor.py:170:no-untyped-call:Call to untyped function "_restore_runtime_state" in typed context
-trading/executor.py:1719:no-untyped-def:Function is missing a return type annotation
-trading/executor.py:1757:no-untyped-def:Function is missing a return type annotation
-trading/executor.py:1762:no-untyped-def:Function is missing a return type annotation
-trading/executor.py:1914:no-untyped-call:Call to untyped function "_process_pending_fills" in typed context
-trading/executor.py:1941:no-untyped-def:Function is missing a return type annotation
-trading/executor.py:1947:no-untyped-call:Call to untyped function "_rebuild_broker_mappings" in typed context
-trading/executor.py:1949:no-untyped-call:Call to untyped function "_process_pending_fills" in typed context
-trading/executor.py:1965:no-untyped-def:Function is missing a return type annotation
-trading/executor.py:2066:no-untyped-def:Function is missing a return type annotation
-trading/executor.py:2083:no-untyped-def:Function is missing a type annotation for one or more arguments
-trading/executor.py:2158:no-untyped-def:Function is missing a return type annotation
-trading/executor.py:2167:no-untyped-call:Call to untyped function "_process_pending_fills" in typed context
-trading/executor.py:2377:no-untyped-def:Function is missing a return type annotation
-trading/executor.py:2404:no-untyped-def:Function is missing a return type annotation
-trading/executor.py:2462:no-untyped-call:Call to untyped function "_process_pending_fills" in typed context
-trading/executor.py:2529:no-untyped-def:Function is missing a return type annotation
-trading/executor.py:2584:no-untyped-def:Function is missing a return type annotation
-trading/executor.py:2615:no-untyped-call:Call to untyped function "_startup_sync" in typed context
-trading/executor.py:2623:no-untyped-def:Function is missing a return type annotation
-trading/executor.py:2657:no-untyped-def:Function is missing a return type annotation
-trading/executor.py:2681:no-untyped-def:Function is missing a return type annotation
-trading/executor.py:2686:no-untyped-def:Function is missing a return type annotation
-trading/executor.py:286:no-untyped-def:Function is missing a return type annotation
-trading/executor.py:286:no-untyped-def:Function is missing a type annotation for one or more arguments
-trading/executor.py:296:no-untyped-call:Call to untyped function "_restore_auto_trader_state" in typed context
-trading/executor.py:299:no-untyped-def:Function is missing a return type annotation
-trading/executor.py:325:no-untyped-def:Function is missing a return type annotation
-trading/executor.py:331:no-untyped-def:Function is missing a return type annotation
-trading/executor.py:430:no-untyped-call:Call to untyped function "_rebuild_broker_mappings" in typed context
-trading/executor.py:502:no-untyped-call:Call to untyped function "_startup_sync" in typed context
-trading/executor.py:710:no-untyped-def:Function is missing a type annotation
-trading/executor.py:753:no-untyped-def:Function is missing a return type annotation
-trading/executor.py:893:no-untyped-def:Function is missing a return type annotation
+trading/executor.py:1011:no-untyped-def:Function is missing a type annotation for one or more arguments
+trading/executor.py:1039:no-untyped-def:Function is missing a return type annotation
+trading/executor.py:1077:no-untyped-def:Function is missing a return type annotation
+trading/executor.py:1081:no-untyped-def:Function is missing a return type annotation
+trading/executor.py:1097:no-untyped-def:Function is missing a return type annotation
+trading/executor.py:1110:no-untyped-def:Function is missing a return type annotation
+trading/executor.py:1136:no-untyped-def:Function is missing a return type annotation
+trading/executor.py:1175:no-untyped-def:Function is missing a return type annotation
+trading/executor.py:1209:no-untyped-def:Function is missing a return type annotation
+trading/executor.py:1233:no-untyped-def:Function is missing a return type annotation
+trading/executor.py:1238:no-untyped-def:Function is missing a return type annotation
+trading/executor.py:210:no-untyped-def:Function is missing a return type annotation
+trading/executor.py:210:no-untyped-def:Function is missing a type annotation for one or more arguments
+trading/executor.py:220:no-untyped-call:Call to untyped function "_restore_auto_trader_state" in typed context
+trading/executor.py:223:no-untyped-def:Function is missing a return type annotation
+trading/executor.py:249:no-untyped-def:Function is missing a return type annotation
+trading/executor.py:255:no-untyped-def:Function is missing a return type annotation
+trading/executor.py:498:no-untyped-def:Function is missing a type annotation
+trading/executor.py:540:no-untyped-def:Function is missing a return type annotation
+trading/executor.py:692:no-untyped-def:Function is missing a return type annotation
+trading/executor.py:701:no-untyped-def:Function is missing a return type annotation
+trading/executor.py:721:no-untyped-def:Function is missing a return type annotation
+trading/executor.py:736:no-untyped-def:Function is missing a return type annotation
+trading/executor.py:974:no-untyped-def:Function is missing a return type annotation
+trading/executor.py:995:no-untyped-def:Function is missing a type annotation
