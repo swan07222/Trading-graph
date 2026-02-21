@@ -1,11 +1,8 @@
 # ui/auto_learn_dialog.py
 
-import threading
-import time
-import traceback
 from datetime import datetime
 
-from PyQt6.QtCore import Qt, QThread, pyqtSignal
+from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
@@ -29,12 +26,13 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from utils.logger import get_logger
 from ui.auto_learn_workers import (
     AutoLearnWorker,
     StockValidatorWorker,
     TargetedLearnWorker,
+    _get_auto_learner,
 )
+from utils.logger import get_logger
 
 log = get_logger(__name__)
 

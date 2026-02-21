@@ -1,19 +1,14 @@
 # data/news.py
-import copy
 import html
 import json
 import math
 import os
 import re
 import ssl
-import threading
-import time
-from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
-import numpy as np
 import requests
 
 from utils.logger import get_logger
@@ -990,5 +985,13 @@ def _make_dedup_key(item: NewsItem) -> tuple[str, str]:
     return (title_part, time_part)
 
 
+from data.news_aggregator import (  # noqa: E402, I001
+    NewsAggregator as _NewsAggregator,
+    get_news_aggregator as _get_news_aggregator,
+)
 
-from data.news_aggregator import NewsAggregator, get_news_aggregator
+NewsAggregator = _NewsAggregator
+get_news_aggregator = _get_news_aggregator
+
+
+

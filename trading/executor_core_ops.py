@@ -7,15 +7,14 @@ import threading
 import time
 import uuid
 from collections import deque
+from collections.abc import Callable
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
 from config import CONFIG, TradingMode
 from core.types import (
-    Account,
     AutoTradeMode,
-    AutoTradeState,
     Fill,
     Order,
     OrderSide,
@@ -23,11 +22,16 @@ from core.types import (
     OrderType,
     TradeSignal,
 )
-from trading.health import ComponentType, HealthStatus
-from trading.runtime_lease import RuntimeLeaseClient, create_runtime_lease_client
-from utils.atomic_io import atomic_write_json, read_json
+from trading.alerts import AlertPriority, get_alert_manager
+from trading.auto_trader import AutoTrader
+from trading.broker import BrokerInterface, create_broker
+from trading.health import ComponentType, HealthStatus, get_health_monitor
+from trading.kill_switch import get_kill_switch
+from trading.risk import RiskManager, get_risk_manager
+from trading.runtime_lease import RuntimeLeaseClient
 from utils.logger import get_logger
 from utils.metrics import inc_counter, observe, set_gauge
+from utils.policy import get_trade_policy_engine
 from utils.security import get_access_control, get_audit_log
 
 log = get_logger(__name__)

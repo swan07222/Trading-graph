@@ -1,5 +1,4 @@
 # models/predictor.py
-import copy
 import json
 import os
 import re
@@ -1368,8 +1367,8 @@ class Predictor:
 
 _PREDICTOR_RECOVERABLE_EXCEPTIONS = JSON_RECOVERABLE_EXCEPTIONS
 
-from models import predictor_forecast_ops as _predictor_forecast_ops
-from models import predictor_runtime_ops as _predictor_runtime_ops
+from models import predictor_forecast_ops as _predictor_forecast_ops  # noqa: E402
+from models import predictor_runtime_ops as _predictor_runtime_ops  # noqa: E402
 
 Predictor.get_realtime_forecast_curve = _predictor_forecast_ops.get_realtime_forecast_curve
 Predictor._stabilize_forecast_curve = staticmethod(_predictor_forecast_ops._stabilize_forecast_curve)

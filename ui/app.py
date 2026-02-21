@@ -1,20 +1,15 @@
 # ui/app.py
-import math
 import os
 import signal
 import sys
 import threading
-import time
 from concurrent.futures import Future, ThreadPoolExecutor
-from concurrent.futures import TimeoutError as FuturesTimeout
 from datetime import datetime
 from importlib import import_module
-from statistics import median
 from typing import Any
 
-import numpy as np
 from PyQt6.QtCore import QSize, Qt, QTimer, pyqtSignal
-from PyQt6.QtGui import QAction, QActionGroup, QColor, QFont
+from PyQt6.QtGui import QAction, QActionGroup, QFont
 from PyQt6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -26,9 +21,7 @@ from PyQt6.QtWidgets import (
     QHeaderView,
     QLabel,
     QLineEdit,
-    QListWidgetItem,
     QMainWindow,
-    QMessageBox,
     QProgressBar,
     QPushButton,
     QScrollArea,
@@ -36,22 +29,21 @@ from PyQt6.QtWidgets import (
     QSplitter,
     QStatusBar,
     QTableWidget,
-    QTableWidgetItem,
     QTextEdit,
     QToolBar,
     QVBoxLayout,
     QWidget,
 )
 
-from config.settings import CONFIG, TradingMode
 from config.runtime_env import env_flag
+from config.settings import CONFIG, TradingMode
 from core.types import (
     AutoTradeAction,
     AutoTradeMode,
     OrderSide,
 )
-from ui import app_bar_ops as _app_bar_ops
 from ui import app_analysis_ops as _app_analysis_ops
+from ui import app_bar_ops as _app_bar_ops
 from ui import app_feed_ops as _app_feed_ops
 from ui import app_model_chart_ops as _app_model_chart_ops
 from ui import app_training_ops as _app_training_ops
@@ -206,9 +198,6 @@ from ui.background_tasks import (
 )
 from ui.background_tasks import (
     sanitize_watch_list as _sanitize_watch_list,
-)
-from ui.background_tasks import (
-    validate_stock_code as _validate_stock_code,
 )
 from utils.logger import get_logger
 from utils.recoverable import COMMON_RECOVERABLE_EXCEPTIONS

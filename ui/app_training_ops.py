@@ -2,18 +2,21 @@ from __future__ import annotations
 
 import time
 from concurrent.futures import Future
+from concurrent.futures import TimeoutError as FuturesTimeout
+from datetime import datetime
 from importlib import import_module
 from typing import Any
 
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QListWidgetItem
 
-from config.settings import CONFIG
 from core.types import AutoTradeMode
 from ui.background_tasks import WorkerThread
 from utils.logger import get_logger
+from utils.recoverable import COMMON_RECOVERABLE_EXCEPTIONS
 
 log = get_logger(__name__)
+_UI_RECOVERABLE_EXCEPTIONS = COMMON_RECOVERABLE_EXCEPTIONS
 
 def _lazy_get(module: str, name: str) -> Any:
     return getattr(import_module(module), name)

@@ -8,12 +8,12 @@ from numpy.typing import NDArray
 
 from config.settings import CONFIG
 from models.predictor import (
+    _PREDICTOR_RECOVERABLE_EXCEPTIONS,
     FloatArray,
     PositionSize,
     Prediction,
     Signal,
     TradingLevels,
-    _PREDICTOR_RECOVERABLE_EXCEPTIONS,
 )
 from utils.logger import get_logger
 

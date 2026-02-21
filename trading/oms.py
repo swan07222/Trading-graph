@@ -5,8 +5,8 @@ from collections.abc import Callable
 from datetime import date, datetime
 from pathlib import Path
 
-from config.settings import CONFIG
 from config.runtime_env import env_flag
+from config.settings import CONFIG
 from core.events import EVENT_BUS, EventType, OrderEvent
 from core.exceptions import (
     InsufficientFundsError,

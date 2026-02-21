@@ -6,11 +6,9 @@ import queue
 import socket
 import threading
 import time
-import uuid
 import weakref
 from collections import deque
-from collections.abc import Callable
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -26,36 +24,36 @@ from core.types import (
     OrderType,
     TradeSignal,
 )
-from trading.alerts import AlertPriority, get_alert_manager
+from trading.alerts import AlertPriority
 from trading.auto_trader import AutoTrader
-from trading.broker import BrokerInterface, create_broker
-from trading.health import ComponentType, HealthStatus, get_health_monitor
-from trading.kill_switch import get_kill_switch
-from trading.risk import RiskManager, get_risk_manager
-from trading.runtime_lease import RuntimeLeaseClient, create_runtime_lease_client
-from utils.atomic_io import atomic_write_json, read_json
-from utils.logger import get_logger
-from utils.metrics import inc_counter, observe, set_gauge
-from utils.policy import get_trade_policy_engine
-from utils.security import get_access_control, get_audit_log
 from trading.executor_core_ops import __init__ as _exec_init_impl
 from trading.executor_core_ops import _build_execution_snapshot as _build_execution_snapshot_impl
 from trading.executor_core_ops import _cancel_oco_siblings as _cancel_oco_siblings_impl
 from trading.executor_core_ops import _evaluate_synthetic_exits as _evaluate_synthetic_exits_impl
 from trading.executor_core_ops import _execute as _execute_impl
-from trading.executor_core_ops import _get_execution_quality_snapshot as _get_execution_quality_snapshot_impl
-from trading.executor_core_ops import _maybe_register_synthetic_exit as _maybe_register_synthetic_exit_impl
+from trading.executor_core_ops import (
+    _get_execution_quality_snapshot as _get_execution_quality_snapshot_impl,
+)
+from trading.executor_core_ops import (
+    _maybe_register_synthetic_exit as _maybe_register_synthetic_exit_impl,
+)
 from trading.executor_core_ops import _process_pending_fills as _process_pending_fills_impl
-from trading.executor_reconcile_ops import _reconciliation_loop as _reconciliation_loop_impl
 from trading.executor_core_ops import _record_execution_quality as _record_execution_quality_impl
 from trading.executor_core_ops import _startup_sync as _startup_sync_impl
 from trading.executor_core_ops import _status_sync_loop as _status_sync_loop_impl
 from trading.executor_core_ops import _submit_synthetic_exit as _submit_synthetic_exit_impl
-from trading.executor_reconcile_ops import _submit_with_retry as _submit_with_retry_impl
 from trading.executor_core_ops import _watchdog_loop as _watchdog_loop_impl
 from trading.executor_core_ops import start as _start_impl
 from trading.executor_core_ops import stop as _stop_impl
 from trading.executor_core_ops import submit as _submit_impl
+from trading.executor_reconcile_ops import _reconciliation_loop as _reconciliation_loop_impl
+from trading.executor_reconcile_ops import _submit_with_retry as _submit_with_retry_impl
+from trading.health import ComponentType, HealthStatus, get_health_monitor
+from trading.runtime_lease import RuntimeLeaseClient, create_runtime_lease_client
+from utils.atomic_io import atomic_write_json, read_json
+from utils.logger import get_logger
+from utils.metrics import inc_counter, set_gauge
+from utils.security import get_audit_log
 
 try:
     from utils.metrics_http import register_snapshot_provider, unregister_snapshot_provider

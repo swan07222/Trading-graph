@@ -1,20 +1,19 @@
 from __future__ import annotations
 
-from typing import Any
-
 import copy
 import threading
 import time
+from typing import Any
 
 import numpy as np
 import pandas as pd
 
 from config.settings import CONFIG
 from models.predictor import (
+    _PREDICTOR_RECOVERABLE_EXCEPTIONS,
     FloatArray,
     Prediction,
     Signal,
-    _PREDICTOR_RECOVERABLE_EXCEPTIONS,
 )
 from utils.logger import get_logger
 

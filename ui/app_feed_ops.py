@@ -4,15 +4,12 @@ import math
 import time
 from typing import Any
 
-import numpy as np
-from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QColor
-from PyQt6.QtWidgets import QTableWidgetItem
-
 from config.settings import CONFIG
 from utils.logger import get_logger
+from utils.recoverable import COMMON_RECOVERABLE_EXCEPTIONS
 
 log = get_logger(__name__)
+_UI_RECOVERABLE_EXCEPTIONS = COMMON_RECOVERABLE_EXCEPTIONS
 
 def _ensure_feed_subscription(self, code: str) -> None:
     """Subscribe symbol to realtime feed using 1m source bars."""
@@ -358,24 +355,28 @@ def _on_bar_ui(self, symbol: str, bar: dict[str, Any]) -> None:
 
     # Avoid excessive disk writes for partial updates.
     min_gap = 0.9 if not is_final else 0.0
-    self._persist_session_bar(
-        symbol,
-        interval,
-        norm_bar,
-        channel="bar_ui",
-        min_gap_seconds=min_gap,
-    )
+    persist_fn = getattr(self, "_persist_session_bar", None)
+    if callable(persist_fn):
+        persist_fn(
+            symbol,
+            interval,
+            norm_bar,
+            channel="bar_ui",
+            min_gap_seconds=min_gap,
+        )
 
     current_code = self._ui_norm(self.stock_input.text())
     if current_code != symbol:
         return
 
-    self._render_live_bar_update(
-        symbol=symbol,
-        interval=interval,
-        bars=arr,
-        norm_bar=norm_bar,
-    )
+    render_fn = getattr(self, "_render_live_bar_update", None)
+    if callable(render_fn):
+        render_fn(
+            symbol=symbol,
+            interval=interval,
+            bars=arr,
+            norm_bar=norm_bar,
+        )
 
 def _render_live_bar_update(
     self,

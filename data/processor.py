@@ -16,10 +16,10 @@ import pandas as pd
 from sklearn.preprocessing import RobustScaler
 
 from config.settings import CONFIG
-from utils.logger import get_logger
 from data.processor_stats_ops import get_class_distribution as _get_class_distribution_impl
 from data.processor_stats_ops import get_scaler_info as _get_scaler_info_impl
 from data.processor_stats_ops import prepare_single_sequence as _prepare_single_sequence_impl
+from utils.logger import get_logger
 
 log = get_logger(__name__)
 
@@ -1482,4 +1482,3 @@ DataProcessor.prepare_single_sequence = _prepare_single_sequence_impl
 DataProcessor.get_class_distribution = _get_class_distribution_impl
 DataProcessor.get_scaler_info = _get_scaler_info_impl
 
-from data.processor_realtime_predictor import RealtimePredictor

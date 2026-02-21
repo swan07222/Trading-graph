@@ -10,14 +10,14 @@ from datetime import datetime
 import numpy as np
 
 from data.news import (
-    EastmoneyNewsFetcher,
-    NewsItem,
-    SinaNewsFetcher,
-    TencentNewsFetcher,
     _DEDUP_PREFIX_LEN,
     _NEWS_BUFFER_SIZE,
     _NEWS_CACHE_TTL,
     _POLICY_KEYWORDS,
+    EastmoneyNewsFetcher,
+    NewsItem,
+    SinaNewsFetcher,
+    TencentNewsFetcher,
     _safe_age_hours_from_now,
     _safe_age_seconds_from_now,
     _safe_float,

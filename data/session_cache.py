@@ -6,16 +6,17 @@ import math
 import os
 import threading
 import time
+from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any
 
 import pandas as pd
 
 from config.settings import CONFIG
-from utils.logger import get_logger
 from data.session_cache_read_ops import read_history as _read_history_impl
+from utils.logger import get_logger
 
 log = get_logger(__name__)
 

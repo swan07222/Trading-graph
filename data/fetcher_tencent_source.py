@@ -6,9 +6,9 @@ import time
 import pandas as pd
 
 from data.fetcher_sources import (
+    _TENCENT_CHUNK_SIZE,
     DataSource,
     Quote,
-    _TENCENT_CHUNK_SIZE,
     _build_tencent_batch_url,
     _build_tencent_daily_url,
     _endpoint_candidates,

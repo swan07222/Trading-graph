@@ -5,9 +5,7 @@ import time
 from statistics import median
 from typing import Any
 
-from PyQt6.QtWidgets import QTableWidgetItem
 from config.settings import CONFIG
-from ui.background_tasks import WorkerThread
 from utils.logger import get_logger
 from utils.recoverable import COMMON_RECOVERABLE_EXCEPTIONS
 

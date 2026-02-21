@@ -3,20 +3,28 @@ import hashlib
 import json
 import os
 import random
-import shutil
 import threading
 import time
-from collections import deque
 from collections.abc import Callable
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass, field
 from datetime import datetime
-from pathlib import Path
 from typing import Any
 
-import numpy as np
 from config.settings import CONFIG
 from data.fetcher import get_fetcher
+from models.auto_learner_components import (
+    ExperienceReplayBuffer,
+    LearningProgress,
+    LRScheduler,
+    MetricTracker,
+    ModelGuardian,
+    ParallelFetcher,
+    StockRotator,
+)
+from models.auto_learner_cycle_ops import _main_loop as _main_loop_impl
+from models.auto_learner_cycle_ops import _run_cycle as _run_cycle_impl
+from models.auto_learner_cycle_ops import (
+    _run_targeted_cycle as _run_targeted_cycle_impl,
+)
 from models.auto_learner_flow_ops import _compute_lookback_bars as _compute_lookback_bars_impl
 from models.auto_learner_flow_ops import (
     _filter_priority_session_codes as _filter_priority_session_codes_impl,
@@ -32,11 +40,6 @@ from models.auto_learner_flow_ops import resume as _resume_impl
 from models.auto_learner_flow_ops import run as _run_impl
 from models.auto_learner_flow_ops import stop as _stop_impl
 from models.auto_learner_flow_ops import validate_stock_code as _validate_stock_code_impl
-from models.auto_learner_cycle_ops import _main_loop as _main_loop_impl
-from models.auto_learner_cycle_ops import _run_cycle as _run_cycle_impl
-from models.auto_learner_cycle_ops import (
-    _run_targeted_cycle as _run_targeted_cycle_impl,
-)
 from utils.cancellation import CancellationToken, CancelledException
 from utils.logger import get_logger
 from utils.recoverable import JSON_RECOVERABLE_EXCEPTIONS
@@ -67,15 +70,7 @@ def clear_thread_local_lr():
     if hasattr(_thread_local, 'learning_rate'):
         delattr(_thread_local, 'learning_rate')
 
-from models.auto_learner_components import (
-    ExperienceReplayBuffer,
-    LearningProgress,
-    LRScheduler,
-    MetricTracker,
-    ModelGuardian,
-    ParallelFetcher,
-    StockRotator,
-)
+
 class ContinuousLearner:
     """
     Production continuous learning system.

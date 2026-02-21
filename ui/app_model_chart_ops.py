@@ -1,16 +1,17 @@
 from __future__ import annotations
 
 import math
-import time
 from statistics import median
 from typing import Any
 
 import numpy as np
-from PyQt6.QtGui import QColor
 
+from config.settings import CONFIG
 from utils.logger import get_logger
+from utils.recoverable import COMMON_RECOVERABLE_EXCEPTIONS
 
 log = get_logger(__name__)
+_UI_RECOVERABLE_EXCEPTIONS = COMMON_RECOVERABLE_EXCEPTIONS
 
 def _sync_ui_to_loaded_model(
     self,

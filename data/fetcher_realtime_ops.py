@@ -1,6 +1,6 @@
 import math
+from collections.abc import Callable
 from datetime import datetime, timezone
-from typing import Callable
 from typing import Any
 
 from data.fetcher_sources import Quote

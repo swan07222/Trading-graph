@@ -841,6 +841,13 @@ class AkShareSource(DataSource):
         return df
 
 
+from data.fetcher_tencent_source import (  # noqa: E402
+    TencentQuoteSource as _TencentQuoteSource,
+)
+
+TencentQuoteSource = _TencentQuoteSource
+
+
 class SinaHistorySource(DataSource):
     """Sina historical K-line source for CN equity (China direct IP)."""
 
@@ -1369,4 +1376,3 @@ class YahooSource(DataSource):
 
 
 
-from data.fetcher_tencent_source import TencentQuoteSource

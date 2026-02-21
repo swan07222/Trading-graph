@@ -6,11 +6,12 @@ from statistics import median
 from typing import Any
 
 from PyQt6.QtWidgets import QTableWidgetItem
+
 from config.settings import CONFIG
+from ui.app_chart_history_load_ops import _load_chart_history_bars as _load_chart_history_bars_impl
 from ui.background_tasks import WorkerThread
 from utils.logger import get_logger
 from utils.recoverable import COMMON_RECOVERABLE_EXCEPTIONS
-from ui.app_chart_history_load_ops import _load_chart_history_bars as _load_chart_history_bars_impl
 
 log = get_logger(__name__)
 

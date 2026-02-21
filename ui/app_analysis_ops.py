@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import time
+from datetime import datetime
 from importlib import import_module
 from typing import Any
 
@@ -8,10 +10,15 @@ from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import QMessageBox, QTableWidgetItem
 
 from config.settings import CONFIG
+from core.types import AutoTradeMode
 from ui.background_tasks import WorkerThread
+from ui.background_tasks import sanitize_watch_list as _sanitize_watch_list
+from ui.background_tasks import validate_stock_code as _validate_stock_code
 from utils.logger import get_logger
+from utils.recoverable import COMMON_RECOVERABLE_EXCEPTIONS
 
 log = get_logger(__name__)
+_UI_RECOVERABLE_EXCEPTIONS = COMMON_RECOVERABLE_EXCEPTIONS
 
 def _lazy_get(module: str, name: str) -> Any:
     return getattr(import_module(module), name)
