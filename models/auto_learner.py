@@ -44,6 +44,12 @@ from models.auto_learner_lifecycle_ops import _targeted_loop as _targeted_loop_i
 from models.auto_learner_lifecycle_ops import run_targeted as _run_targeted_impl
 from models.auto_learner_lifecycle_ops import start as _start_impl
 from models.auto_learner_lifecycle_ops import start_targeted as _start_targeted_impl
+from models.auto_learner_precision_ops import (
+    tune_precision_thresholds as _tune_precision_thresholds_impl,
+)
+from models.auto_learner_precision_ops import (
+    validate_and_decide as _validate_and_decide_impl,
+)
 from utils.cancellation import CancellationToken, CancelledException
 from utils.logger import get_logger
 from utils.recoverable import JSON_RECOVERABLE_EXCEPTIONS
@@ -769,84 +775,14 @@ class ContinuousLearner:
     def _validate_and_decide(
         self, interval, horizon, lookback, pre_val, new_acc
     ) -> bool:
-        """
-        Decide whether to accept or reject the new model based on
-        holdout validation.
-
-        FIX VAL: Requires minimum number of holdout predictions before
-        making rejection decisions.
-        """
-        MAX_DEGRADATION = 0.15
-        MIN_PREDS = self._MIN_HOLDOUT_PREDICTIONS
-        holdout_snapshot = list(self._get_holdout_set())
-
-        if not holdout_snapshot:
-            log.info("No holdout validation - accepting")
-            return True
-
-        post_val = self._guardian.validate_model(
-            interval, horizon, holdout_snapshot, lookback, collect_samples=True
+        return _validate_and_decide_impl(
+            self,
+            interval=interval,
+            horizon=horizon,
+            lookback=lookback,
+            pre_val=pre_val,
+            new_acc=new_acc,
         )
-        post_acc = post_val.get('accuracy', 0)
-        post_conf = post_val.get('avg_confidence', 0)
-        post_preds = post_val.get('predictions_made', 0)
-
-        self.progress.old_stock_accuracy = post_acc
-        self.progress.old_stock_confidence = post_conf
-
-        # Safety gate: insufficient holdout predictions cannot validate quality.
-        if post_preds < MIN_PREDS:
-            log.warning(
-                f"REJECTED: holdout produced only {post_preds} predictions "
-                f"(need {MIN_PREDS}); restoring previous model"
-            )
-            self.progress.add_warning(
-                f"Rejected: holdout insufficient ({post_preds}/{MIN_PREDS} predictions)"
-            )
-            self._guardian.restore_backup(interval, horizon)
-            return False
-
-        if not pre_val or pre_val.get('predictions_made', 0) < MIN_PREDS:
-            log.info(
-                f"No reliable pre-validation baseline "
-                f"(preds={pre_val.get('predictions_made', 0) if pre_val else 0}). "
-                f"Holdout acc={post_acc:.1%}"
-            )
-            accepted = post_acc >= 0.30
-            if accepted:
-                self._maybe_tune_precision_thresholds(
-                    interval, horizon, post_val.get("samples", [])
-                )
-            return accepted
-
-        pre_acc = pre_val.get('accuracy', 0)
-        pre_conf = pre_val.get('avg_confidence', 0)
-
-        log.info(
-            f"Validation: holdout acc {pre_acc:.1%}->{post_acc:.1%}, "
-            f"conf {pre_conf:.3f}->{post_conf:.3f}, train acc={new_acc:.1%}"
-        )
-
-        if pre_acc > 0.1:
-            degradation = (pre_acc - post_acc) / pre_acc
-            if degradation > MAX_DEGRADATION:
-                log.warning(f"REJECTED: holdout acc degraded {degradation:.1%}")
-                self._guardian.restore_backup(interval, horizon)
-                self.progress.add_warning(f"Rejected: holdout acc {pre_acc:.1%}->{post_acc:.1%}")
-                return False
-
-        if pre_conf > 0.1:
-            conf_deg = (pre_conf - post_conf) / pre_conf
-            if conf_deg > MAX_DEGRADATION:
-                log.warning(f"REJECTED: holdout conf degraded {conf_deg:.1%}")
-                self._guardian.restore_backup(interval, horizon)
-                return False
-
-        log.info(f"ACCEPTED: holdout acc={post_acc:.1%}")
-        self._maybe_tune_precision_thresholds(
-            interval, horizon, post_val.get("samples", [])
-        )
-        return True
 
     def _maybe_tune_precision_thresholds(
         self,
@@ -867,47 +803,8 @@ class ContinuousLearner:
 
     def _tune_precision_thresholds(
         self, samples: list[dict[str, Any]]
-    ) -> dict[str, float] | None:
-        """
-        Grid-search confidence/agreement/entropy/edge thresholds that maximize
-        a profit-quality proxy on holdout samples.
-        """
-        conf_grid = [0.60, 0.65, 0.70, 0.75, 0.80]
-        agree_grid = [0.55, 0.60, 0.65, 0.70, 0.75]
-        entropy_grid = [0.30, 0.40, 0.50, 0.60]
-        edge_grid = [0.06, 0.10, 0.14, 0.18]
-
-        best_score = -1e18
-        best: dict[str, float] | None = None
-
-        for c in conf_grid:
-            for a in agree_grid:
-                for e in entropy_grid:
-                    for edge in edge_grid:
-                        metrics = self._score_thresholds(samples, c, a, e, edge)
-                        if metrics["trades"] < self._MIN_TUNED_TRADES:
-                            continue
-                        # Weighted objective: profit factor first, then precision.
-                        score = (
-                            metrics["profit_factor"] * 2.0
-                            + metrics["precision"] * 1.2
-                            + metrics["expectancy"] * 0.2
-                            - metrics["trade_rate"] * 0.05
-                        )
-                        if score > best_score:
-                            best_score = score
-                            best = {
-                                "min_confidence": float(c),
-                                "min_agreement": float(a),
-                                "max_entropy": float(e),
-                                "min_edge": float(edge),
-                                "precision": float(metrics["precision"]),
-                                "profit_factor": float(metrics["profit_factor"]),
-                                "expectancy": float(metrics["expectancy"]),
-                                "trades": float(metrics["trades"]),
-                                "trade_rate": float(metrics["trade_rate"]),
-                            }
-        return best
+    ) -> dict[str, Any] | None:
+        return _tune_precision_thresholds_impl(self, samples)
 
     @staticmethod
     def _score_thresholds(
@@ -994,6 +891,12 @@ class ContinuousLearner:
                     "expectancy": float(tuned.get("expectancy", 0.0)),
                     "trades": int(tuned.get("trades", 0.0)),
                     "trade_rate": float(tuned.get("trade_rate", 0.0)),
+                },
+                "tuning": {
+                    "regime": str(tuned.get("regime", "")),
+                    "objective": float(tuned.get("objective", 0.0)),
+                    "search_space_size": int(tuned.get("search_space_size", 0.0)),
+                    "min_required_trades": int(tuned.get("min_required_trades", 0.0)),
                 },
             }
             path.parent.mkdir(parents=True, exist_ok=True)

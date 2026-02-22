@@ -294,6 +294,21 @@ class PrecisionConfig:
     # Auto-learner threshold tuning
     enable_threshold_tuning: bool = True
     min_tuning_samples: int = 12
+    tuning_min_trade_rate: float = 0.03
+    tuning_max_candidates_per_axis: int = 7
+
+    # Auto-learner holdout acceptance (adaptive, regime-aware).
+    validation_min_predictions: int = 5
+    validation_min_accept_lb: float = 0.30
+    validation_max_accuracy_degradation: float = 0.15
+    validation_max_confidence_degradation: float = 0.18
+    validation_confidence_z: float = 1.64
+    validation_confidence_margin: float = 0.03
+    validation_max_train_holdout_gap: float = 0.40
+    validation_high_vol_return_pct: float = 1.2
+    validation_low_signal_edge: float = 0.10
+    validation_high_vol_relax: float = 0.05
+    validation_low_signal_tighten: float = 0.04
 
     # Persistence for learned threshold profile
     profile_filename: str = "precision_thresholds.json"
@@ -1031,6 +1046,77 @@ class Config:
         ):
             self._validation_warnings.append(
                 f"precision.min_edge out of range: {self.precision.min_edge}"
+            )
+        if self.precision.min_tuning_samples < 1:
+            self._validation_warnings.append(
+                f"precision.min_tuning_samples should be >= 1, got {self.precision.min_tuning_samples}"
+            )
+        if not (0.0 < self.precision.tuning_min_trade_rate <= 1.0):
+            self._validation_warnings.append(
+                f"precision.tuning_min_trade_rate out of range: {self.precision.tuning_min_trade_rate}"
+            )
+        if self.precision.tuning_max_candidates_per_axis < 3:
+            self._validation_warnings.append(
+                "precision.tuning_max_candidates_per_axis should be >= 3"
+            )
+        if self.precision.validation_min_predictions < 1:
+            self._validation_warnings.append(
+                "precision.validation_min_predictions should be >= 1"
+            )
+        if (
+            self.precision.validation_min_accept_lb < 0
+            or self.precision.validation_min_accept_lb > 1
+        ):
+            self._validation_warnings.append(
+                f"precision.validation_min_accept_lb out of range: {self.precision.validation_min_accept_lb}"
+            )
+        if (
+            self.precision.validation_max_accuracy_degradation < 0
+            or self.precision.validation_max_accuracy_degradation > 1
+        ):
+            self._validation_warnings.append(
+                "precision.validation_max_accuracy_degradation out of range"
+            )
+        if (
+            self.precision.validation_max_confidence_degradation < 0
+            or self.precision.validation_max_confidence_degradation > 1
+        ):
+            self._validation_warnings.append(
+                "precision.validation_max_confidence_degradation out of range"
+            )
+        if (
+            self.precision.validation_max_train_holdout_gap < 0
+            or self.precision.validation_max_train_holdout_gap > 1
+        ):
+            self._validation_warnings.append(
+                "precision.validation_max_train_holdout_gap out of range"
+            )
+        if self.precision.validation_confidence_z <= 0:
+            self._validation_warnings.append(
+                "precision.validation_confidence_z should be > 0"
+            )
+        if self.precision.validation_confidence_margin < 0:
+            self._validation_warnings.append(
+                "precision.validation_confidence_margin should be >= 0"
+            )
+        if self.precision.validation_high_vol_return_pct <= 0:
+            self._validation_warnings.append(
+                "precision.validation_high_vol_return_pct should be > 0"
+            )
+        if (
+            self.precision.validation_low_signal_edge < 0
+            or self.precision.validation_low_signal_edge > 1
+        ):
+            self._validation_warnings.append(
+                "precision.validation_low_signal_edge out of range"
+            )
+        if self.precision.validation_high_vol_relax < 0:
+            self._validation_warnings.append(
+                "precision.validation_high_vol_relax should be >= 0"
+            )
+        if self.precision.validation_low_signal_tighten < 0:
+            self._validation_warnings.append(
+                "precision.validation_low_signal_tighten should be >= 0"
             )
 
         for w in self._validation_warnings:
