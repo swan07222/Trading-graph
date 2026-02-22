@@ -1,5 +1,7 @@
 from datetime import datetime, timedelta
 
+import pytest
+
 from config.settings import CONFIG
 from utils.security import AccessControl
 
@@ -41,3 +43,13 @@ def test_access_control_2fa_ttl_expiry_blocks_live():
         assert ac.check("trade_live") is False
     finally:
         CONFIG.security.two_factor_ttl_minutes = old_ttl
+
+
+def test_access_control_identity_lock_blocks_mutation():
+    ac = AccessControl()
+    ac.lock_identity("unit_test")
+
+    with pytest.raises(RuntimeError, match="identity is locked"):
+        ac.set_role("viewer")
+    with pytest.raises(RuntimeError, match="identity is locked"):
+        ac.set_user("alice")

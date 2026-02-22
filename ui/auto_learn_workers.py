@@ -1,8 +1,9 @@
-# ui/auto_learn_workers.py
+from __future__ import annotations
 
 import threading
-import time
 import traceback
+from collections.abc import Callable
+from typing import Any
 
 from PyQt6.QtCore import QThread, pyqtSignal
 
@@ -10,57 +11,159 @@ from utils.logger import get_logger
 
 log = get_logger(__name__)
 
-def _get_cancellation_token():
+_WORKER_RECOVERABLE_EXCEPTIONS = (
+    AttributeError,
+    ImportError,
+    OSError,
+    RuntimeError,
+    TypeError,
+    ValueError,
+)
+_SUPPORTED_TRAIN_INTERVALS = frozenset(
+    {"1m", "2m", "3m", "5m", "15m", "30m", "60m", "1h", "1d"}
+)
+
+
+def _get_cancellation_token() -> Any:
     """Lazy import CancellationToken."""
     from utils.cancellation import CancellationToken
+
     return CancellationToken()
 
-def _get_auto_learner():
+
+def _get_auto_learner() -> Any | None:
     """
     Lazy import AutoLearner/ContinuousLearner.
     Returns the class, not an instance.
     """
     try:
         from models.auto_learner import AutoLearner
+
         return AutoLearner
     except ImportError:
         pass
 
     try:
         from models.auto_learner import ContinuousLearner
+
         return ContinuousLearner
     except ImportError:
         pass
 
     return None
 
-# WORKER: Auto Learn (random rotation)
 
-class AutoLearnWorker(QThread):
-    """
-    Worker thread for auto-learning (random stock rotation).
-    Runs the learner in a separate daemon thread so that
-    learner.start() (which may block) doesn't prevent the
-    QThread from responding to stop requests.
-    """
+def _safe_int(value: Any, default: int, minimum: int = 1, maximum: int = 1_000_000) -> int:
+    try:
+        out = int(value)
+    except (TypeError, ValueError):
+        out = int(default)
+    return max(int(minimum), min(int(maximum), int(out)))
+
+
+def normalize_training_interval(raw: Any, default: str = "1m") -> str:
+    iv = str(raw or default).strip().lower()
+    aliases = {"h1": "1h", "d1": "1d"}
+    iv = aliases.get(iv, iv)
+    if iv in _SUPPORTED_TRAIN_INTERVALS:
+        return iv
+    return str(default).strip().lower() or "1m"
+
+
+class _BaseLearnWorker(QThread):
     progress = pyqtSignal(int, str)
     log_message = pyqtSignal(str, str)
     finished_result = pyqtSignal(dict)
     error_occurred = pyqtSignal(str)
 
-    def __init__(self, config: dict):
+    def __init__(self, config: dict[str, Any] | None):
         super().__init__()
-        self.config = dict(config) if config else {}
+        self.config = dict(config or {})
         self.running = False
         self.token = _get_cancellation_token()
-        self._learner = None
-        self._learner_thread: threading.Thread | None = None
+        self._learner: Any | None = None
         self._error_flag = False
         self._error_message = ""
 
-    def run(self):
+    def _attach_progress_callback(self, results: dict[str, Any], default_error: str) -> None:
+        if self._learner is None:
+            return
+
+        def on_progress(p: Any) -> None:
+            if not self.running:
+                return
+            try:
+                percent = int(max(0, min(100, getattr(p, "progress", 0))))
+                message = str(getattr(p, "message", "") or getattr(p, "stage", ""))
+                stage = str(getattr(p, "stage", ""))
+                if stage == "error":
+                    self._error_flag = True
+                    self._error_message = message or default_error
+                self.progress.emit(percent, message)
+                self.log_message.emit(
+                    f"{stage}: {message}" if stage else message,
+                    "info",
+                )
+                results["discovered"] = int(getattr(p, "stocks_found", 0) or 0)
+                processed_direct = int(getattr(p, "stocks_processed", 0) or 0)
+                processed_alt = int(getattr(p, "processed_count", 0) or 0)
+                results["processed"] = max(processed_direct, processed_alt)
+                results["accuracy"] = float(getattr(p, "validation_accuracy", 0.0) or 0.0)
+            except _WORKER_RECOVERABLE_EXCEPTIONS as exc:
+                log.debug("Progress callback parsing failed: %s", exc)
+
+        if hasattr(self._learner, "add_callback"):
+            self._learner.add_callback(on_progress)
+
+    def _start_and_wait(
+        self,
+        start_fn: Callable[..., Any],
+        kwargs: dict[str, Any],
+    ) -> None:
+        start_fn(**kwargs)
+
+        if self._learner is None:
+            return
+
+        worker_thread = getattr(self._learner, "_thread", None)
+        if isinstance(worker_thread, threading.Thread):
+            while self.running and not self.token.is_cancelled and worker_thread.is_alive():
+                worker_thread.join(timeout=0.2)
+            return
+
+        while self.running and not self.token.is_cancelled:
+            progress = getattr(self._learner, "progress", None)
+            is_running = bool(getattr(progress, "is_running", False))
+            if not is_running:
+                break
+            self.msleep(200)
+
+    def _stop_learner(self) -> None:
+        if self._learner is None:
+            return
+        try:
+            stop_fn = getattr(self._learner, "stop", None)
+            if callable(stop_fn):
+                try:
+                    stop_fn(join_timeout=6.0)
+                except TypeError:
+                    stop_fn()
+        except _WORKER_RECOVERABLE_EXCEPTIONS as exc:
+            log.debug("Learner stop failed: %s", exc)
+        finally:
+            self._learner = None
+
+    def stop(self) -> None:
+        self.running = False
+        self.token.cancel()
+
+
+class AutoLearnWorker(_BaseLearnWorker):
+    """Worker thread for auto-learning random stock rotation."""
+
+    def run(self) -> None:
         self.running = True
-        results = {
+        results: dict[str, Any] = {
             "discovered": 0,
             "processed": 0,
             "samples": 0,
@@ -68,100 +171,60 @@ class AutoLearnWorker(QThread):
         }
 
         try:
-            LearnerClass = _get_auto_learner()
-            if LearnerClass is None:
+            learner_class = _get_auto_learner()
+            if learner_class is None:
                 self.error_occurred.emit(
                     "AutoLearner/ContinuousLearner not found. "
                     "Ensure models/auto_learner.py exists."
                 )
                 return
 
-            self._learner = LearnerClass()
+            self._learner = learner_class()
+            self._attach_progress_callback(results, default_error="Auto-learning failed")
 
-            max_stocks = int(self.config.get("max_stocks", 200))
-            epochs = int(self.config.get("epochs", 10))
-            incremental = bool(self.config.get("incremental", True))
             mode = str(self.config.get("mode", "full"))
-            interval = "1m"
-            horizon = 30
-            try:
-                lookback_bars = 10080
-            except Exception:
-                lookback_bars = 10080
-            cycle_interval_seconds = 900
+            interval = normalize_training_interval(self.config.get("interval", "1m"))
+            horizon = _safe_int(self.config.get("horizon", 30), default=30, minimum=1, maximum=500)
+            lookback_raw = self.config.get("lookback_bars")
+            lookback_bars = (
+                _safe_int(lookback_raw, default=10080, minimum=120, maximum=500_000)
+                if lookback_raw is not None
+                else None
+            )
 
-            def on_progress(p):
-                if not self.running:
-                    return
-                try:
-                    percent = int(max(0, min(100, getattr(p, 'progress', 0))))
-                    message = str(
-                        getattr(p, 'message', '') or getattr(p, 'stage', '')
-                    )
-                    stage = str(getattr(p, 'stage', ''))
-                    if stage == "error":
-                        self._error_flag = True
-                        self._error_message = message or "Auto-learning failed"
-                    self.progress.emit(percent, message)
-                    self.log_message.emit(
-                        f"{stage}: {message}" if stage else message,
-                        "info",
-                    )
-                    results["discovered"] = int(
-                        getattr(p, "stocks_found", 0) or 0
-                    )
-                    processed_direct = int(
-                        getattr(p, "stocks_processed", 0) or 0
-                    )
-                    processed_alt = int(
-                        getattr(p, "processed_count", 0) or 0
-                    )
-                    results["processed"] = max(processed_direct, processed_alt)
-                    results["accuracy"] = float(
-                        getattr(p, "validation_accuracy", 0.0) or 0.0
-                    )
-                except Exception as e:
-                    log.debug(f"Progress callback error: {e}")
-
-            if hasattr(self._learner, 'add_callback'):
-                self._learner.add_callback(on_progress)
-
-            learner_kwargs = {
+            learner_kwargs: dict[str, Any] = {
                 "mode": mode,
-                "max_stocks": max_stocks,
-                "epochs_per_cycle": epochs,
+                "max_stocks": _safe_int(self.config.get("max_stocks", 200), default=200, minimum=10),
+                "epochs_per_cycle": _safe_int(self.config.get("epochs", 10), default=10, minimum=1),
                 "min_market_cap": 10,
                 "include_all_markets": True,
                 "continuous": True,
                 "learning_while_trading": True,
                 "interval": interval,
                 "prediction_horizon": horizon,
-                "lookback_bars": lookback_bars,
-                "cycle_interval_seconds": cycle_interval_seconds,
-                "incremental": incremental,
-                "priority_stock_codes": list(
-                    self.config.get("priority_stock_codes", []) or []
+                "cycle_interval_seconds": _safe_int(
+                    self.config.get("cycle_interval_seconds", 900),
+                    default=900,
+                    minimum=30,
+                    maximum=86_400,
                 ),
+                "incremental": bool(self.config.get("incremental", True)),
+                "priority_stock_codes": list(self.config.get("priority_stock_codes", []) or []),
             }
+            if lookback_bars is not None:
+                learner_kwargs["lookback_bars"] = lookback_bars
 
-            self._learner_thread = threading.Thread(
-                target=self._run_learner,
-                args=(learner_kwargs,),
-                daemon=True,
-                name="auto_learner_inner",
+            self.log_message.emit(
+                (
+                    f"Auto-learning started ({interval}, horizon={horizon}, "
+                    f"max_stocks={learner_kwargs['max_stocks']})"
+                ),
+                "success",
             )
-            self._learner_thread.start()
-            self.log_message.emit("Auto-learning started", "success")
 
-            while self.running and not self.token.is_cancelled:
-                if (
-                    self._learner_thread is not None
-                    and not self._learner_thread.is_alive()
-                ):
-                    break
-                self.msleep(200)
-
+            self._start_and_wait(self._learner.start, learner_kwargs)
             self._stop_learner()
+
             if self.token.is_cancelled or not self.running:
                 results["status"] = "stopped"
             elif self._error_flag:
@@ -171,94 +234,20 @@ class AutoLearnWorker(QThread):
                 results["status"] = "ok"
             self.finished_result.emit(results)
 
-        except Exception as e:
-            error_msg = str(e)
-            log.error(f"AutoLearnWorker error: {error_msg}")
+        except _WORKER_RECOVERABLE_EXCEPTIONS as exc:
+            error_msg = str(exc)
+            log.error("AutoLearnWorker error: %s", error_msg)
             log.debug(traceback.format_exc())
             if self.running:
                 self.error_occurred.emit(error_msg)
 
-    def _run_learner(self, kwargs: dict):
-        try:
-            if self._learner is not None:
-                self._learner.start(**kwargs)
-                # AutoLearner.start() spawns its own thread and returns immediately.
-                # Wait on that internal thread with short joins so cancellation
-                # can interrupt quickly.
-                t = getattr(self._learner, "_thread", None)
-                if t is not None:
-                    while (
-                        self.running
-                        and not self.token.is_cancelled
-                        and t.is_alive()
-                    ):
-                        t.join(timeout=0.2)
-                    return
 
-                # Fallback: wait on progress flag if internal thread not exposed.
-                while self.running and not self.token.is_cancelled:
-                    if not getattr(self._learner.progress, "is_running", False):
-                        break
-                    time.sleep(0.2)
-        except Exception as e:
-            log.error(f"Learner thread error: {e}")
-            log.debug(traceback.format_exc())
-            if self.running:
-                self._error_flag = True
-                self._error_message = str(e)
+class TargetedLearnWorker(_BaseLearnWorker):
+    """Worker thread for targeted training on user-selected stocks."""
 
-    def _stop_learner(self):
-        if self._learner is not None:
-            try:
-                if hasattr(self._learner, 'stop'):
-                    try:
-                        self._learner.stop(join_timeout=6.0)
-                    except TypeError:
-                        self._learner.stop()
-            except Exception as e:
-                log.debug(f"Learner stop error: {e}")
-
-        if self._learner_thread is not None:
-            try:
-                self._learner_thread.join(timeout=8)
-                if self._learner_thread.is_alive():
-                    log.info("Learner thread still finalizing after stop request")
-            except Exception:
-                pass
-
-        self._learner = None
-        self._learner_thread = None
-
-    def stop(self):
-        self.running = False
-        self.token.cancel()
-
-# WORKER: Targeted Training (NEW)
-
-class TargetedLearnWorker(QThread):
-    """
-    Worker thread for targeted training on user-selected stocks.
-    Calls learner.start_targeted() which uses the fixed stock list
-    instead of rotation/discovery.
-    """
-    progress = pyqtSignal(int, str)
-    log_message = pyqtSignal(str, str)
-    finished_result = pyqtSignal(dict)
-    error_occurred = pyqtSignal(str)
-
-    def __init__(self, config: dict):
-        super().__init__()
-        self.config = dict(config) if config else {}
-        self.running = False
-        self.token = _get_cancellation_token()
-        self._learner = None
-        self._learner_thread: threading.Thread | None = None
-        self._error_flag = False
-        self._error_message = ""
-
-    def run(self):
+    def run(self) -> None:
         self.running = True
-        results = {
+        results: dict[str, Any] = {
             "discovered": 0,
             "processed": 0,
             "samples": 0,
@@ -267,217 +256,120 @@ class TargetedLearnWorker(QThread):
         }
 
         try:
-            LearnerClass = _get_auto_learner()
-            if LearnerClass is None:
-                self.error_occurred.emit(
-                    "AutoLearner/ContinuousLearner not found."
-                )
+            learner_class = _get_auto_learner()
+            if learner_class is None:
+                self.error_occurred.emit("AutoLearner/ContinuousLearner not found.")
                 return
 
-            stock_codes = list(self.config.get("stock_codes", []))
+            stock_codes = [str(c).strip() for c in list(self.config.get("stock_codes", []) or []) if str(c).strip()]
             if not stock_codes:
                 self.error_occurred.emit("No stock codes provided.")
                 return
 
-            self._learner = LearnerClass()
+            self._learner = learner_class()
+            self._attach_progress_callback(results, default_error="Targeted training failed")
 
-            epochs = int(self.config.get("epochs", 10))
-            incremental = bool(self.config.get("incremental", True))
-            requested_interval = str(self.config.get("interval", "1m")).strip().lower()
-            interval = "1m"
-            horizon = int(self.config.get("horizon", 30))
-            lookback = self.config.get("lookback_bars", None)
-            continuous = bool(self.config.get("continuous", False))
-            if requested_interval != "1m":
-                self.log_message.emit(
-                    f"Training interval forced to 1m (requested {requested_interval})",
-                    "info",
-                )
+            interval = normalize_training_interval(self.config.get("interval", "1m"))
+            horizon = _safe_int(self.config.get("horizon", 30), default=30, minimum=1, maximum=500)
+            lookback_raw = self.config.get("lookback_bars")
+            lookback_bars = (
+                _safe_int(lookback_raw, default=10080, minimum=120, maximum=500_000)
+                if lookback_raw is not None
+                else None
+            )
 
-            def on_progress(p):
-                if not self.running:
-                    return
-                try:
-                    percent = int(max(0, min(100, getattr(p, 'progress', 0))))
-                    message = str(
-                        getattr(p, 'message', '') or getattr(p, 'stage', '')
-                    )
-                    stage = str(getattr(p, 'stage', ''))
-                    if stage == "error":
-                        self._error_flag = True
-                        self._error_message = message or "Targeted training failed"
-                    self.progress.emit(percent, message)
-                    self.log_message.emit(
-                        f"{stage}: {message}" if stage else message,
-                        "info",
-                    )
-                    processed_direct = int(
-                        getattr(p, "stocks_processed", 0) or 0
-                    )
-                    processed_alt = int(
-                        getattr(p, "processed_count", 0) or 0
-                    )
-                    results["processed"] = max(processed_direct, processed_alt)
-                    results["accuracy"] = float(
-                        getattr(p, "validation_accuracy", 0.0) or 0.0
-                    )
-                    results["discovered"] = int(
-                        getattr(p, "stocks_found", 0) or 0
-                    )
-                except Exception as e:
-                    log.debug(f"Targeted progress callback error: {e}")
-
-            if hasattr(self._learner, 'add_callback'):
-                self._learner.add_callback(on_progress)
-
-            learner_kwargs = {
+            learner_kwargs: dict[str, Any] = {
                 "stock_codes": stock_codes,
-                "epochs_per_cycle": epochs,
+                "epochs_per_cycle": _safe_int(self.config.get("epochs", 10), default=10, minimum=1),
                 "interval": interval,
                 "prediction_horizon": horizon,
-                "incremental": incremental,
-                "continuous": continuous,
-                "cycle_interval_seconds": 900,
+                "incremental": bool(self.config.get("incremental", True)),
+                "continuous": bool(self.config.get("continuous", False)),
+                "cycle_interval_seconds": _safe_int(
+                    self.config.get("cycle_interval_seconds", 900),
+                    default=900,
+                    minimum=30,
+                    maximum=86_400,
+                ),
             }
-            if lookback is not None:
-                learner_kwargs["lookback_bars"] = int(lookback)
-
-            self._learner_thread = threading.Thread(
-                target=self._run_targeted,
-                args=(learner_kwargs,),
-                daemon=True,
-                name="targeted_learner_inner",
-            )
-            self._learner_thread.start()
+            if lookback_bars is not None:
+                learner_kwargs["lookback_bars"] = lookback_bars
 
             self.log_message.emit(
-                f"Targeted training started on {len(stock_codes)} stocks",
+                (
+                    f"Targeted training started on {len(stock_codes)} stocks "
+                    f"(interval={interval}, horizon={horizon})"
+                ),
                 "success",
             )
 
-            while self.running and not self.token.is_cancelled:
-                if (
-                    self._learner_thread is not None
-                    and not self._learner_thread.is_alive()
-                ):
-                    break
-                self.msleep(200)
-
+            self._start_and_wait(self._learner.start_targeted, learner_kwargs)
             self._stop_learner()
+
             if self.token.is_cancelled or not self.running:
                 results["status"] = "stopped"
             elif self._error_flag:
                 results["status"] = "error"
-                results["error"] = (
-                    self._error_message or "Targeted training failed"
-                )
+                results["error"] = self._error_message or "Targeted training failed"
             else:
                 results["status"] = "ok"
             results["stocks_trained"] = stock_codes
             self.finished_result.emit(results)
 
-        except Exception as e:
-            error_msg = str(e)
-            log.error(f"TargetedLearnWorker error: {error_msg}")
+        except _WORKER_RECOVERABLE_EXCEPTIONS as exc:
+            error_msg = str(exc)
+            log.error("TargetedLearnWorker error: %s", error_msg)
             log.debug(traceback.format_exc())
             if self.running:
                 self.error_occurred.emit(error_msg)
 
-    def _run_targeted(self, kwargs: dict):
-        try:
-            if self._learner is not None:
-                self._learner.start_targeted(**kwargs)
-                # start_targeted() also spawns an internal learner thread.
-                t = getattr(self._learner, "_thread", None)
-                if t is not None:
-                    while (
-                        self.running
-                        and not self.token.is_cancelled
-                        and t.is_alive()
-                    ):
-                        t.join(timeout=0.2)
-                    return
-
-                while self.running and not self.token.is_cancelled:
-                    if not getattr(self._learner.progress, "is_running", False):
-                        break
-                    time.sleep(0.2)
-        except Exception as e:
-            log.error(f"Targeted learner thread error: {e}")
-            log.debug(traceback.format_exc())
-            if self.running:
-                self._error_flag = True
-                self._error_message = str(e)
-
-    def _stop_learner(self):
-        if self._learner is not None:
-            try:
-                if hasattr(self._learner, 'stop'):
-                    try:
-                        self._learner.stop(join_timeout=6.0)
-                    except TypeError:
-                        self._learner.stop()
-            except Exception as e:
-                log.debug(f"Targeted learner stop error: {e}")
-
-        if self._learner_thread is not None:
-            try:
-                self._learner_thread.join(timeout=8)
-                if self._learner_thread.is_alive():
-                    log.info("Targeted learner thread still finalizing after stop request")
-            except Exception:
-                pass
-
-        self._learner = None
-        self._learner_thread = None
-
-    def stop(self):
-        self.running = False
-        self.token.cancel()
-
-# STOCK VALIDATOR WORKER (for search)
 
 class StockValidatorWorker(QThread):
     """
     Validates a stock code in background thread.
     Calls learner.validate_stock_code() which checks:
-    - Code exists in the fetcher's data sources
-    - Has enough bars for training (SEQUENCE_LENGTH + 20)
-    - Returns stock name from spot cache if available
+    - code exists in data sources
+    - enough bars for training
+    - stock name from spot cache when available
     """
+
     validation_result = pyqtSignal(dict)
 
     def __init__(self, code: str, interval: str = "1m", request_id: int = 0):
         super().__init__()
-        self.code = code
-        self.interval = interval
+        self.code = str(code or "")
+        self.interval = normalize_training_interval(interval)
         self.request_id = int(request_id)
 
-    def run(self):
+    def run(self) -> None:
         try:
-            LearnerClass = _get_auto_learner()
-            if LearnerClass is None:
-                self.validation_result.emit({
-                    'valid': False,
-                    'code': self.code,
-                    'name': '',
-                    'bars': 0,
-                    'request_id': self.request_id,
-                    'message': 'Learner module not available',
-                })
+            learner_class = _get_auto_learner()
+            if learner_class is None:
+                self.validation_result.emit(
+                    {
+                        "valid": False,
+                        "code": self.code,
+                        "name": "",
+                        "bars": 0,
+                        "request_id": self.request_id,
+                        "message": "Learner module not available",
+                    }
+                )
                 return
 
-            learner = LearnerClass()
+            learner = learner_class()
             result = learner.validate_stock_code(self.code, self.interval)
             result["request_id"] = self.request_id
             self.validation_result.emit(result)
 
-        except Exception as e:
-            self.validation_result.emit({
-                'valid': False,
-                'code': self.code,
-                'name': '',
-                'bars': 0,
-                'request_id': self.request_id,
-                'message': f'Validation error: {str(e)[:200]}',
-            })
+        except _WORKER_RECOVERABLE_EXCEPTIONS as exc:
+            self.validation_result.emit(
+                {
+                    "valid": False,
+                    "code": self.code,
+                    "name": "",
+                    "bars": 0,
+                    "request_id": self.request_id,
+                    "message": f"Validation error: {str(exc)[:200]}",
+                }
+            )

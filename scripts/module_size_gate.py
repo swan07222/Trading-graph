@@ -16,7 +16,7 @@ DEFAULT_TARGETS: tuple[str, ...] = (
     "ui",
     "utils",
 )
-DEFAULT_MAX_LINES = 1500
+DEFAULT_MAX_LINES = 1200
 BASELINE_HEADER = [
     "# module-size baseline",
     "# Format: path:line_count",

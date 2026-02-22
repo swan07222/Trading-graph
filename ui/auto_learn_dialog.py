@@ -31,6 +31,7 @@ from ui.auto_learn_workers import (
     StockValidatorWorker,
     TargetedLearnWorker,
     _get_auto_learner,
+    normalize_training_interval,
 )
 from utils.logger import get_logger
 
@@ -220,25 +221,40 @@ class AutoLearnDialog(QDialog):
         self.epochs_spin.setSuffix(" epochs")
         settings_layout.addWidget(self.epochs_spin, 2, 1)
 
+        settings_layout.addWidget(QLabel("Interval:"), 3, 0)
+        self.auto_interval_combo = QComboBox()
+        self.auto_interval_combo.addItems(
+            ["1m", "2m", "5m", "15m", "30m", "60m", "1h", "1d"]
+        )
+        self.auto_interval_combo.setCurrentText("1m")
+        settings_layout.addWidget(self.auto_interval_combo, 3, 1)
+
+        settings_layout.addWidget(QLabel("Horizon:"), 4, 0)
+        self.auto_horizon_spin = QSpinBox()
+        self.auto_horizon_spin.setRange(1, 500)
+        self.auto_horizon_spin.setValue(30)
+        self.auto_horizon_spin.setSuffix(" bars")
+        settings_layout.addWidget(self.auto_horizon_spin, 4, 1)
+
         self.discover_check = QCheckBox("Discover new stocks from internet")
         self.discover_check.setChecked(True)
-        settings_layout.addWidget(self.discover_check, 3, 0, 1, 2)
+        settings_layout.addWidget(self.discover_check, 5, 0, 1, 2)
 
         self.incremental_check = QCheckBox(
             "Incremental training (keep existing weights)"
         )
         self.incremental_check.setChecked(False)
-        settings_layout.addWidget(self.incremental_check, 4, 0, 1, 2)
+        settings_layout.addWidget(self.incremental_check, 6, 0, 1, 2)
 
         self.use_session_cache_check = QCheckBox(
             "Include stocks captured from real-time UI session"
         )
         self.use_session_cache_check.setChecked(True)
-        settings_layout.addWidget(self.use_session_cache_check, 5, 0, 1, 2)
+        settings_layout.addWidget(self.use_session_cache_check, 7, 0, 1, 2)
 
         self.session_seed_label = QLabel("")
         self.session_seed_label.setStyleSheet("color: #aac3ec; font-size: 11px;")
-        settings_layout.addWidget(self.session_seed_label, 6, 0, 1, 2)
+        settings_layout.addWidget(self.session_seed_label, 8, 0, 1, 2)
 
         settings_group.setLayout(settings_layout)
         layout.addWidget(settings_group)
@@ -427,7 +443,9 @@ class AutoLearnDialog(QDialog):
 
         ts_layout.addWidget(QLabel("Interval:"), 0, 2)
         self.target_interval_combo = QComboBox()
-        self.target_interval_combo.addItems(["1m"])
+        self.target_interval_combo.addItems(
+            ["1m", "2m", "5m", "15m", "30m", "60m", "1h", "1d"]
+        )
         self.target_interval_combo.setCurrentText("1m")
         ts_layout.addWidget(self.target_interval_combo, 0, 3)
 
@@ -711,10 +729,14 @@ class AutoLearnDialog(QDialog):
             from data.session_cache import get_session_bar_cache
             cache = get_session_bar_cache()
             interval = "1m"
-            try:
-                interval = self.target_interval_combo.currentText().strip().lower()
-            except Exception:
-                interval = "1m"
+            if str(mode).strip().lower() == "targeted":
+                interval = normalize_training_interval(
+                    self.target_interval_combo.currentText()
+                )
+            else:
+                interval = normalize_training_interval(
+                    self.auto_interval_combo.currentText()
+                )
             interval_s = {
                 "1m": 60,
                 "2m": 120,
@@ -728,8 +750,8 @@ class AutoLearnDialog(QDialog):
             min_rows = max(2, int((3600 // max(1, interval_s)) + 1))
             live_codes = cache.get_recent_symbols(interval=interval, min_rows=min_rows)
             codes.extend(live_codes)
-        except Exception:
-            pass
+        except (AttributeError, ImportError, OSError, RuntimeError, TypeError, ValueError):
+            log.debug("Session cache priority-code collection skipped", exc_info=True)
 
         dedup = []
         seen = set()
@@ -767,6 +789,10 @@ class AutoLearnDialog(QDialog):
             "discover_new": self.discover_check.isChecked(),
             "max_stocks": self.max_stocks_spin.value(),
             "epochs": self.epochs_spin.value(),
+            "interval": normalize_training_interval(
+                self.auto_interval_combo.currentText()
+            ),
+            "horizon": int(self.auto_horizon_spin.value()),
             "incremental": self.incremental_check.isChecked(),
         }
 
@@ -791,14 +817,16 @@ class AutoLearnDialog(QDialog):
                     ),
                     "warning",
                 )
-        except Exception:
-            pass
+        except (AttributeError, ImportError, OSError, RuntimeError, TypeError, ValueError):
+            log.debug("VPN advisory check skipped", exc_info=True)
 
         self._log("Starting auto-learning...", "info")
         self._log(
             f"Mode: {config['mode']}, "
             f"Max stocks: {config['max_stocks']}, "
-            f"Epochs: {config['epochs']}",
+            f"Epochs: {config['epochs']}, "
+            f"Interval: {config['interval']}, "
+            f"Horizon: {config['horizon']}",
             "info",
         )
 
@@ -873,7 +901,9 @@ class AutoLearnDialog(QDialog):
         config = {
             "stock_codes": list(self._targeted_stock_codes),
             "epochs": self.target_epochs_spin.value(),
-            "interval": self.target_interval_combo.currentText(),
+            "interval": normalize_training_interval(
+                self.target_interval_combo.currentText()
+            ),
             "horizon": self.target_horizon_spin.value(),
             "incremental": self.target_incremental_check.isChecked(),
             "continuous": False,
@@ -956,6 +986,8 @@ class AutoLearnDialog(QDialog):
                 self.mode_combo.setEnabled(False)
                 self.max_stocks_spin.setEnabled(False)
                 self.epochs_spin.setEnabled(False)
+                self.auto_interval_combo.setEnabled(False)
+                self.auto_horizon_spin.setEnabled(False)
                 self.discover_check.setEnabled(False)
                 self.incremental_check.setEnabled(False)
                 self.use_session_cache_check.setEnabled(False)
@@ -984,6 +1016,8 @@ class AutoLearnDialog(QDialog):
             self.mode_combo.setEnabled(True)
             self.max_stocks_spin.setEnabled(True)
             self.epochs_spin.setEnabled(True)
+            self.auto_interval_combo.setEnabled(True)
+            self.auto_horizon_spin.setEnabled(True)
             self.discover_check.setEnabled(True)
             self.incremental_check.setEnabled(True)
             self.use_session_cache_check.setEnabled(True)

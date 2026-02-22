@@ -11,6 +11,14 @@ from config.settings import CONFIG
 from utils.logger import get_logger
 
 log = get_logger(__name__)
+_MONITOR_RECOVERABLE_EXCEPTIONS = (
+    AttributeError,
+    ImportError,
+    OSError,
+    RuntimeError,
+    TypeError,
+    ValueError,
+)
 
 
 def _lazy_get(module: str, name: str) -> Any:
@@ -97,7 +105,7 @@ def collect_live_readiness_failures() -> list[str]:
         from utils.institutional import collect_institutional_readiness
 
         report = collect_institutional_readiness()
-    except Exception:
+    except _MONITOR_RECOVERABLE_EXCEPTIONS:
         return []
 
     if bool(report.get("pass", False)):
@@ -154,7 +162,7 @@ class RealTimeMonitor(QThread):
                 getattr(getattr(CONFIG, "auto_trade", None), "scan_interval_seconds", 30)
                 or 30
             )
-        except Exception:
+        except (AttributeError, TypeError, ValueError):
             cfg_interval = 30
         self.scan_interval = max(8, min(30, int(cfg_interval)))
         self.data_interval = str(interval).lower()
@@ -263,13 +271,13 @@ class RealTimeMonitor(QThread):
                             continue
                         self._last_full_emit[symbol] = quick_key
                         self.signal_detected.emit(full)
-                    except Exception as e:
+                    except _MONITOR_RECOVERABLE_EXCEPTIONS as e:
                         log.warning("Full prediction failed for %s: %s", pred.stock_code, e)
 
                 self._backoff = 1
                 self.status_changed.emit(f"Scanned {len(preds)} stocks, {len(strong)} signals")
 
-            except Exception as e:
+            except _MONITOR_RECOVERABLE_EXCEPTIONS as e:
                 error_msg = str(e)
                 self.error_occurred.emit(error_msg)
                 log.warning("Monitor error: %s", error_msg)
@@ -344,7 +352,7 @@ class WorkerThread(QThread):
                 return
             self.result.emit(out)
 
-        except Exception as e:
+        except _MONITOR_RECOVERABLE_EXCEPTIONS as e:
             if not self._cancelled:
                 self.error.emit(str(e))
 
@@ -353,6 +361,6 @@ class WorkerThread(QThread):
         self._cancelled = True
         try:
             self.requestInterruption()
-        except Exception:
+        except RuntimeError:
             pass
 

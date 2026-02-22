@@ -856,18 +856,22 @@ def test_drift_guard_skips_weak_initial_baseline(monkeypatch, tmp_path):
     assert baseline_path.exists() is True
 
 
-def test_auto_learner_forces_1m_and_10080_lookback_floor():
+def test_auto_learner_resolves_supported_interval_and_keeps_1m_floor():
     learner = ContinuousLearner.__new__(ContinuousLearner)
 
     iv, horizon, lookback, min_bars = learner._resolve_interval(
         "30m", 30, 300
     )
-    assert iv == "1m"
+    assert iv == "30m"
     assert horizon == 30
-    assert lookback >= 10080
-    assert min_bars >= max(int(CONFIG.SEQUENCE_LENGTH) + 20, 80)
+    assert lookback > 0
+    assert min_bars >= max(int(CONFIG.SEQUENCE_LENGTH) + 30, 90)
 
     assert learner._compute_lookback_bars("1m") >= 10080
+
+    iv2, _, lookback2, _ = learner._resolve_interval("unsupported", 30, 300)
+    assert iv2 == "1m"
+    assert lookback2 >= 10080
 
 
 def test_finalize_cycle_updates_rejection_streak():

@@ -53,7 +53,7 @@ from trading.runtime_lease import RuntimeLeaseClient, create_runtime_lease_clien
 from utils.atomic_io import atomic_write_json, read_json
 from utils.logger import get_logger
 from utils.metrics import inc_counter, set_gauge
-from utils.security import get_audit_log
+from utils.security import get_access_control, get_audit_log  # noqa: F401
 
 try:
     from utils.metrics_http import register_snapshot_provider, unregister_snapshot_provider

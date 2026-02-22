@@ -19,8 +19,20 @@ from config.settings import CONFIG
 from utils.logger import get_logger
 
 log = get_logger(__name__)
+_SECURITY_SOFT_EXCEPTIONS = (
+    AttributeError,
+    OSError,
+    RuntimeError,
+    TypeError,
+    ValueError,
+)
+_ENV_SECURE_STORAGE_PATH = "TRADING_SECURE_STORAGE_PATH"
+_ENV_SECURE_KEY_PATH = "TRADING_SECURE_KEY_PATH"
+_ENV_SECURE_MASTER_KEY = "TRADING_SECURE_MASTER_KEY"
+_ENV_LOCK_ACCESS_IDENTITY = "TRADING_LOCK_ACCESS_IDENTITY"
 
 # Import cryptography once; SecureStorage is fail-closed when unavailable.
+_CRYPTO_IMPORT_ERROR: ImportError | None
 try:
     from cryptography.fernet import Fernet
 
@@ -47,36 +59,81 @@ class SecureStorage:
                 "cryptography is required for SecureStorage. "
                 "Install with: pip install cryptography"
             ) from _CRYPTO_IMPORT_ERROR
-        self._storage_path = CONFIG.data_dir / ".secure_storage.enc"
-        self._key_path = CONFIG.data_dir / ".key"
+        self._storage_path = self._resolve_storage_path()
+        self._key_path = self._resolve_key_path()
         self._lock = threading.RLock()
         self._cipher = self._init_cipher()
         self._cache: dict[str, str] = {}
         self._closed = False
         self._load()
 
+    def _resolve_storage_path(self) -> Path:
+        raw = str(os.getenv(_ENV_SECURE_STORAGE_PATH, "") or "").strip()
+        if raw:
+            return Path(raw).expanduser()
+        return CONFIG.data_dir / ".secure_storage.enc"
+
+    def _resolve_key_path(self) -> Path:
+        raw = str(os.getenv(_ENV_SECURE_KEY_PATH, "") or "").strip()
+        if raw:
+            return Path(raw).expanduser()
+        # Keep key outside runtime data directory by default.
+        return CONFIG.data_dir.parent / "secrets" / "trading_graph.key"
+
+    @staticmethod
+    def _set_private_perms(path: Path) -> None:
+        try:
+            os.chmod(path, 0o600)
+        except OSError as e:
+            log.warning("Cannot set file permissions for %s: %s", path, e)
+
+    def _load_key_from_env(self) -> bytes | None:
+        raw = str(os.getenv(_ENV_SECURE_MASTER_KEY, "") or "").strip()
+        if not raw:
+            return None
+        return raw.encode("utf-8")
+
+    def _read_key_file(self, path: Path) -> bytes:
+        with open(path, "rb") as f:
+            return f.read()
+
+    def _write_key_file(self, path: Path, key: bytes) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "wb") as f:
+            f.write(key)
+        self._set_private_perms(path)
+
+    def _load_or_create_key(self) -> bytes:
+        env_key = self._load_key_from_env()
+        if env_key is not None:
+            return env_key
+
+        if self._key_path.exists():
+            return self._read_key_file(self._key_path)
+
+        legacy_key_path = CONFIG.data_dir / ".key"
+        if legacy_key_path.exists():
+            key = self._read_key_file(legacy_key_path)
+            try:
+                self._write_key_file(self._key_path, key)
+            except OSError as e:
+                log.warning("Failed to migrate secure key to %s: %s", self._key_path, e)
+            return key
+
+        if Fernet is None:
+            raise RuntimeError("cryptography.Fernet unavailable")
+        key = Fernet.generate_key()
+        self._write_key_file(self._key_path, key)
+        return key
+
     def _init_cipher(self) -> Any:
         """Initialize encryption cipher."""
         try:
-            if self._key_path.exists():
-                with open(self._key_path, "rb") as f:
-                    key = f.read()
-            else:
-                if Fernet is None:
-                    raise RuntimeError("cryptography.Fernet unavailable")
-                key = Fernet.generate_key()
-                self._key_path.parent.mkdir(parents=True, exist_ok=True)
-                with open(self._key_path, "wb") as f:
-                    f.write(key)
-                try:
-                    os.chmod(self._key_path, 0o600)
-                except OSError as e:
-                    log.warning("Cannot set key file permissions: %s", e)
-
+            key = self._load_or_create_key()
             if Fernet is None:
                 raise RuntimeError("cryptography.Fernet unavailable")
             return Fernet(key)
-        except Exception as e:
+        except _SECURITY_SOFT_EXCEPTIONS as e:
             raise RuntimeError(f"Failed to initialize secure cipher: {e}") from e
 
     def _encrypt(self, data: str) -> bytes:
@@ -99,7 +156,7 @@ class SecureStorage:
                 encrypted = f.read()
             decrypted = self._decrypt(encrypted)
             self._cache = json.loads(decrypted)
-        except Exception as e:
+        except (OSError, ValueError, TypeError, json.JSONDecodeError) as e:
             log.warning("Failed to load secure storage: %s", e)
             self._cache = {}
 
@@ -113,10 +170,10 @@ class SecureStorage:
                 f.write(encrypted)
             tmp_path.replace(self._storage_path)
             try:
-                os.chmod(self._storage_path, 0o600)
-            except OSError:
-                pass
-        except Exception as e:
+                self._set_private_perms(self._storage_path)
+            except OSError as perm_err:
+                log.debug("Secure storage permission update skipped: %s", perm_err)
+        except (OSError, TypeError, ValueError) as e:
             log.error("Failed to save secure storage: %s", e)
 
     def set(self, key: str, value: str) -> None:
@@ -245,7 +302,7 @@ class AuditLog:
             if self._current_file:
                 try:
                     self._current_file.close()
-                except Exception:
+                except _SECURITY_SOFT_EXCEPTIONS:
                     pass
                 self._current_file = None
 
@@ -255,7 +312,7 @@ class AuditLog:
                 self._current_file = gzip.open(path, "at", encoding="utf-8")
                 self._current_date = today
                 self._maybe_auto_prune(today)
-            except Exception as e:
+            except _SECURITY_SOFT_EXCEPTIONS as e:
                 log.error("Failed to open audit log file: %s", e)
                 self._current_file = None
 
@@ -272,7 +329,7 @@ class AuditLog:
             self._last_prune_date = today
             retention_days = int(getattr(sec, "audit_retention_days", 365))
             self.prune_old_files(retention_days=retention_days)
-        except Exception as e:
+        except _SECURITY_SOFT_EXCEPTIONS as e:
             log.debug("Audit auto-prune skipped: %s", e)
 
     def _write(self, record: AuditRecord) -> None:
@@ -292,7 +349,7 @@ class AuditLog:
     def _canonical_details(details: dict[str, Any]) -> str:
         try:
             return json.dumps(details, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
-        except Exception:
+        except (TypeError, ValueError):
             return "{}"
 
     def _compute_record_hash(self, record: AuditRecord) -> str:
@@ -329,7 +386,7 @@ class AuditLog:
                 f.write(json.dumps(record.to_dict()) + "\n")
             f.flush()
             self._buffer.clear()
-        except Exception as e:
+        except _SECURITY_SOFT_EXCEPTIONS as e:
             log.error("Audit log flush failed: %s", e)
 
     def log(
@@ -447,7 +504,7 @@ class AuditLog:
             if self._current_file:
                 try:
                     self._current_file.close()
-                except Exception:
+                except _SECURITY_SOFT_EXCEPTIONS:
                     pass
                 self._current_file = None
 
@@ -461,7 +518,7 @@ class AuditLog:
                 encoding="utf-8",
             )
             return True
-        except Exception as e:
+        except _SECURITY_SOFT_EXCEPTIONS as e:
             log.debug("Failed to mark legal hold for %s: %s", audit_file, e)
             return False
 
@@ -473,7 +530,7 @@ class AuditLog:
             if sidecar.exists():
                 sidecar.unlink()
             return True
-        except Exception as e:
+        except _SECURITY_SOFT_EXCEPTIONS as e:
             log.debug("Failed to unmark legal hold for %s: %s", audit_file, e)
             return False
 
@@ -491,7 +548,7 @@ class AuditLog:
                         stats["kept"] += 1
                         continue
                     file_day = date.fromisoformat(parts[1])
-                except Exception:
+                except (TypeError, ValueError):
                     stats["kept"] += 1
                     continue
 
@@ -507,14 +564,14 @@ class AuditLog:
                 try:
                     path.unlink()
                     stats["deleted"] += 1
-                except Exception:
+                except OSError:
                     stats["kept"] += 1
             if stats["deleted"] > 0:
                 log.info(
                     "Audit retention pruned: deleted=%d held=%d kept=%d",
                     stats["deleted"], stats["held"], stats["kept"],
                 )
-        except Exception as e:
+        except _SECURITY_SOFT_EXCEPTIONS as e:
             log.debug("Audit prune failed: %s", e)
         return stats
 
@@ -570,7 +627,7 @@ class AuditLog:
                             results.append(record)
                             if len(results) >= limit:
                                 return results
-                except Exception as e:
+                except _SECURITY_SOFT_EXCEPTIONS as e:
                     log.debug("Failed to read audit file %s: %s", path, e)
                     continue
 
@@ -767,31 +824,56 @@ class AccessControl:
         self._two_factor_verified_at: datetime | None = None
         self._audit: AuditLog | None = None
         self._logging_access = False  # FIX #10: Recursion guard
+        self._identity_locked = str(
+            os.getenv(_ENV_LOCK_ACCESS_IDENTITY, "0")
+        ).strip().lower() in {"1", "true", "yes", "on"}
+        self._identity_lock_reason = "env_lock" if self._identity_locked else ""
 
     def _get_audit(self) -> AuditLog | None:
         """Lazy audit log access to break circular init."""
         if self._audit is None:
             try:
                 self._audit = get_audit_log()
-            except Exception:
-                pass
+            except _SECURITY_SOFT_EXCEPTIONS:
+                self._audit = None
         return self._audit
+
+    def _ensure_identity_mutable(self) -> None:
+        if self._identity_locked:
+            raise RuntimeError(
+                f"Access identity is locked ({self._identity_lock_reason or 'locked'})"
+            )
+
+    def lock_identity(self, reason: str = "manual") -> None:
+        with self._lock:
+            self._identity_locked = True
+            self._identity_lock_reason = str(reason or "manual")
+
+    def unlock_identity(self) -> None:
+        with self._lock:
+            self._identity_locked = False
+            self._identity_lock_reason = ""
 
     def set_role(self, role: str) -> None:
         """Set current role."""
         if not isinstance(role, str) or not role:
             raise ValueError("role must be a non-empty string")
         with self._lock:
+            self._ensure_identity_mutable()
             if role not in self._permissions:
                 raise ValueError(
                     f"Unknown role {role!r}. Valid: {list(self._permissions.keys())}"
                 )
             self._current_role = role
+            audit = self._get_audit()
+            if audit is not None:
+                audit.log_access("set_role", role, True)
 
     def set_user(self, user: str) -> None:
         if not isinstance(user, str) or not user.strip():
             raise ValueError("user must be a non-empty string")
         with self._lock:
+            self._ensure_identity_mutable()
             self._current_user = user.strip()
             audit = self._get_audit()
             if audit is not None:
@@ -910,8 +992,8 @@ class AccessControl:
                 audit = self._get_audit()
                 if audit is not None:
                     audit.log_access(permission, role, allowed)
-            except Exception:
-                pass
+            except _SECURITY_SOFT_EXCEPTIONS as e:
+                log.debug("Access audit logging skipped: %s", e)
             finally:
                 self._logging_access = False
 
@@ -952,6 +1034,11 @@ class AccessControl:
         """List of available roles."""
         with self._lock:
             return list(self._permissions.keys())
+
+    @property
+    def identity_locked(self) -> bool:
+        with self._lock:
+            return bool(self._identity_locked)
 
 # Module-level singletons with proper locks
 

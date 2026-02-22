@@ -44,6 +44,12 @@ Provider/fallback policy controls:
 - `TRADING_INTRADAY_SESSION_POLICY=none` disables CN-only intraday session clipping for non-CN markets.
 - `TRADING_FETCHER_SCOPE=thread|process` controls singleton isolation (`thread` default to avoid cross-thread mutable-cache coupling).
 
+Secure storage controls:
+- `TRADING_SECURE_MASTER_KEY` uses an external Fernet key from env (no local key file write).
+- `TRADING_SECURE_KEY_PATH` overrides local key-file path (default is outside `data_storage/`).
+- `TRADING_SECURE_STORAGE_PATH` overrides encrypted credential store path.
+- `TRADING_LOCK_ACCESS_IDENTITY=1` locks runtime role/user mutations in access control.
+
 ## Candle Rendering Pipeline
 
 1. Load bars from fetcher/database/session cache
