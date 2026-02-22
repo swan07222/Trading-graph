@@ -252,7 +252,7 @@ class UniversalStockDiscovery:
     # ================================================================== #
     # Network environment (cached)
     # ================================================================== #
-    def _get_net_env(self):
+    def _get_net_env(self) -> SimpleNamespace | object:
         """Return cached network environment probe."""
         if self._net_env is None:
             try:
@@ -284,7 +284,11 @@ class UniversalStockDiscovery:
     # Safe fetch with retry + timeout
     # FIX Bug 10: Uses ThreadPoolExecutor instead of socket.setdefaulttimeout
     # ================================================================== #
-    def _safe_fetch(self, fetch_func, description: str = "data"):
+    def _safe_fetch(
+        self,
+        fetch_func: Callable[[], object],
+        description: str = "data",
+    ) -> object | None:
         """
         Execute *fetch_func* with retries and per-call timeout.
 

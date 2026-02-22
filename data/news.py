@@ -352,7 +352,7 @@ class NewsItem:
     importance: float = 0.5  # 0.0 .. 1.0
     keywords: list[str] = field(default_factory=list)
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         # Only auto-compute sentiment if not already set and text exists
         if self.sentiment_score == 0.0 and (self.title or self.content):
             combined = (self.title or "") + " " + (self.content or "")
@@ -603,7 +603,7 @@ class _BaseNewsFetcher:
 class SinaNewsFetcher(_BaseNewsFetcher):
     """Fetch news from Sina Finance (works on China IP)."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__(referer="https://finance.sina.com.cn/")
 
     def fetch_market_news(self, count: int = 20) -> list[NewsItem]:
@@ -755,7 +755,7 @@ class SinaNewsFetcher(_BaseNewsFetcher):
 class EastmoneyNewsFetcher(_BaseNewsFetcher):
     """Fetch news from Eastmoney (works on China IP only)."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__(referer="https://www.eastmoney.com/")
 
     def fetch_stock_news(
@@ -908,7 +908,7 @@ class EastmoneyNewsFetcher(_BaseNewsFetcher):
 class TencentNewsFetcher(_BaseNewsFetcher):
     """Fetch news from Tencent Finance (works from ANY IP)."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__()
 
     def fetch_market_news(self, count: int = 20) -> list[NewsItem]:

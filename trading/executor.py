@@ -46,9 +46,10 @@ from trading.executor_core_ops import _watchdog_loop as _watchdog_loop_impl
 from trading.executor_core_ops import start as _start_impl
 from trading.executor_core_ops import stop as _stop_impl
 from trading.executor_core_ops import submit as _submit_impl
+from trading.executor_error_policy import SOFT_FAIL_EXCEPTIONS
 from trading.executor_reconcile_ops import _reconciliation_loop as _reconciliation_loop_impl
 from trading.executor_reconcile_ops import _submit_with_retry as _submit_with_retry_impl
-from trading.health import ComponentType, HealthStatus, get_health_monitor
+from trading.health import ComponentType, HealthStatus, SystemHealth, get_health_monitor
 from trading.runtime_lease import RuntimeLeaseClient, create_runtime_lease_client
 from utils.atomic_io import atomic_write_json, read_json
 from utils.logger import get_logger
@@ -61,7 +62,7 @@ except (ImportError, OSError):  # pragma: no cover - optional runtime integratio
     register_snapshot_provider = None
     unregister_snapshot_provider = None
 log = get_logger(__name__)
-_SOFT_FAIL_EXCEPTIONS = (AttributeError, ConnectionError, ImportError, IndexError, KeyError, LookupError, OSError, OverflowError, RuntimeError, TimeoutError, TypeError, ValueError, ZeroDivisionError, queue.Empty, queue.Full)
+_SOFT_FAIL_EXCEPTIONS = SOFT_FAIL_EXCEPTIONS
 # AUTO-TRADER
 class ExecutionEngine:
     """
@@ -81,7 +82,6 @@ class ExecutionEngine:
 
     # Configurable: whether to auto-cancel stuck orders
     AUTO_CANCEL_STUCK_ORDERS: bool = False
-
     # Watermark overlap to avoid missing same-timestamp fills
     _FILL_WATERMARK_OVERLAP_SECONDS: float = 2.0
     _RUNTIME_STATE_FILE: str = "execution_runtime_state.json"
@@ -176,7 +176,7 @@ class ExecutionEngine:
         try:
             CONFIG.auto_trade.enabled = False
         except _SOFT_FAIL_EXCEPTIONS as exc:
-            log.debug("Suppressed exception in trading/executor.py", exc_info=exc)
+            log.warning("Failed to disable auto-trade after model drift alarm: %s", exc)
 
         try:
             self._alert_manager.risk_alert(
@@ -205,7 +205,7 @@ class ExecutionEngine:
     # Auto-trade public API
     # -----------------------------------------------------------------
 
-    def init_auto_trader(self, predictor, watch_list: list[str]):
+    def init_auto_trader(self, predictor: Any, watch_list: list[str]) -> None:
         """
         Initialize the auto-trader with a predictor and watchlist.
         Must be called before start_auto_trade().
@@ -218,7 +218,7 @@ class ExecutionEngine:
         self._restore_auto_trader_state()
         log.info("Auto-trader initialized")
 
-    def start_auto_trade(self, mode: AutoTradeMode = AutoTradeMode.AUTO):
+    def start_auto_trade(self, mode: AutoTradeMode = AutoTradeMode.AUTO) -> None:
         """Start auto-trading in the specified mode."""
         if self.auto_trader is None:
             log.error("Auto-trader not initialized. Call init_auto_trader() first.")
@@ -244,13 +244,13 @@ class ExecutionEngine:
         self.auto_trader.set_mode(mode)
         log.info(f"Auto-trading started: mode={mode.value}")
 
-    def stop_auto_trade(self):
+    def stop_auto_trade(self) -> None:
         """Stop auto-trading (switch to MANUAL)."""
         if self.auto_trader:
             self.auto_trader.set_mode(AutoTradeMode.MANUAL)
             log.info("Auto-trading stopped (switched to MANUAL)")
 
-    def set_auto_mode(self, mode: AutoTradeMode):
+    def set_auto_mode(self, mode: AutoTradeMode) -> None:
         """Change auto-trade mode."""
         if self.auto_trader:
             self.auto_trader.set_mode(mode)
@@ -493,7 +493,7 @@ class ExecutionEngine:
 
         return 0.0
 
-    def _rebuild_broker_mappings(self, oms):
+    def _rebuild_broker_mappings(self, oms: Any) -> None:
         """Rebuild broker ID mappings from persisted orders after restart."""
         try:
             active_orders = oms.get_active_orders()
@@ -516,11 +516,13 @@ class ExecutionEngine:
             self._watchdog_thread,
             self._checkpoint_thread,
         ]
+        deadline = time.monotonic() + max(0.2, float(timeout_seconds))
 
         for thread in threads:
             if thread is None or not thread.is_alive():
                 continue
-            thread.join(timeout=max(0.1, float(timeout_seconds)))
+            remaining = max(0.05, deadline - time.monotonic())
+            thread.join(timeout=remaining)
             if thread.is_alive():
                 log.warning(
                     "Worker thread did not stop within %.1fs: %s",
@@ -535,7 +537,8 @@ class ExecutionEngine:
         self._reconnect_thread = None
         self._watchdog_thread = None
         self._checkpoint_thread = None
-    def _heartbeat(self, name: str):
+
+    def _heartbeat(self, name: str) -> None:
         """Record thread heartbeat for watchdog + observability."""
         with self._thread_hb_lock:
             self._thread_heartbeats[str(name)] = time.time()
@@ -687,7 +690,7 @@ class ExecutionEngine:
         except _SOFT_FAIL_EXCEPTIONS as e:
             log.warning("Runtime lease release failed: %s", e)
 
-    def _persist_runtime_state(self, clean_shutdown: bool = False):
+    def _persist_runtime_state(self, clean_shutdown: bool = False) -> None:
         """Write runtime checkpoint atomically."""
         try:
             payload = self._runtime_state_payload(clean_shutdown=clean_shutdown)
@@ -696,7 +699,7 @@ class ExecutionEngine:
         except _SOFT_FAIL_EXCEPTIONS as e:
             log.debug(f"Runtime checkpoint write failed: {e}")
 
-    def _restore_runtime_state(self):
+    def _restore_runtime_state(self) -> None:
         """Best-effort restore markers from prior run for HA/DR awareness."""
         try:
             if not self._runtime_state_path.exists():
@@ -716,7 +719,7 @@ class ExecutionEngine:
         except _SOFT_FAIL_EXCEPTIONS as e:
             log.debug(f"Runtime checkpoint restore failed: {e}")
 
-    def _restore_auto_trader_state(self):
+    def _restore_auto_trader_state(self) -> None:
         """Apply recovered auto-trader pause markers after crash recovery."""
         if self.auto_trader is None or not isinstance(self._recovered_auto_state, dict):
             return
@@ -731,7 +734,7 @@ class ExecutionEngine:
         except _SOFT_FAIL_EXCEPTIONS as e:
             log.debug(f"Auto-trader recovery state apply failed: {e}")
 
-    def _checkpoint_loop(self):
+    def _checkpoint_loop(self) -> None:
         """Periodic runtime checkpoint loop for crash recovery."""
         interval = float(getattr(CONFIG, "runtime_checkpoint_seconds", 5.0) or 5.0)
         lease_interval = float(getattr(CONFIG, "runtime_lease_heartbeat_seconds", 5.0) or 5.0)
@@ -969,7 +972,7 @@ class ExecutionEngine:
 
         return True, ""
 
-    def _record_rejection_guardrail(self, reason: str):
+    def _record_rejection_guardrail(self, reason: str) -> None:
         """Track reject bursts and trip kill-switch on persistent failures."""
         now = time.time()
         self._recent_rejections.append(now)
@@ -990,7 +993,8 @@ class ExecutionEngine:
                 )
         except _SOFT_FAIL_EXCEPTIONS as e:
             log.debug(f"Reject kill-switch guard failed: {e}")
-    def _on_health_degraded(self, health):
+
+    def _on_health_degraded(self, health: SystemHealth) -> None:
         """Runbook automation: pause autonomous trading on degraded health."""
         try:
             sec_cfg = getattr(CONFIG, "security", None)
@@ -1006,19 +1010,16 @@ class ExecutionEngine:
         except _SOFT_FAIL_EXCEPTIONS as e:
             log.debug(f"Degraded health handler failed: {e}")
 
-    def submit_from_prediction(self, pred) -> bool:
+    def submit_from_prediction(self, pred: Any) -> bool:
         """Submit order from AI prediction."""
         from models.predictor import Signal as UiSignal
-
         if pred.signal == UiSignal.HOLD or pred.position.shares == 0:
             return False
-
         side = (
             OrderSide.BUY
             if pred.signal in (UiSignal.STRONG_BUY, UiSignal.BUY)
             else OrderSide.SELL
         )
-
         signal = TradeSignal(
             symbol=pred.stock_code,
             name=pred.stock_name,
@@ -1034,10 +1035,9 @@ class ExecutionEngine:
         )
         return self.submit(signal)
 
-    def _execution_loop(self):
+    def _execution_loop(self) -> None:
         """Main execution loop."""
         last_risk_update = 0.0
-
         while self._running:
             self._heartbeat("exec")
             try:
@@ -1072,19 +1072,17 @@ class ExecutionEngine:
             if self._wait_or_stop(0.05):
                 break
 
-    def get_risk_metrics(self):
+    def get_risk_metrics(self) -> dict[str, Any] | None:
         if self.risk_manager:
             return self.risk_manager.get_metrics()
         return None
-    def _update_auto_trade_fill(self, order: Order, fill: Fill):
+    def _update_auto_trade_fill(self, order: Order, fill: Fill) -> None:
         """Update auto-trader state with fill information."""
         if not self.auto_trader:
             return
-
         action_id = order.tags.get("auto_trade_action_id", "")
         if not action_id:
             return
-
         with self.auto_trader._lock:
             for action in self.auto_trader.state.recent_actions:
                 if action.id == action_id:
@@ -1092,7 +1090,8 @@ class ExecutionEngine:
                     action.fill_quantity += fill.quantity
                     action.order_id = order.id
                     break
-    def _fill_sync_loop(self):
+
+    def _fill_sync_loop(self) -> None:
         """Poll broker for fills."""
         while self._running:
             self._heartbeat("fill_sync")
@@ -1105,7 +1104,8 @@ class ExecutionEngine:
                 self._evaluate_synthetic_exits()
             except _SOFT_FAIL_EXCEPTIONS as e:
                 log.error(f"Fill sync loop error: {e}")
-    def _prune_processed_fills_unlocked(self, max_size: int = 50000):
+
+    def _prune_processed_fills_unlocked(self, max_size: int = 50000) -> None:
         """
         Prevent unbounded growth of processed fill IDs.
         MUST be called with self._fills_lock already held.
@@ -1131,7 +1131,8 @@ class ExecutionEngine:
                 keep.add(fid)
 
         self._processed_fill_ids = keep
-    def _broker_reconnect_loop(self):
+
+    def _broker_reconnect_loop(self) -> None:
         """Reconnect with exponential backoff."""
         backoff = 1.0
         while self._running:
@@ -1170,7 +1171,7 @@ class ExecutionEngine:
                 log.warning(f"Reconnect loop error: {e}")
                 backoff = min(backoff * 2.0, 60.0)
 
-    def _on_kill_switch(self, reason: str):
+    def _on_kill_switch(self, reason: str) -> None:
         """Handle kill switch activation."""
         log.critical(f"Kill switch activated: {reason}")
 
@@ -1204,7 +1205,7 @@ class ExecutionEngine:
             "KILL SWITCH ACTIVATED", f"All trading halted: {reason}"
         )
 
-    def _reject_signal(self, signal: TradeSignal, reason: str):
+    def _reject_signal(self, signal: TradeSignal, reason: str) -> None:
         """Handle signal rejection."""
         log.warning(f"Signal rejected: {signal.symbol} - {reason}")
         inc_counter(
@@ -1228,14 +1229,13 @@ class ExecutionEngine:
 
         return get_oms().get_account()
 
-    def get_positions(self):
+    def get_positions(self) -> Any:
         from trading.oms import get_oms
 
         return get_oms().get_positions()
 
-    def get_orders(self):
+    def get_orders(self) -> Any:
         return self.broker.get_orders()
-
 ExecutionEngine.start = _start_impl
 ExecutionEngine.stop = _stop_impl
 ExecutionEngine._build_execution_snapshot = _build_execution_snapshot_impl

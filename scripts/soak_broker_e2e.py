@@ -45,7 +45,7 @@ def _safe_float(value: Any) -> float:
         return 0.0
 
 
-def _quote_probe(broker, symbols: list[str]) -> tuple[int, int]:
+def _quote_probe(broker: Any, symbols: list[str]) -> tuple[int, int]:
     checked = 0
     ok = 0
     for symbol in symbols:

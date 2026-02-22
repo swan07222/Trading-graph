@@ -76,7 +76,7 @@ class EnsemblePrediction:
     def is_confident(self) -> bool:
         return bool(self.confidence >= float(CONFIG.model.min_confidence))
 
-def _build_amp_context(device: str):
+def _build_amp_context(device: str) -> tuple[Callable[[], Any], Any | None]:
     """Return (context_factory, GradScaler_or_None) compatible with torch >= 1.9."""
     use_amp = device == "cuda"
     if not use_amp:
@@ -92,7 +92,7 @@ def _build_amp_context(device: str):
     # torch 1.x path
     try:
         from torch.cuda.amp import GradScaler, autocast
-        return (lambda: autocast(enabled=True)), GradScaler(enabled=True)
+        return (lambda: autocast(**{"enabled": True})), GradScaler(enabled=True)
     except (ImportError, TypeError):
         pass
 
@@ -237,7 +237,7 @@ class EnsembleModel:
         hidden_size: int | None = None,
         dropout: float | None = None,
         num_classes: int | None = None,
-    ):
+    ) -> None:
         cls_map = self._get_model_classes()
         try:
             model = cls_map[name](
@@ -253,7 +253,7 @@ class EnsembleModel:
         except Exception as e:
             log.error(f"Failed to initialise {name}: {e}")
 
-    def _normalize_weights(self):
+    def _normalize_weights(self) -> None:
         # FIX NORM: Handle empty weights dict gracefully
         if not self.weights:
             return
@@ -296,7 +296,7 @@ class EnsembleModel:
 
     def calibrate(
         self, X_val: np.ndarray, y_val: np.ndarray, batch_size: int = 512
-    ):
+    ) -> None:
         """Temperature-scale the ensemble's weighted logits on a held-out set."""
         if len(X_val) == 0 or len(y_val) == 0:
             log.warning("Empty validation data for calibration - skipping")
@@ -655,7 +655,7 @@ class EnsembleModel:
         log.info(f"{name} done - best val acc: {best_val_acc:.2%}")
         return history, best_val_acc
 
-    def _update_weights(self, val_accuracies: dict[str, float]):
+    def _update_weights(self, val_accuracies: dict[str, float]) -> None:
         """
         Update ensemble weights from validation accuracies.
 
@@ -896,7 +896,7 @@ class EnsembleModel:
     # ------------------------------------------------------------------
     # ------------------------------------------------------------------
 
-    def save(self, path: str | Path | None = None):
+    def save(self, path: str | Path | None = None) -> None:
         """
         Save ensemble atomically.
 
@@ -1018,7 +1018,7 @@ class EnsembleModel:
                 getattr(getattr(CONFIG, "model", None), "require_artifact_checksum", True)
             )
 
-            def _load_checkpoint(weights_only: bool):
+            def _load_checkpoint(weights_only: bool) -> dict[str, Any]:
                 from utils.atomic_io import torch_load
 
                 return torch_load(
@@ -1169,13 +1169,13 @@ class EnsembleModel:
                 ),
             }
 
-    def set_eval_mode(self):
+    def set_eval_mode(self) -> None:
         """Set all models to evaluation mode."""
         with self._lock:
             for model in self.models.values():
                 model.eval()
 
-    def set_train_mode(self):
+    def set_train_mode(self) -> None:
         """Set all models to training mode."""
         with self._lock:
             for model in self.models.values():

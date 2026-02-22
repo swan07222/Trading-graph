@@ -299,7 +299,7 @@ class PrecisionConfig:
     profile_filename: str = "precision_thresholds.json"
 
 
-def _safe_dataclass_from_dict(dc_instance, data: dict) -> list[str]:
+def _safe_dataclass_from_dict(dc_instance: Any, data: dict[str, Any]) -> list[str]:
     """
     Apply dict values to a dataclass instance with type checking.
     Returns list of warnings for bad values.
@@ -387,7 +387,7 @@ def _coerce_bool(value: Any) -> tuple[bool, bool]:
     return False, False
 
 
-def _dataclass_to_dict(dc_instance) -> dict:
+def _dataclass_to_dict(dc_instance: Any) -> dict[str, Any]:
     """Serialize a dataclass to dict, handling special types."""
     result = {}
     for f in fields(dc_instance):

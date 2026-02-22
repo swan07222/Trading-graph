@@ -410,7 +410,7 @@ class MetricsHandler(BaseHTTPRequestHandler):
 
     timeout = 10
 
-    def log_message(self, fmt, *args) -> None:
+    def log_message(self, fmt: str, *args: object) -> None:
         log.debug(fmt, *args)
 
     def _api_key(self) -> str:
@@ -767,7 +767,7 @@ class MetricsServer:
         self.start()
         return self
 
-    def __exit__(self, *exc) -> None:
+    def __exit__(self, *exc: object) -> None:
         self.stop()
 
     def __repr__(self) -> str:

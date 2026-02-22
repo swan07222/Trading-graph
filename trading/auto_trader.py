@@ -161,6 +161,23 @@ class AutoTrader:
             if not p_cfg or not bool(getattr(p_cfg, "enabled", True)):
                 return True, ""
 
+            block_short_history = bool(
+                getattr(
+                    p_cfg,
+                    "block_auto_trade_on_short_history_fallback",
+                    True,
+                )
+            )
+            warnings = list(getattr(pred, "warnings", []) or [])
+            short_history_fallback = bool(getattr(pred, "short_history_fallback", False))
+            if not short_history_fallback:
+                short_history_fallback = any(
+                    "short-history fallback used" in str(item).lower()
+                    for item in warnings
+                )
+            if block_short_history and short_history_fallback:
+                return False, "Short-history fallback prediction blocked for auto-trade"
+
             entropy = float(getattr(pred, "entropy", 0.0) or 0.0)
             max_entropy = float(getattr(p_cfg, "max_entropy", 1.0) or 1.0)
             if entropy > max_entropy:
@@ -173,8 +190,17 @@ class AutoTrader:
             if edge < min_edge:
                 return False, f"Weak directional edge ({edge:.2f} < {min_edge:.2f})"
         except Exception as e:
+            p_cfg = getattr(CONFIG, "precision", None)
+            fail_closed = bool(
+                getattr(p_cfg, "fail_closed_on_quality_gate_error", True)
+            )
+            if fail_closed:
+                log.warning(
+                    "Precision quality gate failed-closed due to config/runtime error: %s",
+                    e,
+                )
+                return False, "Quality gate error (fail-closed policy)"
             log.debug("Precision quality gate failed-open due to config error: %s", e)
-            # Fail-open to avoid accidental trading halt from malformed config.
             return True, ""
 
         return True, ""

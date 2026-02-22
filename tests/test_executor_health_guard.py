@@ -3,6 +3,8 @@ import threading
 from collections import deque
 from types import SimpleNamespace
 
+import pytest
+
 from config.settings import CONFIG, TradingMode
 from core.types import AutoTradeMode, Fill, Order, OrderSide, OrderStatus, TradeSignal
 from trading.executor import ExecutionEngine
@@ -393,6 +395,78 @@ def test_submit_rejects_stop_order_without_trigger():
         CONFIG.is_market_open = old_is_open
         exec_mod.get_access_control = old_access
         exec_mod.get_audit_log = old_audit
+
+
+def test_submit_blocks_live_advanced_order_without_native_support():
+    import trading.executor as exec_mod
+
+    eng = ExecutionEngine.__new__(ExecutionEngine)
+    eng._running = True
+    eng.mode = TradingMode.LIVE
+    eng.broker = SimpleNamespace()  # no advanced-order capability surface
+    eng._health_monitor = SimpleNamespace(
+        get_health=lambda: SimpleNamespace(status=HealthStatus.HEALTHY)
+    )
+    eng._kill_switch = SimpleNamespace(can_trade=True)
+    eng.risk_manager = SimpleNamespace(check_order=lambda *a, **k: (True, ""))
+    eng._queue = queue.Queue()
+    eng._alert_manager = SimpleNamespace(risk_alert=lambda *a, **k: None)
+    eng._reject_signal = lambda sig, reason: setattr(sig, "_rejected_reason", reason)
+    eng._require_fresh_quote = (
+        lambda symbol, max_age_seconds=15.0, block_delayed=False: (True, "OK", 12.0)
+    )
+    eng._recent_submit_keys = {}
+    eng._recent_submissions = {}
+    eng._recent_rejections = deque()
+
+    old_is_open = CONFIG.is_market_open
+    old_access = exec_mod.get_access_control
+    old_audit = exec_mod.get_audit_log
+    old_allow_live = bool(
+        getattr(CONFIG.security, "allow_live_order_type_emulation", False)
+    )
+    CONFIG.is_market_open = lambda: True
+    CONFIG.security.allow_live_order_type_emulation = False
+    exec_mod.get_access_control = lambda: SimpleNamespace(check=lambda *_a, **_k: True)
+    exec_mod.get_audit_log = lambda: SimpleNamespace(log_risk_event=lambda *a, **k: None)
+    try:
+        sig = TradeSignal(
+            symbol="600519",
+            side=OrderSide.BUY,
+            quantity=100,
+            price=10.0,
+            order_type="trail_market",
+        )
+        ok = eng.submit(sig)
+        assert ok is False
+        assert "requires broker-native support" in str(
+            getattr(sig, "_rejected_reason", "")
+        ).lower()
+    finally:
+        CONFIG.is_market_open = old_is_open
+        CONFIG.security.allow_live_order_type_emulation = old_allow_live
+        exec_mod.get_access_control = old_access
+        exec_mod.get_audit_log = old_audit
+
+
+def test_submit_with_retry_escalates_programming_error_when_strict_policy_enabled():
+    eng = ExecutionEngine.__new__(ExecutionEngine)
+    eng.mode = TradingMode.SIMULATION
+    eng._wait_or_stop = lambda _seconds: False
+
+    def _boom_submit(_order):
+        raise TypeError("bug-like")
+
+    eng.broker = SimpleNamespace(submit_order=_boom_submit)
+
+    old_strict = bool(getattr(CONFIG.security, "strict_runtime_exception_policy", True))
+    CONFIG.security.strict_runtime_exception_policy = True
+    try:
+        order = Order(symbol="600519", side=OrderSide.BUY, quantity=100, price=10.0)
+        with pytest.raises(TypeError):
+            eng._submit_with_retry(order, attempts=2)
+    finally:
+        CONFIG.security.strict_runtime_exception_policy = old_strict
 
 
 def test_oco_sibling_cancel_on_fill():

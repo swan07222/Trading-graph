@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
+from typing import Any
 
 from config.settings import CONFIG
 from utils.logger import get_logger
@@ -28,7 +29,7 @@ class StrategyMarketplace:
     def enabled_path(self) -> Path:
         return self._enabled_path
 
-    def _read_json(self, path: Path, default):
+    def _read_json(self, path: Path, default: Any) -> Any:
         try:
             if not path.exists():
                 return default

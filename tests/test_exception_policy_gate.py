@@ -30,6 +30,24 @@ def test_collect_exception_policy_issues_detects_broad_and_silent(tmp_path: Path
     assert f"{normalized}:3:silent-pass" in issues
 
 
+def test_collect_exception_policy_issues_handles_utf8_bom(tmp_path: Path):
+    gate = _load_exception_policy_gate_module()
+    sample = tmp_path / "sample_bom.py"
+    sample.write_text(
+        "try:\n"
+        "    raise RuntimeError('x')\n"
+        "except Exception:\n"
+        "    pass\n",
+        encoding="utf-8-sig",
+    )
+
+    issues, parse_errors = gate.collect_exception_policy_issues((str(sample),))
+    assert parse_errors == []
+    normalized = str(sample).replace("\\", "/")
+    assert f"{normalized}:3:broad-except" in issues
+    assert f"{normalized}:3:silent-pass" in issues
+
+
 def test_exception_policy_baseline_roundtrip(tmp_path: Path):
     gate = _load_exception_policy_gate_module()
     baseline = tmp_path / "baseline.txt"

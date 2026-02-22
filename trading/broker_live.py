@@ -6,6 +6,7 @@ from abc import abstractmethod
 from collections import deque
 from datetime import date, datetime
 from pathlib import Path
+from typing import Any
 
 from config.settings import CONFIG
 from core.types import Account, Fill, Order, OrderSide, OrderStatus, OrderType, Position
@@ -25,7 +26,7 @@ class EasytraderBroker(BrokerInterface):
     - _get_balance_fields() -> dict (optional, for field name differences)
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__()
         self._client = None
         self._connected = False
@@ -58,7 +59,7 @@ class EasytraderBroker(BrokerInterface):
     def is_connected(self) -> bool:
         return self._connected and self._client is not None
 
-    def connect(self, exe_path: str = None, **kwargs) -> bool:
+    def connect(self, exe_path: str | None = None, **kwargs: Any) -> bool:
         if not self._available:
             log.error("easytrader not installed")
             return False
@@ -89,7 +90,7 @@ class EasytraderBroker(BrokerInterface):
 
         return False
 
-    def disconnect(self):
+    def disconnect(self) -> None:
         self._client = None
         self._connected = False
         log.info(f"Disconnected from {self.name}")
@@ -280,7 +281,7 @@ class EasytraderBroker(BrokerInterface):
             order.message = str(e)
             return order
 
-    def get_fills(self, since: datetime = None) -> list[Fill]:
+    def get_fills(self, since: datetime | None = None) -> list[Fill]:
         """Get fills from broker - deduplicates by broker_fill_id."""
         if not self.is_connected:
             return []
@@ -469,7 +470,7 @@ class EasytraderBroker(BrokerInterface):
             ]
         return list(self._orders.values())
 
-    def _get_fetcher(self):
+    def _get_fetcher(self) -> Any:
         if self._fetcher is None:
             from data.fetcher import get_fetcher
             self._fetcher = get_fetcher()
@@ -547,7 +548,7 @@ class MultiVenueBroker(BrokerInterface):
     def is_connected(self) -> bool:
         return any(v.is_connected for v in self._venues)
 
-    def connect(self, **kwargs) -> bool:
+    def connect(self, **kwargs: Any) -> bool:
         ok_any = False
         for i, venue in enumerate(self._venues):
             try:
@@ -561,7 +562,7 @@ class MultiVenueBroker(BrokerInterface):
                     self._active_idx = i
         return ok_any
 
-    def disconnect(self):
+    def disconnect(self) -> None:
         for venue in self._venues:
             try:
                 venue.disconnect()
@@ -740,7 +741,7 @@ class MultiVenueBroker(BrokerInterface):
         )
         return any(marker in msg for marker in transient_markers)
 
-    def _first_read(self, fn_name: str, *args, **kwargs):
+    def _first_read(self, fn_name: str, *args: Any, **kwargs: Any) -> Any:
         for idx in self._ordered_indices():
             venue = self._venues[idx]
             try:
@@ -831,7 +832,7 @@ class MultiVenueBroker(BrokerInterface):
     def get_quote(self, symbol: str) -> float | None:
         return self._first_read("get_quote", symbol)
 
-    def get_fills(self, since: datetime = None) -> list[Fill]:
+    def get_fills(self, since: datetime | None = None) -> list[Fill]:
         out: list[Fill] = []
         seen: set[str] = set()
         for idx in self._connected_indices():

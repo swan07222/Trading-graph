@@ -36,7 +36,7 @@ class KillSwitch:
 
     STATE_FILE = "kill_switch_state.json"
 
-    def __init__(self):
+    def __init__(self) -> None:
         self._lock = threading.RLock()
         self._audit = get_audit_log()
 
@@ -48,14 +48,14 @@ class KillSwitch:
         self._circuit_breakers: dict[CircuitBreakerType, CircuitBreakerState] = {}
         self._init_circuit_breakers()
 
-        self._on_activate: list[Callable] = []
-        self._on_deactivate: list[Callable] = []
+        self._on_activate: list[Callable[[str], object]] = []
+        self._on_deactivate: list[Callable[[], object]] = []
 
         self._load_state()
 
         EVENT_BUS.subscribe(EventType.RISK_BREACH, self._on_risk_event)
 
-    def _init_circuit_breakers(self):
+    def _init_circuit_breakers(self) -> None:
         self._circuit_breakers = {
             CircuitBreakerType.DAILY_LOSS: CircuitBreakerState(
                 type=CircuitBreakerType.DAILY_LOSS,
@@ -185,7 +185,7 @@ class KillSwitch:
         cb_type: CircuitBreakerType,
         current_value: float,
         message: str = "",
-    ):
+    ) -> None:
         with self._lock:
             cb = self._circuit_breakers.get(cb_type)
             if not cb:
@@ -250,7 +250,7 @@ class KillSwitch:
             log.info(f"Circuit breaker reset: {cb_type.value}")
             return True
 
-    def _on_risk_event(self, event: Event):
+    def _on_risk_event(self, event: Event) -> None:
         """Handle RiskEvent correctly."""
         risk_type = getattr(event, "risk_type", "") or ""
         current_value = float(getattr(event, "current_value", 0.0) or 0.0)
@@ -321,7 +321,7 @@ class KillSwitch:
                 'active_circuit_breakers': active_cbs,
             }
 
-    def _save_state(self):
+    def _save_state(self) -> None:
         path = CONFIG.data_dir / self.STATE_FILE
 
         state = {
@@ -357,7 +357,7 @@ class KillSwitch:
         except Exception as e:
             log.error(f"Failed to save kill switch state: {e}")
 
-    def _load_state(self):
+    def _load_state(self) -> None:
         """
         Load state from disk.
 
@@ -417,10 +417,10 @@ class KillSwitch:
         except Exception as e:
             log.error(f"Failed to load kill switch state: {e}")
 
-    def on_activate(self, callback: Callable):
+    def on_activate(self, callback: Callable[[str], object]) -> None:
         self._on_activate.append(callback)
 
-    def on_deactivate(self, callback: Callable):
+    def on_deactivate(self, callback: Callable[[], object]) -> None:
         self._on_deactivate.append(callback)
 
 # FIX: Module-level lock instead of globals() pattern

@@ -43,6 +43,51 @@ def test_auto_trader_precision_quality_gate():
         CONFIG.precision.min_edge = old_min_edge
 
 
+def test_auto_trader_precision_quality_gate_blocks_short_history_fallback():
+    at = AutoTrader(engine=_DummyEngine(), predictor=None, watch_list=[])
+
+    old_block = bool(
+        getattr(CONFIG.precision, "block_auto_trade_on_short_history_fallback", True)
+    )
+    try:
+        CONFIG.precision.block_auto_trade_on_short_history_fallback = True
+        pred = SimpleNamespace(
+            short_history_fallback=True,
+            entropy=0.01,
+            prob_up=0.70,
+            prob_down=0.10,
+        )
+        ok, reason = at._passes_precision_quality_gate(pred)
+        assert ok is False
+        assert "short-history" in reason.lower()
+    finally:
+        CONFIG.precision.block_auto_trade_on_short_history_fallback = old_block
+
+
+def test_auto_trader_precision_quality_gate_fail_closed_on_error():
+    at = AutoTrader(engine=_DummyEngine(), predictor=None, watch_list=[])
+
+    old_fail_closed = bool(
+        getattr(CONFIG.precision, "fail_closed_on_quality_gate_error", True)
+    )
+    old_max_entropy = float(getattr(CONFIG.precision, "max_entropy", 0.35))
+    try:
+        CONFIG.precision.fail_closed_on_quality_gate_error = True
+        CONFIG.precision.max_entropy = "bad_value"  # type: ignore[assignment]
+        pred = SimpleNamespace(
+            short_history_fallback=False,
+            entropy=0.05,
+            prob_up=0.70,
+            prob_down=0.10,
+        )
+        ok, reason = at._passes_precision_quality_gate(pred)
+        assert ok is False
+        assert "fail-closed" in reason.lower()
+    finally:
+        CONFIG.precision.fail_closed_on_quality_gate_error = old_fail_closed
+        CONFIG.precision.max_entropy = old_max_entropy
+
+
 def test_auto_trader_caps_buy_quantity_with_risk_manager():
     from models.predictor import Signal
 

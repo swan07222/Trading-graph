@@ -146,6 +146,27 @@ class SecureStorage:
         decrypted = self._cipher.decrypt(data)
         return bytes(decrypted).decode("utf-8")
 
+    @staticmethod
+    def _normalize_cache(payload: Any) -> dict[str, str]:
+        if not isinstance(payload, dict):
+            return {}
+        out: dict[str, str] = {}
+        dropped = 0
+        for raw_key, raw_val in payload.items():
+            key = str(raw_key or "").strip()
+            if not key:
+                dropped += 1
+                continue
+            if isinstance(raw_val, str):
+                out[key] = raw_val
+            elif raw_val is None:
+                out[key] = ""
+            else:
+                out[key] = str(raw_val)
+        if dropped > 0:
+            log.warning("Secure storage dropped %d invalid cache key(s)", dropped)
+        return out
+
     def _load(self) -> None:
         """Load from storage."""
         if not self._storage_path.exists():
@@ -155,13 +176,19 @@ class SecureStorage:
             with open(self._storage_path, "rb") as f:
                 encrypted = f.read()
             decrypted = self._decrypt(encrypted)
-            self._cache = json.loads(decrypted)
+            decoded = json.loads(decrypted)
+            if not isinstance(decoded, dict):
+                log.warning("Secure storage payload must be a JSON object; resetting cache")
+                self._cache = {}
+                return
+            self._cache = self._normalize_cache(decoded)
         except (OSError, ValueError, TypeError, json.JSONDecodeError) as e:
             log.warning("Failed to load secure storage: %s", e)
             self._cache = {}
 
     def _save(self) -> None:
         """Save to storage."""
+        tmp_path: Path | None = None
         try:
             data = json.dumps(self._cache)
             encrypted = self._encrypt(data)
@@ -175,6 +202,12 @@ class SecureStorage:
                 log.debug("Secure storage permission update skipped: %s", perm_err)
         except (OSError, TypeError, ValueError) as e:
             log.error("Failed to save secure storage: %s", e)
+        finally:
+            if tmp_path is not None and tmp_path.exists():
+                try:
+                    tmp_path.unlink()
+                except OSError:
+                    pass
 
     def set(self, key: str, value: str) -> None:
         """Store encrypted value."""
@@ -302,8 +335,8 @@ class AuditLog:
             if self._current_file:
                 try:
                     self._current_file.close()
-                except _SECURITY_SOFT_EXCEPTIONS:
-                    pass
+                except _SECURITY_SOFT_EXCEPTIONS as e:
+                    log.debug("Audit log file close during rotation failed: %s", e)
                 self._current_file = None
 
             sid = (self._session_id or "nosession")[:8]
@@ -504,8 +537,8 @@ class AuditLog:
             if self._current_file:
                 try:
                     self._current_file.close()
-                except _SECURITY_SOFT_EXCEPTIONS:
-                    pass
+                except _SECURITY_SOFT_EXCEPTIONS as e:
+                    log.debug("Audit log file close during shutdown failed: %s", e)
                 self._current_file = None
 
     def mark_legal_hold(self, audit_file: Path) -> bool:
@@ -823,7 +856,7 @@ class AccessControl:
         self._two_factor_verified = False
         self._two_factor_verified_at: datetime | None = None
         self._audit: AuditLog | None = None
-        self._logging_access = False  # FIX #10: Recursion guard
+        self._audit_logging_guard = threading.local()
         self._identity_locked = str(
             os.getenv(_ENV_LOCK_ACCESS_IDENTITY, "0")
         ).strip().lower() in {"1", "true", "yes", "on"}
@@ -985,9 +1018,9 @@ class AccessControl:
                 elif bool(getattr(CONFIG.security, "require_2fa_for_live", True)):
                     allowed = allowed and self._is_2fa_valid()
 
-        # FIX #10: Recursion guard: audit.log_access might trigger check()
-        if not self._logging_access:
-            self._logging_access = True
+        # Thread-local recursion guard: audit.log_access might trigger check()
+        if not bool(getattr(self._audit_logging_guard, "active", False)):
+            self._audit_logging_guard.active = True
             try:
                 audit = self._get_audit()
                 if audit is not None:
@@ -995,7 +1028,7 @@ class AccessControl:
             except _SECURITY_SOFT_EXCEPTIONS as e:
                 log.debug("Access audit logging skipped: %s", e)
             finally:
-                self._logging_access = False
+                self._audit_logging_guard.active = False
 
         return allowed
 

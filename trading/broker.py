@@ -1,4 +1,4 @@
-# trading/broker.py
+﻿# trading/broker.py
 """
 Unified Broker Interface - Production Grade with Full Fill Sync
 
@@ -11,140 +11,25 @@ Supports:
 - YinHe (YH)
 
 """
-import hashlib
 import threading
 import time
 import uuid
 from abc import ABC, abstractmethod
-from collections import OrderedDict
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime
+from typing import Any
 
 from config.settings import CONFIG
 from core.types import Account, Fill, Order, OrderSide, OrderStatus, OrderType, Position
+from trading.broker_common import (
+    BoundedOrderedDict,
+    make_fill_uid,
+    parse_broker_status,
+)
 from utils.logger import get_logger
 
 log = get_logger(__name__)
-
-# Bounded ID mapping (LRU eviction)
-# FIX(6): Prevents unbounded growth of order ID maps
-
-class BoundedOrderedDict(OrderedDict):
-    """OrderedDict with max size - evicts oldest on overflow."""
-
-    def __init__(self, maxsize: int = 10000, *args, **kwargs):
-        self._maxsize = maxsize
-        super().__init__(*args, **kwargs)
-
-    def __setitem__(self, key, value):
-        if key in self:
-            self.move_to_end(key)
-        super().__setitem__(key, value)
-        while len(self) > self._maxsize:
-            self.popitem(last=False)
-
-# Module-level fill ID generator
-# FIX(12): Fallback uses stable hash instead of datetime.now()
-
-def make_fill_uid(
-    broker_name: str,
-    broker_fill_id: str,
-    symbol: str,
-    ts: datetime,
-    price: float,
-    qty: int,
-) -> str:
-    """
-    Create a globally-unique, stable Fill.id for OMS primary key.
-
-    Format with broker_fill_id:
-      FILL|<YYYY-MM-DD>|<broker>|<broker_fill_id>|<symbol>
-    Fallback (no broker_fill_id):
-      FILL|<YYYY-MM-DD>|<broker>|<symbol>|<hash>
-    """
-    broker = (broker_name or "broker").replace("|", "_")
-    broker_fill_id = (broker_fill_id or "").strip()
-    sym = str(symbol or "").strip()
-
-    day = (
-        ts.date().isoformat()
-        if isinstance(ts, datetime)
-        else date.today().isoformat()
-    )
-
-    if broker_fill_id:
-        return f"FILL|{day}|{broker}|{broker_fill_id}|{sym}"
-
-    # FIX(12): Stable hash from all available fields
-    iso = ts.isoformat() if isinstance(ts, datetime) else day
-    raw = f"{iso}|{broker}|{sym}|{int(qty)}|{float(price):.4f}"
-    h = hashlib.sha256(raw.encode()).hexdigest()[:12]
-    return f"FILL|{day}|{broker}|{sym}|{h}"
-
-# FIX(3): Single function instead of duplicated methods
-
-def parse_broker_status(status_str: str) -> OrderStatus:
-    """
-    Parse broker/native status strings into internal OrderStatus.
-
-    Handles both English keywords and common Chinese statuses.
-    Unicode escapes are used for Chinese terms to avoid source-encoding drift.
-    """
-    s = str(status_str or "").strip().lower()
-    if not s:
-        return OrderStatus.SUBMITTED
-
-    def _has_any(*tokens: str) -> bool:
-        return any(t and (t in s) for t in tokens)
-
-    if _has_any(
-        "partial",
-        "partially filled",
-        "\u90e8\u5206\u6210\u4ea4",  # 部分成交
-    ):
-        return OrderStatus.PARTIAL
-
-    if (
-        s == "filled"
-        or _has_any(
-            "fully filled",
-            "all traded",
-            "\u5168\u90e8\u6210\u4ea4",  # 全部成交
-            "\u5df2\u6210",              # 已成
-        )
-    ):
-        return OrderStatus.FILLED
-
-    if _has_any(
-        "accepted",
-        "submitted",
-        "pending",
-        "new",
-        "\u5df2\u62a5",              # 已报
-        "\u5df2\u59d4\u6258",        # 已委托
-    ):
-        return OrderStatus.ACCEPTED
-
-    if _has_any(
-        "cancelled",
-        "canceled",
-        "cancelled by user",
-        "\u5df2\u64a4",              # 已撤
-        "\u64a4\u5355",              # 撤单
-    ):
-        return OrderStatus.CANCELLED
-
-    if _has_any(
-        "rejected",
-        "reject",
-        "invalid",
-        "\u5e9f\u5355",              # 废单
-        "\u62d2\u7edd",              # 拒绝
-    ):
-        return OrderStatus.REJECTED
-
-    return OrderStatus.SUBMITTED
 
 class BrokerInterface(ABC):
     """
@@ -155,9 +40,9 @@ class BrokerInterface(ABC):
     # FIX(6): Max tracked order mappings
     _MAX_ORDER_MAPPINGS = 10000
 
-    def __init__(self):
+    def __init__(self) -> None:
         self._lock = threading.RLock()
-        self._callbacks: dict[str, list[Callable]] = {
+        self._callbacks: dict[str, list[Callable[..., object]]] = {
             'order_update': [],
             'trade': [],
             'error': [],
@@ -181,11 +66,11 @@ class BrokerInterface(ABC):
         pass
 
     @abstractmethod
-    def connect(self, **kwargs) -> bool:
+    def connect(self, **kwargs: Any) -> bool:
         pass
 
     @abstractmethod
-    def disconnect(self):
+    def disconnect(self) -> None:
         pass
 
     @abstractmethod
@@ -217,7 +102,7 @@ class BrokerInterface(ABC):
         pass
 
     @abstractmethod
-    def get_fills(self, since: datetime = None) -> list[Fill]:
+    def get_fills(self, since: datetime | None = None) -> list[Fill]:
         pass
 
     @abstractmethod
@@ -234,7 +119,7 @@ class BrokerInterface(ABC):
     def get_order_id(self, broker_id: str) -> str | None:
         return self._broker_id_to_order_id.get(broker_id)
 
-    def register_order_mapping(self, order_id: str, broker_id: str):
+    def register_order_mapping(self, order_id: str, broker_id: str) -> None:
         with self._lock:
             self._order_id_to_broker_id[order_id] = broker_id
             self._broker_id_to_order_id[broker_id] = order_id
@@ -243,7 +128,7 @@ class BrokerInterface(ABC):
     # FIX(8): price=None is valid for market orders
 
     def buy(
-        self, symbol: str, qty: int, price: float = None,
+        self, symbol: str, qty: int, price: float | None = None,
     ) -> Order:
         order = Order(
             symbol=symbol,
@@ -255,7 +140,7 @@ class BrokerInterface(ABC):
         return self.submit_order(order)
 
     def sell(
-        self, symbol: str, qty: int, price: float = None,
+        self, symbol: str, qty: int, price: float | None = None,
     ) -> Order:
         order = Order(
             symbol=symbol,
@@ -266,7 +151,7 @@ class BrokerInterface(ABC):
         )
         return self.submit_order(order)
 
-    def sell_all(self, symbol: str, price: float = None) -> Order | None:
+    def sell_all(self, symbol: str, price: float | None = None) -> Order | None:
         pos = self.get_position(symbol)
         if pos and pos.available_qty > 0:
             return self.sell(symbol, pos.available_qty, price)
@@ -274,11 +159,11 @@ class BrokerInterface(ABC):
 
     # === Callback Management ===
 
-    def on(self, event: str, callback: Callable):
+    def on(self, event: str, callback: Callable[..., object]) -> None:
         if event in self._callbacks:
             self._callbacks[event].append(callback)
 
-    def _emit(self, event: str, *args, **kwargs):
+    def _emit(self, event: str, *args: Any, **kwargs: Any) -> None:
         callbacks = self._callbacks.get(event, [])
         for callback in callbacks:
             try:
@@ -296,7 +181,7 @@ class SimulatorBroker(BrokerInterface):
 
     _MAX_EXEC_WORKERS = 8
 
-    def __init__(self, initial_capital: float = None):
+    def __init__(self, initial_capital: float | None = None) -> None:
         super().__init__()
         self._initial_capital = initial_capital or CONFIG.capital
         self._cash = self._initial_capital
@@ -336,7 +221,7 @@ class SimulatorBroker(BrokerInterface):
             thread_name_prefix="sim_exec",
         )
 
-    def _get_fetcher(self):
+    def _get_fetcher(self) -> Any:
         if self._fetcher is None:
             from data.fetcher import get_fetcher
             self._fetcher = get_fetcher()
@@ -425,7 +310,7 @@ class SimulatorBroker(BrokerInterface):
     def is_connected(self) -> bool:
         return self._connected
 
-    def connect(self, **kwargs) -> bool:
+    def connect(self, **kwargs: Any) -> bool:
         with self._lock:
             self._connected = True
             log.info(
@@ -434,7 +319,7 @@ class SimulatorBroker(BrokerInterface):
             )
             return True
 
-    def disconnect(self):
+    def disconnect(self) -> None:
         with self._lock:
             self._connected = False
             try:
@@ -530,11 +415,11 @@ class SimulatorBroker(BrokerInterface):
                     pos.update_price(price)
             return pos
 
-    def _schedule_execution(self, order_id: str):
+    def _schedule_execution(self, order_id: str) -> None:
         """Execute order asynchronously using bounded thread pool."""
         self._exec_pool.submit(self._execution_worker, order_id)
 
-    def _execution_worker(self, order_id: str):
+    def _execution_worker(self, order_id: str) -> None:
         """
         Worker function for async order execution.
 
@@ -847,7 +732,7 @@ class SimulatorBroker(BrokerInterface):
 
         return True, ""
 
-    def _execute_order(self, order: Order, market_price: float):
+    def _execute_order(self, order: Order, market_price: float) -> None:
         """Execute order with realistic simulation."""
         import random
 
@@ -1128,7 +1013,7 @@ class SimulatorBroker(BrokerInterface):
         )
         self._emit('trade', order, fill)
 
-    def get_fills(self, since: datetime = None) -> list[Fill]:
+    def get_fills(self, since: datetime | None = None) -> list[Fill]:
         """
         Get new fills since last call.
 
@@ -1189,7 +1074,7 @@ class SimulatorBroker(BrokerInterface):
                 ]
             return list(self._orders.values())
 
-    def _check_settlement(self):
+    def _check_settlement(self) -> None:
         """
         FIX(13): Proper T+1 settlement using is_trading_day.
         Shares bought yesterday become available on the next trading day.
@@ -1209,13 +1094,13 @@ class SimulatorBroker(BrokerInterface):
         self._last_settlement_date = today
         log.info("T+1 settlement: all shares now available")
 
-    def _update_prices(self):
+    def _update_prices(self) -> None:
         for symbol, pos in self._positions.items():
             price = self.get_quote(symbol)
             if price:
                 pos.update_price(price)
 
-    def get_trade_history(self) -> list[dict]:
+    def get_trade_history(self) -> list[dict[str, Any]]:
         with self._lock:
             return [
                 {
@@ -1232,7 +1117,7 @@ class SimulatorBroker(BrokerInterface):
                 for f in self._fills
             ]
 
-    def reset(self):
+    def reset(self) -> None:
         with self._lock:
             self._cash = self._initial_capital
             self._positions.clear()
@@ -1247,7 +1132,7 @@ class SimulatorBroker(BrokerInterface):
             self._quote_cache.clear()
             log.info("Simulator reset to initial state")
 
-    def reconcile(self) -> dict:
+    def reconcile(self) -> dict[str, Any]:
         with self._lock:
             return {
                 'cash_diff': 0.0,
@@ -1258,7 +1143,7 @@ class SimulatorBroker(BrokerInterface):
                 'timestamp': datetime.now().isoformat(),
             }
 
-def __getattr__(name: str):
+def __getattr__(name: str) -> Any:
     """Lazy-export live broker classes without importing them at module load."""
     if name in {
         "EasytraderBroker",
@@ -1272,7 +1157,8 @@ def __getattr__(name: str):
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 def create_broker(
-    mode: str = None, **kwargs,
+    mode: str | None = None,
+    **kwargs: Any,
 ) -> BrokerInterface:
     """
     Factory function to create appropriate broker.

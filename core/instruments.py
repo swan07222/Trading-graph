@@ -43,13 +43,13 @@ _CN_FUTURE_PREFIXES = {
     "M", "Y", "P", "A", "C", "SR", "CF", "TA", "MA", "RU",
 }
 
-def _strip_prefixes(s: str, prefixes) -> str:
+def _strip_prefixes(s: str, prefixes: tuple[str, ...]) -> str:
     for p in prefixes:
         if s.startswith(p):
             return s[len(p):]
     return s
 
-def _strip_suffixes(s: str, suffixes) -> str:
+def _strip_suffixes(s: str, suffixes: tuple[str, ...]) -> str:
     for suf in suffixes:
         if s.endswith(suf):
             return s[:-len(suf)]

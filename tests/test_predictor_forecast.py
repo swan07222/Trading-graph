@@ -5,6 +5,7 @@ import numpy as np
 import pandas as pd
 import torch
 
+from config.settings import CONFIG
 from models.predictor import Prediction, Predictor, Signal
 
 
@@ -776,6 +777,76 @@ def test_predict_uses_short_history_bootstrap_before_minimal_snapshot():
     assert float(pred.confidence) > 0
     assert any("Short-history fallback used:" in w for w in pred.warnings)
     assert not any("Insufficient data:" in w for w in pred.warnings)
+
+
+def test_short_history_bootstrap_marks_fallback_and_suppresses_direction_by_default():
+    predictor = Predictor.__new__(Predictor)
+    predictor._get_stock_name = lambda _code, _df: "Demo"
+    predictor._refresh_prediction_uncertainty = lambda _pred: None
+    predictor._apply_tail_risk_guard = lambda _pred: None
+    predictor._build_prediction_bands = lambda _pred: None
+    predictor._calculate_levels = lambda pred: pred.levels
+    predictor._calculate_position = lambda pred: pred.position
+    predictor._generate_reasons = lambda _pred: None
+
+    old_flag = bool(
+        getattr(CONFIG.precision, "allow_short_history_directional_signals", False)
+    )
+    try:
+        CONFIG.precision.allow_short_history_directional_signals = False
+        pred = Prediction(stock_code="600519")
+        ok = predictor._bootstrap_short_history_prediction(
+            pred,
+            _mk_df(100.0).tail(40),
+            horizon=12,
+            required_rows=120,
+        )
+        assert ok is True
+        assert pred.signal == Signal.HOLD
+        assert any(
+            "directional signal suppressed" in w.lower()
+            for w in pred.warnings
+        )
+    finally:
+        CONFIG.precision.allow_short_history_directional_signals = old_flag
+
+
+def test_short_history_bootstrap_allows_direction_when_policy_opted_in():
+    predictor = Predictor.__new__(Predictor)
+    predictor._get_stock_name = lambda _code, _df: "Demo"
+    predictor._refresh_prediction_uncertainty = lambda _pred: None
+    predictor._apply_tail_risk_guard = lambda _pred: None
+    predictor._build_prediction_bands = lambda _pred: None
+    predictor._calculate_levels = lambda pred: pred.levels
+    predictor._calculate_position = lambda pred: pred.position
+    predictor._generate_reasons = lambda _pred: None
+
+    old_flag = bool(
+        getattr(CONFIG.precision, "allow_short_history_directional_signals", False)
+    )
+    try:
+        CONFIG.precision.allow_short_history_directional_signals = True
+        close = np.linspace(100.0, 130.0, 40, dtype=float)
+        df = pd.DataFrame(
+            {
+                "open": close,
+                "high": close + 0.5,
+                "low": close - 0.5,
+                "close": close,
+                "volume": np.full(len(close), 1000.0, dtype=float),
+            }
+        )
+        pred = Prediction(stock_code="600519")
+        ok = predictor._bootstrap_short_history_prediction(
+            pred,
+            df,
+            horizon=12,
+            required_rows=120,
+        )
+        assert ok is True
+        assert pred.signal in (Signal.BUY, Signal.STRONG_BUY)
+    finally:
+        CONFIG.precision.allow_short_history_directional_signals = old_flag
 
 
 def test_apply_ensemble_result_clips_and_normalizes_probabilities():

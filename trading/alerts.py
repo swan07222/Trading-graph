@@ -64,7 +64,7 @@ class Alert:
     acknowledged_by: str = ""
     throttle_key: str = ""
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         if not self.id:
             import uuid
 
@@ -117,7 +117,7 @@ class AlertThrottler:
                 return True
             return False
 
-    def reset(self, throttle_key: str | None = None):
+    def reset(self, throttle_key: str | None = None) -> None:
         with self._lock:
             if throttle_key:
                 keys_to_remove = [k for k in self._last_sent if throttle_key in k]
@@ -132,7 +132,7 @@ class AlertManager:
 
     HISTORY_FILE = "alert_history.json"
 
-    def __init__(self):
+    def __init__(self) -> None:
         self._lock = threading.RLock()
         self._throttler = AlertThrottler()
         self._audit = get_audit_log()
@@ -151,10 +151,10 @@ class AlertManager:
                 "last_error": "",
             }
         )
-        self._desktop_callback: Callable | None = None
+        self._desktop_callback: Callable[[Alert], object] | None = None
         self._load_history()
 
-    def start(self):
+    def start(self) -> None:
         if self._running:
             return
         self._running = True
@@ -162,7 +162,7 @@ class AlertManager:
         self._thread.start()
         log.info("Alert manager started")
 
-    def stop(self):
+    def stop(self) -> None:
         self._running = False
         if self._thread:
             self._queue.put(None)
@@ -170,15 +170,15 @@ class AlertManager:
         self._save_history()
         log.info("Alert manager stopped")
 
-    def send(self, alert: Alert):
+    def send(self, alert: Alert) -> None:
         if not self._running:
             self.start()
         self._queue.put(alert)
 
-    def send_immediate(self, alert: Alert):
+    def send_immediate(self, alert: Alert) -> None:
         self._process_alert(alert)
 
-    def _process_loop(self):
+    def _process_loop(self) -> None:
         while self._running:
             try:
                 alert = self._queue.get(timeout=1)
@@ -190,7 +190,7 @@ class AlertManager:
             except Exception as e:
                 log.error(f"Alert processing error: {e}")
 
-    def _process_alert(self, alert: Alert):
+    def _process_alert(self, alert: Alert) -> None:
         key = f"{alert.category.value}:{alert.throttle_key or alert.title}"
         with self._lock:
             self._repeat_counter[key] += 1
@@ -255,7 +255,7 @@ class AlertManager:
                 stats["failed"] = int(stats.get("failed", 0)) + 1
                 stats["last_error"] = str(error or "")[:300]
 
-    def _send_to_channel(self, alert: Alert, channel: AlertChannel):
+    def _send_to_channel(self, alert: Alert, channel: AlertChannel) -> None:
         if channel == AlertChannel.LOG:
             self._send_log(alert)
         elif channel == AlertChannel.DESKTOP:
@@ -265,7 +265,7 @@ class AlertManager:
         elif channel == AlertChannel.WEBHOOK:
             self._send_webhook(alert)
 
-    def _send_log(self, alert: Alert):
+    def _send_log(self, alert: Alert) -> None:
         level_map = {
             AlertPriority.LOW: log.info,
             AlertPriority.MEDIUM: log.warning,
@@ -275,7 +275,7 @@ class AlertManager:
         logger = level_map.get(alert.priority, log.warning)
         logger(f"[ALERT:{alert.category.value.upper()}] {alert.title}: {alert.message}")
 
-    def _send_desktop(self, alert: Alert):
+    def _send_desktop(self, alert: Alert) -> None:
         if self._desktop_callback:
             try:
                 self._desktop_callback(alert)
@@ -301,7 +301,7 @@ class AlertManager:
         except Exception as e:
             log.debug(f"Desktop notification skipped: {e}")
 
-    def _send_email(self, alert: Alert):
+    def _send_email(self, alert: Alert) -> None:
         if not CONFIG.alerts.email_enabled:
             return
         if not CONFIG.alerts.smtp_server or not CONFIG.alerts.email_recipients:
@@ -337,7 +337,7 @@ class AlertManager:
         except Exception as e:
             log.error(f"Email send failed: {e}")
 
-    def _send_webhook(self, alert: Alert):
+    def _send_webhook(self, alert: Alert) -> None:
         if not CONFIG.alerts.webhook_enabled or not CONFIG.alerts.webhook_url:
             return
         payload = {
@@ -422,10 +422,10 @@ class AlertManager:
                 "top_repeats": top_repeats,
             }
 
-    def set_desktop_callback(self, callback: Callable):
+    def set_desktop_callback(self, callback: Callable[[Alert], object]) -> None:
         self._desktop_callback = callback
 
-    def _save_history(self):
+    def _save_history(self) -> None:
         path = CONFIG.data_dir / self.HISTORY_FILE
         try:
             data = [a.to_dict() for a in self._history[-500:]]
@@ -434,7 +434,7 @@ class AlertManager:
         except Exception as e:
             log.error(f"Failed to save alert history: {e}")
 
-    def _load_history(self):
+    def _load_history(self) -> None:
         path = CONFIG.data_dir / self.HISTORY_FILE
         if not path.exists():
             return
@@ -457,7 +457,12 @@ class AlertManager:
         except Exception as e:
             log.error(f"Failed to load alert history: {e}")
 
-    def risk_alert(self, title: str, message: str, details: dict | None = None):
+    def risk_alert(
+        self,
+        title: str,
+        message: str,
+        details: dict[str, Any] | None = None,
+    ) -> None:
         self.send(
             Alert(
                 category=AlertCategory.RISK,
@@ -470,7 +475,12 @@ class AlertManager:
             )
         )
 
-    def trading_alert(self, title: str, message: str, details: dict | None = None):
+    def trading_alert(
+        self,
+        title: str,
+        message: str,
+        details: dict[str, Any] | None = None,
+    ) -> None:
         self.send(
             Alert(
                 category=AlertCategory.TRADING,
@@ -488,7 +498,7 @@ class AlertManager:
         title: str,
         message: str,
         priority: AlertPriority = AlertPriority.MEDIUM,
-    ):
+    ) -> None:
         self.send(
             Alert(
                 category=AlertCategory.SYSTEM,
@@ -500,7 +510,12 @@ class AlertManager:
             )
         )
 
-    def critical_alert(self, title: str, message: str, details: dict | None = None):
+    def critical_alert(
+        self,
+        title: str,
+        message: str,
+        details: dict[str, Any] | None = None,
+    ) -> None:
         self.send(
             Alert(
                 category=AlertCategory.SYSTEM,

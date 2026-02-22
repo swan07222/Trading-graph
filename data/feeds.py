@@ -11,6 +11,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from enum import Enum
+from typing import Any
 
 from config.settings import CONFIG
 from core.events import EVENT_BUS, TickEvent
@@ -18,6 +19,7 @@ from data.bar_aggregator import BarAggregator, VolumeMode
 from utils.logger import get_logger
 
 log = get_logger(__name__)
+FeedCallback = Callable[..., object]
 _FEED_SOFT_EXCEPTIONS = (
     AttributeError,
     ImportError,
@@ -45,7 +47,7 @@ class Subscription:
     symbol: str
     data_type: str  # 'tick', 'bar', 'quote'
     interval: int = 0
-    callback: Callable | None = None
+    callback: FeedCallback | None = None
     created_at: datetime = field(default_factory=datetime.now)
 
 class DataFeed(ABC):
@@ -53,10 +55,10 @@ class DataFeed(ABC):
 
     name: str = "base"
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.status = FeedStatus.DISCONNECTED
         self._subscriptions: dict[str, Subscription] = {}
-        self._callbacks: list[Callable] = []
+        self._callbacks: list[FeedCallback] = []
         self._running = False
         self._thread: threading.Thread | None = None
         self._lock = threading.RLock()
@@ -66,7 +68,7 @@ class DataFeed(ABC):
         ...
 
     @abstractmethod
-    def disconnect(self):
+    def disconnect(self) -> None:
         ...
 
     @abstractmethod
@@ -74,20 +76,20 @@ class DataFeed(ABC):
         ...
 
     @abstractmethod
-    def unsubscribe(self, symbol: str):
+    def unsubscribe(self, symbol: str) -> None:
         ...
 
-    def add_callback(self, callback: Callable):
+    def add_callback(self, callback: FeedCallback) -> None:
         with self._lock:
             if callback not in self._callbacks:
                 self._callbacks.append(callback)
 
-    def remove_callback(self, callback: Callable):
+    def remove_callback(self, callback: FeedCallback) -> None:
         with self._lock:
             if callback in self._callbacks:
                 self._callbacks.remove(callback)
 
-    def _notify(self, data):
+    def _notify(self, data: object) -> None:
         with self._lock:
             callbacks = self._callbacks.copy()
         for cb in callbacks:
@@ -101,7 +103,7 @@ class PollingFeed(DataFeed):
 
     name = "polling"
 
-    def __init__(self, interval: float = 3.0):
+    def __init__(self, interval: float = 3.0) -> None:
         super().__init__()
         self._interval = max(0.5, float(interval))
         self._fetcher = None
@@ -125,13 +127,13 @@ class PollingFeed(DataFeed):
         log.info(f"Polling feed started (interval={self._interval}s)")
         return True
 
-    def _get_fetcher(self):
+    def _get_fetcher(self) -> Any:
         if self._fetcher is None:
             from data.fetcher import get_fetcher
             self._fetcher = get_fetcher()
         return self._fetcher
 
-    def disconnect(self):
+    def disconnect(self) -> None:
         self._running = False
         self._stop_event.set()
         thread = self._thread
@@ -150,13 +152,13 @@ class PollingFeed(DataFeed):
         log.debug(f"Subscribed to {symbol}")
         return True
 
-    def unsubscribe(self, symbol: str):
+    def unsubscribe(self, symbol: str) -> None:
         with self._lock:
             self._symbols.discard(symbol)
             self._subscriptions.pop(symbol, None)
         log.debug(f"Unsubscribed from {symbol}")
 
-    def _poll_loop(self):
+    def _poll_loop(self) -> None:
         """Drift-resistant polling loop."""
         next_tick = time.monotonic()
 
@@ -318,7 +320,7 @@ class WebSocketFeed(DataFeed):
     _DNS_PRECHECK_TIMEOUT_SECONDS = 1.0
     _DNS_PRECHECK_CACHE_SECONDS = 30.0
 
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__()
         self._ws = None
         self._ws_client_installed = importlib.util.find_spec("websocket") is not None
@@ -353,13 +355,7 @@ class WebSocketFeed(DataFeed):
         self._worker_lock = threading.RLock()
         self._worker_threads: set[threading.Thread] = set()
 
-    def _start_worker(
-        self,
-        *,
-        target: Callable[[], None],
-        name: str,
-        daemon: bool = False,
-    ) -> threading.Thread:
+    def _start_worker(self, *, target: Callable[[], None], name: str, daemon: bool = False) -> threading.Thread:
         thread = threading.Thread(target=target, daemon=daemon, name=name)
         with self._worker_lock:
             self._worker_threads = {
@@ -402,7 +398,7 @@ class WebSocketFeed(DataFeed):
         )
         return any(p in txt for p in patterns)
 
-    def _temporarily_disable(self, reason: str, cooldown_s: float | None = None):
+    def _temporarily_disable(self, reason: str, cooldown_s: float | None = None) -> None:
         duration = max(60.0, float(cooldown_s or self._DNS_DISABLE_COOLDOWN_SECONDS))
         now = time.monotonic()
         until = now + duration
@@ -457,7 +453,7 @@ class WebSocketFeed(DataFeed):
         """
         result: dict[str, bool] = {"done": False, "ok": False}
 
-        def _probe():
+        def _probe() -> None:
             try:
                 socket.getaddrinfo(host, 443)
                 result["ok"] = True
@@ -578,7 +574,7 @@ class WebSocketFeed(DataFeed):
             log.error(f"WebSocket connection failed: {e}")
             return False
 
-    def disconnect(self):
+    def disconnect(self) -> None:
         self._running = False
         self._stop_event.set()
         ws = self._ws
@@ -603,7 +599,7 @@ class WebSocketFeed(DataFeed):
                 self._send_subscribe(symbol)
         return True
 
-    def unsubscribe(self, symbol: str):
+    def unsubscribe(self, symbol: str) -> None:
         with self._lock:
             self._symbols.discard(symbol)
             self._subscriptions.pop(symbol, None)
@@ -618,7 +614,7 @@ class WebSocketFeed(DataFeed):
                 except _FEED_SOFT_EXCEPTIONS as exc:
                     log.debug("Suppressed exception in data/feeds.py", exc_info=exc)
 
-    def _send_subscribe(self, symbol: str):
+    def _send_subscribe(self, symbol: str) -> None:
         try:
             self._ws.send(
                 json.dumps({
@@ -629,7 +625,7 @@ class WebSocketFeed(DataFeed):
         except _FEED_SOFT_EXCEPTIONS as exc:
             log.debug("Suppressed exception in data/feeds.py", exc_info=exc)
 
-    def _on_open(self, ws):
+    def _on_open(self, ws: Any) -> None:
         self.status = FeedStatus.CONNECTED
         self._reconnect_delay = 1
         self._reconnect_count = 0
@@ -646,7 +642,7 @@ class WebSocketFeed(DataFeed):
             name="ws_heartbeat",
         )
 
-    def _on_message(self, ws, message):
+    def _on_message(self, ws: Any, message: str) -> None:
         from data.fetcher import Quote
 
         try:
@@ -701,7 +697,7 @@ class WebSocketFeed(DataFeed):
         except _FEED_SOFT_EXCEPTIONS as e:
             log.debug(f"Message parse error: {e}")
 
-    def _on_error(self, ws, error):
+    def _on_error(self, ws: Any, error: object) -> None:
         now = time.monotonic()
         if not self._running:
             # When feed is intentionally stopped/disabled, callbacks may still
@@ -744,7 +740,7 @@ class WebSocketFeed(DataFeed):
         except _FEED_SOFT_EXCEPTIONS as exc:
             log.debug("Suppressed exception in data/feeds.py", exc_info=exc)
 
-    def _on_close(self, ws, close_status_code, close_msg):
+    def _on_close(self, ws: Any, close_status_code: Any, close_msg: Any) -> None:
         if (
             not self._running
             and time.monotonic() < float(self._ws_disabled_until_ts)
@@ -780,7 +776,7 @@ class WebSocketFeed(DataFeed):
             log.debug("Reconnect already in progress, skipping")
             return
 
-        def _reconnect():
+        def _reconnect() -> None:
             try:
                 if self._stop_event.wait(timeout=max(0.0, float(delay))):
                     return
@@ -803,7 +799,7 @@ class WebSocketFeed(DataFeed):
             name="ws_reconnect",
         )
 
-    def _heartbeat_loop(self):
+    def _heartbeat_loop(self) -> None:
         while (
             self._running
             and self.status == FeedStatus.CONNECTED
@@ -835,13 +831,13 @@ class AggregatedFeed(DataFeed):
 
     name = "aggregated"
 
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__()
         self._feeds: list[DataFeed] = []
         self._primary_feed: DataFeed | None = None
-        self._quote_queue: queue.Queue = queue.Queue()
+        self._quote_queue: queue.Queue[object] = queue.Queue()
 
-    def add_feed(self, feed: DataFeed, primary: bool = False):
+    def add_feed(self, feed: DataFeed, primary: bool = False) -> None:
         self._feeds.append(feed)
         if primary:
             self._primary_feed = feed
@@ -861,7 +857,7 @@ class AggregatedFeed(DataFeed):
             self._running = True
         return connected
 
-    def disconnect(self):
+    def disconnect(self) -> None:
         self._running = False
         for feed in self._feeds:
             try:
@@ -885,7 +881,7 @@ class AggregatedFeed(DataFeed):
                 )
         return success
 
-    def unsubscribe(self, symbol: str):
+    def unsubscribe(self, symbol: str) -> None:
         for feed in self._feeds:
             try:
                 feed.unsubscribe(symbol)
@@ -894,7 +890,7 @@ class AggregatedFeed(DataFeed):
         with self._lock:
             self._subscriptions.pop(symbol, None)
 
-    def _on_feed_data(self, data):
+    def _on_feed_data(self, data: object) -> None:
         self._notify(data)
 
 # Feed manager (singleton)
@@ -905,7 +901,7 @@ class FeedManager:
     _instance = None
     _cls_lock = threading.Lock()
 
-    def __new__(cls):
+    def __new__(cls: type["FeedManager"]) -> "FeedManager":
         if cls._instance is None:
             with cls._cls_lock:
                 if cls._instance is None:
@@ -913,14 +909,14 @@ class FeedManager:
                     cls._instance._initialized = False
         return cls._instance
 
-    def __init__(self):
+    def __init__(self) -> None:
         if self._initialized:
             return
         self._initialized = True
         self._feeds: dict[str, DataFeed] = {}
         self._active_feed: DataFeed | None = None
         self._subscriptions: set[str] = set()
-        self._tick_callbacks: list[Callable] = []
+        self._tick_callbacks: list[FeedCallback] = []
         self._bar_aggregator = BarAggregator()
         self._last_quotes: dict[str, object] = {}
         self._quotes_lock = threading.RLock()
@@ -935,14 +931,14 @@ class FeedManager:
         self._health_stop_event = threading.Event()
         self._init_thread: threading.Thread | None = None
 
-    def initialize(self, force: bool = False):
+    def initialize(self, force: bool = False) -> None:
         """Initialize feeds. Idempotent unless force=True."""
         with self._lock:
             if self._initialized_runtime and not force:
                 return
 
             old_feeds = list(self._feeds.values()) if force else []
-            old_callbacks: list[Callable] = []
+            old_callbacks: list[FeedCallback] = []
             if (
                 hasattr(self, "_bar_aggregator")
                 and self._bar_aggregator
@@ -1197,14 +1193,14 @@ class FeedManager:
             if self._health_stop_event.wait(timeout=sleep_for):
                 return
 
-    def set_bar_interval_seconds(self, seconds: int):
+    def set_bar_interval_seconds(self, seconds: int) -> None:
         """Change bar aggregation interval."""
         try:
             self._bar_aggregator.set_interval(int(seconds))
         except _FEED_SOFT_EXCEPTIONS as exc:
             log.debug("Suppressed exception in data/feeds.py", exc_info=exc)
 
-    def set_bar_volume_mode(self, mode: VolumeMode):
+    def set_bar_volume_mode(self, mode: VolumeMode) -> None:
         """Change bar volume interpretation mode."""
         try:
             self._bar_aggregator.set_volume_mode(mode)
@@ -1218,7 +1214,7 @@ class FeedManager:
             with self._lock:
                 self._init_thread = None
 
-    def ensure_initialized(self, async_init: bool = True):
+    def ensure_initialized(self, async_init: bool = True) -> None:
         if self._initialized_runtime:
             return
         if async_init:
@@ -1270,7 +1266,7 @@ class FeedManager:
                 self._subscriptions.discard(sym)
         return ok
 
-    def unsubscribe(self, symbol: str):
+    def unsubscribe(self, symbol: str) -> None:
         sym = str(symbol)
         with self._lock:
             if sym not in self._subscriptions:
@@ -1284,7 +1280,7 @@ class FeedManager:
             except _FEED_SOFT_EXCEPTIONS:
                 continue
 
-    def _cache_quote(self, data):
+    def _cache_quote(self, data: object) -> None:
         """Thread-safe quote caching."""
         try:
             code = (
@@ -1301,7 +1297,7 @@ class FeedManager:
         except _FEED_SOFT_EXCEPTIONS as exc:
             log.debug("Suppressed exception in data/feeds.py", exc_info=exc)
 
-    def subscribe_many(self, symbols: list[str]):
+    def subscribe_many(self, symbols: list[str]) -> None:
         for symbol in symbols:
             self.subscribe(symbol)
 
@@ -1328,7 +1324,7 @@ class FeedManager:
             return quote.timestamp
         return None
 
-    def add_tick_callback(self, callback: Callable):
+    def add_tick_callback(self, callback: FeedCallback) -> None:
         with self._lock:
             if callback not in self._tick_callbacks:
                 self._tick_callbacks.append(callback)
@@ -1339,10 +1335,10 @@ class FeedManager:
             except _FEED_SOFT_EXCEPTIONS as exc:
                 log.debug("Suppressed exception in data/feeds.py", exc_info=exc)
 
-    def add_bar_callback(self, callback: Callable):
+    def add_bar_callback(self, callback: FeedCallback) -> None:
         self._bar_aggregator.add_callback(callback)
 
-    def shutdown(self):
+    def shutdown(self) -> None:
         """Shutdown all feeds and reset state."""
         self._stop_health_watchdog()
         with self._lock:

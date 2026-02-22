@@ -50,7 +50,7 @@ DEFAULT_TARGETS: tuple[str, ...] = (
     "scripts/typecheck_strict_gate.py",
 )
 DEFAULT_FLAGS: tuple[str, ...] = (
-    "--follow-imports=skip",
+    "--follow-imports=silent",
     "--check-untyped-defs",
     "--warn-return-any",
     "--warn-redundant-casts",

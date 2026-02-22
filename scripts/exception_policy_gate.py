@@ -105,9 +105,10 @@ def collect_exception_policy_issues(targets: tuple[str, ...]) -> tuple[set[str],
     parse_errors: list[str] = []
     for py_file in _iter_python_files(targets):
         try:
-            source = py_file.read_text(encoding="utf-8")
+            # Accept UTF-8 BOM files so gates don't fail on encoding artifacts.
+            source = py_file.read_text(encoding="utf-8-sig")
         except UnicodeDecodeError:
-            source = py_file.read_text(encoding="utf-8", errors="replace")
+            source = py_file.read_text(encoding="utf-8-sig", errors="replace")
         except OSError as exc:
             parse_errors.append(f"{_normalize_path(py_file)}: read error: {exc}")
             continue
@@ -131,7 +132,7 @@ def load_baseline_entries(path: Path) -> set[str]:
     if not path.exists():
         return set()
     rows: set[str] = set()
-    for line in path.read_text(encoding="utf-8").splitlines():
+    for line in path.read_text(encoding="utf-8-sig").splitlines():
         item = line.strip()
         if not item or item.startswith("#"):
             continue
@@ -172,7 +173,7 @@ def load_budget(path: Path) -> dict[str, dict[str, int]]:
     if not path.exists():
         return {}
     try:
-        raw = json.loads(path.read_text(encoding="utf-8"))
+        raw = json.loads(path.read_text(encoding="utf-8-sig"))
     except (OSError, json.JSONDecodeError):
         return {}
     if not isinstance(raw, dict):

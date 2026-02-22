@@ -57,7 +57,7 @@ class TechnicalSummary:
 class TechnicalAnalyzer:
     """Comprehensive technical analysis engine"""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.min_data_points = 60
         self._required_columns = ("open", "high", "low", "close", "volume")
         self._indicator_names = (

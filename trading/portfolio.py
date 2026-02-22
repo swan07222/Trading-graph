@@ -42,7 +42,7 @@ class Trade:
     timestamp: datetime
     pnl: float = 0.0
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         if not self.id:
             self.id = (
                 f"TRD_{datetime.now().strftime('%Y%m%d%H%M%S')}_"
@@ -224,7 +224,10 @@ class Portfolio:
                 "pnl_pct": pos.unrealized_pnl_pct,
             })
 
-        summary.sort(key=lambda x: x["value"], reverse=True)
+        summary.sort(
+            key=lambda item: float(item.get("value", 0.0) or 0.0),
+            reverse=True,
+        )
         return summary
 
     def reset(self) -> None:

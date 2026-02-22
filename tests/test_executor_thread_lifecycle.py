@@ -1,6 +1,7 @@
 import threading
 
 from trading.executor import AutoTrader, ExecutionEngine
+from trading.executor_core_ops import _start_engine_thread
 
 
 class _DummyBroker:
@@ -44,3 +45,48 @@ def test_execution_engine_join_worker_threads_clears_refs():
     assert eng._reconnect_thread is None
     assert eng._watchdog_thread is None
     assert eng._checkpoint_thread is None
+
+
+def test_start_engine_thread_skips_duplicate_live_thread():
+    class DummyEngine:
+        def __init__(self) -> None:
+            self._running = True
+            self._thread_hb_lock = threading.RLock()
+            self._thread_heartbeats = {}
+            self._kill_switch = type("K", (), {"can_trade": False})()
+            self._health_monitor = type(
+                "HM",
+                (),
+                {"report_component_health": staticmethod(lambda *a, **k: None)},
+            )()
+            self._alert_manager = type(
+                "AM",
+                (),
+                {"risk_alert": staticmethod(lambda *a, **k: None)},
+            )()
+            self._exec_thread = None
+
+        def _heartbeat(self, name: str) -> None:
+            with self._thread_hb_lock:
+                self._thread_heartbeats[str(name)] = 1.0
+
+    eng = DummyEngine()
+    started = threading.Event()
+    release = threading.Event()
+
+    def _target() -> None:
+        started.set()
+        release.wait(timeout=2.0)
+
+    _start_engine_thread(eng, "_exec_thread", _target, "exec")
+    assert isinstance(eng._exec_thread, threading.Thread)
+    assert started.wait(timeout=1.0)
+    first = eng._exec_thread
+
+    # Duplicate start should be ignored while the first worker is alive.
+    _start_engine_thread(eng, "_exec_thread", lambda: None, "exec")
+    assert eng._exec_thread is first
+
+    release.set()
+    first.join(timeout=2.0)
+    assert not first.is_alive()

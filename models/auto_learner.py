@@ -1,4 +1,4 @@
-﻿# models/auto_learner.py
+# models/auto_learner.py
 import json
 import random
 import threading

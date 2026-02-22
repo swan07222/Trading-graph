@@ -1138,7 +1138,6 @@ class Predictor:
         score = (drift * 700.0) + (base_move * 6.0)
         direction = float(np.tanh(score))
         depth_ratio = float(min(1.0, len(close) / max(float(required_rows), 1.0)))
-
         pred.confidence = float(
             np.clip(0.36 + (0.24 * depth_ratio) + (0.28 * abs(direction)), 0.36, 0.78)
         )
@@ -1152,7 +1151,6 @@ class Predictor:
             )
         )
         pred.model_margin = float(np.clip(abs(direction) * 0.32, 0.01, 0.25))
-
         neutral = float(
             np.clip(
                 0.45 - (0.20 * abs(direction)) + (0.90 * max(0.0, vol - 0.015)),
@@ -1169,7 +1167,10 @@ class Predictor:
         pred.prob_up = float(up / total)
         pred.prob_neutral = float(neutral / total)
         pred.prob_down = float(down / total)
-
+        allow_directional = bool(getattr(getattr(CONFIG, "precision", None), "allow_short_history_directional_signals", False))
+        if not allow_directional:
+            direction = 0.0
+            pred.warnings.append("Short-history directional signal suppressed by precision policy")
         if direction >= 0.55 and pred.confidence >= 0.70:
             pred.signal = Signal.STRONG_BUY
         elif direction >= 0.30 and pred.confidence >= 0.54:
@@ -1180,7 +1181,6 @@ class Predictor:
             pred.signal = Signal.SELL
         else:
             pred.signal = Signal.HOLD
-
         pred.signal_strength = float(
             np.clip((0.70 * abs(direction)) + (0.30 * pred.confidence), 0.0, 1.0)
         )

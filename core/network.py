@@ -46,7 +46,7 @@ class NetworkDetector:
     _lock = threading.Lock()
     _initialized: bool
 
-    def __new__(cls):
+    def __new__(cls) -> "NetworkDetector":
         if cls._instance is None:
             with cls._lock:
                 if cls._instance is None:
@@ -54,7 +54,7 @@ class NetworkDetector:
                     cls._instance._initialized = False
         return cls._instance
 
-    def __init__(self):
+    def __init__(self) -> None:
         if self._initialized:
             return
         self._initialized = True
@@ -115,7 +115,7 @@ class NetworkDetector:
             return detect_fn()  # type: ignore[misc]
         return detect_fn(prev_env)
 
-    def invalidate(self):
+    def invalidate(self) -> None:
         """Force re-detection on next call."""
         with self._probe_lock:
             self._env = None
@@ -175,7 +175,7 @@ class NetworkDetector:
             )
         }
 
-        def run_probe(url, timeout):
+        def run_probe(url: str, timeout: float | int) -> bool:
             try:
                 r = requests.get(url, timeout=timeout, headers=default_headers)
                 return r.status_code == 200
@@ -263,7 +263,7 @@ def peek_network_env() -> NetworkEnv | None:
     return _detector.peek_env()
 
 
-def invalidate_network_cache():
+def invalidate_network_cache() -> None:
     """Force re-detection on next call."""
     _detector.invalidate()
 

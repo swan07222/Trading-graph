@@ -22,6 +22,7 @@ from core.types import (
 from trading.alerts import AlertPriority, get_alert_manager
 from trading.auto_trader import AutoTrader
 from trading.broker import BrokerInterface, create_broker
+from trading.executor_error_policy import SOFT_FAIL_EXCEPTIONS
 from trading.health import ComponentType, HealthStatus, get_health_monitor
 from trading.kill_switch import get_kill_switch
 from trading.risk import RiskManager, get_risk_manager
@@ -31,7 +32,16 @@ from utils.metrics import set_gauge
 from utils.security import get_access_control, get_audit_log
 
 log = get_logger(__name__)
-_SOFT_FAIL_EXCEPTIONS = (AttributeError, ConnectionError, ImportError, IndexError, KeyError, LookupError, OSError, OverflowError, RuntimeError, TimeoutError, TypeError, ValueError, ZeroDivisionError, queue.Empty, queue.Full)
+_SOFT_FAIL_EXCEPTIONS = SOFT_FAIL_EXCEPTIONS
+_CRITICAL_ENGINE_THREADS = frozenset(
+    {
+        "exec",
+        "fill_sync",
+        "status_sync",
+        "recon",
+        "checkpoint",
+    }
+)
 
 try:
     from utils.metrics_http import register_snapshot_provider, unregister_snapshot_provider
@@ -46,8 +56,8 @@ def _resolve_access_control():
         factory = getattr(_executor_mod, "get_access_control", None)
         if callable(factory):
             return factory()
-    except _SOFT_FAIL_EXCEPTIONS:
-        pass
+    except _SOFT_FAIL_EXCEPTIONS as e:
+        log.debug("Executor-scoped access control resolver unavailable: %s", e)
     return get_access_control()
 
 
@@ -58,8 +68,8 @@ def _resolve_audit_log():
         factory = getattr(_executor_mod, "get_audit_log", None)
         if callable(factory):
             return factory()
-    except _SOFT_FAIL_EXCEPTIONS:
-        pass
+    except _SOFT_FAIL_EXCEPTIONS as e:
+        log.debug("Executor-scoped audit log resolver unavailable: %s", e)
     return get_audit_log()
 
 def __init__(self, mode: TradingMode = None):
@@ -283,13 +293,70 @@ def _start_engine_thread(
     target: Callable[[], None],
     thread_name: str,
 ) -> None:
+    existing = getattr(self, attr_name, None)
+    if isinstance(existing, threading.Thread) and existing.is_alive():
+        log.warning(
+            "Execution worker thread already running: %s (attr=%s)",
+            str(thread_name),
+            str(attr_name),
+        )
+        return
+
+    def _runner() -> None:
+        self._heartbeat(thread_name)
+        try:
+            target()
+        except _SOFT_FAIL_EXCEPTIONS as e:
+            _handle_worker_thread_crash(self, thread_name=thread_name, exc=e)
+        finally:
+            with self._thread_hb_lock:
+                self._thread_heartbeats[str(thread_name)] = 0.0
+
     thread = threading.Thread(
-        target=target,
+        target=_runner,
         name=str(thread_name),
         daemon=False,
     )
     setattr(self, attr_name, thread)
     thread.start()
+
+
+def _handle_worker_thread_crash(
+    self,
+    *,
+    thread_name: str,
+    exc: BaseException,
+) -> None:
+    if not bool(getattr(self, "_running", False)):
+        log.debug("Worker %s exited during shutdown: %s", thread_name, exc)
+        return
+
+    msg = f"Worker thread crashed: {thread_name}: {exc}"
+    log.exception(msg)
+    try:
+        self._health_monitor.report_component_health(
+            ComponentType.RISK_MANAGER,
+            HealthStatus.DEGRADED,
+            error=msg,
+        )
+    except _SOFT_FAIL_EXCEPTIONS as hm_err:
+        log.debug("Worker-crash health-report update failed: %s", hm_err)
+
+    try:
+        self._alert_manager.risk_alert("Runtime worker crash", msg)
+    except _SOFT_FAIL_EXCEPTIONS as alert_err:
+        log.debug("Worker-crash alert dispatch failed: %s", alert_err)
+
+    if str(thread_name) not in _CRITICAL_ENGINE_THREADS:
+        return
+    try:
+        if bool(getattr(self._kill_switch, "can_trade", False)):
+            self._kill_switch.activate(
+                msg,
+                activated_by=f"thread_crash:{thread_name}",
+            )
+    except _SOFT_FAIL_EXCEPTIONS as ks_err:
+        log.critical("Kill-switch activation failed after worker crash: %s", ks_err)
 
 
 def stop(self):

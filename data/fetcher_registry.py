@@ -55,11 +55,13 @@ def get_default_fetcher_registry() -> FetcherRegistry[object]:
     return _default_registry
 
 
-def set_active_fetcher_registry(registry: FetcherRegistry[object]) -> contextvars.Token:
+def set_active_fetcher_registry(
+    registry: FetcherRegistry[object],
+) -> contextvars.Token[FetcherRegistry[object]]:
     return _active_registry_ctx.set(registry)
 
 
-def reset_active_fetcher_registry(token: contextvars.Token) -> None:
+def reset_active_fetcher_registry(token: contextvars.Token[FetcherRegistry[object]]) -> None:
     _active_registry_ctx.reset(token)
 
 

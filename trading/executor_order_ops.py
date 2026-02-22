@@ -1,12 +1,16 @@
 ﻿from __future__ import annotations
 
-import queue
 from datetime import datetime, timedelta
 from typing import Any
 
 from config import CONFIG
 from core.types import Fill, Order, OrderSide, OrderStatus, OrderType, TradeSignal
 from trading.alerts import AlertPriority
+from trading.executor_error_policy import SOFT_FAIL_EXCEPTIONS
+from trading.executor_policy_ops import _allow_order_type_emulation
+from trading.executor_policy_ops import _broker_supports_order_type
+from trading.executor_policy_ops import _is_advanced_order_type
+from trading.executor_policy_ops import _should_escalate_runtime_exception
 from trading.health import HealthStatus
 from utils.logger import get_logger
 from utils.metrics import inc_counter, observe, set_gauge
@@ -14,7 +18,7 @@ from utils.policy import get_trade_policy_engine
 from utils.security import get_access_control, get_audit_log
 
 log = get_logger(__name__)
-_SOFT_FAIL_EXCEPTIONS = (AttributeError, ConnectionError, ImportError, IndexError, KeyError, LookupError, OSError, OverflowError, RuntimeError, TimeoutError, TypeError, ValueError, ZeroDivisionError, queue.Empty, queue.Full)
+_SOFT_FAIL_EXCEPTIONS = SOFT_FAIL_EXCEPTIONS
 
 
 def _resolve_access_control():
@@ -24,8 +28,8 @@ def _resolve_access_control():
         factory = getattr(_executor_mod, "get_access_control", None)
         if callable(factory):
             return factory()
-    except _SOFT_FAIL_EXCEPTIONS:
-        pass
+    except _SOFT_FAIL_EXCEPTIONS as e:
+        log.debug("Executor-scoped access control resolver unavailable: %s", e)
     return get_access_control()
 
 
@@ -36,9 +40,11 @@ def _resolve_audit_log():
         factory = getattr(_executor_mod, "get_audit_log", None)
         if callable(factory):
             return factory()
-    except _SOFT_FAIL_EXCEPTIONS:
-        pass
+    except _SOFT_FAIL_EXCEPTIONS as e:
+        log.debug("Executor-scoped audit log resolver unavailable: %s", e)
     return get_audit_log()
+
+
 def submit(self, signal: TradeSignal) -> bool:
     """Submit a trading signal for execution with strict quote freshness."""
     if not self._running:
@@ -48,8 +54,35 @@ def submit(self, signal: TradeSignal) -> bool:
     requested_order_type = self._normalize_requested_order_type(
         getattr(signal, "order_type", "limit")
     )
+    requested_enum = OrderType(requested_order_type)
     market_style_types = {"market", "ioc", "fok", "stop", "trail_market"}
     limit_style_types = {"limit", "stop_limit", "trail_limit"}
+
+    # Explicit policy gate: advanced order emulation is configurable and
+    # defaults to disabled in LIVE mode.
+    if _is_advanced_order_type(self, requested_enum) and not _broker_supports_order_type(
+        self, requested_enum
+    ):
+        emulate_ok, emulate_msg = _allow_order_type_emulation(self, requested_enum)
+        if not emulate_ok:
+            self._reject_signal(signal, emulate_msg)
+            try:
+                _resolve_audit_log().log_risk_event(
+                    "order_type_emulation_blocked",
+                    {
+                        "symbol": signal.symbol,
+                        "signal_id": signal.id,
+                        "requested_order_type": requested_enum.value,
+                        "mode": str(getattr(self.mode, "value", self.mode)),
+                    },
+                )
+            except _SOFT_FAIL_EXCEPTIONS as e:
+                log.warning(
+                    "Audit log write failed for emulation block on %s: %s",
+                    signal.symbol,
+                    e,
+                )
+            return False
 
     # Operational guardrails: block/allow trading based on health status.
     try:
@@ -148,14 +181,22 @@ def submit(self, signal: TradeSignal) -> bool:
                 )
                 return False
     except _SOFT_FAIL_EXCEPTIONS as e:
-        log.debug(f"Security governance check skipped due to error: {e}")
+        if _should_escalate_runtime_exception(self, e):
+            raise
+        log.error("Security governance check failed for %s: %s", signal.symbol, e)
+        self._reject_signal(signal, "Security governance check unavailable")
+        return False
 
     try:
         if not CONFIG.is_market_open():
             self._reject_signal(signal, "Market closed")
             return False
     except _SOFT_FAIL_EXCEPTIONS as e:
-        log.warning("Market-open check failed for signal=%s: %s", signal.symbol, e)
+        if _should_escalate_runtime_exception(self, e):
+            raise
+        log.error("Market-open check failed for signal=%s: %s", signal.symbol, e)
+        self._reject_signal(signal, "Market-state check unavailable")
+        return False
 
     if not self._kill_switch.can_trade:
         self._reject_signal(signal, "Trading halted - kill switch active")
@@ -248,6 +289,12 @@ def submit(self, signal: TradeSignal) -> bool:
                     )
                 return False
     except _SOFT_FAIL_EXCEPTIONS as e:
+        if _should_escalate_runtime_exception(self, e):
+            raise
+        mode_is_live = str(getattr(self.mode, "value", self.mode)).lower() == "live"
+        if mode_is_live:
+            self._reject_signal(signal, "Best-exec guard unavailable")
+            return False
         log.warning(
             "Best-exec guard evaluation failed for %s: %s",
             signal.symbol,
@@ -291,6 +338,12 @@ def submit(self, signal: TradeSignal) -> bool:
                 )
                 return False
     except _SOFT_FAIL_EXCEPTIONS as e:
+        if _should_escalate_runtime_exception(self, e):
+            raise
+        mode_is_live = str(getattr(self.mode, "value", self.mode)).lower() == "live"
+        if mode_is_live:
+            self._reject_signal(signal, "Price-limit sanity check unavailable")
+            return False
         log.warning("CN price-limit sanity check failed for %s: %s", signal.symbol, e)
 
     passed, rmsg = self.risk_manager.check_order(
@@ -352,14 +405,15 @@ def _execute(self, signal: TradeSignal):
 
         broker_order_type = requested_enum
         emulation_reason = ""
-        if requested_enum in {
-            OrderType.STOP,
-            OrderType.STOP_LIMIT,
-            OrderType.IOC,
-            OrderType.FOK,
-            OrderType.TRAIL_MARKET,
-            OrderType.TRAIL_LIMIT,
-        }:
+        if _is_advanced_order_type(
+            self, requested_enum
+        ) and not _broker_supports_order_type(self, requested_enum):
+            emulate_ok, emulate_msg = _allow_order_type_emulation(
+                self, requested_enum
+            )
+            if not emulate_ok:
+                self._reject_signal(signal, emulate_msg)
+                return
             # Broker abstraction is market/limit centric; advanced types are
             # represented in tags and handled by runtime guardrails/simulator.
             if requested_enum in {
@@ -475,6 +529,9 @@ def _execute(self, signal: TradeSignal):
         )
 
     except _SOFT_FAIL_EXCEPTIONS as e:
+        if _should_escalate_runtime_exception(self, e):
+            log.exception("Execution fatal exception for %s", signal.symbol)
+            raise
         log.error(f"Execution error: {e}")
         if order:
             try:
@@ -616,6 +673,9 @@ def _process_pending_fills(self):
                 )
 
         except _SOFT_FAIL_EXCEPTIONS as e:
+            if _should_escalate_runtime_exception(self, e):
+                log.exception("Fill processing fatal exception")
+                raise
             log.error(f"Fill processing error: {e}")
 
         self._prune_processed_fills_unlocked(max_size=50000)
@@ -1029,5 +1089,8 @@ def _status_sync_loop(self):
                             )
 
         except _SOFT_FAIL_EXCEPTIONS as e:
+            if _should_escalate_runtime_exception(self, e):
+                log.exception("Status sync fatal exception")
+                raise
             log.error(f"Status sync error: {e}")
 

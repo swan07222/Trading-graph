@@ -71,3 +71,35 @@ def test_secure_storage_env_master_key_avoids_local_key_file(monkeypatch, tmp_pa
         assert store._key_path.exists() is False
     finally:
         store.close()
+
+
+def test_secure_storage_non_object_payload_resets_cache(monkeypatch, tmp_path):
+    if security.Fernet is None:
+        pytest.skip("cryptography unavailable")
+
+    security.reset_security_singletons()
+    monkeypatch.setattr(
+        security.CONFIG,
+        "_data_dir_cached",
+        tmp_path / "data_storage",
+        raising=False,
+    )
+    monkeypatch.setenv(
+        "TRADING_SECURE_MASTER_KEY",
+        security.Fernet.generate_key().decode("utf-8"),
+    )
+    monkeypatch.setenv("TRADING_SECURE_KEY_PATH", "")
+
+    store = security.SecureStorage()
+    storage_path = store._storage_path
+    cipher = store._cipher
+    store.close()
+
+    storage_path.parent.mkdir(parents=True, exist_ok=True)
+    storage_path.write_bytes(cipher.encrypt(b"[]"))
+
+    reloaded = security.SecureStorage()
+    try:
+        assert reloaded._cache == {}
+    finally:
+        reloaded.close()
