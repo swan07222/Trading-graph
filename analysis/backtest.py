@@ -1381,5 +1381,5 @@ class Backtester:
             avg_fold_accuracy=np.mean(fold_accuracies) if fold_accuracies else 0,
             fold_results=fold_results,
             equity_curve=equity.tolist(),
-            dates=[d for d in aligned_dates]
+            dates=list(aligned_dates)
         )

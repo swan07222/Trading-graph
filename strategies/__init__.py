@@ -165,3 +165,25 @@ from strategies.golden_cross import GoldenCrossStrategy
 from strategies.gap_and_go import GapAndGoStrategy
 from strategies.vwap_reversion import VWAPReversionStrategy
 from strategies.earnings_momentum import EarningsMomentumStrategy
+
+__all__ = [
+    "BaseStrategy",
+    "Signal",
+    "SignalStrength",
+    "STRATEGY_REGISTRY",
+    "register_strategy",
+    "get_strategy",
+    "list_strategies",
+    "MomentumBreakoutStrategy",
+    "MeanReversionStrategy",
+    "TrendFollowingStrategy",
+    "VolumeProfileStrategy",
+    "SupportResistanceStrategy",
+    "MACDDivergenceStrategy",
+    "BollingerBreakoutStrategy",
+    "RSIOversoldStrategy",
+    "GoldenCrossStrategy",
+    "GapAndGoStrategy",
+    "VWAPReversionStrategy",
+    "EarningsMomentumStrategy",
+]

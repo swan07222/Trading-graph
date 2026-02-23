@@ -21,9 +21,9 @@
     "001382"
   ],
   "interval": "1m",
-  "forecast": 26,
-  "lookback": 1680,
-  "capital": 100000.0,
+  "forecast": 23,
+  "lookback": 1691,
+  "capital": 100006.0,
   "last_stock": "600887",
   "auto_trade_mode": "manual"
 }

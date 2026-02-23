@@ -248,7 +248,7 @@ class NewsScraper:
                 return
             data = json.loads(self._seen_path.read_text(encoding="utf-8"))
             if isinstance(data, list):
-                self._seen_hashes = set(str(x) for x in data if x)
+                self._seen_hashes = {str(x) for x in data if x}
         except Exception:
             self._seen_hashes = set()
 
@@ -483,7 +483,7 @@ class NewsScraper:
             return 0.0, 0.0
 
         avg_score = weighted_score / total_weight
-        source_count = len(set(n.source for n in relevant))
+        source_count = len({n.source for n in relevant})
         breadth_boost = min(source_count / 3.0, 1.0)
         confidence = min(1.0, 0.7 * min(len(relevant) / 8.0, 1.0) + 0.3 * breadth_boost)
         return float(avg_score), float(confidence)
@@ -520,5 +520,5 @@ class NewsScraper:
             "positive_count": pos_count,
             "negative_count": neg_count,
             "neutral_count": len(all_news) - pos_count - neg_count,
-            "source_count": len(set(n.source for n in all_news)),
+            "source_count": len({n.source for n in all_news}),
         }

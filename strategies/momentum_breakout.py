@@ -5,7 +5,6 @@ Identifies stocks breaking out of consolidation with high volume.
 """
 from __future__ import annotations
 
-from datetime import datetime
 from typing import Any
 
 from core.types import OrderSide

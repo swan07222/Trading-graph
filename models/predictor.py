@@ -397,10 +397,11 @@ class Predictor:
         weights = []
         for i in range(len(history)):
             weights.append(0.9 ** (len(history) - i - 1))  # Exponential decay
-        
-        weighted_sum = sum(h * w for h, w in zip(history, weights))
+
+        # Note: weights list is created from history length, so lengths always match
+        weighted_sum = sum(h * w for h, w in zip(history, weights))  # noqa: B905
         weight_total = sum(weights)
-        
+
         return weighted_sum / weight_total if weight_total > 0 else 0.5
 
     def _calibrate_confidence(self, confidence: float, stock_code: str, entropy: float) -> float:

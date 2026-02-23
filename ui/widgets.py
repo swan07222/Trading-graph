@@ -19,11 +19,6 @@ from PyQt6.QtWidgets import (
 from ui.modern_theme import (
     ModernColors,
     ModernFonts,
-    ModernSpacing,
-    get_signal_bg,
-    get_signal_color,
-    get_signal_panel_style,
-    get_progress_bar_style,
 )
 from utils.logger import get_logger
 

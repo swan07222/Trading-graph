@@ -147,7 +147,7 @@ def _load_previous_profile_thresholds() -> dict[str, float]:
 
 
 def _compress_candidates(values: list[float], *, max_size: int) -> list[float]:
-    uniq = sorted(set(round(float(v), 4) for v in values))
+    uniq = sorted({round(float(v), 4) for v in values})
     if len(uniq) <= int(max_size):
         return [float(v) for v in uniq]
     if max_size <= 1:

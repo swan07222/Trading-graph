@@ -1262,7 +1262,7 @@ class SessionBarCache:
                 rows = 0
             if rows >= min_rows:
                 out.append(_norm_symbol(sym))
-        return sorted(set(c for c in out if c))
+        return sorted({c for c in out if c})
 
 
 _session_cache: SessionBarCache | None = None

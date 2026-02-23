@@ -105,7 +105,7 @@ def test_slow_call_threshold():
 def test_memory_tracker():
     """Test memory_tracker context."""
     with memory_tracker("test_memory"):
-        data = [i for i in range(1000)]
+        data = list(range(1000))
         assert len(data) == 1000
 
 

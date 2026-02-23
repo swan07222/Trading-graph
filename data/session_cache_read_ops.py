@@ -301,7 +301,7 @@ def read_history(
             selected = best
 
         keep_idx = [idx for idx, _vals in selected]
-        fixed = {idx: vals for idx, vals in selected}
+        fixed = dict(selected)
         df = df.loc[keep_idx].copy()
         for idx, (o, h, low, c) in fixed.items():
             df.at[idx, "open"] = float(o)

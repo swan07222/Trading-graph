@@ -5,12 +5,10 @@ Provides Prometheus-compatible metrics for monitoring and alerting.
 """
 from __future__ import annotations
 
-import os
 import threading
 import time
 from collections import deque
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import Any
 
@@ -369,8 +367,6 @@ class TradingMetrics:
 
     def export_to_registry(self, registry: MetricsRegistry) -> None:
         """Export metrics to Prometheus registry."""
-        now = datetime.now()
-
         # Order metrics
         registry.counter(
             "trading_orders_submitted_total",

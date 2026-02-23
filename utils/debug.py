@@ -133,7 +133,7 @@ def profile_function(
                 call_count = 1
                 if top_callers:
                     # Try to get call count from stats
-                    for func_key, stats_tuple in list(stats.stats.items())[:1]:
+                    for _func_key, stats_tuple in list(stats.stats.items())[:1]:
                         if isinstance(stats_tuple, tuple) and len(stats_tuple) >= 1:
                             call_count = int(stats_tuple[0])
                             break

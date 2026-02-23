@@ -280,7 +280,7 @@ class MarketDatabase:
         """Raise ValueError if required columns are missing."""
         if df is None or df.empty:
             return
-        present = set(c.lower() for c in df.columns)
+        present = {c.lower() for c in df.columns}
         missing = cls._REQUIRED_BAR_COLUMNS - present
         if missing:
             raise ValueError(

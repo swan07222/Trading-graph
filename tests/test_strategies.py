@@ -1,6 +1,5 @@
 """Tests for trading strategies."""
 import pytest
-from datetime import datetime
 from core.types import OrderSide
 from strategies import (
     BaseStrategy, Signal, SignalStrength,

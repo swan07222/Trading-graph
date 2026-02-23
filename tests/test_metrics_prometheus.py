@@ -1,8 +1,7 @@
 """Tests for Prometheus metrics exporter."""
-import pytest
 from utils.metrics_prometheus import (
     MetricsRegistry, MetricSample,
-    TradingMetrics, TRADING_METRICS,
+    TradingMetrics,
     record_order, record_fill, record_prediction,
     get_trading_metrics,
 )
