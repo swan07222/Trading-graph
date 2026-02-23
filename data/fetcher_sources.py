@@ -611,6 +611,11 @@ class AkShareSource(DataSource):
             "\u6700\u9ad8": "high", "\u6700\u4f4e": "low", "\u6210\u4ea4\u91cf": "volume",
             "\u6210\u4ea4\u989d": "amount",
         },
+        {
+            "time": "date", "open": "open", "close": "close",
+            "high": "high", "low": "low", "volume": "volume",
+            "amount": "amount",
+        },
     ]
     def __init__(self):
         super().__init__()
@@ -968,7 +973,9 @@ class SinaHistorySource(DataSource):
     @staticmethod
     def _estimate_target_rows(days: int, interval: str) -> int:
         iv = str(interval or "1d").lower()
-        bpd = float(BARS_PER_DAY.get(iv, 1.0) or 1.0)
+        # For 2m: Sina fetches 1m bars then resamples, so use 1m bpd
+        lookup_iv = "1m" if iv == "2m" else iv
+        bpd = float(BARS_PER_DAY.get(lookup_iv, 1.0) or 1.0)
         bpd = max(0.05, bpd)
         d = max(1, int(days or 1))
         rows = int(math.ceil(float(d) * bpd)) + 8
@@ -986,7 +993,7 @@ class SinaHistorySource(DataSource):
         endpoints = _endpoint_candidates(self._ENDPOINTS_ENV, self._ENDPOINTS)
         for url in endpoints:
             try:
-                resp = self._session.get(url, params=params, timeout=10)
+                resp = self._session.get(url, params=params, timeout=12)
                 if int(resp.status_code) != 200:
                     errors.append(f"{url} HTTP {resp.status_code}")
                     continue
@@ -1172,8 +1179,8 @@ class YahooSource(DataSource):
     _CB_MIN_COOLDOWN = 20
     _CB_MAX_COOLDOWN = 90
 
-    _SUFFIX_MAP = {"6": ".SS", "0": ".SZ", "3": ".SZ"}
-    _SUPPORTED_PREFIXES = ("0", "3", "6")
+    _SUFFIX_MAP = {"6": ".SS", "0": ".SZ", "3": ".SZ", "4": ".BJ", "8": ".BJ"}
+    _SUPPORTED_PREFIXES = ("0", "3", "4", "6", "8")
 
     def __init__(self):
         super().__init__()

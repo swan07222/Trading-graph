@@ -293,6 +293,7 @@ def atomic_torch_save(
 
     lock = _get_dir_lock(path) if use_lock else None
 
+    saved = False
     if lock:
         lock.acquire()
     try:
@@ -301,17 +302,21 @@ def atomic_torch_save(
                 torch.save(obj, f)
                 _fsync_file(f)
             _safe_replace(tmp, path)
-            if write_checksum:
-                try:
-                    write_checksum_sidecar(path)
-                except OSError:
-                    pass
+            saved = True
         except BaseException:
             _cleanup_tmp(tmp)
             raise
     finally:
         if lock:
             lock.release()
+
+    # Write checksum after releasing the directory lock. Otherwise this path
+    # can deadlock by trying to reacquire the same non-reentrant lock.
+    if saved and write_checksum:
+        try:
+            write_checksum_sidecar(path)
+        except OSError:
+            pass
 
 _DEFAULT_MAX_PICKLE_BYTES = 500 * 1024 * 1024  # 500 MB
 _CHECKSUM_SUFFIX = ".sha256"

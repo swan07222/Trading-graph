@@ -79,7 +79,7 @@ class TencentQuoteSource(DataSource):
                     if not url:
                         continue
                     try:
-                        resp = self._session.get(url, timeout=6)
+                        resp = self._session.get(url, timeout=10)
                         if int(resp.status_code) != 200:
                             endpoint_errors.append(f"{url} HTTP {resp.status_code}")
                             continue
@@ -195,7 +195,7 @@ class TencentQuoteSource(DataSource):
                                     open=open_px,
                                     high=high_px,
                                     low=low_px,
-                                    close=prev_close,
+                                    close=price,
                                     volume=volume,
                                     amount=amount,
                                     change=chg,
@@ -297,7 +297,7 @@ class TencentQuoteSource(DataSource):
                 if not url:
                     continue
                 try:
-                    resp = self._session.get(url, timeout=10)
+                    resp = self._session.get(url, timeout=12)
                     resp.encoding = "utf-8"
                     if int(resp.status_code) != 200:
                         errors.append(f"{url} HTTP {resp.status_code}")
@@ -385,8 +385,8 @@ class TencentQuoteSource(DataSource):
                 close_px = float(row[2] or 0)
                 high_px  = float(row[3] or 0)
                 low_px   = float(row[4] or 0)
-                # Volume in Tencent is in shares (not lots)
-                vol      = float(row[5] or 0)
+                # Volume in Tencent daily is in lots (手), convert to shares
+                vol      = float(row[5] or 0) * 100
 
                 if close_px <= 0:
                     continue

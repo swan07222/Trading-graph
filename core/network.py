@@ -153,17 +153,17 @@ class NetworkDetector:
         force_china_direct = _env_bool("TRADING_CHINA_DIRECT")
 
         probes = {
-            "tencent_ok": ("https://qt.gtimg.cn/q=sh600519", 3),
+            "tencent_ok": ("https://qt.gtimg.cn/q=sh600519", 5),
             "eastmoney_ok": (
                 "https://82.push2.eastmoney.com/api/qt/clist/get"
                 "?pn=1&pz=1&fields=f2&fid=f3&fs=m:0+t:6",
-                3,
+                5,
             ),
             "yahoo_ok": (
                 "https://query1.finance.yahoo.com/v8/finance/chart/AAPL?range=1d",
-                4,
+                6,
             ),
-            "csindex_ok": ("https://www.csindex.com.cn/", 3),
+            "csindex_ok": ("https://www.csindex.com.cn/", 5),
         }
 
         # Avoid sharing requests.Session across threads.
@@ -188,7 +188,7 @@ class NetworkDetector:
                     ex.submit(run_probe, url, to): k
                     for k, (url, to) in probes.items()
                 }
-                for fut in as_completed(fut_map, timeout=10):
+                for fut in as_completed(fut_map, timeout=14):
                     k = fut_map[fut]
                     try:
                         setattr(env, k, bool(fut.result()))

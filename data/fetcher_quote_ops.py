@@ -78,7 +78,7 @@ def get_realtime_batch(self, codes: list[str]) -> dict[str, Quote]:
     if _is_offline():
         return {}
     now = time.time()
-    key = ",".join(cleaned)
+    key = ",".join(sorted(cleaned))
     # Micro-cache read
     with self._rt_cache_lock:
         mc = self._rt_batch_microcache
@@ -104,7 +104,7 @@ def get_realtime_batch(self, codes: list[str]) -> dict[str, Quote]:
     self._fill_from_batch_sources(cleaned, result, tencent_sources)
     missing = [c for c in cleaned if c not in result]
     if missing:
-        self._fill_from_batch_sources(cleaned, result, fallback_sources)
+        self._fill_from_batch_sources(missing, result, fallback_sources)
 
     # Per-symbol APIs for providers without batch endpoints.
     missing = [c for c in cleaned if c not in result]
