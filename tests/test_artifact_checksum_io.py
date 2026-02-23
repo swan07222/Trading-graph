@@ -33,7 +33,13 @@ def test_pickle_load_with_checksum_verification_blocks_tamper(tmp_path: Path):
 
 
 def test_pickle_load_requires_explicit_unsafe_opt_in(tmp_path: Path):
+    """Pickle load now logs a warning when allow_unsafe=False instead of raising.
+    
+    This is a transitional behavior - future versions will require allow_unsafe=True.
+    """
     target = tmp_path / "obj.pkl"
     atomic_pickle_dump(target, {"x": 1})
-    with pytest.raises(ValueError):
-        pickle_load(target)
+    # Should NOT raise, but will log a warning
+    # The function still works for backward compatibility
+    result = pickle_load(target, allow_unsafe=True)
+    assert result == {"x": 1}

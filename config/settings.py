@@ -852,9 +852,9 @@ class Config:
         if not (0 < self.model.train_ratio < 1):
             self._validation_warnings.append("Invalid train ratio")
 
-        if self.model.embargo_bars < self.model.prediction_horizon:
+        if self.model.embargo_bars <= self.model.prediction_horizon:
             self._validation_warnings.append(
-                "Embargo must be >= prediction horizon"
+                "Embargo must be > prediction horizon (not >=)"
             )
 
         if bool(self.model.allow_unsafe_artifact_load):

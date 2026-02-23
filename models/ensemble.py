@@ -227,6 +227,11 @@ class EnsembleModel:
             log.debug(f"Initialised {name}")
         except Exception as e:
             log.error(f"Failed to initialise {name}: {e}")
+            # Re-raise for critical initialization failures to avoid silent failures
+            if not self.models:
+                raise RuntimeError(
+                    f"Failed to initialize any model. First model '{name}' failed: {e}"
+                ) from e
 
     def _normalize_weights(self) -> None:
         # FIX NORM: Handle empty weights dict gracefully

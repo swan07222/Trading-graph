@@ -152,7 +152,8 @@ def list_strategies() -> list[str]:
     return list(STRATEGY_REGISTRY.keys())
 
 
-# Import all strategies to register them
+# Import all strategies to register them (after class definitions)
+# noqa: E402 (imports must be after class definitions to avoid circular imports)
 from strategies.momentum_breakout import MomentumBreakoutStrategy
 from strategies.mean_reversion import MeanReversionStrategy
 from strategies.trend_following import TrendFollowingStrategy

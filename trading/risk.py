@@ -48,8 +48,8 @@ def _get_audit_log():
 # FIX(6,14): Validates inputs; always uses CONFIG.trading.X consistently
 
 def _estimate_order_cost(
-    quantity: int,
-    price: float,
+    quantity: int | None,
+    price: float | None,
     side: OrderSide = OrderSide.BUY,
 ) -> tuple[float, float, float]:
     """
@@ -66,8 +66,12 @@ def _estimate_order_cost(
         For SELL: total_cost = fees only         (proceeds = notional - fees)
 
     Raises:
-        ValueError: If quantity <= 0 or price <= 0
+        ValueError: If quantity <= 0, price <= 0, or either is None
     """
+    if quantity is None:
+        raise ValueError("quantity must not be None")
+    if price is None:
+        raise ValueError("price must not be None")
     if quantity <= 0:
         raise ValueError(f"quantity must be > 0, got {quantity}")
     if price <= 0:

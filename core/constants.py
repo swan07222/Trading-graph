@@ -7,6 +7,9 @@ from functools import lru_cache
 from pathlib import Path
 
 from core.types import OrderSide, OrderStatus, OrderType
+from utils.logger import get_logger
+
+log = get_logger(__name__)
 
 
 class Exchange(Enum):
@@ -55,43 +58,51 @@ TRADING_HOURS = {
 }
 
 # HOLIDAYS (2024-2026 China)
+# Note: These are approximate holidays based on historical patterns.
+# For production use, consider integrating with a dynamic holiday API.
 
 HOLIDAYS_2024: set[date] = {
-    date(2024, 1, 1),
+    date(2024, 1, 1),  # New Year's Day
     date(2024, 2, 9), date(2024, 2, 10), date(2024, 2, 11),
     date(2024, 2, 12), date(2024, 2, 13), date(2024, 2, 14),
-    date(2024, 2, 15), date(2024, 2, 16), date(2024, 2, 17),
-    date(2024, 4, 4), date(2024, 4, 5), date(2024, 4, 6),
+    date(2024, 2, 15), date(2024, 2, 16), date(2024, 2, 17),  # Spring Festival
+    date(2024, 4, 4), date(2024, 4, 5), date(2024, 4, 6),  # Qingming Festival
     date(2024, 5, 1), date(2024, 5, 2), date(2024, 5, 3),
-    date(2024, 5, 4), date(2024, 5, 5),
-    date(2024, 6, 8), date(2024, 6, 9), date(2024, 6, 10),
-    # Mid-Autumn
-    date(2024, 9, 15), date(2024, 9, 16), date(2024, 9, 17),
+    date(2024, 5, 4), date(2024, 5, 5),  # Labor Day
+    date(2024, 6, 8), date(2024, 6, 9), date(2024, 6, 10),  # Dragon Boat Festival
+    date(2024, 9, 15), date(2024, 9, 16), date(2024, 9, 17),  # Mid-Autumn Festival
     date(2024, 10, 1), date(2024, 10, 2), date(2024, 10, 3),
     date(2024, 10, 4), date(2024, 10, 5), date(2024, 10, 6),
-    date(2024, 10, 7),
+    date(2024, 10, 7),  # National Day
 }
 
 HOLIDAYS_2025: set[date] = {
-    date(2025, 1, 1),
+    date(2025, 1, 1),  # New Year's Day
     date(2025, 1, 28), date(2025, 1, 29), date(2025, 1, 30),
     date(2025, 1, 31), date(2025, 2, 1), date(2025, 2, 2),
-    date(2025, 2, 3), date(2025, 2, 4),
+    date(2025, 2, 3), date(2025, 2, 4),  # Spring Festival
+    date(2025, 4, 4), date(2025, 4, 5), date(2025, 4, 6),  # Qingming Festival
+    date(2025, 5, 1), date(2025, 5, 2), date(2025, 5, 3),
+    date(2025, 5, 4), date(2025, 5, 5),  # Labor Day
+    date(2025, 5, 31), date(2025, 6, 1), date(2025, 6, 2),  # Dragon Boat Festival
+    date(2025, 10, 1), date(2025, 10, 2), date(2025, 10, 3),
+    date(2025, 10, 4), date(2025, 10, 5), date(2025, 10, 6),
+    date(2025, 10, 7), date(2025, 10, 8),  # National Day + Mid-Autumn
 }
 
 HOLIDAYS_2026: set[date] = {
-    date(2026, 1, 1), date(2026, 1, 2), date(2026, 1, 3),
+    date(2026, 1, 1), date(2026, 1, 2), date(2026, 1, 3),  # New Year's Day
     date(2026, 2, 15), date(2026, 2, 16), date(2026, 2, 17),
     date(2026, 2, 18), date(2026, 2, 19), date(2026, 2, 20),
-    date(2026, 2, 21), date(2026, 2, 22), date(2026, 2, 23),
-    date(2026, 4, 4), date(2026, 4, 5), date(2026, 4, 6),
+    date(2026, 2, 21), date(2026, 2, 22), date(2026, 2, 23),  # Spring Festival
+    date(2026, 4, 4), date(2026, 4, 5), date(2026, 4, 6),  # Qingming Festival
     date(2026, 5, 1), date(2026, 5, 2), date(2026, 5, 3),
-    date(2026, 5, 4), date(2026, 5, 5),
-    date(2026, 6, 19), date(2026, 6, 20), date(2026, 6, 21),
-    date(2026, 9, 25), date(2026, 9, 26), date(2026, 9, 27),
+    date(2026, 5, 4), date(2026, 5, 5),  # Labor Day
+    date(2026, 6, 19), date(2026, 6, 20), date(2026, 6, 21),  # Dragon Boat Festival
+    date(2026, 9, 25), date(2026, 9, 26), date(2026, 9, 27),  # Mid-Autumn Festival
     date(2026, 10, 1), date(2026, 10, 2), date(2026, 10, 3),
     date(2026, 10, 4), date(2026, 10, 5), date(2026, 10, 6),
-    date(2026, 10, 7),
+    date(2026, 10, 7),  # National Day
 }
 
 _HOLIDAYS_BUILTIN = HOLIDAYS_2024 | HOLIDAYS_2025 | HOLIDAYS_2026
@@ -413,14 +424,22 @@ def is_trading_time(exchange: str = "SSE") -> bool:
     """
     Check if current time is within trading hours.
 
-    FIX: Uses Asia/Shanghai timezone instead of machine-local time
-    to avoid incorrect results on non-Chinese servers.
+    Uses Asia/Shanghai timezone for accurate trading time detection.
+    Falls back to local time with a warning if zoneinfo is unavailable.
     """
     try:
         from zoneinfo import ZoneInfo
 
         now = datetime.now(tz=ZoneInfo("Asia/Shanghai")).time()
-    except Exception:
+    except Exception as e:
+        # Log warning once to avoid spam
+        if not hasattr(is_trading_time, "_warned"):
+            log.warning(
+                "zoneinfo unavailable (%s), using local time for trading hours. "
+                "This may give incorrect results on non-Chinese servers.",
+                e,
+            )
+            is_trading_time._warned = True  # type: ignore
         now = datetime.now().time()
 
     hours = TRADING_HOURS.get(exchange, TRADING_HOURS["SSE"])

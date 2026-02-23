@@ -17,6 +17,24 @@ from utils.logger import get_logger
 
 log = get_logger(__name__)
 
+# Backtest scoring weights - configurable constants for optimization scoring
+_SCORE_WEIGHTS = {
+    "excess_return": 0.35,
+    "total_return": 0.10,
+    "sharpe_ratio": 12.0,
+    "sortino_ratio": 6.0,
+    "information_ratio": 4.0,
+    "calmar_ratio": 5.0,
+    "win_rate": 25.0,
+    "profit_factor": 3.0,
+    "avg_fold_accuracy": 20.0,
+    "max_drawdown_penalty": 0.60,
+    "volatility_penalty_threshold": 45.0,
+    "volatility_penalty_factor": 0.05,
+    "min_trades_threshold": 8,
+    "min_trades_penalty_factor": 0.8,
+}
+
 @dataclass
 class BacktestTrade:
     """Single trade record"""
@@ -332,21 +350,28 @@ class Backtester:
         """
         Composite optimization score.
         Higher is better; penalizes deep drawdown and low signal quality.
+
+        Scoring weights are defined in _SCORE_WEIGHTS constant for easy tuning.
         """
         score = 0.0
-        score += float(result.excess_return) * 0.35
-        score += float(result.total_return) * 0.10
-        score += float(result.sharpe_ratio) * 12.0
-        score += float(result.sortino_ratio) * 6.0
-        score += float(result.information_ratio) * 4.0
-        score += float(result.calmar_ratio) * 5.0
-        score += float(result.win_rate) * 25.0
-        score += float(result.profit_factor) * 3.0
-        score += float(result.avg_fold_accuracy) * 20.0
-        score -= float(result.max_drawdown_pct) * 0.60
-        score -= max(0.0, float(result.volatility) - 45.0) * 0.05
-        if float(result.total_trades) < 8:
-            score -= (8.0 - float(result.total_trades)) * 0.8
+        score += float(result.excess_return) * _SCORE_WEIGHTS["excess_return"]
+        score += float(result.total_return) * _SCORE_WEIGHTS["total_return"]
+        score += float(result.sharpe_ratio) * _SCORE_WEIGHTS["sharpe_ratio"]
+        score += float(result.sortino_ratio) * _SCORE_WEIGHTS["sortino_ratio"]
+        score += float(result.information_ratio) * _SCORE_WEIGHTS["information_ratio"]
+        score += float(result.calmar_ratio) * _SCORE_WEIGHTS["calmar_ratio"]
+        score += float(result.win_rate) * _SCORE_WEIGHTS["win_rate"]
+        score += float(result.profit_factor) * _SCORE_WEIGHTS["profit_factor"]
+        score += float(result.avg_fold_accuracy) * _SCORE_WEIGHTS["avg_fold_accuracy"]
+        score -= float(result.max_drawdown_pct) * _SCORE_WEIGHTS["max_drawdown_penalty"]
+        score -= max(
+            0.0,
+            float(result.volatility) - _SCORE_WEIGHTS["volatility_penalty_threshold"]
+        ) * _SCORE_WEIGHTS["volatility_penalty_factor"]
+        if float(result.total_trades) < _SCORE_WEIGHTS["min_trades_threshold"]:
+            score -= (
+                _SCORE_WEIGHTS["min_trades_threshold"] - float(result.total_trades)
+            ) * _SCORE_WEIGHTS["min_trades_penalty_factor"]
         return float(score)
 
     def optimize(

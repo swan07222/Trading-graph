@@ -537,14 +537,14 @@ class StockChart(QWidget):
         self.fallback_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.fallback_label.setStyleSheet(
             f"""
-            QLabel {
-                background: {ModernColors.BG_PRIMARY};
+            QLabel {{
+                background-color: {ModernColors.BG_PRIMARY};
                 color: {ModernColors.ACCENT_INFO};
                 border: 1px solid {ModernColors.BORDER_SUBTLE};
                 border-radius: 12px;
                 font-size: 14px;
                 padding: 20px;
-            }
+            }}
             """
         )
         self.layout().addWidget(self.fallback_label)

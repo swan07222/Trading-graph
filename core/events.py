@@ -147,6 +147,10 @@ class EventBus:
         # FIX: Use deque with maxlen for O(1) bounded history
         self._max_history = 1000
         self._history: deque = deque(maxlen=self._max_history)
+        
+        # FIX #5: Thread-local error dispatch depth counter to prevent
+        # infinite recursion if ERROR handlers consistently fail
+        self._local = threading.local()
 
     def subscribe(
         self,
@@ -198,7 +202,17 @@ class EventBus:
             self._dispatch(event)
 
     def _dispatch(self, event: Event):
-        """Dispatch event to subscribers."""
+        """
+        Dispatch event to subscribers.
+
+        Note: Handlers receive a copy of the subscriber list and may safely
+        subscribe/unsubscribe during dispatch. However, handlers should avoid
+        blocking operations that could deadlock the event bus worker thread.
+        Long-running handlers should use async execution or background threads.
+        
+        FIX #5: Added error dispatch depth limit to prevent stack overflow
+        if ERROR handlers consistently fail.
+        """
         with self._sub_lock:
             handlers = self._subscribers.get(event.type, []).copy()
 
@@ -208,15 +222,28 @@ class EventBus:
             except Exception as e:
                 # Avoid recursion: don't dispatch ERROR for ERROR handlers
                 if event.type != EventType.ERROR:
-                    error_event = Event(
-                        type=EventType.ERROR,
-                        data={
-                            'error': str(e),
-                            'handler': str(handler),
-                            'original_event_type': event.type.name,
-                        }
-                    )
-                    self._dispatch_error(error_event)
+                    # FIX #5: Check error dispatch depth to prevent infinite recursion
+                    error_depth = getattr(self._local, 'error_depth', 0)
+                    if error_depth >= 3:
+                        # Last resort: just log it to break the recursion
+                        log.error(
+                            f"Error handler failed (max depth reached): {e}"
+                        )
+                        continue
+                    
+                    self._local.error_depth = error_depth + 1
+                    try:
+                        error_event = Event(
+                            type=EventType.ERROR,
+                            data={
+                                'error': str(e),
+                                'handler': str(handler),
+                                'original_event_type': event.type.name,
+                            }
+                        )
+                        self._dispatch_error(error_event)
+                    finally:
+                        self._local.error_depth = error_depth
                 else:
                     log.error(
                         f"Error in ERROR handler: {e}"

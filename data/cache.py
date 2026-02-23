@@ -487,11 +487,21 @@ class TieredCache:
         )
 
     def _get_compute_lock(self, key: str) -> threading.Lock:
-        """Get or create a per-key lock for compute operations."""
+        """
+        Get or create a per-key lock for compute operations.
+
+        Uses LRU eviction policy to prevent unbounded growth while
+        preserving recently used locks.
+        """
         with self._compute_locks_lock:
-            # FIX #13: Prevent unbounded growth
-            if len(self._compute_locks) > self._compute_locks_max:
-                self._compute_locks.clear()
+            # FIX #12: LRU-style eviction instead of clearing all
+            if len(self._compute_locks) >= self._compute_locks_max:
+                # Remove oldest 20% of entries when limit reached
+                keys_to_remove = list(self._compute_locks.keys())[
+                    : self._compute_locks_max // 5
+                ]
+                for k in keys_to_remove:
+                    del self._compute_locks[k]
             if key not in self._compute_locks:
                 self._compute_locks[key] = threading.Lock()
             return self._compute_locks[key]

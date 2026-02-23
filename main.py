@@ -553,9 +553,9 @@ def run_recovery_drill() -> None:
     fills_after = oms2.get_fills(order.id)
     print(f"[DRILL] fills after restart: {len(fills_after)}")
 
-    # FIX: Use explicit exception instead of assert (which can be optimized away)
+    # Use explicit exception instead of assert (which can be optimized away)
     if len(fills_after) != len(fills_before):
-        raise AssertionError(
+        raise RuntimeError(
             f"Fill count changed after restart: before={len(fills_before)}, "
             f"after={len(fills_after)} (dedup broken)"
         )
