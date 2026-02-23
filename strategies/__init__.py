@@ -149,19 +149,18 @@ def list_strategies() -> list[str]:
 
 
 # Import all strategies to register them (after class definitions)
-# noqa: E402 (imports must be after class definitions to avoid circular imports)
-from strategies.bollinger_breakout import BollingerBreakoutStrategy
-from strategies.earnings_momentum import EarningsMomentumStrategy
-from strategies.gap_and_go import GapAndGoStrategy
-from strategies.golden_cross import GoldenCrossStrategy
-from strategies.macd_divergence import MACDDivergenceStrategy
-from strategies.mean_reversion import MeanReversionStrategy
-from strategies.momentum_breakout import MomentumBreakoutStrategy
-from strategies.rsi_oversold import RSIOversoldStrategy
-from strategies.support_resistance import SupportResistanceStrategy
-from strategies.trend_following import TrendFollowingStrategy
-from strategies.volume_profile import VolumeProfileStrategy
-from strategies.vwap_reversion import VWAPReversionStrategy
+from strategies.bollinger_breakout import BollingerBreakoutStrategy  # noqa: E402
+from strategies.earnings_momentum import EarningsMomentumStrategy  # noqa: E402
+from strategies.gap_and_go import GapAndGoStrategy  # noqa: E402
+from strategies.golden_cross import GoldenCrossStrategy  # noqa: E402
+from strategies.macd_divergence import MACDDivergenceStrategy  # noqa: E402
+from strategies.mean_reversion import MeanReversionStrategy  # noqa: E402
+from strategies.momentum_breakout import MomentumBreakoutStrategy  # noqa: E402
+from strategies.rsi_oversold import RSIOversoldStrategy  # noqa: E402
+from strategies.support_resistance import SupportResistanceStrategy  # noqa: E402
+from strategies.trend_following import TrendFollowingStrategy  # noqa: E402
+from strategies.volume_profile import VolumeProfileStrategy  # noqa: E402
+from strategies.vwap_reversion import VWAPReversionStrategy  # noqa: E402
 
 __all__ = [
     "BaseStrategy",

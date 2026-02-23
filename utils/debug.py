@@ -13,13 +13,13 @@ import pstats
 import sys
 import time
 import tracemalloc
+from collections.abc import Callable
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime
 from io import StringIO
 from pathlib import Path
 from typing import Any
-from collections.abc import Callable
 
 from utils.logger import get_logger
 

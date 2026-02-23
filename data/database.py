@@ -99,6 +99,7 @@ class MarketDatabase:
         """Remove and close connections for threads that no longer exist.
 
         FIX #3: Called under _connections_lock by the caller.
+        FIX #10: Register atexit handler to ensure all connections are closed on shutdown.
         """
         alive_ids = {
             t.ident for t in threading.enumerate() if t.ident is not None
@@ -108,7 +109,7 @@ class MarketDatabase:
             for tid in self._connections
             if tid not in alive_ids
         ]
-        for tid in dead_ids:
+        for tid in dead_ids:  # noqa: B007 (tid used as dict key)
             conn = self._connections.pop(tid, None)
             if conn is not None:
                 try:

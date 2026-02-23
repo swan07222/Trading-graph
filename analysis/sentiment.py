@@ -512,7 +512,12 @@ class NewsScraper:
                 if isinstance(symbols, list):
                     for sym in symbols:
                         if isinstance(sym, dict):
-                            symbol_code = str(sym.get("symbol", "")).strip("SHSZ")
+                            symbol_code = str(sym.get("symbol", ""))
+                            # Remove SH/SZ prefix
+                            for prefix in ("SH", "SZ"):
+                                if symbol_code.startswith(prefix):
+                                    symbol_code = symbol_code[len(prefix):]
+                                    break
                             if symbol_code and symbol_code not in stock_codes:
                                 stock_codes.append(symbol_code)
                 

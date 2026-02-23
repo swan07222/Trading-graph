@@ -15,6 +15,30 @@ dependencies = [
   "tqdm>=4.65.0,<5.0.0",
 ]
 
+[tool.setuptools.packages.find]
+include = [
+  "analysis*",
+  "config*",
+  "core*",
+  "data*",
+  "models*",
+  "scripts*",
+  "strategies*",
+  "tests*",
+  "trading*",
+  "ui*",
+  "utils*",
+]
+exclude = [
+  "venv*",
+  "cache*",
+  "audit*",
+  "data_storage*",
+  "models_saved*",
+  "backups*",
+  "logs*",
+]
+
 [project.optional-dependencies]
 ml = [
   "torch>=2.0.0,<3.0.0",

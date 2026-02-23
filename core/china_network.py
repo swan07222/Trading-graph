@@ -15,15 +15,16 @@ import socket
 import ssl
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
-from collections.abc import Callable
 
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
+from core.exceptions import DataFetchError
 from utils.logger import get_logger
 
 log = get_logger(__name__)
@@ -641,7 +642,3 @@ def china_optimized(provider: str):
 
         return wrapper
     return decorator
-
-
-# Import at end to avoid circular imports
-from core.exceptions import DataFetchError

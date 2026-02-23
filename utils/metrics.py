@@ -148,7 +148,11 @@ class MetricsRegistry:
         return key, ""
 
     def _check_key_limit(self) -> None:
-        """FIX #9: Evict oldest keys if we exceed max_keys."""
+        """FIX #9: Evict oldest keys if we exceed max_keys.
+        
+        Eviction now applies to all metric types (counters, gauges, histograms)
+        to prevent unbounded growth in any category.
+        """
         total = len(self._counters) + len(self._gauges) + len(self._histograms)
         if total <= self._max_keys:
             return
@@ -163,6 +167,26 @@ class MetricsRegistry:
             del self._histograms[oldest_key]
             self._histogram_buckets.pop(oldest_key, None)
             log.debug("Evicted histogram key: %s", oldest_key)
+
+        # Then evict from gauges
+        while (
+            self._gauges
+            and len(self._counters) + len(self._gauges) + len(self._histograms)
+            > self._max_keys
+        ):
+            oldest_key = next(iter(self._gauges))
+            del self._gauges[oldest_key]
+            log.debug("Evicted gauge key: %s", oldest_key)
+
+        # Finally evict from counters if still over limit
+        while (
+            self._counters
+            and len(self._counters) + len(self._gauges) + len(self._histograms)
+            > self._max_keys
+        ):
+            oldest_key = next(iter(self._counters))
+            del self._counters[oldest_key]
+            log.debug("Evicted counter key: %s", oldest_key)
 
     def reset(self) -> None:
         """FIX #7: Clear all metrics."""

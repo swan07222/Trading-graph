@@ -6,9 +6,9 @@ duplicated implementations across the codebase and handle circular imports.
 from __future__ import annotations
 
 import time
+from collections.abc import Callable
 from importlib import import_module
 from typing import Any, Generic, TypeVar
-from collections.abc import Callable
 
 T = TypeVar("T")
 
