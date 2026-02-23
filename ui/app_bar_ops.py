@@ -1157,10 +1157,17 @@ def _recover_chart_bars_from_close(
             except _APP_SOFT_EXCEPTIONS:
                 low = min(o, c)
             if iv not in ("1d", "1wk", "1mo"):
-                # Recovery mode should avoid carrying forward vendor day-range
-                # highs/lows into minute bars.
-                h = max(o, c)
-                low = min(o, c)
+                # Recovery mode: clamp wicks to prevent vendor day-range
+                # highs/lows from inflating minute bars, but preserve
+                # partial wick data for natural-looking candles.
+                top = max(o, c)
+                bot = min(o, c)
+                body = top - bot
+                max_wick = max(body * 1.5, top * 0.003)
+                h = min(h, top + max_wick)
+                low = max(low, bot - max_wick)
+                h = max(h, top)
+                low = min(low, bot)
 
             s = self._sanitize_ohlc(
                 o,

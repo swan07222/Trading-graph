@@ -868,13 +868,13 @@ def _prepare_chart_bars_for_interval(
                     if (
                         allow_shape_rebuild
                         and (
-                            rebuild_streak >= 8
+                            rebuild_streak >= 3
                             or (
-                                processed_count >= 60
+                                processed_count >= 40
                                 and (
                                     float(repaired_shape)
                                     / float(max(1, processed_count))
-                                ) > 0.22
+                                ) > 0.12
                             )
                         )
                     ):
@@ -915,18 +915,18 @@ def _prepare_chart_bars_for_interval(
                 if med_body > 0 and math.isfinite(med_body):
                     eff_body_cap = min(
                         eff_body_cap,
-                        float(max(0.0035, med_body * 6.0)),
+                        float(max(0.006, med_body * 8.0)),
                     )
             if recent_span:
                 med_span = float(median(recent_span[-48:]))
                 if med_span > 0 and math.isfinite(med_span):
                     eff_span_cap = min(
                         eff_span_cap,
-                        float(max(0.0050, med_span * 5.5)),
+                        float(max(0.009, med_span * 7.0)),
                     )
                     eff_wick_cap = min(
                         eff_wick_cap,
-                        float(max(0.0035, med_span * 3.8)),
+                        float(max(0.006, med_span * 5.0)),
                     )
 
             if (

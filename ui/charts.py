@@ -651,9 +651,10 @@ class StockChart(QWidget):
                         diag["drop_interval"] += 1
                         continue
 
-                    # Fix missing OHLC values
+                    # Fix missing OHLC values — prefer close (doji) over
+                    # prev_close to avoid creating artificial directional candles.
                     if o <= 0:
-                        o = float(prev_close if prev_close and prev_close > 0 else c)
+                        o = c
                     if h <= 0:
                         h = max(o, c)
                     if l_val <= 0:
