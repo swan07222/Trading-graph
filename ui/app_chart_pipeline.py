@@ -23,6 +23,8 @@ def _on_price_updated(self: Any, code: str, price: float) -> None:
     FIXED: No longer calls update_data() which was overwriting candles.
     Instead, updates the current bar's close price so the candle
     reflects the live price.
+    
+    FIX: Added better throttling to reduce UI flicker in watchlist.
     """
     if not CONFIG.is_market_open():
         return
@@ -54,12 +56,19 @@ def _on_price_updated(self: Any, code: str, price: float) -> None:
         refresh_price = True
         if prev_ui is not None:
             prev_ts, prev_px = float(prev_ui[0]), float(prev_ui[1])
-            if (
-                (now_ui - prev_ts) < 0.12
-                and abs(price - prev_px)
-                <= max(0.001, abs(prev_px) * 0.00004)
-            ):
-                refresh_price = False
+            elapsed_ms = (now_ui - prev_ts) * 1000
+            
+            # FIX: Improved throttling - 200ms minimum between updates
+            # with 0.01% minimum change threshold to reduce flicker
+            if elapsed_ms < 200.0:
+                pct_change = abs(price - prev_px) / max(prev_px, 0.0001)
+                if pct_change < 0.0001:  # 0.01% minimum change
+                    refresh_price = False
+            elif elapsed_ms < 500.0:
+                # Medium throttle window - require 0.05% change
+                pct_change = abs(price - prev_px) / max(prev_px, 0.0001)
+                if pct_change < 0.0005:
+                    refresh_price = False
 
         if refresh_price:
             text = f"CNY {price:.2f}"

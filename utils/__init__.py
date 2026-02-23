@@ -22,7 +22,24 @@ from .helpers import (
     format_price,
     get_trading_dates,
 )
+from .json_io import read_json_safe, write_json_safe, read_jsonl, write_jsonl
+from .lazy_imports import lazy_get, LazyImport, CachedLazyImport, make_lazy_getter
 from .logger import get_logger, log, setup_logging, teardown_logging
+from .serialization import (
+    safe_dataclass_from_dict,
+    dataclass_to_dict,
+    to_serializable,
+)
+from .type_utils import (
+    safe_float,
+    safe_int,
+    safe_str,
+    safe_attr,
+    safe_float_attr,
+    safe_int_attr,
+    safe_str_attr,
+    clamp,
+)
 
 __all__ = [
     "log",
@@ -53,4 +70,27 @@ __all__ = [
     # Atomic I/O — Utilities
     "safe_remove",
     "ensure_parent_dir",
+    # JSON I/O
+    "read_json_safe",
+    "write_json_safe",
+    "read_jsonl",
+    "write_jsonl",
+    # Lazy imports
+    "lazy_get",
+    "LazyImport",
+    "CachedLazyImport",
+    "make_lazy_getter",
+    # Serialization
+    "safe_dataclass_from_dict",
+    "dataclass_to_dict",
+    "to_serializable",
+    # Type utilities
+    "safe_float",
+    "safe_int",
+    "safe_str",
+    "safe_attr",
+    "safe_float_attr",
+    "safe_int_attr",
+    "safe_str_attr",
+    "clamp",
 ]

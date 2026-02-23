@@ -30,6 +30,7 @@ from ui.modern_theme import (
     get_app_stylesheet,
     get_connection_button_style,
     get_connection_status_style,
+    get_primary_font_family,
 )
 from utils.logger import get_logger
 from utils.recoverable import COMMON_RECOVERABLE_EXCEPTIONS
@@ -47,14 +48,15 @@ def _create_left_panel(self: Any) -> QWidget:
     """Create left control panel with interval/forecast settings"""
     panel = QWidget()
     panel.setObjectName("leftPanel")
-    panel.setMinimumWidth(250)
-    panel.setMaximumWidth(320)
+    panel.setMinimumWidth(260)
+    panel.setMaximumWidth(340)
     layout = QVBoxLayout(panel)
-    layout.setSpacing(12)
-    layout.setContentsMargins(0, 0, 0, 0)
+    layout.setSpacing(14)
+    layout.setContentsMargins(6, 10, 6, 8)
 
     watchlist_group = QGroupBox("Watchlist")
     watchlist_layout = QVBoxLayout()
+    watchlist_layout.setSpacing(10)
 
     self.watchlist = self._make_table(
         ["Code", "Price", "Change", "Signal"], max_height=250
@@ -65,6 +67,7 @@ def _create_left_panel(self: Any) -> QWidget:
     watchlist_layout.addWidget(self.watchlist)
 
     btn_layout = QHBoxLayout()
+    btn_layout.setSpacing(10)
     add_btn = QPushButton("+ Add")
     add_btn.clicked.connect(self._add_to_watchlist)
     remove_btn = QPushButton("- Remove")
@@ -78,6 +81,8 @@ def _create_left_panel(self: Any) -> QWidget:
 
     settings_group = QGroupBox("Trading Settings")
     settings_layout = QGridLayout()
+    settings_layout.setHorizontalSpacing(10)
+    settings_layout.setVerticalSpacing(9)
 
     self.mode_combo = QComboBox()
     self.mode_combo.addItems(["Paper Trading", "Live Trading"])
@@ -123,6 +128,7 @@ def _create_left_panel(self: Any) -> QWidget:
 
     connection_group = QGroupBox("Connection")
     connection_layout = QVBoxLayout()
+    connection_layout.setSpacing(10)
 
     self.connection_status = QLabel("Disconnected")
     self.connection_status.setObjectName("connectionStatus")
@@ -210,14 +216,17 @@ def _create_right_panel(self: Any) -> QWidget:
     panel = QWidget()
     panel.setObjectName("rightPanel")
     layout = QVBoxLayout(panel)
-    layout.setSpacing(12)
-    layout.setContentsMargins(0, 0, 0, 0)
+    layout.setSpacing(14)
+    layout.setContentsMargins(4, 4, 4, 4)
 
     self.right_tabs = QTabWidget()
+    self.right_tabs.setDocumentMode(True)
     tabs = self.right_tabs
 
     portfolio_tab = QWidget()
     portfolio_layout = QVBoxLayout(portfolio_tab)
+    portfolio_layout.setSpacing(10)
+    portfolio_layout.setContentsMargins(8, 8, 8, 8)
 
     self.account_labels = {}
     labels = [
@@ -251,6 +260,7 @@ def _create_right_panel(self: Any) -> QWidget:
 
     news_tab = QWidget()
     news_layout = QVBoxLayout(news_tab)
+    news_layout.setContentsMargins(8, 8, 8, 8)
     try:
         NewsPanel = _lazy_get("ui.news_widget", "NewsPanel")
         self.news_panel = NewsPanel()
@@ -263,6 +273,7 @@ def _create_right_panel(self: Any) -> QWidget:
 
     signals_tab = QWidget()
     signals_layout = QVBoxLayout(signals_tab)
+    signals_layout.setContentsMargins(8, 8, 8, 8)
     self.signals_table = self._make_table([
         "Time", "Code", "Signal", "Confidence", "Price", "Action"
     ])
@@ -271,6 +282,7 @@ def _create_right_panel(self: Any) -> QWidget:
 
     history_tab = QWidget()
     history_layout = QVBoxLayout(history_tab)
+    history_layout.setContentsMargins(8, 8, 8, 8)
     self.history_table = self._make_table([
         "Time", "Code", "Signal", "Prob UP", "Confidence", "Result"
     ])
@@ -279,6 +291,7 @@ def _create_right_panel(self: Any) -> QWidget:
 
     trained_tab = QWidget()
     trained_layout = QVBoxLayout(trained_tab)
+    trained_layout.setContentsMargins(8, 8, 8, 8)
 
     trained_top = QHBoxLayout()
     self.trained_stock_count_label = QLabel("Trained: --")
@@ -312,6 +325,8 @@ def _create_right_panel(self: Any) -> QWidget:
     # ==================== AUTO-TRADE TAB ====================
     auto_trade_tab = QWidget()
     auto_trade_layout = QVBoxLayout(auto_trade_tab)
+    auto_trade_layout.setSpacing(10)
+    auto_trade_layout.setContentsMargins(8, 8, 8, 8)
 
     # Auto-trade status frame
     self.auto_trade_labels = {}
@@ -360,6 +375,8 @@ def _create_right_panel(self: Any) -> QWidget:
     auto_btn_frame = QFrame()
     auto_btn_frame.setObjectName("actionStrip")
     auto_btn_layout = QHBoxLayout(auto_btn_frame)
+    auto_btn_layout.setContentsMargins(8, 8, 8, 8)
+    auto_btn_layout.setSpacing(10)
 
     self.auto_pause_btn = QPushButton("Pause Auto")
     self.auto_pause_btn.clicked.connect(self._toggle_auto_pause)
@@ -398,6 +415,7 @@ def _create_right_panel(self: Any) -> QWidget:
     action_frame = QFrame()
     action_frame.setObjectName("actionStrip")
     action_layout = QHBoxLayout(action_frame)
+    action_layout.setContentsMargins(10, 10, 10, 10)
     action_layout.setSpacing(16)
 
     self.buy_btn = QPushButton("BUY")
@@ -420,5 +438,5 @@ def _create_right_panel(self: Any) -> QWidget:
 
 def _apply_professional_style(self: Any) -> None:
     """Apply a modern, professional trading platform theme with enhanced UX."""
-    self.setFont(QFont(ModernFonts.FAMILY_PRIMARY, ModernFonts.SIZE_BASE))
+    self.setFont(QFont(get_primary_font_family(), ModernFonts.SIZE_BASE))
     self.setStyleSheet(get_app_stylesheet())

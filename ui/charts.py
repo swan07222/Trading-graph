@@ -372,7 +372,8 @@ class StockChart(QWidget):
             self._hide_candle_tooltip()
             return
 
-        if abs(x - float(idx)) > 0.60:
+        # FIX: Tighter hover tolerance to prevent flickering between candles
+        if abs(x - float(idx)) > 0.45:
             self._hide_candle_tooltip()
             return
 
@@ -389,13 +390,15 @@ class StockChart(QWidget):
             self._hide_candle_tooltip()
             return
 
-        y_pad = max((high - low) * 0.30, max(abs(close) * 0.002, 0.01))
+        # FIX: More generous Y padding to prevent tooltip flickering
+        y_pad = max((high - low) * 0.40, max(abs(close) * 0.003, 0.015))
         if y < (low - y_pad) or y > (high + y_pad):
             self._hide_candle_tooltip()
             return
 
         tooltip_text = self._build_candle_tooltip(meta)
-        if idx == self._last_hover_index and tooltip_text == self._last_hover_tooltip:
+        # FIX: Only update if index changed (not full text comparison)
+        if idx == self._last_hover_index:
             return
 
         self._last_hover_index = idx
@@ -971,13 +974,26 @@ class StockChart(QWidget):
             # Focus viewport on candle data with only a small portion of
             # the forecast visible, so the prediction area does not
             # compress and distort the real candles.
+            # FIX: Smoother auto-ranging with Y-axis padding to prevent jarring jumps
             if self.plot_widget is not None and not self._manual_zoom:
                 n_candles = len(closes)
                 n_pred = len(self._predicted_prices) if self._predicted_prices else 0
                 if n_candles > 0 and n_pred > 0:
-                    # Auto-range Y first, then constrain X to show
-                    # candles + 30% of forecast width.
-                    self.plot_widget.autoRange()
+                    # FIX: Calculate Y range with padding before applying
+                    closes_arr = np.array(closes, dtype=float)
+                    y_min = float(np.min(closes_arr))
+                    y_max = float(np.max(closes_arr))
+                    y_range = y_max - y_min
+                    y_padding = max(y_range * 0.08, y_max * 0.005, 0.1)
+                    
+                    # Apply Y range with padding
+                    self.plot_widget.setYRange(
+                        max(0, y_min - y_padding),
+                        y_max + y_padding,
+                        padding=0.02
+                    )
+                    
+                    # X range: show candles + 30% of forecast width
                     pred_visible = max(1, int(n_pred * 0.3))
                     visible_candles = max(120, min(n_candles, 600))
                     x_min = max(0, n_candles - visible_candles)
@@ -986,7 +1002,8 @@ class StockChart(QWidget):
                         x_min, x_max, padding=0.02
                     )
                 else:
-                    self.plot_widget.autoRange()
+                    # FIX: Use padded autoRange for candle-only mode
+                    self.plot_widget.autoRange(padding=0.05)
 
         except Exception as e:
             log.warning(f"Chart update failed: {e}")
@@ -1195,7 +1212,10 @@ class StockChart(QWidget):
             act = menu.addAction(f"Overlay: {name}")
             act.setCheckable(True)
             if key == "bb_upper":
-                checked = bool(self.overlay_enabled.get("bb_upper", True) and self.overlay_enabled.get("bb_lower", True))
+                # FIX: Bollinger Bands are shown as a pair - check both
+                bb_upper = bool(self.overlay_enabled.get("bb_upper", True))
+                bb_lower = bool(self.overlay_enabled.get("bb_lower", True))
+                checked = bb_upper and bb_lower
             else:
                 checked = bool(self.overlay_enabled.get(key, True))
             act.setChecked(checked)
@@ -1213,11 +1233,13 @@ class StockChart(QWidget):
             self._toggle_overlay(overlay_actions[chosen])
 
     def _toggle_overlay(self, key: str):
+        """Toggle overlay visibility with proper state management."""
         if key == "bb_upper":
-            new_state = not (
-                self.overlay_enabled.get("bb_upper", True)
-                and self.overlay_enabled.get("bb_lower", True)
-            )
+            # FIX: Bollinger Bands toggle - both upper and lower together
+            bb_upper = bool(self.overlay_enabled.get("bb_upper", True))
+            bb_lower = bool(self.overlay_enabled.get("bb_lower", True))
+            # Toggle OFF if both are on, otherwise toggle ON
+            new_state = not (bb_upper and bb_lower)
             self.overlay_enabled["bb_upper"] = new_state
             self.overlay_enabled["bb_lower"] = new_state
         else:
@@ -1317,7 +1339,38 @@ class StockChart(QWidget):
             return
         try:
             self._manual_zoom = False
-            self.plot_widget.autoRange()
+            
+            # FIX: Restore proper view based on current data
+            n_candles = len(self._actual_prices)
+            n_pred = len(self._predicted_prices) if self._predicted_prices else 0
+            
+            if n_candles > 0:
+                # Calculate Y range with padding
+                closes_arr = np.array(self._actual_prices, dtype=float)
+                y_min = float(np.min(closes_arr))
+                y_max = float(np.max(closes_arr))
+                y_range = y_max - y_min
+                y_padding = max(y_range * 0.08, y_max * 0.005, 0.1)
+                
+                # Apply Y range with padding
+                self.plot_widget.setYRange(
+                    max(0, y_min - y_padding),
+                    y_max + y_padding,
+                    padding=0.02
+                )
+                
+                # X range: show last 200 candles + 30% of forecast if available
+                pred_visible = max(1, int(n_pred * 0.3)) if n_pred > 0 else 0
+                visible_candles = min(200, n_candles)
+                x_min = max(0, n_candles - visible_candles)
+                x_max = n_candles + pred_visible
+                
+                self.plot_widget.setXRange(
+                    x_min, x_max, padding=0.02
+                )
+            else:
+                # No data, just autoRange
+                self.plot_widget.autoRange(padding=0.05)
         except Exception:
             pass
 

@@ -341,13 +341,13 @@ class SessionBarCache:
             db = get_database()
             intraday = db.get_intraday_bars(sym, interval="1m", limit=1)
             if isinstance(intraday, pd.DataFrame) and not intraday.empty:
-                px = self._safe_float(intraday["close"].iloc[-1], 0.0)
+                px = safe_float(intraday["close"].iloc[-1], 0.0)
                 if px > 0:
                     return float(px)
 
             daily = db.get_bars(sym, limit=1)
             if isinstance(daily, pd.DataFrame) and not daily.empty:
-                px = self._safe_float(daily["close"].iloc[-1], 0.0)
+                px = safe_float(daily["close"].iloc[-1], 0.0)
                 if px > 0:
                     return float(px)
         except Exception:
@@ -557,15 +557,15 @@ class SessionBarCache:
         if not sym or not isinstance(bar, dict):
             return False
 
-        close = self._safe_float(bar.get("close", 0), 0.0)
+        close = safe_float(bar.get("close", 0), 0.0)
         if close <= 0:
             return False
 
-        open_px = self._safe_float(bar.get("open", close), close)
-        high_px = self._safe_float(bar.get("high", close), close)
-        low_px = self._safe_float(bar.get("low", close), close)
-        volume = self._safe_float(bar.get("volume", 0), 0.0)
-        amount = self._safe_float(bar.get("amount", 0), 0.0)
+        open_px = safe_float(bar.get("open", close), close)
+        high_px = safe_float(bar.get("high", close), close)
+        low_px = safe_float(bar.get("low", close), close)
+        volume = safe_float(bar.get("volume", 0), 0.0)
+        amount = safe_float(bar.get("amount", 0), 0.0)
         high_px = max(high_px, open_px, close)
         low_px = min(low_px, open_px, close)
 

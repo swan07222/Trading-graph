@@ -131,11 +131,9 @@ class FeatureEngine:
             # FIX: Handle negative/zero ratios correctly for log returns
             # When price decreases, ratio < 1, log should be negative
             # When ratio <= 0 (shouldn't happen with valid prices), use NaN
-            out["log_returns"] = np.where(
-                ratio > 0,
-                np.log(ratio) * 100,
-                np.nan
-            )
+            # Also handle case where shift(1) produces NaN on first row
+            ratio_clean = ratio.where(ratio > 0, np.nan)
+            out["log_returns"] = np.log(ratio_clean) * 100
 
         # === Volatility (require full window to avoid garbage) ===
         out["volatility_5"] = out["returns"].rolling(5, min_periods=5).std()

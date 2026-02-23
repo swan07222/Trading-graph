@@ -1311,42 +1311,45 @@ class Predictor:
     def _apply_regime_adjustments(self, pred: Prediction, df: pd.DataFrame) -> None:
         """
         Apply regime-aware adjustments to prediction.
-        
+
         Adjusts confidence and thresholds based on detected market regime:
         - Trending markets: Higher confidence, lower thresholds
-        - Ranging markets: Lower confidence, higher thresholds  
+        - Ranging markets: Lower confidence, higher thresholds
         - High volatility: Wider stops/targets, confidence adjustment
         """
         try:
             from models.regime import MarketRegimeDetector
-            
+
             detector = MarketRegimeDetector()
             regime_result = detector.detect(df)
-            
+
             # Store regime info
             pred.regime = regime_result.regime.value
-            
+
             # Adjust confidence based on regime historical accuracy
-            regime_acc = regime_result.historical_accuracy
+            regime_acc = float(getattr(regime_result, "historical_accuracy", 0.5) or 0.5)
             if regime_acc > 0.65:
                 # High accuracy regime: boost confidence
                 pred.confidence = min(0.95, pred.confidence * 1.08)
             elif regime_acc < 0.55:
                 # Low accuracy regime: reduce confidence
                 pred.confidence = max(0.4, pred.confidence * 0.92)
-            
+
             # Adjust for volatility
-            if regime_result.volatility_level == "HIGH":
+            vol_level = str(getattr(regime_result, "volatility_level", "") or "")
+            if vol_level == "HIGH":
                 # High volatility: be more conservative
                 pred.confidence = max(0.4, pred.confidence * 0.95)
                 pred.warnings.append("High volatility regime: increased uncertainty")
-            elif regime_result.volatility_level == "LOW":
+            elif vol_level == "LOW":
                 # Low volatility: can be more confident
                 pred.confidence = min(0.95, pred.confidence * 1.03)
-            
+
             # Store regime-based recommended threshold
-            pred.model_margin = regime_result.recommended_threshold
-            
+            pred.model_margin = float(
+                getattr(regime_result, "recommended_threshold", 0.0) or 0.0
+            )
+
         except Exception as e:
             log.debug(f"Regime adjustment failed: {e}")
 

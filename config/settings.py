@@ -116,7 +116,7 @@ class ModelConfig:
     up_threshold: float = 2.0
     down_threshold: float = -2.0
     embargo_bars: int = 10
-    min_confidence: float = 0.60
+    min_confidence: float = 0.70  # Increased to 70% for higher accuracy predictions
     # Require checksum sidecars for model/scaler artifacts at load time.
     require_artifact_checksum: bool = True
     # Unsafe legacy checkpoint/pickle fallback is opt-in only.

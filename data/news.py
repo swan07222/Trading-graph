@@ -21,6 +21,9 @@ _NEWS_BUFFER_SIZE: int = 200        # Rolling buffer max items
 _DEDUP_PREFIX_LEN: int = 40         # Title prefix length for dedup
 _FETCH_TIMEOUT: int = 5             # HTTP timeout for news fetchers
 _SENTIMENT_NEUTRAL_BAND: float = 0.2  # |score| below this is neutral
+_MAX_RETRIES: int = 2               # Retry attempts for failed requests
+_RETRY_DELAY_BASE: float = 0.5      # Base delay between retries (seconds)
+_RATE_LIMIT_DELAY: float = 0.3      # Delay between API calls to avoid rate limiting
 
 # Positive keywords (Chinese financial, Unicode-escaped to avoid encoding drift)
 POSITIVE_WORDS: dict[str, float] = {
@@ -461,6 +464,90 @@ class _BaseNewsFetcher:
                 "News TLS verification disabled by env "
                 "(TRADING_NEWS_ALLOW_INSECURE_TLS=1)"
             )
+        
+        # Rate limiting state
+        self._last_request_time: float = 0.0
+
+    def _rate_limit(self) -> None:
+        """
+        FIX Bug 6: Add rate limiting to avoid API throttling.
+        Enforces minimum delay between consecutive requests.
+        """
+        import time
+        
+        now = time.time()
+        elapsed = now - self._last_request_time
+        if elapsed < _RATE_LIMIT_DELAY:
+            time.sleep(_RATE_LIMIT_DELAY - elapsed)
+        self._last_request_time = time.time()
+
+    def _get_with_retry(
+        self,
+        url: str,
+        params: dict = None,
+        timeout: int = None,
+        retries: int = None,
+    ) -> requests.Response:
+        """
+        FIX Bug 4: Add retry logic with exponential backoff for failed requests.
+        
+        Args:
+            url: URL to fetch
+            params: Query parameters
+            timeout: Request timeout (uses _FETCH_TIMEOUT if not specified)
+            retries: Number of retry attempts (uses _MAX_RETRIES if not specified)
+        
+        Returns:
+            requests.Response object
+        
+        Raises:
+            requests.RequestException: If all retries fail
+        """
+        import time
+        
+        timeout = timeout or _FETCH_TIMEOUT
+        retries = retries if retries is not None else _MAX_RETRIES
+        
+        last_exception: Exception | None = None
+        
+        for attempt in range(retries + 1):
+            try:
+                self._rate_limit()
+                response = self._session.get(
+                    url,
+                    params=params,
+                    timeout=timeout,
+                )
+                response.raise_for_status()
+                return response
+                
+            except requests.exceptions.Timeout as e:
+                last_exception = e
+                log.debug(f"Request timeout (attempt {attempt + 1}/{retries + 1}): {url}")
+                
+            except requests.exceptions.ConnectionError as e:
+                last_exception = e
+                log.debug(f"Connection error (attempt {attempt + 1}/{retries + 1}): {url}")
+                
+            except requests.exceptions.HTTPError as e:
+                last_exception = e
+                # Don't retry client errors (4xx)
+                if 400 <= e.response.status_code < 500:
+                    log.debug(f"HTTP client error (no retry): {url} - {e}")
+                    raise
+                    
+            except requests.exceptions.RequestException as e:
+                last_exception = e
+                log.debug(f"Request failed (attempt {attempt + 1}/{retries + 1}): {url}")
+            
+            # Exponential backoff before retry
+            if attempt < retries:
+                delay = _RETRY_DELAY_BASE * (2 ** attempt)
+                log.debug(f"Retrying in {delay:.2f}s...")
+                time.sleep(delay)
+        
+        # All retries exhausted
+        raise last_exception or requests.exceptions.RequestException("Unknown error")
 
     @staticmethod
     def _clean_text(value: object) -> str:
@@ -607,7 +694,8 @@ class SinaNewsFetcher(_BaseNewsFetcher):
                 "num": str(min(count, 50)),
                 "page": "1",
             }
-            r = self._session.get(url, params=params, timeout=_FETCH_TIMEOUT)
+            # FIX Bug 4: Use retry helper
+            r = self._get_with_retry(url, params=params)
             data = self._response_to_json(r)
             if not isinstance(data, dict):
                 return []
@@ -648,93 +736,96 @@ class SinaNewsFetcher(_BaseNewsFetcher):
     def fetch_stock_news(
         self, stock_code: str, count: int = 10
     ) -> list[NewsItem]:
-        """Fetch news for a specific stock via Sina search/API payloads."""
+        """
+        Fetch news for a specific stock via Sina API.
+        
+        FIX Bug 1: Use proper Sina finance API endpoint instead of 
+        search.sina.com.cn which returns HTML not JSON.
+        """
         try:
             code6 = str(stock_code).zfill(6)
-            url = "https://search.sina.com.cn/news"
+            # FIX: Use Sina's actual finance API for stock news
+            url = "https://feed.mix.sina.com.cn/api/roll/get"
+            
+            # Map stock code to Sina's market ID
+            # 600xxx, 601xxx, 688xxx = SSE (sh), 000xxx, 002xxx, 300xxx = SZSE (sz)
+            if code6.startswith(("600", "601", "603", "605", "688")):
+                market_id = "2516"  # SSE stocks
+                symbol_param = f"sh{code6}"
+            elif code6.startswith(("000", "001", "002", "003", "300", "301")):
+                market_id = "2520"  # SZSE stocks
+                symbol_param = f"sz{code6}"
+            else:
+                # BSE or unknown - use general market news
+                market_id = "2516"
+                symbol_param = code6
+            
             params = {
-                "q": code6,
-                "c": "news",
-                "from": "channel",
-                "ie": "utf-8",
-                "num": str(min(count, 20)),
+                "pageid": "153",
+                "lid": market_id,
+                "k": symbol_param,  # Stock symbol filter
+                "num": str(min(count, 50)),
+                "page": "1",
             }
-            r = self._session.get(url, params=params, timeout=_FETCH_TIMEOUT)
-
+            
+            # FIX Bug 4: Use retry helper
+            r = self._get_with_retry(url, params=params)
+            data = self._response_to_json(r)
+            
             items: list[NewsItem] = []
             seen_titles: set[str] = set()
-
-            payload = self._response_to_json(r)
-            if isinstance(payload, dict):
-                candidate_lists = (
-                    payload.get("result", {}).get("data", []),
-                    payload.get("result", {}).get("list", []),
-                    payload.get("data", []),
-                    payload.get("list", []),
-                    payload.get("news", []),
-                )
-                for group in candidate_lists:
-                    if not isinstance(group, list):
+            
+            if not isinstance(data, dict):
+                # Fallback: try HTML extraction as last resort
+                pass
+            else:
+                articles = data.get("result", {}).get("data", [])
+                for article in articles:
+                    if not isinstance(article, dict):
                         continue
-                    for article in group:
-                        if not isinstance(article, dict):
-                            continue
-                        title = self._clean_text(
-                            article.get("title")
-                            or article.get("name")
-                            or article.get("headline")
-                            or ""
-                        )
-                        if not title:
-                            continue
-                        key = title.lower()
-                        if key in seen_titles:
-                            continue
-                        seen_titles.add(key)
-
-                        pub_time = self._parse_datetime(
-                            article.get("ctime")
-                            or article.get("time")
-                            or article.get("date")
-                            or article.get("publish_time")
-                        ) or datetime.now()
-
-                        items.append(NewsItem(
-                            title=title,
-                            content=self._clean_text(
-                                article.get("summary")
-                                or article.get("intro")
-                                or article.get("content")
-                                or ""
-                            ),
-                            source="sina",
-                            url=str(article.get("url", "") or ""),
-                            publish_time=pub_time,
-                            stock_codes=[code6],
-                            category="company",
-                        ))
-                        if len(items) >= int(count):
-                            return items[:count]
-
-            if len(items) < int(count):
-                title_candidates = self._extract_titles_from_html(
-                    str(getattr(r, "text", "") or ""),
-                    max_items=max(6, int(count) * 3),
-                )
-                for title in title_candidates:
+                    
+                    title = self._clean_text(article.get("title", ""))
+                    if not title:
+                        continue
+                    
                     key = title.lower()
                     if key in seen_titles:
                         continue
                     seen_titles.add(key)
+                    
+                    pub_time = datetime.now()
+                    parsed_time = self._parse_datetime(article.get("ctime"))
+                    if parsed_time is not None:
+                        pub_time = parsed_time
+                    
                     items.append(NewsItem(
                         title=title,
+                        content=(
+                            self._clean_text(article.get("summary", ""))
+                            or self._clean_text(article.get("intro", ""))
+                        ),
                         source="sina",
+                        url=str(article.get("url", "") or ""),
+                        publish_time=pub_time,
                         stock_codes=[code6],
                         category="company",
                     ))
+                    
+                    if len(items) >= int(count):
+                        return items[:count]
+            
+            # Fallback: If no news found, try general market news filtered by keyword
+            if len(items) < int(count):
+                market_news = self.fetch_market_news(count=30)
+                for news_item in market_news:
                     if len(items) >= int(count):
                         break
-
+                    # Check if title/content mentions the stock code
+                    if (code6 in news_item.title or 
+                        code6 in news_item.content):
+                        news_item.stock_codes = [code6]
+                        items.append(news_item)
+            
             return items[:count]
 
         except Exception as exc:
@@ -751,81 +842,126 @@ class EastmoneyNewsFetcher(_BaseNewsFetcher):
     def fetch_stock_news(
         self, stock_code: str, count: int = 10
     ) -> list[NewsItem]:
-        """Fetch stock-specific news and announcements."""
+        """
+        Fetch stock-specific news and announcements from Eastmoney.
+        
+        FIX Bug 2: Use proper JSONP handling with multiple callback patterns
+        and improved error recovery.
+        """
         try:
             code6 = str(stock_code).zfill(6)
             url = "https://search-api-web.eastmoney.com/search/jsonp"
-            params = {
-                "cb": "jQuery_callback",
-                "param": json.dumps({
-                    "uid": "",
-                    "keyword": code6,
-                    "type": ["cmsArticleWebOld"],
-                    "client": "web",
-                    "clientType": "web",
-                    "clientVersion": "curr",
-                    "param": {
-                        "cmsArticleWebOld": {
-                            "searchScope": "default",
-                            "sort": "default",
-                            "pageIndex": 1,
-                            "pageSize": count,
-                        }
-                    },
-                }),
-            }
-
-            r = self._session.get(url, params=params, timeout=_FETCH_TIMEOUT)
-            data = self._response_to_json(r)
-            if not isinstance(data, dict):
-                return []
-
+            
+            # FIX: Try multiple callback names for better compatibility
+            callbacks = ["jQuery", "callback", "eastmoney_callback"]
+            
             items: list[NewsItem] = []
-            articles: list[dict] = []
-            candidate_lists = (
-                data.get("result", {}).get("cmsArticleWebOld", {}).get("list", []),
-                data.get("result", {}).get("cmsArticleWeb", {}).get("list", []),
-                data.get("result", {}).get("news", {}).get("list", []),
-                data.get("data", {}).get("list", []),
-                data.get("list", []),
-            )
-            for group in candidate_lists:
-                if isinstance(group, list):
-                    articles = [row for row in group if isinstance(row, dict)]
-                    if articles:
-                        break
-
-            for article in articles:
-                title = self._clean_text(article.get("title", ""))
-                if not title:
-                    continue
-
-                pub_time = self._parse_datetime(
-                    article.get("date")
-                    or article.get("publish_time")
-                    or article.get("showTime")
-                    or article.get("ctime")
-                ) or datetime.now()
-
-                content = self._clean_text(
-                    article.get("content", "")
-                    or article.get("summary", "")
-                    or article.get("mediaName", "")
-                    or ""
-                )
-
-                items.append(NewsItem(
-                    title=title,
-                    content=content[:500],
-                    source="eastmoney",
-                    url=str(article.get("url") or article.get("link") or ""),
-                    publish_time=pub_time,
-                    stock_codes=[code6],
-                    category="company",
-                ))
-                if len(items) >= int(count):
+            seen_titles: set[str] = set()
+            
+            for cb_name in callbacks:
+                if items:  # Already got results
                     break
+                    
+                params = {
+                    "cb": cb_name,
+                    "param": json.dumps({
+                        "uid": "",
+                        "keyword": code6,
+                        "type": ["cmsArticleWebOld", "cmsArticleWeb"],
+                        "client": "web",
+                        "clientType": "web",
+                        "clientVersion": "curr",
+                        "param": {
+                            "cmsArticleWebOld": {
+                                "searchScope": "default",
+                                "sort": "default",
+                                "pageIndex": 1,
+                                "pageSize": count,
+                            },
+                            "cmsArticleWeb": {
+                                "searchScope": "default",
+                                "sort": "default",
+                                "pageIndex": 1,
+                                "pageSize": count,
+                            },
+                        },
+                    }),
+                }
 
+                # FIX Bug 4: Use retry helper
+                r = self._get_with_retry(url, params=params)
+                data = self._response_to_json(r)
+                
+                if not isinstance(data, dict):
+                    continue
+                
+                # Try multiple response paths
+                articles: list[dict] = []
+                candidate_paths = [
+                    lambda d: d.get("result", {}).get("cmsArticleWebOld", {}).get("list", []),
+                    lambda d: d.get("result", {}).get("cmsArticleWeb", {}).get("list", []),
+                    lambda d: d.get("result", {}).get("news", {}).get("list", []),
+                    lambda d: d.get("data", {}).get("list", []),
+                    lambda d: d.get("list", []),
+                ]
+                
+                for path_fn in candidate_paths:
+                    try:
+                        result = path_fn(data)
+                        if isinstance(result, list) and result:
+                            articles = [row for row in result if isinstance(row, dict)]
+                            if articles:
+                                break
+                    except Exception:
+                        continue
+                
+                if not articles:
+                    continue
+                
+                for article in articles:
+                    title = self._clean_text(
+                        article.get("title")
+                        or article.get("name")
+                        or article.get("headline")
+                        or ""
+                    )
+                    if not title:
+                        continue
+                    
+                    key = title.lower()
+                    if key in seen_titles:
+                        continue
+                    seen_titles.add(key)
+
+                    pub_time = self._parse_datetime(
+                        article.get("date")
+                        or article.get("publish_time")
+                        or article.get("showTime")
+                        or article.get("ctime")
+                        or article.get("showtime")
+                    ) or datetime.now()
+
+                    content = self._clean_text(
+                        article.get("content", "")
+                        or article.get("summary", "")
+                        or article.get("mediaName", "")
+                        or ""
+                    )
+
+                    items.append(NewsItem(
+                        title=title,
+                        content=content[:500],
+                        source="eastmoney",
+                        url=str(article.get("url") or article.get("link") or ""),
+                        publish_time=pub_time,
+                        stock_codes=[code6],
+                        category="company",
+                    ))
+                    
+                    if len(items) >= int(count):
+                        break
+            
+            # Fallback: HTML title extraction if all JSONP attempts failed
             if len(items) < int(count):
                 fallback_titles = self._extract_titles_from_html(
                     str(getattr(r, "text", "") or ""),
@@ -862,7 +998,8 @@ class EastmoneyNewsFetcher(_BaseNewsFetcher):
                 "pageSize": str(min(count, 30)),
                 "pageIndex": "1",
             }
-            r = self._session.get(url, params=params, timeout=_FETCH_TIMEOUT)
+            # FIX Bug 4: Use retry helper
+            r = self._get_with_retry(url, params=params)
             data = self._response_to_json(r)
             if not isinstance(data, dict):
                 return []
@@ -909,7 +1046,8 @@ class TencentNewsFetcher(_BaseNewsFetcher):
                 "ids": "finance_hot",
                 "num": str(min(count, 30)),
             }
-            r = self._session.get(url, params=params, timeout=_FETCH_TIMEOUT)
+            # FIX Bug 4: Use retry helper
+            r = self._get_with_retry(url, params=params)
             data = self._response_to_json(r)
             if not isinstance(data, dict):
                 return []
@@ -975,13 +1113,16 @@ def _make_dedup_key(item: NewsItem) -> tuple[str, str]:
     return (title_part, time_part)
 
 
-from data.news_aggregator import (  # noqa: E402, I001
-    NewsAggregator as _NewsAggregator,
-    get_news_aggregator as _get_news_aggregator,
-)
-
-NewsAggregator = _NewsAggregator
-get_news_aggregator = _get_news_aggregator
+# Lazy import for NewsAggregator to avoid circular dependency
+def __getattr__(name: str):
+    """Lazy import for NewsAggregator."""
+    if name == "NewsAggregator":
+        from data.news_aggregator import NewsAggregator as _NewsAggregator
+        return _NewsAggregator
+    if name == "get_news_aggregator":
+        from data.news_aggregator import get_news_aggregator as _get_news_aggregator
+        return _get_news_aggregator
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 

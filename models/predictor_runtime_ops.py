@@ -581,11 +581,14 @@ def _generate_forecast(
             )
             recent_mu_pct = 0.0
             if prices_arr.size >= 6:
-                rets = np.diff(np.log(prices_arr[-min(90, prices_arr.size):]))
-                if rets.size > 0:
-                    recent_mu_pct = float(
-                        np.clip(np.mean(rets) * 100.0, -0.25, 0.25)
-                    )
+                try:
+                    rets = np.diff(np.log(prices_arr[-min(90, prices_arr.size):]))
+                    if rets.size > 0:
+                        recent_mu_pct = float(
+                            np.clip(np.mean(rets) * 100.0, -0.25, 0.25)
+                        )
+                except (ValueError, FloatingPointError):
+                    recent_mu_pct = 0.0
 
             step_cap_pct = float(
                 np.clip(max(float(atr_pct), 0.0035) * 140.0, 0.18, 3.0)
@@ -694,7 +697,7 @@ def _generate_forecast(
 
             forecast_prices = prices[1:]
             if neutral_mode:
-                neutral_cap = max(float(atr_pct) * 1.2, 0.008)
+                neutral_cap = max(float(atr_pct) * 1.8, 0.015)
                 lo = current_price * (1.0 - neutral_cap)
                 hi = current_price * (1.0 + neutral_cap)
                 forecast_prices = [float(np.clip(p, lo, hi)) for p in forecast_prices]
@@ -725,7 +728,7 @@ def _generate_forecast(
             if probs.size < 3:
                 probs = np.pad(probs, (0, 3 - probs.size), constant_values=0.0)
             prob_sum = float(np.sum(probs[:3]))
-            if prob_sum <= 0:
+            if prob_sum <= 0 or not np.isfinite(prob_sum):
                 probs = np.array([0.33, 0.34, 0.33], dtype=float)
             else:
                 probs = probs[:3] / prob_sum
@@ -821,7 +824,7 @@ def _generate_forecast(
                 price = max(price, current_price * 0.5)
                 price = min(price, current_price * 2.0)
                 if neutral_mode:
-                    neutral_cap = max(volatility, 0.008)
+                    neutral_cap = max(volatility * 1.5, 0.012)
                     price = float(
                         np.clip(
                             price,
@@ -844,15 +847,23 @@ def _generate_forecast(
         dtype=float,
     )
     if prices_arr.size >= 4:
-        rets = np.diff(np.log(prices_arr[-min(120, prices_arr.size):]))
-        ret_mu = float(np.clip(np.mean(rets), -0.01, 0.01))
-        ret_sigma = float(
-            np.clip(
-                np.std(rets),
-                max(float(atr_pct) * 0.02, 0.0003),
-                max(float(atr_pct) * 0.18, 0.0060),
-            )
-        )
+        try:
+            rets = np.diff(np.log(prices_arr[-min(120, prices_arr.size):]))
+            if rets.size > 0 and np.all(np.isfinite(rets)):
+                ret_mu = float(np.clip(np.mean(rets), -0.01, 0.01))
+                ret_sigma = float(
+                    np.clip(
+                        np.std(rets),
+                        max(float(atr_pct) * 0.02, 0.0003),
+                        max(float(atr_pct) * 0.18, 0.0060),
+                    )
+                )
+            else:
+                ret_mu = 0.0
+                ret_sigma = float(max(float(atr_pct) * 0.05, 0.0006))
+        except (ValueError, FloatingPointError):
+            ret_mu = 0.0
+            ret_sigma = float(max(float(atr_pct) * 0.05, 0.0006))
     else:
         ret_mu = 0.0
         ret_sigma = float(max(float(atr_pct) * 0.05, 0.0006))

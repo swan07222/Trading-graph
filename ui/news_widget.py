@@ -18,10 +18,17 @@ from PyQt6.QtWidgets import (
 from ui.modern_theme import (
     ModernColors,
     ModernFonts,
+    get_monospace_font_family,
     get_progress_bar_style,
 )
 from utils.logger import get_logger
-from utils.type_utils import safe_float, safe_int, safe_str, safe_float_attr, safe_str_attr
+from utils.type_utils import (
+    safe_float,
+    safe_float_attr,
+    safe_int,
+    safe_str,
+    safe_str_attr,
+)
 
 log = get_logger(__name__)
 
@@ -450,7 +457,7 @@ class NewsPanel(QWidget):
             sent_item = QTableWidgetItem(sent_text)
             sent_item.setForeground(QColor(sent_color))
             sent_item.setFont(
-                QFont(ModernFonts.FAMILY_MONOSPACE, ModernFonts.SIZE_XS)
+                QFont(get_monospace_font_family(), ModernFonts.SIZE_XS)
             )
             self.table.setItem(row, 1, sent_item)
 

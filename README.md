@@ -8,6 +8,41 @@ Desktop AI trading system for China A-shares with:
 - auto-trade execution and risk controls
 - PyQt real-time charting and operations UI
 
+## Key Features
+
+### 1. Stock Search & Discovery
+- **Search all stocks**: Discovers all China A-share stocks (SSE, SZSE, BSE)
+- Multiple discovery sources: AkShare, Tencent, CSI index constituents
+- Smart scoring based on market cap, volume, and index membership
+- Supports 600/601/603/605, 688, 000/001/002/003, 300/301, 83/87/43 prefixes
+
+### 2. Model Training
+- **Train on all stocks**: `python main.py --train --epochs 100`
+- **Train on specific stock**: `python main.py --train-stock 600519 --epochs 100`
+- Auto-learning with continuous improvement
+- Ensemble models (LSTM, GRU, TCN, Transformer, Hybrid)
+
+### 3. China Network Support
+- **Fully optimized for mainland China network conditions**
+- ✅ 5+ Chinese financial data providers with auto-failover
+- ✅ Proxy support (HTTP/SOCKS5) for VPN users
+- ✅ China-optimized DNS resolution (114DNS, AliDNS, DNSPod)
+- ✅ Extended timeouts for Great Firewall conditions
+- ✅ Network diagnostics: `python -m utils.china_diagnostics`
+
+### 4. Prediction Accuracy
+- **70%+ confidence threshold** (configurable via `min_confidence`)
+- Confidence calibration based on historical accuracy
+- Regime-aware predictions with adaptive thresholds
+- High-precision mode available: `TRADING_HIGH_PRECISION_MODE=1`
+
+### 5. Real-Time Charting
+- **Live candlestick updates** with real-time price feeds
+- **AI prediction overlay** (dashed cyan line)
+- **Uncertainty bands** (dotted yellow lines)
+- Technical indicators (SMA, EMA, Bollinger Bands, VWAP)
+- Interactive hover tooltips with OHLCV data
+
 ## Scope
 
 This project is desktop-first and single-node. It is suitable for personal and small-team workflows, not full institutional deployment.

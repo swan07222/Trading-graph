@@ -3,6 +3,7 @@ import os
 import signal
 import sys
 import threading
+import time
 from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import datetime
 from importlib import import_module
@@ -45,6 +46,8 @@ from core.types import (
 from ui.modern_theme import (
     ModernColors,
     ModernFonts,
+    get_monospace_font_family,
+    get_primary_font_family,
     get_status_badge_style,
 )
 from ui import app_analysis_ops as _app_analysis_ops
@@ -503,11 +506,12 @@ class MainApp(MainAppCommonMixin, QMainWindow):
         self.setCentralWidget(central)
 
         layout = QHBoxLayout(central)
-        layout.setSpacing(12)
-        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(14)
+        layout.setContentsMargins(14, 14, 14, 14)
 
         main_splitter = QSplitter(Qt.Orientation.Horizontal)
         main_splitter.setChildrenCollapsible(False)
+        main_splitter.setHandleWidth(8)
 
         # Left Panel - Control & Watchlist
         left_panel = self._create_left_panel()
@@ -518,8 +522,8 @@ class MainApp(MainAppCommonMixin, QMainWindow):
             Qt.ScrollBarPolicy.ScrollBarAlwaysOff
         )
         left_scroll.setWidget(left_panel)
-        left_scroll.setMinimumWidth(240)
-        left_scroll.setMaximumWidth(340)
+        left_scroll.setMinimumWidth(250)
+        left_scroll.setMaximumWidth(360)
 
         # Center Panel - Charts & Signals
         center_panel = self._create_center_panel()
@@ -533,7 +537,7 @@ class MainApp(MainAppCommonMixin, QMainWindow):
         main_splitter.setStretchFactor(0, 0)
         main_splitter.setStretchFactor(1, 1)
         main_splitter.setStretchFactor(2, 0)
-        main_splitter.setSizes([280, 760, 360])
+        main_splitter.setSizes([300, 780, 390])
 
         layout.addWidget(main_splitter)
 
@@ -614,8 +618,8 @@ class MainApp(MainAppCommonMixin, QMainWindow):
         except ImportError:
             self.signal_panel = QLabel("Signal Panel")
             self.signal_panel.setMinimumHeight(72)
-        self.signal_panel.setMinimumHeight(120)
-        self.signal_panel.setMaximumHeight(170)
+        self.signal_panel.setMinimumHeight(230)
+        self.signal_panel.setMaximumHeight(300)
         self.signal_panel.setSizePolicy(
             QSizePolicy.Policy.Preferred,
             QSizePolicy.Policy.Fixed,
@@ -689,7 +693,7 @@ class MainApp(MainAppCommonMixin, QMainWindow):
         self.details_text = QTextEdit()
         self.details_text.setReadOnly(True)
         self.details_text.setFont(
-            QFont(ModernFonts.FAMILY_MONOSPACE, ModernFonts.SIZE_SM)
+            QFont(get_monospace_font_family(), ModernFonts.SIZE_SM)
         )
         self.details_text.setMaximumHeight(120)
         details_layout.addWidget(self.details_text)
@@ -901,9 +905,18 @@ class MainApp(MainAppCommonMixin, QMainWindow):
 
         FIX: Called periodically to bound cache sizes.
         """
-        # Prune _last_bar_feed_ts - keep only recent entries
+        # Prune _last_bar_feed_ts - keep only recent entries (last 10 minutes)
+        now = time.time()
+        max_age_seconds = 600  # 10 minutes
+        stale_feed_ts = [
+            key for key, ts in self._last_bar_feed_ts.items()
+            if (now - ts) > max_age_seconds
+        ]
+        for key in stale_feed_ts:
+            self._last_bar_feed_ts.pop(key, None)
+        
+        # Also prune by count if still too large
         if len(self._last_bar_feed_ts) > self._MAX_CACHED_QUOTES:
-            # Remove oldest 25%
             sorted_items = sorted(
                 self._last_bar_feed_ts.items(),
                 key=lambda x: x[1]
@@ -912,13 +925,36 @@ class MainApp(MainAppCommonMixin, QMainWindow):
             for key, _ in sorted_items[:cutoff]:
                 self._last_bar_feed_ts.pop(key, None)
 
-        # Prune _bars_by_symbol - keep only most recent
-        if len(self._bars_by_symbol) > self._MAX_CACHED_BARS:
-            # Remove oldest entries (by last access time if available)
-            # For simplicity, remove first 25%
-            keys_to_remove = list(self._bars_by_symbol.keys())[:len(self._bars_by_symbol) // 4]
-            for key in keys_to_remove:
+        # Prune _bars_by_symbol - keep only watchlist and active chart symbol
+        active_syms = set(self._watchlist_row_by_code.keys())
+        selected = self._ui_norm(self.stock_input.text())
+        if selected:
+            active_syms.add(selected)
+        
+        # Keep max 10 inactive symbols as buffer
+        inactive_syms = [
+            k for k in self._bars_by_symbol.keys()
+            if k not in active_syms
+        ]
+        if len(inactive_syms) > 10:
+            for key in inactive_syms[10:]:
                 self._bars_by_symbol.pop(key, None)
+        
+        # Prune stale quote UI emit tracking
+        stale_quotes = [
+            k for k in self._last_quote_ui_emit.keys()
+            if k not in active_syms
+        ]
+        for k in stale_quotes:
+            self._last_quote_ui_emit.pop(k, None)
+        
+        # Prune stale watchlist price UI tracking
+        stale_watchlist = [
+            k for k in self._last_watchlist_price_ui.keys()
+            if k not in active_syms
+        ]
+        for k in stale_watchlist:
+            self._last_watchlist_price_ui.pop(k, None)
 
     def _init_auto_trader(self) -> None:
         _init_auto_trader_impl(self)
@@ -1409,7 +1445,7 @@ def run_app() -> None:
     app.setOrganizationName("AI Trading")
 
     # Set modern font
-    font = QFont(ModernFonts.FAMILY_PRIMARY, ModernFonts.SIZE_BASE)
+    font = QFont(get_primary_font_family(), ModernFonts.SIZE_BASE)
     app.setFont(font)
     
     # Apply modern theme

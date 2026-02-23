@@ -20,10 +20,20 @@ from ui.modern_theme import (
     ModernColors,
     ModernFonts,
     ModernSpacing,
+    get_display_font_family,
+    get_monospace_font_family,
+    get_primary_font_family,
     get_progress_bar_style,
 )
 from utils.logger import get_logger
-from utils.type_utils import safe_float, safe_int, safe_str, safe_float_attr, safe_int_attr, safe_str_attr
+from utils.type_utils import (
+    safe_float,
+    safe_float_attr,
+    safe_int,
+    safe_int_attr,
+    safe_str,
+    safe_str_attr,
+)
 
 log = get_logger(__name__)
 
@@ -61,7 +71,7 @@ class SignalPanel(QFrame):
         self.signal_label.setObjectName("signalLabel")
         self.signal_label.setFont(
             QFont(
-                ModernFonts.FAMILY_DISPLAY,
+                get_display_font_family(),
                 ModernFonts.SIZE_HERO,
                 QFont.Weight.Bold,
             )
@@ -71,7 +81,7 @@ class SignalPanel(QFrame):
 
         self.info_label = QLabel("Enter a stock code to analyze")
         self.info_label.setFont(
-            QFont(ModernFonts.FAMILY_PRIMARY, ModernFonts.SIZE_BASE)
+            QFont(get_primary_font_family(), ModernFonts.SIZE_BASE)
         )
         self.info_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.info_label.setStyleSheet(
@@ -147,7 +157,7 @@ class SignalPanel(QFrame):
 
         self.action_label = QLabel("")
         self.action_label.setFont(
-            QFont(ModernFonts.FAMILY_PRIMARY, ModernFonts.SIZE_BASE)
+            QFont(get_primary_font_family(), ModernFonts.SIZE_BASE)
         )
         self.action_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.action_label.setWordWrap(True)
@@ -158,7 +168,7 @@ class SignalPanel(QFrame):
 
         self.conf_label = QLabel("")
         self.conf_label.setFont(
-            QFont(ModernFonts.FAMILY_PRIMARY, ModernFonts.SIZE_SM)
+            QFont(get_primary_font_family(), ModernFonts.SIZE_SM)
         )
         self.conf_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.conf_label.setStyleSheet(
@@ -202,9 +212,29 @@ class SignalPanel(QFrame):
         self.signal_label.setText(sig_text)
         self.info_label.setText(f"{code} - {name} | CNY {price:.2f}")
 
+        # FIX: Ensure probabilities sum to 100% by normalizing
         prob_down = safe_float_attr(pred, "prob_down", 0.33)
         prob_neutral = safe_float_attr(pred, "prob_neutral", 0.34)
         prob_up = safe_float_attr(pred, "prob_up", 0.33)
+        
+        # Normalize to ensure they sum to 1.0 (100%)
+        total = prob_down + prob_neutral + prob_up
+        if total > 0 and abs(total - 1.0) > 1e-6:
+            prob_down /= total
+            prob_neutral /= total
+            prob_up /= total
+        
+        # Ensure all probabilities are in valid range [0, 1]
+        prob_down = max(0.0, min(1.0, prob_down))
+        prob_neutral = max(0.0, min(1.0, prob_neutral))
+        prob_up = max(0.0, min(1.0, prob_up))
+        
+        # Final normalization after clamping
+        total = prob_down + prob_neutral + prob_up
+        if total > 0:
+            prob_down /= total
+            prob_neutral /= total
+            prob_up /= total
 
         self.prob_down.setValue(int(prob_down * 100))
         self.prob_neutral.setValue(int(prob_neutral * 100))
@@ -402,7 +432,8 @@ class LogWidget(QTextEdit):
     def __init__(self):
         super().__init__()
         self.setReadOnly(True)
-        self.setFont(QFont(ModernFonts.FAMILY_MONOSPACE, ModernFonts.SIZE_SM))
+        mono_font = get_monospace_font_family()
+        self.setFont(QFont(mono_font, ModernFonts.SIZE_SM))
         self.setMaximumHeight(200)
         self.setStyleSheet(
             f"""
@@ -414,7 +445,7 @@ class LogWidget(QTextEdit):
                 padding: 8px;
                 selection-background-color: #2c6b9d;
                 selection-color: {ModernColors.TEXT_STRONG};
-                font-family: '{ModernFonts.FAMILY_MONOSPACE}', monospace;
+                font-family: '{mono_font}', monospace;
             }}
             """
         )
@@ -458,6 +489,7 @@ class LogWidget(QTextEdit):
         """
         Remove oldest lines to keep log bounded.
         Uses document-level block removal instead of fragile cursor manipulation.
+        FIX: Improved trim logic to prevent text corruption.
         """
         try:
             doc = self.document()
@@ -470,27 +502,48 @@ class LogWidget(QTextEdit):
 
             remove_count = min(self._TRIM_BATCH, block_count - self.MAX_LINES)
 
+            # FIX: Use simpler and more reliable trim approach
+            # Get all text, split into lines, remove old ones, restore
             cursor = self.textCursor()
             cursor.movePosition(cursor.MoveOperation.Start)
-            for _ in range(remove_count):
-                cursor.movePosition(
-                    cursor.MoveOperation.Down,
-                    cursor.MoveMode.KeepAnchor,
-                )
             cursor.movePosition(
-                cursor.MoveOperation.StartOfLine,
+                cursor.MoveOperation.End,
                 cursor.MoveMode.KeepAnchor,
             )
-            cursor.removeSelectedText()
-            if cursor.atStart():
-                cursor.deleteChar()
-
-            self._line_count = doc.blockCount()
+            all_text = cursor.selectedText()
+            
+            # Split by line separator (Qt uses \u2029 paragraph separator)
+            lines = all_text.split('\u2029')
+            
+            # Keep only the last MAX_LINES
+            lines_to_keep = lines[remove_count:]
+            
+            # Restore text
+            self.setPlainText('\n'.join(lines_to_keep))
+            
+            # Scroll to bottom
+            scrollbar = self.verticalScrollBar()
+            if scrollbar:
+                scrollbar.setValue(scrollbar.maximum())
+            
+            self._line_count = len(lines_to_keep)
         except Exception as e:
             try:
                 log.debug(f"Log trim failed, clearing: {e}")
-                self.clear()
-                self._line_count = 0
+                # FIX: Instead of clearing, just truncate to last MAX_LINES
+                doc = self.document()
+                if doc:
+                    cursor = self.textCursor()
+                    cursor.movePosition(cursor.MoveOperation.Start)
+                    cursor.movePosition(
+                        cursor.MoveOperation.End,
+                        cursor.MoveMode.KeepAnchor,
+                    )
+                    all_text = cursor.selectedText()
+                    lines = all_text.split('\u2029')
+                    lines_to_keep = lines[-self.MAX_LINES:]
+                    self.setPlainText('\n'.join(lines_to_keep))
+                    self._line_count = len(lines_to_keep)
             except Exception:
                 pass
 
@@ -633,4 +686,3 @@ class TradingStatusBar(QFrame):
             self.market_label.setStyleSheet(
                 f"color: {ModernColors.ACCENT_DANGER}; font-size: 12px; font-weight: 600;"
             )
-

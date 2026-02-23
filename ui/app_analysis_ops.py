@@ -577,17 +577,23 @@ def _on_analysis_done(self, pred: Any) -> None:
         except _UI_RECOVERABLE_EXCEPTIONS as exc:
             log.debug("Suppressed exception in ui/app.py", exc_info=exc)
 
+    # FIX: Enable trading buttons based on mode and stock selection
+    # In MANUAL mode, always enable buttons when a valid stock is selected
+    # In AUTO mode, disable buttons (AI handles trading)
+    # In SEMI-AUTO mode, enable buttons for manual override
     Signal = _lazy_get("models.predictor", "Signal")
-    if hasattr(pred, 'signal'):
-        is_manual = (self._auto_trade_mode == AutoTradeMode.MANUAL)
-        self.buy_btn.setEnabled(
-            is_manual
-            and pred.signal in [Signal.STRONG_BUY, Signal.BUY]
-        )
-        self.sell_btn.setEnabled(
-            is_manual
-            and pred.signal in [Signal.STRONG_SELL, Signal.SELL]
-        )
+    is_manual = (self._auto_trade_mode == AutoTradeMode.MANUAL)
+    is_semi_auto = (self._auto_trade_mode == AutoTradeMode.SEMI_AUTO)
+    has_valid_stock = bool(self._ui_norm(self.stock_input.text()))
+    is_connected = bool(self.executor is not None)
+    
+    # Enable buttons when: manual/semi-auto mode + valid stock + connected
+    buttons_enabled = is_connected and has_valid_stock and (is_manual or is_semi_auto)
+    
+    if hasattr(self, "buy_btn"):
+        self.buy_btn.setEnabled(buttons_enabled)
+    if hasattr(self, "sell_btn"):
+        self.sell_btn.setEnabled(buttons_enabled)
 
     signal_text = (
         pred.signal.value

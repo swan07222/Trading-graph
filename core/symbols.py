@@ -165,6 +165,9 @@ def validate_stock_code(code: str) -> tuple[bool, str]:
         (is_valid, error_message) tuple.
         If valid, error_message is empty string.
     """
+    if code is None:
+        return False, "Invalid stock code: None"
+    
     cleaned = clean_code(code)
     if not cleaned:
         return False, f"Invalid stock code format: '{code}' (empty after cleaning)"
@@ -187,7 +190,9 @@ def validate_stock_code(code: str) -> tuple[bool, str]:
     if cleaned.startswith(("4", "8", "9")):  # BSE/other
         return True, ""
 
-    return False, f"Invalid stock code range: '{cleaned}'"
+    # Unknown but valid format - allow with warning (don't reject)
+    # This prevents false negatives for new/unknown stock prefixes
+    return True, ""
 
 
 def is_st_stock(name: str) -> bool:

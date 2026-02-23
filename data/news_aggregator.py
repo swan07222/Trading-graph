@@ -20,9 +20,9 @@ from data.news import (
     TencentNewsFetcher,
     _safe_age_hours_from_now,
     _safe_age_seconds_from_now,
-    _safe_float,
 )
 from utils.logger import get_logger
+from utils.type_utils import safe_float
 
 log = get_logger(__name__)
 
@@ -398,7 +398,7 @@ class NewsAggregator:
                 "top_negative": [],
             }
 
-        scores = [_safe_float(getattr(n, "sentiment_score", 0.0), 0.0) for n in news]
+        scores = [safe_float(getattr(n, "sentiment_score", 0.0), 0.0) for n in news]
         simple_avg = (sum(scores) / len(scores)) if scores else 0.0
 
         weighted_total = 0.0
@@ -418,8 +418,8 @@ class NewsAggregator:
         scores_older_6h: list[float] = []
 
         for n in news:
-            score = _safe_float(getattr(n, "sentiment_score", 0.0), 0.0)
-            importance = _safe_float(getattr(n, "importance", 0.5), 0.5)
+            score = safe_float(getattr(n, "sentiment_score", 0.0), 0.0)
+            importance = safe_float(getattr(n, "importance", 0.5), 0.5)
             age_h_raw = _safe_age_hours_from_now(getattr(n, "publish_time", None))
             age_h = max(0.0, float(age_h_raw)) if age_h_raw is not None else 0.0
             recency_w = float(0.5 ** (age_h / recency_half_life_hours))
@@ -646,7 +646,7 @@ class NewsAggregator:
                 "policy_sentiment": 0.0,
             }
 
-        scores = [_safe_float(getattr(n, "sentiment_score", 0.0), 0.0) for n in recent]
+        scores = [safe_float(getattr(n, "sentiment_score", 0.0), 0.0) for n in recent]
         total = len(scores)
         positive = sum(1 for s in scores if s > 0.1)
         negative = sum(1 for s in scores if s < -0.1)
@@ -671,15 +671,15 @@ class NewsAggregator:
         for idx, n in enumerate(recent):
             src = str(getattr(n, "source", "") or "").strip().lower()
             source_groups.setdefault(src, []).append(
-                _safe_float(getattr(n, "sentiment_score", 0.0), 0.0)
+                safe_float(getattr(n, "sentiment_score", 0.0), 0.0)
             )
             src_w = self._source_reliability_weight(src)
             age_h = recent_age_hours[idx]
             rec_w = float(0.5 ** (age_h / 18.0))
-            imp_w = max(0.1, _safe_float(getattr(n, "importance", 0.5), 0.5))
+            imp_w = max(0.1, safe_float(getattr(n, "importance", 0.5), 0.5))
             w = max(0.03, src_w * rec_w * imp_w)
             fused_w_sum += w
-            fused_s_sum += _safe_float(getattr(n, "sentiment_score", 0.0), 0.0) * w
+            fused_s_sum += safe_float(getattr(n, "sentiment_score", 0.0), 0.0) * w
 
         fused_sentiment = fused_s_sum / fused_w_sum if fused_w_sum > 0 else weighted_sentiment
         source_disagreement = (
@@ -693,7 +693,7 @@ class NewsAggregator:
         policy_items = [n for n in recent if n.category == "policy"]
         policy_sentiment = (
             sum(
-                _safe_float(getattr(n, "sentiment_score", 0.0), 0.0)
+                safe_float(getattr(n, "sentiment_score", 0.0), 0.0)
                 for n in policy_items
             )
             / len(policy_items)
@@ -701,7 +701,7 @@ class NewsAggregator:
             else 0.0
         )
 
-        importances = [_safe_float(getattr(n, "importance", 0.5), 0.5) for n in recent]
+        importances = [safe_float(getattr(n, "importance", 0.5), 0.5) for n in recent]
 
         # FIX Bug 2: Pass already-fetched news to avoid recursive calls
         summary = self.get_sentiment_summary(stock_code=stock_code, _news=news)
