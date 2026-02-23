@@ -28,7 +28,7 @@ HK_SUFFIXES = (".HK", ".hk")
 US_SUFFIXES = ()  # keep empty; US tickers rarely have suffix in user input
 
 _OCC_OPTION_RE = re.compile(
-    r"^([A-Z]{1,6})(\d{2})(\d{2})(\d{2})([CP])(\d{8})$"
+    r"^([A-Z]{1,6})(\d{2})(0[1-9]|1[0-2])(0[1-9]|[12]\d|3[01])([CP])(\d{8})$"
 )
 _CN_FUTURE_RE = re.compile(r"^([A-Z]{1,3})(\d{3,4})$")
 _US_FUTURE_RE = re.compile(r"^/?([A-Z]{1,3})([FGHJKMNQUVXZ])(\d{1,2})$")

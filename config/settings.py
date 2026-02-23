@@ -645,11 +645,11 @@ class Config:
             "CAPITAL": ("capital", float),
             "TRADING_MODE": (
                 "trading_mode",
-                lambda x: TradingMode(x.lower()),
+                lambda x: TradingMode(x.strip().lower()),
             ),
             "RISK_PROFILE": (
                 "risk_profile",
-                lambda x: RiskProfile(x.lower()),
+                lambda x: RiskProfile(x.strip().lower()),
             ),
             "MAX_POSITION_PCT": ("risk.max_position_pct", float),
             "MAX_DAILY_LOSS_PCT": ("risk.max_daily_loss_pct", float),

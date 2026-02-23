@@ -231,7 +231,11 @@ FONTS = {
 }
 
 # FIX Bug 6: Detect ST labels only at name prefix.
-_ST_PREFIX_PATTERN = re.compile(r"^\s*\*?\s*ST", re.IGNORECASE)
+# Match "ST" or "*ST" at the start, followed by either:
+# - A word boundary (for ASCII: "ST ABC")
+# - Any non-ASCII character (for Chinese: "ST 中珠")
+# This avoids false positives like "BEST" or "FASTEST".
+_ST_PREFIX_PATTERN = re.compile(r"^\s*\*?\s*ST(?:\b|[^\x00-\x7F])", re.IGNORECASE)
 
 
 def get_exchange(code: str) -> str:

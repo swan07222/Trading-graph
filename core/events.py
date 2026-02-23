@@ -209,7 +209,7 @@ class EventBus:
         subscribe/unsubscribe during dispatch. However, handlers should avoid
         blocking operations that could deadlock the event bus worker thread.
         Long-running handlers should use async execution or background threads.
-        
+
         FIX #5: Added error dispatch depth limit to prevent stack overflow
         if ERROR handlers consistently fail.
         """
@@ -230,7 +230,7 @@ class EventBus:
                             f"Error handler failed (max depth reached): {e}"
                         )
                         continue
-                    
+
                     self._local.error_depth = error_depth + 1
                     try:
                         error_event = Event(
@@ -243,7 +243,8 @@ class EventBus:
                         )
                         self._dispatch_error(error_event)
                     finally:
-                        self._local.error_depth = error_depth
+                        # FIX: Ensure depth is always decremented even on exception
+                        self._local.error_depth = getattr(self._local, 'error_depth', 1) - 1
                 else:
                     log.error(
                         f"Error in ERROR handler: {e}"

@@ -492,6 +492,8 @@ class TieredCache:
 
         Uses LRU eviction policy to prevent unbounded growth while
         preserving recently used locks.
+        
+        FIX #6: Locks are now cleaned up after use to prevent memory leak.
         """
         with self._compute_locks_lock:
             # FIX #12: LRU-style eviction instead of clearing all
@@ -505,6 +507,17 @@ class TieredCache:
             if key not in self._compute_locks:
                 self._compute_locks[key] = threading.Lock()
             return self._compute_locks[key]
+
+    def _release_compute_lock(self, key: str) -> None:
+        """
+        Release and remove per-key lock if no longer needed.
+        
+        FIX #6: Call this after compute to clean up unused locks.
+        """
+        with self._compute_locks_lock:
+            # Only remove if it exists
+            if key in self._compute_locks:
+                del self._compute_locks[key]
 
     @staticmethod
     def _clone_cache_value(value: Any) -> Any:
@@ -642,6 +655,7 @@ class TieredCache:
 
         FIX #2: Uses MISSING sentinel so None return values are cacheable.
         FIX #5: Uses per-key locking to prevent double-compute race.
+        FIX #6: Releases compute lock after use to prevent memory leak.
         """
         # Quick check without compute lock
         value = self.get(key, max_age_hours)
@@ -650,17 +664,21 @@ class TieredCache:
 
         # Per-key lock to prevent double-compute
         compute_lock = self._get_compute_lock(key)
-        with compute_lock:
-            # Re-check after acquiring lock (another thread may have
-            # computed and stored while we waited)
-            value = self.get(key, max_age_hours)
-            if value is not MISSING:
-                return value
+        try:
+            with compute_lock:
+                # Re-check after acquiring lock (another thread may have
+                # computed and stored while we waited)
+                value = self.get(key, max_age_hours)
+                if value is not MISSING:
+                    return value
 
-            value = compute_fn()
+                value = compute_fn()
 
-            # Store any value including None
-            self.set(key, value, persist)
+                # Store any value including None
+                self.set(key, value, persist)
+        finally:
+            # FIX #6: Clean up the lock after use
+            self._release_compute_lock(key)
 
         return value
 
@@ -725,9 +743,23 @@ def cached(
     FIX #1: Uses get_cache() instead of bare _cache module variable
     so the cache is always initialized.
     FIX #2: Uses MISSING sentinel so None return values are cacheable.
-    FIX #11: Default key uses sorted kwargs and SHA-256 hash for
-    deterministic, bounded keys.
+    FIX #7: Handles unhashable types in args/kwargs by converting to
+    JSON-serializable form before hashing.
     """
+    import json as _json
+
+    def _make_hashable(obj: Any) -> Any:
+        """Convert potentially unhashable objects to hashable form."""
+        if obj is None or isinstance(obj, (bool, int, float, str, bytes)):
+            return obj
+        if isinstance(obj, (list, tuple)):
+            return tuple(_make_hashable(item) for item in obj)
+        if isinstance(obj, dict):
+            return tuple(sorted((_make_hashable(k), _make_hashable(v)) for k, v in obj.items()))
+        if isinstance(obj, set):
+            return frozenset(_make_hashable(item) for item in obj)
+        # For other types, use string representation
+        return str(obj)
 
     def decorator(func):
         @wraps(func)
@@ -737,12 +769,27 @@ def cached(
             if key_fn:
                 key = key_fn(*args, **kwargs)
             else:
-                # FIX #11: Deterministic key with sorted kwargs + hash
-                sorted_kwargs = tuple(sorted(kwargs.items()))
-                raw_key = (
-                    f"{func.__module__}.{func.__qualname__}"
-                    f":{args}:{sorted_kwargs}"
-                )
+                # FIX #7: Make args/kwargs hashable before creating key
+                try:
+                    sorted_kwargs = tuple(sorted(kwargs.items()))
+                    raw_key = (
+                        f"{func.__module__}.{func.__qualname__}"
+                        f":{args}:{sorted_kwargs}"
+                    )
+                except TypeError:
+                    # Unhashable types - use JSON serialization
+                    try:
+                        key_data = {
+                            'module': func.__module__,
+                            'qualname': func.__qualname__,
+                            'args': _make_hashable(args),
+                            'kwargs': _make_hashable(kwargs),
+                        }
+                        raw_key = _json.dumps(key_data, sort_keys=True, default=str)
+                    except Exception:
+                        # Last resort: use hash of string representation
+                        raw_key = f"{func.__module__}.{func.__qualname__}:{str(args)}:{str(kwargs)}"
+                
                 key = hashlib.sha256(
                     raw_key.encode()
                 ).hexdigest()

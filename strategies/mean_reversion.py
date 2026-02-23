@@ -18,6 +18,7 @@ class MeanReversionStrategy(BaseStrategy):
     """
     Mean Reversion Strategy.
 
+    Trades based on the principle that prices tend to revert to their mean.
     Buys when price is significantly below moving average,
     sells when significantly above.
 
@@ -39,22 +40,38 @@ class MeanReversionStrategy(BaseStrategy):
 
     def generate_signal(self, data: dict[str, Any]) -> Signal | None:
         """Generate mean reversion signal."""
-        bars = data.get("bars", [])
-        if len(bars) < self.params["ma_period"] + 10:
+        # FIX #17: Add input validation
+        if not isinstance(data, dict):
             return None
-
-        closes = np.array([b["close"] for b in bars[-self.params["ma_period"] * 2 :]])
+        
+        bars = data.get("bars", [])
+        if not isinstance(bars, list) or len(bars) < self.params["ma_period"] + 10:
+            return None
+        
+        # Validate bar structure
+        try:
+            closes = np.array([b["close"] for b in bars[-self.params["ma_period"] * 2 :]])
+            if len(closes) < self.params["ma_period"]:
+                return None
+        except (KeyError, TypeError, ValueError):
+            return None
+        
         current_close = closes[-1]
+        if current_close <= 0:
+            return None
 
         # Calculate moving average and standard deviation
         ma = np.mean(closes[-self.params["ma_period"] :])
-        std = np.std(closes[-self.params["ma_period"] :])
+        std = np.std(closes[-self.params["ma_period"] :], ddof=1)  # FIX: Use sample std
 
-        if std == 0:
+        if std == 0 or not np.isfinite(std):
             return None
 
         # Calculate Z-score
         zscore = (current_close - ma) / std
+        
+        if not np.isfinite(zscore):
+            return None
 
         # Check for oversold (buy signal)
         if zscore < -self.params["zscore_threshold"]:

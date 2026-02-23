@@ -945,6 +945,14 @@ class Predictor:
         """
         with self._predict_lock:
             self._maybe_reload_models(reason="predict")
+            
+            # FIX #10: Check if scaler was loaded successfully
+            if not hasattr(self.processor, 'scaler') or self.processor.scaler is None:
+                log.warning(
+                    "Scaler not loaded - predictions may be unreliable. "
+                    "Ensure model training has been completed."
+                )
+            
             interval = self._normalize_interval_token(interval)
             horizon = int(forecast_minutes or self.horizon)
             lookback = int(

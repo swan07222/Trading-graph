@@ -93,11 +93,11 @@ class Order:
     commission: float = 0.0
     slippage: float = 0.0
 
-    created_at: datetime = None
-    submitted_at: datetime = None
-    filled_at: datetime = None
-    cancelled_at: datetime = None
-    updated_at: datetime = None
+    created_at: datetime | None = None
+    submitted_at: datetime | None = None
+    filled_at: datetime | None = None
+    cancelled_at: datetime | None = None
+    updated_at: datetime | None = None
 
     message: str = ""
     strategy: str = ""
@@ -111,9 +111,9 @@ class Order:
     def __post_init__(self):
         if not self.id:
             self.id = f"ORD_{datetime.now().strftime('%Y%m%d%H%M%S')}_{uuid.uuid4().hex[:8].upper()}"
-        if not self.created_at:
+        if self.created_at is None:
             self.created_at = datetime.now()
-        if not self.updated_at:
+        if self.updated_at is None:
             self.updated_at = datetime.now()
 
     @property
@@ -151,8 +151,10 @@ class Order:
         return self.filled_qty * self.avg_price
 
     def to_dict(self) -> dict:
+        """Serialize order to dictionary with all fields."""
         return {
             'id': self.id,
+            'client_id': self.client_id,
             'broker_id': self.broker_id,
             'symbol': self.symbol,
             'name': self.name,
@@ -160,20 +162,33 @@ class Order:
             'order_type': self.order_type.value,
             'quantity': self.quantity,
             'price': self.price,
+            'stop_price': self.stop_price,
             'status': self.status.value,
             'filled_qty': self.filled_qty,
+            'filled_price': self.filled_price,
             'avg_price': self.avg_price,
             'commission': self.commission,
+            'slippage': self.slippage,
+            'stop_loss': self.stop_loss,
+            'take_profit': self.take_profit,
             'created_at': self.created_at.isoformat() if self.created_at else None,
+            'submitted_at': self.submitted_at.isoformat() if self.submitted_at else None,
             'filled_at': self.filled_at.isoformat() if self.filled_at else None,
+            'cancelled_at': self.cancelled_at.isoformat() if self.cancelled_at else None,
+            'updated_at': self.updated_at.isoformat() if self.updated_at else None,
             'message': self.message,
             'strategy': self.strategy,
+            'signal_id': self.signal_id,
+            'parent_id': self.parent_id,
+            'tags': self.tags,
         }
 
     @classmethod
     def from_dict(cls, data: dict) -> 'Order':
+        """Deserialize order from dictionary with all fields."""
         order = cls()
         order.id = data.get('id', order.id)
+        order.client_id = data.get('client_id', '')
         order.broker_id = data.get('broker_id', '')
         order.symbol = data.get('symbol', '')
         order.name = data.get('name', '')
@@ -181,17 +196,27 @@ class Order:
         order.order_type = OrderType(data.get('order_type', 'limit'))
         order.quantity = data.get('quantity', 0)
         order.price = data.get('price', 0.0)
+        order.stop_price = data.get('stop_price', 0.0)
         order.status = OrderStatus(data.get('status', 'pending'))
         order.filled_qty = data.get('filled_qty', 0)
+        order.filled_price = data.get('filled_price', 0.0)
         order.avg_price = data.get('avg_price', 0.0)
         order.commission = data.get('commission', 0.0)
+        order.slippage = data.get('slippage', 0.0)
+        order.stop_loss = data.get('stop_loss', 0.0)
+        order.take_profit = data.get('take_profit', 0.0)
         order.message = data.get('message', '')
         order.strategy = data.get('strategy', '')
+        order.signal_id = data.get('signal_id', '')
+        order.parent_id = data.get('parent_id', '')
+        order.tags = data.get('tags', order.tags)
 
-        if data.get('created_at'):
-            order.created_at = datetime.fromisoformat(data['created_at'])
-        if data.get('filled_at'):
-            order.filled_at = datetime.fromisoformat(data['filled_at'])
+        for field_name in ('created_at', 'submitted_at', 'filled_at', 'cancelled_at', 'updated_at'):
+            if data.get(field_name):
+                try:
+                    setattr(order, field_name, datetime.fromisoformat(data[field_name]))
+                except (ValueError, TypeError):
+                    pass
 
         return order
 
@@ -206,13 +231,13 @@ class Fill:
     price: float = 0.0
     commission: float = 0.0
     stamp_tax: float = 0.0
-    timestamp: datetime = None
+    timestamp: datetime | None = None
     broker_fill_id: str = ""
 
     def __post_init__(self):
         if not self.id:
             self.id = f"FILL_{uuid.uuid4().hex[:12].upper()}"
-        if not self.timestamp:
+        if self.timestamp is None:
             self.timestamp = datetime.now()
 
     @property
@@ -262,11 +287,11 @@ class Position:
     realized_pnl: float = 0.0
     commission_paid: float = 0.0
 
-    opened_at: datetime = None
-    last_updated: datetime = None
+    opened_at: datetime | None = None
+    last_updated: datetime | None = None
 
     def __post_init__(self):
-        if not self.last_updated:
+        if self.last_updated is None:
             self.last_updated = datetime.now()
 
     @property
@@ -339,16 +364,16 @@ class Account:
     commission_paid: float = 0.0
 
     daily_start_equity: float = 0.0
-    daily_start_date: date = None
+    daily_start_date: date | None = None
 
     peak_equity: float = 0.0
 
-    last_updated: datetime = None
+    last_updated: datetime | None = None
 
     def __post_init__(self):
-        if not self.last_updated:
+        if self.last_updated is None:
             self.last_updated = datetime.now()
-        if not self.daily_start_date:
+        if self.daily_start_date is None:
             self.daily_start_date = date.today()
 
     @property
@@ -456,10 +481,10 @@ class RiskMetrics:
     kill_switch_active: bool = False
     warnings: list[str] = field(default_factory=list)
 
-    timestamp: datetime = None
+    timestamp: datetime | None = None
 
     def __post_init__(self):
-        if not self.timestamp:
+        if self.timestamp is None:
             self.timestamp = datetime.now()
 
 @dataclass
@@ -479,8 +504,8 @@ class TradeSignal:
     strategy: str = ""
     reasons: list[str] = field(default_factory=list)
 
-    generated_at: datetime = None
-    expires_at: datetime = None
+    generated_at: datetime | None = None
+    expires_at: datetime | None = None
 
     # Auto-trade metadata
     auto_generated: bool = False
@@ -501,7 +526,7 @@ class TradeSignal:
     def __post_init__(self):
         if not self.id:
             self.id = f"SIG_{datetime.now().strftime('%Y%m%d%H%M%S')}_{uuid.uuid4().hex[:6]}"
-        if not self.generated_at:
+        if self.generated_at is None:
             self.generated_at = datetime.now()
 
 # Auto-Trade Types
@@ -517,7 +542,7 @@ class AutoTradeAction:
     - Post-session analysis
     """
     id: str = ""
-    timestamp: datetime = None
+    timestamp: datetime | None = None
 
     stock_code: str = ""
     stock_name: str = ""
@@ -546,7 +571,7 @@ class AutoTradeAction:
     def __post_init__(self):
         if not self.id:
             self.id = f"ATA_{datetime.now().strftime('%Y%m%d%H%M%S')}_{uuid.uuid4().hex[:6]}"
-        if not self.timestamp:
+        if self.timestamp is None:
             self.timestamp = datetime.now()
 
     def to_dict(self) -> dict:
@@ -601,7 +626,7 @@ class AutoTradeState:
 
     is_paused: bool = False
     pause_reason: str = ""
-    pause_until: datetime = None
+    pause_until: datetime | None = None
 
     # Recent actions (bounded list, newest first)
     recent_actions: list[AutoTradeAction] = field(default_factory=list)
@@ -609,23 +634,23 @@ class AutoTradeState:
     # Pending approvals (for SEMI_AUTO mode)
     pending_approvals: list[AutoTradeAction] = field(default_factory=list)
 
-    last_scan_time: datetime = None
-    last_trade_time: datetime = None
+    last_scan_time: datetime | None = None
+    last_trade_time: datetime | None = None
 
-    session_start: datetime = None
-    session_date: date = None
+    session_start: datetime | None = None
+    session_date: date | None = None
 
     consecutive_errors: int = 0
     last_error: str = ""
-    last_error_time: datetime = None
+    last_error_time: datetime | None = None
 
     MAX_RECENT_ACTIONS: int = 200
     MAX_PENDING_APPROVALS: int = 20
 
     def __post_init__(self):
-        if not self.session_start:
+        if self.session_start is None:
             self.session_start = datetime.now()
-        if not self.session_date:
+        if self.session_date is None:
             self.session_date = date.today()
 
     def reset_daily(self):

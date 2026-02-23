@@ -28,6 +28,9 @@ class OrderStateMachine:
     """
     Valid order state transitions.
     Prevents invalid state changes.
+    
+    FIX #12: Added CANCELLED transition from PENDING to allow
+    order cancellation before submission.
     """
 
     VALID_TRANSITIONS = {

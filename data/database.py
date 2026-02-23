@@ -76,12 +76,15 @@ class MarketDatabase:
                 self._cleanup_dead_threads()
                 self._connections[tid] = conn
         else:
-            # FIX: Periodic cleanup every 50 accesses (reduced from 100)
-            # to prevent connection accumulation more aggressively
+            # FIX #3 & #8: Periodic cleanup every 50 accesses with overflow protection
+            # to prevent connection accumulation and counter overflow.
             if not hasattr(self._local, "access_count"):
                 self._local.access_count = 0
             self._local.access_count += 1
-            if self._local.access_count % 50 == 0:
+            # Reset counter periodically to prevent integer overflow
+            if self._local.access_count >= 10000:
+                self._local.access_count = 0
+            elif self._local.access_count % 50 == 0:
                 with self._connections_lock:
                     self._cleanup_dead_threads()
 
