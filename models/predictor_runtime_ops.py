@@ -663,7 +663,7 @@ def _generate_forecast(
 
                 if neutral_mode:
                     r_val = ((r_val - neutral_bias) * 0.45) + (recent_mu_pct * 0.35)
-                    mean_pull_pct = (-(prices[-1] / current_price - 1.0)) * 22.0
+                    mean_pull_pct = (-(prices[-1] / current_price - 1.0)) * 8.0
                     r_val += mean_pull_pct
                 else:
                     r_val = (r_val * 0.84) + (recent_mu_pct * 0.16)
@@ -694,14 +694,14 @@ def _generate_forecast(
 
             forecast_prices = prices[1:]
             if neutral_mode:
-                neutral_cap = max(float(atr_pct) * 0.55, 0.0045)
+                neutral_cap = max(float(atr_pct) * 1.2, 0.008)
                 lo = current_price * (1.0 - neutral_cap)
                 hi = current_price * (1.0 + neutral_cap)
                 forecast_prices = [float(np.clip(p, lo, hi)) for p in forecast_prices]
                 if len(forecast_prices) >= 2:
                     for i in range(1, len(forecast_prices)):
                         forecast_prices[i] = float(
-                            (0.68 * forecast_prices[i]) + (0.32 * forecast_prices[i - 1])
+                            (0.82 * forecast_prices[i]) + (0.18 * forecast_prices[i - 1])
                         )
                     forecast_prices = [
                         float(np.clip(p, lo, hi)) for p in forecast_prices

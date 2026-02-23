@@ -253,7 +253,7 @@ def _stabilize_forecast_curve(
         vol = 0.02
 
     # Per-step clamp for intraday visualization stability.
-    max_step = float(np.clip(vol * 0.55, 0.0025, 0.015))
+    max_step = float(np.clip(vol * 0.75, 0.003, 0.03))
     prev = px0
     out: list[float] = []
     for raw in values:
@@ -269,7 +269,7 @@ def _stabilize_forecast_curve(
         p = float(np.clip(p, lo, hi))
 
         # Mild EMA smoothing to reduce sawtooth artifacts.
-        p = float((0.70 * p) + (0.30 * prev))
+        p = float((0.82 * p) + (0.18 * prev))
         out.append(p)
         prev = p
     return out

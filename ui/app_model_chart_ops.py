@@ -473,8 +473,8 @@ def _debug_forecast_quality(
         quiet_std_pct = 0.0
 
     quiet_market = bool(
-        (quiet_span_pct > 0 and quiet_span_pct <= max(0.0030, cap_step * 0.85))
-        or (quiet_std_pct > 0 and quiet_std_pct <= max(0.0010, cap_step * 0.22))
+        (quiet_span_pct > 0 and quiet_span_pct <= max(0.0018, cap_step * 0.55))
+        and (quiet_std_pct > 0 and quiet_std_pct <= max(0.0006, cap_step * 0.14))
     )
 
     flat_line_raw = len(vals) >= 5 and (span_pct <= 0.0012 or std_pct <= 0.0005)
@@ -524,16 +524,16 @@ def _chart_prediction_caps(self, interval: str) -> tuple[float, float]:
     """Return (max_total_move, max_step_move) for display-only forecast shaping."""
     iv = self._normalize_interval_token(interval)
     if iv == "1m":
-        return 0.018, 0.0045
+        return 0.028, 0.007
     if iv == "5m":
-        return 0.030, 0.008
+        return 0.045, 0.012
     if iv in ("15m", "30m"):
-        return 0.050, 0.012
+        return 0.065, 0.016
     if iv in ("60m", "1h"):
-        return 0.090, 0.022
+        return 0.100, 0.025
     if iv in ("1d", "1wk", "1mo"):
-        return 0.140, 0.035
-    return 0.060, 0.020
+        return 0.160, 0.040
+    return 0.070, 0.022
 
 def _prepare_chart_predicted_prices(
     self,
@@ -593,14 +593,14 @@ def _prepare_chart_predicted_prices(
         if tf_ratio >= 8.0:
             conservative_projection = True
             if iv_chart == "1m":
-                proj_total_cap = min(proj_total_cap, 0.008)
-                proj_step_cap = min(proj_step_cap, 0.0025)
+                proj_total_cap = min(proj_total_cap, 0.016)
+                proj_step_cap = min(proj_step_cap, 0.004)
             elif iv_chart == "5m":
-                proj_total_cap = min(proj_total_cap, 0.012)
-                proj_step_cap = min(proj_step_cap, 0.0040)
+                proj_total_cap = min(proj_total_cap, 0.025)
+                proj_step_cap = min(proj_step_cap, 0.007)
             else:
-                proj_total_cap = min(proj_total_cap, max_total_move * 0.72)
-                proj_step_cap = min(proj_step_cap, max_step_move * 0.70)
+                proj_total_cap = min(proj_total_cap, max_total_move * 0.85)
+                proj_step_cap = min(proj_step_cap, max_step_move * 0.85)
 
         src_curve: list[float] = [float(anchor)] + [float(v) for v in cleaned]
         # Clamp total move while preserving path curvature.
