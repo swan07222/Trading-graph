@@ -20,6 +20,11 @@ from ui.background_tasks import (
     collect_live_readiness_failures as _collect_live_readiness_failures,
 )
 from ui.background_tasks import normalize_stock_code as _normalize_stock_code
+from ui.modern_theme import (
+    ModernColors,
+    get_connection_button_style,
+    get_connection_status_style,
+)
 from utils.logger import get_logger
 
 log = get_logger(__name__)
@@ -184,20 +189,12 @@ def _connect_trading(self: Any) -> None:
 
         if self.executor.start():
             self.connection_status.setText("Connected")
-            self.connection_status.setStyleSheet("color: #4CAF50; font-weight: bold;")
+            self.connection_status.setStyleSheet(
+                get_connection_status_style(True)
+            )
             self.connect_btn.setText("Disconnect")
             self.connect_btn.setStyleSheet(
-                """
-                    QPushButton {
-                        background: #F44336;
-                        color: white;
-                        border: none;
-                        padding: 12px;
-                        border-radius: 6px;
-                        font-weight: bold;
-                    }
-                    QPushButton:hover { background: #D32F2F; }
-                """
+                get_connection_button_style(True)
             )
 
             self.log(
@@ -228,20 +225,12 @@ def _disconnect_trading(self: Any) -> None:
         self.executor = None
 
     self.connection_status.setText("Disconnected")
-    self.connection_status.setStyleSheet("color: #FF5252; font-weight: bold;")
+    self.connection_status.setStyleSheet(
+        get_connection_status_style(False)
+    )
     self.connect_btn.setText("Connect to Broker")
     self.connect_btn.setStyleSheet(
-        """
-            QPushButton {
-                background: #4CAF50;
-                color: white;
-                border: none;
-                padding: 12px;
-                border-radius: 6px;
-                font-weight: bold;
-            }
-            QPushButton:hover { background: #388E3C; }
-        """
+        get_connection_button_style(False)
     )
 
     self.log("Disconnected from broker", "info")
@@ -760,7 +749,11 @@ def _refresh_portfolio(self: Any) -> None:
         self.account_labels["cash"].setText(f"CNY {available:,.2f}")
         self.account_labels["positions"].setText(f"CNY {market_value:,.2f}")
 
-        pnl_color = "#35b57c" if total_pnl >= 0 else "#e5534b"
+        pnl_color = (
+            ModernColors.ACCENT_SUCCESS
+            if total_pnl >= 0
+            else ModernColors.ACCENT_DANGER
+        )
         self.account_labels["pnl"].setText(f"CNY {total_pnl:,.2f}")
         self.account_labels["pnl"].setStyleSheet(
             f"color: {pnl_color}; font-size: 18px; font-weight: bold;"

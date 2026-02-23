@@ -1,90 +1,99 @@
 """
-Modern Professional UI Theme for Trading Graph
+Modern UI tokens and shared styles for Trading Graph.
 
-Professional dark theme with modern design principles:
-- Consistent color palette
-- Smooth gradients
-- Professional typography
-- High contrast for readability
-- Modern spacing and layout
+This module centralizes colors, typography, spacing, and reusable style helpers
+to keep the desktop UI visually consistent.
 """
 
-# =============================================================================
-# COLOR PALETTE - Professional Dark Theme
-# =============================================================================
+from __future__ import annotations
+
+from typing import Any
+
 
 class ModernColors:
-    """Modern professional color palette."""
-    
-    # Primary Background Colors
-    BG_PRIMARY = "#0f172a"      # Deep navy background
-    BG_SECONDARY = "#1e293b"    # Card/panel background
-    BG_TERTIARY = "#334155"     # Hover/active states
-    
-    # Accent Colors
-    ACCENT_PRIMARY = "#3b82f6"  # Primary blue
-    ACCENT_SECONDARY = "#8b5cf6"  # Purple
-    ACCENT_SUCCESS = "#10b981"  # Green (profit/up)
-    ACCENT_WARNING = "#f59e0b"  # Amber (warning)
-    ACCENT_DANGER = "#ef4444"   # Red (loss/down)
-    ACCENT_INFO = "#06b6d4"     # Cyan (info)
-    
-    # Text Colors
-    TEXT_PRIMARY = "#f8fafc"    # Primary text
-    TEXT_SECONDARY = "#94a3b8"  # Secondary text
-    TEXT_MUTED = "#64748b"      # Muted text
-    
-    # Border & Divider
-    BORDER_SUBTLE = "#334155"
-    BORDER_DEFAULT = "#475569"
-    
-    # Signal Colors
-    SIGNAL_BUY = "#10b981"
-    SIGNAL_BUY_BG = "rgba(16, 185, 129, 0.15)"
-    SIGNAL_SELL = "#ef4444"
-    SIGNAL_SELL_BG = "rgba(239, 68, 68, 0.15)"
-    SIGNAL_HOLD = "#f59e0b"
-    SIGNAL_HOLD_BG = "rgba(245, 158, 11, 0.15)"
-    
+    """Professional dark-blue palette with high readability."""
+
+    # Core surfaces
+    BG_CANVAS = "#050914"
+    BG_PRIMARY = "#0a1020"
+    BG_SECONDARY = "#111a2d"
+    BG_TERTIARY = "#1b2840"
+    BG_ELEVATED = "#223353"
+
+    # Brand and semantic accents
+    ACCENT_PRIMARY = "#3ec1e7"
+    ACCENT_SECONDARY = "#56d6ba"
+    ACCENT_SUCCESS = "#34d399"
+    ACCENT_WARNING = "#f6c04b"
+    ACCENT_DANGER = "#f87171"
+    ACCENT_INFO = "#60a5fa"
+
+    # Text
+    TEXT_PRIMARY = "#e7eefc"
+    TEXT_SECONDARY = "#a9b8d3"
+    TEXT_MUTED = "#6f83a8"
+    TEXT_STRONG = "#f5f9ff"
+
+    # Borders
+    BORDER_SUBTLE = "#243756"
+    BORDER_DEFAULT = "#2f466c"
+    BORDER_FOCUS = "#46c8ec"
+
+    # Signal colors
+    SIGNAL_BUY = ACCENT_SUCCESS
+    SIGNAL_BUY_BG = "rgba(52, 211, 153, 0.12)"
+    SIGNAL_SELL = ACCENT_DANGER
+    SIGNAL_SELL_BG = "rgba(248, 113, 113, 0.12)"
+    SIGNAL_HOLD = ACCENT_WARNING
+    SIGNAL_HOLD_BG = "rgba(246, 192, 75, 0.12)"
+
     # Gradients
-    GRADIENT_BUY = "qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #10b981, stop:1 #059669)"
-    GRADIENT_SELL = "qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #ef4444, stop:1 #dc2626)"
-    GRADIENT_HOLD = "qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #f59e0b, stop:1 #d97706)"
-    GRADIENT_PRIMARY = "qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #3b82f6, stop:1 #2563eb)"
-    GRADIENT_ACCENT = "qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #8b5cf6, stop:1 #7c3aed)"
+    GRADIENT_PRIMARY = (
+        "qlineargradient(x1:0, y1:0, x2:1, y2:0,"
+        " stop:0 #2ba8d1, stop:1 #3ec1e7)"
+    )
+    GRADIENT_BUY = (
+        "qlineargradient(x1:0, y1:0, x2:1, y2:0,"
+        " stop:0 #21b88e, stop:1 #34d399)"
+    )
+    GRADIENT_SELL = (
+        "qlineargradient(x1:0, y1:0, x2:1, y2:0,"
+        " stop:0 #f05d68, stop:1 #f87171)"
+    )
+    GRADIENT_WARNING = (
+        "qlineargradient(x1:0, y1:0, x2:1, y2:0,"
+        " stop:0 #f5b640, stop:1 #f6c04b)"
+    )
+    GRADIENT_SUBTLE = (
+        "qlineargradient(x1:0, y1:0, x2:0, y2:1,"
+        " stop:0 #142038, stop:1 #0d1528)"
+    )
 
-
-# =============================================================================
-# TYPOGRAPHY
-# =============================================================================
 
 class ModernFonts:
-    """Modern typography settings."""
-    
-    FAMILY_PRIMARY = "Segoe UI"
-    FAMILY_MONOSPACE = "Consolas"
-    
-    SIZE_XS = 9
+    """Typography tokens for desktop UI."""
+
+    FAMILY_PRIMARY = "Segoe UI Variable Text"
+    FAMILY_DISPLAY = "Segoe UI Variable Display"
+    FAMILY_MONOSPACE = "JetBrains Mono"
+
+    SIZE_XS = 10
     SIZE_SM = 11
-    SIZE_BASE = 13
-    SIZE_LG = 15
-    SIZE_XL = 18
-    SIZE_XXL = 24
-    SIZE_HERO = 36
-    
+    SIZE_BASE = 12
+    SIZE_LG = 14
+    SIZE_XL = 16
+    SIZE_XXL = 22
+    SIZE_HERO = 30
+
     WEIGHT_NORMAL = 400
     WEIGHT_MEDIUM = 500
     WEIGHT_SEMIBOLD = 600
     WEIGHT_BOLD = 700
 
 
-# =============================================================================
-# SPACING & LAYOUT
-# =============================================================================
-
 class ModernSpacing:
-    """Modern spacing scale."""
-    
+    """Spacing scale."""
+
     XS = 4
     SM = 8
     BASE = 12
@@ -94,205 +103,177 @@ class ModernSpacing:
     XXXL = 32
 
 
-# =============================================================================
-# STYLESHEETS
-# =============================================================================
-
 def get_main_window_style() -> str:
-    """Main window stylesheet."""
     return f"""
         QMainWindow {{
-            background-color: {ModernColors.BG_PRIMARY};
-        }}
-        QStatusBar {{
-            background-color: {ModernColors.BG_SECONDARY};
-            color: {ModernColors.TEXT_SECONDARY};
-            border-top: 1px solid {ModernColors.BORDER_SUBTLE};
-            padding: 4px;
+            background: qlineargradient(
+                x1:0, y1:0, x2:0, y2:1,
+                stop:0 {ModernColors.BG_PRIMARY},
+                stop:1 {ModernColors.BG_CANVAS}
+            );
         }}
     """
 
 
 def get_central_widget_style() -> str:
-    """Central widget stylesheet."""
     return f"""
         QWidget {{
-            background-color: {ModernColors.BG_PRIMARY};
             color: {ModernColors.TEXT_PRIMARY};
+            background-color: {ModernColors.BG_PRIMARY};
             font-family: {ModernFonts.FAMILY_PRIMARY};
             font-size: {ModernFonts.SIZE_BASE}px;
+        }}
+        QWidget:disabled {{
+            color: {ModernColors.TEXT_MUTED};
         }}
     """
 
 
 def get_card_style() -> str:
-    """Card/panel container style."""
     return f"""
-        QFrame#cardFrame {{
-            background-color: {ModernColors.BG_SECONDARY};
+        QFrame#cardFrame,
+        QFrame#statFrame,
+        QFrame#actionStrip,
+        QFrame#newsGauge,
+        QFrame#metricCard,
+        QFrame#statusCard {{
+            background: {ModernColors.GRADIENT_SUBTLE};
             border: 1px solid {ModernColors.BORDER_SUBTLE};
             border-radius: 12px;
         }}
-        QFrame#cardFrame:hover {{
+        QFrame#cardFrame:hover,
+        QFrame#statFrame:hover,
+        QFrame#metricCard:hover {{
             border-color: {ModernColors.BORDER_DEFAULT};
         }}
     """
 
 
 def get_group_box_style() -> str:
-    """Group box style."""
     return f"""
         QGroupBox {{
             background-color: {ModernColors.BG_SECONDARY};
             border: 1px solid {ModernColors.BORDER_SUBTLE};
-            border-radius: 10px;
-            margin-top: 16px;
-            padding-top: 16px;
+            border-radius: 12px;
+            margin-top: 14px;
+            padding-top: 12px;
+            font-size: {ModernFonts.SIZE_SM}px;
             font-weight: {ModernFonts.WEIGHT_SEMIBOLD};
-            font-size: {ModernFonts.SIZE_LG}px;
+            color: {ModernColors.TEXT_SECONDARY};
         }}
         QGroupBox::title {{
             subcontrol-origin: margin;
             subcontrol-position: top left;
-            left: 16px;
-            padding: 0 12px;
-            color: {ModernColors.TEXT_PRIMARY};
+            left: 12px;
+            top: -2px;
+            padding: 0 8px;
+            color: {ModernColors.ACCENT_PRIMARY};
         }}
     """
 
 
 def get_button_style(primary: bool = False, danger: bool = False) -> str:
-    """Button styles."""
     if primary:
-        return f"""
-            QPushButton {{
-                background: {ModernColors.GRADIENT_PRIMARY};
-                color: white;
-                border: none;
-                border-radius: 8px;
-                padding: 12px 24px;
-                font-weight: {ModernFonts.WEIGHT_SEMIBOLD};
-                font-size: {ModernFonts.SIZE_BASE}px;
-            }}
-            QPushButton:hover {{
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #2563eb, stop:1 #1d4ed8);
-            }}
-            QPushButton:pressed {{
-                background: {ModernColors.ACCENT_PRIMARY};
-            }}
-            QPushButton:disabled {{
-                background: {ModernColors.BG_TERTIARY};
-                color: {ModernColors.TEXT_MUTED};
-            }}
-        """
+        bg = ModernColors.GRADIENT_PRIMARY
+        border = ModernColors.BORDER_FOCUS
     elif danger:
-        return f"""
-            QPushButton {{
-                background: {ModernColors.GRADIENT_SELL};
-                color: white;
-                border: none;
-                border-radius: 8px;
-                padding: 12px 24px;
-                font-weight: {ModernFonts.WEIGHT_SEMIBOLD};
-                font-size: {ModernFonts.SIZE_BASE}px;
-            }}
-            QPushButton:hover {{
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #dc2626, stop:1 #b91c1c);
-            }}
-            QPushButton:pressed {{
-                background: {ModernColors.ACCENT_DANGER};
-            }}
-        """
+        bg = ModernColors.GRADIENT_SELL
+        border = "#f26c76"
     else:
-        return f"""
-            QPushButton {{
-                background-color: {ModernColors.BG_TERTIARY};
-                color: {ModernColors.TEXT_PRIMARY};
-                border: 1px solid {ModernColors.BORDER_SUBTLE};
-                border-radius: 8px;
-                padding: 10px 20px;
-                font-weight: {ModernFonts.WEIGHT_MEDIUM};
-                font-size: {ModernFonts.SIZE_BASE}px;
-            }}
-            QPushButton:hover {{
-                background-color: {ModernColors.BG_SECONDARY};
-                border-color: {ModernColors.BORDER_DEFAULT};
-            }}
-            QPushButton:pressed {{
-                background-color: {ModernColors.BG_PRIMARY};
-            }}
-        """
+        bg = "qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #1a2b47, stop:1 #14233d)"
+        border = ModernColors.BORDER_DEFAULT
+
+    return f"""
+        QPushButton {{
+            background: {bg};
+            color: {ModernColors.TEXT_STRONG};
+            border: 1px solid {border};
+            border-radius: 10px;
+            padding: 9px 16px;
+            min-height: 34px;
+            font-size: {ModernFonts.SIZE_BASE}px;
+            font-weight: {ModernFonts.WEIGHT_SEMIBOLD};
+        }}
+        QPushButton:hover {{
+            border-color: {ModernColors.BORDER_FOCUS};
+        }}
+        QPushButton:pressed {{
+            background: #10203a;
+        }}
+        QPushButton:disabled {{
+            background: #17233b;
+            border-color: #243756;
+            color: {ModernColors.TEXT_MUTED};
+        }}
+    """
 
 
 def get_table_style() -> str:
-    """Table widget style."""
     return f"""
-        QTableWidget {{
+        QTableWidget, QTableView, QListWidget {{
             background-color: {ModernColors.BG_SECONDARY};
             alternate-background-color: {ModernColors.BG_PRIMARY};
             border: 1px solid {ModernColors.BORDER_SUBTLE};
-            border-radius: 8px;
+            border-radius: 10px;
             gridline-color: {ModernColors.BORDER_SUBTLE};
-            selection-background-color: {ModernColors.BG_TERTIARY};
+            selection-background-color: #1f3d63;
+            selection-color: {ModernColors.TEXT_STRONG};
             color: {ModernColors.TEXT_PRIMARY};
-            font-size: {ModernFonts.SIZE_BASE}px;
+            font-size: {ModernFonts.SIZE_SM}px;
+            outline: none;
         }}
-        QTableWidget::item {{
-            padding: 8px 12px;
+        QTableWidget::item, QTableView::item, QListWidget::item {{
+            padding: 7px 10px;
             border: none;
         }}
-        QTableWidget::item:selected {{
-            background-color: {ModernColors.BG_TERTIARY};
-            color: {ModernColors.TEXT_PRIMARY};
+        QTableWidget::item:hover, QTableView::item:hover, QListWidget::item:hover {{
+            background-color: #1a2e4a;
         }}
         QHeaderView::section {{
-            background-color: {ModernColors.BG_TERTIARY};
+            background-color: #15243c;
             color: {ModernColors.TEXT_SECONDARY};
-            padding: 10px 12px;
             border: none;
-            border-bottom: 2px solid {ModernColors.BORDER_DEFAULT};
+            border-right: 1px solid {ModernColors.BORDER_SUBTLE};
+            border-bottom: 1px solid {ModernColors.BORDER_SUBTLE};
+            padding: 8px 10px;
+            font-size: {ModernFonts.SIZE_XS}px;
             font-weight: {ModernFonts.WEIGHT_SEMIBOLD};
-            font-size: {ModernFonts.SIZE_SM}px;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-        }}
-        QTableWidget::item:hover {{
-            background-color: {ModernColors.BG_TERTIARY};
         }}
     """
 
 
 def get_progress_bar_style(color: str = "primary") -> str:
-    """Progress bar styles."""
-    colors = {
+    gradients = {
         "primary": ModernColors.GRADIENT_PRIMARY,
         "success": ModernColors.GRADIENT_BUY,
         "danger": ModernColors.GRADIENT_SELL,
-        "warning": ModernColors.GRADIENT_HOLD,
-        "accent": ModernColors.GRADIENT_ACCENT,
+        "warning": ModernColors.GRADIENT_WARNING,
+        "accent": ModernColors.GRADIENT_PRIMARY,
     }
-    gradient = colors.get(color, colors["primary"])
-    
+    gradient = gradients.get(str(color).lower(), gradients["primary"])
     return f"""
         QProgressBar {{
-            background-color: {ModernColors.BG_TERTIARY};
-            border: none;
-            border-radius: 8px;
-            text-align: center;
+            background: {ModernColors.BG_TERTIARY};
+            border: 1px solid {ModernColors.BORDER_SUBTLE};
+            border-radius: 7px;
+            min-height: 16px;
             color: {ModernColors.TEXT_PRIMARY};
+            text-align: center;
+            font-size: {ModernFonts.SIZE_XS}px;
             font-weight: {ModernFonts.WEIGHT_SEMIBOLD};
-            font-size: {ModernFonts.SIZE_SM}px;
-            height: 20px;
         }}
         QProgressBar::chunk {{
             background: {gradient};
-            border-radius: 7px;
+            border-radius: 6px;
         }}
     """
 
 
-def get_label_style(size: str = "base", weight: str = "normal", color: str = "primary") -> str:
-    """Label styles."""
+def get_label_style(
+    size: str = "base",
+    weight: str = "normal",
+    color: str = "primary",
+) -> str:
     sizes = {
         "xs": ModernFonts.SIZE_XS,
         "sm": ModernFonts.SIZE_SM,
@@ -317,41 +298,45 @@ def get_label_style(size: str = "base", weight: str = "normal", color: str = "pr
         "danger": ModernColors.ACCENT_DANGER,
         "info": ModernColors.ACCENT_INFO,
     }
-    
-    return f"""
-        QLabel {{
-            color: {colors_map.get(color, ModernColors.TEXT_PRIMARY)};
-            font-size: {sizes.get(size, ModernFonts.SIZE_BASE)}px;
-            font-weight: {weights.get(weight, ModernFonts.WEIGHT_NORMAL)};
-            font-family: {ModernFonts.FAMILY_PRIMARY};
-        }}
-    """
+    size_px = sizes.get(size, ModernFonts.SIZE_BASE)
+    font_weight = weights.get(weight, ModernFonts.WEIGHT_NORMAL)
+    text_color = colors_map.get(color, ModernColors.TEXT_PRIMARY)
+    return (
+        "QLabel {"
+        f" color: {text_color};"
+        f" font-size: {size_px}px;"
+        f" font-weight: {font_weight};"
+        f" font-family: {ModernFonts.FAMILY_PRIMARY};"
+        "}"
+    )
 
 
 def get_input_style() -> str:
-    """Input field styles."""
     return f"""
-        QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox {{
-            background-color: {ModernColors.BG_PRIMARY};
+        QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox, QTextEdit, QPlainTextEdit {{
+            background-color: {ModernColors.BG_TERTIARY};
             border: 1px solid {ModernColors.BORDER_SUBTLE};
-            border-radius: 6px;
-            padding: 8px 12px;
+            border-radius: 8px;
+            padding: 6px 10px;
             color: {ModernColors.TEXT_PRIMARY};
-            font-size: {ModernFonts.SIZE_BASE}px;
-            font-family: {ModernFonts.FAMILY_PRIMARY};
+            selection-background-color: #2c6b9d;
+            selection-color: {ModernColors.TEXT_STRONG};
+            min-height: 28px;
         }}
-        QLineEdit:focus, QComboBox:focus, QSpinBox:focus, QDoubleSpinBox:focus {{
-            border-color: {ModernColors.ACCENT_PRIMARY};
+        QTextEdit, QPlainTextEdit {{
+            min-height: 0;
+            font-family: {ModernFonts.FAMILY_MONOSPACE};
         }}
-        QLineEdit:hover, QComboBox:hover, QSpinBox:hover, QDoubleSpinBox:hover {{
-            border-color: {ModernColors.BORDER_DEFAULT};
+        QLineEdit:focus, QComboBox:focus, QSpinBox:focus, QDoubleSpinBox:focus, QTextEdit:focus {{
+            border-color: {ModernColors.BORDER_FOCUS};
         }}
         QComboBox::drop-down {{
             border: none;
             width: 24px;
         }}
         QComboBox::down-arrow {{
-            image: none;
+            width: 0;
+            height: 0;
             border-left: 5px solid transparent;
             border-right: 5px solid transparent;
             border-top: 6px solid {ModernColors.TEXT_SECONDARY};
@@ -361,158 +346,336 @@ def get_input_style() -> str:
 
 
 def get_tab_widget_style() -> str:
-    """Tab widget style."""
     return f"""
         QTabWidget::pane {{
             border: 1px solid {ModernColors.BORDER_SUBTLE};
-            border-radius: 8px;
+            border-radius: 10px;
             background-color: {ModernColors.BG_SECONDARY};
+            top: -1px;
         }}
         QTabBar::tab {{
-            background-color: {ModernColors.BG_PRIMARY};
-            color: {ModernColors.TEXT_SECONDARY};
-            padding: 12px 24px;
-            margin-right: 4px;
+            background: #15243c;
+            color: {ModernColors.TEXT_MUTED};
+            border: 1px solid transparent;
             border-top-left-radius: 8px;
             border-top-right-radius: 8px;
+            padding: 8px 14px;
+            margin-right: 4px;
+            min-width: 84px;
+            font-size: {ModernFonts.SIZE_SM}px;
             font-weight: {ModernFonts.WEIGHT_MEDIUM};
         }}
         QTabBar::tab:selected {{
-            background-color: {ModernColors.BG_SECONDARY};
+            background: #1d3150;
             color: {ModernColors.TEXT_PRIMARY};
+            border-color: {ModernColors.BORDER_DEFAULT};
         }}
         QTabBar::tab:hover:!selected {{
-            background-color: {ModernColors.BG_TERTIARY};
+            background: #1b2b46;
+            color: {ModernColors.TEXT_SECONDARY};
         }}
     """
 
 
 def get_scroll_area_style() -> str:
-    """Scroll area style."""
     return f"""
         QScrollArea {{
-            background-color: transparent;
+            background: transparent;
             border: none;
         }}
         QScrollBar:vertical {{
-            background-color: {ModernColors.BG_PRIMARY};
+            background: {ModernColors.BG_SECONDARY};
             width: 12px;
+            margin: 2px;
             border-radius: 6px;
-            margin: 0;
         }}
         QScrollBar::handle:vertical {{
-            background-color: {ModernColors.BG_TERTIARY};
+            background: {ModernColors.BORDER_DEFAULT};
+            min-height: 28px;
             border-radius: 6px;
-            min-height: 30px;
         }}
         QScrollBar::handle:vertical:hover {{
-            background-color: {ModernColors.BORDER_DEFAULT};
-        }}
-        QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
-            height: 0;
+            background: {ModernColors.ACCENT_INFO};
         }}
         QScrollBar:horizontal {{
-            background-color: {ModernColors.BG_PRIMARY};
+            background: {ModernColors.BG_SECONDARY};
             height: 12px;
+            margin: 2px;
             border-radius: 6px;
-            margin: 0;
         }}
         QScrollBar::handle:horizontal {{
-            background-color: {ModernColors.BG_TERTIARY};
+            background: {ModernColors.BORDER_DEFAULT};
+            min-width: 28px;
             border-radius: 6px;
-            min-width: 30px;
         }}
         QScrollBar::handle:horizontal:hover {{
-            background-color: {ModernColors.BORDER_DEFAULT};
+            background: {ModernColors.ACCENT_INFO};
         }}
+        QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical,
         QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{
+            border: none;
+            background: none;
             width: 0;
+            height: 0;
+        }}
+        QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical,
+        QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal {{
+            background: none;
         }}
     """
 
 
 def get_signal_panel_style(signal: str = "hold") -> str:
-    """Signal panel with dynamic coloring."""
-    colors = {
+    color_map = {
         "buy": (ModernColors.SIGNAL_BUY, ModernColors.SIGNAL_BUY_BG),
         "sell": (ModernColors.SIGNAL_SELL, ModernColors.SIGNAL_SELL_BG),
         "hold": (ModernColors.SIGNAL_HOLD, ModernColors.SIGNAL_HOLD_BG),
     }
-    color, bg = colors.get(signal.lower(), colors["hold"])
-    
+    color, bg = color_map.get(str(signal).lower(), color_map["hold"])
     return f"""
-        QFrame {{
+        QFrame#signalPanelFrame {{
             background-color: {bg};
             border: 2px solid {color};
-            border-radius: 16px;
+            border-radius: 14px;
         }}
         QLabel#signalLabel {{
             color: {color};
             font-size: {ModernFonts.SIZE_HERO}px;
             font-weight: {ModernFonts.WEIGHT_BOLD};
+            font-family: {ModernFonts.FAMILY_DISPLAY};
         }}
     """
 
 
 def get_status_indicator_style(status: str = "healthy") -> str:
-    """Status indicator styles."""
-    colors = {
+    color_map = {
         "healthy": ModernColors.ACCENT_SUCCESS,
         "degraded": ModernColors.ACCENT_WARNING,
         "error": ModernColors.ACCENT_DANGER,
         "unknown": ModernColors.TEXT_MUTED,
     }
-    color = colors.get(status.lower(), colors["unknown"])
-    
+    color = color_map.get(str(status).lower(), color_map["unknown"])
+    return (
+        "QLabel {"
+        f" color: {color};"
+        f" border: 1px solid {color};"
+        " border-radius: 8px;"
+        " padding: 3px 8px;"
+        f" font-weight: {ModernFonts.WEIGHT_SEMIBOLD};"
+        "}"
+    )
+
+
+def get_connection_status_style(connected: bool) -> str:
+    if connected:
+        color = ModernColors.ACCENT_SUCCESS
+    else:
+        color = ModernColors.ACCENT_DANGER
+    return (
+        f"color: {color};"
+        f"font-size: {ModernFonts.SIZE_SM}px;"
+        f"font-weight: {ModernFonts.WEIGHT_BOLD};"
+    )
+
+
+def get_connection_button_style(connected: bool) -> str:
+    if connected:
+        gradient = ModernColors.GRADIENT_SELL
+        border = "#ef6f7a"
+    else:
+        gradient = ModernColors.GRADIENT_BUY
+        border = "#2ec695"
     return f"""
-        QLabel {{
-            color: {color};
+        QPushButton {{
+            background: {gradient};
+            color: {ModernColors.TEXT_STRONG};
+            border: 1px solid {border};
+            border-radius: 10px;
+            padding: 9px 12px;
+            min-height: 34px;
+            font-size: {ModernFonts.SIZE_BASE}px;
             font-weight: {ModernFonts.WEIGHT_SEMIBOLD};
-            padding: 4px 12px;
-            background-color: {color}20;
-            border-radius: 6px;
-            border: 1px solid {color};
+        }}
+        QPushButton:hover {{
+            border-color: {ModernColors.BORDER_FOCUS};
+        }}
+        QPushButton:pressed {{
+            background: #122443;
         }}
     """
 
 
-# =============================================================================
-# UTILITY FUNCTIONS
-# =============================================================================
+def get_status_badge_style(kind: str) -> str:
+    kind_norm = str(kind or "").strip().lower()
+    if kind_norm in {"auto", "active", "connected", "running", "success"}:
+        color = ModernColors.ACCENT_SUCCESS
+    elif kind_norm in {"semi-auto", "warning", "hold"}:
+        color = ModernColors.ACCENT_WARNING
+    elif kind_norm in {"error", "danger", "disconnected", "paused"}:
+        color = ModernColors.ACCENT_DANGER
+    else:
+        color = ModernColors.ACCENT_INFO
 
-def apply_modern_theme(app) -> None:
-    """Apply modern theme to entire application."""
-    app.setStyleSheet(f"""
-        {get_main_window_style()}
-        {get_central_widget_style()}
-        {get_card_style()}
-        {get_group_box_style()}
-        {get_table_style()}
-        {get_input_style()}
-        {get_tab_widget_style()}
-        {get_scroll_area_style()}
-    """)
+    return (
+        f"color: {color};"
+        f"font-size: {ModernFonts.SIZE_SM}px;"
+        f"font-weight: {ModernFonts.WEIGHT_BOLD};"
+        "padding: 0 8px;"
+    )
+
+
+def get_app_stylesheet() -> str:
+    return "\n".join(
+        [
+            get_main_window_style(),
+            get_central_widget_style(),
+            get_card_style(),
+            get_group_box_style(),
+            get_button_style(),
+            get_table_style(),
+            get_input_style(),
+            get_tab_widget_style(),
+            get_scroll_area_style(),
+            f"""
+            QMenuBar {{
+                background: #0f1a2e;
+                border-bottom: 1px solid {ModernColors.BORDER_SUBTLE};
+                color: {ModernColors.TEXT_PRIMARY};
+                padding: 2px 8px;
+            }}
+            QMenuBar::item {{
+                padding: 6px 12px;
+                margin: 2px 3px;
+                border-radius: 6px;
+                background: transparent;
+            }}
+            QMenuBar::item:selected {{
+                background: #1a2d49;
+            }}
+            QMenu {{
+                background: #11203a;
+                color: {ModernColors.TEXT_PRIMARY};
+                border: 1px solid {ModernColors.BORDER_DEFAULT};
+                border-radius: 8px;
+                padding: 6px;
+            }}
+            QMenu::item {{
+                padding: 8px 12px;
+                border-radius: 6px;
+            }}
+            QMenu::item:selected {{
+                background: #1e3659;
+            }}
+            QToolBar {{
+                background: #0f1a2e;
+                border: none;
+                border-bottom: 1px solid {ModernColors.BORDER_SUBTLE};
+                spacing: 8px;
+                padding: 6px 10px;
+            }}
+            QToolButton {{
+                background: #182944;
+                color: {ModernColors.TEXT_PRIMARY};
+                border: 1px solid {ModernColors.BORDER_SUBTLE};
+                border-radius: 8px;
+                padding: 6px 12px;
+                min-height: 28px;
+                font-size: {ModernFonts.SIZE_SM}px;
+                font-weight: {ModernFonts.WEIGHT_SEMIBOLD};
+            }}
+            QToolButton:hover {{
+                border-color: {ModernColors.BORDER_FOCUS};
+                background: #1e3455;
+            }}
+            QSplitter::handle {{
+                background: #1b2b46;
+            }}
+            QSplitter::handle:hover {{
+                background: #2a4165;
+            }}
+            QStatusBar {{
+                background: #0f1a2e;
+                border-top: 1px solid {ModernColors.BORDER_SUBTLE};
+                color: {ModernColors.TEXT_SECONDARY};
+                font-size: {ModernFonts.SIZE_XS}px;
+            }}
+            QStatusBar::item {{
+                border: none;
+            }}
+            QToolTip {{
+                background: #1b2b46;
+                color: {ModernColors.TEXT_PRIMARY};
+                border: 1px solid {ModernColors.BORDER_DEFAULT};
+                border-radius: 6px;
+                padding: 6px 8px;
+            }}
+            QLabel#metaLabel {{
+                color: {ModernColors.TEXT_MUTED};
+                font-size: {ModernFonts.SIZE_XS}px;
+            }}
+            QLabel#subtleLabel {{
+                color: {ModernColors.TEXT_SECONDARY};
+                font-size: {ModernFonts.SIZE_SM}px;
+            }}
+            QLabel#chartLatestLabel {{
+                color: {ModernColors.TEXT_MUTED};
+                font-size: {ModernFonts.SIZE_XS}px;
+            }}
+            QLabel#monitorLabel {{
+                color: {ModernColors.TEXT_MUTED};
+                font-size: {ModernFonts.SIZE_SM}px;
+            }}
+            QLabel#connectionStatus {{
+                color: {ModernColors.ACCENT_DANGER};
+                font-size: {ModernFonts.SIZE_SM}px;
+                font-weight: {ModernFonts.WEIGHT_BOLD};
+            }}
+            QFrame#actionStrip {{
+                background: transparent;
+                border: none;
+            }}
+            QPushButton#buyButton {{
+                background: {ModernColors.GRADIENT_BUY};
+                border: 1px solid #2ec695;
+            }}
+            QPushButton#buyButton:hover {{
+                border-color: {ModernColors.BORDER_FOCUS};
+            }}
+            QPushButton#sellButton {{
+                background: {ModernColors.GRADIENT_SELL};
+                border: 1px solid #ef6f7a;
+            }}
+            QPushButton#sellButton:hover {{
+                border-color: {ModernColors.BORDER_FOCUS};
+            }}
+            """,
+        ]
+    )
+
+
+def apply_modern_theme(app: Any) -> None:
+    """Apply the shared modern stylesheet to a QApplication."""
+    app.setStyleSheet(get_app_stylesheet())
 
 
 def get_signal_color(signal: str) -> str:
-    """Get color for signal type."""
-    signal_colors = {
+    mapping = {
         "STRONG_BUY": ModernColors.ACCENT_SUCCESS,
         "BUY": ModernColors.ACCENT_SUCCESS,
         "HOLD": ModernColors.ACCENT_WARNING,
         "SELL": ModernColors.ACCENT_DANGER,
         "STRONG_SELL": ModernColors.ACCENT_DANGER,
     }
-    return signal_colors.get(str(signal).upper(), ModernColors.TEXT_SECONDARY)
+    return mapping.get(str(signal).upper(), ModernColors.TEXT_SECONDARY)
 
 
 def get_signal_bg(signal: str) -> str:
-    """Get background color for signal type."""
-    signal_bgs = {
-        "STRONG_BUY": "rgba(16, 185, 129, 0.2)",
-        "BUY": "rgba(16, 185, 129, 0.15)",
-        "HOLD": "rgba(245, 158, 11, 0.15)",
-        "SELL": "rgba(239, 68, 68, 0.15)",
-        "STRONG_SELL": "rgba(239, 68, 68, 0.2)",
+    mapping = {
+        "STRONG_BUY": "rgba(52, 211, 153, 0.15)",
+        "BUY": "rgba(52, 211, 153, 0.11)",
+        "HOLD": "rgba(246, 192, 75, 0.11)",
+        "SELL": "rgba(248, 113, 113, 0.11)",
+        "STRONG_SELL": "rgba(248, 113, 113, 0.15)",
     }
-    return signal_bgs.get(str(signal).upper(), "transparent")
+    return mapping.get(str(signal).upper(), "transparent")
+

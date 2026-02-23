@@ -15,6 +15,11 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from ui.modern_theme import (
+    ModernColors,
+    ModernFonts,
+    get_progress_bar_style,
+)
 from utils.logger import get_logger
 
 log = get_logger(__name__)
@@ -84,24 +89,26 @@ class SentimentGauge(QFrame):
 
     def __init__(self):
         super().__init__()
+        self.setObjectName("newsGauge")
         self.setFixedHeight(60)
         self.setStyleSheet("""
-            QFrame {
-                background: #0f1b2e;
-                border-radius: 8px;
-                padding: 5px;
+            QFrame#newsGauge {
+                border-radius: 10px;
+                padding: 4px;
             }
         """)
 
         layout = QHBoxLayout(self)
 
         self.label = QLabel("Market Sentiment:")
-        self.label.setStyleSheet("color: #aac3ec; font-size: 11px;")
+        self.label.setStyleSheet(
+            f"color: {ModernColors.TEXT_SECONDARY}; font-size: {ModernFonts.SIZE_SM}px;"
+        )
         layout.addWidget(self.label)
 
         self.score_label = QLabel("--")
         self.score_label.setStyleSheet(
-            "font-size: 16px; font-weight: bold;"
+            f"font-size: {ModernFonts.SIZE_XL}px; font-weight: {ModernFonts.WEIGHT_BOLD};"
         )
         layout.addWidget(self.score_label)
 
@@ -111,11 +118,12 @@ class SentimentGauge(QFrame):
         self.bar.setFixedWidth(120)
         self.bar.setFixedHeight(12)
         self.bar.setTextVisible(False)
+        self.bar.setStyleSheet(get_progress_bar_style("warning"))
         layout.addWidget(self.bar)
 
         self.counts_label = QLabel("")
         self.counts_label.setStyleSheet(
-            "color: #aac3ec; font-size: 10px;"
+            f"color: {ModernColors.TEXT_SECONDARY}; font-size: {ModernFonts.SIZE_XS}px;"
         )
         layout.addWidget(self.counts_label)
 
@@ -156,18 +164,22 @@ class SentimentGauge(QFrame):
         total = self._safe_int(summary, 'total')
 
         if label == "positive":
-            color = "#35b57c"
+            color = ModernColors.ACCENT_SUCCESS
             sentiment_tag = "POS"
         elif label == "negative":
-            color = "#e5534b"
+            color = ModernColors.ACCENT_DANGER
             sentiment_tag = "NEG"
         else:
-            color = "#d8a03a"
+            color = ModernColors.ACCENT_WARNING
             sentiment_tag = "NEU"
 
         self.score_label.setText(f"{sentiment_tag} {score:+.2f}")
         self.score_label.setStyleSheet(
-            f"color: {color}; font-size: 16px; font-weight: bold;"
+            (
+                f"color: {color}; "
+                f"font-size: {ModernFonts.SIZE_XL}px; "
+                f"font-weight: {ModernFonts.WEIGHT_BOLD};"
+            )
         )
 
         # Map score (-1.0 to 1.0) to bar (0 to 100)
@@ -175,33 +187,11 @@ class SentimentGauge(QFrame):
         self.bar.setValue(max(0, min(100, bar_value)))
 
         if score > 0.1:
-            bar_style = """
-                QProgressBar {
-                    background: #14243d; border-radius: 6px;
-                }
-                QProgressBar::chunk {
-                    background: #35b57c; border-radius: 6px;
-                }
-            """
+            self.bar.setStyleSheet(get_progress_bar_style("success"))
         elif score < -0.1:
-            bar_style = """
-                QProgressBar {
-                    background: #14243d; border-radius: 6px;
-                }
-                QProgressBar::chunk {
-                    background: #e5534b; border-radius: 6px;
-                }
-            """
+            self.bar.setStyleSheet(get_progress_bar_style("danger"))
         else:
-            bar_style = """
-                QProgressBar {
-                    background: #14243d; border-radius: 6px;
-                }
-                QProgressBar::chunk {
-                    background: #d8a03a; border-radius: 6px;
-                }
-            """
-        self.bar.setStyleSheet(bar_style)
+            self.bar.setStyleSheet(get_progress_bar_style("warning"))
 
         self.counts_label.setText(f"NEWS {total} | POS {pos} | NEG {neg}")
 
@@ -209,9 +199,14 @@ class SentimentGauge(QFrame):
         """Reset gauge to default state."""
         self.score_label.setText("--")
         self.score_label.setStyleSheet(
-            "font-size: 16px; font-weight: bold; color: #aac3ec;"
+            (
+                f"font-size: {ModernFonts.SIZE_XL}px; "
+                f"font-weight: {ModernFonts.WEIGHT_BOLD}; "
+                f"color: {ModernColors.TEXT_SECONDARY};"
+            )
         )
         self.bar.setValue(50)
+        self.bar.setStyleSheet(get_progress_bar_style("warning"))
         self.counts_label.setText("")
 
 class NewsPanel(QWidget):
@@ -264,7 +259,7 @@ class NewsPanel(QWidget):
 
     def _setup_ui(self):
         layout = QVBoxLayout(self)
-        layout.setSpacing(5)
+        layout.setSpacing(8)
         layout.setContentsMargins(0, 0, 0, 0)
 
         self.sentiment_gauge = SentimentGauge()
@@ -293,6 +288,7 @@ class NewsPanel(QWidget):
         self.table.setSelectionBehavior(
             QTableWidget.SelectionBehavior.SelectRows
         )
+        self.table.setAlternatingRowColors(True)
         self.table.setEditTriggers(
             QTableWidget.EditTrigger.NoEditTriggers
         )
@@ -306,7 +302,7 @@ class NewsPanel(QWidget):
 
         self.mode_label = QLabel(self._mode_text())
         self.mode_label.setStyleSheet(
-            "color: #79a6ff; font-size: 11px;"
+            f"color: {ModernColors.ACCENT_INFO}; font-size: {ModernFonts.SIZE_SM}px;"
         )
         btn_layout.addWidget(self.mode_label)
 
@@ -481,40 +477,42 @@ class NewsPanel(QWidget):
                     pass
 
             time_item = QTableWidgetItem(time_str)
-            time_item.setForeground(QColor("#aac3ec"))
+            time_item.setForeground(QColor(ModernColors.TEXT_SECONDARY))
             self.table.setItem(row, 0, time_item)
 
             score = self._safe_float_attr(item, "sentiment_score", 0.0)
 
             if score > 0.2:
                 sent_text = f"POS {score:+.1f}"
-                sent_color = "#35b57c"
+                sent_color = ModernColors.ACCENT_SUCCESS
             elif score < -0.2:
                 sent_text = f"NEG {score:+.1f}"
-                sent_color = "#e5534b"
+                sent_color = ModernColors.ACCENT_DANGER
             else:
                 sent_text = f"NEU {score:+.1f}"
-                sent_color = "#d8a03a"
+                sent_color = ModernColors.ACCENT_WARNING
 
             sent_item = QTableWidgetItem(sent_text)
             sent_item.setForeground(QColor(sent_color))
-            sent_item.setFont(QFont("Consolas", 9))
+            sent_item.setFont(
+                QFont(ModernFonts.FAMILY_MONOSPACE, ModernFonts.SIZE_XS)
+            )
             self.table.setItem(row, 1, sent_item)
 
             title = str(self._safe_item_attr(item, "title", ""))
             title_item = QTableWidgetItem(title)
 
             if score > 0.3:
-                title_item.setForeground(QColor("#35b57c"))
+                title_item.setForeground(QColor(ModernColors.ACCENT_SUCCESS))
             elif score < -0.3:
-                title_item.setForeground(QColor("#e5534b"))
+                title_item.setForeground(QColor(ModernColors.ACCENT_DANGER))
             else:
-                title_item.setForeground(QColor("#dbe4f3"))
+                title_item.setForeground(QColor(ModernColors.TEXT_PRIMARY))
             self.table.setItem(row, 2, title_item)
 
             source = str(self._safe_item_attr(item, "source", ""))
             source_item = QTableWidgetItem(source)
-            source_item.setForeground(QColor("#aac3ec"))
+            source_item.setForeground(QColor(ModernColors.TEXT_SECONDARY))
             self.table.setItem(row, 3, source_item)
 
     def stop(self):

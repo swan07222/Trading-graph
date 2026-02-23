@@ -42,7 +42,11 @@ from core.types import (
     AutoTradeMode,
     OrderSide,
 )
-from ui.modern_theme import ModernFonts
+from ui.modern_theme import (
+    ModernColors,
+    ModernFonts,
+    get_status_badge_style,
+)
 from ui import app_analysis_ops as _app_analysis_ops
 from ui import app_bar_ops as _app_bar_ops
 from ui import app_feed_ops as _app_feed_ops
@@ -459,7 +463,7 @@ class MainApp(MainAppCommonMixin, QMainWindow):
         # Auto-trade status indicator
         self.auto_trade_status_label = QLabel("  MANUAL  ")
         self.auto_trade_status_label.setStyleSheet(
-            "color: #aac3ec; font-weight: bold; padding: 0 8px;"
+            get_status_badge_style("manual")
         )
         toolbar.addWidget(self.auto_trade_status_label)
 
@@ -495,11 +499,12 @@ class MainApp(MainAppCommonMixin, QMainWindow):
     def _setup_ui(self) -> None:
         """Setup main UI with professional layout"""
         central = QWidget()
+        central.setObjectName("AppRoot")
         self.setCentralWidget(central)
 
         layout = QHBoxLayout(central)
-        layout.setSpacing(10)
-        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setSpacing(12)
+        layout.setContentsMargins(12, 12, 12, 12)
 
         main_splitter = QSplitter(Qt.Orientation.Horizontal)
         main_splitter.setChildrenCollapsible(False)
@@ -569,21 +574,23 @@ class MainApp(MainAppCommonMixin, QMainWindow):
         padding: int = 15,
     ) -> tuple[QFrame, dict[str, QLabel]]:
         frame = QFrame()
-        frame.setStyleSheet(
-            "QFrame {"
-            "background: #111c31;"
-            "border: 1px solid #243454;"
-            f"border-radius: 10px; padding: {int(padding)}px;"
-            "}"
-        )
+        frame.setObjectName("statFrame")
         grid = QGridLayout(frame)
+        grid.setContentsMargins(
+            int(padding),
+            int(padding),
+            int(padding),
+            int(padding),
+        )
+        grid.setHorizontalSpacing(10)
+        grid.setVerticalSpacing(8)
         out = {}
         for key, text, row, col in labels:
             container = QWidget()
             cont_layout = QVBoxLayout(container)
-            cont_layout.setContentsMargins(5, 5, 5, 5)
+            cont_layout.setContentsMargins(4, 4, 4, 4)
             title = QLabel(text)
-            title.setStyleSheet("color: #888; font-size: 11px;")
+            title.setObjectName("metaLabel")
             value = QLabel("--")
             value.setStyleSheet(value_style)
             cont_layout.addWidget(title)
@@ -595,8 +602,10 @@ class MainApp(MainAppCommonMixin, QMainWindow):
     def _create_center_panel(self) -> QWidget:
         """Create center panel with charts and signals"""
         panel = QWidget()
+        panel.setObjectName("centerPanel")
         layout = QVBoxLayout(panel)
-        layout.setSpacing(10)
+        layout.setSpacing(12)
+        layout.setContentsMargins(0, 0, 0, 0)
 
         # Signal Display - lazy import
         try:
@@ -668,7 +677,7 @@ class MainApp(MainAppCommonMixin, QMainWindow):
         chart_layout.addLayout(chart_actions)
 
         self.chart_latest_label = QLabel("Latest --")
-        self.chart_latest_label.setStyleSheet("color: #9aa4b2; font-size: 11px;")
+        self.chart_latest_label.setObjectName("chartLatestLabel")
         chart_layout.addWidget(self.chart_latest_label)
 
         chart_group.setLayout(chart_layout)
@@ -679,7 +688,9 @@ class MainApp(MainAppCommonMixin, QMainWindow):
 
         self.details_text = QTextEdit()
         self.details_text.setReadOnly(True)
-        self.details_text.setFont(QFont("Consolas", 10))
+        self.details_text.setFont(
+            QFont(ModernFonts.FAMILY_MONOSPACE, ModernFonts.SIZE_SM)
+        )
         self.details_text.setMaximumHeight(120)
         details_layout.addWidget(self.details_text)
 
@@ -738,10 +749,11 @@ class MainApp(MainAppCommonMixin, QMainWindow):
         self._status_bar.addWidget(self.status_label)
 
         self.market_label = QLabel("")
+        self.market_label.setObjectName("subtleLabel")
         self._status_bar.addPermanentWidget(self.market_label)
 
         self.monitor_label = QLabel("Monitoring: OFF")
-        self.monitor_label.setStyleSheet("color: #888;")
+        self.monitor_label.setObjectName("monitorLabel")
         self._status_bar.addWidget(self.monitor_label)
 
         self.time_label = QLabel("")
@@ -818,7 +830,12 @@ class MainApp(MainAppCommonMixin, QMainWindow):
                 self.model_status.setText(
                     f"Model: Loaded ({num_models} networks)"
                 )
-                self.model_status.setStyleSheet("color: #4CAF50;")
+                self.model_status.setStyleSheet(
+                    (
+                        f"color: {ModernColors.ACCENT_SUCCESS}; "
+                        f"font-weight: {ModernFonts.WEIGHT_BOLD};"
+                    )
+                )
                 self._sync_ui_to_loaded_model(
                     interval,
                     horizon,
@@ -833,7 +850,12 @@ class MainApp(MainAppCommonMixin, QMainWindow):
                 self.log("AI model loaded successfully", "success")
             else:
                 self.model_status.setText("Model: Not trained")
-                self.model_status.setStyleSheet("color: #FFD54F;")
+                self.model_status.setStyleSheet(
+                    (
+                        f"color: {ModernColors.ACCENT_WARNING}; "
+                        f"font-weight: {ModernFonts.WEIGHT_BOLD};"
+                    )
+                )
                 self.model_info.setText(
                     "Train a model to enable predictions"
                 )
@@ -847,7 +869,12 @@ class MainApp(MainAppCommonMixin, QMainWindow):
             self.log(f"Failed to load model: {e}", "error")
             self.predictor = None
             self.model_status.setText("Model: Error")
-            self.model_status.setStyleSheet("color: #F44336;")
+            self.model_status.setStyleSheet(
+                (
+                    f"color: {ModernColors.ACCENT_DANGER}; "
+                    f"font-weight: {ModernFonts.WEIGHT_BOLD};"
+                )
+            )
             self._update_trained_stocks_ui([])
 
         # Initialize auto-trader on executor if available
@@ -1235,7 +1262,10 @@ class MainApp(MainAppCommonMixin, QMainWindow):
                 f"Market Open | Trading Hours: {hours_text}"
             )
             self.market_label.setStyleSheet(
-                "color: #35b57c; font-weight: bold;"
+                (
+                    f"color: {ModernColors.ACCENT_SUCCESS};"
+                    f" font-weight: {ModernFonts.WEIGHT_BOLD};"
+                )
             )
         else:
             next_open = self._next_market_open(now_sh)
@@ -1246,7 +1276,9 @@ class MainApp(MainAppCommonMixin, QMainWindow):
             self.market_label.setText(
                 f"Market Closed | Trading Hours: {hours_text} | Next Open: {next_open_text}"
             )
-            self.market_label.setStyleSheet("color: #e5534b;")
+            self.market_label.setStyleSheet(
+                f"color: {ModernColors.ACCENT_DANGER};"
+            )
 
     def log(self, message: str, level: str = "info") -> None:
         _log_impl(self, message, level)

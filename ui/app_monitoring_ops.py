@@ -8,6 +8,7 @@ from PyQt6.QtWidgets import QApplication, QPushButton, QTableWidgetItem
 
 from config.settings import CONFIG
 from ui.background_tasks import RealTimeMonitor
+from ui.modern_theme import ModernColors, ModernFonts
 from utils.logger import get_logger
 
 log = get_logger(__name__)
@@ -106,7 +107,12 @@ def _start_monitoring(self: Any) -> None:
     self.monitor.start()
 
     self.monitor_label.setText("Monitoring: ACTIVE")
-    self.monitor_label.setStyleSheet("color: #4CAF50; font-weight: bold;")
+    self.monitor_label.setStyleSheet(
+        (
+            f"color: {ModernColors.ACCENT_SUCCESS}; "
+            f"font-weight: {ModernFonts.WEIGHT_BOLD};"
+        )
+    )
     self.monitor_action.setText("Stop Monitoring")
 
     if monitor_interval != requested_interval or int(monitor_horizon) != int(
@@ -140,7 +146,9 @@ def _stop_monitoring(self: Any) -> None:
             self.monitor = None
 
     self.monitor_label.setText("Monitoring: OFF")
-    self.monitor_label.setStyleSheet("color: #888;")
+    self.monitor_label.setStyleSheet(
+        f"color: {ModernColors.TEXT_MUTED};"
+    )
     self.monitor_action.setText("Start Monitoring")
     self.monitor_action.setChecked(False)
 
@@ -177,9 +185,9 @@ def _on_signal_detected(self: Any, pred: Any) -> None:
     signal_item = QTableWidgetItem(signal_text)
 
     if hasattr(pred, "signal") and pred.signal in [signal_type.STRONG_BUY, signal_type.BUY]:
-        signal_item.setForeground(QColor("#4CAF50"))
+        signal_item.setForeground(QColor(ModernColors.ACCENT_SUCCESS))
     else:
-        signal_item.setForeground(QColor("#F44336"))
+        signal_item.setForeground(QColor(ModernColors.ACCENT_DANGER))
     self.signals_table.setItem(row, 2, signal_item)
 
     conf = pred.confidence if hasattr(pred, "confidence") else 0

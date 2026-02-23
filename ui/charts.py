@@ -9,6 +9,7 @@ from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QCursor
 from PyQt6.QtWidgets import QLabel, QMenu, QToolTip, QVBoxLayout, QWidget
 
+from ui.modern_theme import ModernColors
 from utils.logger import get_logger
 
 log = get_logger(__name__)
@@ -78,8 +79,9 @@ if HAS_PYQTGRAPH:
 
                 up = (c >= o)
                 color = (
-                    pg.mkColor("#10b981") if up
-                    else pg.mkColor("#ef4444")
+                    pg.mkColor(ModernColors.ACCENT_SUCCESS)
+                    if up
+                    else pg.mkColor(ModernColors.ACCENT_DANGER)
                 )
 
                 p.setPen(pg.mkPen(color=color, width=1))
@@ -407,15 +409,25 @@ class StockChart(QWidget):
         """Setup pyqtgraph chart with all three layers."""
         pg.setConfigOptions(
             antialias=True,
-            background='#0f172a',
-            foreground='#e6e9f0'
+            background=ModernColors.BG_PRIMARY,
+            foreground=ModernColors.TEXT_PRIMARY,
         )
 
         self.plot_widget = pg.PlotWidget()
-        self.plot_widget.setLabel('left', 'Price', units='CNY', color='#94a3b8')
-        self.plot_widget.setLabel('bottom', 'Time', units='bars', color='#94a3b8')
-        self.plot_widget.showGrid(x=True, y=True, alpha=0.2)
-        self.plot_widget.setBackground('#0f172a')
+        self.plot_widget.setLabel(
+            "left",
+            "Price",
+            units="CNY",
+            color=ModernColors.TEXT_SECONDARY,
+        )
+        self.plot_widget.setLabel(
+            "bottom",
+            "Time",
+            units="bars",
+            color=ModernColors.TEXT_SECONDARY,
+        )
+        self.plot_widget.showGrid(x=True, y=True, alpha=0.15)
+        self.plot_widget.setBackground(ModernColors.BG_PRIMARY)
         self.plot_widget.setContextMenuPolicy(
             Qt.ContextMenuPolicy.CustomContextMenu
         )
@@ -426,7 +438,7 @@ class StockChart(QWidget):
         # === Layer 1 (BOTTOM): Prediction line - dashed cyan ===
         self.predicted_line = self.plot_widget.plot(
             pen=pg.mkPen(
-                color='#2dd4bf',
+                color=ModernColors.ACCENT_SECONDARY,
                 width=2,
                 style=Qt.PenStyle.DashLine
             ),
@@ -434,7 +446,7 @@ class StockChart(QWidget):
         )
         self.predicted_low_line = self.plot_widget.plot(
             pen=pg.mkPen(
-                color='#fbbf24',
+                color=ModernColors.ACCENT_WARNING,
                 width=1,
                 style=Qt.PenStyle.DotLine,
             ),
@@ -442,7 +454,7 @@ class StockChart(QWidget):
         )
         self.predicted_high_line = self.plot_widget.plot(
             pen=pg.mkPen(
-                color='#fbbf24',
+                color=ModernColors.ACCENT_WARNING,
                 width=1,
                 style=Qt.PenStyle.DotLine,
             ),
@@ -451,8 +463,8 @@ class StockChart(QWidget):
 
         # === Layer 2 (MIDDLE): Price line - solid blue ===
         self.actual_line = self.plot_widget.plot(
-            pen=pg.mkPen(color='#60a5fa', width=1.5),
-            name='Price'
+            pen=pg.mkPen(color=ModernColors.ACCENT_INFO, width=1.5),
+            name="Price",
         )
 
         # === Layer 3 (TOP): Candlesticks ===
@@ -462,15 +474,19 @@ class StockChart(QWidget):
         self.level_lines = {}
         self.overlay_lines = {
             "sma20": self.plot_widget.plot(
-                pen=pg.mkPen(color="#fbbf24", width=1),
+                pen=pg.mkPen(color=ModernColors.ACCENT_WARNING, width=1),
                 name="SMA20",
             ),
             "sma50": self.plot_widget.plot(
-                pen=pg.mkPen(color="#818cf8", width=1, style=Qt.PenStyle.DashLine),
+                pen=pg.mkPen(color="#8ca4d7", width=1, style=Qt.PenStyle.DashLine),
                 name="SMA50",
             ),
             "sma200": self.plot_widget.plot(
-                pen=pg.mkPen(color="#94a3b8", width=1, style=Qt.PenStyle.DashLine),
+                pen=pg.mkPen(
+                    color=ModernColors.TEXT_SECONDARY,
+                    width=1,
+                    style=Qt.PenStyle.DashLine,
+                ),
                 name="SMA200",
             ),
             "ema21": self.plot_widget.plot(
@@ -478,19 +494,23 @@ class StockChart(QWidget):
                 name="EMA21",
             ),
             "ema55": self.plot_widget.plot(
-                pen=pg.mkPen(color="#fcd34d", width=1, style=Qt.PenStyle.DotLine),
+                pen=pg.mkPen(color="#edcf7c", width=1, style=Qt.PenStyle.DotLine),
                 name="EMA55",
             ),
             "bb_upper": self.plot_widget.plot(
-                pen=pg.mkPen(color="#a5b4fc", width=1, style=Qt.PenStyle.DashLine),
+                pen=pg.mkPen(color="#8ab2ff", width=1, style=Qt.PenStyle.DashLine),
                 name="BB Upper",
             ),
             "bb_lower": self.plot_widget.plot(
-                pen=pg.mkPen(color="#a5b4fc", width=1, style=Qt.PenStyle.DashLine),
+                pen=pg.mkPen(color="#8ab2ff", width=1, style=Qt.PenStyle.DashLine),
                 name="BB Lower",
             ),
             "vwap20": self.plot_widget.plot(
-                pen=pg.mkPen(color="#93c5fd", width=1, style=Qt.PenStyle.DotLine),
+                pen=pg.mkPen(
+                    color=ModernColors.ACCENT_INFO,
+                    width=1,
+                    style=Qt.PenStyle.DotLine,
+                ),
                 name="VWAP20",
             ),
         }
@@ -515,16 +535,18 @@ class StockChart(QWidget):
             "Install with: pip install pyqtgraph"
         )
         self.fallback_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.fallback_label.setStyleSheet("""
+        self.fallback_label.setStyleSheet(
+            f"""
             QLabel {
-                background: #0f172a;
-                color: #93c5fd;
-                border: 1px solid #334155;
+                background: {ModernColors.BG_PRIMARY};
+                color: {ModernColors.ACCENT_INFO};
+                border: 1px solid {ModernColors.BORDER_SUBTLE};
                 border-radius: 12px;
                 font-size: 14px;
                 padding: 20px;
             }
-        """)
+            """
+        )
         self.layout().addWidget(self.fallback_label)
 
     # =========================================================================
@@ -1227,16 +1249,16 @@ class StockChart(QWidget):
             return
 
         level_colors = {
-            'stop_loss': '#e5534b',
-            'target_1': '#35b57c',
-            'target_2': '#2ea043',
-            'target_3': '#238636',
-            'entry': '#79a6ff',
+            "stop_loss": ModernColors.ACCENT_DANGER,
+            "target_1": ModernColors.ACCENT_SUCCESS,
+            "target_2": "#2ec695",
+            "target_3": "#24aa83",
+            "entry": ModernColors.ACCENT_INFO,
         }
 
         for name, price in self._levels.items():
             if price and price > 0:
-                color = level_colors.get(name, '#888')
+                color = level_colors.get(name, ModernColors.TEXT_MUTED)
                 try:
                     line = pg.InfiniteLine(
                         pos=price,
@@ -1304,7 +1326,9 @@ class StockChart(QWidget):
         if HAS_PYQTGRAPH and self.plot_widget is not None:
             try:
                 self.plot_widget.setTitle(
-                    title, color='#dbe4f3', size='12pt'
+                    title,
+                    color=ModernColors.TEXT_PRIMARY,
+                    size="12pt",
                 )
             except Exception:
                 pass
@@ -1351,20 +1375,22 @@ class MiniChart(QWidget):
 
         if HAS_PYQTGRAPH:
             self.plot = pg.PlotWidget()
-            self.plot.setBackground('#0c1728')
-            self.plot.hideAxis('left')
-            self.plot.hideAxis('bottom')
+            self.plot.setBackground(ModernColors.BG_PRIMARY)
+            self.plot.hideAxis("left")
+            self.plot.hideAxis("bottom")
             self.plot.setMouseEnabled(False, False)
 
             self.line = self.plot.plot(
-                pen=pg.mkPen(color='#79a6ff', width=1)
+                pen=pg.mkPen(color=ModernColors.ACCENT_INFO, width=1)
             )
             layout.addWidget(self.plot)
         else:
             self.plot = None
             self.line = None
             self.label = QLabel("--")
-            self.label.setStyleSheet("color: #888;")
+            self.label.setStyleSheet(
+                f"color: {ModernColors.TEXT_MUTED};"
+            )
             layout.addWidget(self.label)
 
     def update_data(self, prices: list[float]):
@@ -1386,13 +1412,13 @@ class MiniChart(QWidget):
 
             if len(y) > 1:
                 if y[-1] > y[0]:
-                    color = '#35b57c'
+                    color = ModernColors.ACCENT_SUCCESS
                 elif y[-1] < y[0]:
-                    color = '#e5534b'
+                    color = ModernColors.ACCENT_DANGER
                 else:
-                    color = '#888'
+                    color = ModernColors.TEXT_MUTED
             else:
-                color = '#888'
+                color = ModernColors.TEXT_MUTED
 
             self.line.setPen(pg.mkPen(color=color, width=1))
             self.line.setData(x, y)
@@ -1400,4 +1426,3 @@ class MiniChart(QWidget):
 
         except Exception:
             pass
-

@@ -26,6 +26,11 @@ from PyQt6.QtWidgets import (
 
 from config.settings import CONFIG, TradingMode
 from core.types import AutoTradeAction, AutoTradeMode
+from ui.modern_theme import (
+    ModernColors,
+    ModernFonts,
+    get_status_badge_style,
+)
 from utils.logger import get_logger
 
 log = get_logger(__name__)
@@ -157,17 +162,17 @@ def _update_auto_trade_status_label(self: Any, mode: AutoTradeMode) -> None:
     if mode == AutoTradeMode.AUTO:
         self.auto_trade_status_label.setText("  AUTO  ")
         self.auto_trade_status_label.setStyleSheet(
-            "color: #4CAF50; font-weight: bold; padding: 0 8px;"
+            get_status_badge_style("auto")
         )
     elif mode == AutoTradeMode.SEMI_AUTO:
         self.auto_trade_status_label.setText("  SEMI-AUTO  ")
         self.auto_trade_status_label.setStyleSheet(
-            "color: #FFD54F; font-weight: bold; padding: 0 8px;"
+            get_status_badge_style("semi-auto")
         )
     else:
         self.auto_trade_status_label.setText("  MANUAL  ")
         self.auto_trade_status_label.setStyleSheet(
-            "color: #aac3ec; font-weight: bold; padding: 0 8px;"
+            get_status_badge_style("manual")
         )
 
 
@@ -393,20 +398,20 @@ def _on_auto_trade_action(self: Any, action: AutoTradeAction) -> None:
 
     signal_item = QTableWidgetItem(action.signal_type)
     if action.signal_type in ("STRONG_BUY", "BUY"):
-        signal_item.setForeground(QColor("#4CAF50"))
+        signal_item.setForeground(QColor(ModernColors.ACCENT_SUCCESS))
     elif action.signal_type in ("STRONG_SELL", "SELL"):
-        signal_item.setForeground(QColor("#F44336"))
+        signal_item.setForeground(QColor(ModernColors.ACCENT_DANGER))
     self.auto_actions_table.setItem(row, 2, signal_item)
 
     self.auto_actions_table.setItem(row, 3, QTableWidgetItem(f"{action.confidence:.0%}"))
 
     decision_item = QTableWidgetItem(action.decision)
     if action.decision == "EXECUTED":
-        decision_item.setForeground(QColor("#4CAF50"))
+        decision_item.setForeground(QColor(ModernColors.ACCENT_SUCCESS))
     elif action.decision == "SKIPPED":
-        decision_item.setForeground(QColor("#FFD54F"))
+        decision_item.setForeground(QColor(ModernColors.ACCENT_WARNING))
     elif action.decision == "REJECTED":
-        decision_item.setForeground(QColor("#F44336"))
+        decision_item.setForeground(QColor(ModernColors.ACCENT_DANGER))
     self.auto_actions_table.setItem(row, 4, decision_item)
 
     self.auto_actions_table.setItem(
@@ -461,9 +466,9 @@ def _on_pending_approval(self: Any, action: AutoTradeAction) -> None:
 
     signal_item = QTableWidgetItem(action.signal_type)
     if action.signal_type in ("STRONG_BUY", "BUY"):
-        signal_item.setForeground(QColor("#4CAF50"))
+        signal_item.setForeground(QColor(ModernColors.ACCENT_SUCCESS))
     else:
-        signal_item.setForeground(QColor("#F44336"))
+        signal_item.setForeground(QColor(ModernColors.ACCENT_DANGER))
     self.pending_table.setItem(row, 2, signal_item)
 
     self.pending_table.setItem(row, 3, QTableWidgetItem(f"{action.confidence:.0%}"))
@@ -546,12 +551,22 @@ def _refresh_auto_trade_ui(self: Any) -> None:
         mode_label.setText(mode_text)
 
         if state.mode == AutoTradeMode.AUTO:
-            color = "#F44336" if state.is_safety_paused else "#4CAF50"
+            color = (
+                ModernColors.ACCENT_DANGER
+                if state.is_safety_paused
+                else ModernColors.ACCENT_SUCCESS
+            )
         elif state.mode == AutoTradeMode.SEMI_AUTO:
-            color = "#FFD54F"
+            color = ModernColors.ACCENT_WARNING
         else:
-            color = "#aac3ec"
-        mode_label.setStyleSheet(f"color: {color}; font-size: 16px; font-weight: bold;")
+            color = ModernColors.ACCENT_INFO
+        mode_label.setStyleSheet(
+            (
+                f"color: {color}; "
+                f"font-size: {ModernFonts.SIZE_XL}px; "
+                f"font-weight: {ModernFonts.WEIGHT_BOLD};"
+            )
+        )
 
     trades_label = self.auto_trade_labels.get("trades")
     if trades_label:
@@ -560,10 +575,18 @@ def _refresh_auto_trade_ui(self: Any) -> None:
     pnl_label = self.auto_trade_labels.get("pnl")
     if pnl_label:
         pnl = state.auto_trade_pnl
-        pnl_color = "#35b57c" if pnl >= 0 else "#e5534b"
+        pnl_color = (
+            ModernColors.ACCENT_SUCCESS
+            if pnl >= 0
+            else ModernColors.ACCENT_DANGER
+        )
         pnl_label.setText(f"CNY {pnl:+,.2f}")
         pnl_label.setStyleSheet(
-            f"color: {pnl_color}; font-size: 16px; font-weight: bold;"
+            (
+                f"color: {pnl_color}; "
+                f"font-size: {ModernFonts.SIZE_XL}px; "
+                f"font-weight: {ModernFonts.WEIGHT_BOLD};"
+            )
         )
 
     status_label = self.auto_trade_labels.get("status")
@@ -571,7 +594,11 @@ def _refresh_auto_trade_ui(self: Any) -> None:
         if state.is_safety_paused:
             status_label.setText(f"Paused: {state.pause_reason}")
             status_label.setStyleSheet(
-                "color: #F44336; font-size: 14px; font-weight: bold;"
+                (
+                    f"color: {ModernColors.ACCENT_DANGER}; "
+                    f"font-size: {ModernFonts.SIZE_LG}px; "
+                    f"font-weight: {ModernFonts.WEIGHT_BOLD};"
+                )
             )
         elif state.is_running:
             last_scan = ""
@@ -580,11 +607,20 @@ def _refresh_auto_trade_ui(self: Any) -> None:
                 last_scan = f" ({elapsed:.0f}s ago)"
             status_label.setText(f"Running{last_scan}")
             status_label.setStyleSheet(
-                "color: #4CAF50; font-size: 14px; font-weight: bold;"
+                (
+                    f"color: {ModernColors.ACCENT_SUCCESS}; "
+                    f"font-size: {ModernFonts.SIZE_LG}px; "
+                    f"font-weight: {ModernFonts.WEIGHT_BOLD};"
+                )
             )
         else:
             status_label.setText("Idle")
-            status_label.setStyleSheet("color: #aac3ec; font-size: 14px;")
+            status_label.setStyleSheet(
+                (
+                    f"color: {ModernColors.ACCENT_INFO}; "
+                    f"font-size: {ModernFonts.SIZE_LG}px;"
+                )
+            )
 
     if state.is_safety_paused or state.is_paused:
         self.auto_pause_btn.setText("Resume Auto")

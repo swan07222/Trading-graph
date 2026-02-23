@@ -14,6 +14,7 @@ from core.types import AutoTradeMode
 from ui.background_tasks import WorkerThread
 from ui.background_tasks import sanitize_watch_list as _sanitize_watch_list
 from ui.background_tasks import validate_stock_code as _validate_stock_code
+from ui.modern_theme import ModernColors, ModernFonts
 from utils.logger import get_logger
 from utils.recoverable import COMMON_RECOVERABLE_EXCEPTIONS
 
@@ -654,15 +655,15 @@ def _update_details(self, pred: Any) -> None:
     Signal = _lazy_get("models.predictor", "Signal")
 
     signal_colors = {
-        Signal.STRONG_BUY: "#2ea043",
-        Signal.BUY: "#35b57c",
-        Signal.HOLD: "#d8a03a",
-        Signal.SELL: "#e5534b",
-        Signal.STRONG_SELL: "#da3633",
+        Signal.STRONG_BUY: ModernColors.ACCENT_SUCCESS,
+        Signal.BUY: ModernColors.ACCENT_SUCCESS,
+        Signal.HOLD: ModernColors.ACCENT_WARNING,
+        Signal.SELL: ModernColors.ACCENT_DANGER,
+        Signal.STRONG_SELL: ModernColors.ACCENT_DANGER,
     }
 
     signal = getattr(pred, 'signal', Signal.HOLD)
-    color = signal_colors.get(signal, "#dbe4f3")
+    color = signal_colors.get(signal, ModernColors.TEXT_PRIMARY)
     signal_text = (
         signal.value if hasattr(signal, 'value') else str(signal)
     )
@@ -709,13 +710,13 @@ def _update_details(self, pred: Any) -> None:
                 sent_label = sentiment['label']
 
                 if sent_label == "positive":
-                    sent_color = "#35b57c"
+                    sent_color = ModernColors.ACCENT_SUCCESS
                     sent_emoji = "UP"
                 elif sent_label == "negative":
-                    sent_color = "#e5534b"
+                    sent_color = ModernColors.ACCENT_DANGER
                     sent_emoji = "DOWN"
                 else:
-                    sent_color = "#d8a03a"
+                    sent_color = ModernColors.ACCENT_WARNING
                     sent_emoji = "NEUTRAL"
 
                 news_html = f"""
@@ -777,7 +778,7 @@ def _update_details(self, pred: Any) -> None:
     html = f"""
     <style>
         body {{
-            color: #dbe4f3;
+            color: {ModernColors.TEXT_PRIMARY};
             font-family: Consolas;
             background-color: transparent;
         }}
@@ -788,10 +789,10 @@ def _update_details(self, pred: Any) -> None:
             margin: 10px 0;
             background-color: transparent;
         }}
-        .label {{ color: #aac3ec; }}
-        .positive {{ color: #35b57c; }}
-        .negative {{ color: #e5534b; }}
-        .neutral {{ color: #d8a03a; }}
+        .label {{ color: {ModernColors.TEXT_SECONDARY}; }}
+        .positive {{ color: {ModernColors.ACCENT_SUCCESS}; }}
+        .negative {{ color: {ModernColors.ACCENT_DANGER}; }}
+        .neutral {{ color: {ModernColors.ACCENT_WARNING}; }}
     </style>
 
     <div class="section">
@@ -921,7 +922,7 @@ def _add_to_history(self, pred: Any) -> None:
         signal.value if hasattr(signal, 'value') else str(signal)
     )
     signal_item = QTableWidgetItem(signal_text)
-    signal_item.setForeground(QColor("#79a6ff"))
+    signal_item.setForeground(QColor(ModernColors.ACCENT_INFO))
     self.history_table.setItem(row, 2, signal_item)
 
     prob_up = getattr(pred, 'prob_up', 0)
@@ -1076,20 +1077,20 @@ def _refresh_guess_rows_for_symbol(self, code: str, price: float) -> None:
 
             if direction == "NONE":
                 result_item.setText("--")
-                result_item.setForeground(QColor("#aac3ec"))
+                result_item.setForeground(QColor(ModernColors.TEXT_SECONDARY))
             elif pnl > 0:
                 result_item.setText(
                     f"CORRECT CNY {pnl:+,.2f} ({signed_ret_pct:+.2f}%)"
                 )
-                result_item.setForeground(QColor("#35b57c"))
+                result_item.setForeground(QColor(ModernColors.ACCENT_SUCCESS))
             elif pnl < 0:
                 result_item.setText(
                     f"WRONG CNY {pnl:,.2f} ({signed_ret_pct:+.2f}%)"
                 )
-                result_item.setForeground(QColor("#e5534b"))
+                result_item.setForeground(QColor(ModernColors.ACCENT_DANGER))
             else:
                 result_item.setText("FLAT CNY 0.00 (+0.00%)")
-                result_item.setForeground(QColor("#aac3ec"))
+                result_item.setForeground(QColor(ModernColors.TEXT_SECONDARY))
 
             meta["mark_price"] = mark_price
             result_item.setData(Qt.ItemDataRole.UserRole, meta)
@@ -1158,9 +1159,17 @@ def _update_correct_guess_profit_ui(self) -> None:
         gross_correct = float(stats.get("correct_profit", 0.0) or 0.0)
         gross_wrong = float(stats.get("wrong_loss", 0.0) or 0.0)
         label_profit.setText(f"CNY {net_val:+,.2f}")
-        color = "#35b57c" if net_val >= 0 else "#e5534b"
+        color = (
+            ModernColors.ACCENT_SUCCESS
+            if net_val >= 0
+            else ModernColors.ACCENT_DANGER
+        )
         label_profit.setStyleSheet(
-            f"color: {color}; font-size: 16px; font-weight: bold;"
+            (
+                f"color: {color}; "
+                f"font-size: {ModernFonts.SIZE_XL}px; "
+                f"font-weight: {ModernFonts.WEIGHT_BOLD};"
+            )
         )
         label_profit.setToolTip(
             "Directional guess P&L\n"
@@ -1176,7 +1185,11 @@ def _update_correct_guess_profit_ui(self) -> None:
         rate = float(stats.get("hit_rate", 0.0) or 0.0)
         label_rate.setText(f"{rate:.1%} ({correct}/{total})")
         label_rate.setStyleSheet(
-            "color: #79a6ff; font-size: 16px; font-weight: bold;"
+            (
+                f"color: {ModernColors.ACCENT_INFO}; "
+                f"font-size: {ModernFonts.SIZE_XL}px; "
+                f"font-weight: {ModernFonts.WEIGHT_BOLD};"
+            )
         )
 
 def _scan_stocks(self) -> None:
@@ -1237,4 +1250,3 @@ def _on_scan_done(self, picks: list[Any]) -> None:
         self._analyze_stock()
 
     self.workers.pop('scan', None)
-
