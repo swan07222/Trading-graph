@@ -32,6 +32,13 @@ def get_history(
 ) -> pd.DataFrame:
     """Unified history fetcher. Priority: cache -> local DB -> online."""
     from core.instruments import instrument_key, parse_instrument
+    from data.fetcher import DataFetcher
+
+    # FIX: Validate stock code format
+    is_valid, error_msg = DataFetcher.validate_stock_code(code)
+    if not is_valid:
+        log.warning("Invalid stock code in get_history: %s", error_msg)
+        return pd.DataFrame()
 
     inst = instrument or parse_instrument(code)
     key = instrument_key(inst)

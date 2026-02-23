@@ -38,8 +38,8 @@ class SignalPanel(QFrame):
 
     def _setup_ui(self):
         layout = QVBoxLayout(self)
-        layout.setSpacing(10)
-        layout.setContentsMargins(20, 20, 20, 20)
+        layout.setSpacing(12)
+        layout.setContentsMargins(24, 24, 24, 24)
 
         self.signal_label = QLabel("WAITING")
         self.signal_label.setFont(QFont("Segoe UI", 36, QFont.Weight.Bold))
@@ -47,35 +47,39 @@ class SignalPanel(QFrame):
         layout.addWidget(self.signal_label)
 
         self.info_label = QLabel("Enter a stock code to analyze")
-        self.info_label.setFont(QFont("Segoe UI", 14))
+        self.info_label.setFont(QFont("Segoe UI", 13))
         self.info_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(self.info_label)
 
         prob_widget = QWidget()
         prob_layout = QHBoxLayout(prob_widget)
-        prob_layout.setContentsMargins(0, 10, 0, 10)
+        prob_layout.setSpacing(16)
+        prob_layout.setContentsMargins(0, 12, 0, 12)
 
         down_container = QVBoxLayout()
-        down_label = QLabel("DOWN")
+        down_container.setSpacing(6)
+        down_label = QLabel("▼ DOWN")
         down_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         down_label.setStyleSheet(
-            "color: #e5534b; font-weight: bold; font-size: 11px;"
+            "color: #f87171; font-weight: 700; font-size: 11px;"
         )
         self.prob_down = QProgressBar()
         self.prob_down.setFormat("%p%")
         self.prob_down.setStyleSheet("""
             QProgressBar {
-                background: #101f34;
-                border: 1px solid #304968;
-                border-radius: 6px;
+                background: #1f2937;
+                border: none;
+                border-radius: 8px;
                 text-align: center;
-                color: #eaf1ff;
-                height: 20px;
+                color: #fecaca;
+                height: 24px;
+                font-weight: 600;
+                font-size: 11px;
             }
             QProgressBar::chunk {
                 background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                    stop:0 #e5534b, stop:1 #cf3e36);
-                border-radius: 5px;
+                    stop:0 #f87171, stop:1 #dc2626);
+                border-radius: 7px;
             }
         """)
         down_container.addWidget(down_label)
@@ -83,26 +87,29 @@ class SignalPanel(QFrame):
         prob_layout.addLayout(down_container)
 
         neutral_container = QVBoxLayout()
-        neutral_label = QLabel("NEUTRAL")
+        neutral_container.setSpacing(6)
+        neutral_label = QLabel("● NEUTRAL")
         neutral_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         neutral_label.setStyleSheet(
-            "color: #d8a03a; font-weight: bold; font-size: 11px;"
+            "color: #fbbf24; font-weight: 700; font-size: 11px;"
         )
         self.prob_neutral = QProgressBar()
         self.prob_neutral.setFormat("%p%")
         self.prob_neutral.setStyleSheet("""
             QProgressBar {
-                background: #101f34;
-                border: 1px solid #304968;
-                border-radius: 6px;
+                background: #1f2937;
+                border: none;
+                border-radius: 8px;
                 text-align: center;
-                color: #eaf1ff;
-                height: 20px;
+                color: #fef3c7;
+                height: 24px;
+                font-weight: 600;
+                font-size: 11px;
             }
             QProgressBar::chunk {
                 background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                    stop:0 #d8a03a, stop:1 #bd8224);
-                border-radius: 5px;
+                    stop:0 #fbbf24, stop:1 #d97706);
+                border-radius: 7px;
             }
         """)
         neutral_container.addWidget(neutral_label)
@@ -110,26 +117,29 @@ class SignalPanel(QFrame):
         prob_layout.addLayout(neutral_container)
 
         up_container = QVBoxLayout()
-        up_label = QLabel("UP")
+        up_container.setSpacing(6)
+        up_label = QLabel("▲ UP")
         up_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         up_label.setStyleSheet(
-            "color: #35b57c; font-weight: bold; font-size: 11px;"
+            "color: #34d399; font-weight: 700; font-size: 11px;"
         )
         self.prob_up = QProgressBar()
         self.prob_up.setFormat("%p%")
         self.prob_up.setStyleSheet("""
             QProgressBar {
-                background: #101f34;
-                border: 1px solid #304968;
-                border-radius: 6px;
+                background: #1f2937;
+                border: none;
+                border-radius: 8px;
                 text-align: center;
-                color: #eaf1ff;
-                height: 20px;
+                color: #d1fae5;
+                height: 24px;
+                font-weight: 600;
+                font-size: 11px;
             }
             QProgressBar::chunk {
                 background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                    stop:0 #35b57c, stop:1 #239760);
-                border-radius: 5px;
+                    stop:0 #34d399, stop:1 #059669);
+                border-radius: 7px;
             }
         """)
         up_container.addWidget(up_label)
@@ -142,11 +152,13 @@ class SignalPanel(QFrame):
         self.action_label.setFont(QFont("Segoe UI", 12))
         self.action_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.action_label.setWordWrap(True)
+        self.action_label.setStyleSheet("color: #9ca3af; padding: 8px 0;")
         layout.addWidget(self.action_label)
 
         self.conf_label = QLabel("")
         self.conf_label.setFont(QFont("Segoe UI", 11))
         self.conf_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.conf_label.setStyleSheet("color: #6b7280;")
         layout.addWidget(self.conf_label)
 
         self._set_default_style()
@@ -155,11 +167,11 @@ class SignalPanel(QFrame):
         self.setStyleSheet("""
             SignalPanel {
                 background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 #14243d, stop:1 #0f1b2e);
-                border-radius: 12px;
-                border: 2px solid #2b4266;
+                    stop:0 #1e293b, stop:1 #0f172a);
+                border-radius: 16px;
+                border: 1px solid #334155;
             }
-            QLabel { color: #b8c8e3; }
+            QLabel { color: #e6e9f0; }
         """)
 
     @staticmethod
@@ -314,6 +326,39 @@ class PositionTable(QTableWidget):
             QTableWidget.SelectionBehavior.SelectRows
         )
         self.verticalHeader().setVisible(False)
+        self.setStyleSheet("""
+            QTableWidget {
+                background: #111827;
+                color: #e6e9f0;
+                border: 1px solid #1f2937;
+                border-radius: 10px;
+                gridline-color: #1f2937;
+                selection-background-color: #1e3a5f;
+                selection-color: #ffffff;
+                alternate-background-color: #0f1724;
+                outline: none;
+                font-size: 12px;
+            }
+            QTableWidget::item {
+                padding: 10px;
+                border: none;
+            }
+            QTableWidget::item:hover {
+                background: #1f2937;
+            }
+            QHeaderView::section {
+                background: #1f2937;
+                color: #93c5fd;
+                padding: 12px 10px;
+                border: none;
+                border-right: 1px solid #1f2937;
+                border-bottom: 1px solid #1f2937;
+                font-weight: 600;
+                font-size: 11px;
+                text-transform: uppercase;
+                letter-spacing: 0.5px;
+            }
+        """)
 
     @staticmethod
     def _safe_attr(obj, attr, default=0):
@@ -416,15 +461,18 @@ class LogWidget(QTextEdit):
     def __init__(self):
         super().__init__()
         self.setReadOnly(True)
-        self.setFont(QFont("Consolas", 10))
+        self.setFont(QFont("Consolas", 11))
         self.setMaximumHeight(200)
         self.setStyleSheet("""
             QTextEdit {
-                background: #0c1728;
-                color: #cde8d7;
-                border: 1px solid #253754;
-                border-radius: 8px;
-                padding: 5px;
+                background: #0f172a;
+                color: #a7f3d0;
+                border: 1px solid #1e293b;
+                border-radius: 10px;
+                padding: 10px;
+                selection-background-color: #3b82f6;
+                selection-color: #ffffff;
+                font-family: 'Consolas', 'Cascadia Code', 'JetBrains Mono', monospace;
             }
         """)
         self._line_count = 0
@@ -529,28 +577,31 @@ class MetricCard(QFrame):
     def _setup_ui(self, title: str, value: str, icon: str):
         self.setStyleSheet("""
             MetricCard {
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
-                    stop:0 #14243d, stop:1 #0f1b2e);
-                border-radius: 10px;
-                border: 1px solid #2f4466;
-                padding: 15px;
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 #1e293b, stop:1 #0f172a);
+                border-radius: 12px;
+                border: 1px solid #334155;
+                padding: 18px;
+            }
+            MetricCard:hover {
+                border-color: #475569;
             }
         """)
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(15, 15, 15, 15)
-        layout.setSpacing(5)
+        layout.setContentsMargins(18, 18, 18, 18)
+        layout.setSpacing(8)
 
         title_text = f"{icon} {title}" if icon else title
         title_label = QLabel(title_text)
-        title_label.setStyleSheet("color: #aac3ec; font-size: 12px;")
+        title_label.setStyleSheet("color: #94a3b8; font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px;")
         layout.addWidget(title_label)
 
         self.value_label = QLabel(str(value))
         self.value_label.setStyleSheet("""
-            color: #79a6ff;
-            font-size: 24px;
-            font-weight: bold;
+            color: #60a5fa;
+            font-size: 26px;
+            font-weight: 700;
         """)
         layout.addWidget(self.value_label)
 
@@ -563,8 +614,8 @@ class MetricCard(QFrame):
         if color:
             self.value_label.setStyleSheet(f"""
                 color: {color};
-                font-size: 24px;
-                font-weight: bold;
+                font-size: 26px;
+                font-weight: 700;
             """)
 
 class TradingStatusBar(QFrame):
@@ -580,32 +631,34 @@ class TradingStatusBar(QFrame):
     def _setup_ui(self):
         self.setStyleSheet("""
             TradingStatusBar {
-                background: #0f1b2e;
-                border-radius: 8px;
-                border: 1px solid #2f4466;
-                padding: 10px;
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 #1e293b, stop:1 #0f172a);
+                border-radius: 12px;
+                border: 1px solid #334155;
+                padding: 14px;
             }
         """)
 
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(15, 10, 15, 10)
+        layout.setContentsMargins(18, 12, 18, 12)
+        layout.setSpacing(20)
 
-        self.connection_label = QLabel("Disconnected")
+        self.connection_label = QLabel("● Disconnected")
         self.connection_label.setStyleSheet(
-            "color: #e5534b; font-weight: bold;"
+            "color: #f87171; font-weight: 700; font-size: 12px;"
         )
         layout.addWidget(self.connection_label)
 
         layout.addStretch()
 
         self.market_label = QLabel("Market: --")
-        self.market_label.setStyleSheet("color: #aac3ec;")
+        self.market_label.setStyleSheet("color: #94a3b8; font-size: 12px;")
         layout.addWidget(self.market_label)
 
         layout.addStretch()
 
         self.mode_label = QLabel("Mode: Paper Trading")
-        self.mode_label.setStyleSheet("color: #d8a03a;")
+        self.mode_label.setStyleSheet("color: #fbbf24; font-size: 12px; font-weight: 600;")
         layout.addWidget(self.mode_label)
 
     def set_connected(self, connected: bool, mode: str = "paper"):
@@ -614,23 +667,23 @@ class TradingStatusBar(QFrame):
             return
 
         if connected:
-            self.connection_label.setText("Connected")
+            self.connection_label.setText("● Connected")
             self.connection_label.setStyleSheet(
-                "color: #35b57c; font-weight: bold;"
+                "color: #34d399; font-weight: 700; font-size: 12px;"
             )
 
             if mode == "live":
-                self.mode_label.setText("Mode: LIVE TRADING")
+                self.mode_label.setText("Mode: ● LIVE TRADING")
                 self.mode_label.setStyleSheet(
-                    "color: #e5534b; font-weight: bold;"
+                    "color: #f87171; font-size: 12px; font-weight: 700;"
                 )
             else:
-                self.mode_label.setText("Mode: Paper Trading")
-                self.mode_label.setStyleSheet("color: #d8a03a;")
+                self.mode_label.setText("Mode: ● Paper Trading")
+                self.mode_label.setStyleSheet("color: #fbbf24; font-size: 12px; font-weight: 600;")
         else:
-            self.connection_label.setText("Disconnected")
+            self.connection_label.setText("● Disconnected")
             self.connection_label.setStyleSheet(
-                "color: #e5534b; font-weight: bold;"
+                "color: #f87171; font-weight: 700; font-size: 12px;"
             )
 
     def set_market_status(self, is_open: bool):
@@ -639,9 +692,9 @@ class TradingStatusBar(QFrame):
             return
 
         if is_open:
-            self.market_label.setText("Market Open")
-            self.market_label.setStyleSheet("color: #35b57c;")
+            self.market_label.setText("Market: ● Open")
+            self.market_label.setStyleSheet("color: #34d399; font-size: 12px; font-weight: 600;")
         else:
-            self.market_label.setText("Market Closed")
-            self.market_label.setStyleSheet("color: #e5534b;")
+            self.market_label.setText("Market: ○ Closed")
+            self.market_label.setStyleSheet("color: #f87171; font-size: 12px; font-weight: 600;")
 

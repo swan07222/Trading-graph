@@ -621,6 +621,39 @@ class DataFetcher:
         return digits.zfill(6) if digits else ""
 
     @staticmethod
+    def validate_stock_code(code: str) -> tuple[bool, str]:
+        """
+        Validate a stock code format.
+
+        Returns:
+            (is_valid, error_message) tuple.
+            If valid, error_message is empty string.
+        """
+        cleaned = DataFetcher.clean_code(code)
+        if not cleaned:
+            return False, f"Invalid stock code format: '{code}' (empty after cleaning)"
+        if not cleaned.isdigit():
+            return False, f"Invalid stock code format: '{code}' (must be numeric)"
+        if len(cleaned) != 6:
+            return False, f"Invalid stock code format: '{code}' (must be 6 digits, got {len(cleaned)})"
+        # Basic range checks for CN stocks
+        if cleaned.startswith("000") or cleaned.startswith("001"):
+            return True, ""  # SZSE main board
+        if cleaned.startswith("002"):
+            return True, ""  # SME board
+        if cleaned.startswith("300") or cleaned.startswith("301"):
+            return True, ""  # ChiNext
+        if cleaned.startswith("600") or cleaned.startswith("601") or cleaned.startswith("603") or cleaned.startswith("605"):
+            return True, ""  # SSE main board
+        if cleaned.startswith("688"):
+            return True, ""  # STAR Market
+        if cleaned.startswith("4") or cleaned.startswith("8") or cleaned.startswith("9"):
+            return True, ""  # BSE
+        # Unknown but valid format - allow with warning
+        log.debug("Stock code %s is in unknown range but format is valid", cleaned)
+        return True, ""
+
+    @staticmethod
     def _normalize_interval_token(interval: str | None) -> str:
         iv = str(interval or "1m").strip().lower()
         aliases = {
@@ -1115,6 +1148,13 @@ class DataFetcher:
     ) -> Quote | None:
         """Get real-time quote for a single instrument."""
         from core.instruments import parse_instrument
+
+        # FIX: Validate stock code format
+        is_valid, error_msg = self.validate_stock_code(code)
+        if not is_valid:
+            log.debug("Invalid stock code in get_realtime: %s", error_msg)
+            return None
+
         inst = instrument or parse_instrument(code)
 
         if _is_offline():

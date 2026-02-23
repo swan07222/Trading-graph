@@ -48,7 +48,7 @@ dev = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-q"
+addopts = "-q --cov=analysis --cov=config --cov=core --cov=data --cov=models --cov=trading --cov=ui --cov=utils --cov-report=term-missing --cov-fail-under=85"
 
 [tool.ruff]
 target-version = "py310"
@@ -62,11 +62,14 @@ extend-exclude = [
 ]
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "B", "UP"]
-ignore = ["E501"]
+select = ["E", "F", "I", "B", "UP", "D", "ANN"]
+ignore = ["E501", "D100", "D104", "D105", "D107", "ANN101", "ANN102", "ANN401"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["analysis", "config", "core", "data", "models", "trading", "ui", "utils"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
 
 [tool.mypy]
 python_version = "3.10"
@@ -75,24 +78,35 @@ warn_redundant_casts = true
 warn_unused_configs = true
 check_untyped_defs = true
 disallow_untyped_defs = true
-ignore_missing_imports = false
+disallow_incomplete_defs = true
 no_implicit_optional = true
-allow_redefinition = true
+strict_optional = true
+warn_no_return = true
+warn_unreachable = true
+allow_redefinition = false
+show_error_codes = true
+pretty = true
 disable_error_code = [
-  "assignment",
-  "arg-type",
-  "attr-defined",
-  "index",
-  "operator",
   "import",
-  "var-annotated",
-  "union-attr",
-  "has-type",
-  "no-any-return",
-  "call-overload",
   "misc",
 ]
+enable_error_code = [
+  "redundant-expr",
+  "truthy-bool",
+  "ignore-without-code",
+]
 exclude = "(^|.*[\\\\/])(venv|cache|audit|data_storage|models_saved)([\\\\/]|$)"
+
+[[tool.mypy.overrides]]
+module = [
+  "PyQt6.*",
+  "pyqtgraph.*",
+  "akshare.*",
+  "yfinance.*",
+  "easytrader.*",
+  "ta.*",
+]
+ignore_missing_imports = true
 
 [tool.coverage.run]
 source = ["analysis", "config", "core", "data", "models", "trading", "ui", "utils"]
@@ -108,3 +122,9 @@ omit = [
 [tool.coverage.report]
 show_missing = true
 skip_covered = true
+exclude_lines = [
+  "pragma: no cover",
+  "if TYPE_CHECKING:",
+  "@abstractmethod",
+  "raise NotImplementedError",
+]

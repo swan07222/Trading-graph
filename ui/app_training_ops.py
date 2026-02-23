@@ -18,11 +18,27 @@ from utils.recoverable import COMMON_RECOVERABLE_EXCEPTIONS
 log = get_logger(__name__)
 _UI_RECOVERABLE_EXCEPTIONS = COMMON_RECOVERABLE_EXCEPTIONS
 
+# FIX: Performance constants for caching
+_TRAINED_STOCK_CACHE_TTL = 300.0  # 5 minutes TTL for trained stock cache
+
 def _lazy_get(module: str, name: str) -> Any:
     return getattr(import_module(module), name)
 
 def _get_trained_stock_codes(self) -> list[str]:
-    """Read trained stock list from loaded predictor metadata."""
+    """
+    Read trained stock list from loaded predictor metadata.
+
+    FIX: Added TTL-based caching to avoid repeated predictor calls.
+    """
+    # Check cache with TTL
+    now = time.time()
+    cache_data = getattr(self, '_trained_stock_cache_data', None)
+    if cache_data is not None:
+        cache_ts = cache_data.get('ts', 0.0)
+        cache_val = cache_data.get('val', [])
+        if (now - cache_ts) < float(_TRAINED_STOCK_CACHE_TTL):
+            return cache_val
+    
     if self.predictor is None:
         return []
     try:
@@ -30,14 +46,26 @@ def _get_trained_stock_codes(self) -> list[str]:
         if callable(fn):
             out = fn()
             if isinstance(out, list):
-                return [
+                result = [
                     str(x).strip()
                     for x in out
                     if str(x).strip()
                 ]
+                # Update cache
+                self._trained_stock_cache_data = {'ts': now, 'val': result}
+                return result
     except _UI_RECOVERABLE_EXCEPTIONS as exc:
         log.debug("Suppressed exception in ui/app.py", exc_info=exc)
     return []
+
+def _invalidate_trained_stock_cache(self) -> None:
+    """
+    Invalidate trained stock cache.
+
+    FIX: Call this when models are retrained or reloaded.
+    """
+    if hasattr(self, '_trained_stock_cache_data'):
+        delattr(self, '_trained_stock_cache_data')
 
 def _sync_trained_stock_last_train_from_model(self) -> None:
     """Use loaded model artifacts as source-of-truth for last-train metadata."""

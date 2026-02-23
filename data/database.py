@@ -75,6 +75,14 @@ class MarketDatabase:
                 # FIX #3: Clean up dead threads while registering
                 self._cleanup_dead_threads()
                 self._connections[tid] = conn
+        else:
+            # FIX: Periodic cleanup every 100 accesses to prevent connection accumulation
+            if not hasattr(self._local, "access_count"):
+                self._local.access_count = 0
+            self._local.access_count += 1
+            if self._local.access_count % 100 == 0:
+                with self._connections_lock:
+                    self._cleanup_dead_threads()
 
         # FIX #4: Check wait return value — raise on timeout
         if not self._schema_ready.wait(timeout=30):
@@ -312,6 +320,158 @@ class MarketDatabase:
         return 0.0600, 0.1000, 0.0600, 0.25
 
     @classmethod
+    def _validate_ohlcv_consistency(cls, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Validate and repair basic OHLCV consistency.
+
+        Ensures high >= max(open, close), low <= min(open, close).
+        """
+        out = df.copy()
+        oc_top = out[["open", "close"]].max(axis=1)
+        oc_bot = out[["open", "close"]].min(axis=1)
+        out["high"] = pd.concat([out["high"], oc_top], axis=1).max(axis=1)
+        out["low"] = pd.concat([out["low"], oc_bot], axis=1).min(axis=1)
+        return out
+
+    @classmethod
+    def _repair_price_anomalies(
+        cls,
+        df: pd.DataFrame,
+        body_cap: float,
+        span_cap: float,
+        wick_cap: float,
+        aggressive: bool = False,
+        preserve_truth: bool = True,
+    ) -> pd.DataFrame:
+        """
+        Repair anomalous price bars that exceed caps.
+
+        FIX: Extracted from _sanitize_intraday_frame for clarity.
+        """
+        out = df.copy()
+        close_safe = out["close"].clip(lower=1e-8)
+
+        # Repair bad open prices
+        body = (out["open"] - out["close"]).abs() / close_safe
+        bad_open = body > float(body_cap)
+        if bool(bad_open.any()):
+            out.loc[bad_open, "open"] = out.loc[bad_open, "close"]
+            out = cls._validate_ohlcv_consistency(out)
+
+        # Repair bad shape (span/wick)
+        span = (out["high"] - out["low"]).abs() / close_safe
+        oc_top = out[["open", "close"]].max(axis=1)
+        oc_bot = out[["open", "close"]].min(axis=1)
+        upper_wick = (out["high"] - oc_top).clip(lower=0.0) / close_safe
+        lower_wick = (oc_bot - out["low"]).clip(lower=0.0) / close_safe
+        bad_shape = (
+            (span > float(span_cap))
+            | (upper_wick > float(wick_cap))
+            | (lower_wick > float(wick_cap))
+        )
+        if bool(bad_shape.any()):
+            if aggressive and not preserve_truth:
+                wick_allow = close_safe * float(wick_cap)
+                out.loc[bad_shape, "high"] = (oc_top + wick_allow)[bad_shape]
+                out.loc[bad_shape, "low"] = (oc_bot - wick_allow)[bad_shape]
+            else:
+                out.loc[bad_shape, "high"] = oc_top[bad_shape]
+                out.loc[bad_shape, "low"] = oc_bot[bad_shape]
+            out = cls._validate_ohlcv_consistency(out)
+
+        return out
+
+    @classmethod
+    def _handle_stale_bars(
+        cls,
+        df: pd.DataFrame,
+    ) -> pd.DataFrame:
+        """
+        Drop stale/flat bars with no price movement or volume.
+
+        FIX: Extracted from _sanitize_intraday_frame for clarity.
+        """
+        out = df.copy()
+        close_safe = out["close"].clip(lower=1e-8)
+        same_close = out["close"].diff().abs() <= (close_safe * 1e-6)
+        flat_body = (out["open"] - out["close"]).abs() <= (close_safe * 1e-6)
+        flat_span = (out["high"] - out["low"]).abs() <= (close_safe * 2e-6)
+        vol = out["volume"].fillna(0) if "volume" in out.columns else pd.Series(0.0, index=out.index)
+        stale_flat = same_close & flat_body & flat_span & (vol <= 0)
+
+        if bool(stale_flat.any()):
+            group_key = stale_flat.ne(stale_flat.shift(fill_value=False)).cumsum()
+            stale_pos = stale_flat.groupby(group_key).cumcount()
+            drop_mask = stale_flat & (stale_pos % 12 != 0)
+            if bool(drop_mask.any()):
+                out = out.loc[~drop_mask]
+
+        return out
+
+    @classmethod
+    def _handle_jump_anomalies(
+        cls,
+        df: pd.DataFrame,
+        jump_cap: float,
+        body_cap: float,
+        aggressive: bool = False,
+        preserve_truth: bool = True,
+        wick_cap: float = 0.012,  # Default fallback
+    ) -> pd.DataFrame:
+        """
+        Handle impossible inter-bar price jumps.
+
+        FIX: Extracted from _sanitize_intraday_frame for clarity.
+        """
+        out = df.copy()
+        prev_close = out["close"].shift(1)
+        prev_safe = prev_close.where(prev_close > 0, np.nan)
+        jump = (out["close"] / prev_safe - 1.0).abs()
+        jump_cap_eff = float(max(jump_cap, body_cap * 4.0))
+        bad_jump = jump > jump_cap_eff
+
+        # Exclude day boundaries (jumps expected)
+        if isinstance(out.index, pd.DatetimeIndex):
+            day_change = (
+                pd.Series(out.index.normalize(), index=out.index)
+                .diff()
+                .ne(pd.Timedelta(0))
+            )
+            day_change = day_change.fillna(False)
+            bad_jump = bad_jump & (~day_change)
+        bad_jump = bad_jump.fillna(False)
+
+        if bool(bad_jump.any()):
+            if aggressive and not preserve_truth:
+                # Clip to max allowed jump
+                prev_vals = prev_close[bad_jump].astype(float)
+                curr_vals = out.loc[bad_jump, "close"].astype(float)
+                signs = np.where(curr_vals >= prev_vals, 1.0, -1.0)
+                clipped = prev_vals * (1.0 + (signs * jump_cap_eff))
+                out.loc[bad_jump, "close"] = clipped.values
+                out.loc[bad_jump, "open"] = prev_vals.values
+                close_safe = out["close"].clip(lower=1e-8)
+                oc_top = out[["open", "close"]].max(axis=1)
+                oc_bot = out[["open", "close"]].min(axis=1)
+                wick_allow = close_safe * float(wick_cap)
+                out.loc[bad_jump, "high"] = np.minimum(
+                    out.loc[bad_jump, "high"],
+                    (oc_top + wick_allow)[bad_jump],
+                )
+                out.loc[bad_jump, "low"] = np.maximum(
+                    out.loc[bad_jump, "low"],
+                    (oc_bot - wick_allow)[bad_jump],
+                )
+                out = cls._validate_ohlcv_consistency(out)
+            else:
+                # Drop bars with impossible jumps (truth-preserving)
+                out = out.loc[~bad_jump]
+                if out.empty:
+                    return pd.DataFrame()
+
+        return out
+
+    @classmethod
     def _sanitize_intraday_frame(
         cls,
         df: pd.DataFrame,
@@ -395,146 +555,27 @@ class MarketDatabase:
             body_cap, span_cap, wick_cap, jump_cap = (
                 cls._intraday_quality_caps(iv)
             )
-            close_safe = out["close"].clip(lower=1e-8)
 
-            body = (
-                (out["open"] - out["close"]).abs() / close_safe
+            # FIX: Use extracted helper methods for clarity
+            out = cls._repair_price_anomalies(
+                out,
+                body_cap=body_cap,
+                span_cap=span_cap,
+                wick_cap=wick_cap,
+                aggressive=aggressive_repairs,
+                preserve_truth=preserve_truth,
             )
-            bad_open = body > float(body_cap)
-            if bool(bad_open.any()):
-                out.loc[bad_open, "open"] = out.loc[
-                    bad_open, "close"
-                ]
 
-            oc_top = out[["open", "close"]].max(axis=1)
-            oc_bot = out[["open", "close"]].min(axis=1)
-            out["high"] = pd.concat(
-                [out["high"], oc_top], axis=1
-            ).max(axis=1)
-            out["low"] = pd.concat(
-                [out["low"], oc_bot], axis=1
-            ).min(axis=1)
+            out = cls._handle_jump_anomalies(
+                out,
+                jump_cap=jump_cap,
+                body_cap=body_cap,
+                wick_cap=wick_cap,
+                aggressive=aggressive_repairs,
+                preserve_truth=preserve_truth,
+            )
 
-            span = (
-                (out["high"] - out["low"]).abs() / close_safe
-            )
-            upper_wick = (
-                (out["high"] - oc_top).clip(lower=0.0) / close_safe
-            )
-            lower_wick = (
-                (oc_bot - out["low"]).clip(lower=0.0) / close_safe
-            )
-            bad_shape = (
-                (span > float(span_cap))
-                | (upper_wick > float(wick_cap))
-                | (lower_wick > float(wick_cap))
-            )
-            if bool(bad_shape.any()):
-                if aggressive_repairs and not preserve_truth:
-                    wick_allow = close_safe * float(wick_cap)
-                    out.loc[bad_shape, "high"] = (oc_top + wick_allow)[
-                        bad_shape
-                    ]
-                    out.loc[bad_shape, "low"] = (oc_bot - wick_allow)[
-                        bad_shape
-                    ]
-                else:
-                    # Truth-preserving default: avoid synthetic wick injection.
-                    out.loc[bad_shape, "high"] = oc_top[bad_shape]
-                    out.loc[bad_shape, "low"] = oc_bot[bad_shape]
-                out["high"] = pd.concat(
-                    [out["high"], oc_top], axis=1
-                ).max(axis=1)
-                out["low"] = pd.concat(
-                    [out["low"], oc_bot], axis=1
-                ).min(axis=1)
-
-            prev_close = out["close"].shift(1)
-            prev_safe = prev_close.where(prev_close > 0, np.nan)
-            jump = (out["close"] / prev_safe - 1.0).abs()
-            jump_cap_eff = float(max(jump_cap, body_cap * 4.0))
-            bad_jump = jump > jump_cap_eff
-            day_change = pd.Series(False, index=out.index)
-            if isinstance(out.index, pd.DatetimeIndex):
-                day_change = (
-                    pd.Series(
-                        out.index.normalize(), index=out.index
-                    )
-                    .diff()
-                    .ne(pd.Timedelta(0))
-                )
-                day_change = day_change.fillna(False)
-            bad_jump = bad_jump & (~day_change)
-            bad_jump = bad_jump.fillna(False)
-            if bool(bad_jump.any()):
-                if aggressive_repairs and not preserve_truth:
-                    prev_vals = prev_close[bad_jump].astype(float)
-                    curr_vals = out.loc[bad_jump, "close"].astype(float)
-                    signs = np.where(
-                        curr_vals >= prev_vals, 1.0, -1.0
-                    )
-                    clipped = prev_vals * (
-                        1.0 + (signs * jump_cap_eff)
-                    )
-                    out.loc[bad_jump, "close"] = clipped.values
-                    out.loc[bad_jump, "open"] = prev_vals.values
-                    close_safe = out["close"].clip(lower=1e-8)
-                    oc_top = out[["open", "close"]].max(axis=1)
-                    oc_bot = out[["open", "close"]].min(axis=1)
-                    wick_allow = close_safe * float(wick_cap)
-                    out.loc[bad_jump, "high"] = np.minimum(
-                        out.loc[bad_jump, "high"],
-                        (oc_top + wick_allow)[bad_jump],
-                    )
-                    out.loc[bad_jump, "low"] = np.maximum(
-                        out.loc[bad_jump, "low"],
-                        (oc_bot - wick_allow)[bad_jump],
-                    )
-                    out["high"] = pd.concat(
-                        [out["high"], oc_top], axis=1
-                    ).max(axis=1)
-                    out["low"] = pd.concat(
-                        [out["low"], oc_bot], axis=1
-                    ).min(axis=1)
-                else:
-                    # Preserve observed bars by dropping impossible inter-bar jumps.
-                    out = out.loc[~bad_jump]
-                    if out.empty:
-                        return pd.DataFrame()
-
-            vol = (
-                out["volume"]
-                if "volume" in out.columns
-                else pd.Series(0.0, index=out.index)
-            )
-            close_safe = out["close"].clip(lower=1e-8)
-            same_close = out["close"].diff().abs() <= (
-                close_safe * 1e-6
-            )
-            flat_body = (out["open"] - out["close"]).abs() <= (
-                close_safe * 1e-6
-            )
-            flat_span = (out["high"] - out["low"]).abs() <= (
-                close_safe * 2e-6
-            )
-            stale_flat = (
-                same_close
-                & flat_body
-                & flat_span
-                & (vol.fillna(0) <= 0)
-            )
-            if bool(stale_flat.any()):
-                group_key = (
-                    stale_flat.ne(
-                        stale_flat.shift(fill_value=False)
-                    ).cumsum()
-                )
-                stale_pos = stale_flat.groupby(
-                    group_key
-                ).cumcount()
-                drop_mask = stale_flat & (stale_pos % 12 != 0)
-                if bool(drop_mask.any()):
-                    out = out.loc[~drop_mask]
+            out = cls._handle_stale_bars(out)
 
         if "volume" in out.columns:
             out = out[out["volume"].fillna(0) >= 0]

@@ -128,9 +128,14 @@ class FeatureEngine:
         out["returns"] = close.pct_change() * 100
         with np.errstate(divide="ignore", invalid="ignore"):
             ratio = close / close.shift(1)
-            # FIX DIVZERO: Guard log against zero/negative ratios
-            safe_ratio = ratio.clip(lower=_EPS)
-            out["log_returns"] = np.log(safe_ratio) * 100
+            # FIX: Handle negative/zero ratios correctly for log returns
+            # When price decreases, ratio < 1, log should be negative
+            # When ratio <= 0 (shouldn't happen with valid prices), use NaN
+            out["log_returns"] = np.where(
+                ratio > 0,
+                np.log(ratio) * 100,
+                np.nan
+            )
 
         # === Volatility (require full window to avoid garbage) ===
         out["volatility_5"] = out["returns"].rolling(5, min_periods=5).std()

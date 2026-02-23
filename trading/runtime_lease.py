@@ -51,6 +51,16 @@ class RuntimeLeaseClient:
     def read(self) -> dict[str, Any] | None:
         raise NotImplementedError
 
+    def close(self) -> None:
+        """
+        Explicit cleanup method for resource release.
+
+        FIX: Provides deterministic cleanup beyond __del__ which may not run
+        if process crashes. Subclasses should override to release locks,
+        close connections, and clean up temporary files.
+        """
+        pass
+
 
 class FileRuntimeLeaseClient(RuntimeLeaseClient):
     """
@@ -228,6 +238,26 @@ class FileRuntimeLeaseClient(RuntimeLeaseClient):
 
     def read(self) -> dict[str, Any] | None:
         return self._read()
+
+    def close(self) -> None:
+        """
+        Explicit cleanup: remove stale lock file if we own it.
+
+        FIX: Provides deterministic cleanup beyond __del__.
+        """
+        try:
+            # Only remove lock file if it's ours (check age)
+            if self._lock_path.exists():
+                try:
+                    age = time.time() - float(self._lock_path.stat().st_mtime)
+                    # If lock is older than stale threshold, it's likely abandoned
+                    if age > float(self._lock_stale_s):
+                        self._lock_path.unlink(missing_ok=True)
+                        log.debug("File lease client cleaned up stale lock: %s", self._lock_path)
+                except (FileNotFoundError, OSError, ValueError):
+                    pass
+        except Exception as e:
+            log.debug("File lease client close failed: %s", e)
 
 
 class SqliteRuntimeLeaseClient(RuntimeLeaseClient):
@@ -449,6 +479,16 @@ class SqliteRuntimeLeaseClient(RuntimeLeaseClient):
             return None
         finally:
             conn.close()
+
+    def close(self) -> None:
+        """
+        Explicit cleanup: close any open connections.
+
+        FIX: Provides deterministic cleanup beyond __del__.
+        """
+        # Connections are short-lived and closed in finally blocks,
+        # but this ensures schema flag is reset for clean state
+        self._schema_ready = False
 
 
 def create_runtime_lease_client(

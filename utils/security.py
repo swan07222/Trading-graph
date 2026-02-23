@@ -99,8 +99,12 @@ class SecureStorage:
 
     def _write_key_file(self, path: Path, key: bytes) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
-        with open(path, "wb") as f:
-            f.write(key)
+        # FIX: Write key file with restricted permissions from the start
+        fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        try:
+            os.write(fd, key)
+        finally:
+            os.close(fd)
         self._set_private_perms(path)
 
     def _load_or_create_key(self) -> bytes:
@@ -193,9 +197,19 @@ class SecureStorage:
             data = json.dumps(self._cache)
             encrypted = self._encrypt(data)
             tmp_path = self._storage_path.with_suffix(".tmp")
-            with open(tmp_path, "wb") as f:
-                f.write(encrypted)
+            # FIX: Write temp file with restricted permissions from the start
+            # to avoid race window where file exists with wrong permissions
+            fd = os.open(
+                str(tmp_path),
+                os.O_WRONLY | os.O_CREAT | os.O_TRUNC,
+                0o600  # Owner read/write only
+            )
+            try:
+                os.write(fd, encrypted)
+            finally:
+                os.close(fd)
             tmp_path.replace(self._storage_path)
+            # Re-apply permissions after rename for extra safety
             try:
                 self._set_private_perms(self._storage_path)
             except OSError as perm_err:

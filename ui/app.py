@@ -269,6 +269,9 @@ class MainApp(MainAppCommonMixin, QMainWindow):
             1, int(getattr(CONFIG, "LOT_SIZE", 100) or 100)
         )
 
+        # FIX: Bounded cache dicts with max size to prevent memory leaks
+        self._MAX_CACHED_BARS = 500  # Max symbols with cached bars
+        self._MAX_CACHED_QUOTES = 1000  # Max symbols with cached quotes
         self._bars_by_symbol: dict[str, list[dict[str, Any]]] = {}
         self._trained_stock_codes_cache: list[str] = []
         self._trained_stock_last_train: dict[str, str] = {}
@@ -771,6 +774,11 @@ class MainApp(MainAppCommonMixin, QMainWindow):
         self.chart_live_timer.timeout.connect(self._refresh_live_chart_forecast)
         self.chart_live_timer.start(1500)
 
+        # FIX: Cache pruning to prevent memory leaks
+        self.cache_prune_timer = QTimer()
+        self.cache_prune_timer.timeout.connect(self._prune_caches)
+        self.cache_prune_timer.start(60000)  # Prune every 60 seconds
+
         self._update_market_status()
 
         # =========================================================================
@@ -859,22 +867,30 @@ class MainApp(MainAppCommonMixin, QMainWindow):
             )
         self.log("System initialized - Ready for trading", "info")
 
+    def _prune_caches(self) -> None:
+        """
+        Prune internal caches to prevent memory leaks.
 
+        FIX: Called periodically to bound cache sizes.
+        """
+        # Prune _last_bar_feed_ts - keep only recent entries
+        if len(self._last_bar_feed_ts) > self._MAX_CACHED_QUOTES:
+            # Remove oldest 25%
+            sorted_items = sorted(
+                self._last_bar_feed_ts.items(),
+                key=lambda x: x[1]
+            )
+            cutoff = len(sorted_items) // 4
+            for key, _ in sorted_items[:cutoff]:
+                self._last_bar_feed_ts.pop(key, None)
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+        # Prune _bars_by_symbol - keep only most recent
+        if len(self._bars_by_symbol) > self._MAX_CACHED_BARS:
+            # Remove oldest entries (by last access time if available)
+            # For simplicity, remove first 25%
+            keys_to_remove = list(self._bars_by_symbol.keys())[:len(self._bars_by_symbol) // 4]
+            for key in keys_to_remove:
+                self._bars_by_symbol.pop(key, None)
 
     def _init_auto_trader(self) -> None:
         _init_auto_trader_impl(self)

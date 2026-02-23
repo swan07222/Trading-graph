@@ -78,8 +78,8 @@ if HAS_PYQTGRAPH:
 
                 up = (c >= o)
                 color = (
-                    pg.mkColor("#35b57c") if up
-                    else pg.mkColor("#e5534b")
+                    pg.mkColor("#10b981") if up
+                    else pg.mkColor("#ef4444")
                 )
 
                 p.setPen(pg.mkPen(color=color, width=1))
@@ -407,15 +407,15 @@ class StockChart(QWidget):
         """Setup pyqtgraph chart with all three layers."""
         pg.setConfigOptions(
             antialias=True,
-            background='#0c1728',
-            foreground='#dbe4f3'
+            background='#0f172a',
+            foreground='#e6e9f0'
         )
 
         self.plot_widget = pg.PlotWidget()
-        self.plot_widget.setLabel('left', 'Price', units='CNY')
-        self.plot_widget.setLabel('bottom', 'Time', units='bars')
-        self.plot_widget.showGrid(x=True, y=True, alpha=0.3)
-        self.plot_widget.setBackground('#0c1728')
+        self.plot_widget.setLabel('left', 'Price', units='CNY', color='#94a3b8')
+        self.plot_widget.setLabel('bottom', 'Time', units='bars', color='#94a3b8')
+        self.plot_widget.showGrid(x=True, y=True, alpha=0.2)
+        self.plot_widget.setBackground('#0f172a')
         self.plot_widget.setContextMenuPolicy(
             Qt.ContextMenuPolicy.CustomContextMenu
         )
@@ -426,7 +426,7 @@ class StockChart(QWidget):
         # === Layer 1 (BOTTOM): Prediction line - dashed cyan ===
         self.predicted_line = self.plot_widget.plot(
             pen=pg.mkPen(
-                color='#00d4aa',
+                color='#2dd4bf',
                 width=2,
                 style=Qt.PenStyle.DashLine
             ),
@@ -434,7 +434,7 @@ class StockChart(QWidget):
         )
         self.predicted_low_line = self.plot_widget.plot(
             pen=pg.mkPen(
-                color='#d8a03a',
+                color='#fbbf24',
                 width=1,
                 style=Qt.PenStyle.DotLine,
             ),
@@ -442,7 +442,7 @@ class StockChart(QWidget):
         )
         self.predicted_high_line = self.plot_widget.plot(
             pen=pg.mkPen(
-                color='#d8a03a',
+                color='#fbbf24',
                 width=1,
                 style=Qt.PenStyle.DotLine,
             ),
@@ -451,7 +451,7 @@ class StockChart(QWidget):
 
         # === Layer 2 (MIDDLE): Price line - solid blue ===
         self.actual_line = self.plot_widget.plot(
-            pen=pg.mkPen(color='#79a6ff', width=1.5),
+            pen=pg.mkPen(color='#60a5fa', width=1.5),
             name='Price'
         )
 
@@ -462,35 +462,35 @@ class StockChart(QWidget):
         self.level_lines = {}
         self.overlay_lines = {
             "sma20": self.plot_widget.plot(
-                pen=pg.mkPen(color="#e3b341", width=1),
+                pen=pg.mkPen(color="#fbbf24", width=1),
                 name="SMA20",
             ),
             "sma50": self.plot_widget.plot(
-                pen=pg.mkPen(color="#6f95ff", width=1, style=Qt.PenStyle.DashLine),
+                pen=pg.mkPen(color="#818cf8", width=1, style=Qt.PenStyle.DashLine),
                 name="SMA50",
             ),
             "sma200": self.plot_widget.plot(
-                pen=pg.mkPen(color="#dbe4f3", width=1, style=Qt.PenStyle.DashLine),
+                pen=pg.mkPen(color="#94a3b8", width=1, style=Qt.PenStyle.DashLine),
                 name="SMA200",
             ),
             "ema21": self.plot_widget.plot(
-                pen=pg.mkPen(color="#ffa657", width=1.2, style=Qt.PenStyle.DotLine),
+                pen=pg.mkPen(color="#fdba74", width=1.2, style=Qt.PenStyle.DotLine),
                 name="EMA21",
             ),
             "ema55": self.plot_widget.plot(
-                pen=pg.mkPen(color="#f2cc60", width=1, style=Qt.PenStyle.DotLine),
+                pen=pg.mkPen(color="#fcd34d", width=1, style=Qt.PenStyle.DotLine),
                 name="EMA55",
             ),
             "bb_upper": self.plot_widget.plot(
-                pen=pg.mkPen(color="#aac3ec", width=1, style=Qt.PenStyle.DashLine),
+                pen=pg.mkPen(color="#a5b4fc", width=1, style=Qt.PenStyle.DashLine),
                 name="BB Upper",
             ),
             "bb_lower": self.plot_widget.plot(
-                pen=pg.mkPen(color="#aac3ec", width=1, style=Qt.PenStyle.DashLine),
+                pen=pg.mkPen(color="#a5b4fc", width=1, style=Qt.PenStyle.DashLine),
                 name="BB Lower",
             ),
             "vwap20": self.plot_widget.plot(
-                pen=pg.mkPen(color="#79c0ff", width=1, style=Qt.PenStyle.DotLine),
+                pen=pg.mkPen(color="#93c5fd", width=1, style=Qt.PenStyle.DotLine),
                 name="VWAP20",
             ),
         }
@@ -517,11 +517,12 @@ class StockChart(QWidget):
         self.fallback_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.fallback_label.setStyleSheet("""
             QLabel {
-                background: #0c1728;
-                color: #aac3ec;
-                border: 1px solid #2f4466;
-                border-radius: 8px;
+                background: #0f172a;
+                color: #93c5fd;
+                border: 1px solid #334155;
+                border-radius: 12px;
                 font-size: 14px;
+                padding: 20px;
             }
         """)
         self.layout().addWidget(self.fallback_label)

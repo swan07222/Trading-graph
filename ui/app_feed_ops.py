@@ -11,14 +11,43 @@ from utils.recoverable import COMMON_RECOVERABLE_EXCEPTIONS
 log = get_logger(__name__)
 _UI_RECOVERABLE_EXCEPTIONS = COMMON_RECOVERABLE_EXCEPTIONS
 
-def _ensure_feed_subscription(self, code: str) -> None:
-    """Subscribe symbol to realtime feed using 1m source bars."""
-    if not CONFIG.is_market_open():
-        return
+# FIX: Performance constants
+_FEED_MANAGER_CACHE: Any = None  # Cached feed manager instance
+_SESSION_CACHE_MIN_GAP_SECONDS = 5.0  # Reduced frequency for session cache writes
+_QUOTE_UPDATE_THROTTLE_MS = 150  # Minimum gap between quote UI updates
+_QUOTE_MIN_CHANGE_PCT = 0.005  # 0.005% minimum price change to trigger update
+
+def _get_feed_manager_cached():
+    """
+    Get feed manager with caching to avoid repeated lookups.
+
+    FIX: Caches feed manager reference for performance.
+    """
+    global _FEED_MANAGER_CACHE
+    if _FEED_MANAGER_CACHE is not None:
+        return _FEED_MANAGER_CACHE
     try:
         from data.feeds import get_feed_manager
-        fm = get_feed_manager(auto_init=True, async_init=True)
+        _FEED_MANAGER_CACHE = get_feed_manager(auto_init=True, async_init=True)
+        return _FEED_MANAGER_CACHE
+    except _UI_RECOVERABLE_EXCEPTIONS as e:
+        log.debug(f"Feed manager init failed: {e}")
+        return None
 
+def _ensure_feed_subscription(self, code: str) -> None:
+    """
+    Subscribe symbol to realtime feed using 1m source bars.
+
+    FIX: Uses cached feed manager for better performance.
+    """
+    if not CONFIG.is_market_open():
+        return
+    
+    fm = _get_feed_manager_cached()
+    if fm is None:
+        return
+    
+    try:
         # Keep data acquisition fixed at 1m. UI interval only controls
         # display/aggregation, not upstream fetch cadence.
         fm.set_bar_interval_seconds(60)
@@ -54,7 +83,11 @@ def _on_bar_from_feed(self, symbol: str, bar: dict[str, Any]) -> None:
         log.exception("Failed to forward feed bar to UI (symbol=%s)", symbol)
 
 def _on_tick_from_feed(self, quote: Any) -> None:
-    """Forward feed quote updates to UI thread safely."""
+    """
+    Forward feed quote updates to UI thread safely.
+
+    FIX: Improved throttling with configurable frequency and minimum change detection.
+    """
     if not CONFIG.is_market_open():
         return
     try:
@@ -65,12 +98,15 @@ def _on_tick_from_feed(self, quote: Any) -> None:
             prev = self._last_quote_ui_emit.get(symbol)
             if prev is not None:
                 prev_ts, prev_px = float(prev[0]), float(prev[1])
-                if (
-                    (now - prev_ts) < 0.08
-                    and abs(price - prev_px)
-                    <= max(0.001, abs(prev_px) * 0.00005)
-                ):
-                    return
+                elapsed_ms = (now - prev_ts) * 1000
+                
+                # FIX: Use configurable throttle window
+                if elapsed_ms < float(_QUOTE_UPDATE_THROTTLE_MS):
+                    # Check if price change is significant enough to bypass throttle
+                    pct_change = abs(price - prev_px) / max(prev_px, 0.0001) * 100
+                    if pct_change < float(_QUOTE_MIN_CHANGE_PCT):
+                        return  # Skip insignificant update
+            
             self._last_quote_ui_emit[symbol] = (now, price)
             self.quote_received.emit(symbol, price)
     except _UI_RECOVERABLE_EXCEPTIONS:
@@ -353,8 +389,10 @@ def _on_bar_ui(self, symbol: str, bar: dict[str, Any]) -> None:
         del arr[:-keep]
     self._last_bar_feed_ts[symbol] = time.time()
 
-    # Avoid excessive disk writes for partial updates.
-    min_gap = 0.9 if not is_final else 0.0
+    # FIX: Reduced frequency for session cache writes to improve performance
+    # Non-final bars: write every 5 seconds instead of 0.9s
+    # Final bars: write immediately
+    min_gap = float(_SESSION_CACHE_MIN_GAP_SECONDS) if not is_final else 0.0
     persist_fn = getattr(self, "_persist_session_bar", None)
     if callable(persist_fn):
         persist_fn(

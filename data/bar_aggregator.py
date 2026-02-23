@@ -7,7 +7,6 @@ from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 from enum import Enum
 
-from config.settings import CONFIG
 from core.events import EVENT_BUS, BarEvent
 from utils.logger import get_logger
 
@@ -311,7 +310,10 @@ class BarAggregator:
             except _BAR_SOFT_EXCEPTIONS as e:
                 log.debug(f"Bar session persist failed for {symbol}: {e}")
 
-            should_persist_db = True
+            # FIX: Only persist to DB when market is closed (session cache during market hours)
+            from config.settings import CONFIG
+
+            should_persist_db = not CONFIG.is_market_open()
             if should_persist_db:
                 try:
                     import pandas as pd

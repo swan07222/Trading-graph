@@ -284,25 +284,38 @@ def _analyze_stock(self) -> None:
             level="warning",
         )
 
+    # FIX: Improved request deduplication with sequence numbers and adaptive throttling
     request_key = (
         f"{normalized}:{interval}:{forecast_bars}:"
         f"{int(infer_lookback)}:{int(use_realtime)}:"
         f"{infer_interval}:{int(infer_horizon)}:{int(history_allow_online)}"
     )
     req_now = time.monotonic()
+    
+    # Check for duplicate request with adaptive throttle window
     last_req = dict(self._last_analyze_request or {})
+    throttle_window = float(_ANALYSIS_THROTTLE_SECONDS)
+    
     if (
         last_req.get("key") == request_key
-        and (req_now - float(last_req.get("ts", 0.0) or 0.0)) < 1.2
+        and (req_now - float(last_req.get("ts", 0.0) or 0.0)) < throttle_window
     ):
         self._debug_console(
             f"analyze_dedup:{normalized}:{interval}",
-            f"Skipped duplicate analyze request for {normalized} ({interval})",
+            f"Skipped duplicate analyze request for {normalized} ({interval}) within {throttle_window}s",
             min_gap_seconds=8.0,
             level="info",
         )
         return
-    self._last_analyze_request = {"key": request_key, "ts": req_now}
+    
+    # Store request with sequence number for stale result detection
+    self._analyze_request_seq = getattr(self, '_analyze_request_seq', 0) + 1
+    self._last_analyze_request = {
+        "key": request_key,
+        "ts": req_now,
+        "seq": self._analyze_request_seq,
+    }
+    current_seq = self._analyze_request_seq
 
     self.analyze_action.setEnabled(False)
 
@@ -313,6 +326,7 @@ def _analyze_stock(self) -> None:
     self.progress.setRange(0, 0)
     self.progress.show()
 
+    # Cancel existing worker
     old_worker = self.workers.get("analyze")
     if old_worker and old_worker.isRunning():
         old_worker.cancel()
@@ -330,13 +344,37 @@ def _analyze_stock(self) -> None:
 
     worker = WorkerThread(analyze, timeout_seconds=120)
     self._track_worker(worker)
+    
+    # FIX: Tag worker with sequence number for stale detection
+    worker._request_seq = current_seq
+    
     worker.result.connect(self._on_analysis_done)
     worker.error.connect(self._on_analysis_error)
     self.workers["analyze"] = worker
     worker.start()
 
 def _on_analysis_done(self, pred: Any) -> None:
-    """Handle analysis completion; also triggers news fetch."""
+    """
+    Handle analysis completion; also triggers news fetch.
+
+    FIX: Added stale result detection using sequence numbers.
+    """
+    # FIX: Check for stale result using sequence number
+    worker = self.workers.get("analyze")
+    if worker is not None:
+        worker_seq = getattr(worker, '_request_seq', None)
+        current_seq = getattr(self, '_analyze_request_seq', None)
+        if worker_seq is not None and current_seq is not None and worker_seq != current_seq:
+            # Stale result from older request - discard
+            self._debug_console(
+                f"analyze_stale:{self._ui_norm(self.stock_input.text())}",
+                f"Discarded stale analysis result (seq {worker_seq} != {current_seq})",
+                min_gap_seconds=2.0,
+                level="debug",
+            )
+            self.workers.pop('analyze', None)
+            return
+
     self.analyze_action.setEnabled(True)
     self.progress.hide()
     self.status_label.setText("Ready")
@@ -923,72 +961,140 @@ def _signal_to_direction(self, signal_text: str) -> str:
         return "DOWN"
     return "NONE"
 
+# Performance and quality constants
+_ANALYSIS_THROTTLE_SECONDS = 2.5  # Minimum gap between analysis requests
+_SESSION_CACHE_MIN_GAP_SECONDS = 5.0  # Reduced frequency for session cache writes
+_QUOTE_UPDATE_THROTTLE_MS = 150  # Throttle quote UI updates
+_GUESS_PROFIT_NOTIONAL_VALUE = 10000.0  # CNY notional value per guess
+
+# Transaction cost parameters for realistic P&L estimation
+_TRANSACTION_COSTS = {
+    "commission_rate": 0.0003,  # 0.03% broker commission
+    "commission_min": 5.0,  # Minimum CNY 5 per trade
+    "stamp_duty": 0.001,  # 0.1% stamp duty on sells (CN market)
+    "transfer_fee": 0.00002,  # 0.002% transfer fee
+    "slippage_bps": 2,  # 2 basis points slippage assumption
+}
+
 def _compute_guess_profit(
     self,
     direction: str,
     entry_price: float,
     mark_price: float,
-    shares: int,
+    shares: int | None = None,
 ) -> float:
-    """Compute virtual directional P&L (positive => currently correct)."""
+    """
+    Compute virtual directional P&L with transaction costs.
+
+    Args:
+        direction: "UP", "DOWN", or "NONE"
+        entry_price: Entry price for the guess
+        mark_price: Current mark price
+        shares: Number of shares (if None, calculated from notional value)
+
+    Returns:
+        Net P&L after transaction costs (positive = correct guess)
+
+    FIX: Added transaction cost modeling for realistic estimates.
+    """
     entry = float(entry_price or 0.0)
     mark = float(mark_price or 0.0)
-    qty = max(1, int(shares or 1))
 
     if entry <= 0 or mark <= 0:
         return 0.0
+
+    # Calculate shares based on notional value if not provided
+    if shares is None or shares <= 0:
+        lot_size = int(getattr(CONFIG, "LOT_SIZE", 100) or 100)
+        # Calculate shares to match notional value
+        raw_shares = _GUESS_PROFIT_NOTIONAL_VALUE / entry
+        shares = int(raw_shares / lot_size) * lot_size  # Round to lot size
+        shares = max(lot_size, shares)  # Minimum 1 lot
+
+    qty = max(1, shares)
+
+    # Calculate gross P&L
     if direction == "UP":
-        return (mark - entry) * qty
-    if direction == "DOWN":
-        return (entry - mark) * qty
-    return 0.0
+        gross_pnl = (mark - entry) * qty
+    elif direction == "DOWN":
+        gross_pnl = (entry - mark) * qty
+    else:
+        return 0.0
+
+    # Calculate transaction costs
+    notional_entry = entry * qty
+    notional_exit = mark * qty
+    notional_total = notional_entry + notional_exit
+
+    commission = max(
+        notional_total * _TRANSACTION_COSTS["commission_rate"],
+        _TRANSACTION_COSTS["commission_min"] * 2  # Entry + exit
+    )
+    stamp_duty = notional_exit * _TRANSACTION_COSTS["stamp_duty"]
+    transfer_fee = notional_total * _TRANSACTION_COSTS["transfer_fee"]
+    slippage = notional_total * (_TRANSACTION_COSTS["slippage_bps"] / 10000)
+
+    total_costs = commission + stamp_duty + transfer_fee + slippage
+
+    # Net P&L after costs
+    net_pnl = gross_pnl - total_costs
+    return net_pnl
 
 def _refresh_guess_rows_for_symbol(self, code: str, price: float) -> None:
-    """Update history result for this symbol using latest real-time price."""
+    """
+    Update history result for this symbol using latest real-time price.
+
+    FIX: Uses improved profit calculation with transaction costs.
+    """
     symbol = self._ui_norm(code)
     mark_price = float(price or 0.0)
     if not symbol or mark_price <= 0:
         return
 
-    for row in range(self.history_table.rowCount()):
-        code_item = self.history_table.item(row, 1)
-        result_item = self.history_table.item(row, 5)
-        if not code_item or not result_item:
-            continue
-        if self._ui_norm(code_item.text()) != symbol:
-            continue
+    # FIX: Batch update for performance
+    self.history_table.setUpdatesEnabled(False)
+    try:
+        for row in range(self.history_table.rowCount()):
+            code_item = self.history_table.item(row, 1)
+            result_item = self.history_table.item(row, 5)
+            if not code_item or not result_item:
+                continue
+            if self._ui_norm(code_item.text()) != symbol:
+                continue
 
-        meta = result_item.data(Qt.ItemDataRole.UserRole) or {}
-        direction = str(meta.get("direction", "NONE"))
-        entry = float(meta.get("entry_price", 0.0) or 0.0)
-        shares = int(meta.get("shares", self._guess_profit_notional_shares) or 1)
-        pnl = self._compute_guess_profit(direction, entry, mark_price, shares)
-        raw_ret_pct = ((mark_price / entry - 1.0) * 100.0) if entry > 0 else 0.0
-        signed_ret_pct = (
-            raw_ret_pct
-            if direction == "UP"
-            else (-raw_ret_pct if direction == "DOWN" else 0.0)
-        )
-
-        if direction == "NONE":
-            result_item.setText("--")
-            result_item.setForeground(QColor("#aac3ec"))
-        elif pnl > 0:
-            result_item.setText(
-                f"CORRECT CNY {pnl:+,.2f} ({signed_ret_pct:+.2f}%)"
+            meta = result_item.data(Qt.ItemDataRole.UserRole) or {}
+            direction = str(meta.get("direction", "NONE"))
+            entry = float(meta.get("entry_price", 0.0) or 0.0)
+            shares = int(meta.get("shares", 0) or 0)  # Will use notional if 0
+            pnl = self._compute_guess_profit(direction, entry, mark_price, shares)
+            raw_ret_pct = ((mark_price / entry - 1.0) * 100.0) if entry > 0 else 0.0
+            signed_ret_pct = (
+                raw_ret_pct
+                if direction == "UP"
+                else (-raw_ret_pct if direction == "DOWN" else 0.0)
             )
-            result_item.setForeground(QColor("#35b57c"))
-        elif pnl < 0:
-            result_item.setText(
-                f"WRONG CNY {pnl:,.2f} ({signed_ret_pct:+.2f}%)"
-            )
-            result_item.setForeground(QColor("#e5534b"))
-        else:
-            result_item.setText("FLAT CNY 0.00 (+0.00%)")
-            result_item.setForeground(QColor("#aac3ec"))
 
-        meta["mark_price"] = mark_price
-        result_item.setData(Qt.ItemDataRole.UserRole, meta)
+            if direction == "NONE":
+                result_item.setText("--")
+                result_item.setForeground(QColor("#aac3ec"))
+            elif pnl > 0:
+                result_item.setText(
+                    f"CORRECT CNY {pnl:+,.2f} ({signed_ret_pct:+.2f}%)"
+                )
+                result_item.setForeground(QColor("#35b57c"))
+            elif pnl < 0:
+                result_item.setText(
+                    f"WRONG CNY {pnl:,.2f} ({signed_ret_pct:+.2f}%)"
+                )
+                result_item.setForeground(QColor("#e5534b"))
+            else:
+                result_item.setText("FLAT CNY 0.00 (+0.00%)")
+                result_item.setForeground(QColor("#aac3ec"))
+
+            meta["mark_price"] = mark_price
+            result_item.setData(Qt.ItemDataRole.UserRole, meta)
+    finally:
+        self.history_table.setUpdatesEnabled(True)
 
     self._update_correct_guess_profit_ui()
 

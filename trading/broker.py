@@ -483,6 +483,11 @@ class SimulatorBroker(BrokerInterface):
                     self._emit("order_update", order)
                     return
 
+                # FIX: Final state re-check before execution to close race window
+                # Order could have been cancelled between quote fetch and here
+                if not order.is_active:
+                    return
+
                 self._execute_order(
                     order, market_price=float(market_price),
                 )
