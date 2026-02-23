@@ -12,7 +12,7 @@ import torch.nn as nn
 from torch.utils.data import DataLoader, TensorDataset
 
 from config.settings import CONFIG
-from models.ensemble import EnsembleModel
+from models.ensemble import EnsembleModel as _DefaultEnsembleModel
 from utils.cancellation import CancelledException
 from utils.logger import get_logger
 
@@ -64,6 +64,24 @@ def _resolve_learning_rate(explicit_lr: float | None = None) -> float:
     return CONFIG.model.learning_rate
 
 
+def _resolve_ensemble_model_class() -> type[Any]:
+    """
+    Resolve the ensemble class via models.trainer when available.
+
+    This keeps runtime behavior unchanged while preserving testability when
+    tests monkeypatch `models.trainer.EnsembleModel`.
+    """
+    try:
+        from models import trainer as trainer_mod
+
+        candidate = getattr(trainer_mod, "EnsembleModel", None)
+        if candidate is not None:
+            return candidate
+    except Exception as e:
+        log.debug("Falling back to default EnsembleModel resolver: %s", e)
+    return _DefaultEnsembleModel
+
+
 def train(
     self,
     stock_codes: list[str] = None,
@@ -97,6 +115,7 @@ def train(
     if interval == _TRAINING_INTERVAL_LOCK:
         lookback = int(max(lookback, _MIN_1M_LOOKBACK_BARS))
     model_names = self._normalize_model_names(model_names)
+    ensemble_cls = _resolve_ensemble_model_class()
 
     self.interval = interval
     self.prediction_horizon = horizon
@@ -271,7 +290,7 @@ def train(
     if effective_incremental:
         ensemble_path = live_ensemble_path
         if ensemble_path.exists():
-            temp_ensemble = EnsembleModel(
+            temp_ensemble = ensemble_cls(
                 input_size=self.input_size,
                 model_names=model_names,
             )
@@ -305,17 +324,17 @@ def train(
                     "Failed to load existing ensemble 閳?"
                     "training from scratch"
                 )
-                self.ensemble = EnsembleModel(
+                self.ensemble = ensemble_cls(
                     input_size=self.input_size,
                     model_names=model_names,
                 )
         else:
-            self.ensemble = EnsembleModel(
+            self.ensemble = ensemble_cls(
                 input_size=self.input_size,
                 model_names=model_names,
             )
     else:
-        self.ensemble = EnsembleModel(
+        self.ensemble = ensemble_cls(
             input_size=self.input_size,
             model_names=model_names,
         )

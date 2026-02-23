@@ -34,7 +34,7 @@ def _run_step(name: str, cmd: list[str]) -> dict[str, Any]:
             "stdout": proc.stdout,
             "stderr": proc.stderr,
         }
-    except Exception as exc:
+    except (OSError, ValueError, subprocess.SubprocessError) as exc:
         elapsed = time.monotonic() - started
         return {
             "name": name,
@@ -114,7 +114,7 @@ def _tracked_runtime_artifacts_step(repo_root: Path) -> dict[str, Any]:
             "stdout": stdout,
             "stderr": stderr,
         }
-    except Exception as exc:
+    except (OSError, ValueError, subprocess.SubprocessError) as exc:
         elapsed = time.monotonic() - started
         return {
             "name": "tracked_runtime_artifacts",

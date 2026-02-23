@@ -59,6 +59,7 @@ ERROR_RE = re.compile(
     r"^(?P<path>.+?):(?P<line>\d+)(?::(?P<column>\d+))?: error: "
     r"(?P<message>.+?)\s+\[(?P<code>[^\]]+)\]$"
 )
+DEFAULT_BATCH_SIZE = 8
 
 
 def _normalize_path(path: str) -> str:
@@ -110,7 +111,10 @@ def save_baseline_entries(path: Path, issues: set[str]) -> None:
     path.write_text("\n".join(body) + "\n", encoding="utf-8")
 
 
-def run_mypy(targets: tuple[str, ...], flags: tuple[str, ...]) -> tuple[int, str, set[str]]:
+def _run_mypy_once(
+    targets: tuple[str, ...],
+    flags: tuple[str, ...],
+) -> tuple[int, str, set[str]]:
     cmd = [sys.executable, "-m", "mypy", *flags, *targets]
     proc = subprocess.run(
         cmd,
@@ -122,6 +126,44 @@ def run_mypy(targets: tuple[str, ...], flags: tuple[str, ...]) -> tuple[int, str
     combined = "\n".join(part for part in (proc.stdout, proc.stderr) if part).strip()
     issues = parse_mypy_errors(combined)
     return proc.returncode, combined, issues
+
+
+def _iter_target_batches(
+    targets: tuple[str, ...],
+    batch_size: int,
+) -> list[tuple[str, ...]]:
+    size = max(1, int(batch_size))
+    out: list[tuple[str, ...]] = []
+    for i in range(0, len(targets), size):
+        out.append(tuple(targets[i:i + size]))
+    return out
+
+
+def run_mypy(targets: tuple[str, ...], flags: tuple[str, ...]) -> tuple[int, str, set[str]]:
+    if not targets:
+        return 0, "", set()
+
+    batches = _iter_target_batches(targets, DEFAULT_BATCH_SIZE)
+    if len(batches) == 1:
+        return _run_mypy_once(batches[0], flags)
+
+    all_issues: set[str] = set()
+    output_parts: list[str] = []
+    max_code = 0
+
+    for index, batch in enumerate(batches, start=1):
+        return_code, combined, issues = _run_mypy_once(batch, flags)
+        max_code = max(max_code, int(return_code))
+        all_issues.update(issues)
+        if combined:
+            output_parts.append(
+                f"[batch {index}/{len(batches)}] targets={','.join(batch)}\n{combined}"
+            )
+        if return_code not in (0, 1):
+            break
+
+    output = "\n\n".join(output_parts).strip()
+    return max_code, output, all_issues
 
 
 def main() -> int:

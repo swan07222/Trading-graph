@@ -21,23 +21,14 @@ from utils.logger import get_logger
 
 log = get_logger(__name__)
 
-# CancelledException import (FIX CANCEL)
-
 try:
     from utils.cancellation import CancelledException
 except ImportError:
     class CancelledException(Exception):  # type: ignore[no-redef]
         pass
 
-# Thread-local LR support (FIX C1)
-
 def _get_effective_learning_rate() -> float:
-    """
-    Get effective learning rate, checking thread-local override first.
-
-    This supports the thread-local LR pattern from auto_learner.py
-    which avoids global CONFIG mutation race conditions.
-    """
+    """Get effective learning rate, checking thread-local override first."""
     try:
         from models.auto_learner import get_effective_learning_rate
         return float(get_effective_learning_rate())
@@ -99,16 +90,7 @@ def _build_amp_context(device: str) -> tuple[Callable[[], Any], Any | None]:
     return (lambda: nullcontext()), None
 
 class EnsembleModel:
-    """
-    Ensemble of multiple neural networks with calibrated weighted voting.
-
-    Supports:
-    - Multiple model architectures (LSTM, GRU, TCN, Transformer, Hybrid)
-    - Weighted voting based on validation accuracy
-    - Temperature-scaled calibration
-    - Thread-safe operations
-    - Incremental training
-    """
+    """Ensemble of multiple neural networks with calibrated weighted voting."""
 
     _MODEL_CLASSES: dict | None = None  # class-level cache
 
@@ -117,14 +99,7 @@ class EnsembleModel:
         input_size: int,
         model_names: list[str] | None = None,
     ):
-        """
-        Initialize ensemble with specified models.
-
-        Args:
-            input_size: Number of input features
-            model_names: List of model types to include
-                        (default: ['lstm', 'gru', 'tcn'])
-        """
+        """Initialize ensemble with the configured model set."""
         if input_size <= 0:
             raise ValueError(f"input_size must be positive, got {input_size}")
 

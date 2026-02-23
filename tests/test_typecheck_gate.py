@@ -53,3 +53,54 @@ def test_main_accepts_existing_empty_baseline(tmp_path: Path, monkeypatch):
     )
 
     assert gate.main() == 0
+
+
+def test_run_mypy_batches_and_aggregates(monkeypatch):
+    gate = _load_typecheck_gate_module()
+    monkeypatch.setattr(gate, "DEFAULT_BATCH_SIZE", 2)
+
+    calls: list[tuple[str, ...]] = []
+
+    def _fake_once(targets, _flags):
+        calls.append(tuple(targets))
+        if "b.py" in targets:
+            raw = "b.py:7: error: demo failure  [misc]"
+            return 1, raw, gate.parse_mypy_errors(raw)
+        return 0, "", set()
+
+    monkeypatch.setattr(gate, "_run_mypy_once", _fake_once)
+
+    code, output, issues = gate.run_mypy(
+        ("a.py", "b.py", "c.py"),
+        ("--flag",),
+    )
+    assert code == 1
+    assert len(calls) == 2
+    assert ("a.py", "b.py") in calls
+    assert ("c.py",) in calls
+    assert "batch 1/2" in output
+    assert "b.py:7:misc:demo failure" in issues
+
+
+def test_run_mypy_stops_on_fatal_batch_error(monkeypatch):
+    gate = _load_typecheck_gate_module()
+    monkeypatch.setattr(gate, "DEFAULT_BATCH_SIZE", 1)
+
+    calls: list[tuple[str, ...]] = []
+
+    def _fake_once(targets, _flags):
+        calls.append(tuple(targets))
+        if targets == ("a.py",):
+            return 2, "MemoryError", set()
+        return 0, "", set()
+
+    monkeypatch.setattr(gate, "_run_mypy_once", _fake_once)
+
+    code, output, issues = gate.run_mypy(
+        ("a.py", "b.py"),
+        ("--flag",),
+    )
+    assert code == 2
+    assert calls == [("a.py",)]
+    assert "MemoryError" in output
+    assert issues == set()

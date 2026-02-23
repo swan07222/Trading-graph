@@ -241,9 +241,6 @@ class OrderManagementSystem:
             safe_avg = max(0.0, float(avg_price))
         return safe_filled, safe_avg
 
-    # ------------------------------------------------------------------
-    # ------------------------------------------------------------------
-
     def get_active_orders(self) -> list[Order]:
         """Get all active (non-terminal) orders."""
         return self._db.load_active_orders()
@@ -1121,11 +1118,9 @@ class OrderManagementSystem:
 _oms_instances: dict[str, OrderManagementSystem] = {}
 _oms_lock = threading.Lock()
 
-
 def _singletons_disabled() -> bool:
     """Allow callers to opt out of process-global OMS singleton behavior."""
     return env_flag("TRADING_DISABLE_SINGLETONS", "0")
-
 
 def _resolve_oms_instance_key(
     *,
@@ -1142,7 +1137,6 @@ def _resolve_oms_instance_key(
             return str(Path(db_path))
     return "default"
 
-
 def create_oms(
     initial_capital: float = None,
     db_path: Path = None,
@@ -1152,7 +1146,6 @@ def create_oms(
         initial_capital=initial_capital,
         db_path=db_path,
     )
-
 
 def get_oms(
     initial_capital: float = None,
@@ -1179,7 +1172,6 @@ def get_oms(
             )
             _oms_instances[key] = inst
         return inst
-
 
 def reset_oms(
     *,

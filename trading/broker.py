@@ -31,6 +31,14 @@ from utils.logger import get_logger
 
 log = get_logger(__name__)
 
+__all__ = [
+    "BrokerInterface",
+    "SimulatorBroker",
+    "create_broker",
+    "make_fill_uid",
+    "parse_broker_status",
+]
+
 class BrokerInterface(ABC):
     """
     Abstract broker interface - all brokers must implement this.
@@ -1145,79 +1153,21 @@ class SimulatorBroker(BrokerInterface):
 
 def __getattr__(name: str) -> Any:
     """Lazy-export live broker classes without importing them at module load."""
-    if name in {
-        "EasytraderBroker",
-        "THSBroker",
-        "ZSZQBroker",
-        "MultiVenueBroker",
-    }:
-        from . import broker_live as _broker_live
+    from .broker_factory import resolve_live_export
 
-        return getattr(_broker_live, name)
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    try:
+        return resolve_live_export(name)
+    except AttributeError as exc:
+        raise AttributeError(
+            f"module {__name__!r} has no attribute {name!r}"
+        ) from exc
 
 def create_broker(
     mode: str | None = None,
     **kwargs: Any,
 ) -> BrokerInterface:
-    """
-    Factory function to create appropriate broker.
+    from .broker_factory import create_broker as _create_broker_impl
 
-    Args:
-        mode: 'simulation', 'paper', 'live', 'ths', 'ht',
-              'gj', 'yh', 'zszq'
-        **kwargs: Additional arguments for broker
-    """
-    from .broker_live import MultiVenueBroker, THSBroker, ZSZQBroker, _create_live_broker_by_type
-
-    if mode is None:
-        mode = (
-            CONFIG.trading_mode.value
-            if hasattr(CONFIG.trading_mode, 'value')
-            else str(CONFIG.trading_mode)
-        )
-
-    mode = mode.lower()
-
-    if mode in ('simulation', 'paper'):
-        return SimulatorBroker(
-            kwargs.get('capital', CONFIG.capital),
-        )
-    elif mode == 'live':
-        priority = kwargs.get("venue_priority")
-        if priority is None:
-            priority = getattr(CONFIG.trading, "venue_priority", []) or []
-
-        enable_multi = bool(kwargs.get("enable_multi_venue", False))
-        if not enable_multi:
-            enable_multi = bool(getattr(CONFIG.trading, "enable_multi_venue", False))
-        if not enable_multi and isinstance(priority, list) and len(priority) > 1:
-            enable_multi = True
-
-        if enable_multi:
-            venues: list[BrokerInterface] = []
-            for item in priority:
-                bt = str(item or "").strip().lower()
-                if not bt:
-                    continue
-                venues.append(_create_live_broker_by_type(bt))
-            if not venues:
-                venues = [_create_live_broker_by_type(kwargs.get("broker_type", "ths"))]
-            cooldown = kwargs.get(
-                "venue_failover_cooldown_seconds",
-                getattr(CONFIG.trading, "venue_failover_cooldown_seconds", 30),
-            )
-            return MultiVenueBroker(venues, failover_cooldown_seconds=int(cooldown))
-
-        return _create_live_broker_by_type(kwargs.get('broker_type', 'ths'))
-    elif mode in ('ths', 'ht', 'gj', 'yh'):
-        return THSBroker(broker_type=mode)
-    elif mode in ('zszq', 'zhaoshang'):
-        return ZSZQBroker()
-    else:
-        log.warning(
-            f"Unknown broker mode: {mode}, using simulator"
-        )
-        return SimulatorBroker()
+    return _create_broker_impl(mode, **kwargs)
 
 

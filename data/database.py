@@ -14,10 +14,10 @@ from utils.helpers import to_float, to_int
 from utils.logger import get_logger
 
 log = get_logger(__name__)
-
+_DB_QUERY_EXCEPTIONS = (sqlite3.Error, pd.errors.DatabaseError, ValueError, TypeError)
+_DB_SOFT_EXCEPTIONS = (sqlite3.Error, OSError, RuntimeError, TypeError, ValueError)
 # Current schema version — bump when adding/altering tables
 _SCHEMA_VERSION = 2
-
 
 class MarketDatabase:
     """
@@ -103,7 +103,7 @@ class MarketDatabase:
             if conn is not None:
                 try:
                     conn.close()
-                except Exception:
+                except (sqlite3.Error, OSError):
                     pass
 
     @contextmanager
@@ -113,7 +113,7 @@ class MarketDatabase:
         try:
             yield conn
             conn.commit()
-        except Exception:
+        except _DB_SOFT_EXCEPTIONS:
             conn.rollback()
             raise
 
@@ -142,7 +142,7 @@ class MarketDatabase:
             )
             row = cur.fetchone()
             return int(row[0]) if row else 0
-        except Exception:
+        except _DB_SOFT_EXCEPTIONS:
             return 0
 
     def _set_schema_version(
@@ -178,7 +178,7 @@ class MarketDatabase:
             if conn is not None:
                 try:
                     conn.close()
-                except Exception:
+                except (sqlite3.Error, OSError):
                     pass
 
     @staticmethod
@@ -678,7 +678,7 @@ class MarketDatabase:
                 self._conn,
                 params=(code, interval, limit),
             )
-        except Exception as e:
+        except _DB_QUERY_EXCEPTIONS as e:
             log.warning(
                 f"Intraday query failed for {code}/{interval}: {e}"
             )
@@ -730,7 +730,7 @@ class MarketDatabase:
                         idx_local = idx.tz_convert(
                             ZoneInfo("Asia/Shanghai")
                         ).tz_localize(None)
-                    except Exception:
+                    except (ImportError, ModuleNotFoundError, TypeError, ValueError):
                         idx_local = idx.tz_convert(None)
                 hhmm = (idx_local.hour * 100) + idx_local.minute
                 in_morning = (hhmm >= 930) & (hhmm <= 1130)
@@ -738,7 +738,7 @@ class MarketDatabase:
                 weekday = idx_local.dayofweek < 5
                 mask = weekday & (in_morning | in_afternoon)
                 work = work.loc[mask]
-            except Exception:
+            except (AttributeError, TypeError, ValueError):
                 pass
 
         work = self._sanitize_intraday_frame(
@@ -979,7 +979,7 @@ class MarketDatabase:
             df = pd.read_sql_query(
                 query, self._conn, params=params
             )
-        except Exception as e:
+        except _DB_QUERY_EXCEPTIONS as e:
             log.warning(f"Database query failed for {code}: {e}")
             return pd.DataFrame()
 
@@ -1005,7 +1005,7 @@ class MarketDatabase:
             row = cursor.fetchone()
             if row and row[0]:
                 return datetime.fromisoformat(row[0]).date()
-        except Exception as e:
+        except _DB_SOFT_EXCEPTIONS as e:
             log.debug(f"get_last_date failed for {code}: {e}")
         return None
 
@@ -1014,7 +1014,7 @@ class MarketDatabase:
         try:
             cursor = self._conn.execute("SELECT * FROM stocks")
             return [dict(row) for row in cursor.fetchall()]
-        except Exception as e:
+        except _DB_SOFT_EXCEPTIONS as e:
             log.warning(f"get_all_stocks failed: {e}")
             return []
 
@@ -1033,7 +1033,7 @@ class MarketDatabase:
                 (min_days,),
             )
             return [row["code"] for row in cursor.fetchall()]
-        except Exception as e:
+        except _DB_SOFT_EXCEPTIONS as e:
             log.warning(f"get_stocks_with_data failed: {e}")
             return []
 
@@ -1101,7 +1101,7 @@ class MarketDatabase:
             stats["date_range"] = (
                 (row[0], row[1]) if row else (None, None)
             )
-        except Exception as e:
+        except _DB_SOFT_EXCEPTIONS as e:
             log.warning(f"get_data_stats failed: {e}")
             stats.setdefault("total_stocks", 0)
             stats.setdefault("total_bars", 0)
@@ -1122,13 +1122,13 @@ class MarketDatabase:
                 str(self._db_path), timeout=60
             )
             conn.execute("VACUUM")
-        except Exception as e:
+        except _DB_SOFT_EXCEPTIONS as e:
             log.warning(f"VACUUM failed: {e}")
         finally:
             if conn is not None:
                 try:
                     conn.close()
-                except Exception:
+                except (sqlite3.Error, OSError):
                     pass
 
     def close(self):
@@ -1143,7 +1143,7 @@ class MarketDatabase:
             tid = threading.get_ident()
             try:
                 conn.close()
-            except Exception:
+            except (sqlite3.Error, OSError):
                 pass
             with self._connections_lock:
                 self._connections.pop(tid, None)
@@ -1155,7 +1155,7 @@ class MarketDatabase:
             for _tid, conn in list(self._connections.items()):
                 try:
                     conn.close()
-                except Exception:
+                except (sqlite3.Error, OSError):
                     pass
             self._connections.clear()
         # Also close this thread's connection
@@ -1165,16 +1165,14 @@ class MarketDatabase:
         ):
             try:
                 self._local.conn.close()
-            except Exception:
+            except (sqlite3.Error, OSError):
                 pass
             self._local.conn = None
-
 
 # Global database instance (thread-safe)
 
 _db: MarketDatabase | None = None
 _db_lock = threading.Lock()
-
 
 def get_database() -> MarketDatabase:
     """Get global database instance (thread-safe)."""
@@ -1184,7 +1182,6 @@ def get_database() -> MarketDatabase:
             if _db is None:
                 _db = MarketDatabase()
     return _db
-
 
 def reset_database() -> None:
     """
@@ -1198,6 +1195,6 @@ def reset_database() -> None:
         if _db is not None:
             try:
                 _db.close_all()
-            except Exception:
+            except _DB_SOFT_EXCEPTIONS:
                 pass
             _db = None

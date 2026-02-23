@@ -1,20 +1,26 @@
-# config/settings.py
+﻿# config/settings.py
 from __future__ import annotations
 
 import json
 import logging
 import os
 import threading
-from dataclasses import dataclass, field, fields
+from dataclasses import dataclass, field
 from datetime import datetime, time
 from enum import Enum
 from pathlib import Path
 from typing import Any
 
+from config.settings_utils import (
+    _coerce_bool,
+    _dataclass_to_dict,
+    _safe_dataclass_from_dict,
+)
+
 _SENTINEL = object()
 
 # Minimal logger that doesn't depend on our logger module
-# (avoids circular import: settings → logger → settings)
+# (avoids circular import: settings 鈫?logger 鈫?settings)
 _log = logging.getLogger("config.settings")
 
 
@@ -216,7 +222,7 @@ class AutoTradeConfig:
     # Master enable/disable
     enabled: bool = False
 
-    # Signal filters — minimum thresholds for auto-execution
+    # Signal filters 鈥?minimum thresholds for auto-execution
     min_confidence: float = 0.78
     min_signal_strength: float = 0.70
     min_model_agreement: float = 0.72
@@ -251,7 +257,7 @@ class AutoTradeConfig:
     notify_on_trade: bool = True
     notify_on_skip: bool = False
 
-    # Paper trading safety — require explicit confirmation for live
+    # Paper trading safety 鈥?require explicit confirmation for live
     confirm_live_auto_trade: bool = True
     # Reject delayed/fallback realtime quotes at submission time.
     block_on_stale_realtime: bool = True
@@ -312,108 +318,6 @@ class PrecisionConfig:
 
     # Persistence for learned threshold profile
     profile_filename: str = "precision_thresholds.json"
-
-
-def _safe_dataclass_from_dict(dc_instance: Any, data: dict[str, Any]) -> list[str]:
-    """
-    Apply dict values to a dataclass instance with type checking.
-    Returns list of warnings for bad values.
-    """
-    warnings_list = []
-    if not isinstance(data, dict):
-        return [f"Expected dict, got {type(data).__name__}"]
-
-    dc_fields = {f.name: f for f in fields(dc_instance)}
-
-    for key, value in data.items():
-        if key not in dc_fields:
-            warnings_list.append(f"Unknown field '{key}' — ignored")
-            continue
-
-        current_value = getattr(dc_instance, key)
-
-        try:
-            # FIX: Check bool BEFORE int (since bool is subclass of int)
-            if isinstance(current_value, bool):
-                ok, parsed = _coerce_bool(value)
-                if ok:
-                    setattr(dc_instance, key, parsed)
-                else:
-                    warnings_list.append(
-                        f"Bad value for bool field '{key}': {value!r}"
-                    )
-            elif isinstance(current_value, int) and isinstance(
-                value, (int, float)
-            ):
-                setattr(dc_instance, key, int(value))
-            elif isinstance(current_value, float) and isinstance(
-                value, (int, float)
-            ):
-                setattr(dc_instance, key, float(value))
-            elif isinstance(current_value, str) and isinstance(value, str):
-                setattr(dc_instance, key, value)
-            elif isinstance(current_value, list) and isinstance(value, list):
-                setattr(dc_instance, key, value)
-            elif isinstance(current_value, dict) and isinstance(value, dict):
-                setattr(dc_instance, key, value)
-            elif isinstance(current_value, time) and isinstance(value, str):
-                # Parse "HH:MM" or "HH:MM:SS"
-                parts = [int(p) for p in value.split(":")]
-                setattr(dc_instance, key, time(*parts))
-            else:
-                warnings_list.append(
-                    f"Type mismatch for '{key}': "
-                    f"expected {type(current_value).__name__}, "
-                    f"got {type(value).__name__}"
-                )
-        except (TypeError, ValueError) as e:
-            warnings_list.append(f"Bad value for '{key}': {value!r} — {e}")
-
-    return warnings_list
-
-
-def _coerce_bool(value: Any) -> tuple[bool, bool]:
-    """
-    Coerce common bool representations.
-
-    Returns (ok, parsed_value). When ok is False, parsed_value is undefined.
-    """
-    if isinstance(value, bool):
-        return True, value
-
-    if isinstance(value, int):
-        if value in (0, 1):
-            return True, bool(value)
-        return False, False
-
-    if isinstance(value, float):
-        if value in (0.0, 1.0):
-            return True, bool(int(value))
-        return False, False
-
-    if isinstance(value, str):
-        v = value.strip().lower()
-        if v in ("1", "true", "yes", "on", "y"):
-            return True, True
-        if v in ("0", "false", "no", "off", "n"):
-            return True, False
-        return False, False
-
-    return False, False
-
-
-def _dataclass_to_dict(dc_instance: Any) -> dict[str, Any]:
-    """Serialize a dataclass to dict, handling special types."""
-    result = {}
-    for f in fields(dc_instance):
-        value = getattr(dc_instance, f.name)
-        if isinstance(value, time):
-            result[f.name] = value.strftime("%H:%M:%S")
-        elif isinstance(value, Enum):
-            result[f.name] = value.value
-        else:
-            result[f.name] = value
-    return result
 
 
 class Config:
@@ -575,7 +479,7 @@ class Config:
 
     def __getattr__(self, name: str) -> Any:
         """
-        Legacy compatibility: CONFIG.SEQUENCE_LENGTH → CONFIG.model.sequence_length
+        Legacy compatibility: CONFIG.SEQUENCE_LENGTH 鈫?CONFIG.model.sequence_length
 
         Only called when normal attribute lookup fails,
         so @property definitions always take precedence.
@@ -601,7 +505,7 @@ class Config:
                 f"{self.__class__.__name__} has no attribute {name!r}"
             )
 
-        # Path properties — delegate to the property
+        # Path properties 鈥?delegate to the property
         if mapping.startswith("_prop_"):
             prop_name = mapping[6:]  # strip "_prop_"
             return getattr(self, prop_name)
@@ -619,7 +523,7 @@ class Config:
         value = float(value)
         if value <= 0:
             _log.warning(
-                f"Capital must be positive, got {value} — clamping to 1.0"
+                f"Capital must be positive, got {value} 鈥?clamping to 1.0"
             )
             value = 1.0
         self.capital = value
@@ -708,7 +612,7 @@ class Config:
             d.mkdir(parents=True, exist_ok=True)
 
     def set_model_dir(self, path: str) -> None:
-        """Override model directory path — invalidates cache."""
+        """Override model directory path 鈥?invalidates cache."""
         with self._lock:
             self._model_dir_override = str(path) if path else None
             self._model_dir_cached = _SENTINEL
@@ -723,7 +627,7 @@ class Config:
                 with open(self._config_file, encoding="utf-8") as f:
                     data = json.load(f)
                 self._apply_dict(data, _from_init=True)
-            except Exception as e:
+            except (OSError, TypeError, ValueError, json.JSONDecodeError) as e:
                 _log.warning("Failed to load config file: %s", e)
 
         self._load_from_env()
@@ -802,7 +706,7 @@ class Config:
             if value is not None and value.strip():
                 try:
                     self._set_nested(attr_path, converter(value.strip()))
-                except Exception as e:
+                except (AttributeError, TypeError, ValueError) as e:
                     _log.warning(
                         "Failed to apply env %s=%r: %s",
                         full_key,
@@ -844,7 +748,7 @@ class Config:
                         _log.warning("Config %s: %s", key, w)
                 else:
                     _log.warning(
-                        "Expected dict for '%s', got %s — ignored",
+                        "Expected dict for '%s', got %s 鈥?ignored",
                         key,
                         type(value).__name__,
                     )
@@ -907,10 +811,10 @@ class Config:
                             type(current).__name__,
                             type(value).__name__,
                         )
-                except Exception as e:
+                except (AttributeError, TypeError, ValueError) as e:
                     _log.warning("Failed to set '%s': %s", key, e)
             else:
-                _log.debug("Unknown config key '%s' — ignored", key)
+                _log.debug("Unknown config key '%s' 鈥?ignored", key)
 
     def _set_nested(self, path: str, value: Any) -> None:
         """Set nested attribute like 'risk.max_position_pct'."""
@@ -979,7 +883,7 @@ class Config:
         )
         if abs(ratio_sum - 1.0) >= 0.001:
             self._validation_warnings.append(
-                f"Split ratios must sum to 1.0, got {ratio_sum:.4f} — "
+                f"Split ratios must sum to 1.0, got {ratio_sum:.4f} 鈥?"
                 f"auto-correcting test_ratio"
             )
             corrected_test = (
@@ -1181,11 +1085,11 @@ class Config:
                         pass
                 tmp_path.replace(self._config_file)
 
-        except Exception as e:
+        except (OSError, TypeError, ValueError) as e:
             _log.error("Failed to save config: %s", e)
 
     def reload(self) -> None:
-        """Hot-reload — reset sub-configs to defaults, then re-apply."""
+        """Hot-reload 鈥?reset sub-configs to defaults, then re-apply."""
         with self._lock:
             self.data = DataConfig()
             self.model = ModelConfig()
@@ -1208,7 +1112,7 @@ class Config:
                     with open(self._config_file, encoding="utf-8") as f:
                         data = json.load(f)
                     self._apply_dict_inner(data)
-                except Exception as e:
+                except (OSError, TypeError, ValueError, json.JSONDecodeError) as e:
                     _log.warning("Failed to reload config file: %s", e)
 
             self._load_from_env()
@@ -1227,7 +1131,7 @@ class Config:
             from zoneinfo import ZoneInfo
 
             now = datetime.now(tz=ZoneInfo("Asia/Shanghai"))
-        except Exception:
+        except (ImportError, ModuleNotFoundError):
             now = datetime.now()
 
         # Weekend check

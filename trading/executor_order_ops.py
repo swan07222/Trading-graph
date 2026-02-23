@@ -7,10 +7,12 @@ from config import CONFIG
 from core.types import Fill, Order, OrderSide, OrderStatus, OrderType, TradeSignal
 from trading.alerts import AlertPriority
 from trading.executor_error_policy import SOFT_FAIL_EXCEPTIONS
-from trading.executor_policy_ops import _allow_order_type_emulation
-from trading.executor_policy_ops import _broker_supports_order_type
-from trading.executor_policy_ops import _is_advanced_order_type
-from trading.executor_policy_ops import _should_escalate_runtime_exception
+from trading.executor_policy_ops import (
+    _allow_order_type_emulation,
+    _broker_supports_order_type,
+    _is_advanced_order_type,
+    _should_escalate_runtime_exception,
+)
 from trading.health import HealthStatus
 from utils.logger import get_logger
 from utils.metrics import inc_counter, observe, set_gauge
