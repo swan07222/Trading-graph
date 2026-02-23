@@ -190,17 +190,28 @@ def _ts_to_epoch(self: Any, ts_raw: Any) -> float:
         return float(time.time())
 
 def _epoch_to_iso(self: Any, epoch: float) -> str:
-    """Canonical ISO timestamp for chart bars."""
+    """Canonical ISO timestamp for chart bars (Asia/Shanghai)."""
     try:
+        from zoneinfo import ZoneInfo
+        sh_tz = ZoneInfo("Asia/Shanghai")
         return datetime.fromtimestamp(
-            float(epoch), tz=timezone.utc
+            float(epoch), tz=sh_tz
         ).isoformat(timespec="seconds")
     except _APP_SOFT_EXCEPTIONS:
-        return datetime.now(timezone.utc).isoformat(timespec="seconds")
+        try:
+            return datetime.fromtimestamp(
+                float(epoch), tz=timezone.utc
+            ).isoformat(timespec="seconds")
+        except _APP_SOFT_EXCEPTIONS:
+            return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 def _now_iso(self: Any) -> str:
-    """Consistent sortable timestamp for live bars."""
-    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+    """Consistent sortable timestamp for live bars (Asia/Shanghai)."""
+    try:
+        from zoneinfo import ZoneInfo
+        return datetime.now(tz=ZoneInfo("Asia/Shanghai")).isoformat(timespec="seconds")
+    except _APP_SOFT_EXCEPTIONS:
+        return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 def _merge_bars(
     self: Any,
@@ -503,7 +514,11 @@ def _resample_chart_bars(
         out.append(row_out)
 
     out.sort(key=lambda row: float(row.get("_ts_epoch", 0.0)))
-    return self._merge_bars([], out, tgt)
+    # Skip _merge_bars here: resampled buckets are already deduplicated
+    # with correctly summed volume. Passing through _merge_bars would
+    # use volume as a dedup quality signal and potentially replace
+    # entries instead of summing, corrupting volume data.
+    return out
 
 def _dominant_bar_interval(
     self: Any,

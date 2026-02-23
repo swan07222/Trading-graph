@@ -101,7 +101,8 @@ class BarAggregator:
             return False
         hhmm = (ts_val.hour * 100) + ts_val.minute
         morning = 930 <= hhmm <= 1130
-        afternoon = 1300 <= hhmm <= 1500
+        # Exclude closing call auction (14:57-15:00) to match chart filter.
+        afternoon = 1300 <= hhmm < 1457
         return bool(morning or afternoon)
 
     def add_callback(self, callback: Callable):
@@ -310,7 +311,7 @@ class BarAggregator:
             except _BAR_SOFT_EXCEPTIONS as e:
                 log.debug(f"Bar session persist failed for {symbol}: {e}")
 
-            should_persist_db = not bool(CONFIG.is_market_open())
+            should_persist_db = True
             if should_persist_db:
                 try:
                     import pandas as pd

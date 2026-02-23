@@ -622,7 +622,7 @@ class DataFetcher:
 
     @staticmethod
     def _normalize_interval_token(interval: str | None) -> str:
-        iv = str(interval or "1d").strip().lower()
+        iv = str(interval or "1m").strip().lower()
         aliases = {
             "1h":    "60m",
             "60min": "60m",
@@ -635,7 +635,7 @@ class DataFetcher:
 
     @staticmethod
     def _interval_seconds(interval: str | None) -> int:
-        iv = str(interval or "1d").strip().lower()
+        iv = str(interval or "1m").strip().lower()
         aliases = {
             "1h":    "60m",
             "60min": "60m",

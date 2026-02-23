@@ -688,7 +688,7 @@ class StockChart(QWidget):
                         diag["drop_scale"] += 1
                         continue
 
-                    if prev_close is not None and prev_close > 0 and len(recent_closes) >= 8:
+                    if prev_close is not None and prev_close > 0 and len(recent_closes) >= 2:
                         jump = abs(float(c) / max(float(prev_close), 1e-8) - 1.0)
                         if jump > jump_cap:
                             diag["drop_shape"] += 1

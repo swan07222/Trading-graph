@@ -77,6 +77,21 @@ def _update_watchlist(self) -> None:
         for k in stale_quotes:
             self._last_quote_ui_emit.pop(k, None)
 
+    # Evict bar caches for symbols no longer in watchlist or active chart.
+    if self._bars_by_symbol:
+        active_syms = set(row_map.keys())
+        selected = self._ui_norm(self.stock_input.text())
+        if selected:
+            active_syms.add(selected)
+        max_inactive = 10
+        stale_bars = [
+            k for k in self._bars_by_symbol.keys()
+            if k not in active_syms
+        ]
+        if len(stale_bars) > max_inactive:
+            for k in stale_bars[max_inactive:]:
+                self._bars_by_symbol.pop(k, None)
+
 def _on_watchlist_click(
     self, row: int, col: int, code_override: str | None = None
 ) -> None:
