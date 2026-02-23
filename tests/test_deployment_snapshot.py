@@ -14,7 +14,7 @@ def _load_snapshot_module():
     return module
 
 
-def test_snapshot_create_and_restore_roundtrip(tmp_path: Path):
+def test_snapshot_create_and_restore_roundtrip(tmp_path: Path) -> None:
     mod = _load_snapshot_module()
     root = tmp_path / "repo"
     root.mkdir(parents=True)
@@ -45,13 +45,13 @@ def test_snapshot_create_and_restore_roundtrip(tmp_path: Path):
     assert "\"paper\"" in cfg.read_text(encoding="utf-8")
 
 
-def test_safe_member_path_rejects_traversal():
+def test_safe_member_path_rejects_traversal() -> None:
     mod = _load_snapshot_module()
     with pytest.raises(ValueError):
         mod._safe_member_path("../outside.txt")
 
 
-def test_post_restore_verification_runs_preflight(monkeypatch, tmp_path: Path):
+def test_post_restore_verification_runs_preflight(monkeypatch, tmp_path: Path) -> None:
     mod = _load_snapshot_module()
     captured: list[tuple[str, list[str]]] = []
 
@@ -82,7 +82,7 @@ def test_post_restore_verification_runs_preflight(monkeypatch, tmp_path: Path):
     assert "quick" in captured[0][1]
 
 
-def test_post_restore_live_soak_requires_allow_live(tmp_path: Path):
+def test_post_restore_live_soak_requires_allow_live(tmp_path: Path) -> None:
     mod = _load_snapshot_module()
     out = mod._run_post_restore_verification(
         root=tmp_path,

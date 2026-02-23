@@ -8,6 +8,8 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+from typing import NoReturn
+
 from config import CONFIG
 from data.features import FeatureEngine
 from data.fetcher import DataFetcher, YahooSource
@@ -15,26 +17,26 @@ from data.processor import DataProcessor
 
 
 class TestDataFetcher:
-    """Tests for DataFetcher"""
+    """Tests for DataFetcher."""
 
     @pytest.fixture
     def fetcher(self):
         return DataFetcher()
 
-    def test_fetcher_initialization(self, fetcher):
-        """Test that fetcher initializes with sources"""
+    def test_fetcher_initialization(self, fetcher) -> None:
+        """Test that fetcher initializes with sources."""
         assert fetcher is not None
         assert len(fetcher._sources) > 0
 
-    def test_clean_code(self, fetcher):
-        """Test stock code cleaning"""
+    def test_clean_code(self, fetcher) -> None:
+        """Test stock code cleaning."""
         assert DataFetcher.clean_code("600519") == "600519"
         assert DataFetcher.clean_code("sh600519") == "600519"
         assert DataFetcher.clean_code("600519.SS") == "600519"
         assert DataFetcher.clean_code("519") == "000519"
 
-    def test_get_history_returns_dataframe(self, fetcher):
-        """Test that get_history returns a DataFrame"""
+    def test_get_history_returns_dataframe(self, fetcher) -> None:
+        """Test that get_history returns a DataFrame."""
         df = fetcher.get_history("600519", days=100)
 
         if not df.empty:
@@ -43,8 +45,8 @@ class TestDataFetcher:
             assert 'volume' in df.columns
             assert len(df) > 0
 
-    def test_cache_functionality(self, fetcher):
-        """Test that caching works"""
+    def test_cache_functionality(self, fetcher) -> None:
+        """Test that caching works."""
         df1 = fetcher.get_history("600519", days=50)
 
         if not df1.empty:
@@ -52,7 +54,7 @@ class TestDataFetcher:
 
             assert len(df1) == len(df2)
 
-    def test_yahoo_intraday_keeps_bar_count(self, monkeypatch):
+    def test_yahoo_intraday_keeps_bar_count(self, monkeypatch) -> None:
         """Intraday Yahoo fetch should not be truncated to calendar days."""
         rows = 240
         idx = pd.date_range("2026-01-01", periods=rows, freq="min")
@@ -84,7 +86,7 @@ class TestDataFetcher:
 
         assert len(out) == rows
 
-    def test_resolve_intraday_days_to_bar_depth(self):
+    def test_resolve_intraday_days_to_bar_depth(self) -> None:
         bars = DataFetcher._resolve_requested_bar_count(
             days=7,
             bars=None,
@@ -92,7 +94,7 @@ class TestDataFetcher:
         )
         assert bars >= 1000
 
-    def test_resolve_weekly_monthly_days_to_bar_depth(self):
+    def test_resolve_weekly_monthly_days_to_bar_depth(self) -> None:
         bars_weekly = DataFetcher._resolve_requested_bar_count(
             days=500,
             bars=None,
@@ -107,7 +109,7 @@ class TestDataFetcher:
         assert bars_monthly == 25
 
 class TestDataProcessor:
-    """Tests for DataProcessor"""
+    """Tests for DataProcessor."""
 
     @pytest.fixture
     def processor(self):
@@ -115,7 +117,7 @@ class TestDataProcessor:
 
     @pytest.fixture
     def sample_df(self):
-        """Create sample DataFrame"""
+        """Create sample DataFrame."""
         dates = pd.date_range('2023-01-01', periods=200, freq='D')
         np.random.seed(42)
 
@@ -132,8 +134,8 @@ class TestDataProcessor:
 
         return df
 
-    def test_create_labels(self, processor, sample_df):
-        """Test label creation"""
+    def test_create_labels(self, processor, sample_df) -> None:
+        """Test label creation."""
         df = processor.create_labels(sample_df)
 
         assert 'label' in df.columns
@@ -150,8 +152,8 @@ class TestDataProcessor:
         # So len(df) == len(sample_df)
         assert len(df) == len(sample_df)
 
-    def test_scaler_fitting(self, processor):
-        """Test scaler fitting"""
+    def test_scaler_fitting(self, processor) -> None:
+        """Test scaler fitting."""
         features = np.random.randn(100, 10)
 
         processor.fit_scaler(features)
@@ -159,15 +161,15 @@ class TestDataProcessor:
         assert processor._fitted
         assert processor.scaler is not None
 
-    def test_transform_requires_fit(self, processor):
-        """Test that transform fails without fit"""
+    def test_transform_requires_fit(self, processor) -> None:
+        """Test that transform fails without fit."""
         features = np.random.randn(100, 10)
 
         with pytest.raises(RuntimeError):
             processor.transform(features)
 
-    def test_transform_clips_values(self, processor):
-        """Test that transform clips extreme values"""
+    def test_transform_clips_values(self, processor) -> None:
+        """Test that transform clips extreme values."""
         features = np.random.randn(100, 10)
         processor.fit_scaler(features)
 
@@ -177,8 +179,8 @@ class TestDataProcessor:
         assert np.all(transformed >= -5)
         assert np.all(transformed <= 5)
 
-    def test_save_load_scaler(self, processor, tmp_path):
-        """Test scaler save/load"""
+    def test_save_load_scaler(self, processor, tmp_path) -> None:
+        """Test scaler save/load."""
         features = np.random.randn(100, 10)
         processor.fit_scaler(features)
 
@@ -191,7 +193,7 @@ class TestDataProcessor:
         assert loaded
         assert processor2._fitted
 
-    def test_load_scaler_prefers_safe_sidecar(self, processor, tmp_path, monkeypatch):
+    def test_load_scaler_prefers_safe_sidecar(self, processor, tmp_path, monkeypatch) -> None:
         """Safe sidecar should load without touching unsafe pickle path."""
         features = np.random.randn(120, 8)
         processor.fit_scaler(features)
@@ -201,7 +203,7 @@ class TestDataProcessor:
 
         import utils.atomic_io as atomic_io
 
-        def _fail_pickle_load(*_args, **_kwargs):
+        def _fail_pickle_load(*_args, **_kwargs) -> NoReturn:
             raise RuntimeError("pickle path should not be used")
 
         monkeypatch.setattr(atomic_io, "pickle_load", _fail_pickle_load, raising=True)
@@ -219,7 +221,7 @@ class TestDataProcessor:
             CONFIG.model.allow_unsafe_artifact_load = old_allow
             CONFIG.model.require_artifact_checksum = old_require
 
-    def test_load_scaler_blocks_pickle_without_safe_sidecar(self, processor, tmp_path):
+    def test_load_scaler_blocks_pickle_without_safe_sidecar(self, processor, tmp_path) -> None:
         """When unsafe fallback is disabled, missing safe sidecar must fail."""
         features = np.random.randn(120, 8)
         processor.fit_scaler(features)
@@ -243,7 +245,7 @@ class TestDataProcessor:
             CONFIG.model.require_artifact_checksum = old_require
 
 class TestFeatureEngine:
-    """Tests for FeatureEngine"""
+    """Tests for FeatureEngine."""
 
     @pytest.fixture
     def engine(self):
@@ -251,7 +253,7 @@ class TestFeatureEngine:
 
     @pytest.fixture
     def sample_ohlcv(self):
-        """Create sample OHLCV data"""
+        """Create sample OHLCV data."""
         dates = pd.date_range('2023-01-01', periods=200, freq='D')
         np.random.seed(42)
 
@@ -265,8 +267,8 @@ class TestFeatureEngine:
             'volume': np.random.randint(1000000, 5000000, 200),
         }, index=dates)
 
-    def test_create_features(self, engine, sample_ohlcv):
-        """Test feature creation"""
+    def test_create_features(self, engine, sample_ohlcv) -> None:
+        """Test feature creation."""
         df = engine.create_features(sample_ohlcv)
 
         feature_cols = engine.get_feature_columns()
@@ -274,8 +276,8 @@ class TestFeatureEngine:
         for col in feature_cols[:5]:  # Check first 5
             assert col in df.columns, f"Missing feature: {col}"
 
-    def test_no_nan_in_features(self, engine, sample_ohlcv):
-        """Test that features don't have NaN after processing"""
+    def test_no_nan_in_features(self, engine, sample_ohlcv) -> None:
+        """Test that features don't have NaN after processing."""
         df = engine.create_features(sample_ohlcv)
         feature_cols = engine.get_feature_columns()
 
@@ -283,16 +285,16 @@ class TestFeatureEngine:
             if col in df.columns:
                 assert not df[col].isna().any(), f"NaN in {col}"
 
-    def test_feature_count(self, engine):
-        """Test feature count matches expected"""
+    def test_feature_count(self, engine) -> None:
+        """Test feature count matches expected."""
         feature_cols = engine.get_feature_columns()
         assert len(feature_cols) >= 30  # Should have many features
 
 class TestIntegration:
-    """Integration tests for the data pipeline"""
+    """Integration tests for the data pipeline."""
 
-    def test_full_pipeline(self):
-        """Test complete data pipeline"""
+    def test_full_pipeline(self) -> None:
+        """Test complete data pipeline."""
         fetcher = DataFetcher()
         processor = DataProcessor()
         engine = FeatureEngine()

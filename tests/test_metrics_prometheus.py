@@ -10,7 +10,7 @@ from utils.metrics_prometheus import (
 )
 
 
-def test_metrics_registry_gauge():
+def test_metrics_registry_gauge() -> None:
     """Test gauge metric recording."""
     registry = MetricsRegistry()
     registry.gauge("test_gauge", 42.0, labels={"host": "server1"}, help_text="Test gauge")
@@ -21,7 +21,7 @@ def test_metrics_registry_gauge():
     assert 'test_gauge{host="server1"} 42.0' in output
 
 
-def test_metrics_registry_counter():
+def test_metrics_registry_counter() -> None:
     """Test counter metric recording."""
     registry = MetricsRegistry()
     registry.counter("test_counter", 1.0, labels={"method": "GET"}, help_text="Test counter")
@@ -33,7 +33,7 @@ def test_metrics_registry_counter():
     assert 'test_counter{method="GET"} 2.0' in output
 
 
-def test_metrics_registry_clear():
+def test_metrics_registry_clear() -> None:
     """Test registry clear."""
     registry = MetricsRegistry()
     registry.gauge("test", 1.0)
@@ -43,7 +43,7 @@ def test_metrics_registry_clear():
     assert output == ""
 
 
-def test_trading_metrics_record_order():
+def test_trading_metrics_record_order() -> None:
     """Test TradingMetrics order recording."""
     metrics = TradingMetrics()
     assert metrics.orders_submitted == 0
@@ -57,7 +57,7 @@ def test_trading_metrics_record_order():
     assert metrics.orders_rejected == 1
 
 
-def test_trading_metrics_record_fill():
+def test_trading_metrics_record_fill() -> None:
     """Test TradingMetrics fill recording."""
     metrics = TradingMetrics()
     metrics.record_fill(1000.0, 3.0)
@@ -66,7 +66,7 @@ def test_trading_metrics_record_fill():
     assert metrics.total_commission == 3.0
 
 
-def test_trading_metrics_record_prediction():
+def test_trading_metrics_record_prediction() -> None:
     """Test TradingMetrics prediction recording."""
     metrics = TradingMetrics()
     metrics.record_prediction(0.8, 0.1)
@@ -75,7 +75,7 @@ def test_trading_metrics_record_prediction():
     assert metrics.avg_confidence == 0.8
 
 
-def test_trading_metrics_record_fetch():
+def test_trading_metrics_record_fetch() -> None:
     """Test TradingMetrics fetch recording."""
     metrics = TradingMetrics()
     metrics.record_fetch(50.0, True)
@@ -86,7 +86,7 @@ def test_trading_metrics_record_fetch():
     assert metrics.cache_misses == 1
 
 
-def test_trading_metrics_export():
+def test_trading_metrics_export() -> None:
     """Test TradingMetrics export to registry."""
     metrics = TradingMetrics()
     metrics.record_order("FILLED")
@@ -100,13 +100,13 @@ def test_trading_metrics_export():
     assert "trading_fill_value_total" in output
 
 
-def test_get_trading_metrics():
+def test_get_trading_metrics() -> None:
     """Test get_trading_metrics function."""
     metrics = get_trading_metrics()
     assert isinstance(metrics, TradingMetrics)
 
 
-def test_convenience_functions():
+def test_convenience_functions() -> None:
     """Test convenience functions."""
     record_order("FILLED")
     record_fill(500.0, 1.5)
@@ -116,7 +116,7 @@ def test_convenience_functions():
     assert metrics.orders_filled >= 1
 
 
-def test_metric_sample():
+def test_metric_sample() -> None:
     """Test MetricSample dataclass."""
     sample = MetricSample(
         name="test",
@@ -132,7 +132,7 @@ def test_metric_sample():
     assert sample.metric_type == "gauge"
 
 
-def test_metrics_registry_multiple_labels():
+def test_metrics_registry_multiple_labels() -> None:
     """Test registry with multiple label combinations."""
     registry = MetricsRegistry()
     registry.gauge("multi_label", 1.0, labels={"a": "1", "b": "2"})
@@ -143,7 +143,7 @@ def test_metrics_registry_multiple_labels():
     assert 'multi_label{a="1",b="3"} 2.0' in output
 
 
-def test_trading_metrics_update_pnl():
+def test_trading_metrics_update_pnl() -> None:
     """Test P&L update."""
     metrics = get_trading_metrics()
     metrics.realized_pnl = 1000.0
@@ -153,7 +153,7 @@ def test_trading_metrics_update_pnl():
     assert metrics.unrealized_pnl == 500.0
 
 
-def test_trading_metrics_update_risk():
+def test_trading_metrics_update_risk() -> None:
     """Test risk metrics update."""
     metrics = get_trading_metrics()
     metrics.current_var = 5000.0

@@ -40,10 +40,10 @@ log = get_logger(__name__)
 class AutoLearnDialog(QDialog):
     """Dialog for automatic learning with two tabs:
     - Auto Learn: random stock rotation (existing)
-    - Train by Search: user-selected stocks (new)
+    - Train by Search: user-selected stocks (new).
     """
 
-    def __init__(self, parent=None, seed_stock_codes: list[str] | None = None):
+    def __init__(self, parent=None, seed_stock_codes: list[str] | None = None) -> None:
         super().__init__(parent)
         self.setWindowTitle("Auto Learning")
         self.setMinimumSize(700, 540)
@@ -76,7 +76,7 @@ class AutoLearnDialog(QDialog):
     # =========================================================================
     # =========================================================================
 
-    def _setup_ui(self):
+    def _setup_ui(self) -> None:
         root_layout = QVBoxLayout(self)
         root_layout.setSpacing(8)
         root_layout.setContentsMargins(10, 10, 10, 10)
@@ -517,7 +517,7 @@ class AutoLearnDialog(QDialog):
         # Return as-is if we can't normalize
         return code_lower
 
-    def _search_stock(self):
+    def _search_stock(self) -> None:
         """Search/validate a stock code."""
         raw = self.search_input.text().strip()
         if not raw:
@@ -555,7 +555,7 @@ class AutoLearnDialog(QDialog):
         self._validator.validation_result.connect(self._on_validation_result)
         self._validator.start()
 
-    def _on_validation_result(self, result: dict):
+    def _on_validation_result(self, result: dict) -> None:
         """Handle stock validation result from background thread."""
         request_id = int(result.get("request_id", 0) or 0)
         if request_id != self._validation_request_id:
@@ -595,7 +595,7 @@ class AutoLearnDialog(QDialog):
 
         self._validator = None
 
-    def _add_searched_stock(self):
+    def _add_searched_stock(self) -> None:
         """Add the last validated stock to the training list."""
         code = self._last_validated_code
         if not code:
@@ -624,7 +624,7 @@ class AutoLearnDialog(QDialog):
         self._last_validated_code = ""
         self._update_stock_count()
 
-    def _quick_add_stock(self, code: str):
+    def _quick_add_stock(self, code: str) -> None:
         """Add a stock from the quick-add buttons without validation."""
         if code in self._targeted_stock_codes:
             self._log(f"{code} already in list", "warning")
@@ -637,7 +637,7 @@ class AutoLearnDialog(QDialog):
 
     def _add_stock_to_list_widget(
         self, code: str, name: str, bars: int
-    ):
+    ) -> None:
         """Add a stock item to the QListWidget."""
         display = f"  {code}"
         if name:
@@ -649,7 +649,7 @@ class AutoLearnDialog(QDialog):
         item.setData(Qt.ItemDataRole.UserRole, code)
         self.stock_list.addItem(item)
 
-    def _remove_selected_stocks(self):
+    def _remove_selected_stocks(self) -> None:
         """Remove selected stocks from the list."""
         selected = self.stock_list.selectedItems()
         if not selected:
@@ -664,7 +664,7 @@ class AutoLearnDialog(QDialog):
 
         self._update_stock_count()
 
-    def _clear_stock_list(self):
+    def _clear_stock_list(self) -> None:
         """Clear all stocks from the list."""
         if not self._targeted_stock_codes:
             return
@@ -685,7 +685,7 @@ class AutoLearnDialog(QDialog):
         self.stock_list.clear()
         self._update_stock_count()
 
-    def _update_stock_count(self):
+    def _update_stock_count(self) -> None:
         """Update the stock count label."""
         count = len(self._targeted_stock_codes)
         if count == 0:
@@ -702,7 +702,7 @@ class AutoLearnDialog(QDialog):
                 "color: #35b57c; font-size: 12px;"
             )
 
-    def _load_seed_stocks(self):
+    def _load_seed_stocks(self) -> None:
         """Preload targeted list from session-captured symbols."""
         if not self._seed_stock_codes:
             self.session_seed_label.setText("Session seed stocks: 0")
@@ -765,7 +765,7 @@ class AutoLearnDialog(QDialog):
     # AUTO LEARN START/STOP
     # =========================================================================
 
-    def _start_auto_learning(self):
+    def _start_auto_learning(self) -> None:
         """Start auto-learning (random rotation)."""
         if self._is_running:
             return
@@ -837,7 +837,7 @@ class AutoLearnDialog(QDialog):
         self.worker.error_occurred.connect(self._on_error)
         self.worker.start()
 
-    def _stop_auto_learning(self):
+    def _stop_auto_learning(self) -> None:
         """Stop auto-learning gracefully."""
         if not self._is_running:
             return
@@ -862,7 +862,7 @@ class AutoLearnDialog(QDialog):
     # TARGETED LEARN START/STOP
     # =========================================================================
 
-    def _start_targeted_learning(self):
+    def _start_targeted_learning(self) -> None:
         """Start training on user-selected stocks."""
         if self._is_running:
             return
@@ -935,7 +935,7 @@ class AutoLearnDialog(QDialog):
         self.targeted_worker.error_occurred.connect(self._on_error)
         self.targeted_worker.start()
 
-    def _stop_targeted_learning(self):
+    def _stop_targeted_learning(self) -> None:
         """Stop targeted training gracefully."""
         if not self._is_running:
             return
@@ -958,7 +958,7 @@ class AutoLearnDialog(QDialog):
     # =========================================================================
     # =========================================================================
 
-    def _set_running(self, running: bool, mode: str = ""):
+    def _set_running(self, running: bool, mode: str = "") -> None:
         """Set UI running state.
         Disables all interactive controls while training is active.
         """
@@ -1036,7 +1036,7 @@ class AutoLearnDialog(QDialog):
     # =========================================================================
     # =========================================================================
 
-    def _on_progress(self, percent: int, message: str):
+    def _on_progress(self, percent: int, message: str) -> None:
         """Handle progress update from either worker."""
         try:
             p_raw = int(float(percent))
@@ -1052,7 +1052,7 @@ class AutoLearnDialog(QDialog):
         self.progress_bar.setFormat(f"{p}%")
         self.status_label.setText(msg or f"Running ({p}%)")
 
-    def _on_auto_finished(self, results: dict):
+    def _on_auto_finished(self, results: dict) -> None:
         """Handle auto-learning completion."""
         self._log("=" * 50, "info")
         status = results.get("status", "ok")
@@ -1098,7 +1098,7 @@ class AutoLearnDialog(QDialog):
             f"Accuracy: {results.get('accuracy', 0):.1%}",
         )
 
-    def _on_targeted_finished(self, results: dict):
+    def _on_targeted_finished(self, results: dict) -> None:
         """Handle targeted training completion."""
         self._log("=" * 50, "info")
         status = results.get("status", "ok")
@@ -1151,7 +1151,7 @@ class AutoLearnDialog(QDialog):
             f"Accuracy: {results.get('accuracy', 0):.1%}",
         )
 
-    def _on_error(self, error: str):
+    def _on_error(self, error: str) -> None:
         """Handle error from either worker."""
         error = str(error or "Unknown error")
         display_error = error[:300] if len(error) > 300 else error
@@ -1171,7 +1171,7 @@ class AutoLearnDialog(QDialog):
                 f"An error occurred during learning:\n\n{error[:500]}",
             )
 
-    def _log_results(self, results: dict):
+    def _log_results(self, results: dict) -> None:
         """Log training results to the activity log."""
         discovered = int(results.get("discovered", 0))
         processed = int(results.get("processed", 0))
@@ -1187,7 +1187,7 @@ class AutoLearnDialog(QDialog):
     # =========================================================================
     # =========================================================================
 
-    def _log(self, message: str, level: str = "info"):
+    def _log(self, message: str, level: str = "info") -> None:
         """Add message to activity log with timestamp and color."""
         timestamp = datetime.now().strftime("%H:%M:%S")
 
@@ -1273,7 +1273,7 @@ class AutoLearnDialog(QDialog):
     # =========================================================================
     # =========================================================================
 
-    def _apply_style(self):
+    def _apply_style(self) -> None:
         self.setStyleSheet("""
             QDialog {
                 background: #0b1422;
@@ -1384,7 +1384,7 @@ class AutoLearnDialog(QDialog):
     # =========================================================================
     # =========================================================================
 
-    def closeEvent(self, event):
+    def closeEvent(self, event) -> None:
         """Handle close - stop any running training first."""
         if self._is_running:
             reply = QMessageBox.question(

@@ -369,7 +369,7 @@ def submit(self, signal: TradeSignal) -> bool:
     return True
 
 
-def _execute(self, signal: TradeSignal):
+def _execute(self, signal: TradeSignal) -> None:
     """Execute a single signal - NEVER fabricate fills."""
     from trading.oms import get_oms
 
@@ -553,7 +553,7 @@ def _execute(self, signal: TradeSignal):
         )
 
 
-def _startup_sync(self):
+def _startup_sync(self) -> None:
     """Run once after broker.connect()."""
     from trading.oms import get_oms
 
@@ -578,7 +578,7 @@ def _startup_sync(self):
             continue
 
 
-def _process_pending_fills(self):
+def _process_pending_fills(self) -> None:
     """Process pending fills with safe watermark overlap."""
     from trading.oms import get_oms
 
@@ -968,7 +968,7 @@ def _submit_synthetic_exit(
         return False
 
 
-def _status_sync_loop(self):
+def _status_sync_loop(self) -> None:
     """Poll broker for order status updates.
     Includes stuck order watchdog.
     """

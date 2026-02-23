@@ -120,7 +120,7 @@ class Portfolio:
         - Persist / restore state across restarts
     """
 
-    def __init__(self, initial_capital: float | None = None):
+    def __init__(self, initial_capital: float | None = None) -> None:
         self._lock = threading.RLock()
 
         self.initial_capital: float = initial_capital or CONFIG.CAPITAL

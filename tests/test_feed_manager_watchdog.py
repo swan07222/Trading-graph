@@ -11,7 +11,7 @@ def _is_watchdog_alive(thread_obj) -> bool:
         return False
 
 
-def test_feed_manager_watchdog_stop_terminates_thread():
+def test_feed_manager_watchdog_stop_terminates_thread() -> None:
     fm = FeedManager()
     fm._stop_health_watchdog()
 
@@ -30,7 +30,7 @@ def test_feed_manager_watchdog_stop_terminates_thread():
         fm._stop_health_watchdog()
 
 
-def test_websocket_feed_dns_failures_trigger_cooldown():
+def test_websocket_feed_dns_failures_trigger_cooldown() -> None:
     ws = WebSocketFeed()
     ws._ws_client_installed = True
     ws._running = True
@@ -44,14 +44,14 @@ def test_websocket_feed_dns_failures_trigger_cooldown():
     assert float(ws._ws_disabled_until_ts) > time.monotonic()
 
 
-def test_websocket_feed_support_recovers_after_cooldown():
+def test_websocket_feed_support_recovers_after_cooldown() -> None:
     ws = WebSocketFeed()
     ws._ws_client_installed = True
     ws._ws_disabled_until_ts = time.monotonic() - 0.1
     assert ws.supports_websocket() is True
 
 
-def test_websocket_feed_on_close_honors_temp_disable():
+def test_websocket_feed_on_close_honors_temp_disable() -> None:
     ws = WebSocketFeed()
     ws._ws_client_installed = True
     ws._running = False
@@ -65,7 +65,7 @@ def test_websocket_feed_on_close_honors_temp_disable():
     assert int(ws._reconnect_count) == before
 
 
-def test_websocket_feed_on_error_ignores_late_callbacks_while_disabled():
+def test_websocket_feed_on_error_ignores_late_callbacks_while_disabled() -> None:
     ws = WebSocketFeed()
     ws._ws_client_installed = True
     ws._running = False
@@ -81,7 +81,7 @@ def test_websocket_feed_on_error_ignores_late_callbacks_while_disabled():
     assert ws.supports_websocket() is False
 
 
-def test_websocket_feed_max_reconnect_attempts_enters_cooldown():
+def test_websocket_feed_max_reconnect_attempts_enters_cooldown() -> None:
     ws = WebSocketFeed()
     ws._ws_client_installed = True
     ws._running = True
@@ -95,7 +95,7 @@ def test_websocket_feed_max_reconnect_attempts_enters_cooldown():
     assert float(ws._ws_disabled_until_ts) > time.monotonic()
 
 
-def test_websocket_feed_can_be_forced_off_with_env(monkeypatch):
+def test_websocket_feed_can_be_forced_off_with_env(monkeypatch) -> None:
     monkeypatch.setenv("TRADING_DISABLE_WEBSOCKET", "1")
     ws = WebSocketFeed()
     ws._ws_client_installed = True
@@ -103,7 +103,7 @@ def test_websocket_feed_can_be_forced_off_with_env(monkeypatch):
     assert ws.connect() is False
 
 
-def test_websocket_feed_connect_blocked_on_vpn(monkeypatch):
+def test_websocket_feed_connect_blocked_on_vpn(monkeypatch) -> None:
     class _Env:
         is_vpn_active = True
 
@@ -117,7 +117,7 @@ def test_websocket_feed_connect_blocked_on_vpn(monkeypatch):
     assert ws.supports_websocket() is False
 
 
-def test_websocket_feed_connect_blocked_when_ws_host_dns_fails(monkeypatch):
+def test_websocket_feed_connect_blocked_when_ws_host_dns_fails(monkeypatch) -> None:
     class _Env:
         is_vpn_active = False
 
@@ -132,7 +132,7 @@ def test_websocket_feed_connect_blocked_when_ws_host_dns_fails(monkeypatch):
     assert ws.supports_websocket() is False
 
 
-def test_websocket_feed_host_resolves_timeout_returns_unknown_as_true(monkeypatch):
+def test_websocket_feed_host_resolves_timeout_returns_unknown_as_true(monkeypatch) -> None:
     ws = WebSocketFeed()
     ws._ws_client_installed = True
     ws._last_dns_probe_host = ""
@@ -146,14 +146,14 @@ def test_websocket_feed_host_resolves_timeout_returns_unknown_as_true(monkeypatc
     assert ws._host_resolves("push.sina.cn") is True
 
 
-def test_websocket_feed_host_resolves_uses_cache(monkeypatch):
+def test_websocket_feed_host_resolves_uses_cache(monkeypatch) -> None:
     ws = WebSocketFeed()
     ws._ws_client_installed = True
     ws._DNS_PRECHECK_CACHE_SECONDS = 60.0
 
     calls = {"n": 0}
 
-    def _fake_probe(host: str, timeout_s: float):
+    def _fake_probe(host: str, timeout_s: float) -> bool:
         calls["n"] += 1
         return False
 
@@ -168,11 +168,11 @@ def test_websocket_feed_host_resolves_uses_cache(monkeypatch):
     assert int(calls["n"]) == 1
 
 
-def test_polling_feed_batch_invalid_quote_falls_back_to_single_fetch(monkeypatch):
+def test_polling_feed_batch_invalid_quote_falls_back_to_single_fetch(monkeypatch) -> None:
     feed = PollingFeed(interval=1.0)
 
     class _Fetcher:
-        def __init__(self):
+        def __init__(self) -> None:
             self.single_calls = 0
 
         def get_realtime_batch(self, symbols):
@@ -184,7 +184,7 @@ def test_polling_feed_batch_invalid_quote_falls_back_to_single_fetch(monkeypatch
 
     class _SpotCache:
         @staticmethod
-        def get_quote(symbol):  # noqa: ARG004
+        def get_quote(symbol) -> None:  # noqa: ARG004
             return None
 
     fetcher = _Fetcher()

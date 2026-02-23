@@ -1,5 +1,4 @@
-"""Models Module
-"""
+"""Models Module."""
 try:
     from .layers import (
         AttentionPooling,

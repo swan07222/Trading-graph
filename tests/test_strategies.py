@@ -24,7 +24,7 @@ from strategies import (
 )
 
 
-def test_list_strategies():
+def test_list_strategies() -> None:
     """Test that all strategies are registered."""
     strategies = list_strategies()
     assert len(strategies) >= 12
@@ -33,26 +33,26 @@ def test_list_strategies():
     assert "trend_following" in strategies
 
 
-def test_get_strategy():
+def test_get_strategy() -> None:
     """Test getting strategy by name."""
     strategy = get_strategy("momentum_breakout")
     assert strategy is not None
     assert isinstance(strategy, MomentumBreakoutStrategy)
 
 
-def test_get_strategy_not_found():
+def test_get_strategy_not_found() -> None:
     """Test getting non-existent strategy."""
     strategy = get_strategy("nonexistent")
     assert strategy is None
 
 
-def test_base_strategy_abstract():
+def test_base_strategy_abstract() -> None:
     """Test that BaseStrategy requires generate_signal."""
     with pytest.raises(TypeError):
         BaseStrategy()
 
 
-def test_signal_creation():
+def test_signal_creation() -> None:
     """Test Signal creation."""
     signal = Signal(
         strategy_name="test",
@@ -71,7 +71,7 @@ def test_signal_creation():
     assert signal.confidence == 0.75
 
 
-def test_signal_invalid():
+def test_signal_invalid() -> None:
     """Test invalid signal."""
     signal = Signal(
         strategy_name="test",
@@ -83,7 +83,7 @@ def test_signal_invalid():
     assert not signal.is_valid
 
 
-def test_signal_to_dict():
+def test_signal_to_dict() -> None:
     """Test Signal to_dict method."""
     signal = Signal(
         strategy_name="test",
@@ -99,7 +99,7 @@ def test_signal_to_dict():
     assert d["confidence"] == 0.6
 
 
-def test_momentum_breakout_no_data():
+def test_momentum_breakout_no_data() -> None:
     """Test momentum breakout with insufficient data."""
     strategy = MomentumBreakoutStrategy()
     data = {"bars": [], "symbol": "600519"}
@@ -107,7 +107,7 @@ def test_momentum_breakout_no_data():
     assert signal is None
 
 
-def test_mean_reversion_no_data():
+def test_mean_reversion_no_data() -> None:
     """Test mean reversion with insufficient data."""
     strategy = MeanReversionStrategy()
     data = {"bars": [], "symbol": "600519"}
@@ -115,7 +115,7 @@ def test_mean_reversion_no_data():
     assert signal is None
 
 
-def test_trend_following_no_data():
+def test_trend_following_no_data() -> None:
     """Test trend following with insufficient data."""
     strategy = TrendFollowingStrategy()
     data = {"bars": [], "symbol": "600519"}
@@ -123,7 +123,7 @@ def test_trend_following_no_data():
     assert signal is None
 
 
-def test_volume_profile_no_data():
+def test_volume_profile_no_data() -> None:
     """Test volume profile with insufficient data."""
     strategy = VolumeProfileStrategy()
     data = {"bars": [], "symbol": "600519"}
@@ -131,7 +131,7 @@ def test_volume_profile_no_data():
     assert signal is None
 
 
-def test_support_resistance_no_data():
+def test_support_resistance_no_data() -> None:
     """Test support/resistance with insufficient data."""
     strategy = SupportResistanceStrategy()
     data = {"bars": [], "symbol": "600519"}
@@ -139,7 +139,7 @@ def test_support_resistance_no_data():
     assert signal is None
 
 
-def test_macd_divergence_no_data():
+def test_macd_divergence_no_data() -> None:
     """Test MACD divergence with insufficient data."""
     strategy = MACDDivergenceStrategy()
     data = {"bars": [], "symbol": "600519"}
@@ -147,7 +147,7 @@ def test_macd_divergence_no_data():
     assert signal is None
 
 
-def test_bollinger_breakout_no_data():
+def test_bollinger_breakout_no_data() -> None:
     """Test Bollinger breakout with insufficient data."""
     strategy = BollingerBreakoutStrategy()
     data = {"bars": [], "symbol": "600519"}
@@ -155,7 +155,7 @@ def test_bollinger_breakout_no_data():
     assert signal is None
 
 
-def test_rsi_oversold_no_data():
+def test_rsi_oversold_no_data() -> None:
     """Test RSI oversold with insufficient data."""
     strategy = RSIOversoldStrategy()
     data = {"bars": [], "symbol": "600519"}
@@ -163,7 +163,7 @@ def test_rsi_oversold_no_data():
     assert signal is None
 
 
-def test_golden_cross_no_data():
+def test_golden_cross_no_data() -> None:
     """Test golden cross with insufficient data."""
     strategy = GoldenCrossStrategy()
     data = {"bars": [], "symbol": "600519"}
@@ -171,7 +171,7 @@ def test_golden_cross_no_data():
     assert signal is None
 
 
-def test_gap_and_go_no_data():
+def test_gap_and_go_no_data() -> None:
     """Test gap and go with insufficient data."""
     strategy = GapAndGoStrategy()
     data = {"bars": [], "symbol": "600519"}
@@ -179,7 +179,7 @@ def test_gap_and_go_no_data():
     assert signal is None
 
 
-def test_vwap_reversion_no_data():
+def test_vwap_reversion_no_data() -> None:
     """Test VWAP reversion with insufficient data."""
     strategy = VWAPReversionStrategy()
     data = {"bars": [], "symbol": "600519"}
@@ -187,7 +187,7 @@ def test_vwap_reversion_no_data():
     assert signal is None
 
 
-def test_earnings_momentum_no_data():
+def test_earnings_momentum_no_data() -> None:
     """Test earnings momentum with insufficient data."""
     strategy = EarningsMomentumStrategy()
     data = {"bars": [], "symbol": "600519"}
@@ -195,7 +195,7 @@ def test_earnings_momentum_no_data():
     assert signal is None
 
 
-def test_strategy_get_info():
+def test_strategy_get_info() -> None:
     """Test strategy get_info method."""
     strategy = MomentumBreakoutStrategy()
     info = strategy.get_info()
@@ -206,7 +206,7 @@ def test_strategy_get_info():
     assert "min_confidence" in info
 
 
-def test_register_strategy_decorator():
+def test_register_strategy_decorator() -> None:
     """Test register_strategy decorator."""
     @register_strategy
     class TestStrategy(BaseStrategy):
@@ -214,7 +214,7 @@ def test_register_strategy_decorator():
         description = "Test strategy"
         version = "1.0.0"
         
-        def generate_signal(self, data):
+        def generate_signal(self, data) -> None:
             return None
     
     assert "test_strategy_xyz" in list_strategies()

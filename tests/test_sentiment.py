@@ -4,7 +4,7 @@ from datetime import datetime
 from analysis.sentiment import KeywordSentimentAnalyzer, NewsItem, NewsScraper
 
 
-def test_keyword_sentiment_positive():
+def test_keyword_sentiment_positive() -> None:
     analyzer = KeywordSentimentAnalyzer()
     r = analyzer.analyze("Company posts breakout and beats estimate with raised guidance")
     assert r.label == "positive"
@@ -12,14 +12,14 @@ def test_keyword_sentiment_positive():
     assert 0 <= r.confidence <= 1
 
 
-def test_keyword_sentiment_negative_with_negation():
+def test_keyword_sentiment_negative_with_negation() -> None:
     analyzer = KeywordSentimentAnalyzer()
     r = analyzer.analyze("Company not in recovery and faces downgrade and lawsuit risk")
     assert r.label in {"negative", "neutral"}
     assert r.score <= 0
 
 
-def test_news_scraper_custom_provider_registration():
+def test_news_scraper_custom_provider_registration() -> None:
     scraper = NewsScraper()
     scraper.register_provider(
         "custom",
@@ -43,7 +43,7 @@ def test_news_scraper_custom_provider_registration():
     assert scraper.unregister_provider("custom") is True
 
 
-def test_news_scraper_offline_skips_builtin_providers():
+def test_news_scraper_offline_skips_builtin_providers() -> None:
     scraper = NewsScraper()
     scraper._providers["sina"] = lambda: (_ for _ in ()).throw(RuntimeError("should_skip_sina"))
     scraper._providers["eastmoney"] = lambda: (_ for _ in ()).throw(RuntimeError("should_skip_east"))

@@ -3,7 +3,7 @@ from pathlib import Path
 from data.cache import DiskCache
 
 
-def test_disk_cache_clear_blocked_without_manual_override(tmp_path: Path, monkeypatch):
+def test_disk_cache_clear_blocked_without_manual_override(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.delenv("TRADING_MANUAL_CACHE_DELETE", raising=False)
     dc = DiskCache(tmp_path / "l2", compress=False)
     dc.set("k1", {"x": 1})
@@ -14,7 +14,7 @@ def test_disk_cache_clear_blocked_without_manual_override(tmp_path: Path, monkey
     assert len(files_after) == len(files_before)
 
 
-def test_disk_cache_clear_allowed_with_manual_override(tmp_path: Path, monkeypatch):
+def test_disk_cache_clear_allowed_with_manual_override(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("TRADING_MANUAL_CACHE_DELETE", "1")
     dc = DiskCache(tmp_path / "l2", compress=False)
     dc.set("k1", {"x": 1})

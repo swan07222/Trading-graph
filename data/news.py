@@ -442,7 +442,7 @@ class _BaseNewsFetcher:
         # Keep TLS verification enabled by default.
         return True
 
-    def __init__(self, referer: str = ""):
+    def __init__(self, referer: str = "") -> None:
         self._session = requests.Session()
         headers = {
             "User-Agent": (

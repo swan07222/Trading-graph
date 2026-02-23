@@ -25,7 +25,7 @@ class SignalStrength(Enum):
 
 @dataclass
 class TechnicalSignal:
-    """Technical analysis signal"""
+    """Technical analysis signal."""
     indicator: str
     signal: str  # "buy", "sell", "neutral"
     strength: SignalStrength
@@ -34,7 +34,7 @@ class TechnicalSignal:
 
 @dataclass
 class SupportResistance:
-    """Support and resistance levels"""
+    """Support and resistance levels."""
     support_1: float
     support_2: float
     support_3: float
@@ -45,7 +45,7 @@ class SupportResistance:
 
 @dataclass
 class TechnicalSummary:
-    """Complete technical analysis summary"""
+    """Complete technical analysis summary."""
     trend: TrendDirection
     trend_strength: float
     signals: list[TechnicalSignal]
@@ -55,7 +55,7 @@ class TechnicalSummary:
     indicators: dict[str, float]
 
 class TechnicalAnalyzer:
-    """Comprehensive technical analysis engine"""
+    """Comprehensive technical analysis engine."""
 
     def __init__(self) -> None:
         self.min_data_points = 60
@@ -106,7 +106,7 @@ class TechnicalAnalyzer:
         return out
 
     def analyze(self, df: pd.DataFrame) -> TechnicalSummary:
-        """Perform complete technical analysis"""
+        """Perform complete technical analysis."""
         df = self._prepare_dataframe(df)
         if len(df) < self.min_data_points:
             raise ValueError(f"Need at least {self.min_data_points} data points")
@@ -130,7 +130,7 @@ class TechnicalAnalyzer:
         )
 
     def _calculate_indicators(self, df: pd.DataFrame) -> dict[str, float]:
-        """Calculate all technical indicators"""
+        """Calculate all technical indicators."""
         close = df['close']
         high = df['high']
         low = df['low']
@@ -254,7 +254,7 @@ class TechnicalAnalyzer:
         return indicators
 
     def _generate_signals(self, df: pd.DataFrame, ind: dict[str, float]) -> list[TechnicalSignal]:
-        """Generate trading signals from indicators"""
+        """Generate trading signals from indicators."""
         signals = []
         close = ind['close']
 
@@ -340,7 +340,7 @@ class TechnicalAnalyzer:
         return signals
 
     def _analyze_trend(self, df: pd.DataFrame, ind: dict[str, float]) -> tuple[TrendDirection, float]:
-        """Analyze overall trend"""
+        """Analyze overall trend."""
         close = ind['close']
         scores = []
 
@@ -389,7 +389,7 @@ class TechnicalAnalyzer:
         return trend, trend_strength
 
     def _calculate_support_resistance(self, df: pd.DataFrame) -> SupportResistance:
-        """Calculate support and resistance using pivot points"""
+        """Calculate support and resistance using pivot points."""
         high = df['high'].iloc[-1]
         low = df['low'].iloc[-1]
         close = df['close'].iloc[-1]
@@ -415,7 +415,7 @@ class TechnicalAnalyzer:
         )
 
     def _calculate_overall(self, signals: list[TechnicalSignal], trend: TrendDirection) -> tuple[float, str]:
-        """Calculate overall score and signal"""
+        """Calculate overall score and signal."""
         score = 0.0
 
         for technical_signal in signals:

@@ -137,7 +137,7 @@ class RealTimeMonitor(QThread):
         forecast_minutes: int = 30,
         lookback_bars: int = 1680,
         history_allow_online: bool = True,
-    ):
+    ) -> None:
         super().__init__()
         self.predictor = predictor
         raw_watch = list(watch_list or [])
@@ -331,7 +331,7 @@ class WorkerThread(QThread):
     error = pyqtSignal(str)
     progress = pyqtSignal(int, str)
 
-    def __init__(self, func: Any, *args: Any, timeout_seconds: float = 300, **kwargs: Any):
+    def __init__(self, func: Any, *args: Any, timeout_seconds: float = 300, **kwargs: Any) -> None:
         super().__init__()
         self.func = func
         self.args = args

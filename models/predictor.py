@@ -53,7 +53,7 @@ class Predictor:
         capital: float = None,
         interval: str = "1m",
         prediction_horizon: int = None,
-    ):
+    ) -> None:
         self.capital = float(capital or CONFIG.CAPITAL)
         self.interval = str(interval).lower()
         intraday_tokens = {"1m", "2m", "3m", "5m", "15m", "30m", "60m", "1h"}
@@ -350,8 +350,7 @@ class Predictor:
                 self._model_weights[name] = self._last_model_performance[name] / total_perf
 
     def _record_prediction_outcome(self, stock_code: str, predicted_up: bool, actual_up: bool) -> None:
-        """Record prediction outcome for historical accuracy tracking.
-        """
+        """Record prediction outcome for historical accuracy tracking."""
         was_correct = (predicted_up == actual_up)
         
         if stock_code not in self._stock_accuracy_history:
@@ -367,8 +366,7 @@ class Predictor:
         self._update_model_weights(stock_code, was_correct)
 
     def _get_stock_accuracy(self, stock_code: str) -> float:
-        """Get recent prediction accuracy for a stock.
-        """
+        """Get recent prediction accuracy for a stock."""
         if stock_code not in self._stock_accuracy_history:
             return 0.5  # Neutral default
         
@@ -419,7 +417,6 @@ class Predictor:
 
     def _find_best_model_pair(self, model_dir: Path) -> tuple[Path | None, Path | None]:
         """Find the best ensemble + scaler file pair."""
-
         req_ens = model_dir / f"ensemble_{self.interval}_{self.horizon}.pt"
         req_scl = model_dir / f"scaler_{self.interval}_{self.horizon}.pkl"
 
@@ -770,8 +767,7 @@ class Predictor:
             return []
 
     def get_trained_stock_codes(self, limit: int | None = None) -> list[str]:
-        """Return stock codes used in the currently loaded training artifact.
-        """
+        """Return stock codes used in the currently loaded training artifact."""
         codes = list(self._trained_stock_codes)
         if limit is not None:
             try:

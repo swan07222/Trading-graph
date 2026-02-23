@@ -1,11 +1,11 @@
 from models.predictor import Predictor
 
 
-def _touch(path):
+def _touch(path) -> None:
     path.write_bytes(b"x")
 
 
-def test_model_pair_prefers_same_interval_when_exact_horizon_missing(tmp_path):
+def test_model_pair_prefers_same_interval_when_exact_horizon_missing(tmp_path) -> None:
     _touch(tmp_path / "ensemble_1d_5.pt")
     _touch(tmp_path / "scaler_1d_5.pkl")
     _touch(tmp_path / "ensemble_1m_30.pt")
@@ -23,7 +23,7 @@ def test_model_pair_prefers_same_interval_when_exact_horizon_missing(tmp_path):
     assert scl.name == "scaler_1m_30.pkl"
 
 
-def test_model_pair_prefers_exact_interval_and_horizon(tmp_path):
+def test_model_pair_prefers_exact_interval_and_horizon(tmp_path) -> None:
     _touch(tmp_path / "ensemble_1m_120.pt")
     _touch(tmp_path / "scaler_1m_120.pkl")
     _touch(tmp_path / "ensemble_1m_30.pt")
@@ -41,7 +41,7 @@ def test_model_pair_prefers_exact_interval_and_horizon(tmp_path):
     assert scl.name == "scaler_1m_120.pkl"
 
 
-def test_model_pair_intraday_request_prefers_intraday_fallback(tmp_path):
+def test_model_pair_intraday_request_prefers_intraday_fallback(tmp_path) -> None:
     _touch(tmp_path / "ensemble_1d_5.pt")
     _touch(tmp_path / "scaler_1d_5.pkl")
     _touch(tmp_path / "ensemble_1m_30.pt")
@@ -58,7 +58,7 @@ def test_model_pair_intraday_request_prefers_intraday_fallback(tmp_path):
     assert scl is None
 
 
-def test_best_scaler_checkpoint_prefers_same_interval_nearest_horizon(tmp_path):
+def test_best_scaler_checkpoint_prefers_same_interval_nearest_horizon(tmp_path) -> None:
     _touch(tmp_path / "scaler_1d_5.pkl")
     _touch(tmp_path / "scaler_1m_5.pkl")
     _touch(tmp_path / "scaler_1m_30.pkl")
@@ -73,7 +73,7 @@ def test_best_scaler_checkpoint_prefers_same_interval_nearest_horizon(tmp_path):
     assert sp.name == "scaler_1m_30.pkl"
 
 
-def test_model_checkpoint_selection_accepts_candidate_suffix(tmp_path):
+def test_model_checkpoint_selection_accepts_candidate_suffix(tmp_path) -> None:
     _touch(tmp_path / "ensemble_1m_5.candidate.pt")
     _touch(tmp_path / "forecast_1m_5.candidate.pt")
     _touch(tmp_path / "scaler_1m_5.candidate.pkl")
@@ -93,7 +93,7 @@ def test_model_checkpoint_selection_accepts_candidate_suffix(tmp_path):
     assert fore.name == "forecast_1m_5.candidate.pt"
 
 
-def test_trained_stock_fallback_uses_matching_learner_state(tmp_path):
+def test_trained_stock_fallback_uses_matching_learner_state(tmp_path) -> None:
     import json
 
     from config.settings import CONFIG
@@ -126,7 +126,7 @@ def test_trained_stock_fallback_uses_matching_learner_state(tmp_path):
         CONFIG._data_dir_cached = old_cached
 
 
-def test_trained_stock_last_train_manifest_fallback(tmp_path):
+def test_trained_stock_last_train_manifest_fallback(tmp_path) -> None:
     import json
 
     ensemble_path = tmp_path / "ensemble_1m_30.pt"
@@ -150,7 +150,7 @@ def test_trained_stock_last_train_manifest_fallback(tmp_path):
     assert out == {"600519": "2026-02-19T10:00:00"}
 
 
-def test_get_trained_stock_last_train_returns_copy():
+def test_get_trained_stock_last_train_returns_copy() -> None:
     predictor = Predictor.__new__(Predictor)
     predictor._trained_stock_last_train = {"600519": "2026-02-19T10:00:00"}
 

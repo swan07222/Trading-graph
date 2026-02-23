@@ -1,14 +1,14 @@
 from core.instruments import parse_instrument
 
 
-def test_parse_instrument_cn_equity_default_digits():
+def test_parse_instrument_cn_equity_default_digits() -> None:
     inst = parse_instrument("600519")
     assert inst["market"] == "CN"
     assert inst["asset"] == "EQUITY"
     assert inst["symbol"] == "600519"
 
 
-def test_parse_instrument_occ_option():
+def test_parse_instrument_occ_option() -> None:
     inst = parse_instrument("AAPL250117C00150000")
     assert inst["market"] == "US"
     assert inst["asset"] == "OPTION"
@@ -19,7 +19,7 @@ def test_parse_instrument_occ_option():
     assert inst["vendor"]["expiry"] == "2025-01-17"
 
 
-def test_parse_instrument_cn_future():
+def test_parse_instrument_cn_future() -> None:
     inst = parse_instrument("IF2503")
     assert inst["market"] == "CN"
     assert inst["asset"] == "FUTURE"
@@ -28,7 +28,7 @@ def test_parse_instrument_cn_future():
     assert inst["vendor"]["contract_ym"] == "2503"
 
 
-def test_parse_instrument_fx_pair():
+def test_parse_instrument_fx_pair() -> None:
     inst = parse_instrument("EUR/USD")
     assert inst["market"] == "FX"
     assert inst["asset"] == "FOREX"
@@ -38,7 +38,7 @@ def test_parse_instrument_fx_pair():
     assert inst["vendor"]["quote"] == "USD"
 
 
-def test_parse_instrument_us_prefix_does_not_corrupt_tickers():
+def test_parse_instrument_us_prefix_does_not_corrupt_tickers() -> None:
     plain = parse_instrument("USO")
     assert plain["market"] == "US"
     assert plain["symbol"] == "USO"

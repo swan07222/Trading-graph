@@ -5,7 +5,7 @@ import time
 from data.session_cache import SessionBarCache
 
 
-def test_performance_session_cache_append_smoke(tmp_path):
+def test_performance_session_cache_append_smoke(tmp_path) -> None:
     cache = SessionBarCache(root=tmp_path / "session_bars")
     symbol = "600519"
     interval = "1m"
@@ -32,7 +32,7 @@ def test_performance_session_cache_append_smoke(tmp_path):
     assert elapsed < 8.0, f"append_bar too slow: {elapsed:.2f}s for 2000 bars"
 
 
-def test_performance_session_cache_read_smoke(tmp_path):
+def test_performance_session_cache_read_smoke(tmp_path) -> None:
     cache = SessionBarCache(root=tmp_path / "session_bars")
     symbol = "600519"
     interval = "1m"

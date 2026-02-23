@@ -3,7 +3,7 @@ from datetime import datetime
 from core.network import NetworkDetector, NetworkEnv
 
 
-def test_network_detector_peek_respects_ttl():
+def test_network_detector_peek_respects_ttl() -> None:
     det = NetworkDetector()
 
     old_env = det._env
@@ -20,7 +20,7 @@ def test_network_detector_peek_respects_ttl():
         det._ttl = old_ttl
 
 
-def test_network_detector_get_env_uses_fresh_cache(monkeypatch):
+def test_network_detector_get_env_uses_fresh_cache(monkeypatch) -> None:
     det = NetworkDetector()
 
     old_env = det._env
@@ -54,7 +54,7 @@ def test_network_detector_get_env_uses_fresh_cache(monkeypatch):
         det._ttl = old_ttl
 
 
-def test_network_detector_force_refresh_bypasses_cache(monkeypatch):
+def test_network_detector_force_refresh_bypasses_cache(monkeypatch) -> None:
     det = NetworkDetector()
 
     old_env = det._env
@@ -88,7 +88,7 @@ def test_network_detector_force_refresh_bypasses_cache(monkeypatch):
         det._ttl = old_ttl
 
 
-def test_network_detector_invalidate_clears_cache():
+def test_network_detector_invalidate_clears_cache() -> None:
     det = NetworkDetector()
 
     old_env = det._env
@@ -103,7 +103,7 @@ def test_network_detector_invalidate_clears_cache():
         det._env_time = old_time
 
 
-def test_network_detector_detect_does_not_depend_on_requests_session(monkeypatch):
+def test_network_detector_detect_does_not_depend_on_requests_session(monkeypatch) -> None:
     det = NetworkDetector()
 
     old_env = det._env
@@ -117,7 +117,7 @@ def test_network_detector_detect_does_not_depend_on_requests_session(monkeypatch
         )
 
         class _Resp:
-            def __init__(self, status_code: int):
+            def __init__(self, status_code: int) -> None:
                 self.status_code = int(status_code)
 
         def _fake_get(url, timeout=0, headers=None):

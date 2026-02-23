@@ -14,7 +14,7 @@ def _sample_bar(ts: datetime) -> dict:
     }
 
 
-def test_emit_bar_attaches_canonical_interval_for_one_day():
+def test_emit_bar_attaches_canonical_interval_for_one_day() -> None:
     agg = BarAggregator(interval_seconds=86400)
     seen: list[dict] = []
     agg.add_callback(lambda _sym, bar: seen.append(dict(bar)))
@@ -28,7 +28,7 @@ def test_emit_bar_attaches_canonical_interval_for_one_day():
     assert out["final"] is False
 
 
-def test_emit_bar_attaches_canonical_interval_for_sixty_minutes():
+def test_emit_bar_attaches_canonical_interval_for_sixty_minutes() -> None:
     agg = BarAggregator(interval_seconds=3600)
     seen: list[dict] = []
     agg.add_callback(lambda _sym, bar: seen.append(dict(bar)))
@@ -41,22 +41,22 @@ def test_emit_bar_attaches_canonical_interval_for_sixty_minutes():
     assert int(out["interval_seconds"]) == 3600
 
 
-def test_emit_bar_market_open_writes_session_only(monkeypatch):
+def test_emit_bar_market_open_writes_session_only(monkeypatch) -> None:
     agg = BarAggregator(interval_seconds=60)
 
     class _Cache:
-        def __init__(self):
+        def __init__(self) -> None:
             self.calls = 0
 
-        def append_bar(self, symbol, interval, bar):  # noqa: ARG002
+        def append_bar(self, symbol, interval, bar) -> bool:  # noqa: ARG002
             self.calls += 1
             return True
 
     class _DB:
-        def __init__(self):
+        def __init__(self) -> None:
             self.calls = 0
 
-        def upsert_intraday_bars(self, symbol, interval, df):  # noqa: ARG002
+        def upsert_intraday_bars(self, symbol, interval, df) -> None:  # noqa: ARG002
             self.calls += 1
 
     cache = _Cache()
@@ -72,22 +72,22 @@ def test_emit_bar_market_open_writes_session_only(monkeypatch):
     assert db.calls == 0
 
 
-def test_emit_bar_market_closed_persists_to_db(monkeypatch):
+def test_emit_bar_market_closed_persists_to_db(monkeypatch) -> None:
     agg = BarAggregator(interval_seconds=60)
 
     class _Cache:
-        def __init__(self):
+        def __init__(self) -> None:
             self.calls = 0
 
-        def append_bar(self, symbol, interval, bar):  # noqa: ARG002
+        def append_bar(self, symbol, interval, bar) -> bool:  # noqa: ARG002
             self.calls += 1
             return True
 
     class _DB:
-        def __init__(self):
+        def __init__(self) -> None:
             self.calls = 0
 
-        def upsert_intraday_bars(self, symbol, interval, df):  # noqa: ARG002
+        def upsert_intraday_bars(self, symbol, interval, df) -> None:  # noqa: ARG002
             self.calls += 1
 
     cache = _Cache()

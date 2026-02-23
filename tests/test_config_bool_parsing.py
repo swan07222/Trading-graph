@@ -1,7 +1,7 @@
 from config.settings import CONFIG, TradingConfig, _safe_dataclass_from_dict
 
 
-def test_safe_dataclass_bool_parses_false_strings():
+def test_safe_dataclass_bool_parses_false_strings() -> None:
     cfg = TradingConfig()
     cfg.t_plus_1 = True
 
@@ -11,7 +11,7 @@ def test_safe_dataclass_bool_parses_false_strings():
     assert cfg.t_plus_1 is False
 
 
-def test_safe_dataclass_bool_parses_true_strings():
+def test_safe_dataclass_bool_parses_true_strings() -> None:
     cfg = TradingConfig()
     cfg.allow_short = False
 
@@ -21,7 +21,7 @@ def test_safe_dataclass_bool_parses_true_strings():
     assert cfg.allow_short is True
 
 
-def test_safe_dataclass_bool_rejects_unknown_string():
+def test_safe_dataclass_bool_rejects_unknown_string() -> None:
     cfg = TradingConfig()
     cfg.allow_short = True
 
@@ -32,7 +32,7 @@ def test_safe_dataclass_bool_rejects_unknown_string():
     assert "Bad value for bool field 'allow_short'" in warnings[0]
 
 
-def test_load_from_env_runtime_lease_enabled_false(monkeypatch):
+def test_load_from_env_runtime_lease_enabled_false(monkeypatch) -> None:
     monkeypatch.setenv("TRADING_RUNTIME_LEASE_ENABLED", "false")
     try:
         CONFIG.reload()
@@ -42,7 +42,7 @@ def test_load_from_env_runtime_lease_enabled_false(monkeypatch):
         CONFIG.reload()
 
 
-def test_load_from_env_runtime_lease_invalid_does_not_override(monkeypatch):
+def test_load_from_env_runtime_lease_invalid_does_not_override(monkeypatch) -> None:
     monkeypatch.delenv("TRADING_RUNTIME_LEASE_ENABLED", raising=False)
     CONFIG.reload()
     baseline = bool(CONFIG.security.enable_runtime_lease)

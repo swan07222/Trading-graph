@@ -1,4 +1,5 @@
 from types import SimpleNamespace
+from typing import NoReturn
 
 import numpy as np
 import pandas as pd
@@ -45,7 +46,7 @@ def _mk_result(
     )
 
 
-def test_backtest_score_prefers_higher_quality():
+def test_backtest_score_prefers_higher_quality() -> None:
     a = _mk_result(
         total_return=12.0,
         excess_return=9.0,
@@ -71,7 +72,7 @@ def test_backtest_score_prefers_higher_quality():
     assert Backtester._score_result(a) > Backtester._score_result(b)
 
 
-def test_backtest_optimize_returns_best_and_restores_confidence(monkeypatch):
+def test_backtest_optimize_returns_best_and_restores_confidence(monkeypatch) -> None:
     bt = Backtester.__new__(Backtester)
 
     old_conf = float(CONFIG.model.min_confidence)
@@ -116,7 +117,7 @@ def test_backtest_optimize_returns_best_and_restores_confidence(monkeypatch):
     assert abs(float(CONFIG.model.min_confidence) - old_conf) < 1e-9
 
 
-def test_backtest_optimize_extended_parameters_and_restore(monkeypatch):
+def test_backtest_optimize_extended_parameters_and_restore(monkeypatch) -> None:
     bt = Backtester.__new__(Backtester)
 
     old_conf = float(getattr(CONFIG.model, "min_confidence", 0.6) or 0.6)
@@ -197,7 +198,7 @@ def test_backtest_optimize_extended_parameters_and_restore(monkeypatch):
         assert not hasattr(CONFIG.risk, "backtest_max_volume_participation")
 
 
-def test_backtest_resolve_horizon_falls_back_for_daily_interval():
+def test_backtest_resolve_horizon_falls_back_for_daily_interval() -> None:
     bt = Backtester.__new__(Backtester)
 
     old_h = int(getattr(CONFIG.model, "prediction_horizon", 1) or 1)
@@ -209,7 +210,7 @@ def test_backtest_resolve_horizon_falls_back_for_daily_interval():
         CONFIG.model.prediction_horizon = old_h
 
 
-def test_backtest_fold_uses_configurable_backtest_epochs(monkeypatch):
+def test_backtest_fold_uses_configurable_backtest_epochs(monkeypatch) -> None:
     bt = Backtester.__new__(Backtester)
 
     class _DummyFeatureEngine:
@@ -220,7 +221,7 @@ def test_backtest_fold_uses_configurable_backtest_epochs(monkeypatch):
             return df.copy()
 
     class _DummyProcessor:
-        def fit_scaler(self, _arr):
+        def fit_scaler(self, _arr) -> None:
             return None
 
         def create_labels(self, df, horizon=None):
@@ -241,7 +242,7 @@ def test_backtest_fold_uses_configurable_backtest_epochs(monkeypatch):
     train_calls = {"epochs": None}
 
     class _DummyModel:
-        def __init__(self, input_size, model_names=None):
+        def __init__(self, input_size, model_names=None) -> None:
             self.input_size = input_size
 
         def train(self, X_train, y_train, X_val, y_val, epochs=None):
@@ -295,7 +296,7 @@ def test_backtest_fold_uses_configurable_backtest_epochs(monkeypatch):
             CONFIG.model.backtest_epochs = old_backtest_epochs
 
 
-def test_backtest_run_fails_fast_when_train_window_cannot_build_sequences(monkeypatch):
+def test_backtest_run_fails_fast_when_train_window_cannot_build_sequences(monkeypatch) -> None:
     bt = Backtester.__new__(Backtester)
 
     dates = pd.date_range("2024-01-01", periods=120, freq="D")
@@ -335,7 +336,7 @@ def test_backtest_run_fails_fast_when_train_window_cannot_build_sequences(monkey
 
     fold_calls = {"count": 0}
 
-    def _run_fold_unexpected(*args, **kwargs):
+    def _run_fold_unexpected(*args, **kwargs) -> None:
         fold_calls["count"] += 1
         return None
 
@@ -354,7 +355,7 @@ def test_backtest_run_fails_fast_when_train_window_cannot_build_sequences(monkey
         CONFIG.model.prediction_horizon = old_h
 
 
-def test_backtest_fold_skips_when_train_sequences_too_small(monkeypatch):
+def test_backtest_fold_skips_when_train_sequences_too_small(monkeypatch) -> None:
     bt = Backtester.__new__(Backtester)
 
     class _DummyFeatureEngine:
@@ -365,7 +366,7 @@ def test_backtest_fold_skips_when_train_sequences_too_small(monkeypatch):
             return df.copy()
 
     class _DummyProcessor:
-        def fit_scaler(self, _arr):
+        def fit_scaler(self, _arr) -> None:
             return None
 
         def create_labels(self, df, horizon=None):  # noqa: ARG002
@@ -390,7 +391,7 @@ def test_backtest_fold_skips_when_train_sequences_too_small(monkeypatch):
                 return X, y, r, idx
             return X, y, r
 
-    def _unexpected_model(*args, **kwargs):  # noqa: ARG001
+    def _unexpected_model(*args, **kwargs) -> NoReturn:  # noqa: ARG001
         raise AssertionError("EnsembleModel must not be constructed for tiny train set")
 
     bt.feature_engine = _DummyFeatureEngine()

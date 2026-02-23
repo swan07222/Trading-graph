@@ -384,7 +384,7 @@ class TimingContext:
 
     _stats: dict[str, TimingStats] = {}
 
-    def __init__(self, name: str, log_results: bool = True):
+    def __init__(self, name: str, log_results: bool = True) -> None:
         self.name = name
         self.log_results = log_results
         self.elapsed = 0.0

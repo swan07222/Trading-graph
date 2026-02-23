@@ -42,8 +42,7 @@ def _norm_symbol(symbol: str) -> str:
 
 
 def _parse_epoch_timestamp(value: float) -> datetime:
-    """Parse epoch numeric values in seconds or milliseconds.
-    """
+    """Parse epoch numeric values in seconds or milliseconds."""
     v = float(value)
     if abs(v) >= 1e11:
         v = v / 1000.0
@@ -350,8 +349,7 @@ class SessionBarCache:
         return 0.0
 
     def _cleanup_corrupt_files(self) -> None:
-        """Startup cleanup: quarantine obviously wrong-scale intraday cache files.
-        """
+        """Startup cleanup: quarantine obviously wrong-scale intraday cache files."""
         try:
             files = sorted(self._root.glob("*.csv"))
         except Exception:

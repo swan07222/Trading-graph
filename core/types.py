@@ -71,7 +71,7 @@ class AutoTradeMode(Enum):
 
 @dataclass
 class Order:
-    """Canonical Order representation"""
+    """Canonical Order representation."""
     id: str = ""
     client_id: str = ""
     broker_id: str = ""
@@ -107,7 +107,7 @@ class Order:
     stop_loss: float = 0.0
     take_profit: float = 0.0
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         if not self.id:
             self.id = f"ORD_{datetime.now().strftime('%Y%m%d%H%M%S')}_{uuid.uuid4().hex[:8].upper()}"
         if self.created_at is None:
@@ -221,7 +221,7 @@ class Order:
 
 @dataclass
 class Fill:
-    """Trade execution/fill"""
+    """Trade execution/fill."""
     id: str = ""
     order_id: str = ""
     symbol: str = ""
@@ -233,7 +233,7 @@ class Fill:
     timestamp: datetime | None = None
     broker_fill_id: str = ""
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         if not self.id:
             self.id = f"FILL_{uuid.uuid4().hex[:12].upper()}"
         if self.timestamp is None:
@@ -269,7 +269,7 @@ class Fill:
 
 @dataclass
 class Position:
-    """Position in a security"""
+    """Position in a security."""
     symbol: str = ""
     name: str = ""
 
@@ -325,8 +325,8 @@ class Position:
             return PositionSide.SHORT
         return PositionSide.FLAT
 
-    def update_price(self, price: float):
-        """Update current price"""
+    def update_price(self, price: float) -> None:
+        """Update current price."""
         self.current_price = price
         self.last_updated = datetime.now()
 
@@ -347,7 +347,7 @@ class Position:
 
 @dataclass
 class Account:
-    """Trading account state"""
+    """Trading account state."""
     broker_name: str = ""
     account_id: str = ""
 
@@ -381,7 +381,7 @@ class Account:
 
     @property
     def market_value(self) -> float:
-        """Alias for positions_value"""
+        """Alias for positions_value."""
         return self.positions_value
 
     @property
@@ -446,7 +446,7 @@ class Account:
 
 @dataclass
 class RiskMetrics:
-    """Comprehensive risk metrics"""
+    """Comprehensive risk metrics."""
     equity: float = 0.0
     cash: float = 0.0
     positions_value: float = 0.0
@@ -488,7 +488,7 @@ class RiskMetrics:
 
 @dataclass
 class TradeSignal:
-    """Trade signal for execution"""
+    """Trade signal for execution."""
     id: str = ""
     symbol: str = ""
     name: str = ""
@@ -650,7 +650,7 @@ class AutoTradeState:
         if self.session_date is None:
             self.session_date = date.today()
 
-    def reset_daily(self):
+    def reset_daily(self) -> None:
         """Reset daily counters. Called at start of each trading day."""
         self.trades_today = 0
         self.trades_per_stock_today.clear()
@@ -669,13 +669,13 @@ class AutoTradeState:
         self.session_date = date.today()
         self.session_start = datetime.now()
 
-    def record_action(self, action: AutoTradeAction):
+    def record_action(self, action: AutoTradeAction) -> None:
         """Add an action to recent history (bounded)."""
         self.recent_actions.insert(0, action)
         if len(self.recent_actions) > self.MAX_RECENT_ACTIONS:
             self.recent_actions = self.recent_actions[:self.MAX_RECENT_ACTIONS]
 
-    def add_pending_approval(self, action: AutoTradeAction):
+    def add_pending_approval(self, action: AutoTradeAction) -> None:
         """Add a pending approval for SEMI_AUTO mode."""
         self.pending_approvals.insert(0, action)
         if len(self.pending_approvals) > self.MAX_PENDING_APPROVALS:
@@ -703,7 +703,7 @@ class AutoTradeState:
             return False
         return True
 
-    def set_cooldown(self, stock_code: str, seconds: int):
+    def set_cooldown(self, stock_code: str, seconds: int) -> None:
         """Set cooldown for a stock."""
         from datetime import timedelta
         self.cooldowns[stock_code] = datetime.now() + timedelta(seconds=seconds)
@@ -713,7 +713,7 @@ class AutoTradeState:
         count = self.trades_per_stock_today.get(stock_code, 0)
         return count < max_per_stock
 
-    def record_trade(self, stock_code: str, side: str):
+    def record_trade(self, stock_code: str, side: str) -> None:
         """Record a trade execution."""
         self.trades_today += 1
         self.trades_per_stock_today[stock_code] = (
@@ -726,13 +726,13 @@ class AutoTradeState:
         self.last_trade_time = datetime.now()
         self.consecutive_errors = 0
 
-    def record_error(self, error: str):
+    def record_error(self, error: str) -> None:
         """Record an error."""
         self.consecutive_errors += 1
         self.last_error = error
         self.last_error_time = datetime.now()
 
-    def record_skip(self):
+    def record_skip(self) -> None:
         """Record a skipped signal."""
         self.skipped_today += 1
 

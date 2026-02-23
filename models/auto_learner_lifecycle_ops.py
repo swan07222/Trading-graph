@@ -21,7 +21,7 @@ def start(
     learning_while_trading=True, interval="1m", prediction_horizon=30,
     lookback_bars=None, cycle_interval_seconds=900, incremental=True,
     priority_stock_codes: list[str] | None = None,
-):
+) -> None:
     requested_interval = str(interval or "1m").strip().lower()
     interval = self._normalize_interval_token(requested_interval)
     if interval != requested_interval:
@@ -84,7 +84,7 @@ def start_targeted(
     incremental: bool = True,
     continuous: bool = False,
     cycle_interval_seconds: int = 900,
-):
+) -> None:
     """Train on specific user-selected stocks instead of random rotation."""
     requested_interval = str(interval or "1m").strip().lower()
     interval = self._normalize_interval_token(requested_interval)
@@ -171,7 +171,7 @@ def _targeted_loop(
     incremental: bool,
     continuous: bool,
     cycle_seconds: int,
-):
+) -> None:
     """Main loop for targeted training."""
     cycle = 0
 
@@ -231,7 +231,7 @@ def _targeted_loop(
         self._save_state()
         self._notify()
 
-def _interruptible_sleep(self, seconds: int):
+def _interruptible_sleep(self, seconds: int) -> None:
     """Sleep for up to `seconds`, checking cancellation frequently."""
     deadline = time.monotonic() + max(0.0, float(seconds))
     while not self._should_stop():
@@ -241,7 +241,7 @@ def _interruptible_sleep(self, seconds: int):
         if self._cancel_token.wait(timeout=min(0.2, remaining)):
             break
 
-def _save_state(self):
+def _save_state(self) -> None:
     """Persist learner state atomically."""
     state = {
         'version': 4,
@@ -289,7 +289,7 @@ def _save_state(self):
     except _AUTO_LEARNER_RECOVERABLE_EXCEPTIONS as e:
         log.warning(f"State save failed: {e}")
 
-def _load_state(self):
+def _load_state(self) -> None:
     """Load learner state from disk.
 
     FIX PRIV: Uses public StockRotator methods for state migration

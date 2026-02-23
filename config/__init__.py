@@ -1,5 +1,4 @@
-"""Configuration Package
-"""
+"""Configuration Package."""
 from .settings import (
     CONFIG,
     Config,

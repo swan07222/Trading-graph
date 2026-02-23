@@ -67,7 +67,7 @@ class FileRuntimeLeaseClient(RuntimeLeaseClient):
     Works for single-host/mounted-volume scenarios.
     """
 
-    def __init__(self, path: Path, cluster: str):
+    def __init__(self, path: Path, cluster: str) -> None:
         self._path = Path(path)
         self._cluster = str(cluster or "execution_engine")
         self._lock_path = self._path.with_suffix(self._path.suffix + ".lock")
@@ -262,7 +262,7 @@ class SqliteRuntimeLeaseClient(RuntimeLeaseClient):
     This is safer for active/standby failover than plain file leases.
     """
 
-    def __init__(self, db_path: Path, cluster: str):
+    def __init__(self, db_path: Path, cluster: str) -> None:
         self._db_path = Path(db_path)
         self._cluster = str(cluster or "execution_engine")
         self._lock = threading.RLock()

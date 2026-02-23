@@ -92,7 +92,7 @@ class StrategyScriptEngine:
     ) -> tuple[float, list[str]]:
         """Evaluate all strategy scripts and return:
         - bias score contribution in [-25, +25]
-        - human-readable reasons list
+        - human-readable reasons list.
         """
         total_bias = 0.0
         reasons: list[str] = []

@@ -2,7 +2,6 @@
 
 def __getattr__(name: str):
     """Lazy import dispatcher for the data package."""
-
     _CACHE = {'TieredCache', 'get_cache', 'cached', 'CacheStats'}
     _DATABASE = {'MarketDatabase', 'get_database'}
     _FETCHER = {'DataFetcher', 'Quote', 'get_fetcher'}

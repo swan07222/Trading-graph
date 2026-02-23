@@ -3,7 +3,7 @@ import pytest
 from utils import security
 
 
-def test_secure_storage_requires_cryptography(monkeypatch):
+def test_secure_storage_requires_cryptography(monkeypatch) -> None:
     monkeypatch.setattr(security, "CRYPTO_AVAILABLE", False)
     monkeypatch.setattr(
         security,
@@ -15,7 +15,7 @@ def test_secure_storage_requires_cryptography(monkeypatch):
         security.SecureStorage()
 
 
-def test_get_secure_storage_propagates_fail_closed(monkeypatch):
+def test_get_secure_storage_propagates_fail_closed(monkeypatch) -> None:
     security.reset_security_singletons()
     monkeypatch.setattr(security, "CRYPTO_AVAILABLE", False)
     monkeypatch.setattr(
@@ -28,7 +28,7 @@ def test_get_secure_storage_propagates_fail_closed(monkeypatch):
         security.get_secure_storage()
 
 
-def test_secure_storage_default_key_path_is_outside_storage_dir(monkeypatch, tmp_path):
+def test_secure_storage_default_key_path_is_outside_storage_dir(monkeypatch, tmp_path) -> None:
     if security.Fernet is None:
         pytest.skip("cryptography unavailable")
 
@@ -54,7 +54,7 @@ def test_secure_storage_default_key_path_is_outside_storage_dir(monkeypatch, tmp
         store.close()
 
 
-def test_secure_storage_env_master_key_avoids_local_key_file(monkeypatch, tmp_path):
+def test_secure_storage_env_master_key_avoids_local_key_file(monkeypatch, tmp_path) -> None:
     if security.Fernet is None:
         pytest.skip("cryptography unavailable")
 
@@ -83,7 +83,7 @@ def test_secure_storage_env_master_key_avoids_local_key_file(monkeypatch, tmp_pa
         store.close()
 
 
-def test_secure_storage_non_object_payload_resets_cache(monkeypatch, tmp_path):
+def test_secure_storage_non_object_payload_resets_cache(monkeypatch, tmp_path) -> None:
     if security.Fernet is None:
         pytest.skip("cryptography unavailable")
 

@@ -25,7 +25,7 @@ class RealtimePredictor:
         interval: str = "1m",
         horizon: int = 30,
         auto_load: bool = True,
-    ):
+    ) -> None:
         self.interval = str(interval).lower()
         self.horizon = int(horizon)
 

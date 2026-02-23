@@ -42,13 +42,13 @@ class NewsFetchThread(QThread):
     fetch_complete = pyqtSignal()           # emitted when done (for cleanup)
     fetch_error = pyqtSignal(str)           # error message
 
-    def __init__(self, stock_code: str = None, fetch_type: str = "market"):
+    def __init__(self, stock_code: str = None, fetch_type: str = "market") -> None:
         super().__init__()
         self.stock_code = stock_code
         self.fetch_type = str(fetch_type)
         self._is_running = False
 
-    def run(self):
+    def run(self) -> None:
         self._is_running = True
         try:
             from data.news import get_news_aggregator
@@ -93,7 +93,7 @@ class NewsFetchThread(QThread):
 class SentimentGauge(QFrame):
     """Visual sentiment gauge with robust data handling."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__()
         self.setObjectName("newsGauge")
         self.setFixedHeight(60)
@@ -135,7 +135,7 @@ class SentimentGauge(QFrame):
 
         layout.addStretch()
 
-    def update_sentiment(self, summary: dict):
+    def update_sentiment(self, summary: dict) -> None:
         """Update gauge with sentiment summary data."""
         if not summary or not isinstance(summary, dict):
             self.reset()
@@ -179,7 +179,7 @@ class SentimentGauge(QFrame):
 
         self.counts_label.setText(f"NEWS {total} | POS {pos} | NEG {neg}")
 
-    def reset(self):
+    def reset(self) -> None:
         """Reset gauge to default state."""
         self.score_label.setText("--")
         self.score_label.setStyleSheet(
@@ -199,12 +199,12 @@ class NewsPanel(QWidget):
     - News table with color-coded sentiment
     - Auto-refresh every 5 minutes
     - Stock-specific or market-wide view
-    - Robust thread management
+    - Robust thread management.
     """
 
     REFRESH_INTERVAL_MS = 300000  # 5 minutes
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self._current_stock: str | None = None
         self._fetch_thread: NewsFetchThread | None = None
@@ -240,7 +240,7 @@ class NewsPanel(QWidget):
         current_stock = self._normalize_stock_code(self._current_stock)
         return sender_stock != current_stock
 
-    def _setup_ui(self):
+    def _setup_ui(self) -> None:
         layout = QVBoxLayout(self)
         layout.setSpacing(8)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -292,13 +292,13 @@ class NewsPanel(QWidget):
         btn_layout.addStretch()
         layout.addLayout(btn_layout)
 
-    def _setup_timer(self):
+    def _setup_timer(self) -> None:
         """Setup auto-refresh timer."""
         self._timer = QTimer()
         self._timer.timeout.connect(self.refresh)
         self._timer.start(self.REFRESH_INTERVAL_MS)
 
-    def set_stock(self, stock_code: str):
+    def set_stock(self, stock_code: str) -> None:
         """Switch to stock-specific news."""
         if not stock_code:
             return
@@ -306,13 +306,13 @@ class NewsPanel(QWidget):
         self.mode_label.setText(self._mode_text())
         self.refresh(force=True)
 
-    def set_market_mode(self):
+    def set_market_mode(self) -> None:
         """Switch to market-wide news."""
         self._current_stock = None
         self.mode_label.setText(self._mode_text())
         self.refresh(force=True)
 
-    def refresh(self, force: bool = False):
+    def refresh(self, force: bool = False) -> None:
         """Fetch news in background safely.
 
         Guards:
@@ -362,7 +362,7 @@ class NewsPanel(QWidget):
 
         thread.start()
 
-    def _on_fetch_complete(self):
+    def _on_fetch_complete(self) -> None:
         """Handle fetch thread completion."""
         self._is_fetching = False
         self.refresh_btn.setEnabled(True)
@@ -375,7 +375,7 @@ class NewsPanel(QWidget):
         if should_refresh:
             QTimer.singleShot(0, lambda: self.refresh(force=False))
 
-    def _on_fetch_error(self, error: str):
+    def _on_fetch_error(self, error: str) -> None:
         """Handle fetch error."""
         if self._is_stale_sender():
             return
@@ -385,13 +385,13 @@ class NewsPanel(QWidget):
         self._clear_news_view()
         log.debug(f"News fetch error: {error}")
 
-    def _on_sentiment_received(self, summary: dict):
+    def _on_sentiment_received(self, summary: dict) -> None:
         """Apply sentiment updates for the currently active request only."""
         if self._is_stale_sender():
             return
         self.sentiment_gauge.update_sentiment(summary)
 
-    def _cleanup_thread(self):
+    def _cleanup_thread(self) -> None:
         """Safely clean up fetch thread reference."""
         thread = self._fetch_thread
         self._fetch_thread = None
@@ -410,7 +410,7 @@ class NewsPanel(QWidget):
             except (RuntimeError, AttributeError):
                 pass
 
-    def _on_news_received(self, news_items: list):
+    def _on_news_received(self, news_items: list) -> None:
         """Update table with received news and handle missing attributes."""
         if self._is_stale_sender():
             return
@@ -473,7 +473,7 @@ class NewsPanel(QWidget):
             source_item.setForeground(QColor(ModernColors.TEXT_SECONDARY))
             self.table.setItem(row, 3, source_item)
 
-    def stop(self):
+    def stop(self) -> None:
         """Stop all background activity."""
         self._pending_refresh = False
         if hasattr(self, '_timer') and self._timer:
@@ -484,7 +484,7 @@ class NewsPanel(QWidget):
 
         self._cleanup_thread()
 
-    def __del__(self):
+    def __del__(self) -> None:
         """Destructor: stop timer and threads."""
         try:
             self.stop()

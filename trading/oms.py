@@ -58,7 +58,7 @@ class OrderStateMachine:
         return to_status in cls.VALID_TRANSITIONS.get(from_status, [])
 
     @classmethod
-    def validate_transition(cls, order: Order, new_status: OrderStatus):
+    def validate_transition(cls, order: Order, new_status: OrderStatus) -> None:
         if not cls.can_transition(order.status, new_status):
             raise OrderError(
                 f"Invalid state transition: {order.status.value} -> {new_status.value}"
@@ -80,7 +80,7 @@ class OrderManagementSystem:
         self,
         initial_capital: float = None,
         db_path: Path = None
-    ):
+    ) -> None:
         self._lock = threading.RLock()
         self._db = OrderDatabase(db_path=db_path)
         self._audit = get_audit_log()
@@ -115,7 +115,7 @@ class OrderManagementSystem:
         self._db.save_account_state(account)
         return account
 
-    def _reconstruct_reservations(self):
+    def _reconstruct_reservations(self) -> None:
         """Reconstruct cash/share reservations from active orders.
         Called on recovery to fix available cash and frozen shares.
         """
@@ -169,7 +169,7 @@ class OrderManagementSystem:
                 f"{len(frozen_by_symbol)} symbols with frozen shares"
             )
 
-    def _process_settlement(self):
+    def _process_settlement(self) -> None:
         """Process T+1 settlement on startup."""
         settled = self._db.process_t1_settlement()
         if settled:
@@ -178,7 +178,7 @@ class OrderManagementSystem:
             )
             self._account.positions = self._db.load_positions()
 
-    def _enforce_position_invariants(self, pos: Position):
+    def _enforce_position_invariants(self, pos: Position) -> None:
         """Keep (available_qty, frozen_qty, quantity) consistent."""
         pos.quantity = max(0, int(pos.quantity or 0))
         pos.available_qty = max(0, int(pos.available_qty or 0))
@@ -195,7 +195,7 @@ class OrderManagementSystem:
 
         pos.available_qty = min(pos.available_qty, pos.quantity)
 
-    def _enforce_invariants(self):
+    def _enforce_invariants(self) -> None:
         """Ensure account + positions invariants are maintained."""
         cash = float(self._account.cash or 0.0)
         if abs(cash) < 1e-9:
@@ -212,7 +212,7 @@ class OrderManagementSystem:
         for pos in list(self._account.positions.values()):
             self._enforce_position_invariants(pos)
 
-    def _check_new_day(self):
+    def _check_new_day(self) -> None:
         """Check and handle new trading day."""
         today = date.today()
         if self._account.daily_start_date != today:
@@ -315,7 +315,7 @@ class OrderManagementSystem:
             )
             return order
 
-    def _validate_buy_order(self, order: Order):
+    def _validate_buy_order(self, order: Order) -> None:
         """Validate buy order and reserve cash."""
         if order.price <= 0:
             raise OrderValidationError("BUY reservation requires price > 0")
@@ -359,7 +359,7 @@ class OrderManagementSystem:
         self._account.frozen += float(reserved_total)
         self._enforce_invariants()
 
-    def _validate_sell_order(self, order: Order):
+    def _validate_sell_order(self, order: Order) -> None:
         """Validate sell order and freeze shares."""
         position = self._account.positions.get(order.symbol)
 
@@ -512,7 +512,7 @@ class OrderManagementSystem:
     ) -> Order | None:
         return self._db.load_order_by_broker_id(broker_id)
 
-    def _release_reserved(self, order: Order):
+    def _release_reserved(self, order: Order) -> None:
         """Release reserved funds/shares for terminal orders."""
         if order.side == OrderSide.BUY:
             tags = order.tags or {}
@@ -600,7 +600,7 @@ class OrderManagementSystem:
         fill.quantity = qty
         fill.price = price
 
-    def process_fill(self, order: Order, fill: Fill):
+    def process_fill(self, order: Order, fill: Fill) -> None:
         """Process order fill — IDEMPOTENT.
         All mutations happen inside the transaction block.
 
@@ -800,7 +800,7 @@ class OrderManagementSystem:
         fill: Fill,
         fill_date: date,
         conn: sqlite3.Connection
-    ):
+    ) -> None:
         """Update account and positions after fill."""
         if order.side == OrderSide.BUY:
             self._apply_buy_fill(order, fill, fill_date, conn)
@@ -816,7 +816,7 @@ class OrderManagementSystem:
         fill: Fill,
         fill_date: date,
         conn: sqlite3.Connection
-    ):
+    ) -> None:
         """Apply a BUY fill to account + positions."""
         qty = int(fill.quantity)
         px = float(fill.price)
@@ -867,7 +867,7 @@ class OrderManagementSystem:
 
     def _apply_sell_fill(
         self, order: Order, fill: Fill, conn: sqlite3.Connection
-    ):
+    ) -> None:
         """Apply a SELL fill to account + positions."""
         qty = int(fill.quantity)
         px = float(fill.price)
@@ -942,7 +942,7 @@ class OrderManagementSystem:
     def get_account(self) -> Account:
         return self._account
 
-    def update_prices(self, prices: dict[str, float]):
+    def update_prices(self, prices: dict[str, float]) -> None:
         """Update position prices and persist."""
         with self._lock:
             updated = False
@@ -967,13 +967,13 @@ class OrderManagementSystem:
     # ------------------------------------------------------------------
     # ------------------------------------------------------------------
 
-    def on_order_update(self, callback: Callable):
+    def on_order_update(self, callback: Callable) -> None:
         self._on_order_update.append(callback)
 
-    def on_fill(self, callback: Callable):
+    def on_fill(self, callback: Callable) -> None:
         self._on_fill.append(callback)
 
-    def _notify_order_update(self, order: Order):
+    def _notify_order_update(self, order: Order) -> None:
         for callback in self._on_order_update:
             try:
                 callback(order)
@@ -985,7 +985,7 @@ class OrderManagementSystem:
                     getattr(order, "id", ""),
                 )
 
-    def _notify_fill(self, fill: Fill):
+    def _notify_fill(self, fill: Fill) -> None:
         for callback in self._on_fill:
             try:
                 callback(fill)
@@ -1063,7 +1063,7 @@ class OrderManagementSystem:
         broker_positions: dict[str, Position],
         broker_cash: float,
         broker_available: float = None
-    ):
+    ) -> None:
         """Force sync OMS state from broker.
         WARNING: This overwrites OMS state.
         Clears T+1 pending for removed positions.
@@ -1110,7 +1110,7 @@ class OrderManagementSystem:
                 f"positions={len(broker_positions)}"
             )
 
-    def close(self):
+    def close(self) -> None:
         """Cleanup resources."""
         try:
             self._db.close_connection()
@@ -1179,7 +1179,7 @@ def reset_oms(
     *,
     instance: str | None = None,
     db_path: Path = None,
-):
+) -> None:
     """Reset OMS singleton(s); defaults to clearing all registered instances."""
     with _oms_lock:
         if instance is None and db_path is None:

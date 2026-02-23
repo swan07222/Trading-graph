@@ -1,4 +1,4 @@
-"""Market Regime Detection Module
+"""Market Regime Detection Module.
 
 Detects market regimes to improve prediction accuracy through:
 1. Adaptive thresholds based on volatility
@@ -62,7 +62,7 @@ class MarketRegimeDetector:
         trend_period: int = 20,
         volatility_period: int = 14,
         adx_period: int = 14,
-    ):
+    ) -> None:
         self.trend_period = trend_period
         self.volatility_period = volatility_period
         self.adx_period = adx_period

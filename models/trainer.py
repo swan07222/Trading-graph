@@ -490,8 +490,7 @@ class Trainer:
         }
     @staticmethod
     def _risk_adjusted_score(metrics: dict[str, Any]) -> float:
-        """Compute a deployment score using risk-first metrics, not accuracy alone.
-        """
+        """Compute a deployment score using risk-first metrics, not accuracy alone."""
         accuracy = float(np.clip(metrics.get("accuracy", 0.0), 0.0, 1.0))
         trading = metrics.get("trading", {}) or {}
 

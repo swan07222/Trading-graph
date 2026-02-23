@@ -218,7 +218,7 @@ def _lazy_get(module: str, name: str) -> Any:
     return getattr(import_module(module), name)
 
 class MainApp(MainAppCommonMixin, QMainWindow):
-    """Professional AI Stock Trading Application
+    """Professional AI Stock Trading Application.
 
     Features:
     - Real-time signal monitoring with multiple intervals
@@ -342,7 +342,7 @@ class MainApp(MainAppCommonMixin, QMainWindow):
 
 
     def _setup_menubar(self) -> None:
-        """Setup professional menu bar"""
+        """Setup professional menu bar."""
         menubar = self.menuBar()
 
         file_menu = menubar.addMenu("&File")
@@ -420,7 +420,7 @@ class MainApp(MainAppCommonMixin, QMainWindow):
         help_menu.addAction(about_action)
 
     def _setup_toolbar(self) -> None:
-        """Setup professional toolbar with auto-trade controls"""
+        """Setup professional toolbar with auto-trade controls."""
         toolbar = QToolBar("Main Toolbar")
         toolbar.setIconSize(QSize(24, 24))
         toolbar.setMovable(False)
@@ -499,7 +499,7 @@ class MainApp(MainAppCommonMixin, QMainWindow):
 
 
     def _setup_ui(self) -> None:
-        """Setup main UI with professional layout"""
+        """Setup main UI with professional layout."""
         central = QWidget()
         central.setObjectName("AppRoot")
         self.setCentralWidget(central)
@@ -603,7 +603,7 @@ class MainApp(MainAppCommonMixin, QMainWindow):
         return frame, out
 
     def _create_center_panel(self) -> QWidget:
-        """Create center panel with charts and signals"""
+        """Create center panel with charts and signals."""
         panel = QWidget()
         panel.setObjectName("centerPanel")
         layout = QVBoxLayout(panel)
@@ -738,7 +738,7 @@ class MainApp(MainAppCommonMixin, QMainWindow):
     # =========================================================================
 
     def _setup_statusbar(self) -> None:
-        """Setup status bar"""
+        """Setup status bar."""
         self._status_bar = QStatusBar()
         self.setStatusBar(self._status_bar)
 
@@ -763,7 +763,7 @@ class MainApp(MainAppCommonMixin, QMainWindow):
         self._status_bar.addWidget(self.time_label)
 
     def _setup_timers(self) -> None:
-        """Setup update timers"""
+        """Setup update timers."""
         self.clock_timer = QTimer()
         self.clock_timer.timeout.connect(self._update_clock)
         self.clock_timer.start(1000)
@@ -807,7 +807,7 @@ class MainApp(MainAppCommonMixin, QMainWindow):
     # =========================================================================
 
     def _init_components(self) -> None:
-        """Initialize trading components"""
+        """Initialize trading components."""
         try:
             Predictor = _lazy_get("models.predictor", "Predictor")
 
@@ -1280,13 +1280,13 @@ class MainApp(MainAppCommonMixin, QMainWindow):
     # =========================================================================
 
     def _update_clock(self) -> None:
-        """Update clock"""
+        """Update clock."""
         self.time_label.setText(
             datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         )
 
     def _update_market_status(self) -> None:
-        """Update market status"""
+        """Update market status."""
         is_open = CONFIG.is_market_open()
         hours_text = self._market_hours_text()
         now_sh = self._shanghai_now()
@@ -1432,7 +1432,7 @@ def _bind_mainapp_extracted_ops() -> None:
 _bind_mainapp_extracted_ops()
 
 def run_app() -> None:
-    """Run the application with modern professional theme"""
+    """Run the application with modern professional theme."""
     os.environ.setdefault('QT_AUTO_SCREEN_SCALE_FACTOR', '1')
 
     app = QApplication(sys.argv)

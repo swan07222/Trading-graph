@@ -132,7 +132,7 @@ class MetricsRegistry:
             self._check_key_limit()
 
     def _make_key(self, name: str, labels: dict[str, str] | None = None) -> str:
-        """Build Prometheus-format key: metric_name{label="value",...}"""
+        """Build Prometheus-format key: metric_name{label="value",...}."""
         if not labels:
             return name
         label_str = ",".join(

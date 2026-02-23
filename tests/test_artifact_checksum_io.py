@@ -10,7 +10,7 @@ from utils.atomic_io import (
 )
 
 
-def test_atomic_pickle_dump_writes_checksum_sidecar(tmp_path: Path):
+def test_atomic_pickle_dump_writes_checksum_sidecar(tmp_path: Path) -> None:
     target = tmp_path / "obj.pkl"
     atomic_pickle_dump(target, {"x": 1})
     sidecar = artifact_checksum_path(target)
@@ -18,7 +18,7 @@ def test_atomic_pickle_dump_writes_checksum_sidecar(tmp_path: Path):
     assert verify_checksum_sidecar(target, require=True) is True
 
 
-def test_pickle_load_with_checksum_verification_blocks_tamper(tmp_path: Path):
+def test_pickle_load_with_checksum_verification_blocks_tamper(tmp_path: Path) -> None:
     target = tmp_path / "obj.pkl"
     atomic_pickle_dump(target, {"x": 1})
     target.write_bytes(b"tampered")
@@ -32,7 +32,7 @@ def test_pickle_load_with_checksum_verification_blocks_tamper(tmp_path: Path):
         )
 
 
-def test_pickle_load_requires_explicit_unsafe_opt_in(tmp_path: Path):
+def test_pickle_load_requires_explicit_unsafe_opt_in(tmp_path: Path) -> None:
     """Pickle load now logs a warning when allow_unsafe=False instead of raising.
     
     This is a transitional behavior - future versions will require allow_unsafe=True.

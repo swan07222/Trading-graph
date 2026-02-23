@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import NoReturn
 
 from config.settings import CONFIG
 from core.types import Account, Fill, Order, OrderSide, OrderStatus, OrderType
@@ -6,7 +7,7 @@ from trading.broker import BrokerInterface, MultiVenueBroker, THSBroker, create_
 
 
 class _DummyVenue(BrokerInterface):
-    def __init__(self, name: str, fail_submit: bool = False):
+    def __init__(self, name: str, fail_submit: bool = False) -> None:
         super().__init__()
         self._name = name
         self._connected = True
@@ -29,7 +30,7 @@ class _DummyVenue(BrokerInterface):
         self._connected = True
         return True
 
-    def disconnect(self):
+    def disconnect(self) -> None:
         self._connected = False
 
     def get_account(self) -> Account:
@@ -38,7 +39,7 @@ class _DummyVenue(BrokerInterface):
     def get_positions(self):
         return {}
 
-    def get_position(self, symbol: str):
+    def get_position(self, symbol: str) -> None:
         return None
 
     def submit_order(self, order: Order) -> Order:
@@ -62,7 +63,7 @@ class _DummyVenue(BrokerInterface):
     def get_orders(self, active_only: bool = True):
         return []
 
-    def get_quote(self, symbol: str):
+    def get_quote(self, symbol: str) -> float:
         return 10.0
 
     def get_fills(self, since: datetime = None):
@@ -75,7 +76,7 @@ class _DummyVenue(BrokerInterface):
         return order
 
 
-def test_multi_venue_failover_on_submit():
+def test_multi_venue_failover_on_submit() -> None:
     primary = _DummyVenue("primary", fail_submit=True)
     secondary = _DummyVenue("secondary", fail_submit=False)
     router = MultiVenueBroker([primary, secondary], failover_cooldown_seconds=60)
@@ -91,7 +92,7 @@ def test_multi_venue_failover_on_submit():
     assert snap["active_venue"] == "secondary"
 
 
-def test_create_broker_live_multi_venue_from_config():
+def test_create_broker_live_multi_venue_from_config() -> None:
     old_enable = getattr(CONFIG.trading, "enable_multi_venue", False)
     old_priority = list(getattr(CONFIG.trading, "venue_priority", []))
     old_cooldown = getattr(CONFIG.trading, "venue_failover_cooldown_seconds", 30)
@@ -108,7 +109,7 @@ def test_create_broker_live_multi_venue_from_config():
         CONFIG.trading.venue_failover_cooldown_seconds = old_cooldown
 
 
-def test_multi_venue_failover_on_transient_reject():
+def test_multi_venue_failover_on_transient_reject() -> None:
     primary = _DummyVenue("primary", fail_submit=False)
     primary._reject_submit = True
     primary._reject_message = "Not connected to broker"
@@ -123,7 +124,7 @@ def test_multi_venue_failover_on_transient_reject():
     assert secondary.submit_calls == 1
 
 
-def test_multi_venue_business_reject_no_failover():
+def test_multi_venue_business_reject_no_failover() -> None:
     primary = _DummyVenue("primary", fail_submit=False)
     primary._reject_submit = True
     primary._reject_message = "Insufficient funds"
@@ -138,7 +139,7 @@ def test_multi_venue_business_reject_no_failover():
     assert secondary.submit_calls == 0
 
 
-def test_multi_venue_health_snapshot_cooldown_until_zero_when_no_failure():
+def test_multi_venue_health_snapshot_cooldown_until_zero_when_no_failure() -> None:
     primary = _DummyVenue("primary", fail_submit=False)
     secondary = _DummyVenue("secondary", fail_submit=False)
     router = MultiVenueBroker([primary, secondary], failover_cooldown_seconds=60)
@@ -147,7 +148,7 @@ def test_multi_venue_health_snapshot_cooldown_until_zero_when_no_failure():
     assert snap["venues"][1]["cooldown_until"] == 0.0
 
 
-def test_multi_venue_aggregates_fills_from_all_connected_venues():
+def test_multi_venue_aggregates_fills_from_all_connected_venues() -> None:
     primary = _DummyVenue("primary", fail_submit=False)
     secondary = _DummyVenue("secondary", fail_submit=False)
 
@@ -164,7 +165,7 @@ def test_multi_venue_aggregates_fills_from_all_connected_venues():
     assert out_ids == {"F1", "F2"}
 
 
-def test_multi_venue_cancel_prefers_order_affinity_venue():
+def test_multi_venue_cancel_prefers_order_affinity_venue() -> None:
     primary = _DummyVenue("primary", fail_submit=True)
     secondary = _DummyVenue("secondary", fail_submit=False)
     router = MultiVenueBroker([primary, secondary], failover_cooldown_seconds=60)
@@ -184,7 +185,7 @@ def test_multi_venue_cancel_prefers_order_affinity_venue():
     assert primary.cancel_calls == 0
 
 
-def test_multi_venue_snapshot_includes_score_and_read_count():
+def test_multi_venue_snapshot_includes_score_and_read_count() -> None:
     primary = _DummyVenue("primary", fail_submit=False)
     secondary = _DummyVenue("secondary", fail_submit=False)
     router = MultiVenueBroker([primary, secondary], failover_cooldown_seconds=60)
@@ -200,17 +201,17 @@ def test_multi_venue_snapshot_includes_score_and_read_count():
     assert "last_error" in first
 
 
-def test_easytrader_get_quote_fetcher_failure_returns_none(monkeypatch):
+def test_easytrader_get_quote_fetcher_failure_returns_none(monkeypatch) -> None:
     broker = THSBroker()
 
     class _FeedManager:
         @staticmethod
-        def get_quote(symbol):  # noqa: ARG004
+        def get_quote(symbol) -> None:  # noqa: ARG004
             return None
 
     class _BrokenFetcher:
         @staticmethod
-        def get_realtime(symbol):  # noqa: ARG004
+        def get_realtime(symbol) -> NoReturn:  # noqa: ARG004
             raise RuntimeError("realtime temporarily unavailable")
 
     monkeypatch.setattr("data.feeds.get_feed_manager", lambda auto_init=False: _FeedManager())

@@ -68,7 +68,7 @@ class CacheStats:
     total_sets: int = 0
     total_evictions: int = 0
 
-    def increment(self, field_name: str, amount: int = 1):
+    def increment(self, field_name: str, amount: int = 1) -> None:
         with self._lock:
             setattr(self, field_name, getattr(self, field_name) + amount)
 
@@ -110,7 +110,7 @@ class CacheEntry:
 class LRUCache:
     """Thread-safe LRU cache with TTL enforcement."""
 
-    def __init__(self, max_items: int = 1000, max_size_mb: int = 500):
+    def __init__(self, max_items: int = 1000, max_size_mb: int = 500) -> None:
         self._cache: OrderedDict[str, CacheEntry] = OrderedDict()
         self._max_items = max_items
         self._max_size = max_size_mb * 1024 * 1024
@@ -145,7 +145,7 @@ class LRUCache:
             self._cache.move_to_end(key)
             return entry.data
 
-    def set(self, key: str, value: Any, size_bytes: int = 0):
+    def set(self, key: str, value: Any, size_bytes: int = 0) -> None:
         with self._lock:
             if key in self._cache:
                 self._evict_key(key)
@@ -177,12 +177,12 @@ class LRUCache:
                 return True
             return False
 
-    def clear(self):
+    def clear(self) -> None:
         with self._lock:
             self._cache.clear()
             self._current_size = 0
 
-    def _evict_key(self, key: str):
+    def _evict_key(self, key: str) -> None:
         """Remove a specific key (caller must hold lock)."""
         entry = self._cache.pop(key, None)
         if entry:
@@ -191,7 +191,7 @@ class LRUCache:
                 0, self._current_size - entry.size_bytes
             )
 
-    def _evict_oldest(self):
+    def _evict_oldest(self) -> None:
         """Remove oldest entry (caller must hold lock)."""
         if self._cache:
             _, entry = self._cache.popitem(last=False)
@@ -265,7 +265,7 @@ class DiskCache:
     fd leak and avoid Windows PermissionError when renaming.
     """
 
-    def __init__(self, cache_dir: Path, compress: bool = False):
+    def __init__(self, cache_dir: Path, compress: bool = False) -> None:
         self._dir = cache_dir
         self._dir.mkdir(parents=True, exist_ok=True)
         self._compress = compress
@@ -348,7 +348,7 @@ class DiskCache:
                 pass
             return _SENTINEL
 
-    def set(self, key: str, value: Any):
+    def set(self, key: str, value: Any) -> None:
         """Atomic write: temp file → rename.
 
         FIX C4: Close the file descriptor from mkstemp IMMEDIATELY
@@ -413,7 +413,7 @@ class DiskCache:
             pass
         return False
 
-    def clear(self, older_than_hours: float = None):
+    def clear(self, older_than_hours: float = None) -> None:
         """Clear cache, optionally only old files."""
         if not _cache_delete_allowed():
             log.warning(
@@ -453,7 +453,7 @@ class TieredCache:
 
     _L3_MAX_WORKERS = 4
 
-    def __init__(self):
+    def __init__(self) -> None:
         self._l1 = LRUCache(
             max_items=500,
             max_size_mb=CONFIG.data.max_memory_cache_mb,
@@ -575,7 +575,7 @@ class TieredCache:
 
         return MISSING
 
-    def set(self, key: str, value: Any, persist: bool = True):
+    def set(self, key: str, value: Any, persist: bool = True) -> None:
         """Store value in cache tiers."""
         self._stats.increment("total_sets")
 
@@ -600,7 +600,7 @@ class TieredCache:
                     # Pool already shut down
                     pass
 
-    def delete(self, key: str):
+    def delete(self, key: str) -> None:
         """Delete from all tiers."""
         if not _cache_delete_allowed():
             log.warning(
@@ -617,7 +617,7 @@ class TieredCache:
         self,
         tier: str = None,
         older_than_hours: float = None,
-    ):
+    ) -> None:
         """Clear cache (optionally one tier or old entries only)."""
         if not _cache_delete_allowed():
             log.warning(
@@ -672,7 +672,7 @@ class TieredCache:
 
         return value
 
-    def shutdown(self):
+    def shutdown(self) -> None:
         """Shutdown L3 background writer pool."""
         # FIX #12: Set flag before shutdown to prevent new submissions
         self._shutdown_flag = True

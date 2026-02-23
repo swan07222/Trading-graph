@@ -19,7 +19,7 @@ def _make_df(rows: int = 80) -> pd.DataFrame:
     )
 
 
-def test_strategy_engine_discovers_and_evaluates(tmp_path: Path):
+def test_strategy_engine_discovers_and_evaluates(tmp_path: Path) -> None:
     strategy = tmp_path / "test_rule.py"
     strategy.write_text(
         "\n".join(
@@ -43,7 +43,7 @@ def test_strategy_engine_discovers_and_evaluates(tmp_path: Path):
     assert any("RSI oversold" in r for r in reasons)
 
 
-def test_strategy_engine_respects_marketplace_disable(tmp_path: Path):
+def test_strategy_engine_respects_marketplace_disable(tmp_path: Path) -> None:
     strategy = tmp_path / "rule.py"
     strategy.write_text(
         "\n".join(
@@ -80,7 +80,7 @@ def test_strategy_engine_respects_marketplace_disable(tmp_path: Path):
     assert engine.list_strategy_files() == []
 
 
-def test_strategy_engine_isolates_script_side_effects(tmp_path: Path):
+def test_strategy_engine_isolates_script_side_effects(tmp_path: Path) -> None:
     (tmp_path / "a_mutator.py").write_text(
         "\n".join(
             [
@@ -121,7 +121,7 @@ def test_strategy_engine_isolates_script_side_effects(tmp_path: Path):
     assert any("isolated" in r.lower() for r in reasons)
 
 
-def test_strategy_engine_supports_batch_signals_and_weights(tmp_path: Path):
+def test_strategy_engine_supports_batch_signals_and_weights(tmp_path: Path) -> None:
     (tmp_path / "batch_rule.py").write_text(
         "\n".join(
             [
@@ -145,7 +145,7 @@ def test_strategy_engine_supports_batch_signals_and_weights(tmp_path: Path):
     assert any("weighted buy" in r.lower() for r in reasons)
 
 
-def test_strategy_engine_passes_marketplace_params_and_weight(tmp_path: Path):
+def test_strategy_engine_passes_marketplace_params_and_weight(tmp_path: Path) -> None:
     (tmp_path / "param_rule.py").write_text(
         "\n".join(
             [

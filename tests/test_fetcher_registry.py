@@ -6,7 +6,7 @@ import data.fetcher as fetcher_mod
 from data.fetcher_registry import FetcherRegistry
 
 
-def _install_factory(monkeypatch):
+def _install_factory(monkeypatch) -> None:
     counter = {"n": 0}
 
     def _factory():
@@ -16,7 +16,7 @@ def _install_factory(monkeypatch):
     monkeypatch.setattr(fetcher_mod, "create_fetcher", _factory)
 
 
-def test_get_fetcher_defaults_to_thread_scope(monkeypatch):
+def test_get_fetcher_defaults_to_thread_scope(monkeypatch) -> None:
     monkeypatch.delenv("TRADING_DISABLE_SINGLETONS", raising=False)
     monkeypatch.delenv("TRADING_FETCHER_SCOPE", raising=False)
     fetcher_mod.reset_fetcher()
@@ -25,7 +25,7 @@ def test_get_fetcher_defaults_to_thread_scope(monkeypatch):
     main_inst = fetcher_mod.get_fetcher()
     result: dict[str, object] = {}
 
-    def _worker():
+    def _worker() -> None:
         result["worker"] = fetcher_mod.get_fetcher()
 
     t = threading.Thread(target=_worker)
@@ -36,7 +36,7 @@ def test_get_fetcher_defaults_to_thread_scope(monkeypatch):
     assert result["worker"] is not main_inst
 
 
-def test_get_fetcher_process_scope_shares_instance(monkeypatch):
+def test_get_fetcher_process_scope_shares_instance(monkeypatch) -> None:
     monkeypatch.delenv("TRADING_DISABLE_SINGLETONS", raising=False)
     monkeypatch.setenv("TRADING_FETCHER_SCOPE", "process")
     fetcher_mod.reset_fetcher()
@@ -45,7 +45,7 @@ def test_get_fetcher_process_scope_shares_instance(monkeypatch):
     main_inst = fetcher_mod.get_fetcher()
     result: dict[str, object] = {}
 
-    def _worker():
+    def _worker() -> None:
         result["worker"] = fetcher_mod.get_fetcher()
 
     t = threading.Thread(target=_worker)
@@ -56,7 +56,7 @@ def test_get_fetcher_process_scope_shares_instance(monkeypatch):
     assert result["worker"] is main_inst
 
 
-def test_use_fetcher_registry_isolates_context(monkeypatch):
+def test_use_fetcher_registry_isolates_context(monkeypatch) -> None:
     monkeypatch.delenv("TRADING_DISABLE_SINGLETONS", raising=False)
     monkeypatch.setenv("TRADING_FETCHER_SCOPE", "process")
     fetcher_mod.reset_fetcher()

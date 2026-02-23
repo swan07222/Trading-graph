@@ -49,7 +49,7 @@ def create_local_database_source(db_ref: Any) -> DataSource:
         needs_china_direct = False
         needs_vpn = False
 
-        def __init__(self, db_source: Any):
+        def __init__(self, db_source: Any) -> None:
             super().__init__()
             self._db = db_source
 

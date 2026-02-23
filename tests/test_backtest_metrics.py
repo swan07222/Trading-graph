@@ -10,7 +10,7 @@ def _build_dates(n: int):
     return [start + timedelta(days=i) for i in range(n)]
 
 
-def test_backtest_metrics_include_extended_ratios():
+def test_backtest_metrics_include_extended_ratios() -> None:
     bt = Backtester.__new__(Backtester)
     daily = np.array([0.2, -0.1, 0.3, 0.1, -0.05], dtype=float)
     bench = np.array([0.1, -0.05, 0.2, 0.05, -0.02], dtype=float)
@@ -35,7 +35,7 @@ def test_backtest_metrics_include_extended_ratios():
     assert "Alpha/Beta" in result.summary()
 
 
-def test_backtest_metrics_handle_flat_benchmark():
+def test_backtest_metrics_handle_flat_benchmark() -> None:
     bt = Backtester.__new__(Backtester)
     daily = np.array([0.1, -0.2, 0.15, -0.05], dtype=float)
     bench = np.zeros_like(daily)
@@ -55,7 +55,7 @@ def test_backtest_metrics_handle_flat_benchmark():
     assert np.isfinite(result.alpha)
 
 
-def test_backtest_metrics_sanitize_non_finite_and_alignment():
+def test_backtest_metrics_sanitize_non_finite_and_alignment() -> None:
     bt = Backtester.__new__(Backtester)
     daily = np.array([0.1, np.nan, np.inf, -np.inf, 0.2], dtype=float)
     bench = np.array([0.0, 0.05], dtype=float)

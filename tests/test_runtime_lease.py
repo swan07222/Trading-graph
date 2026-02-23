@@ -18,7 +18,7 @@ def _mk_engine(tmp_path, lease_id: str) -> ExecutionEngine:
     return eng
 
 
-def test_runtime_lease_exclusive_owner(tmp_path):
+def test_runtime_lease_exclusive_owner(tmp_path) -> None:
     eng1 = _mk_engine(tmp_path, "owner-1")
     eng2 = _mk_engine(tmp_path, "owner-2")
 
@@ -27,7 +27,7 @@ def test_runtime_lease_exclusive_owner(tmp_path):
     assert isinstance(eng2._runtime_lease_owner_hint, dict)
 
 
-def test_runtime_lease_refresh_and_release(tmp_path):
+def test_runtime_lease_refresh_and_release(tmp_path) -> None:
     eng = _mk_engine(tmp_path, "owner-1")
     assert eng._acquire_runtime_lease() is True
     assert eng._refresh_runtime_lease() is True
@@ -37,7 +37,7 @@ def test_runtime_lease_refresh_and_release(tmp_path):
     assert (not eng._runtime_lease_path.exists()) or eng._runtime_lease_path.read_text(encoding="utf-8")
 
 
-def test_sqlite_runtime_lease_exclusive_owner(tmp_path):
+def test_sqlite_runtime_lease_exclusive_owner(tmp_path) -> None:
     db_path = tmp_path / "lease.db"
     c1 = create_runtime_lease_client("sqlite", "cluster-a", db_path)
     c2 = create_runtime_lease_client("sqlite", "cluster-a", db_path)
@@ -51,7 +51,7 @@ def test_sqlite_runtime_lease_exclusive_owner(tmp_path):
     assert str((r2.record or {}).get("owner_id", "")) == "node-a"
 
 
-def test_sqlite_runtime_lease_stale_takeover_increments_fencing_token(tmp_path):
+def test_sqlite_runtime_lease_stale_takeover_increments_fencing_token(tmp_path) -> None:
     db_path = tmp_path / "lease.db"
     c1 = create_runtime_lease_client("sqlite", "cluster-b", db_path)
     c2 = create_runtime_lease_client("sqlite", "cluster-b", db_path)
@@ -76,7 +76,7 @@ def test_sqlite_runtime_lease_stale_takeover_increments_fencing_token(tmp_path):
     assert int((r2.record or {}).get("generation", 0)) == 2
 
 
-def test_file_runtime_lease_contention_has_single_winner(tmp_path, monkeypatch):
+def test_file_runtime_lease_contention_has_single_winner(tmp_path, monkeypatch) -> None:
     lease_path = tmp_path / "lease.json"
     c1 = FileRuntimeLeaseClient(path=lease_path, cluster="cluster-c")
     c2 = FileRuntimeLeaseClient(path=lease_path, cluster="cluster-c")

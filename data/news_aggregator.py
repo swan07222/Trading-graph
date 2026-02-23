@@ -31,7 +31,7 @@ class NewsAggregator:
     Network-aware: uses different sources based on China/VPN.
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         self._sina = SinaNewsFetcher()
         self._eastmoney = EastmoneyNewsFetcher()
         self._tencent = TencentNewsFetcher()

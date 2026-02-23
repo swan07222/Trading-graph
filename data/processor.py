@@ -47,7 +47,7 @@ class RealtimeBuffer:
     ``with buffer.lock:`` to hold the lock across multiple calls.
     """
 
-    def __init__(self, max_size: int | None = None):
+    def __init__(self, max_size: int | None = None) -> None:
         self.max_size = max_size or CONFIG.SEQUENCE_LENGTH * 2
         self._buffer: deque = deque(maxlen=self.max_size)
         self._lock = threading.RLock()
@@ -1057,7 +1057,7 @@ class DataProcessor:
 
     def _get_feature_lookback(self) -> int:
         """Safely retrieve ``CONFIG.data.feature_lookback`` with fallback.
-        (Issue 7 fix)
+        (Issue 7 fix).
         """
         data_config = getattr(CONFIG, "data", None)
         if data_config is not None:

@@ -1,7 +1,7 @@
 from trading.alerts import Alert, AlertCategory, AlertManager, AlertPriority
 
 
-def test_alert_repeat_escalation():
+def test_alert_repeat_escalation() -> None:
     mgr = AlertManager()
     for _ in range(3):
         mgr.send_immediate(
@@ -18,7 +18,7 @@ def test_alert_repeat_escalation():
     assert hist[-1].priority in {AlertPriority.HIGH, AlertPriority.CRITICAL}
 
 
-def test_alert_stats_snapshot():
+def test_alert_stats_snapshot() -> None:
     mgr = AlertManager()
     mgr.send_immediate(
         Alert(

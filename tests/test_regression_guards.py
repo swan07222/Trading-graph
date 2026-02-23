@@ -4,7 +4,7 @@ from analysis.strategy_marketplace import StrategyMarketplace
 from data.session_cache import SessionBarCache
 
 
-def test_regression_marketplace_skips_mismatch_hash(tmp_path):
+def test_regression_marketplace_skips_mismatch_hash(tmp_path) -> None:
     strategies_dir = tmp_path / "strategies"
     strategies_dir.mkdir(parents=True, exist_ok=True)
 
@@ -41,7 +41,7 @@ def test_regression_marketplace_skips_mismatch_hash(tmp_path):
     assert files == []
 
 
-def test_regression_session_cache_keeps_latest_duplicate_timestamp(tmp_path):
+def test_regression_session_cache_keeps_latest_duplicate_timestamp(tmp_path) -> None:
     cache = SessionBarCache(root=tmp_path / "session_bars")
     symbol = "600519"
     interval = "1m"

@@ -597,8 +597,7 @@ def _stabilize_chart_depth(
     interval: str,
     candidate: list[dict[str, Any]] | None,
 ) -> list[dict[str, Any]]:
-    """Avoid replacing a healthy deep window with a transient tiny window.
-    """
+    """Avoid replacing a healthy deep window with a transient tiny window."""
     cand = list(candidate or [])
     if not cand:
         return cand
@@ -959,7 +958,7 @@ def _is_outlier_tick(
     return jump_pct > float(jump_cap)
 
 def _get_levels_dict(self: Any) -> dict[str, float] | None:
-    """Get trading levels as dict"""
+    """Get trading levels as dict."""
     if (
         not self.current_prediction
         or not hasattr(self.current_prediction, 'levels')
@@ -982,8 +981,7 @@ def _scrub_chart_bars(
     symbol: str = "",
     anchor_price: float | None = None,
 ) -> list[dict[str, Any]]:
-    """Prepare bars for charting and never fall back to unsanitized rows.
-    """
+    """Prepare bars for charting and never fall back to unsanitized rows."""
     arr_in = list(bars or [])
     arr_out = self._prepare_chart_bars_for_interval(
         arr_in,

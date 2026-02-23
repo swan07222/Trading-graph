@@ -1,4 +1,4 @@
-"""China Network Diagnostics Utility
+"""China Network Diagnostics Utility.
 
 Provides comprehensive network testing for China mainland users:
 - Great Firewall connectivity tests
@@ -250,7 +250,6 @@ class ChinaNetworkDiagnostics:
         Returns:
             Dictionary with test results and recommendations
         """
-
         self.results = []
 
         # Test Chinese financial endpoints

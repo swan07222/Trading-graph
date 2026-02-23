@@ -161,8 +161,7 @@ def _run_with_timeout(
     task: Callable[[], object],
     timeout_s: float,
 ) -> object | None:
-    """Run a callable with a timeout without mutating process-global socket defaults.
-    """
+    """Run a callable with a timeout without mutating process-global socket defaults."""
     executor = ThreadPoolExecutor(max_workers=1)
     future = executor.submit(task)
     try:
@@ -279,7 +278,7 @@ class DataSource:
     _CB_HALF_OPEN_PROBE_INTERVAL: float = 8.0
     _CB_DISABLE_WARN_MIN_GAP_SEC: float = 8.0
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.status = DataSourceStatus(name=self.name)
         self._session = requests.Session()
         self._session.headers.update({
@@ -420,7 +419,7 @@ class SpotCache:
         "change_pct": ("\u6da8\u8dcc\u5e45", "change_pct"),
         "name":       ("\u540d\u79f0", "\u80a1\u7968\u540d\u79f0", "name"),
     }
-    def __init__(self, ttl_seconds: float = _SPOT_CACHE_TTL):
+    def __init__(self, ttl_seconds: float = _SPOT_CACHE_TTL) -> None:
         self._cache: pd.DataFrame | None = None
         self._cache_time: float = 0.0
         self._ttl = ttl_seconds
@@ -615,7 +614,7 @@ class AkShareSource(DataSource):
             "amount": "amount",
         },
     ]
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__()
         self._ak = None
         self._spot_cache: SpotCache | None = None
@@ -1180,7 +1179,7 @@ class YahooSource(DataSource):
     _SUFFIX_MAP = {"6": ".SS", "0": ".SZ", "3": ".SZ", "4": ".BJ", "8": ".BJ"}
     _SUPPORTED_PREFIXES = ("0", "3", "4", "6", "8")
 
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__()
         self._yf = None
         try:

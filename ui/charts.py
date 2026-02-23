@@ -29,19 +29,19 @@ if HAS_PYQTGRAPH:
         Data format: list of (x, open, close, low, high) tuples.
         """
 
-        def __init__(self):
+        def __init__(self) -> None:
             super().__init__()
             self.data = []
             self._picture = None
 
-        def setData(self, data):
-            """Set candlestick data. Each item: (x, open, close, low, high)"""
+        def setData(self, data) -> None:
+            """Set candlestick data. Each item: (x, open, close, low, high)."""
             self.data = data or []
             self._picture = None
             self.prepareGeometryChange()
             self.update()
 
-        def _generate_picture(self):
+        def _generate_picture(self) -> None:
             """Generate QPicture for all candles."""
             pic = pg.QtGui.QPicture()
             p = pg.QtGui.QPainter(pic)
@@ -109,7 +109,7 @@ if HAS_PYQTGRAPH:
             p.end()
             self._picture = pic
 
-        def paint(self, p, *args):
+        def paint(self, p, *args) -> None:
             """Paint the candlestick item."""
             if self._picture is None:
                 self._generate_picture()
@@ -154,7 +154,7 @@ class StockChart(QWidget):
     """
     trade_requested = pyqtSignal(str, float)  # side, price
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None) -> None:
         super().__init__(parent)
 
         self._bars: list[dict] = []
@@ -191,7 +191,7 @@ class StockChart(QWidget):
 
         self._setup_ui()
 
-    def _setup_ui(self):
+    def _setup_ui(self) -> None:
         """Setup chart UI with pyqtgraph or fallback."""
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -406,7 +406,7 @@ class StockChart(QWidget):
         except Exception:
             pass
 
-    def _setup_pyqtgraph(self):
+    def _setup_pyqtgraph(self) -> None:
         """Setup pyqtgraph chart with all three layers."""
         pg.setConfigOptions(
             antialias=True,
@@ -529,7 +529,7 @@ class StockChart(QWidget):
 
         self.layout().addWidget(self.plot_widget)
 
-    def _setup_fallback(self):
+    def _setup_fallback(self) -> None:
         """Setup fallback when pyqtgraph not available."""
         self.fallback_label = QLabel(
             "Chart requires pyqtgraph\n\n"
@@ -561,7 +561,7 @@ class StockChart(QWidget):
         predicted_prices_low: list[float] = None,
         predicted_prices_high: list[float] = None,
         levels: dict[str, float] = None,
-    ):
+    ) -> None:
         """UNIFIED update method - draws all three layers together.
 
         This is the PRIMARY method that should be called for updates.
@@ -1016,7 +1016,7 @@ class StockChart(QWidget):
         predicted_prices_low: list[float] = None,
         predicted_prices_high: list[float] = None,
         levels: dict[str, float] = None,
-    ):
+    ) -> None:
         """Update chart with candlestick bar data.
 
         BACKWARD COMPATIBLE: This now delegates to update_chart()
@@ -1037,7 +1037,7 @@ class StockChart(QWidget):
         predicted_prices_low: list[float] = None,
         predicted_prices_high: list[float] = None,
         levels: dict[str, float] = None
-    ):
+    ) -> None:
         """Update chart with line data.
 
         BACKWARD COMPATIBLE: Converts price list to bar format,
@@ -1068,7 +1068,7 @@ class StockChart(QWidget):
     # =========================================================================
     # =========================================================================
 
-    def _clear_all(self):
+    def _clear_all(self) -> None:
         """Clear all chart elements."""
         self._candle_meta = []
         self._hide_candle_tooltip()
@@ -1110,7 +1110,7 @@ class StockChart(QWidget):
             out[i] = alpha * values[i] + (1.0 - alpha) * out[i - 1]
         return out
 
-    def _plot_series(self, key: str, y: np.ndarray):
+    def _plot_series(self, key: str, y: np.ndarray) -> None:
         line = self.overlay_lines.get(key)
         if line is None:
             return
@@ -1127,7 +1127,7 @@ class StockChart(QWidget):
             return
         line.setData(x[mask], y[mask])
 
-    def _update_overlay_lines(self, bars: list[dict], closes: list[float]):
+    def _update_overlay_lines(self, bars: list[dict], closes: list[float]) -> None:
         if not HAS_PYQTGRAPH or not self.overlay_lines:
             return
         arr = np.array(closes, dtype=float)
@@ -1174,7 +1174,7 @@ class StockChart(QWidget):
                         vwap[i] = float(np.mean(tp[i - 19:i + 1]))
             self._plot_series("vwap20", vwap)
 
-    def _on_context_menu(self, pos):
+    def _on_context_menu(self, pos) -> None:
         if not HAS_PYQTGRAPH or self.plot_widget is None:
             return
         if not self._actual_prices:
@@ -1227,7 +1227,7 @@ class StockChart(QWidget):
         elif chosen in overlay_actions:
             self._toggle_overlay(overlay_actions[chosen])
 
-    def _toggle_overlay(self, key: str):
+    def _toggle_overlay(self, key: str) -> None:
         """Toggle overlay visibility with proper state management."""
         if key == "bb_upper":
             # FIX: Bollinger Bands toggle - both upper and lower together
@@ -1250,7 +1250,7 @@ class StockChart(QWidget):
                     continue
             self._update_overlay_lines(self._bars[-3000:], closes)
 
-    def _update_level_lines(self):
+    def _update_level_lines(self) -> None:
         """Update horizontal lines for trading levels."""
         if not HAS_PYQTGRAPH or self.plot_widget is None:
             return
@@ -1296,7 +1296,7 @@ class StockChart(QWidget):
                 except Exception as e:
                     log.debug(f"Failed to add level line {name}: {e}")
 
-    def clear(self):
+    def clear(self) -> None:
         """Clear all data from chart."""
         self._bars = []
         self._actual_prices = []
@@ -1306,7 +1306,7 @@ class StockChart(QWidget):
         self._levels = {}
         self._clear_all()
 
-    def zoom_in(self):
+    def zoom_in(self) -> None:
         """Zoom into current view."""
         if not HAS_PYQTGRAPH or self.plot_widget is None:
             return
@@ -1317,7 +1317,7 @@ class StockChart(QWidget):
         except Exception:
             pass
 
-    def zoom_out(self):
+    def zoom_out(self) -> None:
         """Zoom out from current view."""
         if not HAS_PYQTGRAPH or self.plot_widget is None:
             return
@@ -1328,7 +1328,7 @@ class StockChart(QWidget):
         except Exception:
             pass
 
-    def reset_view(self):
+    def reset_view(self) -> None:
         """Reset view and resume auto-follow."""
         if not HAS_PYQTGRAPH or self.plot_widget is None:
             return
@@ -1369,7 +1369,7 @@ class StockChart(QWidget):
         except Exception:
             pass
 
-    def set_title(self, title: str):
+    def set_title(self, title: str) -> None:
         """Set chart title."""
         if HAS_PYQTGRAPH and self.plot_widget is not None:
             try:
@@ -1381,7 +1381,7 @@ class StockChart(QWidget):
             except Exception:
                 pass
 
-    def set_overlay_enabled(self, key: str, enabled: bool):
+    def set_overlay_enabled(self, key: str, enabled: bool) -> None:
         """Public overlay toggle for UI controls.
         For Bollinger, use key='bbands' to control both bands.
         """
@@ -1410,13 +1410,13 @@ class StockChart(QWidget):
 class MiniChart(QWidget):
     """Compact mini chart for watchlist items."""
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self.setFixedSize(100, 40)
         self._prices: list[float] = []
         self._setup_ui()
 
-    def _setup_ui(self):
+    def _setup_ui(self) -> None:
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
 
@@ -1440,7 +1440,7 @@ class MiniChart(QWidget):
             )
             layout.addWidget(self.label)
 
-    def update_data(self, prices: list[float]):
+    def update_data(self, prices: list[float]) -> None:
         """Update mini chart."""
         if prices is None:
             self._prices = []

@@ -414,8 +414,7 @@ class AuditLog:
         return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
     def _flush(self) -> None:
-        """FIX #3: Flush buffer to file. Only clears buffer on SUCCESS.
-        """
+        """FIX #3: Flush buffer to file. Only clears buffer on SUCCESS."""
         if not self._buffer:
             return
 
@@ -582,8 +581,7 @@ class AuditLog:
             return False
 
     def prune_old_files(self, retention_days: int) -> dict[str, int]:
-        """Delete audit files older than retention_days, except legal-hold files.
-        """
+        """Delete audit files older than retention_days, except legal-hold files."""
         stats = {"deleted": 0, "held": 0, "kept": 0}
         try:
             keep_since = date.today() - timedelta(days=max(1, int(retention_days)))
@@ -686,8 +684,7 @@ class AuditLog:
         end_date: datetime | None = None,
         limit: int = 100000,
     ) -> dict[str, Any]:
-        """Verify tamper-evident hash chain across queried audit records.
-        """
+        """Verify tamper-evident hash chain across queried audit records."""
         records = self.query(start_date=start_date, end_date=end_date, limit=limit)
         checked = 0
         prev_hash = ""

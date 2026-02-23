@@ -188,7 +188,7 @@ class RiskManager:
     MAX_TRACKED_SYMBOLS: int = 500  # FIX(9): bound quote timestamps
     DAILY_RETURN_LOOKBACK_DAYS: int = 30  # FIX(12): extended from 15
 
-    def __init__(self):
+    def __init__(self) -> None:
         self._lock = threading.RLock()
         self._audit = _get_audit_log()  # FIX(7): safe import
 
@@ -225,7 +225,7 @@ class RiskManager:
         for event_type, handler in self._event_handlers.items():
             EVENT_BUS.subscribe(event_type, handler)
 
-    def shutdown(self):
+    def shutdown(self) -> None:
         """Unsubscribe from all events. Call before discarding this instance."""
         for event_type, handler in self._event_handlers.items():
             try:
@@ -240,7 +240,7 @@ class RiskManager:
     # =========================================================================
     # =========================================================================
 
-    def initialize(self, account: Account):
+    def initialize(self, account: Account) -> None:
         """Initialize with account state."""
         with self._lock:
             self._account = account
@@ -253,7 +253,7 @@ class RiskManager:
             self._max_drawdown_pct = 0.0
             log.info(f"Risk manager initialized: equity=¥{account.equity:,.2f}")
 
-    def update(self, account: Account):
+    def update(self, account: Account) -> None:
         """Update with current account state. Called on every portfolio refresh."""
         if account is None:
             log.warning("RiskManager.update() called with None account")
@@ -280,7 +280,7 @@ class RiskManager:
             self._prune_equity_history()
             self._check_risk_breaches()
 
-    def record_trade(self):
+    def record_trade(self) -> None:
         """Record a trade — called by execution engine.
         This is the ONLY way trades should be counted.
         """
@@ -351,7 +351,7 @@ class RiskManager:
         self._apply_oms_reservations(unified)
         return unified
 
-    def _apply_oms_reservations(self, account: Account):
+    def _apply_oms_reservations(self, account: Account) -> None:
         """Reduce available cash/shares based on active orders in OMS.
         Mutates ``account`` in place.
         """
@@ -397,7 +397,7 @@ class RiskManager:
     # =========================================================================
     # =========================================================================
 
-    def _new_day(self, last_equity: float):
+    def _new_day(self, last_equity: float) -> None:
         """Reset daily counters for new trading day."""
         log.info("Risk manager: New trading day started")
         self._daily_start_equity = last_equity
@@ -413,7 +413,7 @@ class RiskManager:
                 f"(Total return: {total_return:+.2f}%)"
             )
 
-    def _prune_equity_history(self):
+    def _prune_equity_history(self) -> None:
         """Prune old entries from _equity_by_day."""
         if len(self._equity_by_day) <= self.MAX_EQUITY_HISTORY_DAYS:
             return
@@ -425,12 +425,12 @@ class RiskManager:
     # =========================================================================
     # =========================================================================
 
-    def _on_error(self, event: Event):
+    def _on_error(self, event: Event) -> None:
         """Handle error event for error rate monitoring."""
         with self._lock:
             self._errors_this_minute.append(datetime.now())
 
-    def _on_tick(self, event: Event):
+    def _on_tick(self, event: Event) -> None:
         """Handle tick event for quote freshness tracking."""
         with self._lock:
             symbol = getattr(event, 'symbol', None)
@@ -455,7 +455,8 @@ class RiskManager:
     @staticmethod
     def _prune_minute_window(dq: deque) -> None:
         """Remove entries older than 1 minute from the left of a
-        time-sorted deque."""
+        time-sorted deque.
+        """
         cutoff = datetime.now() - timedelta(minutes=1)
         while dq and dq[0] < cutoff:
             dq.popleft()
@@ -617,7 +618,7 @@ class RiskManager:
             return abs(float(var_pct)) * equity
         return abs(float(np.mean(tail))) * equity
 
-    def _record_daily_return(self, equity: float):
+    def _record_daily_return(self, equity: float) -> None:
         """Record daily return for VaR calculation."""
         today = date.today()
         if self._last_var_day == today:
@@ -642,7 +643,7 @@ class RiskManager:
     # =========================================================================
     # =========================================================================
 
-    def _check_risk_breaches(self):
+    def _check_risk_breaches(self) -> None:
         """Check for risk limit breaches and trigger events."""
         if self._account is None:
             return
@@ -690,7 +691,7 @@ class RiskManager:
             if triggered:
                 self._trigger_risk_event(risk_type, value)
 
-    def _trigger_risk_event(self, risk_type: str, value: float):
+    def _trigger_risk_event(self, risk_type: str, value: float) -> None:
         """Trigger risk event with throttling."""
         now = datetime.now()
         last = self._last_breach.get(risk_type)
@@ -767,7 +768,7 @@ class RiskManager:
             return False
         return True
 
-    def _record_order_attempt(self):
+    def _record_order_attempt(self) -> None:
         """Record an order attempt AFTER all validations pass."""
         self._orders_this_minute.append(datetime.now())
         self._orders_submitted_today += 1
@@ -1145,19 +1146,19 @@ class RiskManager:
     # =========================================================================
     # =========================================================================
 
-    def set_staleness_threshold(self, seconds: float):
+    def set_staleness_threshold(self, seconds: float) -> None:
         """Set quote staleness threshold."""
         with self._lock:
             self._staleness_threshold_seconds = max(1.0, seconds)
 
     def update_quote_timestamp(
         self, symbol: str, timestamp: datetime = None,
-    ):
+    ) -> None:
         """Manually update quote timestamp."""
         with self._lock:
             self._quote_timestamps[symbol] = timestamp or datetime.now()
 
-    def reset_daily(self):
+    def reset_daily(self) -> None:
         """Manually reset daily tracking (for testing)."""
         with self._lock:
             if self._account:
@@ -1182,7 +1183,7 @@ def get_risk_manager() -> RiskManager:
                 _risk_manager = RiskManager()
     return _risk_manager
 
-def reset_risk_manager():
+def reset_risk_manager() -> None:
     """Reset global risk manager (for testing).
     Properly unsubscribes the old instance before discarding.
     """

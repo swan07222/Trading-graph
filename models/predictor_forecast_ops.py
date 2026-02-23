@@ -306,7 +306,6 @@ def _apply_ensemble_prediction(self, X: FloatArray, pred: Prediction) -> None:
 
 def _apply_ensemble_result(self, ensemble_pred: Any, pred: Prediction) -> None:
     """Apply a precomputed ensemble result to a prediction object."""
-
     probs = np.asarray(
         getattr(ensemble_pred, "probabilities", [0.33, 0.34, 0.33]),
         dtype=float,
@@ -457,8 +456,7 @@ def _refresh_prediction_uncertainty(self, pred: Prediction) -> None:
     pred.tail_risk_score = float(tail_risk)
 
 def _apply_tail_risk_guard(self, pred: Prediction) -> None:
-    """Block actionable signals when adverse-tail probability is too high.
-    """
+    """Block actionable signals when adverse-tail probability is too high."""
     if pred.signal == Signal.HOLD:
         return
     conf = float(np.clip(getattr(pred, "confidence", 0.0), 0.0, 1.0))
@@ -486,8 +484,7 @@ def _apply_tail_risk_guard(self, pred: Prediction) -> None:
     )
 
 def _build_prediction_bands(self, pred: Prediction) -> None:
-    """Build per-step prediction intervals to visualize uncertainty.
-    """
+    """Build per-step prediction intervals to visualize uncertainty."""
     values = [
         float(v)
         for v in list(getattr(pred, "predicted_prices", []) or [])

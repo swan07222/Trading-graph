@@ -37,7 +37,7 @@ _SCORE_WEIGHTS = {
 
 @dataclass
 class BacktestTrade:
-    """Single trade record"""
+    """Single trade record."""
     entry_date: datetime
     exit_date: datetime | None
     stock_code: str
@@ -52,7 +52,7 @@ class BacktestTrade:
 
 @dataclass
 class SlippageModel:
-    """Realistic slippage based on order size and liquidity"""
+    """Realistic slippage based on order size and liquidity."""
     base_slippage: float = 0.001
     volume_impact: float = 0.1
 
@@ -129,7 +129,7 @@ class SpreadModel:
 
 @dataclass
 class BacktestResult:
-    """Complete backtest results"""
+    """Complete backtest results."""
     total_return: float
     excess_return: float
     sharpe_ratio: float
@@ -230,7 +230,7 @@ class BacktestOptimizationTrial:
 class Backtester:
     """Walk-Forward Backtesting with proper methodology."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.fetcher = DataFetcher()
         self.feature_engine = FeatureEngine()
 
@@ -403,8 +403,7 @@ class Backtester:
         initial_capital: float | None = None,
         top_k: int = 5,
     ) -> dict:
-        """Parameter sweep over walk-forward settings and execution assumptions.
-        """
+        """Parameter sweep over walk-forward settings and execution assumptions."""
         train_opts = sorted(
             {int(x) for x in (train_months_options or [6, 9, 12, 18]) if int(x) > 0}
         )
@@ -658,7 +657,7 @@ class Backtester:
         }
 
     def _get_stock_list(self, stock_codes: list[str] | None) -> list[str]:
-        """Get stock list with fallbacks"""
+        """Get stock list with fallbacks."""
         if stock_codes:
             return stock_codes
 
@@ -699,8 +698,7 @@ class Backtester:
         return base
 
     def _backtest_train_row_requirement(self, interval: str = "1d") -> tuple[int, int, int]:
-        """Return (sequence_length, label_horizon, min_train_rows) for backtest.
-        """
+        """Return (sequence_length, label_horizon, min_train_rows) for backtest."""
         seq_length = int(getattr(getattr(CONFIG, "model", None), "sequence_length", 60))
         seq_length = max(5, seq_length)
         label_horizon = self._resolve_backtest_horizon(interval=interval)
@@ -716,8 +714,7 @@ class Backtester:
         folds: list[tuple],
         min_train_rows: int,
     ) -> tuple[bool, int]:
-        """Check whether at least one fold has enough train rows to build sequences.
-        """
+        """Check whether at least one fold has enough train rows to build sequences."""
         best_rows_seen = 0
         for train_start, train_end, _, _ in folds:
             fold_best = 0
@@ -774,7 +771,7 @@ class Backtester:
         return all_data
 
     def _diagnose_data_issue(self, stocks: list[str]) -> str:
-        """Provide detailed diagnosis of data issues"""
+        """Provide detailed diagnosis of data issues."""
         issues = []
 
         issues.append("No valid data available for backtesting.\n")
@@ -807,7 +804,7 @@ class Backtester:
         train_months: int,
         test_months: int
     ) -> list[tuple]:
-        """Generate walk-forward folds with proper separation"""
+        """Generate walk-forward folds with proper separation."""
         folds = []
 
         embargo_days = 5  # default
@@ -1040,7 +1037,7 @@ class Backtester:
         preds: list | None = None,
         horizon: int | None = None,
     ) -> tuple[list[BacktestTrade], dict, dict]:
-        """Simulate trading with realistic costs"""
+        """Simulate trading with realistic costs."""
         slippage_model = SlippageModel()
         spread_model = SpreadModel()
         lot = int(get_lot_size(stock_code))
@@ -1291,7 +1288,7 @@ class Backtester:
         fold_accuracies: list[float],
         fold_results: list[dict]
     ) -> BacktestResult:
-        """Calculate comprehensive backtest metrics"""
+        """Calculate comprehensive backtest metrics."""
         safe_capital = float(capital)
         if not np.isfinite(safe_capital) or safe_capital <= 0:
             safe_capital = 1.0

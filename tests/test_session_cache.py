@@ -7,7 +7,7 @@ from config.settings import CONFIG
 from data.session_cache import SessionBarCache
 
 
-def test_session_cache_append_and_read(tmp_path):
+def test_session_cache_append_and_read(tmp_path) -> None:
     cache = SessionBarCache(root=tmp_path / "session_bars")
     symbol = "600519"
     interval = "1m"
@@ -36,7 +36,7 @@ def test_session_cache_append_and_read(tmp_path):
     assert symbol in symbols
 
 
-def test_session_cache_epoch_milliseconds_timestamp(tmp_path):
+def test_session_cache_epoch_milliseconds_timestamp(tmp_path) -> None:
     cache = SessionBarCache(root=tmp_path / "session_bars")
 
     ok = cache.append_bar(
@@ -59,7 +59,7 @@ def test_session_cache_epoch_milliseconds_timestamp(tmp_path):
     assert df.index[-1].year == 2023
 
 
-def test_session_cache_epoch_seconds_timestamp(tmp_path):
+def test_session_cache_epoch_seconds_timestamp(tmp_path) -> None:
     cache = SessionBarCache(root=tmp_path / "session_bars")
 
     ok = cache.append_bar(
@@ -82,7 +82,7 @@ def test_session_cache_epoch_seconds_timestamp(tmp_path):
     assert df.index[-1].year == 2023
 
 
-def test_session_cache_skips_immediate_duplicate_rows(tmp_path):
+def test_session_cache_skips_immediate_duplicate_rows(tmp_path) -> None:
     cache = SessionBarCache(root=tmp_path / "session_bars")
     bar = {
         "timestamp": "2026-02-12T09:30:00+00:00",
@@ -100,7 +100,7 @@ def test_session_cache_skips_immediate_duplicate_rows(tmp_path):
     assert len(df) == 1
 
 
-def test_session_cache_keeps_same_close_ohlc_refinement(tmp_path):
+def test_session_cache_keeps_same_close_ohlc_refinement(tmp_path) -> None:
     cache = SessionBarCache(root=tmp_path / "session_bars")
     symbol = "600519"
     interval = "1m"
@@ -132,7 +132,7 @@ def test_session_cache_keeps_same_close_ohlc_refinement(tmp_path):
     assert float(row["low"]) == 99.4
 
 
-def test_session_cache_normalizes_bad_numeric_inputs(tmp_path):
+def test_session_cache_normalizes_bad_numeric_inputs(tmp_path) -> None:
     cache = SessionBarCache(root=tmp_path / "session_bars")
     ok = cache.append_bar(
         "600519",
@@ -159,7 +159,7 @@ def test_session_cache_normalizes_bad_numeric_inputs(tmp_path):
     assert row["low"] <= row["close"]
 
 
-def test_session_cache_read_history_scrubs_outlier_jumps(tmp_path):
+def test_session_cache_read_history_scrubs_outlier_jumps(tmp_path) -> None:
     cache = SessionBarCache(root=tmp_path / "session_bars")
     symbol = "600519"
     interval = "1m"
@@ -200,7 +200,7 @@ def test_session_cache_read_history_scrubs_outlier_jumps(tmp_path):
     assert float(df["close"].max()) < 200.0
 
 
-def test_session_cache_prefers_recent_segment_after_scale_regime_jump(tmp_path):
+def test_session_cache_prefers_recent_segment_after_scale_regime_jump(tmp_path) -> None:
     cache = SessionBarCache(root=tmp_path / "session_bars")
     symbol = "601318"
     interval = "1m"
@@ -226,7 +226,7 @@ def test_session_cache_prefers_recent_segment_after_scale_regime_jump(tmp_path):
     assert float(df["close"].iloc[-1]) > 70.0
 
 
-def test_session_cache_rejects_outlier_append_write(tmp_path):
+def test_session_cache_rejects_outlier_append_write(tmp_path) -> None:
     cache = SessionBarCache(root=tmp_path / "session_bars")
     symbol = "600519"
     interval = "1m"
@@ -264,7 +264,7 @@ def test_session_cache_rejects_outlier_append_write(tmp_path):
     assert abs(float(df["close"].iloc[-1]) - 100.0) < 1e-9
 
 
-def test_session_cache_final_only_salvages_legacy_non_final_rows(tmp_path):
+def test_session_cache_final_only_salvages_legacy_non_final_rows(tmp_path) -> None:
     cache = SessionBarCache(root=tmp_path / "session_bars")
     symbol = "000333"
     interval = "1m"
@@ -305,7 +305,7 @@ def test_session_cache_final_only_salvages_legacy_non_final_rows(tmp_path):
     assert abs(float(df["close"].iloc[-1]) - 79.08) < 1e-9
 
 
-def test_session_cache_keeps_new_day_opening_gap_rows(tmp_path):
+def test_session_cache_keeps_new_day_opening_gap_rows(tmp_path) -> None:
     cache = SessionBarCache(root=tmp_path / "session_bars")
     symbol = "600519"
     interval = "1m"
@@ -346,7 +346,7 @@ def test_session_cache_keeps_new_day_opening_gap_rows(tmp_path):
     assert abs(float(df["close"].iloc[1]) - 112.1) < 1e-9
 
 
-def test_session_cache_describe_and_purge_realtime_rows(tmp_path):
+def test_session_cache_describe_and_purge_realtime_rows(tmp_path) -> None:
     cache = SessionBarCache(root=tmp_path / "session_bars")
     symbol = "600519"
     interval = "1m"
@@ -405,7 +405,7 @@ def test_session_cache_describe_and_purge_realtime_rows(tmp_path):
     assert str(df["source"].iloc[-1]).strip().lower() == "akshare"
 
 
-def test_session_cache_purge_realtime_rows_since_anchor(tmp_path):
+def test_session_cache_purge_realtime_rows_since_anchor(tmp_path) -> None:
     cache = SessionBarCache(root=tmp_path / "session_bars")
     symbol = "600519"
     interval = "1m"
@@ -455,7 +455,7 @@ def test_session_cache_purge_realtime_rows_since_anchor(tmp_path):
     assert src_vals == ["tencent_rt", "akshare"]
 
 
-def test_session_cache_upsert_history_frame_adds_akshare_rows(tmp_path):
+def test_session_cache_upsert_history_frame_adds_akshare_rows(tmp_path) -> None:
     cache = SessionBarCache(root=tmp_path / "session_bars")
     symbol = "600519"
     interval = "1m"
@@ -509,7 +509,7 @@ def test_session_cache_upsert_history_frame_adds_akshare_rows(tmp_path):
     assert abs(float(df["close"].iloc[-1]) - 100.5) < 1e-9
 
 
-def test_session_cache_append_compacts_when_row_cap_exceeded(tmp_path):
+def test_session_cache_append_compacts_when_row_cap_exceeded(tmp_path) -> None:
     cache = SessionBarCache(root=tmp_path / "session_bars")
     symbol = "600519"
     interval = "1d"
@@ -553,7 +553,7 @@ def test_session_cache_append_compacts_when_row_cap_exceeded(tmp_path):
         data_cfg.session_cache_max_file_mb = old_mb
 
 
-def test_session_cache_upsert_respects_row_limit_retention_policy(tmp_path):
+def test_session_cache_upsert_respects_row_limit_retention_policy(tmp_path) -> None:
     cache = SessionBarCache(root=tmp_path / "session_bars")
     symbol = "600519"
     interval = "1d"

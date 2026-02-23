@@ -12,7 +12,7 @@ def _load_module_size_gate_module():
     return module
 
 
-def test_collect_oversized_modules_flags_large_file(tmp_path: Path):
+def test_collect_oversized_modules_flags_large_file(tmp_path: Path) -> None:
     gate = _load_module_size_gate_module()
     py_file = tmp_path / "big.py"
     py_file.write_text(
@@ -25,7 +25,7 @@ def test_collect_oversized_modules_flags_large_file(tmp_path: Path):
     assert oversized == {normalized: 4}
 
 
-def test_module_size_baseline_roundtrip(tmp_path: Path):
+def test_module_size_baseline_roundtrip(tmp_path: Path) -> None:
     gate = _load_module_size_gate_module()
     baseline = tmp_path / "baseline.txt"
     sample = {"a.py": 1200, "b.py": 2000}
@@ -35,7 +35,7 @@ def test_module_size_baseline_roundtrip(tmp_path: Path):
     assert loaded == sample
 
 
-def test_module_size_collect_line_counts(tmp_path: Path):
+def test_module_size_collect_line_counts(tmp_path: Path) -> None:
     gate = _load_module_size_gate_module()
     py_file = tmp_path / "small.py"
     py_file.write_text("x = 1\ny = 2\n", encoding="utf-8")
@@ -44,7 +44,7 @@ def test_module_size_collect_line_counts(tmp_path: Path):
     assert counts[normalized] == 2
 
 
-def test_module_size_budget_roundtrip(tmp_path: Path):
+def test_module_size_budget_roundtrip(tmp_path: Path) -> None:
     gate = _load_module_size_gate_module()
     budget = tmp_path / "budget.json"
     sample = {"a.py": 1000, "b.py": 1500}

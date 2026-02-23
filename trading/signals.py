@@ -22,7 +22,7 @@ from models.predictor import Signal
 log = get_logger(__name__)
 
 class SignalConfidence(Enum):
-    """Signal confidence level"""
+    """Signal confidence level."""
     VERY_HIGH = "very_high"
     HIGH = "high"
     MEDIUM = "medium"
@@ -136,7 +136,7 @@ class SignalGenerator:
     """Generates trading signals by combining:
     - AI predictions (50% weight)
     - Technical analysis (30% weight)
-    - Sentiment analysis (20% weight)
+    - Sentiment analysis (20% weight).
 
     Uses weighted scoring to produce final signal with confidence levels.
 
@@ -169,7 +169,7 @@ class SignalGenerator:
     MIN_MODEL_AGREEMENT: float = 0.60
     MIN_SENTIMENT_SIGNIFICANT: float = 0.30
 
-    def __init__(self):
+    def __init__(self) -> None:
         """Initialize signal generator with lazy-loaded analyzers."""
         self.tech_analyzer = None
         self.sentiment_analyzer = None

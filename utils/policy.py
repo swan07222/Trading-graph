@@ -27,7 +27,7 @@ class TradePolicyEngine:
     Default policy file: config/security_policy.json
     """
 
-    def __init__(self, policy_path: Path | None = None):
+    def __init__(self, policy_path: Path | None = None) -> None:
         base = Path(getattr(CONFIG, "base_dir", Path(".")))
         self._path = Path(policy_path) if policy_path else (base / "config" / "security_policy.json")
         self._lock = threading.RLock()

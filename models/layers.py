@@ -9,7 +9,7 @@ import torch.nn.functional as F
 class PositionalEncoding(nn.Module):
     """Sinusoidal positional encoding for transformer models."""
 
-    def __init__(self, d_model: int, max_len: int = 512, dropout: float = 0.1):
+    def __init__(self, d_model: int, max_len: int = 512, dropout: float = 0.1) -> None:
         super().__init__()
         if d_model <= 0:
             raise ValueError(f"d_model must be positive, got {d_model}")
@@ -32,7 +32,7 @@ class PositionalEncoding(nn.Module):
         self.register_buffer("pe", pe.unsqueeze(0), persistent=False)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """x: (batch, seq_len, d_model)"""
+        """x: (batch, seq_len, d_model)."""
         x = x + self.pe[:, : x.size(1)]
         return self.dropout(x)
 
@@ -43,7 +43,7 @@ class MultiHeadAttention(nn.Module):
     for flash-attention / memory-efficient kernels.
     """
 
-    def __init__(self, d_model: int, num_heads: int = 8, dropout: float = 0.1):
+    def __init__(self, d_model: int, num_heads: int = 8, dropout: float = 0.1) -> None:
         super().__init__()
         if d_model % num_heads != 0:
             raise ValueError(
@@ -74,7 +74,7 @@ class MultiHeadAttention(nn.Module):
         """Args:
             x: (batch, seq_len, d_model)
             causal: if True, apply causal (lower-triangular) mask
-            mask: optional additive or boolean mask
+            mask: optional additive or boolean mask.
 
         Returns:
             output: (batch, seq_len, d_model)
@@ -126,7 +126,7 @@ class FeedForward(nn.Module):
         d_ff: int | None = None,
         dropout: float = 0.1,
         use_glu: bool = False,
-    ):
+    ) -> None:
         super().__init__()
         d_ff = d_ff or d_model * 4
 
@@ -150,9 +150,9 @@ class FeedForward(nn.Module):
         return self.net(x)
 
 class _SwiGLU(nn.Module):
-    """SwiGLU activation: SiLU(xW1) * xW2"""
+    """SwiGLU activation: SiLU(xW1) * xW2."""
 
-    def __init__(self, d_in: int, d_out: int):
+    def __init__(self, d_in: int, d_out: int) -> None:
         super().__init__()
         self.w1 = nn.Linear(d_in, d_out)
         self.w2 = nn.Linear(d_in, d_out)
@@ -169,7 +169,7 @@ class TransformerBlock(nn.Module):
         num_heads: int = 8,
         dropout: float = 0.1,
         causal: bool = False,
-    ):
+    ) -> None:
         super().__init__()
         self.causal = causal
 
@@ -204,7 +204,7 @@ class LSTMBlock(nn.Module):
         num_layers: int = 2,
         dropout: float = 0.3,
         bidirectional: bool = True,
-    ):
+    ) -> None:
         super().__init__()
         self.bidirectional = bidirectional
         self.output_size = hidden_size * (2 if bidirectional else 1)
@@ -241,7 +241,7 @@ class TemporalConvBlock(nn.Module):
         kernel_size: int = 3,
         dilation: int = 1,
         dropout: float = 0.2,
-    ):
+    ) -> None:
         super().__init__()
 
         self.padding = (kernel_size - 1) * dilation
@@ -269,7 +269,7 @@ class TemporalConvBlock(nn.Module):
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """x: (batch, channels, seq_len)"""
+        """x: (batch, channels, seq_len)."""
         residual = self.residual(x)
 
         out = F.pad(x, (self.padding, 0))  # causal left-pad
@@ -285,7 +285,7 @@ class TemporalConvBlock(nn.Module):
 class AttentionPooling(nn.Module):
     """Attention-based pooling to aggregate a sequence into a single vector."""
 
-    def __init__(self, hidden_size: int):
+    def __init__(self, hidden_size: int) -> None:
         super().__init__()
         bottleneck = max(1, hidden_size // 4)
         self.attention = nn.Sequential(
@@ -295,7 +295,7 @@ class AttentionPooling(nn.Module):
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """x: (batch, seq_len, hidden) -> (batch, hidden)"""
+        """x: (batch, seq_len, hidden) -> (batch, hidden)."""
         weights = self.attention(x)  # (batch, seq, 1)
         weights = F.softmax(weights, dim=1)
         return torch.sum(weights * x, dim=1)

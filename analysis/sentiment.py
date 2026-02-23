@@ -21,7 +21,7 @@ log = get_logger(__name__)
 
 @dataclass
 class NewsItem:
-    """News article"""
+    """News article."""
 
     title: str
     content: str
@@ -35,7 +35,7 @@ class NewsItem:
 
 @dataclass
 class SentimentResult:
-    """Sentiment analysis result"""
+    """Sentiment analysis result."""
 
     score: float
     confidence: float
@@ -136,7 +136,7 @@ class SentimentAnalyzer:
         self,
         use_bert: bool = False,
         hf_model: str = "IDEA-CCNL/Erlangshen-Roberta-110M-Sentiment",
-    ):
+    ) -> None:
         self.keyword_analyzer = KeywordSentimentAnalyzer()
         self._use_bert = bool(use_bert)
         self._hf = None
@@ -198,7 +198,7 @@ class NewsScraper:
     - Social sentiment from Chinese platforms
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         # Use optimized session from China network module
         try:
             from core.china_network import get_best_endpoint, get_optimized_session

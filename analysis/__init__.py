@@ -1,5 +1,4 @@
-"""Analysis Module - Technical, Sentiment, and Backtesting
-"""
+"""Analysis Module - Technical, Sentiment, and Backtesting."""
 
 try:
     from .technical import TechnicalAnalyzer

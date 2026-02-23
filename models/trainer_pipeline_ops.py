@@ -98,9 +98,8 @@ def train(
 ) -> dict:
     """Train complete pipeline:
     1) Classification ensemble for trading signals
-    2) Multi-step forecaster for AI-generated price curves
+    2) Multi-step forecaster for AI-generated price curves.
     """
-
     epochs = int(epochs or CONFIG.EPOCHS)
     batch_size = int(batch_size or CONFIG.BATCH_SIZE)
     interval = self._enforce_training_interval(interval)

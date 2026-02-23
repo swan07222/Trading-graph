@@ -51,7 +51,7 @@ class AutoTrader:
         engine: ExecutionEngine,
         predictor,
         watch_list: list[str],
-    ):
+    ) -> None:
         self._engine = engine
         self._predictor = predictor
         self._watch_list = list(watch_list)
@@ -70,7 +70,7 @@ class AutoTrader:
     # -----------------------------------------------------------------
     # -----------------------------------------------------------------
 
-    def set_mode(self, mode: AutoTradeMode):
+    def set_mode(self, mode: AutoTradeMode) -> None:
         """Change trading mode. Stops/starts scan loop as needed."""
         should_stop = False
         should_start = False
@@ -102,7 +102,7 @@ class AutoTrader:
         with self._lock:
             return self.state.mode
 
-    def start(self):
+    def start(self) -> None:
         """Start the auto-trader (uses current mode)."""
         with self._lock:
             if self.state.mode == AutoTradeMode.MANUAL:
@@ -117,7 +117,7 @@ class AutoTrader:
             self._notify_state_changed()
             log.info(f"Auto-trader started in {self.state.mode.value} mode")
 
-    def stop(self):
+    def stop(self) -> None:
         """Stop the auto-trader scan loop."""
         self._stop_loop()
         with self._lock:
@@ -125,12 +125,12 @@ class AutoTrader:
             self._notify_state_changed()
             log.info("Auto-trader stopped")
 
-    def update_watchlist(self, watch_list: list[str]):
+    def update_watchlist(self, watch_list: list[str]) -> None:
         """Update the watchlist (thread-safe)."""
         with self._lock:
             self._watch_list = list(watch_list)[:50]
 
-    def update_predictor(self, predictor):
+    def update_predictor(self, predictor) -> None:
         """Update the predictor instance (after model reload)."""
         with self._lock:
             self._predictor = predictor
@@ -304,7 +304,7 @@ class AutoTrader:
             log.info(f"Pending approval REJECTED: {action.stock_code}")
             return True
 
-    def pause(self, reason: str, duration_seconds: int = 0):
+    def pause(self, reason: str, duration_seconds: int = 0) -> None:
         """Pause auto-trading temporarily."""
         with self._lock:
             self.state.is_paused = True
@@ -318,7 +318,7 @@ class AutoTrader:
             log.info(f"Auto-trader paused: {reason}")
             self._notify_state_changed()
 
-    def resume(self):
+    def resume(self) -> None:
         """Resume auto-trading after pause."""
         with self._lock:
             self.state.is_paused = False
@@ -335,7 +335,7 @@ class AutoTrader:
         """Check if scan thread is alive."""
         return self._thread is not None and self._thread.is_alive()
 
-    def _start_loop(self):
+    def _start_loop(self) -> None:
         """Start the scan loop thread."""
         with self._loop_lock:
             if self._thread and self._thread.is_alive():
@@ -348,7 +348,7 @@ class AutoTrader:
             )
             self._thread.start()
 
-    def _stop_loop(self):
+    def _stop_loop(self) -> None:
         """Stop the scan loop thread."""
         with self._loop_lock:
             self._stop_event.set()
@@ -363,7 +363,7 @@ class AutoTrader:
     # Internal: main scan loop
     # -----------------------------------------------------------------
 
-    def _scan_loop(self):
+    def _scan_loop(self) -> None:
         """Main auto-trading scan loop.
 
         Runs on a dedicated worker thread. Each cycle:
@@ -460,7 +460,7 @@ class AutoTrader:
 
         return True
 
-    def _run_scan_cycle(self):
+    def _run_scan_cycle(self) -> None:
         """Execute one scan cycle: predict 鈫?filter 鈫?execute/queue.
         Called WITHOUT lock held (acquires as needed).
         """
@@ -805,7 +805,7 @@ class AutoTrader:
 
         return success
 
-    def _record_skip(self, pred, Signal, reason: str):
+    def _record_skip(self, pred, Signal, reason: str) -> None:
         """Record a skipped signal. MUST be called with _lock held."""
         code = getattr(pred, 'stock_code', '?')
         sig = getattr(pred, 'signal', Signal.HOLD)
@@ -831,7 +831,7 @@ class AutoTrader:
     # Internal: notification helpers
     # -----------------------------------------------------------------
 
-    def _notify_action(self, action: AutoTradeAction):
+    def _notify_action(self, action: AutoTradeAction) -> None:
         """Notify UI of an action."""
         if self.on_action:
             try:
@@ -839,7 +839,7 @@ class AutoTrader:
             except Exception as e:
                 log.debug(f"Action callback error: {e}")
 
-    def _notify_state_changed(self):
+    def _notify_state_changed(self) -> None:
         """Notify UI of state change."""
         if self.on_state_changed:
             try:
@@ -847,7 +847,7 @@ class AutoTrader:
             except Exception as e:
                 log.debug(f"State callback error: {e}")
 
-    def _notify_pending(self, action: AutoTradeAction):
+    def _notify_pending(self, action: AutoTradeAction) -> None:
         """Notify UI of pending approval."""
         if self.on_pending_approval:
             try:
@@ -855,7 +855,7 @@ class AutoTrader:
             except Exception as e:
                 log.debug(f"Pending callback error: {e}")
 
-    def _sleep_interruptible(self, seconds: float):
+    def _sleep_interruptible(self, seconds: float) -> None:
         """Sleep that can be interrupted by stop event."""
         end = time.time() + seconds
         while time.time() < end and not self._stop_event.is_set():

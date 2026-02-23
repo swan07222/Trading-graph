@@ -12,7 +12,7 @@ def _load_typecheck_gate_module():
     return module
 
 
-def test_parse_mypy_errors_extracts_stable_issue_keys():
+def test_parse_mypy_errors_extracts_stable_issue_keys() -> None:
     gate = _load_typecheck_gate_module()
     raw = (
         "trading\\\\alerts.py:321: error: Item \"None\" of \"datetime | None\" "
@@ -26,7 +26,7 @@ def test_parse_mypy_errors_extracts_stable_issue_keys():
     ) in out
 
 
-def test_baseline_roundtrip(tmp_path: Path):
+def test_baseline_roundtrip(tmp_path: Path) -> None:
     gate = _load_typecheck_gate_module()
     baseline_path = tmp_path / "baseline.txt"
     sample = {
@@ -39,7 +39,7 @@ def test_baseline_roundtrip(tmp_path: Path):
     assert loaded == sample
 
 
-def test_main_accepts_existing_empty_baseline(tmp_path: Path, monkeypatch):
+def test_main_accepts_existing_empty_baseline(tmp_path: Path, monkeypatch) -> None:
     gate = _load_typecheck_gate_module()
     baseline_path = tmp_path / "baseline.txt"
     gate.save_baseline_entries(baseline_path, set())
@@ -55,7 +55,7 @@ def test_main_accepts_existing_empty_baseline(tmp_path: Path, monkeypatch):
     assert gate.main() == 0
 
 
-def test_run_mypy_batches_and_aggregates(monkeypatch):
+def test_run_mypy_batches_and_aggregates(monkeypatch) -> None:
     gate = _load_typecheck_gate_module()
     monkeypatch.setattr(gate, "DEFAULT_BATCH_SIZE", 2)
 
@@ -82,7 +82,7 @@ def test_run_mypy_batches_and_aggregates(monkeypatch):
     assert "b.py:7:misc:demo failure" in issues
 
 
-def test_run_mypy_stops_on_fatal_batch_error(monkeypatch):
+def test_run_mypy_stops_on_fatal_batch_error(monkeypatch) -> None:
     gate = _load_typecheck_gate_module()
     monkeypatch.setattr(gate, "DEFAULT_BATCH_SIZE", 1)
 

@@ -1,5 +1,6 @@
 import threading
 from types import SimpleNamespace
+from typing import NoReturn
 
 import numpy as np
 import pandas as pd
@@ -9,11 +10,11 @@ from config.settings import CONFIG
 from models.predictor import Prediction, Predictor, Signal
 
 
-def _touch(path):
+def _touch(path) -> None:
     path.write_bytes(b"x")
 
 
-def test_forecaster_checkpoint_prefers_same_interval(tmp_path):
+def test_forecaster_checkpoint_prefers_same_interval(tmp_path) -> None:
     _touch(tmp_path / "forecast_1d_5.pt")
     _touch(tmp_path / "forecast_1m_30.pt")
     _touch(tmp_path / "forecast_1m_120.pt")
@@ -38,7 +39,7 @@ class _DummyForecaster:
         return returns, conf
 
 
-def test_generate_forecast_forecaster_path_matches_requested_horizon():
+def test_generate_forecast_forecaster_path_matches_requested_horizon() -> None:
     predictor = Predictor.__new__(Predictor)
     predictor.forecaster = _DummyForecaster()
     predictor.ensemble = None
@@ -54,7 +55,7 @@ def test_generate_forecast_forecaster_path_matches_requested_horizon():
     assert all(float(v) > 0 for v in out)
 
 
-def test_generate_forecast_forecaster_tail_extension_is_not_flat():
+def test_generate_forecast_forecaster_tail_extension_is_not_flat() -> None:
     predictor = Predictor.__new__(Predictor)
     predictor.forecaster = _DummyForecaster()
     predictor.ensemble = None
@@ -79,7 +80,7 @@ class _DummyEnsemble:
         return SimpleNamespace(probabilities=[0.2, 0.3, 0.5])
 
 
-def test_generate_forecast_fallback_uses_sequence_signature():
+def test_generate_forecast_fallback_uses_sequence_signature() -> None:
     predictor = Predictor.__new__(Predictor)
     predictor.forecaster = None
     predictor.ensemble = _DummyEnsemble()
@@ -107,7 +108,7 @@ def test_generate_forecast_fallback_uses_sequence_signature():
     assert not np.allclose(out_a, out_b)
 
 
-def test_generate_forecast_last_resort_without_models_is_not_flat():
+def test_generate_forecast_last_resort_without_models_is_not_flat() -> None:
     predictor = Predictor.__new__(Predictor)
     predictor.forecaster = None
     predictor.ensemble = None
@@ -127,7 +128,7 @@ def test_generate_forecast_last_resort_without_models_is_not_flat():
     assert np.std(np.array(out, dtype=float)) > 1e-6
 
 
-def test_generate_forecast_seed_context_differentiates_same_signature():
+def test_generate_forecast_seed_context_differentiates_same_signature() -> None:
     predictor = Predictor.__new__(Predictor)
     predictor.forecaster = None
     predictor.ensemble = _DummyEnsemble()
@@ -172,7 +173,7 @@ class _ConstantUpForecaster:
         return returns, conf
 
 
-def test_generate_forecast_neutral_mode_stays_close_to_price():
+def test_generate_forecast_neutral_mode_stays_close_to_price() -> None:
     predictor = Predictor.__new__(Predictor)
     predictor.forecaster = None
     predictor.ensemble = _NeutralEnsemble()
@@ -192,7 +193,7 @@ def test_generate_forecast_neutral_mode_stays_close_to_price():
     assert max_dev <= 0.015
 
 
-def test_generate_forecast_neutral_forecaster_avoids_one_way_tail():
+def test_generate_forecast_neutral_forecaster_avoids_one_way_tail() -> None:
     predictor = Predictor.__new__(Predictor)
     predictor.forecaster = _ConstantUpForecaster()
     predictor.ensemble = _NeutralEnsemble()
@@ -220,7 +221,7 @@ def test_generate_forecast_neutral_forecaster_avoids_one_way_tail():
         assert flip_ratio < 0.80
 
 
-def test_generate_forecast_news_bias_tilts_curve_direction():
+def test_generate_forecast_news_bias_tilts_curve_direction() -> None:
     predictor = Predictor.__new__(Predictor)
     predictor.interval = "1m"
     predictor.forecaster = None
@@ -253,7 +254,7 @@ def test_generate_forecast_news_bias_tilts_curve_direction():
     assert float(out_pos[-1]) > float(out_neg[-1])
 
 
-def test_apply_news_influence_rebalances_probs_and_can_upgrade_hold():
+def test_apply_news_influence_rebalances_probs_and_can_upgrade_hold() -> None:
     predictor = Predictor.__new__(Predictor)
     predictor.interval = "1m"
     predictor._get_news_sentiment = lambda *_args, **_kwargs: (0.8, 0.9, 12)
@@ -277,7 +278,7 @@ def test_apply_news_influence_rebalances_probs_and_can_upgrade_hold():
     assert abs((pred.prob_up + pred.prob_neutral + pred.prob_down) - 1.0) < 1e-9
 
 
-def test_prediction_cache_is_contextual_and_immutable():
+def test_prediction_cache_is_contextual_and_immutable() -> None:
     predictor = Predictor.__new__(Predictor)
     predictor._cache_lock = threading.Lock()
     predictor._pred_cache = {}
@@ -300,7 +301,7 @@ def test_prediction_cache_is_contextual_and_immutable():
     assert predictor._get_cached_prediction("600519:1d:5") is None
 
 
-def test_prediction_cache_ttl_is_shorter_for_realtime_intraday():
+def test_prediction_cache_ttl_is_shorter_for_realtime_intraday() -> None:
     predictor = Predictor.__new__(Predictor)
     predictor._cache_lock = threading.Lock()
     predictor._pred_cache = {}
@@ -322,7 +323,7 @@ def test_prediction_cache_ttl_is_shorter_for_realtime_intraday():
     assert predictor._get_cached_prediction("600519:1m:30:rt", ttl=1.2) is None
 
 
-def test_cache_ttl_profile_prefers_short_realtime_window():
+def test_cache_ttl_profile_prefers_short_realtime_window() -> None:
     predictor = Predictor.__new__(Predictor)
     predictor._CACHE_TTL = 5.0
     predictor._CACHE_TTL_REALTIME = 1.2
@@ -332,7 +333,7 @@ def test_cache_ttl_profile_prefers_short_realtime_window():
     assert predictor._get_cache_ttl(use_realtime=True, interval="1d") == 2.0
 
 
-def test_sanitize_history_df_repairs_zero_open_rows():
+def test_sanitize_history_df_repairs_zero_open_rows() -> None:
     predictor = Predictor.__new__(Predictor)
     idx = pd.to_datetime(
         [
@@ -360,7 +361,7 @@ def test_sanitize_history_df_repairs_zero_open_rows():
     assert (out["low"] <= out[["open", "close"]].min(axis=1)).all()
 
 
-def test_sanitize_history_df_drops_non_session_intraday_rows():
+def test_sanitize_history_df_drops_non_session_intraday_rows() -> None:
     predictor = Predictor.__new__(Predictor)
     idx = pd.to_datetime(
         [
@@ -390,7 +391,7 @@ def test_sanitize_history_df_drops_non_session_intraday_rows():
 
 
 class _BatchOnlyEnsemble:
-    def __init__(self):
+    def __init__(self) -> None:
         self.batch_calls = 0
         self.single_calls = 0
 
@@ -409,17 +410,17 @@ class _BatchOnlyEnsemble:
             )
         return out
 
-    def predict(self, _x):
+    def predict(self, _x) -> NoReturn:
         self.single_calls += 1
         raise AssertionError("single predict should not be called")
 
 
 class _BatchFailSingleOkEnsemble:
-    def __init__(self):
+    def __init__(self) -> None:
         self.batch_calls = 0
         self.single_calls = 0
 
-    def predict_batch(self, X, batch_size=1024):
+    def predict_batch(self, X, batch_size=1024) -> NoReturn:
         self.batch_calls += 1
         raise RuntimeError("batch failure")
 
@@ -479,9 +480,9 @@ def _mk_quick_predictor(ensemble) -> Predictor:
     return predictor
 
 
-def test_realtime_forecast_curve_defaults_to_30_on_latest_1680_bars(monkeypatch):
+def test_realtime_forecast_curve_defaults_to_30_on_latest_1680_bars(monkeypatch) -> None:
     class _Fetcher:
-        def __init__(self):
+        def __init__(self) -> None:
             self.last_bars = 0
 
         def get_history(self, _code, interval, bars, use_cache=True, update_db=True):
@@ -499,7 +500,7 @@ def test_realtime_forecast_curve_defaults_to_30_on_latest_1680_bars(monkeypatch)
                 }
             )
 
-        def get_realtime(self, _code):
+        def get_realtime(self, _code) -> None:
             return None
 
     class _EmptyCache:
@@ -555,7 +556,7 @@ def test_realtime_forecast_curve_defaults_to_30_on_latest_1680_bars(monkeypatch)
     assert len(predicted) == 30
 
 
-def test_realtime_forecast_curve_merges_partial_session_bars(monkeypatch):
+def test_realtime_forecast_curve_merges_partial_session_bars(monkeypatch) -> None:
     class _Fetcher:
         def get_history(self, _code, interval, bars, use_cache=True, update_db=True):  # noqa: ARG002
             n = int(bars)
@@ -573,7 +574,7 @@ def test_realtime_forecast_curve_merges_partial_session_bars(monkeypatch):
                 index=idx,
             )
 
-        def get_realtime(self, _code):
+        def get_realtime(self, _code) -> None:
             return None
 
     captured = {"final_only": True}
@@ -630,7 +631,7 @@ def test_realtime_forecast_curve_merges_partial_session_bars(monkeypatch):
     assert len(predicted) == 30
 
 
-def test_predict_quick_batch_uses_batched_ensemble_path():
+def test_predict_quick_batch_uses_batched_ensemble_path() -> None:
     ensemble = _BatchOnlyEnsemble()
     predictor = _mk_quick_predictor(ensemble)
 
@@ -642,7 +643,7 @@ def test_predict_quick_batch_uses_batched_ensemble_path():
     assert all(float(p.confidence) > 0.7 for p in out)
 
 
-def test_predict_quick_batch_falls_back_to_single_predict():
+def test_predict_quick_batch_falls_back_to_single_predict() -> None:
     ensemble = _BatchFailSingleOkEnsemble()
     predictor = _mk_quick_predictor(ensemble)
 
@@ -654,7 +655,7 @@ def test_predict_quick_batch_falls_back_to_single_predict():
     assert all(float(p.confidence) > 0.7 for p in out)
 
 
-def test_predict_uses_short_history_bootstrap_when_intraday_history_is_short():
+def test_predict_uses_short_history_bootstrap_when_intraday_history_is_short() -> None:
     predictor = Predictor.__new__(Predictor)
     predictor._predict_lock = threading.RLock()
     predictor.interval = "1m"
@@ -706,7 +707,7 @@ def test_predict_uses_short_history_bootstrap_when_intraday_history_is_short():
     assert not any("Insufficient data:" in w for w in pred.warnings)
 
 
-def test_predict_populates_minimal_snapshot_when_all_history_paths_are_short():
+def test_predict_populates_minimal_snapshot_when_all_history_paths_are_short() -> None:
     predictor = Predictor.__new__(Predictor)
     predictor._predict_lock = threading.RLock()
     predictor.interval = "1m"
@@ -740,7 +741,7 @@ def test_predict_populates_minimal_snapshot_when_all_history_paths_are_short():
     assert any("Insufficient data:" in w for w in pred.warnings)
 
 
-def test_predict_uses_short_history_bootstrap_before_minimal_snapshot():
+def test_predict_uses_short_history_bootstrap_before_minimal_snapshot() -> None:
     predictor = Predictor.__new__(Predictor)
     predictor._predict_lock = threading.RLock()
     predictor.interval = "1m"
@@ -779,7 +780,7 @@ def test_predict_uses_short_history_bootstrap_before_minimal_snapshot():
     assert not any("Insufficient data:" in w for w in pred.warnings)
 
 
-def test_short_history_bootstrap_marks_fallback_and_suppresses_direction_by_default():
+def test_short_history_bootstrap_marks_fallback_and_suppresses_direction_by_default() -> None:
     predictor = Predictor.__new__(Predictor)
     predictor._get_stock_name = lambda _code, _df: "Demo"
     predictor._refresh_prediction_uncertainty = lambda _pred: None
@@ -811,7 +812,7 @@ def test_short_history_bootstrap_marks_fallback_and_suppresses_direction_by_defa
         CONFIG.precision.allow_short_history_directional_signals = old_flag
 
 
-def test_short_history_bootstrap_allows_direction_when_policy_opted_in():
+def test_short_history_bootstrap_allows_direction_when_policy_opted_in() -> None:
     predictor = Predictor.__new__(Predictor)
     predictor._get_stock_name = lambda _code, _df: "Demo"
     predictor._refresh_prediction_uncertainty = lambda _pred: None
@@ -849,7 +850,7 @@ def test_short_history_bootstrap_allows_direction_when_policy_opted_in():
         CONFIG.precision.allow_short_history_directional_signals = old_flag
 
 
-def test_apply_ensemble_result_clips_and_normalizes_probabilities():
+def test_apply_ensemble_result_clips_and_normalizes_probabilities() -> None:
     predictor = Predictor.__new__(Predictor)
     predictor._high_precision = {"enabled": 0.0}
 
@@ -870,7 +871,7 @@ def test_apply_ensemble_result_clips_and_normalizes_probabilities():
     assert abs((pred.prob_down + pred.prob_neutral + pred.prob_up) - 1.0) < 1e-9
 
 
-def test_determine_signal_requires_edge_in_sideways_regime():
+def test_determine_signal_requires_edge_in_sideways_regime() -> None:
     predictor = Predictor.__new__(Predictor)
     pred = Prediction(
         stock_code="600519",
@@ -887,7 +888,7 @@ def test_determine_signal_requires_edge_in_sideways_regime():
     assert out == Signal.HOLD
 
 
-def test_generate_reasons_keeps_existing_gate_warnings():
+def test_generate_reasons_keeps_existing_gate_warnings() -> None:
     predictor = Predictor.__new__(Predictor)
     pred = Prediction(
         stock_code="600519",
@@ -908,7 +909,7 @@ def test_generate_reasons_keeps_existing_gate_warnings():
     )
 
 
-def test_uncertainty_profile_builds_prediction_bands():
+def test_uncertainty_profile_builds_prediction_bands() -> None:
     predictor = Predictor.__new__(Predictor)
     pred = Prediction(
         stock_code="600519",
@@ -944,7 +945,7 @@ def test_uncertainty_profile_builds_prediction_bands():
     )
 
 
-def test_tail_risk_guard_filters_fragile_actionable_signal():
+def test_tail_risk_guard_filters_fragile_actionable_signal() -> None:
     predictor = Predictor.__new__(Predictor)
     pred = Prediction(
         stock_code="600519",

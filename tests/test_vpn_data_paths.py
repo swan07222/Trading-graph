@@ -4,7 +4,7 @@ from data.discovery import DiscoveredStock, UniversalStockDiscovery
 from data.fetcher import TencentQuoteSource
 
 
-def test_tencent_daily_kline_parser():
+def test_tencent_daily_kline_parser() -> None:
     payload = (
         '{"code":0,"msg":"","data":{"sh600519":{"qfqday":['
         '["2026-02-10","1000","1010","1015","995","12345"],'
@@ -17,7 +17,7 @@ def test_tencent_daily_kline_parser():
     assert float(df["close"].iloc[-1]) == 1020.0
 
 
-def test_tencent_daily_kline_parser_jsonp_wrapper():
+def test_tencent_daily_kline_parser_jsonp_wrapper() -> None:
     payload = (
         'jQuery12345({"code":0,"msg":"","data":{"sz000858":{"qfqday":['
         '["2026-02-11","1200","1210","1220","1190","20000"]'
@@ -29,7 +29,7 @@ def test_tencent_daily_kline_parser_jsonp_wrapper():
     assert float(df["close"].iloc[0]) == 1210.0
 
 
-def test_discovery_tencent_semicolon_response(monkeypatch):
+def test_discovery_tencent_semicolon_response(monkeypatch) -> None:
     class _Resp:
         status_code = 200
         text = (
@@ -61,7 +61,7 @@ def test_discovery_tencent_semicolon_response(monkeypatch):
     assert codes == ["000858", "600519"]
 
 
-def test_tencent_realtime_bse_30pct_move_not_filtered():
+def test_tencent_realtime_bse_30pct_move_not_filtered() -> None:
     src = TencentQuoteSource()
 
     parts = ["0"] * 40
@@ -88,7 +88,7 @@ def test_tencent_realtime_bse_30pct_move_not_filtered():
     assert float(out["430001"].price) == 13.0
 
 
-def test_tencent_realtime_batch_parses_semicolon_single_line_payload():
+def test_tencent_realtime_batch_parses_semicolon_single_line_payload() -> None:
     src = TencentQuoteSource()
 
     def _make_payload(name: str, price: float, prev_close: float) -> str:

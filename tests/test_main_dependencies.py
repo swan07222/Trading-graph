@@ -5,7 +5,7 @@ import pytest
 import main
 
 
-def test_check_dependencies_gui_mode_skips_ml_stack(monkeypatch):
+def test_check_dependencies_gui_mode_skips_ml_stack(monkeypatch) -> None:
     seen = []
 
     def fake_find_spec(name):
@@ -24,7 +24,7 @@ def test_check_dependencies_gui_mode_skips_ml_stack(monkeypatch):
     assert "sklearn" not in seen
 
 
-def test_check_dependencies_ml_mode_requires_ml_stack(monkeypatch, capsys):
+def test_check_dependencies_ml_mode_requires_ml_stack(monkeypatch, capsys) -> None:
     def fake_find_spec(name):
         if name in {"psutil", "numpy", "pandas", "sklearn", "cryptography"}:
             return types.SimpleNamespace()
@@ -38,7 +38,7 @@ def test_check_dependencies_ml_mode_requires_ml_stack(monkeypatch, capsys):
     assert "torch" in out
 
 
-def test_check_dependencies_live_mode_requires_easytrader(monkeypatch, capsys):
+def test_check_dependencies_live_mode_requires_easytrader(monkeypatch, capsys) -> None:
     def fake_find_spec(name):
         if name in {"psutil", "cryptography"}:
             return types.SimpleNamespace()
@@ -52,29 +52,29 @@ def test_check_dependencies_live_mode_requires_easytrader(monkeypatch, capsys):
     assert "easytrader" in out
 
 
-def test_parse_positive_int_csv_rejects_invalid_values():
+def test_parse_positive_int_csv_rejects_invalid_values() -> None:
     with pytest.raises(ValueError, match="--opt-train-months"):
         main._parse_positive_int_csv("12,foo,0", "--opt-train-months")
 
 
-def test_parse_probability_csv_rejects_out_of_range():
+def test_parse_probability_csv_rejects_out_of_range() -> None:
     with pytest.raises(ValueError, match="--opt-min-confidence"):
         main._parse_probability_csv("0.6,1.2", "--opt-min-confidence")
 
 
-def test_ensure_backtest_optimize_success_raises_on_failed_status():
+def test_ensure_backtest_optimize_success_raises_on_failed_status() -> None:
     with pytest.raises(RuntimeError, match="failed"):
         main._ensure_backtest_optimize_success(
             {"status": "failed", "errors": ["boom"]}
         )
 
 
-def test_require_positive_int_rejects_non_positive_values():
+def test_require_positive_int_rejects_non_positive_values() -> None:
     with pytest.raises(ValueError, match="--opt-top-k"):
         main._require_positive_int(0, "--opt-top-k")
 
 
-def test_health_gate_violations_for_unhealthy_report():
+def test_health_gate_violations_for_unhealthy_report() -> None:
     violations = main._health_gate_violations(
         {
             "status": "degraded",
@@ -89,12 +89,12 @@ def test_health_gate_violations_for_unhealthy_report():
     assert "slo_pass=false" in violations
 
 
-def test_ensure_health_gate_from_json_rejects_invalid_payload():
+def test_ensure_health_gate_from_json_rejects_invalid_payload() -> None:
     with pytest.raises(RuntimeError, match="valid JSON"):
         main._ensure_health_gate_from_json("{not-json}")
 
 
-def test_doctor_gate_violations_detect_missing_readiness():
+def test_doctor_gate_violations_detect_missing_readiness() -> None:
     violations = main._doctor_gate_violations(
         {
             "dependencies": {
@@ -117,7 +117,7 @@ def test_doctor_gate_violations_detect_missing_readiness():
     assert any(v.startswith("config_warnings=") for v in violations)
 
 
-def test_doctor_gate_violations_detect_live_readiness_failures():
+def test_doctor_gate_violations_detect_live_readiness_failures() -> None:
     violations = main._doctor_gate_violations(
         {
             "dependencies": {

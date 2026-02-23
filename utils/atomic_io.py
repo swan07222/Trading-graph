@@ -392,8 +392,7 @@ def _sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 def write_checksum_sidecar(path: str | Path) -> Path:
-    """Write SHA-256 sidecar for the artifact and return sidecar path.
-    """
+    """Write SHA-256 sidecar for the artifact and return sidecar path."""
     src = Path(path)
     sidecar = artifact_checksum_path(src)
     payload = f"{_sha256_file(src)}\n"

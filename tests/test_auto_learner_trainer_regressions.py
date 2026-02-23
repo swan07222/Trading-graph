@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
+from typing import NoReturn
 
 import numpy as np
 import pandas as pd
@@ -14,13 +15,13 @@ from models.trainer import Trainer
 from utils.cancellation import CancelledException
 
 
-def test_auto_cycle_small_batch_threshold_is_capped():
+def test_auto_cycle_small_batch_threshold_is_capped() -> None:
     learner = ContinuousLearner.__new__(ContinuousLearner)
     learner.progress = LearningProgress()
     learner.progress.training_mode = "auto"
 
     class _Rotator:
-        def __init__(self):
+        def __init__(self) -> None:
             self.processed_count = 0
             self.pool_size = 2
 
@@ -29,14 +30,14 @@ def test_auto_cycle_small_batch_threshold_is_capped():
         ):
             return ["000001", "000002"][: int(max_stocks)]
 
-        def mark_failed(self, code):  # noqa: ARG002
+        def mark_failed(self, code) -> None:  # noqa: ARG002
             return None
 
-        def mark_processed(self, codes):  # noqa: ARG002
+        def mark_processed(self, codes) -> None:  # noqa: ARG002
             return None
 
     class _Replay:
-        def __len__(self):
+        def __len__(self) -> int:
             return 0
 
         def sample(self, n):  # noqa: ARG002
@@ -92,13 +93,13 @@ def test_auto_cycle_small_batch_threshold_is_capped():
     assert finalized["count"] == 1
 
 
-def test_auto_cycle_rejects_when_trainer_quality_gate_fails():
+def test_auto_cycle_rejects_when_trainer_quality_gate_fails() -> None:
     learner = ContinuousLearner.__new__(ContinuousLearner)
     learner.progress = LearningProgress()
     learner.progress.training_mode = "auto"
 
     class _Rotator:
-        def __init__(self):
+        def __init__(self) -> None:
             self.processed_count = 0
             self.pool_size = 2
 
@@ -107,14 +108,14 @@ def test_auto_cycle_rejects_when_trainer_quality_gate_fails():
         ):
             return ["000001", "000002"][: int(max_stocks)]
 
-        def mark_failed(self, code):  # noqa: ARG002
+        def mark_failed(self, code) -> None:  # noqa: ARG002
             return None
 
-        def mark_processed(self, codes):  # noqa: ARG002
+        def mark_processed(self, codes) -> None:  # noqa: ARG002
             return None
 
     class _Replay:
-        def __len__(self):
+        def __len__(self) -> int:
             return 0
 
         def sample(self, n):  # noqa: ARG002
@@ -147,7 +148,7 @@ def test_auto_cycle_rejects_when_trainer_quality_gate_fails():
 
     finalized = {"accepted": None}
 
-    def _should_not_validate(*_a, **_k):
+    def _should_not_validate(*_a, **_k) -> NoReturn:
         raise AssertionError("holdout validation should be skipped")
 
     learner._ensure_holdout = lambda *_a, **_k: None
@@ -192,7 +193,7 @@ def test_auto_cycle_rejects_when_trainer_quality_gate_fails():
     assert learner.progress.model_was_rejected is True
 
 
-def test_trainer_metadata_uses_split_survivors(monkeypatch):
+def test_trainer_metadata_uses_split_survivors(monkeypatch) -> None:
     import models.trainer as trainer_mod
 
     trainer = trainer_mod.Trainer()
@@ -254,14 +255,14 @@ def test_trainer_metadata_uses_split_survivors(monkeypatch):
     monkeypatch.setattr(trainer, "_train_forecaster", lambda *_a, **_k: False)
 
     class _DummyEnsemble:
-        def __init__(self, input_size, model_names=None):  # noqa: ARG002
+        def __init__(self, input_size, model_names=None) -> None:  # noqa: ARG002
             self.input_size = int(input_size)
             self.models = {"dummy": object()}
             self.interval = "1m"
             self.prediction_horizon = 30
             self.trained_stock_codes = []
 
-        def load(self, path):  # noqa: ARG002
+        def load(self, path) -> bool:  # noqa: ARG002
             return False
 
         def train(
@@ -278,7 +279,7 @@ def test_trainer_metadata_uses_split_survivors(monkeypatch):
         ):  # noqa: ARG002
             return {"dummy": {"val_acc": [0.62]}}
 
-        def save(self, path):  # noqa: ARG002
+        def save(self, path) -> None:  # noqa: ARG002
             return None
 
     monkeypatch.setattr(trainer_mod, "EnsembleModel", _DummyEnsemble)
@@ -299,7 +300,7 @@ def test_trainer_metadata_uses_split_survivors(monkeypatch):
     assert trainer.ensemble.trained_stock_codes == ["AAA"]
 
 
-def test_split_and_fit_scaler_refits_on_feature_mismatch(monkeypatch):
+def test_split_and_fit_scaler_refits_on_feature_mismatch(monkeypatch) -> None:
     trainer = Trainer()
     trainer._skip_scaler_fit = True
 
@@ -309,7 +310,7 @@ def test_split_and_fit_scaler_refits_on_feature_mismatch(monkeypatch):
         is_fitted = True
         n_features = 99
 
-        def fit_scaler(self, features, interval=None, horizon=None):
+        def fit_scaler(self, features, interval=None, horizon=None) -> None:
             fit_calls.append((features.shape, interval, horizon))
 
     trainer.processor = _Processor()
@@ -341,7 +342,7 @@ def test_split_and_fit_scaler_refits_on_feature_mismatch(monkeypatch):
     assert len(fit_calls) == 1
 
 
-def test_train_forecaster_raises_when_stop_requested():
+def test_train_forecaster_raises_when_stop_requested() -> None:
     trainer = Trainer()
 
     class _Stop:
@@ -361,7 +362,7 @@ def test_train_forecaster_raises_when_stop_requested():
         )
 
 
-def test_trainer_prepare_data_forces_1m_and_minimum_lookback(monkeypatch):
+def test_trainer_prepare_data_forces_1m_and_minimum_lookback(monkeypatch) -> None:
     trainer = Trainer()
     seq_len = int(CONFIG.SEQUENCE_LENGTH)
     n_feat = 3
@@ -434,7 +435,7 @@ def test_trainer_prepare_data_forces_1m_and_minimum_lookback(monkeypatch):
     assert int(captured["bars"]) >= 10080
 
 
-def test_trainer_normalize_model_names_uses_all_five_defaults():
+def test_trainer_normalize_model_names_uses_all_five_defaults() -> None:
     expected = ["lstm", "gru", "tcn", "transformer", "hybrid"]
     assert Trainer._normalize_model_names(None) == expected
     assert Trainer._normalize_model_names(["LSTM", "gru", "lstm", "  "]) == [
@@ -443,7 +444,7 @@ def test_trainer_normalize_model_names_uses_all_five_defaults():
     ]
 
 
-def test_trainer_incremental_adds_missing_default_models(monkeypatch, tmp_path):
+def test_trainer_incremental_adds_missing_default_models(monkeypatch, tmp_path) -> None:
     import models.trainer as trainer_mod
 
     trainer = trainer_mod.Trainer()
@@ -512,7 +513,7 @@ def test_trainer_incremental_adds_missing_default_models(monkeypatch, tmp_path):
     monkeypatch.setattr(trainer_mod.CONFIG, "MODEL_DIR", model_dir, raising=False)
 
     class _DummyEnsemble:
-        def __init__(self, input_size, model_names=None):  # noqa: ARG002
+        def __init__(self, input_size, model_names=None) -> None:  # noqa: ARG002
             self.input_size = int(input_size)
             self.models = {"lstm": object()}
             self.weights = {"lstm": 1.0}
@@ -522,15 +523,15 @@ def test_trainer_incremental_adds_missing_default_models(monkeypatch, tmp_path):
             self.added: list[str] = []
             self.normalized = False
 
-        def load(self, path):  # noqa: ARG002
+        def load(self, path) -> bool:  # noqa: ARG002
             return True
 
-        def _init_model(self, name):
+        def _init_model(self, name) -> None:
             self.models[str(name)] = object()
             self.weights[str(name)] = 1.0
             self.added.append(str(name))
 
-        def _normalize_weights(self):
+        def _normalize_weights(self) -> None:
             self.normalized = True
 
         def train(
@@ -547,7 +548,7 @@ def test_trainer_incremental_adds_missing_default_models(monkeypatch, tmp_path):
         ):
             return {"dummy": {"val_acc": [0.6]}}
 
-        def save(self, path):  # noqa: ARG002
+        def save(self, path) -> None:  # noqa: ARG002
             return None
 
     monkeypatch.setattr(trainer_mod, "EnsembleModel", _DummyEnsemble)
@@ -706,14 +707,14 @@ def _setup_minimal_trainer_for_artifact_gate(
     )
 
     class _DummyEnsemble:
-        def __init__(self, input_size, model_names=None):  # noqa: ARG002
+        def __init__(self, input_size, model_names=None) -> None:  # noqa: ARG002
             self.input_size = int(input_size)
             self.models = {"dummy": object()}
             self.interval = "1m"
             self.prediction_horizon = horizon
             self.trained_stock_codes = []
 
-        def load(self, path):  # noqa: ARG002
+        def load(self, path) -> bool:  # noqa: ARG002
             return False
 
         def train(
@@ -730,7 +731,7 @@ def _setup_minimal_trainer_for_artifact_gate(
         ):
             return {"dummy": {"val_acc": [0.62]}}
 
-        def save(self, path):
+        def save(self, path) -> None:
             Path(path).write_text("candidate_ensemble", encoding="utf-8")
 
     monkeypatch.setattr(trainer_mod, "EnsembleModel", _DummyEnsemble)
@@ -738,7 +739,7 @@ def _setup_minimal_trainer_for_artifact_gate(
     return trainer, model_dir, horizon
 
 
-def test_trainer_keeps_live_artifacts_when_quality_gate_fails(monkeypatch, tmp_path):
+def test_trainer_keeps_live_artifacts_when_quality_gate_fails(monkeypatch, tmp_path) -> None:
     trainer, model_dir, horizon = _setup_minimal_trainer_for_artifact_gate(
         monkeypatch,
         tmp_path,
@@ -774,7 +775,7 @@ def test_trainer_keeps_live_artifacts_when_quality_gate_fails(monkeypatch, tmp_p
 def test_trainer_promotes_live_artifacts_when_quality_gate_passes(
     monkeypatch,
     tmp_path,
-):
+) -> None:
     trainer, model_dir, horizon = _setup_minimal_trainer_for_artifact_gate(
         monkeypatch,
         tmp_path,
@@ -807,7 +808,7 @@ def test_trainer_promotes_live_artifacts_when_quality_gate_passes(
     assert candidate_scaler.exists() is False
 
 
-def test_drift_guard_skips_weak_initial_baseline(monkeypatch, tmp_path):
+def test_drift_guard_skips_weak_initial_baseline(monkeypatch, tmp_path) -> None:
     trainer = Trainer()
     monkeypatch.setattr(CONFIG, "DATA_DIR", tmp_path, raising=False)
 
@@ -856,7 +857,7 @@ def test_drift_guard_skips_weak_initial_baseline(monkeypatch, tmp_path):
     assert baseline_path.exists() is True
 
 
-def test_auto_learner_resolves_supported_interval_and_keeps_1m_floor():
+def test_auto_learner_resolves_supported_interval_and_keeps_1m_floor() -> None:
     learner = ContinuousLearner.__new__(ContinuousLearner)
 
     iv, horizon, lookback, min_bars = learner._resolve_interval(
@@ -874,19 +875,19 @@ def test_auto_learner_resolves_supported_interval_and_keeps_1m_floor():
     assert lookback2 >= 10080
 
 
-def test_finalize_cycle_updates_rejection_streak():
+def test_finalize_cycle_updates_rejection_streak() -> None:
     learner = ContinuousLearner.__new__(ContinuousLearner)
     learner.progress = LearningProgress()
     learner.progress.training_mode = "auto"
 
     class _Replay:
-        def __init__(self):
+        def __init__(self) -> None:
             self._count = 0
 
-        def add(self, codes, confidence=0.5):  # noqa: ARG002
+        def add(self, codes, confidence=0.5) -> None:  # noqa: ARG002
             self._count += len(list(codes or []))
 
-        def __len__(self):
+        def __len__(self) -> int:
             return int(self._count)
 
     learner._replay = _Replay()

@@ -9,7 +9,7 @@ def _make_predictor(cfg: dict) -> Predictor:
     return p
 
 
-def test_high_precision_disabled_keeps_signal():
+def test_high_precision_disabled_keeps_signal() -> None:
     p = _make_predictor({"enabled": 0.0})
     pred = Prediction(
         stock_code="600519",
@@ -25,7 +25,7 @@ def test_high_precision_disabled_keeps_signal():
     assert pred.signal == Signal.BUY
 
 
-def test_high_precision_enabled_filters_weak_signal():
+def test_high_precision_enabled_filters_weak_signal() -> None:
     p = _make_predictor(
         {
             "enabled": 1.0,
@@ -51,7 +51,7 @@ def test_high_precision_enabled_filters_weak_signal():
     assert any("High Precision Mode filtered signal" in w for w in pred.warnings)
 
 
-def test_high_precision_enabled_keeps_strong_signal():
+def test_high_precision_enabled_keeps_strong_signal() -> None:
     p = _make_predictor(
         {
             "enabled": 1.0,
@@ -75,7 +75,7 @@ def test_high_precision_enabled_keeps_strong_signal():
     assert pred.signal == Signal.STRONG_BUY
 
 
-def test_runtime_quality_gate_filters_weak_signal():
+def test_runtime_quality_gate_filters_weak_signal() -> None:
     p = _make_predictor({"enabled": 0.0})
     pred = Prediction(
         stock_code="600519",
@@ -95,7 +95,7 @@ def test_runtime_quality_gate_filters_weak_signal():
     assert any("Runtime quality gate filtered signal" in w for w in pred.warnings)
 
 
-def test_runtime_quality_gate_keeps_strong_aligned_signal():
+def test_runtime_quality_gate_keeps_strong_aligned_signal() -> None:
     p = _make_predictor({"enabled": 0.0})
     pred = Prediction(
         stock_code="600519",

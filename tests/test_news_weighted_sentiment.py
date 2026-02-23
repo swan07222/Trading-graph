@@ -1,6 +1,7 @@
 import json
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
+from typing import NoReturn
 
 from data.news import (
     EastmoneyNewsFetcher,
@@ -12,7 +13,7 @@ from data.news import (
 )
 
 
-def test_sentiment_summary_uses_weighted_mode(monkeypatch):
+def test_sentiment_summary_uses_weighted_mode(monkeypatch) -> None:
     agg = NewsAggregator()
     now = datetime.now()
     sample = [
@@ -44,7 +45,7 @@ def test_sentiment_summary_uses_weighted_mode(monkeypatch):
     assert summary["overall_sentiment"] > summary["simple_sentiment"]
 
 
-def test_news_fusion_diagnostics_and_features(monkeypatch):
+def test_news_fusion_diagnostics_and_features(monkeypatch) -> None:
     agg = NewsAggregator()
     now = datetime.now()
     sample = [
@@ -100,7 +101,7 @@ def test_news_fusion_diagnostics_and_features(monkeypatch):
     assert 0.0 <= features["news_disagreement_penalty"] <= 1.0
 
 
-def test_sentiment_entropy_zero_for_single_source(monkeypatch):
+def test_sentiment_entropy_zero_for_single_source(monkeypatch) -> None:
     agg = NewsAggregator()
     now = datetime.now()
     sample = [
@@ -128,7 +129,7 @@ def test_sentiment_entropy_zero_for_single_source(monkeypatch):
     assert summary["source_entropy"] == 0.0
 
 
-def test_base_news_fetcher_uses_existing_ca_bundle(tmp_path, monkeypatch):
+def test_base_news_fetcher_uses_existing_ca_bundle(tmp_path, monkeypatch) -> None:
     ca_path = tmp_path / "ca.pem"
     ca_path.write_text("dummy", encoding="utf-8")
 
@@ -147,7 +148,7 @@ def test_base_news_fetcher_uses_existing_ca_bundle(tmp_path, monkeypatch):
     assert str(fetcher._session.verify) == str(ca_path)
 
 
-def test_base_news_fetcher_keeps_verify_enabled_when_all_ca_paths_invalid(monkeypatch):
+def test_base_news_fetcher_keeps_verify_enabled_when_all_ca_paths_invalid(monkeypatch) -> None:
     monkeypatch.setattr("certifi.where", lambda: "Z:/missing/certifi.pem", raising=False)
     monkeypatch.setattr(
         "requests.utils.DEFAULT_CA_BUNDLE_PATH",
@@ -164,7 +165,7 @@ def test_base_news_fetcher_keeps_verify_enabled_when_all_ca_paths_invalid(monkey
     assert fetcher._session.verify is True
 
 
-def test_base_news_fetcher_allows_insecure_tls_only_with_env(monkeypatch):
+def test_base_news_fetcher_allows_insecure_tls_only_with_env(monkeypatch) -> None:
     monkeypatch.setattr("certifi.where", lambda: "Z:/missing/certifi.pem", raising=False)
     monkeypatch.setattr(
         "requests.utils.DEFAULT_CA_BUNDLE_PATH",
@@ -181,7 +182,7 @@ def test_base_news_fetcher_allows_insecure_tls_only_with_env(monkeypatch):
     assert fetcher._session.verify is False
 
 
-def test_sentiment_summary_handles_mixed_timezone_publish_times(monkeypatch):
+def test_sentiment_summary_handles_mixed_timezone_publish_times(monkeypatch) -> None:
     agg = NewsAggregator()
     now_naive = datetime.now()
     now_aware = datetime.now(timezone.utc)
@@ -212,7 +213,7 @@ def test_sentiment_summary_handles_mixed_timezone_publish_times(monkeypatch):
     assert "average_age_hours" in out
 
 
-def test_news_features_supports_zero_lookback_and_mixed_timezone(monkeypatch):
+def test_news_features_supports_zero_lookback_and_mixed_timezone(monkeypatch) -> None:
     agg = NewsAggregator()
     now_naive = datetime.now()
     now_aware = datetime.now(timezone.utc)
@@ -243,7 +244,7 @@ def test_news_features_supports_zero_lookback_and_mixed_timezone(monkeypatch):
     assert 0.0 <= out["news_volume"] <= 1.0
 
 
-def test_market_news_sort_accepts_mixed_timezone_publish_times(monkeypatch):
+def test_market_news_sort_accepts_mixed_timezone_publish_times(monkeypatch) -> None:
     agg = NewsAggregator()
     now_naive = datetime.now()
     now_aware = datetime.now(timezone.utc)
@@ -282,7 +283,7 @@ def test_market_news_sort_accepts_mixed_timezone_publish_times(monkeypatch):
     assert out[0].title == "newer aware"
 
 
-def test_news_features_invalid_lookback_value_does_not_crash(monkeypatch):
+def test_news_features_invalid_lookback_value_does_not_crash(monkeypatch) -> None:
     agg = NewsAggregator()
     sample = [
         NewsItem(
@@ -301,7 +302,7 @@ def test_news_features_invalid_lookback_value_does_not_crash(monkeypatch):
     assert "news_weighted_sentiment" in out
 
 
-def test_sentiment_summary_tolerates_non_numeric_fields(monkeypatch):
+def test_sentiment_summary_tolerates_non_numeric_fields(monkeypatch) -> None:
     agg = NewsAggregator()
     item = NewsItem(
         title="malformed payload",
@@ -323,7 +324,7 @@ def test_sentiment_summary_tolerates_non_numeric_fields(monkeypatch):
     assert "news_weighted_sentiment" in features
 
 
-def test_analyze_sentiment_handles_negation_and_contrast():
+def test_analyze_sentiment_handles_negation_and_contrast() -> None:
     score_pos, label_pos = analyze_sentiment(
         "\u4e0d\u662f\u5229\u7a7a\uff0c\u800c\u662f\u91cd\u5927\u5229\u597d"
     )
@@ -337,7 +338,7 @@ def test_analyze_sentiment_handles_negation_and_contrast():
     assert score_neg < 0
 
 
-def test_sina_stock_news_parses_jsonp_payload_without_html_h2(monkeypatch):
+def test_sina_stock_news_parses_jsonp_payload_without_html_h2(monkeypatch) -> None:
     fetcher = SinaNewsFetcher()
     payload = (
         'cb({"result":{"list":[{"title":"<em>600519</em>\u91cd\u5927\u5229\u597d",'
@@ -350,10 +351,10 @@ def test_sina_stock_news_parses_jsonp_payload_without_html_h2(monkeypatch):
         status_code = 200
 
         @staticmethod
-        def json():
+        def json() -> NoReturn:
             raise ValueError("not-json")
         
-        def raise_for_status(self):
+        def raise_for_status(self) -> None:
             pass  # OK
 
     monkeypatch.setattr(fetcher._session, "get", lambda *args, **kwargs: _Resp())
@@ -365,7 +366,7 @@ def test_sina_stock_news_parses_jsonp_payload_without_html_h2(monkeypatch):
     assert out[0].url == "https://example.com/a"
 
 
-def test_eastmoney_stock_news_parses_plain_json_without_jsonp_wrapper(monkeypatch):
+def test_eastmoney_stock_news_parses_plain_json_without_jsonp_wrapper(monkeypatch) -> None:
     fetcher = EastmoneyNewsFetcher()
     payload_obj = {
         "result": {
@@ -391,7 +392,7 @@ def test_eastmoney_stock_news_parses_plain_json_without_jsonp_wrapper(monkeypatc
         def json():
             return payload_obj
         
-        def raise_for_status(self):
+        def raise_for_status(self) -> None:
             pass  # OK
 
     monkeypatch.setattr(fetcher._session, "get", lambda *args, **kwargs: _Resp())

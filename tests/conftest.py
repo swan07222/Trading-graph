@@ -9,7 +9,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 @pytest.fixture(autouse=True)
 def reset_cache(tmp_path):
-    """Reset cache before each test"""
+    """Reset cache before each test."""
     if os.environ.get("TRADING_SKIP_TEST_CACHE_CLEAR", "0") == "1":
         yield
         return
@@ -52,7 +52,7 @@ def temp_model_dir(tmp_path):
 def force_offline_for_tests():
     """Make pytest deterministic and fast:
     - Avoid network calls (AkShare/Yahoo)
-    - Allow tests to run even without data sources
+    - Allow tests to run even without data sources.
     """
     old = os.environ.get("TRADING_OFFLINE")
     os.environ["TRADING_OFFLINE"] = "1"

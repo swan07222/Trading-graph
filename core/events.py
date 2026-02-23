@@ -14,7 +14,7 @@ from utils.logger import get_logger
 log = get_logger(__name__)
 
 class EventType(Enum):
-    """All event types in the system"""
+    """All event types in the system."""
     TICK = auto()
     BAR = auto()
     QUOTE = auto()
@@ -44,7 +44,7 @@ class EventType(Enum):
 
 @dataclass
 class Event:
-    """Base event class"""
+    """Base event class."""
     type: EventType = EventType.SYSTEM_START
     timestamp: datetime = field(default_factory=datetime.now)
     source: str = ""
@@ -52,7 +52,7 @@ class Event:
 
 @dataclass
 class TickEvent(Event):
-    """Market tick event"""
+    """Market tick event."""
     type: EventType = EventType.TICK
     symbol: str = ""
     price: float = 0.0
@@ -62,7 +62,7 @@ class TickEvent(Event):
 
 @dataclass
 class BarEvent(Event):
-    """OHLCV bar event"""
+    """OHLCV bar event."""
     type: EventType = EventType.BAR
     symbol: str = ""
     open: float = 0.0
@@ -73,7 +73,7 @@ class BarEvent(Event):
 
 @dataclass
 class OrderEvent(Event):
-    """Order lifecycle event"""
+    """Order lifecycle event."""
     type: EventType = EventType.ORDER_SUBMITTED
     order_id: str = ""
     symbol: str = ""
@@ -86,7 +86,7 @@ class OrderEvent(Event):
 
 @dataclass
 class SignalEvent(Event):
-    """Trading signal event"""
+    """Trading signal event."""
     type: EventType = EventType.SIGNAL_GENERATED
     symbol: str = ""
     signal: str = ""
@@ -99,7 +99,7 @@ class SignalEvent(Event):
 
 @dataclass
 class RiskEvent(Event):
-    """Risk management event"""
+    """Risk management event."""
     type: EventType = EventType.RISK_BREACH
     risk_type: str = ""
     current_value: float = 0.0
@@ -107,7 +107,7 @@ class RiskEvent(Event):
     action_taken: str = ""
 
 class EventHandler(ABC):
-    """Abstract event handler"""
+    """Abstract event handler."""
 
     @abstractmethod
     def handle(self, event: Event):
@@ -132,7 +132,7 @@ class EventBus:
                     cls._instance._initialized = False
         return cls._instance
 
-    def __init__(self):
+    def __init__(self) -> None:
         if self._initialized:
             return
 
@@ -155,7 +155,7 @@ class EventBus:
         self,
         event_type: EventType,
         handler: Callable[[Event], None]
-    ):
+    ) -> None:
         """Subscribe to event type (thread-safe)."""
         with self._sub_lock:
             if handler not in self._subscribers[event_type]:
@@ -165,7 +165,7 @@ class EventBus:
         self,
         event_type: EventType,
         handler: Callable[[Event], None]
-    ):
+    ) -> None:
         """Unsubscribe from event type (thread-safe)."""
         with self._sub_lock:
             try:
@@ -173,7 +173,7 @@ class EventBus:
             except ValueError:
                 pass
 
-    def clear_subscribers(self, event_type: EventType = None):
+    def clear_subscribers(self, event_type: EventType = None) -> None:
         """Clear all subscribers for a given event type,
         or all subscribers if event_type is None.
         Useful for testing.
@@ -184,7 +184,7 @@ class EventBus:
             else:
                 self._subscribers.clear()
 
-    def publish(self, event: Event, async_: bool = True):
+    def publish(self, event: Event, async_: bool = True) -> None:
         """Publish event (thread-safe).
 
         FIX: deque.append is O(1) and auto-bounded by maxlen,
@@ -198,7 +198,7 @@ class EventBus:
         else:
             self._dispatch(event)
 
-    def _dispatch(self, event: Event):
+    def _dispatch(self, event: Event) -> None:
         """Dispatch event to subscribers.
 
         Note: Handlers receive a copy of the subscriber list and may safely
@@ -246,7 +246,7 @@ class EventBus:
                         f"Error in ERROR handler: {e}"
                     )
 
-    def _dispatch_error(self, event: Event):
+    def _dispatch_error(self, event: Event) -> None:
         """Dispatch error event without recursion risk."""
         with self._sub_lock:
             handlers = self._subscribers.get(
@@ -260,7 +260,7 @@ class EventBus:
                 # Last resort: just log it
                 log.error(f"Error handler failed: {e}")
 
-    def start(self):
+    def start(self) -> None:
         """Start async event processing."""
         if self._running:
             return
@@ -273,7 +273,7 @@ class EventBus:
         )
         self._worker_thread.start()
 
-    def stop(self):
+    def stop(self) -> None:
         """Stop async event processing gracefully."""
         if not self._running:
             return
@@ -296,7 +296,7 @@ class EventBus:
             except Exception:
                 break
 
-    def _worker(self):
+    def _worker(self) -> None:
         """Worker thread for async event processing."""
         while self._running:
             try:
@@ -329,7 +329,7 @@ class EventBus:
                 history_list = list(self._history)
                 return history_list[-limit:]
 
-    def clear_history(self):
+    def clear_history(self) -> None:
         """Clear event history."""
         self._history.clear()
 

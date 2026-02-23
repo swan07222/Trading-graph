@@ -6,7 +6,7 @@ from config.settings import CONFIG
 from utils.security import AccessControl
 
 
-def test_access_control_requires_2fa_for_live():
+def test_access_control_requires_2fa_for_live() -> None:
     ac = AccessControl()
     ac.set_role("live_trader")
     ac.mark_2fa_verified(False)
@@ -15,7 +15,7 @@ def test_access_control_requires_2fa_for_live():
     assert ac.check("trade_live") is True
 
 
-def test_access_control_session_expiry_blocks_live():
+def test_access_control_session_expiry_blocks_live() -> None:
     ac = AccessControl()
     ac.set_role("live_trader")
     ac.mark_2fa_verified(True)
@@ -23,7 +23,7 @@ def test_access_control_session_expiry_blocks_live():
     assert ac.check("trade_live") is False
 
 
-def test_access_control_custom_role_grants():
+def test_access_control_custom_role_grants() -> None:
     ac = AccessControl()
     ac.create_role("qa", ["view"])
     ac.grant_permission("qa", "analyze")
@@ -32,7 +32,7 @@ def test_access_control_custom_role_grants():
     assert ac.check("analyze") is True
 
 
-def test_access_control_2fa_ttl_expiry_blocks_live():
+def test_access_control_2fa_ttl_expiry_blocks_live() -> None:
     old_ttl = int(getattr(CONFIG.security, "two_factor_ttl_minutes", 30))
     try:
         CONFIG.security.two_factor_ttl_minutes = 1
@@ -45,7 +45,7 @@ def test_access_control_2fa_ttl_expiry_blocks_live():
         CONFIG.security.two_factor_ttl_minutes = old_ttl
 
 
-def test_access_control_identity_lock_blocks_mutation():
+def test_access_control_identity_lock_blocks_mutation() -> None:
     ac = AccessControl()
     ac.lock_identity("unit_test")
 

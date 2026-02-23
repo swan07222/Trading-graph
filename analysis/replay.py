@@ -33,7 +33,7 @@ class MarketReplay:
     - JSONL files where each line is a dict with equivalent fields
     """
 
-    def __init__(self, bars: list[ReplayBar]):
+    def __init__(self, bars: list[ReplayBar]) -> None:
         self._bars = sorted(bars, key=lambda b: (b.ts, b.symbol))
         self._idx = 0
 

@@ -75,7 +75,7 @@ class _BaseLearnWorker(QThread):
     finished_result = pyqtSignal(dict)
     error_occurred = pyqtSignal(str)
 
-    def __init__(self, config: dict[str, Any] | None):
+    def __init__(self, config: dict[str, Any] | None) -> None:
         super().__init__()
         self.config = dict(config or {})
         self.running = False
@@ -328,12 +328,12 @@ class StockValidatorWorker(QThread):
     Calls learner.validate_stock_code() which checks:
     - code exists in data sources
     - enough bars for training
-    - stock name from spot cache when available
+    - stock name from spot cache when available.
     """
 
     validation_result = pyqtSignal(dict)
 
-    def __init__(self, code: str, interval: str = "1m", request_id: int = 0):
+    def __init__(self, code: str, interval: str = "1m", request_id: int = 0) -> None:
         super().__init__()
         self.code = str(code or "")
         self.interval = normalize_training_interval(interval)

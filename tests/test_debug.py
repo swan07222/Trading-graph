@@ -14,7 +14,7 @@ from utils.debug import (
 )
 
 
-def test_timing_stats():
+def test_timing_stats() -> None:
     """Test TimingStats class."""
     stats = TimingStats()
     assert stats.count == 0
@@ -35,7 +35,7 @@ def test_timing_stats():
     assert stats.avg == pytest.approx(0.15, rel=1e-9)
 
 
-def test_timing_context():
+def test_timing_context() -> None:
     """Test TimingContext."""
     with TimingContext("test_block", log_results=False) as ctx:
         time.sleep(0.01)
@@ -46,7 +46,7 @@ def test_timing_context():
     assert stats.count >= 1
 
 
-def test_timing_context_multiple():
+def test_timing_context_multiple() -> None:
     """Test TimingContext with multiple uses."""
     for _ in range(3):
         with TimingContext("multi_test", log_results=False):
@@ -57,7 +57,7 @@ def test_timing_context_multiple():
     assert stats.count == 3
 
 
-def test_diagnose_performance():
+def test_diagnose_performance() -> None:
     """Test diagnose_performance."""
     results = diagnose_performance()
     assert "timestamp" in results
@@ -68,10 +68,10 @@ def test_diagnose_performance():
     assert results["thread_count"] >= 1
 
 
-def test_profile_function():
+def test_profile_function() -> None:
     """Test profile_function decorator."""
     @profile_function(enable_memory=False)
-    def test_func():
+    def test_func() -> int:
         time.sleep(0.01)
         return 42
     
@@ -81,24 +81,24 @@ def test_profile_function():
 
 
 @pytest.mark.skip(reason="Profile output format varies by platform")
-def test_profile_function_detailed():
+def test_profile_function_detailed() -> None:
     """Test profile_function decorator detailed output."""
     # Detailed profiling test skipped due to platform variations
     pass
 
 
-def test_profile_context():
+def test_profile_context() -> None:
     """Test profile_context."""
     with profile_context("test_profile", enable_memory=False, log_level="debug"):
         time.sleep(0.01)
 
 
-def test_slow_call_threshold():
+def test_slow_call_threshold() -> None:
     """Test slow_call_threshold decorator."""
     call_count = [0]
     
     @slow_call_threshold(threshold_ms=100.0)
-    def slow_func():
+    def slow_func() -> str:
         call_count[0] += 1
         time.sleep(0.01)
         return "done"
@@ -108,14 +108,14 @@ def test_slow_call_threshold():
     assert call_count[0] == 1
 
 
-def test_memory_tracker():
+def test_memory_tracker() -> None:
     """Test memory_tracker context."""
     with memory_tracker("test_memory"):
         data = list(range(1000))
         assert len(data) == 1000
 
 
-def test_timing_stats_str():
+def test_timing_stats_str() -> None:
     """Test TimingStats string representation."""
     stats = TimingStats()
     stats.record(0.1)

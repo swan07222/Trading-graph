@@ -9,7 +9,7 @@ def _make_predictor(capital: float = 100000.0) -> Predictor:
     return p
 
 
-def test_position_sizing_allows_positive_expected_edge():
+def test_position_sizing_allows_positive_expected_edge() -> None:
     p = _make_predictor()
     pred = Prediction(
         stock_code="600519",
@@ -34,7 +34,7 @@ def test_position_sizing_allows_positive_expected_edge():
     assert pos.risk_reward_ratio > 1.1
 
 
-def test_position_sizing_blocks_negative_expected_edge():
+def test_position_sizing_blocks_negative_expected_edge() -> None:
     p = _make_predictor()
     pred = Prediction(
         stock_code="600519",

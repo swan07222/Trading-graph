@@ -4,7 +4,7 @@ from analysis.strategy_marketplace import StrategyMarketplace
 from data.session_cache import SessionBarCache
 
 
-def test_chaos_marketplace_invalid_json_falls_back(tmp_path):
+def test_chaos_marketplace_invalid_json_falls_back(tmp_path) -> None:
     strategies_dir = tmp_path / "strategies"
     strategies_dir.mkdir(parents=True, exist_ok=True)
 
@@ -17,7 +17,7 @@ def test_chaos_marketplace_invalid_json_falls_back(tmp_path):
     assert marketplace.get_enabled_files() == []
 
 
-def test_chaos_session_cache_invalid_rows_are_ignored(tmp_path):
+def test_chaos_session_cache_invalid_rows_are_ignored(tmp_path) -> None:
     cache = SessionBarCache(root=tmp_path / "session_bars")
     symbol = "600519"
     interval = "1m"
@@ -40,7 +40,7 @@ def test_chaos_session_cache_invalid_rows_are_ignored(tmp_path):
     assert float(df["close"].iloc[0]) == 100.10
 
 
-def test_chaos_session_cache_rejects_nondict_bar(tmp_path):
+def test_chaos_session_cache_rejects_nondict_bar(tmp_path) -> None:
     cache = SessionBarCache(root=tmp_path / "session_bars")
     assert cache.append_bar("600519", "1m", None) is False
     assert cache.read_history("600519", "1m", bars=10).empty

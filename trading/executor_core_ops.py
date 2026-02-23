@@ -72,7 +72,7 @@ def _resolve_audit_log():
         log.debug("Executor-scoped audit log resolver unavailable: %s", e)
     return get_audit_log()
 
-def __init__(self, mode: TradingMode = None):
+def __init__(self, mode: TradingMode = None) -> None:
     self.mode = mode or CONFIG.trading_mode
     self.broker: BrokerInterface = create_broker(self.mode.value)
     self.risk_manager: RiskManager = get_risk_manager()
@@ -359,7 +359,7 @@ def _handle_worker_thread_crash(
         log.critical("Kill-switch activation failed after worker crash: %s", ks_err)
 
 
-def stop(self):
+def stop(self) -> None:
     if not self._running:
         self._stop_event.set()
         self._release_runtime_lease()
@@ -502,7 +502,7 @@ def _get_execution_quality_snapshot(self) -> dict[str, object]:
         }
 
 
-def _watchdog_loop(self):
+def _watchdog_loop(self) -> None:
     """Watchdog for core execution threads.
     On heartbeat stall, pause auto-trader and report degraded health.
     """

@@ -487,7 +487,7 @@ class THSBroker(EasytraderBroker):
         "yh": "YH",
     }
 
-    def __init__(self, broker_type: str = "ths"):
+    def __init__(self, broker_type: str = "ths") -> None:
         self._broker_type = broker_type
         super().__init__()
 
@@ -519,7 +519,7 @@ class MultiVenueBroker(BrokerInterface):
     - On write failure, rotates to next venue with cooldown.
     """
 
-    def __init__(self, venues: list[BrokerInterface], failover_cooldown_seconds: int = 30):
+    def __init__(self, venues: list[BrokerInterface], failover_cooldown_seconds: int = 30) -> None:
         super().__init__()
         self._venues = [v for v in venues if v is not None]
         self._active_idx = 0

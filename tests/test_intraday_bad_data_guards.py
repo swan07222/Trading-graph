@@ -6,7 +6,7 @@ from data.database import MarketDatabase
 from data.fetcher import DataFetcher
 
 
-def test_clean_dataframe_compresses_zero_volume_flat_streak():
+def test_clean_dataframe_compresses_zero_volume_flat_streak() -> None:
     idx = pd.date_range("2026-02-18 09:31:00", periods=120, freq="min")
     df = pd.DataFrame(
         {
@@ -34,7 +34,7 @@ def test_clean_dataframe_compresses_zero_volume_flat_streak():
     assert out.index.is_monotonic_increasing
 
 
-def test_clean_dataframe_clamps_intraday_spike_shapes():
+def test_clean_dataframe_clamps_intraday_spike_shapes() -> None:
     idx = pd.date_range("2026-02-18 09:30:00", periods=3, freq="min")
     df = pd.DataFrame(
         {
@@ -63,7 +63,7 @@ def test_clean_dataframe_clamps_intraday_spike_shapes():
     assert span > 0.50
 
 
-def test_clean_dataframe_clips_extreme_intraday_jump():
+def test_clean_dataframe_clips_extreme_intraday_jump() -> None:
     idx = pd.date_range("2026-02-18 09:30:00", periods=2, freq="min")
     df = pd.DataFrame(
         {
@@ -90,7 +90,7 @@ def test_clean_dataframe_clips_extreme_intraday_jump():
     assert float(out.iloc[1]["close"]) == 130.0
 
 
-def test_clean_dataframe_truth_preserving_does_not_clip_intraday_jump():
+def test_clean_dataframe_truth_preserving_does_not_clip_intraday_jump() -> None:
     idx = pd.date_range("2026-02-18 09:30:00", periods=2, freq="min")
     df = pd.DataFrame(
         {
@@ -116,7 +116,7 @@ def test_clean_dataframe_truth_preserving_does_not_clip_intraday_jump():
     assert float(out.iloc[1]["close"]) == 130.0
 
 
-def test_clean_dataframe_truth_preserving_rejects_undated_intraday_rows():
+def test_clean_dataframe_truth_preserving_rejects_undated_intraday_rows() -> None:
     df = pd.DataFrame(
         {
             "open": [10.0, 10.1, 10.2],
@@ -138,7 +138,7 @@ def test_clean_dataframe_truth_preserving_rejects_undated_intraday_rows():
     assert out.empty
 
 
-def test_database_intraday_sanitizer_filters_bad_rows(tmp_path):
+def test_database_intraday_sanitizer_filters_bad_rows(tmp_path) -> None:
     db = MarketDatabase(db_path=tmp_path / "market_data.db")
     try:
         idx = pd.date_range("2026-02-18 09:30:00", periods=80, freq="min")

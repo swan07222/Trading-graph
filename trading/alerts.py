@@ -90,7 +90,7 @@ class Alert:
 class AlertThrottler:
     """Prevent alert spam by throttling similar alerts."""
 
-    def __init__(self, default_window_seconds: int = 300):
+    def __init__(self, default_window_seconds: int = 300) -> None:
         self._lock = threading.Lock()
         self._last_sent: dict[str, datetime] = {}
         self._default_window = timedelta(seconds=default_window_seconds)

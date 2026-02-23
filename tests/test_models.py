@@ -12,19 +12,19 @@ from config import CONFIG
 
 
 class TestNetworkArchitectures:
-    """Test neural network architectures"""
+    """Test neural network architectures."""
 
     @pytest.fixture
     def sample_input(self):
-        """Create sample input tensor"""
+        """Create sample input tensor."""
         batch_size = 4
         seq_len = CONFIG.SEQUENCE_LENGTH
         features = 35
 
         return torch.randn(batch_size, seq_len, features)
 
-    def test_lstm_model(self, sample_input):
-        """Test LSTM model forward pass"""
+    def test_lstm_model(self, sample_input) -> None:
+        """Test LSTM model forward pass."""
         from models.networks import LSTMModel
 
         model = LSTMModel(
@@ -39,8 +39,8 @@ class TestNetworkArchitectures:
         assert conf.shape == (4, 1)
         assert not torch.isnan(logits).any()
 
-    def test_transformer_model(self, sample_input):
-        """Test Transformer model forward pass"""
+    def test_transformer_model(self, sample_input) -> None:
+        """Test Transformer model forward pass."""
         from models.networks import TransformerModel
 
         model = TransformerModel(
@@ -54,8 +54,8 @@ class TestNetworkArchitectures:
         assert logits.shape == (4, 3)
         assert not torch.isnan(logits).any()
 
-    def test_gru_model(self, sample_input):
-        """Test GRU model forward pass"""
+    def test_gru_model(self, sample_input) -> None:
+        """Test GRU model forward pass."""
         from models.networks import GRUModel
 
         model = GRUModel(
@@ -68,8 +68,8 @@ class TestNetworkArchitectures:
 
         assert logits.shape == (4, 3)
 
-    def test_tcn_model(self, sample_input):
-        """Test TCN model forward pass"""
+    def test_tcn_model(self, sample_input) -> None:
+        """Test TCN model forward pass."""
         from models.networks import TCNModel
 
         model = TCNModel(
@@ -83,11 +83,11 @@ class TestNetworkArchitectures:
         assert logits.shape == (4, 3)
 
 class TestEnsemble:
-    """Test ensemble model"""
+    """Test ensemble model."""
 
     @pytest.fixture
     def sample_data(self):
-        """Create sample training data"""
+        """Create sample training data."""
         n_samples = 100
         seq_len = CONFIG.SEQUENCE_LENGTH
         features = 35
@@ -97,8 +97,8 @@ class TestEnsemble:
 
         return X, y
 
-    def test_ensemble_creation(self, sample_data):
-        """Test ensemble creation"""
+    def test_ensemble_creation(self, sample_data) -> None:
+        """Test ensemble creation."""
         from models.ensemble import EnsembleModel
 
         X, y = sample_data
@@ -110,8 +110,8 @@ class TestEnsemble:
         assert 'lstm' in ensemble.models
         assert 'gru' in ensemble.models
 
-    def test_ensemble_prediction(self, sample_data):
-        """Test ensemble prediction"""
+    def test_ensemble_prediction(self, sample_data) -> None:
+        """Test ensemble prediction."""
         from models.ensemble import EnsembleModel
 
         X, y = sample_data
@@ -128,8 +128,8 @@ class TestEnsemble:
         assert 0 <= pred.margin <= 1
         assert pred.brier_score >= 0
 
-    def test_ensemble_training(self, sample_data):
-        """Test ensemble traini`ng (short)"""
+    def test_ensemble_training(self, sample_data) -> None:
+        """Test ensemble traini`ng (short)."""
         from models.ensemble import EnsembleModel
 
         X, y = sample_data
@@ -150,7 +150,7 @@ class TestEnsemble:
 
     def test_partial_weight_update_preserves_untrained_mass(
         self, sample_data
-    ):
+    ) -> None:
         """Partial training updates should not fabricate scores for untrained models."""
         from models.ensemble import EnsembleModel
 
@@ -171,7 +171,7 @@ class TestEnsemble:
 
     def test_full_weight_update_reflects_validation_ranking(
         self, sample_data
-    ):
+    ) -> None:
         """When all models are trained, higher validation accuracy should dominate."""
         from models.ensemble import EnsembleModel
 
@@ -189,7 +189,7 @@ class TestEnsemble:
 
     def test_train_skips_calibration_when_stop_requested(
         self, monkeypatch
-    ):
+    ) -> None:
         """If stop is requested before training, calibration must be skipped."""
         from models.ensemble import EnsembleModel
 
@@ -207,7 +207,7 @@ class TestEnsemble:
 
         calls = {"calibrate": 0}
 
-        def _fake_calibrate(*_args, **_kwargs):
+        def _fake_calibrate(*_args, **_kwargs) -> None:
             calls["calibrate"] += 1
 
         monkeypatch.setattr(ensemble, "calibrate", _fake_calibrate, raising=True)
@@ -229,7 +229,7 @@ class TestEnsemble:
 
     def test_train_skips_calibration_after_midcycle_stop(
         self, monkeypatch
-    ):
+    ) -> None:
         """If stop is triggered during a cycle, calibration must be skipped."""
         from models.ensemble import EnsembleModel
 
@@ -247,13 +247,13 @@ class TestEnsemble:
 
         calls = {"calibrate": 0}
 
-        def _fake_calibrate(*_args, **_kwargs):
+        def _fake_calibrate(*_args, **_kwargs) -> None:
             calls["calibrate"] += 1
 
         monkeypatch.setattr(ensemble, "calibrate", _fake_calibrate, raising=True)
 
         class _ToggleStop:
-            def __init__(self):
+            def __init__(self) -> None:
                 self.calls = 0
 
             def __call__(self):
@@ -277,7 +277,7 @@ class TestEnsemble:
 
     def test_ensemble_save_load_preserves_trained_stock_codes(
         self, sample_data, tmp_path
-    ):
+    ) -> None:
         """Trained stock metadata should round-trip through save/load."""
         from models.ensemble import EnsembleModel
 
@@ -309,10 +309,10 @@ class TestEnsemble:
         }
 
 class TestTrainer:
-    """Test trainer module"""
+    """Test trainer module."""
 
-    def test_trainer_initialization(self):
-        """Test trainer initialization"""
+    def test_trainer_initialization(self) -> None:
+        """Test trainer initialization."""
         from models.trainer import Trainer
 
         trainer = Trainer()
@@ -322,10 +322,10 @@ class TestTrainer:
         assert trainer.feature_engine is not None
 
 class TestPredictor:
-    """Test predictor module"""
+    """Test predictor module."""
 
-    def test_predictor_initialization(self):
-        """Test predictor initialization"""
+    def test_predictor_initialization(self) -> None:
+        """Test predictor initialization."""
         from models.predictor import Predictor
 
         predictor = Predictor()

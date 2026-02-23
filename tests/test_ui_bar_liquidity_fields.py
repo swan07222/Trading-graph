@@ -4,7 +4,7 @@ from ui.app import MainApp
 
 
 class _Combo:
-    def __init__(self, value: str):
+    def __init__(self, value: str) -> None:
         self._value = str(value)
 
     def currentText(self) -> str:
@@ -12,7 +12,7 @@ class _Combo:
 
 
 class _LineEdit:
-    def __init__(self, value: str):
+    def __init__(self, value: str) -> None:
         self._value = str(value)
 
     def text(self) -> str:
@@ -40,7 +40,7 @@ class _DummyBarApp:
     _bar_trading_date = MainApp._bar_trading_date
     _is_outlier_tick = MainApp._is_outlier_tick
 
-    def __init__(self, ui_interval: str = "1m"):
+    def __init__(self, ui_interval: str = "1m") -> None:
         self._bars_by_symbol: dict[str, list[dict]] = {}
         self._last_bar_feed_ts: dict[str, float] = {}
         self._last_session_cache_write_ts: dict[str, float] = {}
@@ -70,7 +70,7 @@ class _DummyBarApp:
         return list(kwargs.get("bars") or [])
 
 
-def test_on_bar_ui_derives_amount_from_volume_and_close():
+def test_on_bar_ui_derives_amount_from_volume_and_close() -> None:
     app = _DummyBarApp(ui_interval="1m")
 
     app._on_bar_ui(
@@ -94,7 +94,7 @@ def test_on_bar_ui_derives_amount_from_volume_and_close():
     assert abs(float(row.get("amount", 0.0)) - 12240.0) < 1e-6
 
 
-def test_on_bar_ui_aggregates_amount_when_resampling_to_ui_interval():
+def test_on_bar_ui_aggregates_amount_when_resampling_to_ui_interval() -> None:
     app = _DummyBarApp(ui_interval="5m")
 
     app._on_bar_ui(

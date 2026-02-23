@@ -48,13 +48,13 @@ def _get_signal_enum():
 class SignalPanel(QFrame):
     """Large signal display panel with modern professional styling."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__()
         self.setObjectName("signalPanelFrame")
         self.setMinimumHeight(220)
         self._setup_ui()
 
-    def _setup_ui(self):
+    def _setup_ui(self) -> None:
         layout = QVBoxLayout(self)
         layout.setSpacing(ModernSpacing.LG)
         layout.setContentsMargins(
@@ -175,7 +175,7 @@ class SignalPanel(QFrame):
 
         self._set_default_style()
 
-    def _set_default_style(self):
+    def _set_default_style(self) -> None:
         self.setStyleSheet(
             f"""
             QFrame#signalPanelFrame {{
@@ -193,7 +193,7 @@ class SignalPanel(QFrame):
             """
         )
 
-    def update_prediction(self, pred):
+    def update_prediction(self, pred) -> None:
         """Update display with prediction data (robust to missing fields)."""
         Signal = _get_signal_enum()
 
@@ -303,7 +303,7 @@ class SignalPanel(QFrame):
             """
         )
 
-    def reset(self):
+    def reset(self) -> None:
         """Reset to default state."""
         self.signal_label.setText("WAITING")
         self.info_label.setText("Enter a stock code to analyze")
@@ -318,7 +318,7 @@ class SignalPanel(QFrame):
 class PositionTable(QTableWidget):
     """Position display table with professional styling."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__()
         self.setColumnCount(8)
         self.setHorizontalHeaderLabels(
@@ -355,7 +355,7 @@ class PositionTable(QTableWidget):
         except (TypeError, ValueError):
             return default
 
-    def update_positions(self, positions: dict):
+    def update_positions(self, positions: dict) -> None:
         """Update table with position data - handles missing attributes."""
         if positions is None:
             positions = {}
@@ -426,7 +426,7 @@ class LogWidget(QTextEdit):
     MAX_LINES = 500
     _TRIM_BATCH = 100
 
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__()
         self.setReadOnly(True)
         mono_font = get_monospace_font_family()
@@ -448,7 +448,7 @@ class LogWidget(QTextEdit):
         )
         self._line_count = 0
 
-    def log(self, message: str, level: str = "info"):
+    def log(self, message: str, level: str = "info") -> None:
         """Add log message with color coding."""
         colors = {
             "info": "#9cead6",
@@ -482,7 +482,7 @@ class LogWidget(QTextEdit):
         if scrollbar:
             scrollbar.setValue(scrollbar.maximum())
 
-    def _trim_old_lines(self):
+    def _trim_old_lines(self) -> None:
         """Remove oldest lines to keep log bounded.
         Uses document-level block removal instead of fragile cursor manipulation.
         FIX: Improved trim logic to prevent text corruption.
@@ -543,7 +543,7 @@ class LogWidget(QTextEdit):
             except Exception:
                 pass
 
-    def clear_log(self):
+    def clear_log(self) -> None:
         """Clear all log messages."""
         self.clear()
         self._line_count = 0
@@ -552,12 +552,12 @@ class LogWidget(QTextEdit):
 class MetricCard(QFrame):
     """Metric display card for dashboard."""
 
-    def __init__(self, title: str, value: str = "--", icon: str = ""):
+    def __init__(self, title: str, value: str = "--", icon: str = "") -> None:
         super().__init__()
         self.value_label = None
         self._setup_ui(title, value, icon)
 
-    def _setup_ui(self, title: str, value: str, icon: str):
+    def _setup_ui(self, title: str, value: str, icon: str) -> None:
         self.setObjectName("metricCard")
 
         layout = QVBoxLayout(self)
@@ -585,7 +585,7 @@ class MetricCard(QFrame):
         )
         layout.addWidget(self.value_label)
 
-    def set_value(self, value: str, color: str = None):
+    def set_value(self, value: str, color: str = None) -> None:
         """Update the displayed value."""
         if self.value_label is None:
             return
@@ -604,14 +604,14 @@ class MetricCard(QFrame):
 class TradingStatusBar(QFrame):
     """Trading status bar showing connection and market status."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__()
         self.connection_label = None
         self.market_label = None
         self.mode_label = None
         self._setup_ui()
 
-    def _setup_ui(self):
+    def _setup_ui(self) -> None:
         self.setObjectName("statusCard")
 
         layout = QHBoxLayout(self)
@@ -640,7 +640,7 @@ class TradingStatusBar(QFrame):
         )
         layout.addWidget(self.mode_label)
 
-    def set_connected(self, connected: bool, mode: str = "paper"):
+    def set_connected(self, connected: bool, mode: str = "paper") -> None:
         """Update connection status."""
         if self.connection_label is None:
             return
@@ -667,7 +667,7 @@ class TradingStatusBar(QFrame):
                 f"color: {ModernColors.ACCENT_DANGER}; font-weight: 700; font-size: 12px;"
             )
 
-    def set_market_status(self, is_open: bool):
+    def set_market_status(self, is_open: bool) -> None:
         """Update market status."""
         if self.market_label is None:
             return

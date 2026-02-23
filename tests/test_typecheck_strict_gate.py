@@ -12,7 +12,7 @@ def _load_typecheck_strict_gate_module():
     return module
 
 
-def test_parse_mypy_errors_extracts_stable_issue_keys():
+def test_parse_mypy_errors_extracts_stable_issue_keys() -> None:
     gate = _load_typecheck_strict_gate_module()
     raw = (
         "scripts\\\\module_size_gate.py:42: error: "
@@ -25,7 +25,7 @@ def test_parse_mypy_errors_extracts_stable_issue_keys():
     ) in out
 
 
-def test_baseline_roundtrip(tmp_path: Path):
+def test_baseline_roundtrip(tmp_path: Path) -> None:
     gate = _load_typecheck_strict_gate_module()
     baseline_path = tmp_path / "strict-baseline.txt"
     sample = {

@@ -12,7 +12,7 @@ def _fetch_json(url: str, headers: dict | None = None) -> tuple[int, dict]:
         return resp.status, json.loads(body)
 
 
-def test_metrics_http_snapshot_provider():
+def test_metrics_http_snapshot_provider() -> None:
     metrics_http.unregister_snapshot_provider("unit_test")
     metrics_http.register_snapshot_provider("unit_test", lambda: {"value": 42})
 
@@ -32,7 +32,7 @@ def test_metrics_http_snapshot_provider():
         metrics_http.unregister_snapshot_provider("unit_test")
 
 
-def test_metrics_http_api_key_guard(monkeypatch):
+def test_metrics_http_api_key_guard(monkeypatch) -> None:
     metrics_http.unregister_snapshot_provider("secure_test")
     metrics_http.register_snapshot_provider("secure_test", lambda: {"ok": True})
     monkeypatch.setenv("TRADING_HTTP_API_KEY", "secret-key")
@@ -58,7 +58,7 @@ def test_metrics_http_api_key_guard(monkeypatch):
         metrics_http.unregister_snapshot_provider("secure_test")
 
 
-def test_metrics_http_operational_snapshots():
+def test_metrics_http_operational_snapshots() -> None:
     server = metrics_http.MetricsServer(port=0, host="127.0.0.1")
     server.start()
     try:
@@ -80,7 +80,7 @@ def test_metrics_http_operational_snapshots():
         server.stop()
 
 
-def test_metrics_http_extended_telemetry_endpoints(monkeypatch):
+def test_metrics_http_extended_telemetry_endpoints(monkeypatch) -> None:
     monkeypatch.setattr(
         metrics_http,
         "_build_sentiment_snapshot",

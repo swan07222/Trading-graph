@@ -17,7 +17,7 @@ def _df(rows: int = 220) -> pd.DataFrame:
     )
 
 
-def test_technical_analyzer_has_extended_indicators():
+def test_technical_analyzer_has_extended_indicators() -> None:
     ta = TechnicalAnalyzer()
     summary = ta.analyze(_df())
     keys = set(summary.indicators.keys())
@@ -34,7 +34,7 @@ def test_technical_analyzer_has_extended_indicators():
     assert "ema_21" in ta.list_supported_indicators()
 
 
-def test_technical_analyzer_sanitizes_dirty_ohlcv():
+def test_technical_analyzer_sanitizes_dirty_ohlcv() -> None:
     ta = TechnicalAnalyzer()
     df = _df()
     df["close"] = df["close"].astype(object)
@@ -49,7 +49,7 @@ def test_technical_analyzer_sanitizes_dirty_ohlcv():
     assert all(pd.notna(v) for v in summary.indicators.values())
 
 
-def test_technical_analyzer_requires_ohlcv_columns():
+def test_technical_analyzer_requires_ohlcv_columns() -> None:
     ta = TechnicalAnalyzer()
     bad = pd.DataFrame({"close": [100.0] * 120})
     with pytest.raises(ValueError, match="Missing required columns"):

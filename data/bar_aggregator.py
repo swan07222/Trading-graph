@@ -40,7 +40,7 @@ class BarAggregator:
         self,
         interval_seconds: int = 60,
         volume_mode: VolumeMode = VolumeMode.CUMULATIVE
-    ):
+    ) -> None:
         self._interval = max(1, int(interval_seconds))
         self._volume_mode = volume_mode
         self._current_bars: dict[str, dict] = {}
@@ -51,8 +51,7 @@ class BarAggregator:
 
     @staticmethod
     def _to_shanghai_naive(ts_raw) -> datetime:
-        """Normalize quote timestamps to naive Asia/Shanghai time.
-        """
+        """Normalize quote timestamps to naive Asia/Shanghai time."""
         try:
             from zoneinfo import ZoneInfo
 
@@ -88,8 +87,7 @@ class BarAggregator:
 
     @staticmethod
     def _is_cn_session_time(ts_val: datetime) -> bool:
-        """Check whether a timestamp is within CN A-share regular trading session.
-        """
+        """Check whether a timestamp is within CN A-share regular trading session."""
         if not isinstance(ts_val, datetime):
             return False
         # Monday..Friday
@@ -101,22 +99,22 @@ class BarAggregator:
         afternoon = 1300 <= hhmm < 1457
         return bool(morning or afternoon)
 
-    def add_callback(self, callback: Callable):
+    def add_callback(self, callback: Callable) -> None:
         with self._lock:
             if callback not in self._callbacks:
                 self._callbacks.append(callback)
 
-    def remove_callback(self, callback: Callable):
+    def remove_callback(self, callback: Callable) -> None:
         with self._lock:
             if callback in self._callbacks:
                 self._callbacks.remove(callback)
 
-    def set_volume_mode(self, mode: VolumeMode):
+    def set_volume_mode(self, mode: VolumeMode) -> None:
         """Change volume interpretation mode."""
         with self._lock:
             self._volume_mode = mode
 
-    def on_tick(self, quote):
+    def on_tick(self, quote) -> None:
         """Process incoming tick/quote.
 
         FIXED: Now emits partial bar on EVERY tick for real-time updates.
@@ -181,7 +179,7 @@ class BarAggregator:
                 self._emit_bar(symbol, bar, final=False)
                 self._last_partial_emit_ts[symbol] = now_ts
 
-    def _update_volume(self, bar: dict, quote):
+    def _update_volume(self, bar: dict, quote) -> None:
         """Update bar volume based on configured mode."""
         raw_vol = getattr(quote, "volume", None)
         if raw_vol is None:
@@ -255,14 +253,14 @@ class BarAggregator:
             return f"{mins}m"
         return f"{sec}s"
 
-    def set_interval(self, interval_seconds: int):
+    def set_interval(self, interval_seconds: int) -> None:
         """Change bar interval; clears partial bars."""
         with self._lock:
             self._interval = max(1, int(interval_seconds))
             self._current_bars.clear()
             self._last_partial_emit_ts.clear()
 
-    def _emit_bar(self, symbol: str, bar: dict, final: bool = True):
+    def _emit_bar(self, symbol: str, bar: dict, final: bool = True) -> None:
         """Emit bar to callbacks.
 
         Args:

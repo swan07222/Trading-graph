@@ -3,7 +3,7 @@ from pathlib import Path
 from utils.release import build_release_manifest, sign_manifest_hmac, verify_manifest_hmac
 
 
-def test_release_manifest_build_and_sign(tmp_path: Path):
+def test_release_manifest_build_and_sign(tmp_path: Path) -> None:
     a = tmp_path / "a.whl"
     b = tmp_path / "b.tar.gz"
     a.write_bytes(b"alpha")
@@ -20,7 +20,7 @@ def test_release_manifest_build_and_sign(tmp_path: Path):
     assert signed["signature"]["type"] == "hmac-sha256"
 
 
-def test_release_manifest_signing_is_idempotent():
+def test_release_manifest_signing_is_idempotent() -> None:
     manifest = {
         "version": "v9.9.9",
         "generated_at": "2026-02-14T00:00:00+00:00",
@@ -34,7 +34,7 @@ def test_release_manifest_signing_is_idempotent():
     assert signed_twice["signature"]["type"] == "hmac-sha256"
 
 
-def test_release_manifest_hmac_verify_roundtrip():
+def test_release_manifest_hmac_verify_roundtrip() -> None:
     manifest = {
         "version": "v1.0.0",
         "generated_at": "2026-02-14T00:00:00+00:00",

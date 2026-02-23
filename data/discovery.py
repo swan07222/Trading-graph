@@ -323,7 +323,7 @@ class UniversalStockDiscovery:
         min_market_cap: float = 0,
         include_st: bool = False,
     ) -> list[DiscoveredStock]:
-        """Discover stocks from the best available source.
+        r"""Discover stocks from the best available source.
 
         Args:
             callback:        ``(message, count_so_far) -> None`` progress hook.

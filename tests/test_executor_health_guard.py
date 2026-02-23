@@ -2,6 +2,7 @@ import queue
 import threading
 from collections import deque
 from types import SimpleNamespace
+from typing import NoReturn
 
 import pytest
 
@@ -11,7 +12,7 @@ from trading.executor import ExecutionEngine
 from trading.health import ComponentType, HealthStatus
 
 
-def test_submit_blocks_when_unhealthy():
+def test_submit_blocks_when_unhealthy() -> None:
     eng = ExecutionEngine.__new__(ExecutionEngine)
     eng._running = True
     eng.mode = TradingMode.SIMULATION
@@ -30,16 +31,16 @@ def test_submit_blocks_when_unhealthy():
     assert "unhealthy" in getattr(sig, "_rejected_reason", "").lower()
 
 
-def test_degraded_auto_pause_switches_to_manual():
+def test_degraded_auto_pause_switches_to_manual() -> None:
     class DummyAutoTrader:
-        def __init__(self):
+        def __init__(self) -> None:
             self._mode = AutoTradeMode.AUTO
             self.set_calls = []
 
         def get_mode(self):
             return self._mode
 
-        def set_mode(self, mode):
+        def set_mode(self, mode) -> None:
             self._mode = mode
             self.set_calls.append(mode)
 
@@ -54,7 +55,7 @@ def test_degraded_auto_pause_switches_to_manual():
     assert eng.auto_trader.set_calls
 
 
-def test_submit_blocks_when_delayed_quote_guard_enabled():
+def test_submit_blocks_when_delayed_quote_guard_enabled() -> None:
     import trading.executor as exec_mod
 
     eng = ExecutionEngine.__new__(ExecutionEngine)
@@ -109,11 +110,11 @@ def test_submit_blocks_when_delayed_quote_guard_enabled():
         exec_mod.get_audit_log = old_audit
 
 
-def test_trigger_model_drift_alarm_forces_live_auto_manual():
+def test_trigger_model_drift_alarm_forces_live_auto_manual() -> None:
     import trading.executor as exec_mod
 
     class DummyAutoTrader:
-        def __init__(self):
+        def __init__(self) -> None:
             self._mode = AutoTradeMode.AUTO
             self.pause_calls = []
             self.mode_calls = []
@@ -121,11 +122,11 @@ def test_trigger_model_drift_alarm_forces_live_auto_manual():
         def get_mode(self):
             return self._mode
 
-        def set_mode(self, mode):
+        def set_mode(self, mode) -> None:
             self._mode = mode
             self.mode_calls.append(mode)
 
-        def pause(self, reason, duration_seconds=0):
+        def pause(self, reason, duration_seconds=0) -> None:
             self.pause_calls.append((str(reason), int(duration_seconds)))
 
     eng = ExecutionEngine.__new__(ExecutionEngine)
@@ -161,7 +162,7 @@ def test_trigger_model_drift_alarm_forces_live_auto_manual():
         exec_mod.get_audit_log = old_audit
 
 
-def test_submit_blocks_on_best_exec_quote_deviation():
+def test_submit_blocks_on_best_exec_quote_deviation() -> None:
     import trading.executor as exec_mod
 
     eng = ExecutionEngine.__new__(ExecutionEngine)
@@ -205,7 +206,7 @@ def test_submit_blocks_on_best_exec_quote_deviation():
         exec_mod.get_access_control = old_access
         exec_mod.get_audit_log = old_audit
 
-def test_execution_snapshot_includes_broker_routing():
+def test_execution_snapshot_includes_broker_routing() -> None:
     eng = ExecutionEngine.__new__(ExecutionEngine)
     eng._running = True
     eng.mode = TradingMode.SIMULATION
@@ -222,7 +223,7 @@ def test_execution_snapshot_includes_broker_routing():
     assert snap["broker"]["routing"]["active_venue"] == "ths"
 
 
-def test_execution_quality_snapshot_tracks_slippage():
+def test_execution_quality_snapshot_tracks_slippage() -> None:
     eng = ExecutionEngine.__new__(ExecutionEngine)
     eng._exec_quality_lock = threading.RLock()
     eng._exec_quality = {
@@ -246,7 +247,7 @@ def test_execution_quality_snapshot_tracks_slippage():
     assert snap["by_reason"].get("entry", 0) == 1
 
 
-def test_synthetic_exit_plan_triggers_and_clears():
+def test_synthetic_exit_plan_triggers_and_clears() -> None:
     eng = ExecutionEngine.__new__(ExecutionEngine)
     eng._synthetic_exit_lock = threading.RLock()
     eng._synthetic_exits = {}
@@ -254,7 +255,7 @@ def test_synthetic_exit_plan_triggers_and_clears():
 
     calls = []
 
-    def _fake_submit(plan, trigger_price, reason):
+    def _fake_submit(plan, trigger_price, reason) -> bool:
         calls.append((plan["symbol"], trigger_price, reason))
         return True
 
@@ -278,7 +279,7 @@ def test_synthetic_exit_plan_triggers_and_clears():
     assert order.id not in eng._synthetic_exits
 
 
-def test_synthetic_exit_state_roundtrip(tmp_path):
+def test_synthetic_exit_state_roundtrip(tmp_path) -> None:
     eng = ExecutionEngine.__new__(ExecutionEngine)
     eng._synthetic_exit_lock = threading.RLock()
     eng._synthetic_exits = {
@@ -309,7 +310,7 @@ def test_synthetic_exit_state_roundtrip(tmp_path):
     assert int(restored["open_qty"]) == 100
 
 
-def test_submit_limit_keeps_limit_price_and_tracks_arrival_quote():
+def test_submit_limit_keeps_limit_price_and_tracks_arrival_quote() -> None:
     import trading.executor as exec_mod
 
     eng = ExecutionEngine.__new__(ExecutionEngine)
@@ -354,7 +355,7 @@ def test_submit_limit_keeps_limit_price_and_tracks_arrival_quote():
         exec_mod.get_audit_log = old_audit
 
 
-def test_submit_rejects_stop_order_without_trigger():
+def test_submit_rejects_stop_order_without_trigger() -> None:
     import trading.executor as exec_mod
 
     eng = ExecutionEngine.__new__(ExecutionEngine)
@@ -397,7 +398,7 @@ def test_submit_rejects_stop_order_without_trigger():
         exec_mod.get_audit_log = old_audit
 
 
-def test_submit_blocks_live_advanced_order_without_native_support():
+def test_submit_blocks_live_advanced_order_without_native_support() -> None:
     import trading.executor as exec_mod
 
     eng = ExecutionEngine.__new__(ExecutionEngine)
@@ -449,12 +450,12 @@ def test_submit_blocks_live_advanced_order_without_native_support():
         exec_mod.get_audit_log = old_audit
 
 
-def test_submit_with_retry_escalates_programming_error_when_strict_policy_enabled():
+def test_submit_with_retry_escalates_programming_error_when_strict_policy_enabled() -> None:
     eng = ExecutionEngine.__new__(ExecutionEngine)
     eng.mode = TradingMode.SIMULATION
     eng._wait_or_stop = lambda _seconds: False
 
-    def _boom_submit(_order):
+    def _boom_submit(_order) -> NoReturn:
         raise TypeError("bug-like")
 
     eng.broker = SimpleNamespace(submit_order=_boom_submit)
@@ -469,11 +470,11 @@ def test_submit_with_retry_escalates_programming_error_when_strict_policy_enable
         CONFIG.security.strict_runtime_exception_policy = old_strict
 
 
-def test_oco_sibling_cancel_on_fill():
+def test_oco_sibling_cancel_on_fill() -> None:
     eng = ExecutionEngine.__new__(ExecutionEngine)
     cancelled = []
 
-    def _cancel(order_id):
+    def _cancel(order_id) -> bool:
         cancelled.append(order_id)
         return True
 
@@ -506,7 +507,7 @@ def test_oco_sibling_cancel_on_fill():
     assert all(u[0] != other.id for u in updates)
 
 
-def test_market_fingerprint_ignores_price_noise():
+def test_market_fingerprint_ignores_price_noise() -> None:
     s1 = TradeSignal(
         symbol="600519",
         side=OrderSide.BUY,
@@ -524,7 +525,7 @@ def test_market_fingerprint_ignores_price_noise():
     assert ExecutionEngine._make_submit_fingerprint(s1) == ExecutionEngine._make_submit_fingerprint(s2)
 
 
-def test_live_readiness_check_skips_for_non_live_mode():
+def test_live_readiness_check_skips_for_non_live_mode() -> None:
     eng = ExecutionEngine.__new__(ExecutionEngine)
     eng.mode = TradingMode.SIMULATION
 
@@ -533,7 +534,7 @@ def test_live_readiness_check_skips_for_non_live_mode():
     assert msg == ""
 
 
-def test_live_readiness_non_strict_allows_start_check(monkeypatch):
+def test_live_readiness_non_strict_allows_start_check(monkeypatch) -> None:
     import utils.institutional as institutional
 
     eng = ExecutionEngine.__new__(ExecutionEngine)
@@ -561,7 +562,7 @@ def test_live_readiness_non_strict_allows_start_check(monkeypatch):
     assert "Institutional readiness failed" in msg
 
 
-def test_start_blocks_when_live_readiness_fails_strict(monkeypatch):
+def test_start_blocks_when_live_readiness_fails_strict(monkeypatch) -> None:
     import utils.institutional as institutional
 
     eng = ExecutionEngine.__new__(ExecutionEngine)

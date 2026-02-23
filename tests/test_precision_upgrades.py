@@ -6,7 +6,7 @@ from data.processor import DataProcessor
 from models.auto_learner import ContinuousLearner, LearningProgress
 
 
-def test_profit_aware_labels_use_wider_neutral_band():
+def test_profit_aware_labels_use_wider_neutral_band() -> None:
     p = DataProcessor()
     base = pd.DataFrame(
         {
@@ -39,7 +39,7 @@ def test_profit_aware_labels_use_wider_neutral_band():
     assert aware_up <= normal_up
 
 
-def test_threshold_score_prefers_clear_edges():
+def test_threshold_score_prefers_clear_edges() -> None:
     samples = [
         {
             "predicted": 2,
@@ -93,7 +93,7 @@ def _make_validation_learner(post_val: dict):
         def validate_model(self, *_a, **_k):
             return post_val
 
-        def restore_backup(self, *_a, **_k):
+        def restore_backup(self, *_a, **_k) -> None:
             restore_calls["count"] += 1
 
     learner._guardian = _Guardian()
@@ -104,7 +104,7 @@ def _make_validation_learner(post_val: dict):
     return learner, restore_calls, tuned_calls
 
 
-def test_validate_and_decide_rejects_weak_lower_bound_without_baseline():
+def test_validate_and_decide_rejects_weak_lower_bound_without_baseline() -> None:
     samples = [
         {
             "predicted": 2,
@@ -188,7 +188,7 @@ def test_validate_and_decide_rejects_weak_lower_bound_without_baseline():
     assert tuned_calls["count"] == 0
 
 
-def test_validate_and_decide_relaxes_degradation_in_high_vol_regime():
+def test_validate_and_decide_relaxes_degradation_in_high_vol_regime() -> None:
     hi_vol_samples = []
     for i in range(80):
         pred = 2 if (i % 2 == 0) else 0
@@ -232,7 +232,7 @@ def test_validate_and_decide_relaxes_degradation_in_high_vol_regime():
     assert tuned_calls["count"] == 1
 
 
-def test_tune_precision_thresholds_returns_adaptive_metadata():
+def test_tune_precision_thresholds_returns_adaptive_metadata() -> None:
     samples = []
     for i in range(120):
         is_good = i < 80

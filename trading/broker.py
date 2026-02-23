@@ -1,5 +1,5 @@
 ﻿# trading/broker.py
-"""Unified Broker Interface - Production Grade with Full Fill Sync
+"""Unified Broker Interface - Production Grade with Full Fill Sync.
 
 Supports:
 - Paper Trading (Simulator)

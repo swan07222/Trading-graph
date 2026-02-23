@@ -14,7 +14,7 @@ def _main_loop(
     self, mode, max_stocks, epochs, min_market_cap, include_all,
     continuous, interval, horizon, lookback, cycle_seconds, incremental,
     priority_stock_codes,
-):
+) -> None:
     cycle = 0
     current_epochs = epochs
     base_incremental = bool(incremental)

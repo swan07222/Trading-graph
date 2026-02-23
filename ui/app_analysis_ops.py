@@ -25,12 +25,12 @@ def _lazy_get(module: str, name: str) -> Any:
     return getattr(import_module(module), name)
 
 def _quick_trade(self, pred: Any) -> None:
-    """Quick trade from signal"""
+    """Quick trade from signal."""
     self.stock_input.setText(pred.stock_code)
     self._analyze_stock()
 
 def _update_watchlist(self) -> None:
-    """Update watchlist display"""
+    """Update watchlist display."""
     sanitized = _sanitize_watch_list(
         self.watch_list,
         max_size=self.MAX_WATCHLIST_SIZE,
@@ -138,7 +138,7 @@ def _on_watchlist_click(
     self._analyze_stock()
 
 def _add_to_watchlist(self) -> None:
-    """Add stock to watchlist with validation"""
+    """Add stock to watchlist with validation."""
     code = self.stock_input.text().strip()
     normalized = self._ui_norm(code)
 
@@ -173,7 +173,7 @@ def _add_to_watchlist(self) -> None:
         self.log(f"{normalized} already in watchlist", "info")
 
 def _remove_from_watchlist(self) -> None:
-    """Remove selected stock from watchlist"""
+    """Remove selected stock from watchlist."""
     row = self.watchlist.currentRow()
     if row >= 0 and row < self.watchlist.rowCount():
         item = self.watchlist.item(row, 0)
@@ -191,7 +191,7 @@ def _remove_from_watchlist(self) -> None:
                     )
 
 def _analyze_stock(self) -> None:
-    """Analyze stock with validation"""
+    """Analyze stock with validation."""
     code = self.stock_input.text().strip()
     if not code:
         self.log("Please enter a stock code", "warning")
@@ -644,7 +644,7 @@ def _on_analysis_done(self, pred: Any) -> None:
     self.workers.pop('analyze', None)
 
 def _on_analysis_error(self, error: str) -> None:
-    """Handle analysis error"""
+    """Handle analysis error."""
     self.analyze_action.setEnabled(True)
     self.progress.hide()
     self.status_label.setText("Ready")
@@ -655,7 +655,7 @@ def _on_analysis_error(self, error: str) -> None:
     self.workers.pop('analyze', None)
 
 def _update_details(self, pred: Any) -> None:
-    """Update analysis details with news sentiment"""
+    """Update analysis details with news sentiment."""
     Signal = _lazy_get("models.predictor", "Signal")
 
     signal_colors = {
@@ -908,7 +908,7 @@ def _update_details(self, pred: Any) -> None:
     self.details_text.setHtml(html)
 
 def _add_to_history(self, pred: Any) -> None:
-    """Add prediction to history"""
+    """Add prediction to history."""
     row = 0
     self.history_table.insertRow(row)
 
@@ -1194,7 +1194,7 @@ def _update_correct_guess_profit_ui(self) -> None:
         )
 
 def _scan_stocks(self) -> None:
-    """Scan all stocks for signals"""
+    """Scan all stocks for signals."""
     if self.predictor is None or self.predictor.ensemble is None:
         self.log("No model loaded", "error")
         return
@@ -1223,7 +1223,7 @@ def _scan_stocks(self) -> None:
     worker.start()
 
 def _on_scan_done(self, picks: list[Any]) -> None:
-    """Handle scan completion"""
+    """Handle scan completion."""
     self.progress.hide()
 
     if not picks:

@@ -17,7 +17,7 @@ class OrderDatabase:
     Uses WAL mode for better concurrency.
     """
 
-    def __init__(self, db_path: Path = None):
+    def __init__(self, db_path: Path = None) -> None:
         self._db_path = (
             Path(db_path) if db_path
             else (CONFIG.data_dir / "orders.db")
@@ -41,7 +41,7 @@ class OrderDatabase:
             self._local.conn.execute("PRAGMA foreign_keys=ON")
         return self._local.conn
 
-    def close_connection(self):
+    def close_connection(self) -> None:
         """Close thread-local connection."""
         if hasattr(self._local, 'conn') and self._local.conn:
             try:
@@ -61,7 +61,7 @@ class OrderDatabase:
             conn.rollback()
             raise
 
-    def _init_db(self):
+    def _init_db(self) -> None:
         with self._init_lock:
             with self.transaction() as conn:
                 conn.execute("""
@@ -205,8 +205,7 @@ class OrderDatabase:
                 )
 
     def _ensure_orders_schema(self, conn: sqlite3.Connection) -> None:
-        """Apply non-destructive schema upgrades for legacy OMS databases.
-        """
+        """Apply non-destructive schema upgrades for legacy OMS databases."""
         cols = {
             str(row["name"])
             for row in conn.execute("PRAGMA table_info(orders)").fetchall()
@@ -219,7 +218,7 @@ class OrderDatabase:
     # ------------------------------------------------------------------
     # ------------------------------------------------------------------
 
-    def save_order(self, order: Order, conn: sqlite3.Connection = None):
+    def save_order(self, order: Order, conn: sqlite3.Connection = None) -> None:
         """Save or update order. Uses provided conn for transactions."""
         target = conn or self._conn
         auto_commit = conn is None
@@ -546,7 +545,7 @@ class OrderDatabase:
     # ------------------------------------------------------------------
     # ------------------------------------------------------------------
 
-    def save_position(self, pos: Position, conn: sqlite3.Connection = None):
+    def save_position(self, pos: Position, conn: sqlite3.Connection = None) -> None:
         target = conn or self._conn
         auto_commit = conn is None
 
@@ -604,7 +603,7 @@ class OrderDatabase:
 
         return positions
 
-    def delete_position(self, symbol: str, conn: sqlite3.Connection = None):
+    def delete_position(self, symbol: str, conn: sqlite3.Connection = None) -> None:
         target = conn or self._conn
         auto_commit = conn is None
 
@@ -624,7 +623,7 @@ class OrderDatabase:
 
     def save_account_state(
         self, account: Account, conn: sqlite3.Connection = None
-    ):
+    ) -> None:
         target = conn or self._conn
         auto_commit = conn is None
 
@@ -689,7 +688,7 @@ class OrderDatabase:
     def save_t1_pending(
         self, symbol: str, quantity: int, purchase_date: date,
         conn: sqlite3.Connection = None
-    ):
+    ) -> None:
         """Save T+1 pending — accumulates if same symbol+date."""
         target = conn or self._conn
         auto_commit = conn is None
@@ -728,7 +727,7 @@ class OrderDatabase:
     def clear_t1_pending(
         self, symbol: str, purchase_date: date = None,
         conn: sqlite3.Connection = None
-    ):
+    ) -> None:
         target = conn or self._conn
         auto_commit = conn is None
 

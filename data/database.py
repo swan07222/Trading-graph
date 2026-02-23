@@ -36,7 +36,7 @@ class MarketDatabase:
     FIX #9: Migration connection is registered and always cleaned up.
     """
 
-    def __init__(self, db_path: Path = None):
+    def __init__(self, db_path: Path = None) -> None:
         self._db_path = db_path or CONFIG.data_dir / "market_data.db"
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
         self._local = threading.local()
@@ -95,7 +95,7 @@ class MarketDatabase:
             )
         return self._local.conn
 
-    def _cleanup_dead_threads(self):
+    def _cleanup_dead_threads(self) -> None:
         """Remove and close connections for threads that no longer exist.
 
         FIX #3: Called under _connections_lock by the caller.
@@ -132,7 +132,7 @@ class MarketDatabase:
     # Schema initialization
     # ------------------------------------------------------------------
 
-    def _init_db(self):
+    def _init_db(self) -> None:
         """Initialize or migrate database schema."""
         with self._schema_lock:
             try:
@@ -158,7 +158,7 @@ class MarketDatabase:
 
     def _set_schema_version(
         self, conn: sqlite3.Connection, version: int
-    ):
+    ) -> None:
         conn.execute(
             "INSERT INTO _meta (key, value) VALUES ('schema_version', ?) "
             "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
@@ -166,7 +166,7 @@ class MarketDatabase:
         )
         conn.commit()
 
-    def _create_or_migrate(self):
+    def _create_or_migrate(self) -> None:
         """Create tables or migrate from older schema versions.
 
         FIX #9: Migration connection is tracked and always closed.
@@ -192,7 +192,7 @@ class MarketDatabase:
                     pass
 
     @staticmethod
-    def _apply_v1(conn: sqlite3.Connection):
+    def _apply_v1(conn: sqlite3.Connection) -> None:
         """V1: core tables."""
         conn.executescript(
             """
@@ -245,7 +245,7 @@ class MarketDatabase:
         conn.commit()
 
     @staticmethod
-    def _apply_v2(conn: sqlite3.Connection):
+    def _apply_v2(conn: sqlite3.Connection) -> None:
         """V2: intraday bars table."""
         conn.executescript(
             """
@@ -737,7 +737,7 @@ class MarketDatabase:
 
     def upsert_intraday_bars(
         self, code: str, interval: str, df: pd.DataFrame
-    ):
+    ) -> None:
         """Insert/update intraday bars."""
         if df is None or df.empty:
             return
@@ -846,7 +846,7 @@ class MarketDatabase:
         sector: str = None,
         market_cap: float = None,
         is_st: bool = False,
-    ):
+    ) -> None:
         """Insert or update stock metadata."""
         with self._transaction() as conn:
             conn.execute(
@@ -884,7 +884,7 @@ class MarketDatabase:
     # Daily bars
     # ------------------------------------------------------------------
 
-    def upsert_bars(self, code: str, df: pd.DataFrame):
+    def upsert_bars(self, code: str, df: pd.DataFrame) -> None:
         """Insert/update daily bars with column validation and sanitization.
 
         FIX #23: Now sanitizes daily bars (high >= low, positive close, etc.)
@@ -1087,7 +1087,7 @@ class MarketDatabase:
         prob_down: float,
         confidence: float,
         price: float,
-    ):
+    ) -> None:
         """Save model prediction."""
         with self._transaction() as conn:
             conn.execute(
@@ -1147,7 +1147,7 @@ class MarketDatabase:
 
         return stats
 
-    def vacuum(self):
+    def vacuum(self) -> None:
         """Optimize database.
 
         FIX #15: Uses a dedicated connection for VACUUM to avoid
@@ -1168,7 +1168,7 @@ class MarketDatabase:
                 except (sqlite3.Error, OSError):
                     pass
 
-    def close(self):
+    def close(self) -> None:
         """Close this thread's connection."""
         if (
             hasattr(self._local, "conn")
@@ -1186,7 +1186,7 @@ class MarketDatabase:
                 self._connections.pop(tid, None)
             self._local.conn = None
 
-    def close_all(self):
+    def close_all(self) -> None:
         """Close all tracked connections (call on shutdown)."""
         with self._connections_lock:
             for _tid, conn in list(self._connections.items()):

@@ -12,7 +12,7 @@ def _load_release_preflight_module():
     return module
 
 
-def test_release_preflight_default_includes_lint_and_pytest(monkeypatch):
+def test_release_preflight_default_includes_lint_and_pytest(monkeypatch) -> None:
     module = _load_release_preflight_module()
     captured_steps: list[str] = []
 
@@ -46,7 +46,7 @@ def test_release_preflight_default_includes_lint_and_pytest(monkeypatch):
     assert captured_steps[:2] == ["ruff_lint", "pytest_strict"]
 
 
-def test_release_preflight_allow_test_warnings(monkeypatch):
+def test_release_preflight_allow_test_warnings(monkeypatch) -> None:
     module = _load_release_preflight_module()
     captured_pytest_cmd: list[str] = []
 
@@ -83,7 +83,7 @@ def test_release_preflight_allow_test_warnings(monkeypatch):
     assert "error" not in captured_pytest_cmd
 
 
-def test_release_preflight_returns_failure_when_any_step_fails(monkeypatch):
+def test_release_preflight_returns_failure_when_any_step_fails(monkeypatch) -> None:
     module = _load_release_preflight_module()
 
     def fake_run_step(name: str, cmd: list[str]):
@@ -115,7 +115,7 @@ def test_release_preflight_returns_failure_when_any_step_fails(monkeypatch):
     assert module.main() == 1
 
 
-def test_release_preflight_includes_policy_gates_when_typecheck_enabled(monkeypatch):
+def test_release_preflight_includes_policy_gates_when_typecheck_enabled(monkeypatch) -> None:
     module = _load_release_preflight_module()
     captured_steps: list[str] = []
 
@@ -166,7 +166,7 @@ def test_release_preflight_includes_policy_gates_when_typecheck_enabled(monkeypa
     assert "module_size_gate" in captured_steps
 
 
-def test_release_preflight_quick_profile_skips_slow_steps(monkeypatch):
+def test_release_preflight_quick_profile_skips_slow_steps(monkeypatch) -> None:
     module = _load_release_preflight_module()
     captured_steps: list[str] = []
 

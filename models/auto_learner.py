@@ -70,11 +70,11 @@ def get_effective_learning_rate() -> float:
     """
     return getattr(_thread_local, 'learning_rate', CONFIG.model.learning_rate)
 
-def set_thread_local_lr(lr: float):
+def set_thread_local_lr(lr: float) -> None:
     """Set thread-local learning rate override."""
     _thread_local.learning_rate = lr
 
-def clear_thread_local_lr():
+def clear_thread_local_lr() -> None:
     """Clear thread-local learning rate override."""
     if hasattr(_thread_local, 'learning_rate'):
         delattr(_thread_local, 'learning_rate')
@@ -126,7 +126,7 @@ class ContinuousLearner:
     _MIN_REJECTION_COOLDOWN_SECONDS = 600
     _MAX_REJECTION_COOLDOWN_SECONDS = 3600
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.progress = LearningProgress()
         self._cancel_token = CancellationToken()
         self._thread: threading.Thread | None = None
@@ -151,16 +151,16 @@ class ContinuousLearner:
     # =========================================================================
     # =========================================================================
 
-    def add_callback(self, callback: Callable[[LearningProgress], None]):
+    def add_callback(self, callback: Callable[[LearningProgress], None]) -> None:
         with self._lock:
             self._callbacks.append(callback)
 
-    def remove_callback(self, callback: Callable[[LearningProgress], None]):
+    def remove_callback(self, callback: Callable[[LearningProgress], None]) -> None:
         with self._lock:
             if callback in self._callbacks:
                 self._callbacks.remove(callback)
 
-    def _notify(self):
+    def _notify(self) -> None:
         self.progress.last_update = datetime.now()
         with self._lock:
             callbacks = self._callbacks.copy()
@@ -170,7 +170,7 @@ class ContinuousLearner:
             except _AUTO_LEARNER_RECOVERABLE_EXCEPTIONS as e:
                 log.warning("Progress callback failed: %s", e)
 
-    def _update(self, stage=None, message=None, progress=None, **kw):
+    def _update(self, stage=None, message=None, progress=None, **kw) -> None:
         if stage:
             self.progress.stage = stage
         if message:
@@ -189,15 +189,14 @@ class ContinuousLearner:
         with self._lock:
             return set(self._holdout_codes)
 
-    def _set_holdout_codes(self, codes: list[str]):
+    def _set_holdout_codes(self, codes: list[str]) -> None:
         with self._lock:
             self._holdout_codes = list(codes)
         self._guardian.set_holdout(codes)
 
     # FIX PAUSE: Extracted to reusable method
     def _wait_if_paused(self) -> bool:
-        """Block while paused. Returns True if should stop.
-        """
+        """Block while paused. Returns True if should stop."""
         while self.progress.is_paused and not self._should_stop():
             if self._cancel_token.wait(timeout=1.0):
                 break
@@ -302,13 +301,13 @@ class ContinuousLearner:
     def run(self, **kwargs):
         return _run_impl(self, **kwargs)
 
-    def stop(self, join_timeout: float = 30.0):
+    def stop(self, join_timeout: float = 30.0) -> None:
         _stop_impl(self, join_timeout=join_timeout)
 
-    def pause(self):
+    def pause(self) -> None:
         _pause_impl(self)
 
-    def resume(self):
+    def resume(self) -> None:
         _resume_impl(self)
 
     # =========================================================================
@@ -411,7 +410,7 @@ class ContinuousLearner:
         ok_codes: list[str], new_batch: list[str], replay_batch: list[str],
         interval: str, horizon: int, lookback: int,
         acc: float, cycle_number: int, start_time: datetime,
-    ):
+    ) -> None:
         """Shared logic for finalizing a training cycle (auto or targeted)."""
         mode = self.progress.training_mode
 
@@ -509,7 +508,7 @@ class ContinuousLearner:
 
         return eff_interval, eff_horizon, eff_lookback, min_bars
 
-    def _ensure_holdout(self, interval, lookback, min_bars, cycle_number):
+    def _ensure_holdout(self, interval, lookback, min_bars, cycle_number) -> None:
         """FIX: Adaptive holdout size based on pool size."""
         min_required = max(1, int(self._MIN_HOLDOUT_PREDICTIONS))
         with self._lock:
@@ -713,7 +712,7 @@ class ContinuousLearner:
         model_epoch_map: dict[str, int] = {}
         max_progress_seen = 50.0
 
-        def cb(model_name, epoch_idx, val_acc):
+        def cb(model_name, epoch_idx, val_acc) -> None:
             nonlocal max_progress_seen
             if self._should_stop():
                 raise CancelledException()
@@ -916,7 +915,7 @@ class ContinuousLearner:
         except _AUTO_LEARNER_RECOVERABLE_EXCEPTIONS as e:
             log.debug("Failed saving precision profile: %s", e)
 
-    def _cache_training_sequences(self, codes, interval, horizon, lookback):
+    def _cache_training_sequences(self, codes, interval, horizon, lookback) -> None:
         try:
             from data.features import FeatureEngine
             from data.processor import DataProcessor
@@ -964,7 +963,7 @@ class ContinuousLearner:
         except _AUTO_LEARNER_RECOVERABLE_EXCEPTIONS as e:
             log.debug(f"Sequence caching failed: {e}")
 
-    def _log_cycle(self, cycle, new_batch, replay_batch, ok_codes, acc, accepted):
+    def _log_cycle(self, cycle, new_batch, replay_batch, ok_codes, acc, accepted) -> None:
         try:
             history_dir = CONFIG.DATA_DIR / "cycle_history"
             history_dir.mkdir(parents=True, exist_ok=True)
@@ -1005,7 +1004,7 @@ class ContinuousLearner:
     def _load_state(self):
         return _load_state_impl(self)
 
-    def reset_rotation(self):
+    def reset_rotation(self) -> None:
         self._rotator.reset_processed()
         self._rotator.clear_old_failures()
         self._rotator.clear_pool()
@@ -1013,7 +1012,7 @@ class ContinuousLearner:
         self._save_state()
         log.info("Rotation reset")
 
-    def reset_all(self):
+    def reset_all(self) -> None:
         self._rotator = StockRotator()
         self._replay = ExperienceReplayBuffer()
         self._metrics = MetricTracker()

@@ -45,7 +45,7 @@ def _lazy_get(module: str, name: str) -> Any:
 
 
 def _create_left_panel(self: Any) -> QWidget:
-    """Create left control panel with interval/forecast settings"""
+    """Create left control panel with interval/forecast settings."""
     panel = QWidget()
     panel.setObjectName("leftPanel")
     panel.setMinimumWidth(260)
@@ -212,7 +212,7 @@ def _create_left_panel(self: Any) -> QWidget:
 
 
 def _create_right_panel(self: Any) -> QWidget:
-    """Create right panel with portfolio, news, orders, and auto-trade"""
+    """Create right panel with portfolio, news, orders, and auto-trade."""
     panel = QWidget()
     panel.setObjectName("rightPanel")
     layout = QVBoxLayout(panel)

@@ -39,7 +39,7 @@ class ComponentType(Enum):
 
 @dataclass
 class ComponentHealth:
-    """Health status of a component"""
+    """Health status of a component."""
     component: ComponentType
     status: HealthStatus = HealthStatus.HEALTHY
     last_check: datetime = None
@@ -55,7 +55,7 @@ class ComponentHealth:
 
 @dataclass
 class SystemHealth:
-    """Overall system health"""
+    """Overall system health."""
     status: HealthStatus = HealthStatus.HEALTHY
     components: dict[str, ComponentHealth] = field(default_factory=dict)
 
@@ -120,10 +120,9 @@ def _get_disk_percent() -> float:
             return 0.0
 
 class HealthMonitor:
-    """Comprehensive health monitoring system.
-    """
+    """Comprehensive health monitoring system."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self._lock = threading.RLock()
         self._running = False
         self._thread: threading.Thread | None = None
@@ -164,11 +163,11 @@ class HealthMonitor:
         EVENT_BUS.subscribe(EventType.ERROR, self._on_error_event)
         EVENT_BUS.subscribe(EventType.TICK, self._on_tick_event)
 
-    def _init_components(self):
+    def _init_components(self) -> None:
         for comp_type in ComponentType:
             self._components[comp_type] = ComponentHealth(component=comp_type)
 
-    def start(self):
+    def start(self) -> None:
         if self._running:
             return
 
@@ -179,13 +178,13 @@ class HealthMonitor:
         self._thread.start()
         log.info("Health monitor started")
 
-    def stop(self):
+    def stop(self) -> None:
         self._running = False
         if self._thread:
             self._thread.join(timeout=5)
         log.info("Health monitor stopped")
 
-    def _monitor_loop(self):
+    def _monitor_loop(self) -> None:
         while self._running:
             try:
                 self._run_checks()
@@ -194,11 +193,11 @@ class HealthMonitor:
 
             time.sleep(10)
 
-    def attach_broker(self, broker):
+    def attach_broker(self, broker) -> None:
         with self._lock:
             self._broker = broker
 
-    def _run_checks(self):
+    def _run_checks(self) -> None:
         """Run all health checks."""
         with self._lock:
             cpu = psutil.cpu_percent(interval=1) if HAS_PSUTIL else 0.0
@@ -215,7 +214,7 @@ class HealthMonitor:
             health = self._calculate_overall_health(cpu, memory, disk)
             self._check_status_change(health)
 
-    def _check_database(self):
+    def _check_database(self) -> None:
         """Check database health.
 
         FIX: Tests the market data database directly instead of importing
@@ -244,7 +243,7 @@ class HealthMonitor:
 
         comp.last_check = datetime.now()
 
-    def _check_broker(self):
+    def _check_broker(self) -> None:
         """Check broker connection health."""
         comp = self._components[ComponentType.BROKER]
         start = time.time()
@@ -291,7 +290,7 @@ class HealthMonitor:
 
         comp.last_check = datetime.now()
 
-    def _check_data_feed(self):
+    def _check_data_feed(self) -> None:
         comp = self._components[ComponentType.DATA_FEED]
 
         if self._last_quote_time:
@@ -314,7 +313,7 @@ class HealthMonitor:
 
         comp.last_check = datetime.now()
 
-    def _check_model(self):
+    def _check_model(self) -> None:
         """Check ML model health - accept legacy OR interval/horizon models."""
         comp = self._components[ComponentType.MODEL]
 
@@ -467,7 +466,7 @@ class HealthMonitor:
 
         return len(violations) == 0, violations
 
-    def _check_status_change(self, health: SystemHealth):
+    def _check_status_change(self, health: SystemHealth) -> None:
         if self._last_status is None or self._last_status != health.status:
             self._last_status = health.status
             for callback in self._on_status_change:
@@ -486,7 +485,7 @@ class HealthMonitor:
 
         self._prev_degraded = health.degraded_mode
 
-    def _on_error_event(self, event: Event):
+    def _on_error_event(self, event: Event) -> None:
         with self._lock:
             error_msg = (
                 f"{datetime.now().isoformat()}: "
@@ -497,7 +496,7 @@ class HealthMonitor:
             if len(self._recent_errors) > self._max_errors:
                 self._recent_errors = self._recent_errors[-self._max_errors:]
 
-    def _on_tick_event(self, event: Event):
+    def _on_tick_event(self, event: Event) -> None:
         with self._lock:
             self._last_quote_time = datetime.now()
 
@@ -507,7 +506,7 @@ class HealthMonitor:
         status: HealthStatus,
         latency_ms: float = 0,
         error: str = "",
-    ):
+    ) -> None:
         with self._lock:
             comp = self._components.get(component)
             if comp:
@@ -536,10 +535,10 @@ class HealthMonitor:
     def get_health_json(self) -> str:
         return json.dumps(self.get_health().to_dict(), indent=2)
 
-    def on_degraded(self, callback: Callable):
+    def on_degraded(self, callback: Callable) -> None:
         self._on_degraded.append(callback)
 
-    def on_status_change(self, callback: Callable):
+    def on_status_change(self, callback: Callable) -> None:
         self._on_status_change.append(callback)
 
 # FIX: Module-level lock instead of globals() pattern

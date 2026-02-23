@@ -285,7 +285,7 @@ def _ensure_doctor_gate(report: dict[str, Any]) -> None:
 
 
 def main() -> int:
-    """Main entry point"""
+    """Main entry point."""
     parser = argparse.ArgumentParser(description='AI Stock Trading System')
 
     parser.add_argument('--train', action='store_true', help='Train model')
@@ -544,7 +544,7 @@ def run_recovery_drill() -> None:
     1) Create isolated OMS DB in temp folder
     2) Submit an order, process a fill
     3) Simulate crash: drop OMS instance
-    4) Re-open OMS from same DB and verify fills are not duplicated
+    4) Re-open OMS from same DB and verify fills are not duplicated.
     """
     import tempfile
     from pathlib import Path

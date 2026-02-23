@@ -245,7 +245,7 @@ class TrainWorker(QThread):
     finished = pyqtSignal(dict)
     failed = pyqtSignal(str)
 
-    def __init__(self, stocks: list[str], epochs: int, incremental: bool = False):
+    def __init__(self, stocks: list[str], epochs: int, incremental: bool = False) -> None:
         super().__init__()
         self.stocks = list(stocks)
         self.epochs = int(epochs)
@@ -254,7 +254,7 @@ class TrainWorker(QThread):
         CancellationToken = _get_cancellation_token()
         self.cancel_token = CancellationToken()
 
-    def run(self):
+    def run(self) -> None:
         try:
             from models.trainer import Trainer
 
@@ -262,7 +262,7 @@ class TrainWorker(QThread):
 
             trainer = Trainer()
 
-            def cb(model_name: str, epoch_idx: int, val_acc: float):
+            def cb(model_name: str, epoch_idx: int, val_acc: float) -> None:
                 self.cancel_token.raise_if_cancelled()
                 self.epoch.emit(
                     str(model_name),
@@ -301,7 +301,7 @@ class TrainWorker(QThread):
 
             self.failed.emit(str(e))
 
-    def cancel(self):
+    def cancel(self) -> None:
         """Cancel training gracefully via token."""
         self.cancel_token.cancel()
 
@@ -316,14 +316,14 @@ class BacktestWorker(QThread):
         stocks: list[str],
         train_months: int,
         test_months: int
-    ):
+    ) -> None:
         super().__init__()
         self.stocks = list(stocks)
         self.train_months = int(train_months)
         self.test_months = int(test_months)
         self._cancelled = False
 
-    def run(self):
+    def run(self) -> None:
         try:
             if self._cancelled:
                 return
@@ -344,14 +344,14 @@ class BacktestWorker(QThread):
             if not self._cancelled:
                 self.failed.emit(str(e))
 
-    def cancel(self):
+    def cancel(self) -> None:
         """Cancel backtest."""
         self._cancelled = True
 
 class TrainingDialog(QDialog):
     """Dialog for training the AI model from scratch or incrementally."""
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self.setWindowTitle("Train AI Model")
         self.setMinimumSize(720, 520)
@@ -486,7 +486,7 @@ class TrainingDialog(QDialog):
             if it.text().strip()
         ]
 
-    def _add_stock(self):
+    def _add_stock(self) -> None:
         """Add a stock code to the list."""
         code = self.add_stock_edit.text().strip()
         if not code:
@@ -509,13 +509,13 @@ class TrainingDialog(QDialog):
         self.stocks_list.addItem(QListWidgetItem(code))
         self.add_stock_edit.clear()
 
-    def _remove_selected(self):
+    def _remove_selected(self) -> None:
         """Remove selected stocks from the list."""
         for it in self.stocks_list.selectedItems():
             row = self.stocks_list.row(it)
             self.stocks_list.takeItem(row)
 
-    def start_training(self):
+    def start_training(self) -> None:
         """Start the training process."""
         if self._is_training:
             return
@@ -560,7 +560,7 @@ class TrainingDialog(QDialog):
         self.worker.failed.connect(self._on_failed)
         self.worker.start()
 
-    def stop_training(self):
+    def stop_training(self) -> None:
         """Stop training gracefully via cancellation token."""
         if self.worker:
             self.logs.append("Requesting cancellation...")
@@ -577,11 +577,11 @@ class TrainingDialog(QDialog):
 
         self._set_idle("Stopped by user")
 
-    def _on_log(self, msg: str):
+    def _on_log(self, msg: str) -> None:
         """Handle log message from worker."""
         self.logs.append(str(msg))
 
-    def _on_epoch(self, model_name: str, epoch: int, val_acc: float):
+    def _on_epoch(self, model_name: str, epoch: int, val_acc: float) -> None:
         """Handle epoch completion from worker."""
         self.logs.append(
             f"[{model_name}] epoch={epoch} val_acc={val_acc:.2%}"
@@ -611,7 +611,7 @@ class TrainingDialog(QDialog):
             f"Training... {pct}% ({observed_models}/{total_models} models)"
         )
 
-    def _on_finished(self, results: dict):
+    def _on_finished(self, results: dict) -> None:
         """Handle training completion."""
         if results.get("cancelled"):
             self.training_result = {"status": "cancelled"}
@@ -656,7 +656,7 @@ class TrainingDialog(QDialog):
             f"Samples: {results.get('train_samples', 0)}"
         )
 
-    def _on_failed(self, err: str):
+    def _on_failed(self, err: str) -> None:
         """Handle training failure."""
         self.training_result = {"status": "failed", "error": str(err)}
         self.logs.append(f"ERROR: {err}")
@@ -667,7 +667,7 @@ class TrainingDialog(QDialog):
             f"Training failed with error:\n\n{err[:500]}"
         )
 
-    def _set_idle(self, status: str):
+    def _set_idle(self, status: str) -> None:
         """Reset dialog to idle state."""
         self._is_training = False
         self.status.setText(status)
@@ -683,7 +683,7 @@ class TrainingDialog(QDialog):
 
         self.worker = None
 
-    def closeEvent(self, event):
+    def closeEvent(self, event) -> None:
         """Handle close - stop training if running."""
         if self._is_training and self.worker:
             reply = QMessageBox.question(
@@ -714,7 +714,7 @@ class TrainTrainedStocksDialog(QDialog):
         trained_codes: list[str],
         last_train_map: dict[str, str] | None = None,
         parent=None,
-    ):
+    ) -> None:
         super().__init__(parent)
         self.setWindowTitle("Train Trained Stocks")
         self.setMinimumSize(680, 520)
@@ -837,13 +837,13 @@ class TrainTrainedStocksDialog(QDialog):
         n = int(self.count_spin.value())
         return list(self._ordered_codes[: max(1, n)])
 
-    def _refresh_preview(self):
+    def _refresh_preview(self) -> None:
         self.preview_list.clear()
         for code in self._selected_codes():
             last_text = self._display_train_dt(self._last_train_map.get(code, ""))
             self.preview_list.addItem(f"{code}  | last train: {last_text}")
 
-    def start_training(self):
+    def start_training(self) -> None:
         if self._is_training:
             return
         stocks = self._selected_codes()
@@ -884,7 +884,7 @@ class TrainTrainedStocksDialog(QDialog):
         self.worker.failed.connect(self._on_failed)
         self.worker.start()
 
-    def stop_training(self):
+    def stop_training(self) -> None:
         if self.worker:
             self.logs.append("Requesting cancellation...")
             self.stop_btn.setEnabled(False)
@@ -892,10 +892,10 @@ class TrainTrainedStocksDialog(QDialog):
             self.worker.wait(10000)
         self._set_idle("Stopped")
 
-    def _on_log(self, msg: str):
+    def _on_log(self, msg: str) -> None:
         self.logs.append(str(msg))
 
-    def _on_epoch(self, model_name: str, epoch: int, val_acc: float):
+    def _on_epoch(self, model_name: str, epoch: int, val_acc: float) -> None:
         self.logs.append(f"[{model_name}] epoch={epoch} val_acc={val_acc:.2%}")
         key = str(model_name or "model")
         prev = int(self._epoch_by_model.get(key, 0))
@@ -917,7 +917,7 @@ class TrainTrainedStocksDialog(QDialog):
             f"Training... {pct}% ({observed_models}/{total_models} models)"
         )
 
-    def _on_finished(self, results: dict):
+    def _on_finished(self, results: dict) -> None:
         if results.get("cancelled") or str(results.get("status", "")).lower() == "cancelled":
             self.training_result = {
                 "status": "cancelled",
@@ -954,7 +954,7 @@ class TrainTrainedStocksDialog(QDialog):
             ),
         )
 
-    def _on_failed(self, err: str):
+    def _on_failed(self, err: str) -> None:
         self.training_result = {
             "status": "failed",
             "error": str(err),
@@ -964,7 +964,7 @@ class TrainTrainedStocksDialog(QDialog):
         self._set_idle("Failed")
         QMessageBox.critical(self, "Training Failed", f"{err[:500]}")
 
-    def _set_idle(self, status: str):
+    def _set_idle(self, status: str) -> None:
         self._is_training = False
         self.status.setText(status)
         self.start_btn.setEnabled(True)
@@ -974,7 +974,7 @@ class TrainTrainedStocksDialog(QDialog):
         self.epochs_spin.setEnabled(True)
         self.worker = None
 
-    def closeEvent(self, event):
+    def closeEvent(self, event) -> None:
         if self._is_training and self.worker:
             reply = QMessageBox.question(
                 self,
@@ -997,7 +997,7 @@ class TrainTrainedStocksDialog(QDialog):
 class BacktestDialog(QDialog):
     """Dialog for walk-forward backtesting."""
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self.setWindowTitle("Walk-Forward Backtest")
         self.setMinimumSize(720, 520)
@@ -1053,7 +1053,7 @@ class BacktestDialog(QDialog):
         self.stop_btn.clicked.connect(self.stop_backtest)
         self.close_btn.clicked.connect(self.close)
 
-    def run_backtest(self):
+    def run_backtest(self) -> None:
         """Start backtest."""
         self.logs.clear()
         self.progress.setVisible(True)
@@ -1071,7 +1071,7 @@ class BacktestDialog(QDialog):
         self.worker.failed.connect(self._on_failed)
         self.worker.start()
 
-    def stop_backtest(self):
+    def stop_backtest(self) -> None:
         """Stop backtest."""
         if self.worker:
             self.worker.cancel()
@@ -1079,7 +1079,7 @@ class BacktestDialog(QDialog):
             self.worker = None
         self._reset_ui("Stopped")
 
-    def _on_done(self, result):
+    def _on_done(self, result) -> None:
         """Handle backtest completion."""
         self._reset_ui("Done")
         try:
@@ -1090,19 +1090,19 @@ class BacktestDialog(QDialog):
         except Exception:
             self.logs.append(str(result))
 
-    def _on_failed(self, err: str):
+    def _on_failed(self, err: str) -> None:
         """Handle backtest failure."""
         self._reset_ui("Failed")
         self.logs.append(f"ERROR: {err}")
 
-    def _reset_ui(self, status: str = "Ready"):
+    def _reset_ui(self, status: str = "Ready") -> None:
         """Reset UI to idle state."""
         self.progress.setVisible(False)
         self.run_btn.setEnabled(True)
         self.stop_btn.setEnabled(False)
         self.worker = None
 
-    def closeEvent(self, event):
+    def closeEvent(self, event) -> None:
         """Handle close - stop backtest if running."""
         if self.worker and self.worker.isRunning():
             self.stop_backtest()
@@ -1114,7 +1114,7 @@ class BrokerSettingsDialog(QDialog):
     For real trading with THS: easytrader requires THS client.
     """
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self.setWindowTitle("Broker Settings")
         self.setMinimumWidth(520)
@@ -1156,7 +1156,7 @@ class BrokerSettingsDialog(QDialog):
         btns.rejected.connect(self.reject)
         layout.addWidget(btns)
 
-    def _browse(self):
+    def _browse(self) -> None:
         """Browse for broker executable."""
         path, _ = QFileDialog.getOpenFileName(
             self, "Select broker executable"
@@ -1164,7 +1164,7 @@ class BrokerSettingsDialog(QDialog):
         if path:
             self.path_edit.setText(path)
 
-    def _save(self):
+    def _save(self) -> None:
         """Save broker settings."""
         mode = self.mode_combo.currentText().strip().lower()
         try:
@@ -1187,10 +1187,9 @@ class BrokerSettingsDialog(QDialog):
         self.accept()
 
 class RiskSettingsDialog(QDialog):
-    """Adjust risk parameters at runtime (in-memory).
-    """
+    """Adjust risk parameters at runtime (in-memory)."""
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self.setWindowTitle("Risk Settings")
         self.setMinimumWidth(520)
@@ -1261,7 +1260,7 @@ class RiskSettingsDialog(QDialog):
             pass
         return int(default)
 
-    def _save(self):
+    def _save(self) -> None:
         """Save risk settings to CONFIG (in-memory)."""
         try:
             CONFIG.MAX_POSITION_PCT = float(self.max_pos_pct.value())

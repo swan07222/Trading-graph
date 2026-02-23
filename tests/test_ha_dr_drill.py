@@ -12,7 +12,7 @@ def _load_ha_dr_module():
     return module
 
 
-def test_ha_dr_drill_passes_for_sqlite_backend(tmp_path: Path):
+def test_ha_dr_drill_passes_for_sqlite_backend(tmp_path: Path) -> None:
     mod = _load_ha_dr_module()
     report = mod.run_ha_dr_drill(
         backend="sqlite",

@@ -15,7 +15,7 @@ class _DummyEngine:
         self.risk_manager = None
 
 
-def test_auto_trader_worker_thread_is_non_daemon():
+def test_auto_trader_worker_thread_is_non_daemon() -> None:
     trader = AutoTrader(engine=_DummyEngine(), predictor=None, watch_list=[])
     trader._start_loop()
     try:
@@ -25,7 +25,7 @@ def test_auto_trader_worker_thread_is_non_daemon():
         trader._stop_loop()
 
 
-def test_execution_engine_join_worker_threads_clears_refs():
+def test_execution_engine_join_worker_threads_clears_refs() -> None:
     eng = ExecutionEngine.__new__(ExecutionEngine)
     t = threading.Thread(target=lambda: None, name="dummy-thread")
     eng._exec_thread = t
@@ -47,7 +47,7 @@ def test_execution_engine_join_worker_threads_clears_refs():
     assert eng._checkpoint_thread is None
 
 
-def test_start_engine_thread_skips_duplicate_live_thread():
+def test_start_engine_thread_skips_duplicate_live_thread() -> None:
     class DummyEngine:
         def __init__(self) -> None:
             self._running = True

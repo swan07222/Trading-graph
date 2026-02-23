@@ -12,7 +12,7 @@ class _DummyEngine:
     pass
 
 
-def test_auto_trader_get_state_is_snapshot_copy():
+def test_auto_trader_get_state_is_snapshot_copy() -> None:
     at = AutoTrader(engine=_DummyEngine(), predictor=None, watch_list=[])
     at.state.mode = AutoTradeMode.AUTO
     at.state.trades_today = 5
@@ -24,7 +24,7 @@ def test_auto_trader_get_state_is_snapshot_copy():
     assert snap.mode == AutoTradeMode.AUTO
 
 
-def test_auto_trader_precision_quality_gate():
+def test_auto_trader_precision_quality_gate() -> None:
     at = AutoTrader(engine=_DummyEngine(), predictor=None, watch_list=[])
 
     pred_bad_entropy = SimpleNamespace(entropy=0.99, prob_up=0.7, prob_down=0.1)
@@ -43,7 +43,7 @@ def test_auto_trader_precision_quality_gate():
         CONFIG.precision.min_edge = old_min_edge
 
 
-def test_auto_trader_precision_quality_gate_blocks_short_history_fallback():
+def test_auto_trader_precision_quality_gate_blocks_short_history_fallback() -> None:
     at = AutoTrader(engine=_DummyEngine(), predictor=None, watch_list=[])
 
     old_block = bool(
@@ -64,7 +64,7 @@ def test_auto_trader_precision_quality_gate_blocks_short_history_fallback():
         CONFIG.precision.block_auto_trade_on_short_history_fallback = old_block
 
 
-def test_auto_trader_precision_quality_gate_fail_closed_on_error():
+def test_auto_trader_precision_quality_gate_fail_closed_on_error() -> None:
     at = AutoTrader(engine=_DummyEngine(), predictor=None, watch_list=[])
 
     old_fail_closed = bool(
@@ -88,7 +88,7 @@ def test_auto_trader_precision_quality_gate_fail_closed_on_error():
         CONFIG.precision.max_entropy = old_max_entropy
 
 
-def test_auto_trader_caps_buy_quantity_with_risk_manager():
+def test_auto_trader_caps_buy_quantity_with_risk_manager() -> None:
     from models.predictor import Signal
 
     quick_pred = SimpleNamespace(
@@ -142,7 +142,7 @@ def test_auto_trader_caps_buy_quantity_with_risk_manager():
     assert pending.quantity == 200
 
 
-def test_auto_trader_stop_does_not_block_on_scan_lock():
+def test_auto_trader_stop_does_not_block_on_scan_lock() -> None:
     old_enabled = bool(CONFIG.auto_trade.enabled)
     old_scan_interval = int(CONFIG.auto_trade.scan_interval_seconds)
     try:
@@ -168,7 +168,7 @@ def test_auto_trader_stop_does_not_block_on_scan_lock():
         CONFIG.auto_trade.scan_interval_seconds = old_scan_interval
 
 
-def test_news_aggregator_stale_cache_fallback_and_source_health(monkeypatch):
+def test_news_aggregator_stale_cache_fallback_and_source_health(monkeypatch) -> None:
     agg = NewsAggregator()
     stale_item = NewsItem(
         title="stale cached headline",
@@ -201,7 +201,7 @@ def test_news_aggregator_stale_cache_fallback_and_source_health(monkeypatch):
     assert health["tencent"]["success_rate"] < 1.0
 
 
-def test_news_aggregator_institutional_snapshot_shape(monkeypatch):
+def test_news_aggregator_institutional_snapshot_shape(monkeypatch) -> None:
     agg = NewsAggregator()
 
     class _Env:
@@ -237,7 +237,7 @@ def test_news_aggregator_institutional_snapshot_shape(monkeypatch):
     assert "source_health" in snap
 
 
-def test_news_aggregator_stock_fallback_from_market_pool(monkeypatch):
+def test_news_aggregator_stock_fallback_from_market_pool(monkeypatch) -> None:
     agg = NewsAggregator()
 
     class _Env:
@@ -271,7 +271,7 @@ def test_news_aggregator_stock_fallback_from_market_pool(monkeypatch):
     assert "600519" in out[0].title
 
 
-def test_news_aggregator_stock_news_prefers_direct_over_context(monkeypatch):
+def test_news_aggregator_stock_news_prefers_direct_over_context(monkeypatch) -> None:
     agg = NewsAggregator()
 
     class _Env:
@@ -303,7 +303,7 @@ def test_news_aggregator_stock_news_prefers_direct_over_context(monkeypatch):
     assert "600519" in out[0].title
 
 
-def test_news_aggregator_stock_news_does_not_mutate_shared_market_items(monkeypatch):
+def test_news_aggregator_stock_news_does_not_mutate_shared_market_items(monkeypatch) -> None:
     agg = NewsAggregator()
 
     class _Env:

@@ -15,7 +15,7 @@ log = get_logger(__name__)
 
 @dataclass
 class NetworkEnv:
-    """Current network environment snapshot"""
+    """Current network environment snapshot."""
     is_china_direct: bool = True          # True = China IP, no VPN
     is_vpn_active: bool = False           # True = foreign IP (Astrill ON)
 
@@ -100,8 +100,7 @@ class NetworkDetector:
             return self._env  # type: ignore[return-value]
 
     def _run_detect(self, prev_env: NetworkEnv | None) -> NetworkEnv:
-        """Call detector while supporting legacy/monkeypatched zero-arg callables.
-        """
+        """Call detector while supporting legacy/monkeypatched zero-arg callables."""
         detect_fn = self._detect
         try:
             n_params = len(inspect.signature(detect_fn).parameters)

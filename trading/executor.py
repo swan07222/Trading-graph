@@ -343,8 +343,7 @@ class ExecutionEngine:
             log.debug(f"Synthetic exit state restore failed: {e}")
 
     def _resolve_price(self, symbol: str, hinted_price: float = 0.0) -> float:
-        """Resolve one authoritative price for this submission.
-        """
+        """Resolve one authoritative price for this submission."""
         try:
             px = float(hinted_price or 0.0)
             if px > 0:
@@ -650,8 +649,7 @@ class ExecutionEngine:
     def _get_quote_snapshot(
         self, symbol: str
     ) -> tuple[float, datetime | None, str, bool]:
-        """Returns (price, timestamp, source, is_delayed).
-        """
+        """Returns (price, timestamp, source, is_delayed)."""
         # 1) feed cache
         try:
             from data.feeds import get_feed_manager
@@ -811,7 +809,7 @@ class ExecutionEngine:
         """Extra exchange-style guardrails:
         - duplicate suppression
         - per-symbol burst cap
-        - max single-order notional cap
+        - max single-order notional cap.
         """
         now = time.time()
         risk_cfg = getattr(CONFIG, "risk", None)

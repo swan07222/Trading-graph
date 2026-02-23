@@ -3,7 +3,7 @@ from types import SimpleNamespace
 from utils.institutional import collect_institutional_readiness
 
 
-def test_institutional_readiness_passes_with_strict_controls():
+def test_institutional_readiness_passes_with_strict_controls() -> None:
     sec = SimpleNamespace(
         enable_runtime_lease=True,
         runtime_lease_backend="sqlite",
@@ -35,7 +35,7 @@ def test_institutional_readiness_passes_with_strict_controls():
     assert report["failed_required_controls"] == []
 
 
-def test_institutional_readiness_flags_missing_controls():
+def test_institutional_readiness_flags_missing_controls() -> None:
     sec = SimpleNamespace(
         enable_runtime_lease=False,
         runtime_lease_backend="file",
@@ -70,7 +70,7 @@ def test_institutional_readiness_flags_missing_controls():
     assert "policy_change_ticket" in failed
 
 
-def test_institutional_readiness_parses_string_booleans_safely():
+def test_institutional_readiness_parses_string_booleans_safely() -> None:
     sec = SimpleNamespace(
         enable_runtime_lease="false",
         runtime_lease_backend="sqlite",

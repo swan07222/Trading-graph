@@ -6,7 +6,7 @@ from config.settings import CONFIG
 from utils.security import get_audit_log, reset_security_singletons
 
 
-def test_audit_hash_chain_integrity_ok(tmp_path):
+def test_audit_hash_chain_integrity_ok(tmp_path) -> None:
     old = CONFIG._audit_dir_cached
     CONFIG._audit_dir_cached = tmp_path
     try:
@@ -26,7 +26,7 @@ def test_audit_hash_chain_integrity_ok(tmp_path):
         CONFIG._audit_dir_cached = old
 
 
-def test_audit_hash_chain_detects_tamper(tmp_path):
+def test_audit_hash_chain_detects_tamper(tmp_path) -> None:
     old = CONFIG._audit_dir_cached
     CONFIG._audit_dir_cached = tmp_path
     try:
@@ -62,7 +62,7 @@ def test_audit_hash_chain_detects_tamper(tmp_path):
         CONFIG._audit_dir_cached = old
 
 
-def test_audit_prune_respects_legal_hold(tmp_path):
+def test_audit_prune_respects_legal_hold(tmp_path) -> None:
     old = CONFIG._audit_dir_cached
     old_ret = getattr(CONFIG.security, "audit_retention_days", 365)
     old_auto = getattr(CONFIG.security, "audit_auto_prune", True)

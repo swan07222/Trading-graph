@@ -3,6 +3,7 @@ from __future__ import annotations
 import threading
 from datetime import datetime, timedelta
 from types import SimpleNamespace
+from typing import NoReturn
 
 import pandas as pd
 
@@ -10,13 +11,13 @@ from data.fetcher import DataFetcher, DataSource, Quote, SinaHistorySource
 
 
 class _DummyCache:
-    def __init__(self):
+    def __init__(self) -> None:
         self._store = {}
 
     def get(self, key, ttl):  # noqa: ARG002
         return self._store.get(key)
 
-    def set(self, key, value):
+    def set(self, key, value) -> None:
         self._store[key] = value
 
 
@@ -49,7 +50,7 @@ def _make_fetcher_for_realtime() -> DataFetcher:
     return f
 
 
-def test_realtime_batch_uses_non_tencent_batch_fallback_when_tencent_partial(monkeypatch):
+def test_realtime_batch_uses_non_tencent_batch_fallback_when_tencent_partial(monkeypatch) -> None:
     monkeypatch.setenv("TRADING_OFFLINE", "0")
     fetcher = _make_fetcher_for_realtime()
 
@@ -83,7 +84,7 @@ def test_realtime_batch_uses_non_tencent_batch_fallback_when_tencent_partial(mon
     assert out["000001"].source == "akshare"
 
 
-def test_realtime_batch_uses_non_tencent_single_quote_for_missing(monkeypatch):
+def test_realtime_batch_uses_non_tencent_single_quote_for_missing(monkeypatch) -> None:
     monkeypatch.setenv("TRADING_OFFLINE", "0")
     fetcher = _make_fetcher_for_realtime()
 
@@ -114,7 +115,7 @@ def test_realtime_batch_uses_non_tencent_single_quote_for_missing(monkeypatch):
     assert out["000001"].source == "yahoo"
 
 
-def test_realtime_batch_drops_stale_localdb_last_close_by_default(monkeypatch):
+def test_realtime_batch_drops_stale_localdb_last_close_by_default(monkeypatch) -> None:
     monkeypatch.setenv("TRADING_OFFLINE", "0")
     fetcher = _make_fetcher_for_realtime()
 
@@ -147,7 +148,7 @@ def test_realtime_batch_drops_stale_localdb_last_close_by_default(monkeypatch):
     assert "600519" not in out
 
 
-def test_realtime_batch_partial_missing_keeps_fresh_last_good_only(monkeypatch):
+def test_realtime_batch_partial_missing_keeps_fresh_last_good_only(monkeypatch) -> None:
     monkeypatch.setenv("TRADING_OFFLINE", "0")
     fetcher = _make_fetcher_for_realtime()
 
@@ -190,7 +191,7 @@ def test_realtime_batch_partial_missing_keeps_fresh_last_good_only(monkeypatch):
     assert out["000001"].source == "last_good"
 
 
-def test_realtime_batch_allows_stale_localdb_when_explicitly_opted_in(monkeypatch):
+def test_realtime_batch_allows_stale_localdb_when_explicitly_opted_in(monkeypatch) -> None:
     monkeypatch.setenv("TRADING_OFFLINE", "0")
     fetcher = _make_fetcher_for_realtime()
     fetcher._allow_stale_realtime_fallback = True
@@ -227,7 +228,7 @@ def test_realtime_batch_allows_stale_localdb_when_explicitly_opted_in(monkeypatc
     assert out["600519"].is_delayed is True
 
 
-def test_realtime_batch_uses_spot_cache_when_tencent_missing(monkeypatch):
+def test_realtime_batch_uses_spot_cache_when_tencent_missing(monkeypatch) -> None:
     import data.fetcher as fetcher_mod
 
     monkeypatch.setenv("TRADING_OFFLINE", "0")
@@ -265,7 +266,7 @@ def test_realtime_batch_uses_spot_cache_when_tencent_missing(monkeypatch):
     assert float(out["600519"].price) == 1888.8
 
 
-def test_realtime_batch_spot_cache_tolerates_malformed_values(monkeypatch):
+def test_realtime_batch_spot_cache_tolerates_malformed_values(monkeypatch) -> None:
     import data.fetcher as fetcher_mod
 
     monkeypatch.setenv("TRADING_OFFLINE", "0")
@@ -312,7 +313,7 @@ def test_realtime_batch_spot_cache_tolerates_malformed_values(monkeypatch):
     assert int(out["000001"].volume) == 0
 
 
-def test_realtime_batch_drops_stale_spot_cache_snapshot(monkeypatch):
+def test_realtime_batch_drops_stale_spot_cache_snapshot(monkeypatch) -> None:
     import data.fetcher as fetcher_mod
 
     monkeypatch.setenv("TRADING_OFFLINE", "0")
@@ -350,7 +351,7 @@ def test_realtime_batch_drops_stale_spot_cache_snapshot(monkeypatch):
     assert "600519" not in out
 
 
-def test_last_good_fallback_marks_quote_delayed():
+def test_last_good_fallback_marks_quote_delayed() -> None:
     fetcher = _make_fetcher_for_realtime()
     fetcher._last_good_quotes = {"600519": _mk_quote("600519", 101.0, "tencent")}
 
@@ -362,7 +363,7 @@ def test_last_good_fallback_marks_quote_delayed():
     assert out["600519"].is_delayed is True
 
 
-def test_data_source_half_open_probe_during_cooldown(monkeypatch):
+def test_data_source_half_open_probe_during_cooldown(monkeypatch) -> None:
     src = DataSource()
     src.status.disabled_until = datetime.now() + timedelta(seconds=60)
     src.status.consecutive_errors = 8
@@ -378,7 +379,7 @@ def test_data_source_half_open_probe_during_cooldown(monkeypatch):
     assert src.is_available() is False
 
 
-def test_fetch_history_with_depth_retry_uses_larger_windows():
+def test_fetch_history_with_depth_retry_uses_larger_windows() -> None:
     fetcher = DataFetcher.__new__(DataFetcher)
 
     calls: list[int] = []
@@ -412,7 +413,7 @@ def test_fetch_history_with_depth_retry_uses_larger_windows():
     assert any(x > 5 for x in calls)
 
 
-def test_fetch_history_policy_tries_online_before_localdb():
+def test_fetch_history_policy_tries_online_before_localdb() -> None:
     fetcher = DataFetcher.__new__(DataFetcher)
     fetcher._rate_limiter = threading.Semaphore(1)
     fetcher._rate_limit = lambda source, interval: None  # noqa: ARG005
@@ -434,7 +435,7 @@ def test_fetch_history_policy_tries_online_before_localdb():
     class _Tencent:
         name = "tencent"
 
-        def __init__(self):
+        def __init__(self) -> None:
             self.called = 0
 
         def get_history_instrument(self, inst, days, interval="1d"):  # noqa: ARG002
@@ -445,7 +446,7 @@ def test_fetch_history_policy_tries_online_before_localdb():
     class _Akshare:
         name = "akshare"
 
-        def __init__(self):
+        def __init__(self) -> None:
             self.called = 0
 
         def get_history_instrument(self, inst, days, interval="1d"):  # noqa: ARG002
@@ -456,7 +457,7 @@ def test_fetch_history_policy_tries_online_before_localdb():
     class _Local:
         name = "localdb"
 
-        def __init__(self):
+        def __init__(self) -> None:
             self.called = 0
 
         def get_history_instrument(self, inst, days, interval="1d"):  # noqa: ARG002
@@ -483,7 +484,7 @@ def test_fetch_history_policy_tries_online_before_localdb():
     assert call_order[0] == "tencent"
 
 
-def test_history_policy_keeps_nonlocal_fallback_when_single_online_source():
+def test_history_policy_keeps_nonlocal_fallback_when_single_online_source() -> None:
     fetcher = DataFetcher.__new__(DataFetcher)
     fetcher._rate_limiter = threading.Semaphore(1)
     fetcher._rate_limit = lambda source, interval: None  # noqa: ARG005
@@ -520,7 +521,7 @@ def test_history_policy_keeps_nonlocal_fallback_when_single_online_source():
     assert not out.empty
 
 
-def test_fetch_history_daily_collects_multiple_sources_for_consensus():
+def test_fetch_history_daily_collects_multiple_sources_for_consensus() -> None:
     fetcher = DataFetcher.__new__(DataFetcher)
     fetcher._rate_limiter = threading.Semaphore(1)
     fetcher._rate_limit = lambda source, interval: None  # noqa: ARG005
@@ -555,7 +556,7 @@ def test_fetch_history_daily_collects_multiple_sources_for_consensus():
     class _Tencent:
         name = "tencent"
 
-        def __init__(self):
+        def __init__(self) -> None:
             self.called = 0
 
         def get_history_instrument(self, inst, days, interval="1d"):  # noqa: ARG002
@@ -565,7 +566,7 @@ def test_fetch_history_daily_collects_multiple_sources_for_consensus():
     class _Sina:
         name = "sina"
 
-        def __init__(self):
+        def __init__(self) -> None:
             self.called = 0
 
         def get_history_instrument(self, inst, days, interval="1d"):  # noqa: ARG002
@@ -589,7 +590,7 @@ def test_fetch_history_daily_collects_multiple_sources_for_consensus():
     assert sina.called == 1
 
 
-def test_get_history_cn_daily_skips_db_upsert_when_quorum_fails():
+def test_get_history_cn_daily_skips_db_upsert_when_quorum_fails() -> None:
     fetcher = DataFetcher.__new__(DataFetcher)
     fetcher._cache = _DummyCache()
 
@@ -607,14 +608,14 @@ def test_get_history_cn_daily_skips_db_upsert_when_quorum_fails():
     )
 
     class _DB:
-        def __init__(self):
+        def __init__(self) -> None:
             self.upsert_calls = 0
 
         @staticmethod
         def get_bars(code, limit=1000):  # noqa: ARG002
             return pd.DataFrame()
 
-        def upsert_bars(self, code, df):  # noqa: ARG002
+        def upsert_bars(self, code, df) -> None:  # noqa: ARG002
             self.upsert_calls += 1
 
     db = _DB()
@@ -647,7 +648,7 @@ def test_get_history_cn_daily_skips_db_upsert_when_quorum_fails():
     assert db.upsert_calls == 0
 
 
-def test_get_history_cn_daily_upserts_when_quorum_passes():
+def test_get_history_cn_daily_upserts_when_quorum_passes() -> None:
     fetcher = DataFetcher.__new__(DataFetcher)
     fetcher._cache = _DummyCache()
 
@@ -665,14 +666,14 @@ def test_get_history_cn_daily_upserts_when_quorum_passes():
     )
 
     class _DB:
-        def __init__(self):
+        def __init__(self) -> None:
             self.upsert_calls = 0
 
         @staticmethod
         def get_bars(code, limit=1000):  # noqa: ARG002
             return pd.DataFrame()
 
-        def upsert_bars(self, code, df):  # noqa: ARG002
+        def upsert_bars(self, code, df) -> None:  # noqa: ARG002
             self.upsert_calls += 1
 
     db = _DB()
@@ -705,7 +706,7 @@ def test_get_history_cn_daily_upserts_when_quorum_passes():
     assert db.upsert_calls == 1
 
 
-def test_sina_source_parses_kline_payload(monkeypatch):
+def test_sina_source_parses_kline_payload(monkeypatch) -> None:
     monkeypatch.setattr(
         "core.network.get_network_env",
         lambda: SimpleNamespace(is_china_direct=True),
@@ -734,7 +735,7 @@ def test_sina_source_parses_kline_payload(monkeypatch):
     assert float(out["close"].iloc[-1]) > 0
 
 
-def test_sina_source_not_available_off_china_direct(monkeypatch):
+def test_sina_source_not_available_off_china_direct(monkeypatch) -> None:
     monkeypatch.setattr(
         "core.network.get_network_env",
         lambda: SimpleNamespace(is_china_direct=False),
@@ -743,7 +744,7 @@ def test_sina_source_not_available_off_china_direct(monkeypatch):
     assert src.is_available() is False
 
 
-def test_sina_source_parses_jsonp_wrapper(monkeypatch):
+def test_sina_source_parses_jsonp_wrapper(monkeypatch) -> None:
     monkeypatch.setattr(
         "core.network.get_network_env",
         lambda: SimpleNamespace(is_china_direct=True),
@@ -770,7 +771,7 @@ def test_sina_source_parses_jsonp_wrapper(monkeypatch):
     assert "close" in out.columns
 
 
-def test_get_history_cn_intraday_does_not_use_session_shortcut():
+def test_get_history_cn_intraday_does_not_use_session_shortcut() -> None:
     fetcher = DataFetcher.__new__(DataFetcher)
     fetcher._cache = _DummyCache()
 
@@ -826,7 +827,7 @@ def test_get_history_cn_intraday_does_not_use_session_shortcut():
     assert called["intraday"] == 2
 
 
-def test_get_history_post_close_exact_refresh_bypasses_session_shortcut():
+def test_get_history_post_close_exact_refresh_bypasses_session_shortcut() -> None:
     fetcher = DataFetcher.__new__(DataFetcher)
     fetcher._cache = _DummyCache()
 
@@ -872,7 +873,7 @@ def test_get_history_post_close_exact_refresh_bypasses_session_shortcut():
     assert called["intraday"] == 0
 
 
-def test_get_history_intraday_market_open_skips_db_persist(monkeypatch):
+def test_get_history_intraday_market_open_skips_db_persist(monkeypatch) -> None:
     fetcher = DataFetcher.__new__(DataFetcher)
     fetcher._cache = _DummyCache()
     fetcher._get_session_history = lambda symbol, interval, bars: pd.DataFrame()  # noqa: ARG005
@@ -919,7 +920,7 @@ def test_get_history_intraday_market_open_skips_db_persist(monkeypatch):
     assert captured["persist"] is False
 
 
-def test_get_history_intraday_market_closed_allows_db_persist(monkeypatch):
+def test_get_history_intraday_market_closed_allows_db_persist(monkeypatch) -> None:
     fetcher = DataFetcher.__new__(DataFetcher)
     fetcher._cache = _DummyCache()
     fetcher._get_session_history = lambda symbol, interval, bars: pd.DataFrame()  # noqa: ARG005
@@ -966,7 +967,7 @@ def test_get_history_intraday_market_closed_allows_db_persist(monkeypatch):
     assert captured["persist"] is True
 
 
-def test_get_history_cn_intraday_offline_filters_non_session_rows():
+def test_get_history_cn_intraday_offline_filters_non_session_rows() -> None:
     fetcher = DataFetcher.__new__(DataFetcher)
     fetcher._cache = _DummyCache()
 
@@ -1006,7 +1007,7 @@ def test_get_history_cn_intraday_offline_filters_non_session_rows():
     assert out.index[0].strftime("%H:%M") == "09:35"
 
 
-def test_get_history_cn_intraday_rejects_weak_online_snapshot():
+def test_get_history_cn_intraday_rejects_weak_online_snapshot() -> None:
     fetcher = DataFetcher.__new__(DataFetcher)
     fetcher._cache = _DummyCache()
 
@@ -1058,7 +1059,7 @@ def test_get_history_cn_intraday_rejects_weak_online_snapshot():
     assert float(out["close"].min()) >= 10.0
 
 
-def test_get_history_normalizes_interval_alias_before_source_routing():
+def test_get_history_normalizes_interval_alias_before_source_routing() -> None:
     fetcher = DataFetcher.__new__(DataFetcher)
     fetcher._cache = _DummyCache()
     fetcher._get_session_history = lambda symbol, interval, bars: pd.DataFrame()  # noqa: ARG005
@@ -1092,7 +1093,7 @@ def test_get_history_normalizes_interval_alias_before_source_routing():
     assert captured.get("interval") == "60m"
 
 
-def test_get_history_cn_weekly_routes_to_daily_handler():
+def test_get_history_cn_weekly_routes_to_daily_handler() -> None:
     fetcher = DataFetcher.__new__(DataFetcher)
     fetcher._cache = _DummyCache()
     fetcher._get_session_history = (
@@ -1156,7 +1157,7 @@ def test_get_history_cn_weekly_routes_to_daily_handler():
     assert called["interval"] == "1wk"
 
 
-def test_network_force_refresh_is_rate_limited(monkeypatch):
+def test_network_force_refresh_is_rate_limited(monkeypatch) -> None:
     fetcher = _make_fetcher_for_realtime()
     fetcher._last_network_force_refresh_ts = 0.0
     fetcher._network_force_refresh_cooldown_s = 20.0
@@ -1179,7 +1180,7 @@ def test_network_force_refresh_is_rate_limited(monkeypatch):
     assert calls["n"] == 1
 
 
-def test_accept_online_intraday_snapshot_rejects_stale_online():
+def test_accept_online_intraday_snapshot_rejects_stale_online() -> None:
     fetcher = DataFetcher.__new__(DataFetcher)
 
     idx = pd.date_range("2026-02-18 09:30:00", periods=180, freq="min")
@@ -1216,7 +1217,7 @@ def test_accept_online_intraday_snapshot_rejects_stale_online():
     assert ok is False
 
 
-def test_accept_online_intraday_snapshot_accepts_clean_online():
+def test_accept_online_intraday_snapshot_accepts_clean_online() -> None:
     fetcher = DataFetcher.__new__(DataFetcher)
 
     idx_base = pd.date_range("2026-02-18 09:30:00", periods=120, freq="min")
@@ -1256,7 +1257,7 @@ def test_accept_online_intraday_snapshot_accepts_clean_online():
     assert ok is True
 
 
-def test_depth_retry_keeps_probing_when_first_intraday_window_is_bad():
+def test_depth_retry_keeps_probing_when_first_intraday_window_is_bad() -> None:
     fetcher = DataFetcher.__new__(DataFetcher)
 
     calls: list[int] = []
@@ -1303,7 +1304,7 @@ def test_depth_retry_keeps_probing_when_first_intraday_window_is_bad():
     assert float(q["stale_ratio"]) < 0.20
 
 
-def test_refresh_trained_stock_history_uses_last_saved_increment(monkeypatch):
+def test_refresh_trained_stock_history_uses_last_saved_increment(monkeypatch) -> None:
     monkeypatch.setenv("TRADING_OFFLINE", "0")
     fetcher = DataFetcher.__new__(DataFetcher)
 
@@ -1331,13 +1332,13 @@ def test_refresh_trained_stock_history_uses_last_saved_increment(monkeypatch):
     )
 
     class _DB:
-        def __init__(self, seed: pd.DataFrame):
+        def __init__(self, seed: pd.DataFrame) -> None:
             self.df = seed.copy()
 
         def get_intraday_bars(self, code, interval="1m", limit=1000):  # noqa: ARG002
             return self.df.tail(int(limit)).copy()
 
-        def upsert_intraday_bars(self, code, interval, df):  # noqa: ARG002
+        def upsert_intraday_bars(self, code, interval, df) -> None:  # noqa: ARG002
             merged = pd.concat([self.df, df], axis=0)
             merged = merged[~merged.index.duplicated(keep="last")].sort_index()
             self.df = merged
@@ -1345,7 +1346,7 @@ def test_refresh_trained_stock_history_uses_last_saved_increment(monkeypatch):
         def get_bars(self, code, limit=1000):  # noqa: ARG002
             return pd.DataFrame()
 
-        def upsert_bars(self, code, df):  # noqa: ARG002
+        def upsert_bars(self, code, df) -> None:  # noqa: ARG002
             return None
 
     fetcher._db = _DB(base_df)
@@ -1383,7 +1384,7 @@ def test_refresh_trained_stock_history_uses_last_saved_increment(monkeypatch):
     assert int(rows.get("600519", 0)) > 0
 
 
-def test_refresh_trained_stock_history_replaces_realtime_cache_after_close(monkeypatch):
+def test_refresh_trained_stock_history_replaces_realtime_cache_after_close(monkeypatch) -> None:
     import data.fetcher as fetcher_mod
 
     monkeypatch.setenv("TRADING_OFFLINE", "0")
@@ -1399,7 +1400,7 @@ def test_refresh_trained_stock_history_replaces_realtime_cache_after_close(monke
     fetcher = DataFetcher.__new__(DataFetcher)
 
     class _DB:
-        def __init__(self):
+        def __init__(self) -> None:
             self.df = pd.DataFrame()
 
         def get_intraday_bars(self, code, interval="1m", limit=1000):  # noqa: ARG002
@@ -1407,7 +1408,7 @@ def test_refresh_trained_stock_history_replaces_realtime_cache_after_close(monke
                 return pd.DataFrame()
             return self.df.tail(int(limit)).copy()
 
-        def upsert_intraday_bars(self, code, interval, df):  # noqa: ARG002
+        def upsert_intraday_bars(self, code, interval, df) -> None:  # noqa: ARG002
             merged = pd.concat([self.df, df], axis=0)
             merged = merged[~merged.index.duplicated(keep="last")].sort_index()
             self.df = merged
@@ -1415,7 +1416,7 @@ def test_refresh_trained_stock_history_replaces_realtime_cache_after_close(monke
         def get_bars(self, code, limit=1000):  # noqa: ARG002
             return pd.DataFrame()
 
-        def upsert_bars(self, code, df):  # noqa: ARG002
+        def upsert_bars(self, code, df) -> None:  # noqa: ARG002
             return None
 
     fetcher._db = _DB()
@@ -1439,7 +1440,7 @@ def test_refresh_trained_stock_history_replaces_realtime_cache_after_close(monke
     fetcher._fetch_from_sources_instrument = _fake_fetch
 
     class _SessionCache:
-        def __init__(self):
+        def __init__(self) -> None:
             self.purged_calls = 0
             self.upsert_calls = []
             self.purge_kwargs = []
@@ -1454,7 +1455,7 @@ def test_refresh_trained_stock_history_replaces_realtime_cache_after_close(monke
                 "last_akshare_ts": now - timedelta(hours=1),
             }
 
-        def purge_realtime_rows(self, symbol, interval, *, since_ts=None):  # noqa: ARG002
+        def purge_realtime_rows(self, symbol, interval, *, since_ts=None) -> int:  # noqa: ARG002
             self.purged_calls += 1
             self.purge_kwargs.append({"since_ts": since_ts})
             return 100
@@ -1498,7 +1499,7 @@ def test_refresh_trained_stock_history_replaces_realtime_cache_after_close(monke
     assert str(used.get("600519", "")).strip() != ""
 
 
-def test_refresh_trained_stock_history_retries_pending_cache_sync(monkeypatch, tmp_path):
+def test_refresh_trained_stock_history_retries_pending_cache_sync(monkeypatch, tmp_path) -> None:
     import data.fetcher as fetcher_mod
 
     monkeypatch.setenv("TRADING_OFFLINE", "0")
@@ -1516,7 +1517,7 @@ def test_refresh_trained_stock_history_retries_pending_cache_sync(monkeypatch, t
     fetcher._refresh_reconcile_path = tmp_path / "refresh_reconcile_queue.json"
 
     class _DB:
-        def __init__(self):
+        def __init__(self) -> None:
             self.df = pd.DataFrame()
 
         def get_intraday_bars(self, code, interval="1m", limit=1000):  # noqa: ARG002
@@ -1524,7 +1525,7 @@ def test_refresh_trained_stock_history_retries_pending_cache_sync(monkeypatch, t
                 return pd.DataFrame()
             return self.df.tail(int(limit)).copy()
 
-        def upsert_intraday_bars(self, code, interval, df):  # noqa: ARG002
+        def upsert_intraday_bars(self, code, interval, df) -> None:  # noqa: ARG002
             merged = pd.concat([self.df, df], axis=0)
             merged = merged[~merged.index.duplicated(keep="last")].sort_index()
             self.df = merged
@@ -1532,7 +1533,7 @@ def test_refresh_trained_stock_history_retries_pending_cache_sync(monkeypatch, t
         def get_bars(self, code, limit=1000):  # noqa: ARG002
             return pd.DataFrame()
 
-        def upsert_bars(self, code, df):  # noqa: ARG002
+        def upsert_bars(self, code, df) -> None:  # noqa: ARG002
             return None
 
     fetcher._db = _DB()
@@ -1571,10 +1572,10 @@ def test_refresh_trained_stock_history_retries_pending_cache_sync(monkeypatch, t
             frame,
             source="official_history",
             is_final=True,  # noqa: ARG002
-        ):
+        ) -> NoReturn:
             raise RuntimeError("cache write failed")
 
-        def purge_realtime_rows(self, symbol, interval, *, since_ts=None):  # noqa: ARG002
+        def purge_realtime_rows(self, symbol, interval, *, since_ts=None) -> int:  # noqa: ARG002
             return 0
 
     monkeypatch.setattr(fetcher_mod, "get_session_bar_cache", lambda: _FailCache())
@@ -1592,7 +1593,7 @@ def test_refresh_trained_stock_history_retries_pending_cache_sync(monkeypatch, t
     assert fetcher._refresh_reconcile_path.exists()
 
     class _GoodCache:
-        def __init__(self):
+        def __init__(self) -> None:
             self.upsert_calls = 0
 
         def describe_symbol_interval(self, symbol, interval):  # noqa: ARG002
@@ -1616,7 +1617,7 @@ def test_refresh_trained_stock_history_retries_pending_cache_sync(monkeypatch, t
             self.upsert_calls += 1
             return int(len(frame))
 
-        def purge_realtime_rows(self, symbol, interval, *, since_ts=None):  # noqa: ARG002
+        def purge_realtime_rows(self, symbol, interval, *, since_ts=None) -> int:  # noqa: ARG002
             return 0
 
     good_cache = _GoodCache()
@@ -1633,7 +1634,7 @@ def test_refresh_trained_stock_history_retries_pending_cache_sync(monkeypatch, t
     assert int(out2.get("pending_reconcile_after", 0)) == 0
 
 
-def test_reconcile_pending_cache_sync_clears_queue_on_success(monkeypatch, tmp_path):
+def test_reconcile_pending_cache_sync_clears_queue_on_success(monkeypatch, tmp_path) -> None:
     import data.fetcher as fetcher_mod
 
     fetcher = DataFetcher.__new__(DataFetcher)
@@ -1676,7 +1677,7 @@ def test_reconcile_pending_cache_sync_clears_queue_on_success(monkeypatch, tmp_p
     )
 
     class _Cache:
-        def __init__(self):
+        def __init__(self) -> None:
             self.upsert_calls = 0
 
         def upsert_history_frame(
@@ -1698,7 +1699,7 @@ def test_reconcile_pending_cache_sync_clears_queue_on_success(monkeypatch, tmp_p
                 "first_realtime_after_akshare_ts": None,
             }
 
-        def purge_realtime_rows(self, symbol, interval, *, since_ts=None):  # noqa: ARG002
+        def purge_realtime_rows(self, symbol, interval, *, since_ts=None) -> int:  # noqa: ARG002
             return 0
 
     cache = _Cache()
@@ -1715,7 +1716,7 @@ def test_reconcile_pending_cache_sync_clears_queue_on_success(monkeypatch, tmp_p
     assert fetcher.get_pending_reconcile_codes(interval="1m") == []
 
 
-def test_get_multiple_parallel_allows_short_requests_under_global_history_floor():
+def test_get_multiple_parallel_allows_short_requests_under_global_history_floor() -> None:
     fetcher = DataFetcher.__new__(DataFetcher)
     fetcher._all_sources = []
 
@@ -1743,7 +1744,7 @@ def test_get_multiple_parallel_allows_short_requests_under_global_history_floor(
     assert all(len(df) == 50 for df in out.values())
 
 
-def test_get_multiple_parallel_clamps_invalid_negative_worker_count():
+def test_get_multiple_parallel_clamps_invalid_negative_worker_count() -> None:
     fetcher = DataFetcher.__new__(DataFetcher)
     fetcher._all_sources = []
 

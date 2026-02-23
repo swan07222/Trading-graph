@@ -98,7 +98,7 @@ class EnsembleModel:
         self,
         input_size: int,
         model_names: list[str] | None = None,
-    ):
+    ) -> None:
         """Initialize ensemble with the configured model set."""
         if input_size <= 0:
             raise ValueError(f"input_size must be positive, got {input_size}")
@@ -481,7 +481,6 @@ class EnsembleModel:
         CancelledException is raised, preventing a half-trained model
         from being left as the active model.
         """
-
         optimizer = torch.optim.AdamW(
             model.parameters(),
             lr=learning_rate,

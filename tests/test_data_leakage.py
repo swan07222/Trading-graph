@@ -14,11 +14,11 @@ from data.processor import DataProcessor
 
 
 class TestScalerLeakage:
-    """Tests to ensure scaler is not fitted on test data"""
+    """Tests to ensure scaler is not fitted on test data."""
 
     @pytest.fixture
     def sample_df(self):
-        """Create deterministic sample data"""
+        """Create deterministic sample data."""
         np.random.seed(42)
         n = 500
         dates = pd.date_range('2020-01-01', periods=n, freq='D')
@@ -35,16 +35,16 @@ class TestScalerLeakage:
 
         return df
 
-    def test_scaler_not_fitted_before_explicit_call(self):
-        """Scaler should not be fitted until explicitly called"""
+    def test_scaler_not_fitted_before_explicit_call(self) -> None:
+        """Scaler should not be fitted until explicitly called."""
         processor = DataProcessor()
         assert not processor._fitted
 
         with pytest.raises(RuntimeError, match="Scaler not fitted"):
             processor.transform(np.random.randn(10, 5))
 
-    def test_scaler_fitted_only_on_training(self, sample_df):
-        """Scaler must be fitted only on training data"""
+    def test_scaler_fitted_only_on_training(self, sample_df) -> None:
+        """Scaler must be fitted only on training data."""
         feature_engine = FeatureEngine()
         processor = DataProcessor()
 
@@ -73,8 +73,8 @@ class TestScalerLeakage:
         np.testing.assert_array_equal(processor.scaler.center_, train_center)
         np.testing.assert_array_equal(processor.scaler.scale_, train_scale)
 
-    def test_split_temporal_applies_embargo(self, sample_df):
-        """Temporal split must apply embargo gap"""
+    def test_split_temporal_applies_embargo(self, sample_df) -> None:
+        """Temporal split must apply embargo gap."""
         feature_engine = FeatureEngine()
         processor = DataProcessor()
 
@@ -90,11 +90,11 @@ class TestScalerLeakage:
         assert splits['test'][0].shape[0] > 0
 
 class TestLabelLeakage:
-    """Tests to ensure labels don't leak future information"""
+    """Tests to ensure labels don't leak future information."""
 
     @pytest.fixture
     def deterministic_df(self):
-        """Create data with known future returns"""
+        """Create data with known future returns."""
         n = 200
         dates = pd.date_range('2020-01-01', periods=n, freq='D')
 
@@ -111,8 +111,8 @@ class TestLabelLeakage:
 
         return df
 
-    def test_labels_use_only_future_data(self, deterministic_df):
-        """Labels must be computed from future prices only"""
+    def test_labels_use_only_future_data(self, deterministic_df) -> None:
+        """Labels must be computed from future prices only."""
         processor = DataProcessor()
         horizon = 5
 
@@ -127,8 +127,8 @@ class TestLabelLeakage:
 
             np.testing.assert_almost_equal(actual_return, expected_return, decimal=5)
 
-    def test_last_horizon_rows_have_nan_labels(self, deterministic_df):
-        """Last PREDICTION_HORIZON rows must have NaN labels"""
+    def test_last_horizon_rows_have_nan_labels(self, deterministic_df) -> None:
+        """Last PREDICTION_HORIZON rows must have NaN labels."""
         processor = DataProcessor()
         horizon = 5
 
@@ -141,11 +141,11 @@ class TestLabelLeakage:
         assert not df['label'].iloc[:-horizon].isna().any()
 
 class TestSequenceConsistency:
-    """Tests to ensure training and inference use same sequence construction"""
+    """Tests to ensure training and inference use same sequence construction."""
 
     @pytest.fixture
     def sample_data(self):
-        """Create sample data"""
+        """Create sample data."""
         np.random.seed(42)
         n = 200
         dates = pd.date_range('2020-01-01', periods=n, freq='D')
@@ -162,8 +162,8 @@ class TestSequenceConsistency:
 
         return df
 
-    def test_train_inference_sequence_match(self, sample_data):
-        """Training and inference sequences must be constructed identically"""
+    def test_train_inference_sequence_match(self, sample_data) -> None:
+        """Training and inference sequences must be constructed identically."""
         feature_engine = FeatureEngine()
         processor = DataProcessor()
 
@@ -194,11 +194,11 @@ class TestSequenceConsistency:
         )
 
 class TestTemporalOrdering:
-    """Tests to ensure temporal ordering is preserved"""
+    """Tests to ensure temporal ordering is preserved."""
 
     @pytest.fixture
     def ordered_df(self):
-        """Create data with clear temporal ordering"""
+        """Create data with clear temporal ordering."""
         n = 300
         dates = pd.date_range('2020-01-01', periods=n, freq='D')
 
@@ -214,8 +214,8 @@ class TestTemporalOrdering:
 
         return df
 
-    def test_no_shuffle_in_split(self, ordered_df):
-        """Temporal split must not shuffle data"""
+    def test_no_shuffle_in_split(self, ordered_df) -> None:
+        """Temporal split must not shuffle data."""
         feature_engine = FeatureEngine()
         processor = DataProcessor()
 
@@ -243,10 +243,10 @@ class TestTemporalOrdering:
         assert X_test.shape[1] == CONFIG.SEQUENCE_LENGTH
 
 class TestEnsembleWeightPersistence:
-    """Tests for ensemble model save/load"""
+    """Tests for ensemble model save/load."""
 
-    def test_weights_preserved_after_save_load(self, tmp_path):
-        """Ensemble weights must be preserved after save/load"""
+    def test_weights_preserved_after_save_load(self, tmp_path) -> None:
+        """Ensemble weights must be preserved after save/load."""
         from models.ensemble import EnsembleModel
 
         ensemble = EnsembleModel(input_size=35, model_names=['lstm', 'gru'])

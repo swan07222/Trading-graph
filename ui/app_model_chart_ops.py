@@ -730,8 +730,7 @@ def _chart_prediction_uncertainty_profile(
     self,
     symbol: str,
 ) -> tuple[float, float, float]:
-    """Resolve (uncertainty, tail_risk, confidence) for chart forecast bands.
-    """
+    """Resolve (uncertainty, tail_risk, confidence) for chart forecast bands."""
     uncertainty = 0.55
     tail_risk = 0.55
     confidence = 0.45
@@ -869,8 +868,7 @@ def _render_chart_state(
     allow_legacy_candles: bool = False,
     reset_view_on_symbol_switch: bool = False,
 ) -> list[dict[str, Any]]:
-    """Unified chart rendering path used by bar/tick/analysis updates.
-    """
+    """Unified chart rendering path used by bar/tick/analysis updates."""
     iv = self._normalize_interval_token(interval)
     arr = self._safe_list(bars)
 

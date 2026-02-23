@@ -5,7 +5,7 @@ from data.fetcher import AkShareSource, DataFetcher, DataSourceStatus
 from data.universe import _can_use_akshare
 
 
-def test_universe_tries_akshare_on_direct_china_even_if_probe_is_down(monkeypatch):
+def test_universe_tries_akshare_on_direct_china_even_if_probe_is_down(monkeypatch) -> None:
     env = SimpleNamespace(
         eastmoney_ok=False,
         is_vpn_active=False,
@@ -15,7 +15,7 @@ def test_universe_tries_akshare_on_direct_china_even_if_probe_is_down(monkeypatc
     assert _can_use_akshare() is True
 
 
-def test_universe_skips_akshare_when_probe_is_down_offshore(monkeypatch):
+def test_universe_skips_akshare_when_probe_is_down_offshore(monkeypatch) -> None:
     env = SimpleNamespace(
         eastmoney_ok=False,
         is_vpn_active=False,
@@ -25,7 +25,7 @@ def test_universe_skips_akshare_when_probe_is_down_offshore(monkeypatch):
     assert _can_use_akshare() is False
 
 
-def test_akshare_source_requires_eastmoney_probe(monkeypatch):
+def test_akshare_source_requires_eastmoney_probe(monkeypatch) -> None:
     src = AkShareSource()
 
     env_bad = SimpleNamespace(eastmoney_ok=False, is_china_direct=True)
@@ -37,16 +37,16 @@ def test_akshare_source_requires_eastmoney_probe(monkeypatch):
     assert src.is_suitable_for_network() is True
 
 
-def test_source_health_prefers_tencent_when_eastmoney_down():
+def test_source_health_prefers_tencent_when_eastmoney_down() -> None:
     fetcher = DataFetcher.__new__(DataFetcher)
 
     class _DummySource:
-        def __init__(self, name: str):
+        def __init__(self, name: str) -> None:
             self.name = name
             self.priority = 0
             self.status = DataSourceStatus(name=name)
 
-        def is_suitable_for_network(self):
+        def is_suitable_for_network(self) -> bool:
             return True
 
     env = SimpleNamespace(
@@ -62,20 +62,20 @@ def test_source_health_prefers_tencent_when_eastmoney_down():
     assert t_score > a_score
 
 
-def test_get_active_sources_filters_network_unsuitable_source(monkeypatch):
+def test_get_active_sources_filters_network_unsuitable_source(monkeypatch) -> None:
     fetcher = DataFetcher.__new__(DataFetcher)
     fetcher._last_network_mode = (True, True, False)
     fetcher._rate_lock = threading.Lock()
     fetcher._request_times = {}
 
     class _Source:
-        def __init__(self, name: str, suitable: bool):
+        def __init__(self, name: str, suitable: bool) -> None:
             self.name = name
             self.priority = 0
             self.status = DataSourceStatus(name=name)
             self._suitable = bool(suitable)
 
-        def is_available(self):
+        def is_available(self) -> bool:
             return True
 
         def is_suitable_for_network(self):

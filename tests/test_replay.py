@@ -3,7 +3,7 @@ from pathlib import Path
 from analysis.replay import MarketReplay
 
 
-def test_replay_csv_load_and_order(tmp_path):
+def test_replay_csv_load_and_order(tmp_path) -> None:
     csv_path = Path(tmp_path) / "replay.csv"
     csv_path.write_text(
         "\n".join(

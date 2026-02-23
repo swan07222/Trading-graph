@@ -1,5 +1,6 @@
 import builtins
 from datetime import date, datetime, timedelta, timezone
+from typing import NoReturn
 
 import core.constants as constants
 from config.settings import Config
@@ -7,7 +8,7 @@ from core.constants import get_price_limit, is_st_stock, is_trading_day
 from data.fetcher import DataFetcher
 
 
-def test_is_st_stock_handles_cn_prefix_forms():
+def test_is_st_stock_handles_cn_prefix_forms() -> None:
     cn_st = "ST\u4e2d\u73e0"
     cn_star_st = "*ST\u957f\u836f"
     assert is_st_stock(cn_st) is True
@@ -17,19 +18,19 @@ def test_is_st_stock_handles_cn_prefix_forms():
     assert is_st_stock("FASTEST") is False
 
 
-def test_get_price_limit_uses_st_band_for_cn_st_names():
+def test_get_price_limit_uses_st_band_for_cn_st_names() -> None:
     cn_st = "ST\u4e2d\u73e0"
     cn_star_st = "*ST\u957f\u836f"
     assert float(get_price_limit("600000", cn_st)) == 0.05
     assert float(get_price_limit("600000", cn_star_st)) == 0.05
 
 
-def test_is_trading_day_marks_2026_new_year_closed():
+def test_is_trading_day_marks_2026_new_year_closed() -> None:
     # 2026-01-01 should not be considered a trading day.
     assert is_trading_day(date(2026, 1, 1)) is False
 
 
-def test_is_trading_day_future_year_uses_dynamic_provider(monkeypatch):
+def test_is_trading_day_future_year_uses_dynamic_provider(monkeypatch) -> None:
     class _FakeHolidaysModule:
         @staticmethod
         def country_holidays(country: str, years: list[int]):
@@ -54,7 +55,7 @@ def test_is_trading_day_future_year_uses_dynamic_provider(monkeypatch):
     assert constants.is_trading_day(date(2027, 1, 5)) is True
 
 
-def test_fetcher_now_shanghai_fallback_keeps_utc_plus_8(monkeypatch):
+def test_fetcher_now_shanghai_fallback_keeps_utc_plus_8(monkeypatch) -> None:
     original_import = builtins.__import__
 
     def _fake_import(name, globals=None, locals=None, fromlist=(), level=0):
@@ -69,7 +70,7 @@ def test_fetcher_now_shanghai_fallback_keeps_utc_plus_8(monkeypatch):
     assert abs((got - expected).total_seconds()) < 2.0
 
 
-def test_is_market_open_tolerates_trading_day_runtime_error(monkeypatch):
+def test_is_market_open_tolerates_trading_day_runtime_error(monkeypatch) -> None:
     class _FixedDatetime(datetime):
         @classmethod
         def now(cls, tz=None):
@@ -78,7 +79,7 @@ def test_is_market_open_tolerates_trading_day_runtime_error(monkeypatch):
                 return base.replace(tzinfo=tz)
             return base
 
-    def _boom(_d):
+    def _boom(_d) -> NoReturn:
         raise RuntimeError("calendar failure")
 
     monkeypatch.setattr("config.settings.datetime", _FixedDatetime)

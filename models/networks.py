@@ -23,7 +23,7 @@ def _pick_num_groups(channels: int, preferred: int = 8) -> int:
             return g
     return 1
 
-def _init_weights(module: nn.Module):
+def _init_weights(module: nn.Module) -> None:
     """Apply sensible weight initialization.
 
     FIX INIT: Skip LSTM/GRU modules — they use orthogonal initialization
@@ -54,7 +54,7 @@ class PositionalEncoding(nn.Module):
     Strictly causal — only encodes position, no future information.
     """
 
-    def __init__(self, d_model: int, dropout: float = 0.1, max_len: int = 512):
+    def __init__(self, d_model: int, dropout: float = 0.1, max_len: int = 512) -> None:
         super().__init__()
         self.dropout = nn.Dropout(p=dropout)
 
@@ -73,9 +73,10 @@ class PositionalEncoding(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Args:
-            x: (batch, seq_len, d_model)
+            x: (batch, seq_len, d_model).
+
         Returns:
-            (batch, seq_len, d_model) with positional encoding added
+            (batch, seq_len, d_model) with positional encoding added.
         """
         seq_len = x.size(1)
         x = x + self.pe[:, :seq_len, :]
@@ -97,7 +98,7 @@ class TransformerBlock(nn.Module):
         dropout: float = 0.1,
         causal: bool = True,
         ff_mult: int = 4,
-    ):
+    ) -> None:
         super().__init__()
         self.causal = causal
 
@@ -141,9 +142,10 @@ class TransformerBlock(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Args:
-            x: (batch, seq_len, d_model)
+            x: (batch, seq_len, d_model).
+
         Returns:
-            (batch, seq_len, d_model)
+            (batch, seq_len, d_model).
         """
         attn_mask = None
         if self.causal:
@@ -177,7 +179,7 @@ class LSTMBlock(nn.Module):
         num_layers: int = 2,
         dropout: float = 0.3,
         bidirectional: bool = True,
-    ):
+    ) -> None:
         super().__init__()
 
         # FIX LSTM_DROPOUT: No dropout for single layer
@@ -195,9 +197,10 @@ class LSTMBlock(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Args:
-            x: (batch, seq_len, input_size)
+            x: (batch, seq_len, input_size).
+
         Returns:
-            (batch, seq_len, hidden_size * num_directions)
+            (batch, seq_len, hidden_size * num_directions).
         """
         output, _ = self.lstm(x)
         return self.dropout(output)
@@ -220,7 +223,7 @@ class TemporalConvBlock(nn.Module):
         kernel_size: int = 3,
         dilation: int = 1,
         dropout: float = 0.1,
-    ):
+    ) -> None:
         super().__init__()
         self.padding = (kernel_size - 1) * dilation  # Left padding for causality
 
@@ -244,9 +247,10 @@ class TemporalConvBlock(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Args:
-            x: (batch, channels, seq_len)
+            x: (batch, channels, seq_len).
+
         Returns:
-            (batch, out_channels, seq_len)
+            (batch, out_channels, seq_len).
         """
         residual = x
         if self.residual_proj is not None:
@@ -278,7 +282,7 @@ class AttentionPooling(nn.Module):
     representation from variable-length sequences.
     """
 
-    def __init__(self, hidden_size: int):
+    def __init__(self, hidden_size: int) -> None:
         super().__init__()
         self.attention = nn.Sequential(
             nn.Linear(hidden_size, hidden_size // 2),
@@ -288,9 +292,10 @@ class AttentionPooling(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Args:
-            x: (batch, seq_len, hidden_size)
+            x: (batch, seq_len, hidden_size).
+
         Returns:
-            (batch, hidden_size) — weighted average over time
+            (batch, hidden_size) — weighted average over time.
         """
         scores = self.attention(x)  # (batch, seq_len, 1)
         weights = F.softmax(scores, dim=1)  # (batch, seq_len, 1)
@@ -301,7 +306,7 @@ class AttentionPooling(nn.Module):
 class _ClassifierHead(nn.Module):
     """Shared classification + confidence head."""
 
-    def __init__(self, in_features: int, hidden: int, num_classes: int, dropout: float):
+    def __init__(self, in_features: int, hidden: int, num_classes: int, dropout: float) -> None:
         super().__init__()
         # Ensure hidden dimension is at least 1
         hidden = max(1, hidden)
@@ -333,7 +338,7 @@ class LSTMModel(nn.Module):
         hidden_size: int = 256,
         num_classes: int = 3,
         dropout: float = 0.3,
-    ):
+    ) -> None:
         super().__init__()
         self.input_proj = nn.Linear(input_size, hidden_size)
 
@@ -350,10 +355,11 @@ class LSTMModel(nn.Module):
 
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         """Args:
-            x: (batch, seq_len, input_size)
+            x: (batch, seq_len, input_size).
+
         Returns:
             (logits, confidence) where logits is (batch, num_classes)
-            and confidence is (batch, 1)
+            and confidence is (batch, 1).
         """
         x = self.input_proj(x)
         x = self.lstm(x)
@@ -371,7 +377,7 @@ class TransformerModel(nn.Module):
         dropout: float = 0.3,
         num_layers: int = 4,
         num_heads: int = 8,
-    ):
+    ) -> None:
         super().__init__()
         num_heads = _safe_num_heads(hidden_size, num_heads)
 
@@ -395,9 +401,10 @@ class TransformerModel(nn.Module):
 
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         """Args:
-            x: (batch, seq_len, input_size)
+            x: (batch, seq_len, input_size).
+
         Returns:
-            (logits, confidence)
+            (logits, confidence).
         """
         x = self.input_proj(x)
         x = self.pos_encoding(x)
@@ -419,7 +426,7 @@ class GRUModel(nn.Module):
         num_classes: int = 3,
         dropout: float = 0.3,
         num_layers: int = 2,
-    ):
+    ) -> None:
         super().__init__()
         self.input_proj = nn.Linear(input_size, hidden_size)
 
@@ -444,9 +451,10 @@ class GRUModel(nn.Module):
 
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         """Args:
-            x: (batch, seq_len, input_size)
+            x: (batch, seq_len, input_size).
+
         Returns:
-            (logits, confidence)
+            (logits, confidence).
         """
         x = self.input_proj(x)
         x, _ = self.gru(x)
@@ -468,7 +476,7 @@ class TCNModel(nn.Module):
         num_classes: int = 3,
         dropout: float = 0.3,
         num_blocks: int = 4,
-    ):
+    ) -> None:
         super().__init__()
         self.input_proj = nn.Linear(input_size, hidden_size)
 
@@ -490,9 +498,10 @@ class TCNModel(nn.Module):
 
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         """Args:
-            x: (batch, seq_len, input_size)
+            x: (batch, seq_len, input_size).
+
         Returns:
-            (logits, confidence)
+            (logits, confidence).
         """
         x = self.input_proj(x)
         x = x.transpose(1, 2)  # (batch, hidden, seq)
@@ -519,7 +528,7 @@ class HybridModel(nn.Module):
         hidden_size: int = 256,
         num_classes: int = 3,
         dropout: float = 0.3,
-    ):
+    ) -> None:
         super().__init__()
         self.input_proj = nn.Linear(input_size, hidden_size)
 
@@ -552,9 +561,10 @@ class HybridModel(nn.Module):
 
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         """Args:
-            x: (batch, seq_len, input_size)
+            x: (batch, seq_len, input_size).
+
         Returns:
-            (logits, confidence)
+            (logits, confidence).
         """
         x = self.input_proj(x)
 

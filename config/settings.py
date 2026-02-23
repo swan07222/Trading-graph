@@ -505,7 +505,7 @@ class Config:
         return obj
 
     def __getattr__(self, name: str) -> Any:
-        """Legacy compatibility: CONFIG.SEQUENCE_LENGTH 鈫?CONFIG.model.sequence_length
+        """Legacy compatibility: CONFIG.SEQUENCE_LENGTH 鈫?CONFIG.model.sequence_length.
 
         Only called when normal attribute lookup fails,
         so @property definitions always take precedence.

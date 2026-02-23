@@ -9,11 +9,11 @@ from core.types import Order, OrderSide, OrderStatus, OrderType, Position
 from trading.broker import SimulatorBroker
 
 
-def test_simulator_quote_falls_back_to_recent_cache(monkeypatch):
+def test_simulator_quote_falls_back_to_recent_cache(monkeypatch) -> None:
     broker = SimulatorBroker(initial_capital=100000.0)
 
     class _Fetcher:
-        def __init__(self):
+        def __init__(self) -> None:
             self.calls = 0
 
         def get_realtime(self, symbol):  # noqa: ARG002
@@ -32,11 +32,11 @@ def test_simulator_quote_falls_back_to_recent_cache(monkeypatch):
     assert float(px2 or 0.0) == 12.34
 
 
-def test_simulator_quote_falls_back_to_history_close(monkeypatch):
+def test_simulator_quote_falls_back_to_history_close(monkeypatch) -> None:
     broker = SimulatorBroker(initial_capital=100000.0)
 
     class _Fetcher:
-        def get_realtime(self, symbol):  # noqa: ARG002
+        def get_realtime(self, symbol) -> None:  # noqa: ARG002
             return None
 
         def get_history(
@@ -56,7 +56,7 @@ def test_simulator_quote_falls_back_to_history_close(monkeypatch):
     assert float(px or 0.0) == 10.8
 
 
-def test_stop_order_waits_for_trigger_then_fills(monkeypatch):
+def test_stop_order_waits_for_trigger_then_fills(monkeypatch) -> None:
     broker = SimulatorBroker(initial_capital=1_000_000.0)
     assert broker.connect() is True
 
@@ -87,7 +87,7 @@ def test_stop_order_waits_for_trigger_then_fills(monkeypatch):
     assert bool(order.tags.get("_conditional_triggered", False)) is True
 
 
-def test_trailing_sell_waits_then_triggers_on_pullback(monkeypatch):
+def test_trailing_sell_waits_then_triggers_on_pullback(monkeypatch) -> None:
     broker = SimulatorBroker(initial_capital=1_000_000.0)
     assert broker.connect() is True
     broker._positions["600519"] = Position(
@@ -129,7 +129,7 @@ def test_trailing_sell_waits_then_triggers_on_pullback(monkeypatch):
     assert broker._positions["600519"].quantity == 100
 
 
-def test_trailing_limit_validation_accepts_offset_without_price():
+def test_trailing_limit_validation_accepts_offset_without_price() -> None:
     broker = SimulatorBroker(initial_capital=1_000_000.0)
     order = Order(
         symbol="600519",
@@ -149,7 +149,7 @@ def test_trailing_limit_validation_accepts_offset_without_price():
     assert reason == "OK"
 
 
-def test_non_marketable_limit_day_order_waits_not_rejects():
+def test_non_marketable_limit_day_order_waits_not_rejects() -> None:
     broker = SimulatorBroker(initial_capital=1_000_000.0)
     assert broker.connect() is True
 
@@ -172,7 +172,7 @@ def test_non_marketable_limit_day_order_waits_not_rejects():
     assert "Waiting limit BUY" in str(order.message)
 
 
-def test_non_marketable_limit_ioc_cancels():
+def test_non_marketable_limit_ioc_cancels() -> None:
     broker = SimulatorBroker(initial_capital=1_000_000.0)
     assert broker.connect() is True
 

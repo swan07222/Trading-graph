@@ -23,7 +23,7 @@ class CircuitBreakerType(Enum):
 
 @dataclass
 class CircuitBreakerState:
-    """Circuit breaker state"""
+    """Circuit breaker state."""
     type: CircuitBreakerType
     triggered: bool = False
     triggered_at: datetime | None = None

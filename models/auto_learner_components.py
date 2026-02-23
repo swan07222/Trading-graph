@@ -27,7 +27,7 @@ _MAX_MESSAGES = 100  # Bound for error/warning lists (Issue 11)
 
 @dataclass
 class LearningProgress:
-    """Track learning progress across all cycles"""
+    """Track learning progress across all cycles."""
     stage: str = "idle"
     progress: float = 0.0
     message: str = ""
@@ -68,17 +68,17 @@ class LearningProgress:
 
     # --- bounded message helpers (Issue 11) ---
 
-    def add_error(self, msg: str):
+    def add_error(self, msg: str) -> None:
         self.errors.append(msg)
         if len(self.errors) > _MAX_MESSAGES:
             self.errors = self.errors[-_MAX_MESSAGES:]
 
-    def add_warning(self, msg: str):
+    def add_warning(self, msg: str) -> None:
         self.warnings.append(msg)
         if len(self.warnings) > _MAX_MESSAGES:
             self.warnings = self.warnings[-_MAX_MESSAGES:]
 
-    def reset(self):
+    def reset(self) -> None:
         self.stage = "idle"
         self.progress = 0.0
         self.message = ""
@@ -137,7 +137,7 @@ class MetricTracker:
     FIX M4: Thread-safe access to _plateau_count.
     """
 
-    def __init__(self, window: int = 10, plateau_threshold: float = 0.005):
+    def __init__(self, window: int = 10, plateau_threshold: float = 0.005) -> None:
         self._history: deque = deque(maxlen=window)
         self._window = window
         self._plateau_threshold = plateau_threshold
@@ -145,14 +145,14 @@ class MetricTracker:
         self._best_ema: float = 0.0
         self._lock = threading.Lock()
 
-    def record(self, accuracy: float):
-        """Record a new accuracy measurement"""
+    def record(self, accuracy: float) -> None:
+        """Record a new accuracy measurement."""
         with self._lock:
             self._history.append(accuracy)
 
     @property
     def trend(self) -> str:
-        """Current trend: improving, stable, degrading"""
+        """Current trend: improving, stable, degrading."""
         with self._lock:
             if len(self._history) < 3:
                 return "stable"
@@ -171,7 +171,7 @@ class MetricTracker:
 
     @property
     def ema(self) -> float:
-        """Exponential moving average of accuracy"""
+        """Exponential moving average of accuracy."""
         with self._lock:
             if not self._history:
                 return 0.0
@@ -183,7 +183,7 @@ class MetricTracker:
 
     @property
     def is_plateau(self) -> bool:
-        """Check if accuracy has plateaued"""
+        """Check if accuracy has plateaued."""
         with self._lock:
             return self._is_plateau_unlocked()
 
@@ -252,7 +252,7 @@ class MetricTracker:
                 'best_ema': self._best_ema,
             }
 
-    def from_dict(self, data: dict):
+    def from_dict(self, data: dict) -> None:
         with self._lock:
             self._history = deque(
                 data.get('history', []), maxlen=self._window
@@ -273,7 +273,7 @@ class ExperienceReplayBuffer:
         max_size: int = 2000,
         cache_dir: Path = None,
         cache_ttl_hours: float = 72.0,
-    ):
+    ) -> None:
         self.max_size = max_size
         self._buffer: list[str] = []
         self._performance: dict[str, float] = {}
@@ -284,8 +284,8 @@ class ExperienceReplayBuffer:
         self._cache_dir = cache_dir or CONFIG.DATA_DIR / "replay_cache"
         self._cache_dir.mkdir(parents=True, exist_ok=True)
 
-    def add(self, codes: list[str], confidence: float = 0.5):
-        """Add successfully trained codes"""
+    def add(self, codes: list[str], confidence: float = 0.5) -> None:
+        """Add successfully trained codes."""
         with self._lock:
             for code in codes:
                 if code not in self._buffer:
@@ -357,8 +357,8 @@ class ExperienceReplayBuffer:
 
             return selected
 
-    def cache_sequences(self, code: str, X: np.ndarray, y: np.ndarray):
-        """Cache training sequences with timestamp"""
+    def cache_sequences(self, code: str, X: np.ndarray, y: np.ndarray) -> None:
+        """Cache training sequences with timestamp."""
         try:
             path = self._cache_dir / f"{code}.npz"
             np.savez_compressed(path, X=X, y=y)
@@ -370,7 +370,7 @@ class ExperienceReplayBuffer:
     def get_cached_sequences(
         self, code: str
     ) -> tuple[np.ndarray, np.ndarray] | None:
-        """Load cached sequences if not stale"""
+        """Load cached sequences if not stale."""
         try:
             path = self._cache_dir / f"{code}.npz"
             if not path.exists():
@@ -387,7 +387,7 @@ class ExperienceReplayBuffer:
             return None
 
     def get_cached_codes(self) -> list[str]:
-        """Get codes with valid cache"""
+        """Get codes with valid cache."""
         now = time.time()
         with self._lock:
             return [
@@ -396,13 +396,13 @@ class ExperienceReplayBuffer:
                 and (now - self._cache_times.get(c, 0)) < self._cache_ttl
             ]
 
-    def update_performance(self, code: str, confidence: float):
+    def update_performance(self, code: str, confidence: float) -> None:
         with self._lock:
             if code in self._performance:
                 old = self._performance[code]
                 self._performance[code] = 0.7 * old + 0.3 * confidence
 
-    def _remove_cache(self, code: str):
+    def _remove_cache(self, code: str) -> None:
         try:
             path = self._cache_dir / f"{code}.npz"
             path.unlink(missing_ok=True)
@@ -414,7 +414,7 @@ class ExperienceReplayBuffer:
         with self._lock:
             return list(self._buffer)
 
-    def __len__(self):
+    def __len__(self) -> int:
         with self._lock:
             return len(self._buffer)
 
@@ -429,7 +429,7 @@ class ExperienceReplayBuffer:
                 },
             }
 
-    def from_dict(self, data: dict):
+    def from_dict(self, data: dict) -> None:
         with self._lock:
             self._buffer = list(data.get('buffer', []))[-self.max_size:]
             self._performance = dict(data.get('performance', {}))
@@ -438,7 +438,7 @@ class ExperienceReplayBuffer:
                 for k, v in data.get('cache_times', {}).items()
             }
 
-    def cleanup_stale_cache(self):
+    def cleanup_stale_cache(self) -> None:
         now = time.time()
         try:
             for path in self._cache_dir.glob("*.npz"):
@@ -457,14 +457,14 @@ class ModelGuardian:
     aborting the entire validation.
     """
 
-    def __init__(self, model_dir: Path = None, max_backups: int = 5):
+    def __init__(self, model_dir: Path = None, max_backups: int = 5) -> None:
         self.model_dir = model_dir or CONFIG.MODEL_DIR
         self._best_metrics: dict[str, float] = {}
         self._max_backups = max_backups
         self._lock = threading.Lock()
         self._holdout_codes: list[str] = []
 
-    def set_holdout(self, codes: list[str]):
+    def set_holdout(self, codes: list[str]) -> None:
         with self._lock:
             self._holdout_codes = list(codes)
 
@@ -714,7 +714,7 @@ class ModelGuardian:
             f"scaler_{interval}_{horizon}.pkl",
         ]
 
-    def _prune_backups(self):
+    def _prune_backups(self) -> None:
         try:
             backup_root = self.model_dir / "backups"
             if not backup_root.exists():
@@ -734,7 +734,7 @@ class StockRotator:
     instead of requiring direct private attribute access.
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         self._processed: set[str] = set()
         self._failed: dict[str, int] = {}
         self._fail_max = 3
@@ -773,38 +773,38 @@ class StockRotator:
         code = "".join(ch for ch in str(raw or "").strip() if ch.isdigit())
         return code.zfill(6) if code else ""
 
-    def mark_processed(self, codes: list[str]):
+    def mark_processed(self, codes: list[str]) -> None:
         for code in codes:
             self._processed.add(code)
 
-    def mark_failed(self, code: str):
+    def mark_failed(self, code: str) -> None:
         self._failed[code] = self._failed.get(code, 0) + 1
 
-    def clear_old_failures(self):
+    def clear_old_failures(self) -> None:
         self._failed.clear()
 
-    def reset_processed(self):
+    def reset_processed(self) -> None:
         """Clear processed set - used by plateau handler."""
         self._processed.clear()
 
-    def reset_discovery(self):
+    def reset_discovery(self) -> None:
         """Force pool re-discovery on next call."""
         self._last_discovery = 0
 
-    def clear_pool(self):
+    def clear_pool(self) -> None:
         """Clear the stock pool - used by reset_rotation()."""
         self._pool.clear()
 
     # FIX PRIV: Public methods for state migration from old format
-    def set_processed(self, codes: set[str]):
+    def set_processed(self, codes: set[str]) -> None:
         """Set processed codes from loaded state."""
         self._processed = set(codes)
 
-    def set_failed(self, failed: dict[str, int]):
+    def set_failed(self, failed: dict[str, int]) -> None:
         """Set failed codes from loaded state."""
         self._failed = dict(failed)
 
-    def _maybe_refresh_pool(self, max_stocks, min_market_cap, stop_check, progress_cb):
+    def _maybe_refresh_pool(self, max_stocks, min_market_cap, stop_check, progress_cb) -> None:
         del max_stocks, min_market_cap  # Pool refresh is universe-wide.
         now = time.time()
         expired = (now - self._last_discovery) > self._discovery_ttl
@@ -946,7 +946,7 @@ class StockRotator:
             'last_listing_probe': self._last_listing_probe,
         }
 
-    def from_dict(self, data: dict):
+    def from_dict(self, data: dict) -> None:
         self._processed = {
             self._norm_code(c)
             for c in data.get('processed', [])
@@ -988,7 +988,7 @@ class LRScheduler:
     def __init__(
         self, base_lr: float = None, decay_rate: float = 0.05,
         warmup_cycles: int = 2, min_lr_ratio: float = 0.05,
-    ):
+    ) -> None:
         self._base_lr = base_lr or CONFIG.model.learning_rate
         self._decay_rate = decay_rate
         self._warmup_cycles = warmup_cycles
@@ -1014,7 +1014,7 @@ class LRScheduler:
         self._boost = max(1.0, self._boost * 0.9)
         return max(lr, self._min_lr)
 
-    def apply_boost(self, factor: float):
+    def apply_boost(self, factor: float) -> None:
         self._boost = float(factor)
         log.info(f"LR boost applied: {factor}x")
 
@@ -1024,7 +1024,7 @@ class ParallelFetcher:
     FIX FETCH: Handles empty codes list without error.
     """
 
-    def __init__(self, max_workers: int = 5):
+    def __init__(self, max_workers: int = 5) -> None:
         self._max_workers = max_workers
 
     def fetch_batch(

@@ -6,7 +6,7 @@ import pandas as pd
 from models.auto_learner import ContinuousLearner, LearningProgress
 
 
-def test_session_continuous_window_seconds_counts_contiguous_1m_bars(monkeypatch):
+def test_session_continuous_window_seconds_counts_contiguous_1m_bars(monkeypatch) -> None:
     start = datetime(2026, 1, 5, 9, 30, 0)
     idx = pd.date_range(start=start, periods=61, freq="1min")
     df = pd.DataFrame(
@@ -35,7 +35,7 @@ def test_session_continuous_window_seconds_counts_contiguous_1m_bars(monkeypatch
     assert span >= 3600.0
 
 
-def test_filter_priority_session_codes_requires_one_hour_intraday():
+def test_filter_priority_session_codes_requires_one_hour_intraday() -> None:
     learner = ContinuousLearner.__new__(ContinuousLearner)
     learner.progress = LearningProgress()
 
@@ -57,7 +57,7 @@ def test_filter_priority_session_codes_requires_one_hour_intraday():
     )
 
 
-def test_filter_priority_session_codes_keeps_dedup_for_non_intraday():
+def test_filter_priority_session_codes_keeps_dedup_for_non_intraday() -> None:
     learner = ContinuousLearner.__new__(ContinuousLearner)
     learner.progress = LearningProgress()
     out = learner._filter_priority_session_codes(
@@ -68,7 +68,7 @@ def test_filter_priority_session_codes_keeps_dedup_for_non_intraday():
     assert out == ["600519", "000001"]
 
 
-def test_prioritize_codes_by_news_promotes_symbols_with_recent_mentions(monkeypatch):
+def test_prioritize_codes_by_news_promotes_symbols_with_recent_mentions(monkeypatch) -> None:
     now = datetime(2026, 1, 6, 10, 0, 0)
 
     class _FakeAgg:
@@ -112,7 +112,7 @@ def test_prioritize_codes_by_news_promotes_symbols_with_recent_mentions(monkeypa
     assert sorted(out) == ["000001", "300750", "600519"]
 
 
-def test_prioritize_codes_by_news_keeps_order_when_no_news(monkeypatch):
+def test_prioritize_codes_by_news_keeps_order_when_no_news(monkeypatch) -> None:
     class _FakeAgg:
         def get_market_news(self, count=80, force_refresh=False):  # noqa: ARG002
             return []

@@ -30,7 +30,7 @@ class StrategyMarketplaceDialog(QDialog):
     COL_INTEGRITY = 7
     COL_DESCRIPTION = 8
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self.setWindowTitle("Strategy Marketplace")
         self.setMinimumSize(980, 560)

@@ -13,7 +13,7 @@ log = get_logger(__name__)
 
 
 class Exchange(Enum):
-    """Stock exchanges"""
+    """Stock exchanges."""
     SSE = "SSE"       # Shanghai Stock Exchange
     SZSE = "SZSE"     # Shenzhen Stock Exchange
     BSE = "BSE"       # Beijing Stock Exchange
@@ -116,7 +116,7 @@ ORDER_TYPES = {t.value: t for t in OrderType}
 ORDER_STATUS = {s.value: s for s in OrderStatus}
 
 class SignalType(Enum):
-    """Trading signal type"""
+    """Trading signal type."""
     STRONG_BUY = "STRONG_BUY"
     BUY = "BUY"
     HOLD = "HOLD"

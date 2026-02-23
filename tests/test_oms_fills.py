@@ -1,4 +1,4 @@
-def test_fill_dedup_with_broker_fill_id_allows_same_second_multi_fills(tmp_path):
+def test_fill_dedup_with_broker_fill_id_allows_same_second_multi_fills(tmp_path) -> None:
     from datetime import datetime
 
     from core.types import Fill, Order, OrderSide, OrderType
@@ -31,7 +31,7 @@ def test_fill_dedup_with_broker_fill_id_allows_same_second_multi_fills(tmp_path)
     assert len(fills) == 2, "Should keep both fills even if same qty/price/timestamp (broker_fill_id differs)"
 
 
-def test_order_timeline_records_submit_and_fill(tmp_path):
+def test_order_timeline_records_submit_and_fill(tmp_path) -> None:
     from datetime import datetime
 
     from core.types import Fill, Order, OrderSide, OrderType
@@ -69,7 +69,7 @@ def test_order_timeline_records_submit_and_fill(tmp_path):
     assert "fill" in event_types
 
 
-def test_get_order_roundtrip_with_sqlite_row_factory(tmp_path):
+def test_get_order_roundtrip_with_sqlite_row_factory(tmp_path) -> None:
     from core.types import Order, OrderSide, OrderType
     from trading.oms import get_oms, reset_oms
 
@@ -92,7 +92,7 @@ def test_get_order_roundtrip_with_sqlite_row_factory(tmp_path):
     assert loaded.id == submitted.id
 
 
-def test_order_parent_id_roundtrip_persists(tmp_path):
+def test_order_parent_id_roundtrip_persists(tmp_path) -> None:
     from core.types import Order, OrderSide, OrderType
     from trading.oms import get_oms, reset_oms
 
@@ -116,7 +116,7 @@ def test_order_parent_id_roundtrip_persists(tmp_path):
     assert loaded.parent_id == "PARENT-001"
 
 
-def test_legacy_orders_table_is_migrated_for_parent_id(tmp_path):
+def test_legacy_orders_table_is_migrated_for_parent_id(tmp_path) -> None:
     import sqlite3
 
     from core.types import Order, OrderSide, OrderType
@@ -176,7 +176,7 @@ def test_legacy_orders_table_is_migrated_for_parent_id(tmp_path):
     assert loaded.parent_id == "LEGACY-PARENT"
 
 
-def test_get_order_tolerates_malformed_tags_json(tmp_path):
+def test_get_order_tolerates_malformed_tags_json(tmp_path) -> None:
     import sqlite3
 
     from core.types import Order, OrderSide, OrderType
@@ -209,7 +209,7 @@ def test_get_order_tolerates_malformed_tags_json(tmp_path):
     assert loaded.tags == {}
 
 
-def test_process_fill_rejects_side_mismatch_without_mutation(tmp_path):
+def test_process_fill_rejects_side_mismatch_without_mutation(tmp_path) -> None:
     from datetime import datetime
 
     import pytest
@@ -253,7 +253,7 @@ def test_process_fill_rejects_side_mismatch_without_mutation(tmp_path):
     assert len(oms.get_fills(order.id)) == 0
 
 
-def test_process_fill_rejects_overfill(tmp_path):
+def test_process_fill_rejects_overfill(tmp_path) -> None:
     from datetime import datetime
 
     import pytest
@@ -296,7 +296,7 @@ def test_process_fill_rejects_overfill(tmp_path):
     assert len(oms.get_fills(order.id)) == 0
 
 
-def test_partial_fill_publishes_partial_event_type(tmp_path):
+def test_partial_fill_publishes_partial_event_type(tmp_path) -> None:
     from datetime import datetime
 
     from core.events import EVENT_BUS, EventType
@@ -334,7 +334,7 @@ def test_partial_fill_publishes_partial_event_type(tmp_path):
     assert history[-1].type == EventType.ORDER_PARTIALLY_FILLED
 
 
-def test_buy_fill_overrun_preserves_negative_cash(tmp_path):
+def test_buy_fill_overrun_preserves_negative_cash(tmp_path) -> None:
     from datetime import datetime
 
     from core.types import Fill, Order, OrderSide, OrderType
@@ -371,7 +371,7 @@ def test_buy_fill_overrun_preserves_negative_cash(tmp_path):
     assert account.frozen == 0.0
 
 
-def test_sell_fill_increases_available_cash(tmp_path):
+def test_sell_fill_increases_available_cash(tmp_path) -> None:
     from datetime import datetime
 
     from core.types import Fill, Order, OrderSide, OrderType
@@ -443,7 +443,7 @@ def test_sell_fill_increases_available_cash(tmp_path):
     )
 
 
-def test_buy_overrun_preserves_other_active_buy_reservations(tmp_path):
+def test_buy_overrun_preserves_other_active_buy_reservations(tmp_path) -> None:
     from datetime import datetime
 
     from core.types import Fill, Order, OrderSide, OrderType
@@ -493,7 +493,7 @@ def test_buy_overrun_preserves_other_active_buy_reservations(tmp_path):
     assert float(reloaded_o2.tags.get("reserved_cash_remaining", 0.0)) > 0.0
 
 
-def test_recovery_clears_stale_frozen_qty_when_no_active_sell_orders(tmp_path):
+def test_recovery_clears_stale_frozen_qty_when_no_active_sell_orders(tmp_path) -> None:
     from core.types import Position
     from trading.oms import get_oms, reset_oms
 

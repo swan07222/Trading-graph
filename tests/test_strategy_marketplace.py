@@ -5,7 +5,7 @@ from pathlib import Path
 from analysis.strategy_marketplace import StrategyMarketplace
 
 
-def test_marketplace_enable_disable(tmp_path: Path):
+def test_marketplace_enable_disable(tmp_path: Path) -> None:
     strategies_dir = tmp_path / "strategies"
     strategies_dir.mkdir(parents=True, exist_ok=True)
     script = strategies_dir / "demo.py"
@@ -34,7 +34,7 @@ def test_marketplace_enable_disable(tmp_path: Path):
     assert m.get_enabled_ids() == []
 
 
-def test_marketplace_save_enabled_filters_unknown_and_mismatch(tmp_path: Path):
+def test_marketplace_save_enabled_filters_unknown_and_mismatch(tmp_path: Path) -> None:
     strategies_dir = tmp_path / "strategies"
     strategies_dir.mkdir(parents=True, exist_ok=True)
 
@@ -58,7 +58,7 @@ def test_marketplace_save_enabled_filters_unknown_and_mismatch(tmp_path: Path):
     assert m.get_enabled_ids() == ["good"]
 
 
-def test_marketplace_integrity_summary_counts(tmp_path: Path):
+def test_marketplace_integrity_summary_counts(tmp_path: Path) -> None:
     strategies_dir = tmp_path / "strategies"
     strategies_dir.mkdir(parents=True, exist_ok=True)
 
@@ -82,7 +82,7 @@ def test_marketplace_integrity_summary_counts(tmp_path: Path):
     assert summary["missing"] == 1
 
 
-def test_marketplace_rejects_unsafe_paths_and_dedupes_enabled(tmp_path: Path):
+def test_marketplace_rejects_unsafe_paths_and_dedupes_enabled(tmp_path: Path) -> None:
     strategies_dir = tmp_path / "strategies"
     strategies_dir.mkdir(parents=True, exist_ok=True)
 

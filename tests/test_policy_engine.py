@@ -17,7 +17,7 @@ def _signal(**kwargs):
     return SimpleNamespace(**base)
 
 
-def test_policy_engine_blocks_symbol(tmp_path):
+def test_policy_engine_blocks_symbol(tmp_path) -> None:
     policy_path = tmp_path / "security_policy.json"
     policy_path.write_text(
         json.dumps(
@@ -40,7 +40,7 @@ def test_policy_engine_blocks_symbol(tmp_path):
     assert "blocked symbol" in d.reason
 
 
-def test_policy_engine_enforces_notional_and_approvals(tmp_path):
+def test_policy_engine_enforces_notional_and_approvals(tmp_path) -> None:
     policy_path = tmp_path / "security_policy.json"
     policy_path.write_text(
         json.dumps(
@@ -67,7 +67,7 @@ def test_policy_engine_enforces_notional_and_approvals(tmp_path):
     assert "distinct approvals" in d2.reason
 
 
-def test_policy_engine_enforces_manual_and_change_ticket(tmp_path):
+def test_policy_engine_enforces_manual_and_change_ticket(tmp_path) -> None:
     policy_path = tmp_path / "security_policy.json"
     policy_path.write_text(
         json.dumps(
@@ -110,7 +110,7 @@ def test_policy_engine_enforces_manual_and_change_ticket(tmp_path):
     assert d3.allowed is True
 
 
-def test_policy_engine_enforces_strategy_and_justification(tmp_path):
+def test_policy_engine_enforces_strategy_and_justification(tmp_path) -> None:
     policy_path = tmp_path / "security_policy.json"
     policy_path.write_text(
         json.dumps(
@@ -151,7 +151,7 @@ def test_policy_engine_enforces_strategy_and_justification(tmp_path):
     assert d3.allowed is True
 
 
-def test_policy_engine_normalizes_symbol_and_order_sanity(tmp_path):
+def test_policy_engine_normalizes_symbol_and_order_sanity(tmp_path) -> None:
     policy_path = tmp_path / "security_policy.json"
     policy_path.write_text(
         json.dumps(
@@ -193,7 +193,7 @@ def test_policy_engine_normalizes_symbol_and_order_sanity(tmp_path):
     assert "limit price" in d3.reason.lower()
 
 
-def test_policy_engine_rejects_missing_symbol_or_side(tmp_path):
+def test_policy_engine_rejects_missing_symbol_or_side(tmp_path) -> None:
     policy_path = tmp_path / "security_policy.json"
     policy_path.write_text(
         json.dumps(
@@ -226,7 +226,7 @@ def test_policy_engine_rejects_missing_symbol_or_side(tmp_path):
     assert "missing side" in missing_side.reason.lower()
 
 
-def test_policy_engine_prevents_market_notional_bypass(tmp_path):
+def test_policy_engine_prevents_market_notional_bypass(tmp_path) -> None:
     policy_path = tmp_path / "security_policy.json"
     policy_path.write_text(
         json.dumps(

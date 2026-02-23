@@ -11,7 +11,7 @@ from config.settings import CONFIG
 from models.trainer import Trainer
 
 
-def test_evaluate_falls_back_when_sklearn_metrics_missing(monkeypatch):
+def test_evaluate_falls_back_when_sklearn_metrics_missing(monkeypatch) -> None:
     trainer = Trainer.__new__(Trainer)
     trainer.ensemble = SimpleNamespace(
         predict_batch=lambda X: [
@@ -58,7 +58,7 @@ def test_evaluate_falls_back_when_sklearn_metrics_missing(monkeypatch):
     assert "up_f1" in out
 
 
-def test_fetch_raw_data_rejects_invalid_ohlc():
+def test_fetch_raw_data_rejects_invalid_ohlc() -> None:
     trainer = Trainer()
 
     bad_df = pd.DataFrame(
@@ -91,7 +91,7 @@ def test_fetch_raw_data_rejects_invalid_ohlc():
     assert "invalid_ohlc_relations" in set(summary["top_reject_reasons"])
 
 
-def test_fetch_raw_data_skips_codes_with_pending_reconcile():
+def test_fetch_raw_data_skips_codes_with_pending_reconcile() -> None:
     trainer = Trainer()
 
     idx = pd.date_range("2026-02-18 09:30:00", periods=300, freq="min")
@@ -108,7 +108,7 @@ def test_fetch_raw_data_skips_codes_with_pending_reconcile():
     )
 
     class _Fetcher:
-        def __init__(self):
+        def __init__(self) -> None:
             self.reconcile_calls = 0
 
         @staticmethod
@@ -147,7 +147,7 @@ def test_fetch_raw_data_skips_codes_with_pending_reconcile():
     assert int(guard.get("pending_count", 0)) == 1
 
 
-def test_quality_gate_blocks_tail_stress_failure_only():
+def test_quality_gate_blocks_tail_stress_failure_only() -> None:
     trainer = Trainer()
     test_metrics = {
         "accuracy": 0.72,
@@ -181,7 +181,7 @@ def test_quality_gate_blocks_tail_stress_failure_only():
     assert "tail_stress_failure" in set(out["failed_reasons"])
 
 
-def test_quality_gate_blocks_insufficient_trade_count():
+def test_quality_gate_blocks_insufficient_trade_count() -> None:
     trainer = Trainer()
     test_metrics = {
         "accuracy": 0.86,
@@ -215,7 +215,7 @@ def test_quality_gate_blocks_insufficient_trade_count():
     assert "insufficient_trade_count" in set(out["failed_reasons"])
 
 
-def test_train_blocks_incremental_mode_on_high_regime(monkeypatch, tmp_path: Path):
+def test_train_blocks_incremental_mode_on_high_regime(monkeypatch, tmp_path: Path) -> None:
     import models.trainer as trainer_mod
 
     trainer = trainer_mod.Trainer()
@@ -332,14 +332,14 @@ def test_train_blocks_incremental_mode_on_high_regime(monkeypatch, tmp_path: Pat
     class _DummyEnsemble:
         load_calls = 0
 
-        def __init__(self, input_size, model_names=None):  # noqa: ARG002
+        def __init__(self, input_size, model_names=None) -> None:  # noqa: ARG002
             self.input_size = int(input_size)
             self.models = {"dummy": object()}
             self.interval = "1m"
             self.prediction_horizon = 30
             self.trained_stock_codes = []
 
-        def load(self, path):  # noqa: ARG002
+        def load(self, path) -> bool:  # noqa: ARG002
             _DummyEnsemble.load_calls += 1
             return True
 
@@ -357,7 +357,7 @@ def test_train_blocks_incremental_mode_on_high_regime(monkeypatch, tmp_path: Pat
         ):
             return {"dummy": {"val_acc": [0.63]}}
 
-        def save(self, path):  # noqa: ARG002
+        def save(self, path) -> None:  # noqa: ARG002
             return None
 
     monkeypatch.setattr(trainer_mod, "EnsembleModel", _DummyEnsemble)
@@ -379,7 +379,7 @@ def test_train_blocks_incremental_mode_on_high_regime(monkeypatch, tmp_path: Pat
     assert _DummyEnsemble.load_calls == 0
 
 
-def test_rebalance_train_samples_downsamples_noise_and_upsamples_tails():
+def test_rebalance_train_samples_downsamples_noise_and_upsamples_tails() -> None:
     trainer = Trainer()
     n = 400
     seq_len = int(CONFIG.SEQUENCE_LENGTH)

@@ -59,7 +59,7 @@ class FeatureEngine:
     # Must be >= max lookback window (ma60 needs 60 rows)
     MIN_ROWS = 60
 
-    def __init__(self):
+    def __init__(self) -> None:
         self._ta = None
         self._ta_available = False
         try:
@@ -243,7 +243,7 @@ class FeatureEngine:
         self, df: pd.DataFrame,
         close: pd.Series, high: pd.Series,
         low: pd.Series, volume: pd.Series,
-    ):
+    ) -> None:
         # RSI — always use our own Wilder-smoothed implementation
         df["rsi_14"] = self._calc_rsi(close, 14) / 100 - 0.5
         df["rsi_7"] = self._calc_rsi(close, 7) / 100 - 0.5
@@ -311,7 +311,7 @@ class FeatureEngine:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _add_macd(df: pd.DataFrame, close: pd.Series):
+    def _add_macd(df: pd.DataFrame, close: pd.Series) -> None:
         ema12 = close.ewm(span=12, min_periods=12, adjust=False).mean()
         ema26 = close.ewm(span=26, min_periods=26, adjust=False).mean()
         macd_line = ema12 - ema26
@@ -328,7 +328,7 @@ class FeatureEngine:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _add_bollinger(df: pd.DataFrame, close: pd.Series, window: int = 20):
+    def _add_bollinger(df: pd.DataFrame, close: pd.Series, window: int = 20) -> None:
         ma = close.rolling(window, min_periods=window).mean()
         std = close.rolling(window, min_periods=window).std()
         upper = ma + 2 * std
@@ -347,7 +347,7 @@ class FeatureEngine:
         df: pd.DataFrame,
         close: pd.Series, high: pd.Series,
         low: pd.Series, volume: pd.Series,
-    ):
+    ) -> None:
         vol_ma20 = volume.rolling(20, min_periods=20).mean()
 
         # FIX VOLRATIO: Handle zero volume gracefully
@@ -387,7 +387,7 @@ class FeatureEngine:
     def _add_trend(
         self, df: pd.DataFrame,
         close: pd.Series, high: pd.Series, low: pd.Series,
-    ):
+    ) -> None:
         adx_val, di_plus, di_minus = self._calc_adx(close, high, low)
         df["adx"] = adx_val / 100
         df["di_diff"] = (di_plus - di_minus) / 100
@@ -449,7 +449,7 @@ class FeatureEngine:
     def _add_price_position(
         df: pd.DataFrame,
         close: pd.Series, high: pd.Series, low: pd.Series,
-    ):
+    ) -> None:
         # shift(1): window of COMPLETED bars only (excludes current bar)
         high_20 = high.rolling(20, min_periods=20).max().shift(1)
         low_20 = low.rolling(20, min_periods=20).min().shift(1)
@@ -476,7 +476,7 @@ class FeatureEngine:
         df: pd.DataFrame,
         close: pd.Series, high: pd.Series,
         low: pd.Series, open_price: pd.Series,
-    ):
+    ) -> None:
         # Vectorized (no pd.concat overhead)
         close_vals = close.values.astype(np.float64)
         open_vals = open_price.values.astype(np.float64)
@@ -498,7 +498,7 @@ class FeatureEngine:
     def _add_atr(
         df: pd.DataFrame,
         close: pd.Series, high: pd.Series, low: pd.Series,
-    ):
+    ) -> None:
         prev_close = close.shift(1)
         tr = pd.concat([
             high - low,
@@ -520,7 +520,7 @@ class FeatureEngine:
         df: pd.DataFrame,
         close: pd.Series, high: pd.Series,
         low: pd.Series, open_price: pd.Series,
-    ):
+    ) -> None:
         # FIX GAPNAN: gap uses shift(1) which produces NaN on first row.
         # This is expected — the NaN will be handled by ffill + fillna(0)
         # in _build(). Using epsilon in denominator for safety.

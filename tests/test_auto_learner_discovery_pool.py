@@ -5,7 +5,7 @@ import time
 from models.auto_learner import StockRotator
 
 
-def test_rotator_keeps_full_universe_and_persists_without_truncation(monkeypatch):
+def test_rotator_keeps_full_universe_and_persists_without_truncation(monkeypatch) -> None:
     universe = [f"{600000 + i:06d}" for i in range(5200)]
     new_listing = ["001399"]
 
@@ -41,7 +41,7 @@ def test_rotator_keeps_full_universe_and_persists_without_truncation(monkeypatch
     assert len(restored.get_pool_snapshot()) == len(snapshot)
 
 
-def test_rotator_injects_new_listing_between_full_refresh_windows(monkeypatch):
+def test_rotator_injects_new_listing_between_full_refresh_windows(monkeypatch) -> None:
     monkeypatch.setattr(
         "data.universe.get_universe_codes",
         lambda force_refresh=False, max_age_hours=12.0: ["600000", "600001"],  # noqa: ARG005

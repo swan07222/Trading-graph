@@ -1,4 +1,4 @@
-"""China Network Optimization Module
+"""China Network Optimization Module.
 
 Provides enhanced connectivity for China mainland users with:
 - Multiple Chinese CDN and DNS resolvers

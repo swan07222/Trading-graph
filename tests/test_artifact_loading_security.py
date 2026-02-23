@@ -30,7 +30,7 @@ def _valid_ensemble_state(seed: EnsembleModel) -> dict:
     }
 
 
-def test_ensemble_load_blocks_unsafe_legacy_fallback(monkeypatch, tmp_path: Path):
+def test_ensemble_load_blocks_unsafe_legacy_fallback(monkeypatch, tmp_path: Path) -> None:
     seed = EnsembleModel(input_size=8, model_names=["lstm"])
     payload = _valid_ensemble_state(seed)
 
@@ -72,7 +72,7 @@ def test_ensemble_load_blocks_unsafe_legacy_fallback(monkeypatch, tmp_path: Path
 
 def test_ensemble_load_allows_unsafe_legacy_fallback_when_opted_in(
     monkeypatch, tmp_path: Path
-):
+) -> None:
     seed = EnsembleModel(input_size=8, model_names=["lstm"])
     payload = _valid_ensemble_state(seed)
 

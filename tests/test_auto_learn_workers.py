@@ -13,14 +13,14 @@ def _load_auto_learn_workers_module():
     return module
 
 
-def test_normalize_training_interval_alias_and_fallback():
+def test_normalize_training_interval_alias_and_fallback() -> None:
     workers = _load_auto_learn_workers_module()
     assert workers.normalize_training_interval("15m") == "15m"
     assert workers.normalize_training_interval("h1") == "1h"
     assert workers.normalize_training_interval("bad-token") == "1m"
 
 
-def test_targeted_worker_passes_requested_interval(monkeypatch):
+def test_targeted_worker_passes_requested_interval(monkeypatch) -> None:
     workers = _load_auto_learn_workers_module()
     captured: dict[str, object] = {}
 
@@ -30,10 +30,10 @@ def test_targeted_worker_passes_requested_interval(monkeypatch):
             self._thread = None
             self._cb = None
 
-        def add_callback(self, cb):
+        def add_callback(self, cb) -> None:
             self._cb = cb
 
-        def start_targeted(self, **kwargs):
+        def start_targeted(self, **kwargs) -> None:
             captured.update(kwargs)
             if callable(self._cb):
                 self._cb(
@@ -48,7 +48,7 @@ def test_targeted_worker_passes_requested_interval(monkeypatch):
                     )
                 )
 
-        def stop(self, join_timeout: float = 6.0):  # noqa: ARG002
+        def stop(self, join_timeout: float = 6.0) -> None:  # noqa: ARG002
             return None
 
     monkeypatch.setattr(workers, "_get_auto_learner", lambda: _FakeLearner)
@@ -72,7 +72,7 @@ def test_targeted_worker_passes_requested_interval(monkeypatch):
     assert results and results[-1]["status"] == "ok"
 
 
-def test_auto_worker_passes_requested_interval(monkeypatch):
+def test_auto_worker_passes_requested_interval(monkeypatch) -> None:
     workers = _load_auto_learn_workers_module()
     captured: dict[str, object] = {}
 
@@ -82,10 +82,10 @@ def test_auto_worker_passes_requested_interval(monkeypatch):
             self._thread = None
             self._cb = None
 
-        def add_callback(self, cb):
+        def add_callback(self, cb) -> None:
             self._cb = cb
 
-        def start(self, **kwargs):
+        def start(self, **kwargs) -> None:
             captured.update(kwargs)
             if callable(self._cb):
                 self._cb(
@@ -100,7 +100,7 @@ def test_auto_worker_passes_requested_interval(monkeypatch):
                     )
                 )
 
-        def stop(self, join_timeout: float = 6.0):  # noqa: ARG002
+        def stop(self, join_timeout: float = 6.0) -> None:  # noqa: ARG002
             return None
 
     monkeypatch.setattr(workers, "_get_auto_learner", lambda: _FakeLearner)

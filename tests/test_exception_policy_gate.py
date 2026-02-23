@@ -12,7 +12,7 @@ def _load_exception_policy_gate_module():
     return module
 
 
-def test_collect_exception_policy_issues_detects_broad_and_silent(tmp_path: Path):
+def test_collect_exception_policy_issues_detects_broad_and_silent(tmp_path: Path) -> None:
     gate = _load_exception_policy_gate_module()
     sample = tmp_path / "sample.py"
     sample.write_text(
@@ -30,7 +30,7 @@ def test_collect_exception_policy_issues_detects_broad_and_silent(tmp_path: Path
     assert f"{normalized}:3:silent-pass" in issues
 
 
-def test_collect_exception_policy_issues_handles_utf8_bom(tmp_path: Path):
+def test_collect_exception_policy_issues_handles_utf8_bom(tmp_path: Path) -> None:
     gate = _load_exception_policy_gate_module()
     sample = tmp_path / "sample_bom.py"
     sample.write_text(
@@ -48,7 +48,7 @@ def test_collect_exception_policy_issues_handles_utf8_bom(tmp_path: Path):
     assert f"{normalized}:3:silent-pass" in issues
 
 
-def test_exception_policy_baseline_roundtrip(tmp_path: Path):
+def test_exception_policy_baseline_roundtrip(tmp_path: Path) -> None:
     gate = _load_exception_policy_gate_module()
     baseline = tmp_path / "baseline.txt"
     sample = {
@@ -60,7 +60,7 @@ def test_exception_policy_baseline_roundtrip(tmp_path: Path):
     assert loaded == sample
 
 
-def test_exception_policy_summarize_issue_counts():
+def test_exception_policy_summarize_issue_counts() -> None:
     gate = _load_exception_policy_gate_module()
     issues = {
         "a.py:10:broad-except",
@@ -74,7 +74,7 @@ def test_exception_policy_summarize_issue_counts():
     assert summary["b.py"]["bare-except"] == 1
 
 
-def test_exception_policy_budget_roundtrip(tmp_path: Path):
+def test_exception_policy_budget_roundtrip(tmp_path: Path) -> None:
     gate = _load_exception_policy_gate_module()
     budget_path = tmp_path / "budget.json"
     sample = {
