@@ -8,6 +8,7 @@ import pandas as pd
 
 from config.settings import CONFIG
 from utils.logger import get_logger
+from utils.type_utils import safe_float
 
 log = get_logger(__name__)
 
@@ -156,12 +157,12 @@ def read_history(
             )
         )
         for idx, row in df.sort_index().iterrows():
-            c = self._safe_float(row.get("close", 0), 0.0)
+            c = safe_float(row.get("close", 0), 0.0)
             if c <= 0:
                 continue
-            o = self._safe_float(row.get("open", c), c)
-            h = self._safe_float(row.get("high", c), c)
-            low = self._safe_float(row.get("low", c), c)
+            o = safe_float(row.get("open", c), c)
+            h = safe_float(row.get("high", c), c)
+            low = safe_float(row.get("low", c), c)
             idx_date = idx.date() if hasattr(idx, "date") else None
             ref_close = prev_close
             if (

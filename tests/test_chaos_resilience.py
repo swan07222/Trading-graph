@@ -23,17 +23,21 @@ def test_chaos_session_cache_invalid_rows_are_ignored(tmp_path):
     interval = "1m"
 
     path = cache.root / f"{symbol}_{interval}.csv"
+    # Test data with realistic OHLC ranges for 1m bars (< 0.5% range)
+    # Row 1: invalid timestamp format - should be dropped
+    # Row 2: close=0 - should be dropped  
+    # Row 3: valid realistic bar - should be kept
     path.write_text(
         "timestamp,open,high,low,close,volume,amount,is_final\n"
-        "bad-ts,1,1,1,1,1,1,true\n"
-        "2026-02-12T09:30:00+00:00,10,11,9,0,100,1000,true\n"
-        "2026-02-12T09:31:00+00:00,10,11,9,10.5,100,1000,true\n",
+        "bad-ts,100.00,100.10,99.90,100.05,1000,100050,true\n"
+        "2026-02-12T09:30:00+00:00,100.00,100.10,99.90,0,1000,100050,true\n"
+        "2026-02-12T09:31:00+00:00,100.05,100.15,100.00,100.10,1000,100100,true\n",
         encoding="utf-8",
     )
 
     df = cache.read_history(symbol, interval, bars=10)
     assert len(df) == 1
-    assert float(df["close"].iloc[0]) == 10.5
+    assert float(df["close"].iloc[0]) == 100.10
 
 
 def test_chaos_session_cache_rejects_nondict_bar(tmp_path):

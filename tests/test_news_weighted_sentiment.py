@@ -347,10 +347,14 @@ def test_sina_stock_news_parses_jsonp_payload_without_html_h2(monkeypatch):
 
     class _Resp:
         text = payload
+        status_code = 200
 
         @staticmethod
         def json():
             raise ValueError("not-json")
+        
+        def raise_for_status(self):
+            pass  # OK
 
     monkeypatch.setattr(fetcher._session, "get", lambda *args, **kwargs: _Resp())
 
@@ -381,10 +385,14 @@ def test_eastmoney_stock_news_parses_plain_json_without_jsonp_wrapper(monkeypatc
 
     class _Resp:
         text = payload
+        status_code = 200
 
         @staticmethod
         def json():
             return payload_obj
+        
+        def raise_for_status(self):
+            pass  # OK
 
     monkeypatch.setattr(fetcher._session, "get", lambda *args, **kwargs: _Resp())
 

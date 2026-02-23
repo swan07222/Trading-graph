@@ -779,7 +779,9 @@ class SinaNewsFetcher(_BaseNewsFetcher):
                 # Fallback: try HTML extraction as last resort
                 pass
             else:
-                articles = data.get("result", {}).get("data", [])
+                # Sina API may return 'data' or 'list' depending on endpoint
+                result = data.get("result", {})
+                articles = result.get("data") or result.get("list", [])
                 for article in articles:
                     if not isinstance(article, dict):
                         continue
