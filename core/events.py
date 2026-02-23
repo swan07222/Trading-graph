@@ -110,7 +110,7 @@ class EventHandler(ABC):
     """Abstract event handler."""
 
     @abstractmethod
-    def handle(self, event: Event):
+    def handle(self, event: Event) -> None:
         pass
 
 class EventBus:
@@ -124,7 +124,7 @@ class EventBus:
     _instance = None
     _lock = threading.RLock()
 
-    def __new__(cls):
+    def __new__(cls) -> "EventBus":
         if cls._instance is None:
             with cls._lock:
                 if cls._instance is None:
@@ -173,7 +173,7 @@ class EventBus:
             except ValueError:
                 pass
 
-    def clear_subscribers(self, event_type: EventType = None) -> None:
+    def clear_subscribers(self, event_type: EventType | None = None) -> None:
         """Clear all subscribers for a given event type,
         or all subscribers if event_type is None.
         Useful for testing.
@@ -311,7 +311,7 @@ class EventBus:
 
     def get_history(
         self,
-        event_type: EventType = None,
+        event_type: EventType | None = None,
         limit: int = 100
     ) -> list[Event]:
         """Get event history.

@@ -7,6 +7,7 @@ from typing import Any
 
 
 class OrderSide(Enum):
+    """Order side (buy or sell)."""
     BUY = "buy"
     SELL = "sell"
 
@@ -19,6 +20,7 @@ class Signal(Enum):
     STRONG_SELL = "STRONG_SELL"
 
 class OrderStatus(Enum):
+    """Order execution status."""
     PENDING = "pending"
     SUBMITTED = "submitted"
     ACCEPTED = "accepted"
@@ -29,6 +31,7 @@ class OrderStatus(Enum):
     EXPIRED = "expired"
 
 class OrderType(Enum):
+    """Order type."""
     MARKET = "market"
     LIMIT = "limit"
     STOP = "stop"
@@ -39,17 +42,20 @@ class OrderType(Enum):
     TRAIL_LIMIT = "trail_limit"
 
 class PositionSide(Enum):
+    """Position side."""
     LONG = "long"
     SHORT = "short"
     FLAT = "flat"
 
 class RiskLevel(Enum):
+    """Risk level classification."""
     LOW = "low"
     MEDIUM = "medium"
     HIGH = "high"
     CRITICAL = "critical"
 
 class SystemStatus(Enum):
+    """System operational status."""
     RUNNING = "running"
     PAUSED = "paused"
     STOPPED = "stopped"
@@ -117,6 +123,7 @@ class Order:
 
     @property
     def is_active(self) -> bool:
+        """Check if order is still active (not complete)."""
         return self.status in [
             OrderStatus.PENDING,
             OrderStatus.SUBMITTED,
@@ -126,6 +133,7 @@ class Order:
 
     @property
     def is_complete(self) -> bool:
+        """Check if order is complete (filled, cancelled, rejected, or expired)."""
         return self.status in [
             OrderStatus.FILLED,
             OrderStatus.CANCELLED,
@@ -135,18 +143,22 @@ class Order:
 
     @property
     def remaining_qty(self) -> int:
+        """Get remaining quantity to fill."""
         return self.quantity - self.filled_qty
 
     @property
     def fill_ratio(self) -> float:
+        """Get fill ratio (filled quantity / total quantity)."""
         return self.filled_qty / self.quantity if self.quantity > 0 else 0
 
     @property
     def notional_value(self) -> float:
+        """Get notional value of the order."""
         return self.quantity * self.price
 
     @property
     def filled_value(self) -> float:
+        """Get value of filled portion."""
         return self.filled_qty * self.avg_price
 
     def to_dict(self) -> dict:
@@ -241,20 +253,24 @@ class Fill:
 
     @property
     def value(self) -> float:
+        """Get fill value."""
         return self.quantity * self.price
 
     @property
     def total_cost(self) -> float:
+        """Get total cost (commission + stamp tax)."""
         return self.commission + self.stamp_tax
 
     @property
     def net_value(self) -> float:
+        """Get net value after costs."""
         if self.side == OrderSide.BUY:
             return -(self.value + self.total_cost)
         else:
             return self.value - self.total_cost
 
     def to_dict(self) -> dict:
+        """Serialize fill to dictionary."""
         return {
             'id': self.id,
             'order_id': self.order_id,
@@ -289,36 +305,42 @@ class Position:
     opened_at: datetime | None = None
     last_updated: datetime | None = None
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         if self.last_updated is None:
             self.last_updated = datetime.now()
 
     @property
     def market_value(self) -> float:
+        """Get market value of position."""
         return self.quantity * self.current_price
 
     @property
     def cost_basis(self) -> float:
+        """Get cost basis of position."""
         return self.quantity * self.avg_cost
 
     @property
     def unrealized_pnl(self) -> float:
+        """Get unrealized P&L."""
         if self.quantity == 0 or self.avg_cost == 0:
             return 0
         return (self.current_price - self.avg_cost) * self.quantity
 
     @property
     def unrealized_pnl_pct(self) -> float:
+        """Get unrealized P&L percentage."""
         if self.cost_basis == 0:
             return 0
         return (self.unrealized_pnl / self.cost_basis) * 100
 
     @property
     def total_pnl(self) -> float:
+        """Get total P&L (realized + unrealized)."""
         return self.realized_pnl + self.unrealized_pnl
 
     @property
     def side(self) -> PositionSide:
+        """Get position side (long/short/flat)."""
         if self.quantity > 0:
             return PositionSide.LONG
         elif self.quantity < 0:
@@ -331,6 +353,7 @@ class Position:
         self.last_updated = datetime.now()
 
     def to_dict(self) -> dict:
+        """Serialize position to dictionary."""
         return {
             'symbol': self.symbol,
             'name': self.name,
@@ -369,7 +392,7 @@ class Account:
 
     last_updated: datetime | None = None
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         if self.last_updated is None:
             self.last_updated = datetime.now()
         if self.daily_start_date is None:
@@ -377,6 +400,7 @@ class Account:
 
     @property
     def positions_value(self) -> float:
+        """Get total value of all positions."""
         return sum(p.market_value for p in self.positions.values())
 
     @property
@@ -386,48 +410,58 @@ class Account:
 
     @property
     def equity(self) -> float:
+        """Get total equity (cash + positions)."""
         return self.cash + self.positions_value
 
     @property
     def unrealized_pnl(self) -> float:
+        """Get total unrealized P&L from all positions."""
         return sum(p.unrealized_pnl for p in self.positions.values())
 
     @property
     def total_pnl(self) -> float:
+        """Get total P&L from initial capital."""
         return self.equity - self.initial_capital
 
     @property
     def total_pnl_pct(self) -> float:
+        """Get total P&L percentage."""
         if self.initial_capital <= 0:
             return 0
         return (self.equity / self.initial_capital - 1) * 100
 
     @property
     def daily_pnl(self) -> float:
+        """Get daily P&L."""
         return self.equity - self.daily_start_equity
 
     @property
     def daily_pnl_pct(self) -> float:
+        """Get daily P&L percentage."""
         if self.daily_start_equity <= 0:
             return 0
         return (self.equity / self.daily_start_equity - 1) * 100
 
     @property
     def drawdown(self) -> float:
+        """Get current drawdown from peak equity."""
         if self.peak_equity <= 0:
             return 0
         return self.peak_equity - self.equity
 
     @property
     def drawdown_pct(self) -> float:
+        """Get drawdown percentage from peak equity."""
         if self.peak_equity <= 0:
             return 0
         return (self.peak_equity - self.equity) / self.peak_equity * 100
 
     def get_position(self, symbol: str) -> Position | None:
+        """Get position by symbol."""
         return self.positions.get(symbol)
 
     def to_dict(self) -> dict:
+        """Serialize account to dictionary."""
         return {
             'broker_name': self.broker_name,
             'equity': self.equity,
@@ -482,7 +516,7 @@ class RiskMetrics:
 
     timestamp: datetime | None = None
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         if self.timestamp is None:
             self.timestamp = datetime.now()
 
@@ -522,7 +556,7 @@ class TradeSignal:
     oco_group: str = ""
     bracket: bool = False
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         if not self.id:
             self.id = f"SIG_{datetime.now().strftime('%Y%m%d%H%M%S')}_{uuid.uuid4().hex[:6]}"
         if self.generated_at is None:
@@ -566,13 +600,14 @@ class AutoTradeAction:
     realized_pnl: float = 0.0
     outcome: str = ""  # "WIN", "LOSS", "PENDING", ""
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         if not self.id:
             self.id = f"ATA_{datetime.now().strftime('%Y%m%d%H%M%S')}_{uuid.uuid4().hex[:6]}"
         if self.timestamp is None:
             self.timestamp = datetime.now()
 
     def to_dict(self) -> dict:
+        """Serialize trade signal to dictionary."""
         return {
             'id': self.id,
             'timestamp': self.timestamp.isoformat() if self.timestamp else None,
@@ -644,7 +679,7 @@ class AutoTradeState:
     MAX_RECENT_ACTIONS: int = 200
     MAX_PENDING_APPROVALS: int = 20
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         if self.session_start is None:
             self.session_start = datetime.now()
         if self.session_date is None:
@@ -757,6 +792,7 @@ class AutoTradeState:
         return True
 
     def to_dict(self) -> dict:
+        """Serialize auto-trade state to dictionary."""
         return {
             'mode': self.mode.value,
             'is_running': self.is_running,
