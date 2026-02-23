@@ -1,5 +1,80 @@
 {
-  "enabled": [
-    "momentum_breakout"
-  ]
+  "enabled_strategies": [
+    "momentum_breakout",
+    "mean_reversion",
+    "trend_following",
+    "volume_profile",
+    "support_resistance",
+    "macd_divergence",
+    "bollinger_breakout",
+    "rsi_oversold",
+    "golden_cross",
+    "gap_and_go",
+    "vwap_reversion",
+    "earnings_momentum"
+  ],
+  "strategy_configs": {
+    "momentum_breakout": {
+      "lookback_days": 20,
+      "volume_multiplier": 1.5,
+      "min_confidence": 0.6
+    },
+    "mean_reversion": {
+      "ma_period": 20,
+      "zscore_threshold": 2.0,
+      "min_confidence": 0.55
+    },
+    "trend_following": {
+      "fast_ma": 10,
+      "slow_ma": 30,
+      "min_confidence": 0.55
+    },
+    "volume_profile": {
+      "lookback": 30,
+      "bins": 20,
+      "min_confidence": 0.5
+    },
+    "support_resistance": {
+      "lookback": 50,
+      "tolerance": 0.02,
+      "min_confidence": 0.55
+    },
+    "macd_divergence": {
+      "fast": 12,
+      "slow": 26,
+      "signal": 9,
+      "min_confidence": 0.6
+    },
+    "bollinger_breakout": {
+      "period": 20,
+      "std_dev": 2.0,
+      "min_confidence": 0.55
+    },
+    "rsi_oversold": {
+      "period": 14,
+      "oversold": 30,
+      "overbought": 70,
+      "min_confidence": 0.5
+    },
+    "golden_cross": {
+      "short_ma": 50,
+      "long_ma": 200,
+      "min_confidence": 0.65
+    },
+    "gap_and_go": {
+      "min_gap_pct": 2.0,
+      "lookback": 20,
+      "min_confidence": 0.55
+    },
+    "vwap_reversion": {
+      "lookback": 20,
+      "std_threshold": 2.0,
+      "min_confidence": 0.55
+    },
+    "earnings_momentum": {
+      "earnings_lookback": 5,
+      "momentum_period": 10,
+      "min_confidence": 0.6
+    }
+  }
 }
