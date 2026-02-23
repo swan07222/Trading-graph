@@ -636,6 +636,19 @@ def _stabilize_chart_depth(
 def _bar_bucket_epoch(self: Any, ts_raw: Any, interval: str) -> float:
     """Floor any timestamp to the interval bucket start (epoch seconds)."""
     epoch = self._ts_to_epoch(ts_raw)
+    iv = self._normalize_interval_token(interval)
+    if iv in ("1d", "1wk", "1mo"):
+        # Use Shanghai trading date as bucket key to avoid UTC date aliasing.
+        # Providers may timestamp daily bars at midnight Shanghai time which
+        # is 16:00 UTC on the previous day -- naive UTC floor would map them
+        # to the wrong date.
+        try:
+            from zoneinfo import ZoneInfo
+            dt_val = datetime.fromtimestamp(float(epoch), tz=ZoneInfo("Asia/Shanghai"))
+        except _APP_SOFT_EXCEPTIONS:
+            dt_val = datetime.fromtimestamp(float(epoch))
+        sh_midnight = dt_val.replace(hour=0, minute=0, second=0, microsecond=0)
+        return float(sh_midnight.timestamp())
     step = float(max(1, self._interval_seconds(interval)))
     return float(int(epoch // step) * int(step))
 
@@ -765,7 +778,10 @@ def _is_market_session_timestamp(self: Any, ts_raw: Any, interval: str) -> bool:
     cur_time = dt_val.time()
     t = CONFIG.trading
     morning = t.market_open_am <= cur_time <= t.market_close_am
-    afternoon = t.market_open_pm <= cur_time <= t.market_close_pm
+    # Exclude closing call auction (14:57-15:00) from intraday bars
+    # to prevent giant candles from auction price matching.
+    from datetime import time as _dt_time
+    afternoon = t.market_open_pm <= cur_time < _dt_time(14, 57)
     return bool(morning or afternoon)
 
 def _filter_bars_to_market_session(
@@ -799,8 +815,10 @@ def _bar_safety_caps(self: Any, interval: str) -> tuple[float, float]:
         return 0.14, 0.020
     if iv in ("60m", "1h"):
         return 0.18, 0.040
-    if iv in ("1d", "1wk", "1mo"):
-        return 0.24, 0.22
+    if iv == "1d":
+        return 0.24, 0.24
+    if iv in ("1wk", "1mo"):
+        return 0.35, 0.40
     return 0.20, 0.15
 
 def _synthetic_tick_jump_cap(self: Any, interval: str) -> float:

@@ -655,10 +655,14 @@ def _on_price_updated(self: Any, code: str, price: float) -> None:
                 target_steps=int(self.forecast_spin.value()),
             )
 
-            # Update current_prediction with new forecast
+            # Update current_prediction with new forecast.
+            # Only overwrite when we have actual data -- an empty list
+            # would permanently erase the prediction line for all
+            # subsequent tick renders that fall back to current_prediction.
             if (
                 self.current_prediction
                 and self.current_prediction.stock_code == code
+                and display_predicted
             ):
                 self.current_prediction.predicted_prices = display_predicted
                 low_band, high_band = self._build_chart_prediction_bands(
@@ -1051,10 +1055,10 @@ def _prepare_chart_bars_for_interval(
 
     if out and iv in ("1d", "1wk", "1mo"):
         if iv == "1d":
-            daily_jump_cap = 0.18
-            daily_body_cap = 0.12
-            daily_span_cap = 0.20
-            daily_wick_cap = 0.10
+            daily_jump_cap = 0.22
+            daily_body_cap = 0.22
+            daily_span_cap = 0.28
+            daily_wick_cap = 0.14
         elif iv == "1wk":
             daily_jump_cap = 0.26
             daily_body_cap = 0.20

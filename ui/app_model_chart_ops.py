@@ -927,15 +927,19 @@ def _render_chart_state(
     if anchor_for_pred is None:
         anchor_for_pred = anchor_input
 
-    source_iv_for_prepare = iv if predicted_prepared else pred_source_iv
-    chart_predicted = self._prepare_chart_predicted_prices(
-        symbol=symbol,
-        chart_interval=iv,
-        predicted_prices=pred_vals,
-        source_interval=source_iv_for_prepare,
-        current_price=anchor_for_pred,
-        target_steps=steps,
-    )
+    if predicted_prepared and pred_vals:
+        # Already shaped by _prepare_chart_predicted_prices upstream;
+        # re-processing with a different anchor can distort or empty them.
+        chart_predicted = list(pred_vals)
+    else:
+        chart_predicted = self._prepare_chart_predicted_prices(
+            symbol=symbol,
+            chart_interval=iv,
+            predicted_prices=pred_vals,
+            source_interval=pred_source_iv,
+            current_price=anchor_for_pred,
+            target_steps=steps,
+        )
     chart_predicted_low, chart_predicted_high = self._build_chart_prediction_bands(
         symbol=symbol,
         predicted_prices=chart_predicted,
