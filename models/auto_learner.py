@@ -62,8 +62,7 @@ _AUTO_LEARNER_RECOVERABLE_EXCEPTIONS = JSON_RECOVERABLE_EXCEPTIONS
 _thread_local = threading.local()
 
 def get_effective_learning_rate() -> float:
-    """
-    Get thread-local LR override or global default.
+    """Get thread-local LR override or global default.
 
     This allows ContinuousLearner to set a per-cycle LR without
     mutating the global CONFIG, avoiding race conditions when
@@ -82,8 +81,7 @@ def clear_thread_local_lr():
 
 
 class ContinuousLearner:
-    """
-    Production continuous learning system.
+    """Production continuous learning system.
 
     Supports two modes:
     - Auto learning: discovers and rotates through stocks automatically
@@ -198,8 +196,7 @@ class ContinuousLearner:
 
     # FIX PAUSE: Extracted to reusable method
     def _wait_if_paused(self) -> bool:
-        """
-        Block while paused. Returns True if should stop.
+        """Block while paused. Returns True if should stop.
         """
         while self.progress.is_paused and not self._should_stop():
             if self._cancel_token.wait(timeout=1.0):
@@ -695,8 +692,7 @@ class ContinuousLearner:
     def _train(
         self, ok_codes, epochs, interval, horizon, lookback, incremental, lr,
     ) -> dict:
-        """
-        Train model.
+        """Train model.
 
         FIX LR: Passes learning_rate explicitly to trainer.train() instead
         of mutating global CONFIG.model.learning_rate.

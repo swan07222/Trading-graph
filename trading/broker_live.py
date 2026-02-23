@@ -17,8 +17,7 @@ from .broker import BrokerInterface, make_fill_uid, parse_broker_status
 log = get_logger(__name__)
 
 class EasytraderBroker(BrokerInterface):
-    """
-    Base class for all easytrader-based brokers (THS, ZSZQ, HT, etc).
+    """Base class for all easytrader-based brokers (THS, ZSZQ, HT, etc).
 
     Subclasses only need to override:
     - name (property)
@@ -513,8 +512,7 @@ class ZSZQBroker(EasytraderBroker):
 
 
 class MultiVenueBroker(BrokerInterface):
-    """
-    Multi-venue router with active failover.
+    """Multi-venue router with active failover.
 
     - Uses a priority list of underlying brokers.
     - Routes writes to the active venue.
@@ -666,8 +664,7 @@ class MultiVenueBroker(BrokerInterface):
         return float(sum(vals) / max(1, len(vals)))
 
     def _venue_score(self, idx: int) -> float:
-        """
-        Adaptive routing score.
+        """Adaptive routing score.
 
         Higher is better:
         - rewards venues with successful submits/reads
@@ -714,8 +711,7 @@ class MultiVenueBroker(BrokerInterface):
 
     @staticmethod
     def _is_transient_reject(order: Order) -> bool:
-        """
-        Detect infrastructure-style rejects that should trigger failover.
+        """Detect infrastructure-style rejects that should trigger failover.
 
         Business rejects (insufficient funds, rule violations, etc.) should
         not fan out to other venues.

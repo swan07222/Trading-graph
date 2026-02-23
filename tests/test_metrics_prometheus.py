@@ -1,9 +1,12 @@
 """Tests for Prometheus metrics exporter."""
 from utils.metrics_prometheus import (
-    MetricsRegistry, MetricSample,
+    MetricSample,
+    MetricsRegistry,
     TradingMetrics,
-    record_order, record_fill, record_prediction,
     get_trading_metrics,
+    record_fill,
+    record_order,
+    record_prediction,
 )
 
 

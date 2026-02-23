@@ -355,8 +355,7 @@ def _analyze_stock(self) -> None:
     worker.start()
 
 def _on_analysis_done(self, pred: Any) -> None:
-    """
-    Handle analysis completion; also triggers news fetch.
+    """Handle analysis completion; also triggers news fetch.
 
     FIX: Added stale result detection using sequence numbers.
     """
@@ -581,12 +580,11 @@ def _on_analysis_done(self, pred: Any) -> None:
     # In MANUAL mode, always enable buttons when a valid stock is selected
     # In AUTO mode, disable buttons (AI handles trading)
     # In SEMI-AUTO mode, enable buttons for manual override
-    Signal = _lazy_get("models.predictor", "Signal")
     is_manual = (self._auto_trade_mode == AutoTradeMode.MANUAL)
     is_semi_auto = (self._auto_trade_mode == AutoTradeMode.SEMI_AUTO)
     has_valid_stock = bool(self._ui_norm(self.stock_input.text()))
     is_connected = bool(self.executor is not None)
-    
+
     # Enable buttons when: manual/semi-auto mode + valid stock + connected
     buttons_enabled = is_connected and has_valid_stock and (is_manual or is_semi_auto)
     
@@ -990,8 +988,7 @@ def _compute_guess_profit(
     mark_price: float,
     shares: int | None = None,
 ) -> float:
-    """
-    Compute virtual directional P&L with transaction costs.
+    """Compute virtual directional P&L with transaction costs.
 
     Args:
         direction: "UP", "DOWN", or "NONE"
@@ -1048,8 +1045,7 @@ def _compute_guess_profit(
     return net_pnl
 
 def _refresh_guess_rows_for_symbol(self, code: str, price: float) -> None:
-    """
-    Update history result for this symbol using latest real-time price.
+    """Update history result for this symbol using latest real-time price.
 
     FIX: Uses improved profit calculation with transaction costs.
     """
@@ -1106,8 +1102,7 @@ def _refresh_guess_rows_for_symbol(self, code: str, price: float) -> None:
     self._update_correct_guess_profit_ui()
 
 def _calculate_realtime_correct_guess_profit(self) -> dict[str, float]:
-    """
-    Aggregate real-time guess quality across history rows.
+    """Aggregate real-time guess quality across history rows.
     Reports both net and gross-correct directional P&L.
     """
     total = 0
@@ -1171,11 +1166,11 @@ def _update_correct_guess_profit_ui(self) -> None:
             else ModernColors.ACCENT_DANGER
         )
         label_profit.setStyleSheet(
-            (
+            
                 f"color: {color}; "
                 f"font-size: {ModernFonts.SIZE_XL}px; "
                 f"font-weight: {ModernFonts.WEIGHT_BOLD};"
-            )
+            
         )
         label_profit.setToolTip(
             "Directional guess P&L\n"
@@ -1191,11 +1186,11 @@ def _update_correct_guess_profit_ui(self) -> None:
         rate = float(stats.get("hit_rate", 0.0) or 0.0)
         label_rate.setText(f"{rate:.1%} ({correct}/{total})")
         label_rate.setStyleSheet(
-            (
+            
                 f"color: {ModernColors.ACCENT_INFO}; "
                 f"font-size: {ModernFonts.SIZE_XL}px; "
                 f"font-weight: {ModernFonts.WEIGHT_BOLD};"
-            )
+            
         )
 
 def _scan_stocks(self) -> None:

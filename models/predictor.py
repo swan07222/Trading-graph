@@ -1,6 +1,5 @@
 # models/predictor.py
 import json
-import os
 import re
 import threading
 import time
@@ -30,8 +29,7 @@ __all__ = [
 ]
 
 class Predictor:
-    """
-    AI Stock Predictor with real-time capabilities.
+    """AI Stock Predictor with real-time capabilities.
 
     Features:
     - Ensemble model predictions
@@ -119,8 +117,7 @@ class Predictor:
         self._initialize_model_weights()
 
     def _load_high_precision_config(self) -> dict[str, float]:
-        """
-        Optional high-precision runtime gate.
+        """Optional high-precision runtime gate.
         Disabled by default so existing behavior is unchanged.
         """
         from config.runtime_env import env_flag, env_text
@@ -304,8 +301,7 @@ class Predictor:
             return False
 
     def _initialize_model_weights(self) -> None:
-        """
-        Initialize adaptive model weights based on historical performance.
+        """Initialize adaptive model weights based on historical performance.
         
         This improves ensemble accuracy by weighting better-performing models higher.
         """
@@ -328,8 +324,7 @@ class Predictor:
         log.info(f"Initialized model weights for {n_models} models")
 
     def _update_model_weights(self, stock_code: str, was_correct: bool) -> None:
-        """
-        Update model weights based on prediction accuracy.
+        """Update model weights based on prediction accuracy.
         
         Uses exponential moving average to track recent performance.
         """
@@ -352,8 +347,7 @@ class Predictor:
                 self._model_weights[name] = self._last_model_performance[name] / total_perf
 
     def _record_prediction_outcome(self, stock_code: str, predicted_up: bool, actual_up: bool) -> None:
-        """
-        Record prediction outcome for historical accuracy tracking.
+        """Record prediction outcome for historical accuracy tracking.
         """
         was_correct = (predicted_up == actual_up)
         
@@ -370,8 +364,7 @@ class Predictor:
         self._update_model_weights(stock_code, was_correct)
 
     def _get_stock_accuracy(self, stock_code: str) -> float:
-        """
-        Get recent prediction accuracy for a stock.
+        """Get recent prediction accuracy for a stock.
         """
         if stock_code not in self._stock_accuracy_history:
             return 0.5  # Neutral default
@@ -392,8 +385,7 @@ class Predictor:
         return weighted_sum / weight_total if weight_total > 0 else 0.5
 
     def _calibrate_confidence(self, confidence: float, stock_code: str, entropy: float) -> float:
-        """
-        Calibrate confidence based on historical accuracy and uncertainty.
+        """Calibrate confidence based on historical accuracy and uncertainty.
         
         This improves prediction reliability by adjusting confidence based on:
         1. Historical accuracy for this stock
@@ -580,8 +572,7 @@ class Predictor:
         return scaler_ready and (ensemble is not None or forecaster is not None)
 
     def _maybe_reload_models(self, *, reason: str = "", force: bool = False) -> bool:
-        """
-        Opportunistically reload models when artifacts appear/rotate on disk.
+        """Opportunistically reload models when artifacts appear/rotate on disk.
 
         This keeps long-running UI sessions in sync without requiring restart
         after training finishes.
@@ -729,8 +720,7 @@ class Predictor:
         interval: str,
         horizon: int,
     ) -> list[str]:
-        """
-        Last-resort fallback for legacy artifacts missing stock metadata.
+        """Last-resort fallback for legacy artifacts missing stock metadata.
         Uses persisted learner_state only when interval+horizon match.
         """
         try:
@@ -777,8 +767,7 @@ class Predictor:
             return []
 
     def get_trained_stock_codes(self, limit: int | None = None) -> list[str]:
-        """
-        Return stock codes used in the currently loaded training artifact.
+        """Return stock codes used in the currently loaded training artifact.
         """
         codes = list(self._trained_stock_codes)
         if limit is not None:
@@ -915,8 +904,7 @@ class Predictor:
         skip_cache: bool = False,
         history_allow_online: bool = True,
     ) -> Prediction:
-        """
-        Make full prediction with price forecast.
+        """Make full prediction with price forecast.
 
         Args:
             stock_code: Stock code to predict
@@ -1096,8 +1084,7 @@ class Predictor:
             return False
 
     def _populate_minimal_snapshot(self, pred: Prediction, code: str) -> None:
-        """
-        Populate minimal quote context when full feature history is unavailable.
+        """Populate minimal quote context when full feature history is unavailable.
         This keeps UI chart/price widgets responsive instead of returning all zeros.
         """
         if pred.current_price > 0:
@@ -1166,8 +1153,7 @@ class Predictor:
         horizon: int,
         required_rows: int,
     ) -> bool:
-        """
-        Produce a lightweight fallback prediction when history is short.
+        """Produce a lightweight fallback prediction when history is short.
         This avoids HOLD(0%) outputs during startup warm-up windows.
         """
         if df is None or df.empty or "close" not in df.columns:
@@ -1309,8 +1295,7 @@ class Predictor:
         return True
 
     def _apply_regime_adjustments(self, pred: Prediction, df: pd.DataFrame) -> None:
-        """
-        Apply regime-aware adjustments to prediction.
+        """Apply regime-aware adjustments to prediction.
 
         Adjusts confidence and thresholds based on detected market regime:
         - Trending markets: Higher confidence, lower thresholds
@@ -1354,8 +1339,7 @@ class Predictor:
             log.debug(f"Regime adjustment failed: {e}")
 
     def _apply_adaptive_signal_threshold(self, pred: Prediction) -> None:
-        """
-        Apply adaptive thresholds for signal generation.
+        """Apply adaptive thresholds for signal generation.
         
         Uses dynamic thresholds based on:
         1. Historical accuracy for this stock

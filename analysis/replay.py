@@ -26,8 +26,7 @@ class ReplayBar:
 
 
 class MarketReplay:
-    """
-    Deterministic market replay utility for regression testing.
+    """Deterministic market replay utility for regression testing.
 
     Supports:
     - CSV files with columns: symbol, ts, open, high, low, close[, volume, amount]
@@ -130,8 +129,7 @@ class MarketReplay:
             yield b
 
     def play(self, speed: float = 1.0) -> Iterator[ReplayBar]:
-        """
-        Replay bars in chronological order.
+        """Replay bars in chronological order.
         speed=1.0 keeps real time deltas, >1 accelerates.
         """
         self.reset()

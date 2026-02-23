@@ -19,8 +19,7 @@ DEFAULT_BUCKETS: tuple[float, ...] = (
 )
 
 def _sanitize_name(name: str) -> str:
-    """
-    FIX #2: Sanitize metric name for Prometheus compatibility.
+    """FIX #2: Sanitize metric name for Prometheus compatibility.
     Replaces invalid characters with underscores.
     """
     sanitized = re.sub(r"[^a-zA-Z0-9_:]", "_", name)
@@ -44,8 +43,7 @@ def _validate_labels(labels: dict[str, str] | None) -> None:
             raise TypeError(f"Label value for {key!r} must be a string, got {type(value).__name__}")
 
 class MetricsRegistry:
-    """
-    Prometheus-compatible metrics registry.
+    """Prometheus-compatible metrics registry.
 
     Supports counters, gauges, and histograms with proper exposition format.
     """
@@ -204,8 +202,7 @@ class MetricsRegistry:
             return result
 
     def to_prometheus(self) -> str:
-        """
-        FIX #3, #4: Export in valid Prometheus exposition format.
+        """FIX #3, #4: Export in valid Prometheus exposition format.
         Includes # TYPE and # HELP annotations.
         Histograms emit proper _bucket, _count, _sum lines.
         """
@@ -310,8 +307,7 @@ _process_metrics_lock = threading.Lock()
 _process_metrics_started = False
 
 def start_process_metrics(interval_seconds: float = 5.0) -> None:
-    """
-    Background gauges: cpu/mem/threads. Safe to call multiple times.
+    """Background gauges: cpu/mem/threads. Safe to call multiple times.
 
     FIX #5: Thread-safe guard.
     FIX #6: Warmup cpu_percent on first call.

@@ -1,7 +1,6 @@
 # trading/__init__.py
 def __getattr__(name: str):
-    """
-    Lazy import dispatcher.
+    """Lazy import dispatcher.
 
     Allows `from trading import SimulatorBroker` etc. to work
     without eagerly importing every submodule at package load time.

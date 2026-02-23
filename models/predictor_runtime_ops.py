@@ -189,8 +189,7 @@ def _sanitize_history_df(
     df: pd.DataFrame | None,
     interval: str,
 ) -> pd.DataFrame:
-    """
-    Normalize history rows before features/inference.
+    """Normalize history rows before features/inference.
     Fixes malformed open=0 intraday rows and drops out-of-session noise.
     """
     if df is None or df.empty:
@@ -383,8 +382,7 @@ def _fetch_data(
         return None
 
 def _default_lookback_bars(self, interval: str | None) -> int:
-    """
-    Default history depth for inference.
+    """Default history depth for inference.
     Intraday intervals use a true 7-day window (e.g. 1m => 1680 bars).
     """
     iv = self._normalize_interval_token(interval)
@@ -435,8 +433,7 @@ def _forecast_seed(
     seed_context: str = "",
     recent_prices: list[float] | None = None,
 ) -> int:
-    """
-    Deterministic seed for forecast noise.
+    """Deterministic seed for forecast noise.
     Includes symbol/interval context to avoid repeated template curves
     when feature signatures are similar across symbols.
     """
@@ -1074,8 +1071,7 @@ def _expected_edge(
     stop_distance: float,
     reward_distance: float,
 ) -> float:
-    """
-    Estimate expected edge after costs.
+    """Estimate expected edge after costs.
 
     Returns decimal edge (e.g. 0.003 means +0.3% expected value).
     """
@@ -1112,8 +1108,7 @@ def _round_trip_cost_pct(self, side: str) -> float:
     return (2.0 * commission) + (2.0 * slippage) + stamp_tax
 
 def _extract_technicals(self, df: pd.DataFrame, pred: Prediction) -> None:
-    """
-    Extract technical indicators from dataframe.
+    """Extract technical indicators from dataframe.
 
     IMPORTANT: FeatureEngine normalizes indicators:
     - rsi_14 = raw_rsi/100 - 0.5  (range: -0.5 to 0.5)
@@ -1280,8 +1275,7 @@ def _get_stock_name(self, code: str, df: pd.DataFrame) -> str:
     return ""
 
 def _clean_code(self, code: str) -> str:
-    """
-    Clean and normalize stock code.
+    """Clean and normalize stock code.
     Delegates to DataFetcher when available.
     """
     if self.fetcher is not None:

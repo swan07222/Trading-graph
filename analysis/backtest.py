@@ -57,8 +57,7 @@ class SlippageModel:
     volume_impact: float = 0.1
 
     def calculate(self, order_value: float, daily_volume: float, daily_avg_price: float) -> float:
-        """
-        Calculate slippage with protection against edge cases.
+        """Calculate slippage with protection against edge cases.
         
         FIX: Added explicit checks for very small daily_value to prevent
         division by near-zero values producing unexpectedly large slippage.
@@ -82,8 +81,7 @@ class SlippageModel:
 
 @dataclass
 class SpreadModel:
-    """
-    Deterministic spread estimator used by backtest execution.
+    """Deterministic spread estimator used by backtest execution.
 
     Spread widens during higher intraday volatility and thinner volume.
     Returned value is decimal (e.g. 0.0008 = 8 bps full spread).
@@ -358,8 +356,7 @@ class Backtester:
 
     @staticmethod
     def _score_result(result: BacktestResult) -> float:
-        """
-        Composite optimization score.
+        """Composite optimization score.
         Higher is better; penalizes deep drawdown and low signal quality.
 
         Scoring weights are defined in _SCORE_WEIGHTS constant for easy tuning.
@@ -399,8 +396,7 @@ class Backtester:
         initial_capital: float | None = None,
         top_k: int = 5,
     ) -> dict:
-        """
-        Parameter sweep over walk-forward settings and execution assumptions.
+        """Parameter sweep over walk-forward settings and execution assumptions.
         """
         train_opts = sorted(
             {int(x) for x in (train_months_options or [6, 9, 12, 18]) if int(x) > 0}
@@ -679,8 +675,7 @@ class Backtester:
         return default_stocks
 
     def _resolve_backtest_horizon(self, interval: str = "1d") -> int:
-        """
-        Resolve label/trading horizon for backtest interval.
+        """Resolve label/trading horizon for backtest interval.
 
         Daily backtests should not inherit long intraday horizons unchanged
         (e.g. 30 bars from 1m mode), otherwise fold training can become empty.
@@ -697,8 +692,7 @@ class Backtester:
         return base
 
     def _backtest_train_row_requirement(self, interval: str = "1d") -> tuple[int, int, int]:
-        """
-        Return (sequence_length, label_horizon, min_train_rows) for backtest.
+        """Return (sequence_length, label_horizon, min_train_rows) for backtest.
         """
         seq_length = int(getattr(getattr(CONFIG, "model", None), "sequence_length", 60))
         seq_length = max(5, seq_length)
@@ -715,8 +709,7 @@ class Backtester:
         folds: list[tuple],
         min_train_rows: int,
     ) -> tuple[bool, int]:
-        """
-        Check whether at least one fold has enough train rows to build sequences.
+        """Check whether at least one fold has enough train rows to build sequences.
         """
         best_rows_seen = 0
         for train_start, train_end, _, _ in folds:

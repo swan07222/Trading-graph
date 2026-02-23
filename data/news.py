@@ -12,7 +12,6 @@ from pathlib import Path
 import requests
 
 from utils.logger import get_logger
-from utils.type_utils import safe_float
 
 log = get_logger(__name__)
 
@@ -206,8 +205,7 @@ def _context_adjusted_weight(
     end: int,
     base_weight: float,
 ) -> float:
-    """
-    Adjust keyword weight with local context heuristics.
+    """Adjust keyword weight with local context heuristics.
 
     This keeps the scorer lightweight while improving handling of:
     - negation near a keyword (e.g., "not bullish", "\u4e0d\u662f\u5229\u597d")
@@ -265,8 +263,7 @@ def _safe_age_hours_from_now(
 
 
 def analyze_sentiment(text: str) -> tuple[float, str]:
-    """
-    Weighted keyword sentiment scoring.
+    """Weighted keyword sentiment scoring.
 
     - Counts each keyword up to _MAX_KEYWORD_COUNT times
     - Normalizes by total absolute weight contribution
@@ -395,8 +392,7 @@ class _BaseNewsFetcher:
 
     @staticmethod
     def _resolve_tls_verify() -> bool | str:
-        """
-        Resolve a usable CA bundle path for requests.
+        """Resolve a usable CA bundle path for requests.
 
         Some environments can have a stale certifi path; in that case we first
         try system/default bundles. If no valid bundle path can be found,
@@ -469,8 +465,7 @@ class _BaseNewsFetcher:
         self._last_request_time: float = 0.0
 
     def _rate_limit(self) -> None:
-        """
-        FIX Bug 6: Add rate limiting to avoid API throttling.
+        """FIX Bug 6: Add rate limiting to avoid API throttling.
         Enforces minimum delay between consecutive requests.
         """
         import time
@@ -488,8 +483,7 @@ class _BaseNewsFetcher:
         timeout: int = None,
         retries: int = None,
     ) -> requests.Response:
-        """
-        FIX Bug 4: Add retry logic with exponential backoff for failed requests.
+        """FIX Bug 4: Add retry logic with exponential backoff for failed requests.
         
         Args:
             url: URL to fetch
@@ -736,8 +730,7 @@ class SinaNewsFetcher(_BaseNewsFetcher):
     def fetch_stock_news(
         self, stock_code: str, count: int = 10
     ) -> list[NewsItem]:
-        """
-        Fetch news for a specific stock via Sina API.
+        """Fetch news for a specific stock via Sina API.
         
         FIX Bug 1: Use proper Sina finance API endpoint instead of 
         search.sina.com.cn which returns HTML not JSON.
@@ -844,8 +837,7 @@ class EastmoneyNewsFetcher(_BaseNewsFetcher):
     def fetch_stock_news(
         self, stock_code: str, count: int = 10
     ) -> list[NewsItem]:
-        """
-        Fetch stock-specific news and announcements from Eastmoney.
+        """Fetch stock-specific news and announcements from Eastmoney.
         
         FIX Bug 2: Use proper JSONP handling with multiple callback patterns
         and improved error recovery.
@@ -1101,8 +1093,7 @@ _POLICY_KEYWORDS: tuple[str, ...] = (
 
 
 def _make_dedup_key(item: NewsItem) -> tuple[str, str]:
-    """
-    Create a stable dedup key from title prefix and publish_time.
+    """Create a stable dedup key from title prefix and publish_time.
 
     FIX Bug 1: Original code referenced item.published_at which does not
     exist on NewsItem. The correct attribute is item.publish_time.

@@ -1,5 +1,4 @@
-"""
-Trading strategies for Trading Graph.
+"""Trading strategies for Trading Graph.
 
 This package contains various trading strategies that can be enabled
 and configured for auto-trading.
@@ -62,8 +61,7 @@ class Signal:
 
 
 class BaseStrategy(ABC):
-    """
-    Abstract base class for trading strategies.
+    """Abstract base class for trading strategies.
 
     All strategies must implement the generate_signal method.
 
@@ -86,8 +84,7 @@ class BaseStrategy(ABC):
 
     @abstractmethod
     def generate_signal(self, data: dict[str, Any]) -> Signal | None:
-        """
-        Generate trading signal from market data.
+        """Generate trading signal from market data.
 
         Args:
             data: Market data including:
@@ -102,8 +99,7 @@ class BaseStrategy(ABC):
         pass
 
     def validate_signal(self, signal: Signal) -> bool:
-        """
-        Validate a generated signal.
+        """Validate a generated signal.
 
         Args:
             signal: Signal to validate
@@ -154,18 +150,18 @@ def list_strategies() -> list[str]:
 
 # Import all strategies to register them (after class definitions)
 # noqa: E402 (imports must be after class definitions to avoid circular imports)
-from strategies.momentum_breakout import MomentumBreakoutStrategy
+from strategies.bollinger_breakout import BollingerBreakoutStrategy
+from strategies.earnings_momentum import EarningsMomentumStrategy
+from strategies.gap_and_go import GapAndGoStrategy
+from strategies.golden_cross import GoldenCrossStrategy
+from strategies.macd_divergence import MACDDivergenceStrategy
 from strategies.mean_reversion import MeanReversionStrategy
+from strategies.momentum_breakout import MomentumBreakoutStrategy
+from strategies.rsi_oversold import RSIOversoldStrategy
+from strategies.support_resistance import SupportResistanceStrategy
 from strategies.trend_following import TrendFollowingStrategy
 from strategies.volume_profile import VolumeProfileStrategy
-from strategies.support_resistance import SupportResistanceStrategy
-from strategies.macd_divergence import MACDDivergenceStrategy
-from strategies.bollinger_breakout import BollingerBreakoutStrategy
-from strategies.rsi_oversold import RSIOversoldStrategy
-from strategies.golden_cross import GoldenCrossStrategy
-from strategies.gap_and_go import GapAndGoStrategy
 from strategies.vwap_reversion import VWAPReversionStrategy
-from strategies.earnings_momentum import EarningsMomentumStrategy
 
 __all__ = [
     "BaseStrategy",

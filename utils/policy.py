@@ -22,8 +22,7 @@ class PolicyDecision:
 
 
 class TradePolicyEngine:
-    """
-    File-backed policy evaluator for governance controls.
+    """File-backed policy evaluator for governance controls.
 
     Default policy file: config/security_policy.json
     """

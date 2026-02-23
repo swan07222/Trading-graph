@@ -67,8 +67,7 @@ def _is_us_ticker(s: str) -> bool:
     return bool(re.fullmatch(r"[A-Z0-9]{1,6}(\.[A-Z])?", s))
 
 def _parse_occ_option(s_upper: str) -> dict[str, Any] | None:
-    """
-    Parse OCC-style US option symbols.
+    """Parse OCC-style US option symbols.
 
     Format:
       <ROOT><YY><MM><DD><C|P><STRIKE*1000:8d>
@@ -160,8 +159,7 @@ def _parse_fx_pair(raw_upper: str, raw: str) -> dict[str, Any] | None:
     }
 
 def _cn_yahoo_suffix(code6: str) -> str:
-    """
-    Best-effort mapping of CN code -> Yahoo suffix.
+    """Best-effort mapping of CN code -> Yahoo suffix.
     If get_exchange is available, use it; else fall back on prefix heuristics.
     """
     if get_exchange is not None:
@@ -189,8 +187,7 @@ def instrument_key(inst: dict[str, Any]) -> str:
     return f"{market}:{asset}:{sym}"
 
 def parse_instrument(code: str) -> dict[str, Any]:
-    """
-    Parse a user-provided symbol/code into a normalized instrument dict.
+    """Parse a user-provided symbol/code into a normalized instrument dict.
 
     Examples:
       "600519", "sh600519", "600519.SS"         -> CN EQUITY symbol=600519 yahoo=600519.SS

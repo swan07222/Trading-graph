@@ -52,8 +52,7 @@ def _estimate_order_cost(
     price: float | None,
     side: OrderSide = OrderSide.BUY,
 ) -> tuple[float, float, float]:
-    """
-    Estimate total order cost including slippage, commission, and stamp tax.
+    """Estimate total order cost including slippage, commission, and stamp tax.
 
     Args:
         quantity: Number of shares (must be > 0)
@@ -111,8 +110,7 @@ _oms_cache_val = None
 _oms_cache_ttl: float = 5.0  # 5 second cache for OMS
 
 def _get_oms():
-    """
-    Cached deferred import for OMS with TTL.
+    """Cached deferred import for OMS with TTL.
 
     FIX: Adds TTL-based caching to avoid repeated calls.
     """
@@ -162,8 +160,7 @@ def _get_feed_quote(symbol: str):
         return None
 
 class RiskManager:
-    """
-    Production risk management system.
+    """Production risk management system.
 
     Thread-safety
     -------------
@@ -284,8 +281,7 @@ class RiskManager:
             self._check_risk_breaches()
 
     def record_trade(self):
-        """
-        Record a trade — called by execution engine.
+        """Record a trade — called by execution engine.
         This is the ONLY way trades should be counted.
         """
         with self._lock:
@@ -295,8 +291,7 @@ class RiskManager:
     # =========================================================================
 
     def _get_unified_account_view(self) -> Account:
-        """
-        Build a unified account view that reflects OMS active-order
+        """Build a unified account view that reflects OMS active-order
         reservations.
 
         Priority:
@@ -357,8 +352,7 @@ class RiskManager:
         return unified
 
     def _apply_oms_reservations(self, account: Account):
-        """
-        Reduce available cash/shares based on active orders in OMS.
+        """Reduce available cash/shares based on active orders in OMS.
         Mutates ``account`` in place.
         """
         try:
@@ -470,8 +464,7 @@ class RiskManager:
     # =========================================================================
 
     def get_metrics(self, _account: Account = None) -> RiskMetrics:
-        """
-        Calculate comprehensive risk metrics.
+        """Calculate comprehensive risk metrics.
 
         Args:
             _account: Optional pre-fetched unified account view.
@@ -812,8 +805,7 @@ class RiskManager:
         quantity: int,
         price: float,
     ) -> tuple[bool, str]:
-        """
-        Comprehensive pre-trade order validation.
+        """Comprehensive pre-trade order validation.
 
         Returns:
             (approved, message) — message is "OK" on success, reason
@@ -1026,8 +1018,7 @@ class RiskManager:
         confidence: float = 1.0,
         signal_strength: float = 1.0,
     ) -> int:
-        """
-        Calculate optimal position size using risk-based sizing.
+        """Calculate optimal position size using risk-based sizing.
 
         Uses Kelly-adjusted risk allocation with multiple caps.
         """
@@ -1192,8 +1183,7 @@ def get_risk_manager() -> RiskManager:
     return _risk_manager
 
 def reset_risk_manager():
-    """
-    Reset global risk manager (for testing).
+    """Reset global risk manager (for testing).
     Properly unsubscribes the old instance before discarding.
     """
     global _risk_manager

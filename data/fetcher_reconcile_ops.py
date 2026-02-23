@@ -202,8 +202,7 @@ def reconcile_pending_cache_sync(
     db_limit: int | None = None,
     get_session_bar_cache_fn: Callable[[], Any] | None = None,
 ) -> dict[str, object]:
-    """
-    Attempt to heal pending DB->session-cache sync debt without network fetches.
+    """Attempt to heal pending DB->session-cache sync debt without network fetches.
 
     Reads pending queue entries, writes existing DB bars into session cache, and
     clears successfully reconciled entries.

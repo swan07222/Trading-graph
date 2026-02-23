@@ -1,6 +1,5 @@
 # core/__init__.py
-"""
-Core Package - Foundation components for the trading system
+"""Core Package - Foundation components for the trading system
 """
 from .events import (
     EVENT_BUS,

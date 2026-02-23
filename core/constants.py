@@ -252,8 +252,7 @@ def get_exchange(code: str) -> str:
 
 @lru_cache(maxsize=1)
 def _load_external_holidays() -> frozenset[date]:
-    """
-    Load optional external holidays file once and cache as frozenset.
+    """Load optional external holidays file once and cache as frozenset.
 
     File format: <data_dir>/holidays_cn.json
     Content: ["2026-01-01", "2026-02-10", ...]
@@ -289,8 +288,7 @@ def _load_external_holidays() -> frozenset[date]:
 
 @lru_cache(maxsize=32)
 def _load_dynamic_holidays_for_year(year: int) -> frozenset[date]:
-    """
-    Best-effort dynamic CN holiday provider for years beyond static constants.
+    """Best-effort dynamic CN holiday provider for years beyond static constants.
 
     Uses optional `holidays` package when available.
     """
@@ -360,8 +358,7 @@ def _holiday_window(anchor_year: int) -> frozenset[date]:
 
 
 def get_holidays() -> frozenset[date]:
-    """
-    Return holiday set for current runtime window.
+    """Return holiday set for current runtime window.
 
     Includes:
     - built-in constants
@@ -372,8 +369,7 @@ def get_holidays() -> frozenset[date]:
 
 
 def get_price_limit(code: str, name: str | None = None) -> float:
-    """
-    Get price limit for stock.
+    """Get price limit for stock.
 
     Args:
         code: Stock code
@@ -413,8 +409,7 @@ def get_lot_size(code: str) -> int:
 
 
 def is_trading_day(d: date) -> bool:
-    """
-    Check if date is a trading day (weekend + holiday aware).
+    """Check if date is a trading day (weekend + holiday aware).
 
     Uses year-scoped holiday cache so future years can be resolved via
     optional dynamic providers when static constants are outdated.
@@ -425,8 +420,7 @@ def is_trading_day(d: date) -> bool:
 
 
 def is_trading_time(exchange: str = "SSE") -> bool:
-    """
-    Check if current time is within trading hours.
+    """Check if current time is within trading hours.
 
     Uses Asia/Shanghai timezone for accurate trading time detection.
     Falls back to local time with a warning if zoneinfo is unavailable.
@@ -455,8 +449,7 @@ def is_trading_time(exchange: str = "SSE") -> bool:
 
 
 def is_st_stock(name: str) -> bool:
-    """
-    Check if stock is ST.
+    """Check if stock is ST.
 
     Detects ST at prefix only, e.g. "ST600000", "*ST600000", "ST ABC".
     Avoids false positives like "BEST" or "FASTEST".

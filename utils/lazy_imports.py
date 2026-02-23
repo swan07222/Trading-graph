@@ -1,5 +1,4 @@
-"""
-Lazy import utilities for deferred module loading.
+"""Lazy import utilities for deferred module loading.
 
 This module provides centralized lazy import helpers to replace
 duplicated implementations across the codebase and handle circular imports.
@@ -8,14 +7,14 @@ from __future__ import annotations
 
 import time
 from importlib import import_module
-from typing import Any, Callable, Generic, TypeVar
+from typing import Any, Generic, TypeVar
+from collections.abc import Callable
 
 T = TypeVar("T")
 
 
 def lazy_get(module: str, name: str) -> Any:
-    """
-    Lazily import and return an attribute from a module.
+    """Lazily import and return an attribute from a module.
 
     Args:
         module: Module name to import from.
@@ -28,8 +27,7 @@ def lazy_get(module: str, name: str) -> Any:
 
 
 class LazyImport(Generic[T]):
-    """
-    Lazy import descriptor for module-level attributes.
+    """Lazy import descriptor for module-level attributes.
 
     Usage:
         _oms = LazyImport("trading.oms", "get_oms")
@@ -59,8 +57,7 @@ class LazyImport(Generic[T]):
 
 
 class CachedLazyImport(Generic[T]):
-    """
-    Lazy import with TTL-based caching for expensive lookups.
+    """Lazy import with TTL-based caching for expensive lookups.
 
     Usage:
         _get_oms = CachedLazyImport("trading.oms", "get_oms", ttl=5.0)
@@ -96,8 +93,7 @@ class CachedLazyImport(Generic[T]):
 
 
 def make_lazy_getter(module: str, name: str, *, cache: bool = False, ttl: float = 5.0) -> Callable[..., Any]:
-    """
-    Create a lazy getter function.
+    """Create a lazy getter function.
 
     Args:
         module: Module name.

@@ -7,8 +7,7 @@ from typing import Any
 
 
 def _coerce_bool(value: Any) -> tuple[bool, bool]:
-    """
-    Coerce common bool representations.
+    """Coerce common bool representations.
 
     Returns (ok, parsed_value). When ok is False, parsed_value is undefined.
     """
@@ -37,8 +36,7 @@ def _coerce_bool(value: Any) -> tuple[bool, bool]:
 
 
 def _safe_dataclass_from_dict(dc_instance: Any, data: dict[str, Any]) -> list[str]:
-    """
-    Apply dict values to a dataclass instance with type checking.
+    """Apply dict values to a dataclass instance with type checking.
     Returns list of warnings for bad values.
     """
     warnings_list: list[str] = []

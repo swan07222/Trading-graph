@@ -1,5 +1,4 @@
-"""
-Strategy Marketplace - Enhanced local strategy catalog with ratings, performance tracking,
+"""Strategy Marketplace - Enhanced local strategy catalog with ratings, performance tracking,
 versioning, import/export, and community sharing capabilities.
 
 Features:
@@ -50,7 +49,7 @@ class StrategyRating:
         }
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "StrategyRating":
+    def from_dict(cls, data: dict[str, Any]) -> StrategyRating:
         return cls(
             strategy_id=data.get("strategy_id", ""),
             rating=max(1, min(5, int(data.get("rating", 3)))),
@@ -107,7 +106,7 @@ class StrategyPerformance:
         }
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "StrategyPerformance":
+    def from_dict(cls, data: dict[str, Any]) -> StrategyPerformance:
         return cls(
             strategy_id=data.get("strategy_id", ""),
             total_trades=int(data.get("total_trades", 0)),
@@ -198,7 +197,7 @@ class StrategyEntry:
         }
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "StrategyEntry":
+    def from_dict(cls, data: dict[str, Any]) -> StrategyEntry:
         perf_data = data.get("performance")
         return cls(
             id=data.get("id", ""),
@@ -233,8 +232,7 @@ class StrategyEntry:
 
 
 class StrategyMarketplace:
-    """
-    Enhanced local strategy catalog with ratings, performance tracking,
+    """Enhanced local strategy catalog with ratings, performance tracking,
     versioning, import/export, and sharing capabilities.
     """
 

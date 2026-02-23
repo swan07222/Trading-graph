@@ -14,8 +14,7 @@ from utils.logger import get_logger
 log = get_logger(__name__)
 
 class RealtimePredictor:
-    """
-    High-level helper for real-time AI predictions.
+    """High-level helper for real-time AI predictions.
 
     Combines FeatureEngine, DataProcessor (with scaler), and
     EnsembleModel for end-to-end live prediction.
@@ -45,8 +44,7 @@ class RealtimePredictor:
             self.load_models()
 
     def load_models(self) -> bool:
-        """
-        Load all required models for prediction.
+        """Load all required models for prediction.
 
         FIX RACE: Uses double-check locking to prevent redundant loads
         when multiple threads call load_models() simultaneously.
@@ -140,8 +138,7 @@ class RealtimePredictor:
             return False
 
     def _load_forecaster(self, path: Path) -> None:
-        """
-        Load TCN forecaster model.
+        """Load TCN forecaster model.
 
         The forecaster outputs ``horizon`` regression values (not class
         probabilities), so ``num_classes`` in the TCN is set to the
@@ -230,8 +227,7 @@ class RealtimePredictor:
         df: pd.DataFrame,
         include_forecast: bool = True,
     ) -> dict[str, Any] | None:
-        """
-        Make real-time prediction.
+        """Make real-time prediction.
 
         FIX LOCK: Does NOT hold self._lock during inference, only during
         state checks. This prevents blocking other threads during the
@@ -261,8 +257,7 @@ class RealtimePredictor:
         df: pd.DataFrame,
         include_forecast: bool,
     ) -> dict[str, Any] | None:
-        """
-        Internal prediction logic.
+        """Internal prediction logic.
 
         FIX LOCK: No longer requires self._lock to be held.
         The models are only modified during load_models() which is

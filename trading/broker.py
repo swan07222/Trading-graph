@@ -1,6 +1,5 @@
 ﻿# trading/broker.py
-"""
-Unified Broker Interface - Production Grade with Full Fill Sync
+"""Unified Broker Interface - Production Grade with Full Fill Sync
 
 Supports:
 - Paper Trading (Simulator)
@@ -40,8 +39,7 @@ __all__ = [
 ]
 
 class BrokerInterface(ABC):
-    """
-    Abstract broker interface - all brokers must implement this.
+    """Abstract broker interface - all brokers must implement this.
     Thread-safe design with callbacks for order updates.
     """
 
@@ -180,8 +178,7 @@ class BrokerInterface(ABC):
                 log.error(f"Callback error for {event}: {e}")
 
 class SimulatorBroker(BrokerInterface):
-    """
-    Paper trading simulator with realistic behavior.
+    """Paper trading simulator with realistic behavior.
 
     FIX(10): Uses bounded thread pool with proper shutdown.
     FIX(2):  Fill tracking uses cursor, not list clearing.
@@ -428,8 +425,7 @@ class SimulatorBroker(BrokerInterface):
         self._exec_pool.submit(self._execution_worker, order_id)
 
     def _execution_worker(self, order_id: str) -> None:
-        """
-        Worker function for async order execution.
+        """Worker function for async order execution.
 
         FIX(1): Re-checks order.is_active after every state-changing
         boundary to close race windows.
@@ -1027,8 +1023,7 @@ class SimulatorBroker(BrokerInterface):
         self._emit('trade', order, fill)
 
     def get_fills(self, since: datetime | None = None) -> list[Fill]:
-        """
-        Get new fills since last call.
+        """Get new fills since last call.
 
         FIX(2): Uses cursor-based tracking instead of clearing list.
         Multiple consumers can call this without losing fills.
@@ -1088,8 +1083,7 @@ class SimulatorBroker(BrokerInterface):
             return list(self._orders.values())
 
     def _check_settlement(self) -> None:
-        """
-        FIX(13): Proper T+1 settlement using is_trading_day.
+        """FIX(13): Proper T+1 settlement using is_trading_day.
         Shares bought yesterday become available on the next trading day.
         """
         from core.constants import is_trading_day

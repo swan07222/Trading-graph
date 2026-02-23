@@ -503,8 +503,7 @@ def _get_execution_quality_snapshot(self) -> dict[str, object]:
 
 
 def _watchdog_loop(self):
-    """
-    Watchdog for core execution threads.
+    """Watchdog for core execution threads.
     On heartbeat stall, pause auto-trader and report degraded health.
     """
     stall_seconds = float(getattr(CONFIG, "runtime_watchdog_stall_seconds", 25.0) or 25.0)

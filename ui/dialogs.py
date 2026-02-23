@@ -1110,8 +1110,7 @@ class BacktestDialog(QDialog):
         super().closeEvent(event)
 
 class BrokerSettingsDialog(QDialog):
-    """
-    Configure broker path (THS) and mode.
+    """Configure broker path (THS) and mode.
     For real trading with THS: easytrader requires THS client.
     """
 
@@ -1188,8 +1187,7 @@ class BrokerSettingsDialog(QDialog):
         self.accept()
 
 class RiskSettingsDialog(QDialog):
-    """
-    Adjust risk parameters at runtime (in-memory).
+    """Adjust risk parameters at runtime (in-memory).
     """
 
     def __init__(self, parent=None):

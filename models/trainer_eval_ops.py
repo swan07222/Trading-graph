@@ -50,8 +50,7 @@ def _walk_forward_validate(
     r_test: np.ndarray | None,
     regime_profile: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """
-    Evaluate stability on contiguous forward windows.
+    """Evaluate stability on contiguous forward windows.
 
     This is a post-train diagnostic (not re-training folds) used to
     detect unstable model behavior across recent slices.
@@ -558,8 +557,7 @@ def _build_trading_stress_tests(
     confidence_floor: float,
     masks: dict[str, np.ndarray],
 ) -> dict[str, Any]:
-    """
-    Build robustness diagnostics for tail events and higher trading costs.
+    """Build robustness diagnostics for tail events and higher trading costs.
 
     These checks are used to reduce live deployment of fragile models.
     """
@@ -973,8 +971,7 @@ def _simulate_trading(
     cost_multiplier: float = 1.0,
     stress_return_shock_pct: float = 0.0,
 ) -> dict:
-    """
-    Simulate trading with proper compounding and consistent units.
+    """Simulate trading with proper compounding and consistent units.
 
     FIX TRADE: Accumulates returns over the actual holding period
     instead of using a single returns[entry_idx] value.

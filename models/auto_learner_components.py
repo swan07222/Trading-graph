@@ -131,8 +131,7 @@ class LearningProgress:
         }
 
 class MetricTracker:
-    """
-    Tracks accuracy trend with exponential moving average.
+    """Tracks accuracy trend with exponential moving average.
     Detects improvement, plateau, and degradation.
 
     FIX M4: Thread-safe access to _plateau_count.
@@ -262,8 +261,7 @@ class MetricTracker:
             self._best_ema = data.get('best_ema', 0.0)
 
 class ExperienceReplayBuffer:
-    """
-    Stores trained stock codes with cached sequences.
+    """Stores trained stock codes with cached sequences.
     Bounded size, cache TTL, stratified sampling.
 
     FIX M3: sample() logs warning when returning fewer items than requested.
@@ -302,8 +300,7 @@ class ExperienceReplayBuffer:
                     self._remove_cache(code)
 
     def sample(self, n: int) -> list[str]:
-        """
-        Stratified sampling.
+        """Stratified sampling.
 
         FIX M3: Log warning if returning fewer than n items.
         FIX SAMP: Handle edge cases properly.
@@ -453,8 +450,7 @@ class ExperienceReplayBuffer:
             log.debug("Stale cache cleanup failed: %s", e)
 
 class ModelGuardian:
-    """
-    Protects best model from degradation.
+    """Protects best model from degradation.
 
     FIX C2: validate_model() loads exact model path instead of using discovery.
     FIX GUARD: validate_model() handles individual stock errors without
@@ -559,8 +555,7 @@ class ModelGuardian:
         validation_codes: list[str], lookback_bars: int,
         collect_samples: bool = False,
     ) -> dict[str, float]:
-        """
-        Validate model on holdout stocks.
+        """Validate model on holdout stocks.
 
         FIX C2: Loads the EXACT model file instead of using Predictor's
         discovery fallback which may load a different model.
@@ -733,8 +728,7 @@ class ModelGuardian:
             log.debug("Backup prune failed: %s", e)
 
 class StockRotator:
-    """
-    Manages stock discovery and rotation.
+    """Manages stock discovery and rotation.
 
     FIX PRIV: Provides public methods for state migration in _load_state
     instead of requiring direct private attribute access.
@@ -1025,8 +1019,7 @@ class LRScheduler:
         log.info(f"LR boost applied: {factor}x")
 
 class ParallelFetcher:
-    """
-    Fetch stock data with thread pool and proper rate limiting.
+    """Fetch stock data with thread pool and proper rate limiting.
 
     FIX FETCH: Handles empty codes list without error.
     """
@@ -1046,8 +1039,7 @@ class ParallelFetcher:
         allow_online: bool = True,
         update_db: bool = True,
     ) -> tuple[list[str], list[str]]:
-        """
-        Fetch data for multiple stocks in parallel.
+        """Fetch data for multiple stocks in parallel.
         Returns (ok_codes, failed_codes).
         """
         # FIX FETCH: Handle empty codes list

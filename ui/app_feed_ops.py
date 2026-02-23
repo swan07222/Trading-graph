@@ -18,8 +18,7 @@ _QUOTE_UPDATE_THROTTLE_MS = 150  # Minimum gap between quote UI updates
 _QUOTE_MIN_CHANGE_PCT = 0.005  # 0.005% minimum price change to trigger update
 
 def _get_feed_manager_cached():
-    """
-    Get feed manager with caching to avoid repeated lookups.
+    """Get feed manager with caching to avoid repeated lookups.
 
     FIX: Caches feed manager reference for performance.
     """
@@ -35,8 +34,7 @@ def _get_feed_manager_cached():
         return None
 
 def _ensure_feed_subscription(self, code: str) -> None:
-    """
-    Subscribe symbol to realtime feed using 1m source bars.
+    """Subscribe symbol to realtime feed using 1m source bars.
 
     FIX: Uses cached feed manager for better performance.
     """
@@ -64,8 +62,7 @@ def _ensure_feed_subscription(self, code: str) -> None:
         log.debug(f"Feed subscription failed: {e}")
 
 def _on_bar_from_feed(self, symbol: str, bar: dict[str, Any]) -> None:
-    """
-    Called from feed thread (NOT UI thread).
+    """Called from feed thread (NOT UI thread).
     Emit signal to update UI safely.
     """
     if not CONFIG.is_market_open():
@@ -83,8 +80,7 @@ def _on_bar_from_feed(self, symbol: str, bar: dict[str, Any]) -> None:
         log.exception("Failed to forward feed bar to UI (symbol=%s)", symbol)
 
 def _on_tick_from_feed(self, quote: Any) -> None:
-    """
-    Forward feed quote updates to UI thread safely.
+    """Forward feed quote updates to UI thread safely.
 
     FIX: Improved throttling with configurable frequency and minimum change detection.
     """
@@ -113,8 +109,7 @@ def _on_tick_from_feed(self, quote: Any) -> None:
         log.exception("Failed to forward feed quote to UI")
 
 def _on_bar_ui(self, symbol: str, bar: dict[str, Any]) -> None:
-    """
-    Handle bar data on UI thread.
+    """Handle bar data on UI thread.
 
     FIXED: Now properly updates chart with all three layers.
     """

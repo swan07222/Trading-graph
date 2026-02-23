@@ -32,8 +32,7 @@ def _get_cancellation_token() -> Any:
 
 
 def _get_auto_learner() -> Any | None:
-    """
-    Lazy import AutoLearner/ContinuousLearner.
+    """Lazy import AutoLearner/ContinuousLearner.
     Returns the class, not an instance.
     """
     try:
@@ -325,8 +324,7 @@ class TargetedLearnWorker(_BaseLearnWorker):
 
 
 class StockValidatorWorker(QThread):
-    """
-    Validates a stock code in background thread.
+    """Validates a stock code in background thread.
     Calls learner.validate_stock_code() which checks:
     - code exists in data sources
     - enough bars for training

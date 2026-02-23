@@ -1,5 +1,4 @@
-"""
-Debugging and profiling utilities for Trading Graph.
+"""Debugging and profiling utilities for Trading Graph.
 
 This module provides comprehensive debugging, profiling, and diagnostic tools
 for performance analysis and troubleshooting.
@@ -19,7 +18,8 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from io import StringIO
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
+from collections.abc import Callable
 
 from utils.logger import get_logger
 
@@ -67,8 +67,7 @@ def profile_function(
     enable_memory: bool = False,
     top_n: int = 10,
 ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
-    """
-    Decorator to profile function execution.
+    """Decorator to profile function execution.
 
     Args:
         enable_memory: Whether to track memory allocation
@@ -166,8 +165,7 @@ def profile_context(
     enable_memory: bool = False,
     log_level: str = "info",
 ):
-    """
-    Context manager for profiling code blocks.
+    """Context manager for profiling code blocks.
 
     Args:
         name: Name for this profiling block
@@ -220,8 +218,7 @@ def profile_context(
 
 
 def get_memory_snapshot(top_n: int = 10) -> MemorySnapshot:
-    """
-    Take a snapshot of current memory usage.
+    """Take a snapshot of current memory usage.
 
     Args:
         top_n: Number of top allocations to include
@@ -250,8 +247,7 @@ def get_memory_snapshot(top_n: int = 10) -> MemorySnapshot:
 
 @contextmanager
 def memory_tracker(label: str = "block"):
-    """
-    Context manager for tracking memory changes.
+    """Context manager for tracking memory changes.
 
     Args:
         label: Label for this tracking block
@@ -291,8 +287,7 @@ def memory_tracker(label: str = "block"):
 
 
 def trace_calls(frame: Any, event: str, arg: Any) -> Any:
-    """
-    Trace function call entries and exits.
+    """Trace function call entries and exits.
 
     Use with sys.settrace() for detailed call tracing.
 
@@ -320,8 +315,7 @@ def trace_execution(
     log_file: Path | None = None,
     trace_returns: bool = False,
 ):
-    """
-    Context manager for tracing function calls.
+    """Context manager for tracing function calls.
 
     Args:
         log_file: Optional file to write trace logs
@@ -395,7 +389,7 @@ class TimingContext:
         self.log_results = log_results
         self.elapsed = 0.0
 
-    def __enter__(self) -> "TimingContext":
+    def __enter__(self) -> TimingContext:
         self.start = time.perf_counter()
         return self
 
@@ -444,8 +438,7 @@ class TimingContext:
 
 
 def slow_call_threshold(threshold_ms: float = 100.0) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
-    """
-    Decorator to log calls that exceed a time threshold.
+    """Decorator to log calls that exceed a time threshold.
 
     Args:
         threshold_ms: Threshold in milliseconds
@@ -481,8 +474,7 @@ def slow_call_threshold(threshold_ms: float = 100.0) -> Callable[[Callable[..., 
 
 
 def diagnose_performance() -> dict[str, Any]:
-    """
-    Run performance diagnostics and return results.
+    """Run performance diagnostics and return results.
 
     Returns:
         Dictionary with diagnostic results

@@ -27,8 +27,7 @@ from utils.type_utils import safe_float
 log = get_logger(__name__)
 
 class NewsAggregator:
-    """
-    Aggregates news from multiple sources with caching.
+    """Aggregates news from multiple sources with caching.
     Network-aware: uses different sources based on China/VPN.
     """
 
@@ -109,8 +108,7 @@ class NewsAggregator:
                 state["last_error"] = str(error)[:240]
 
     def _source_reliability_weight(self, source: str) -> float:
-        """
-        Reliability prior from rolling source health.
+        """Reliability prior from rolling source health.
         Returns [0.5, 1.3] so weak sources are down-weighted, not removed.
         """
         with self._lock:
@@ -143,8 +141,7 @@ class NewsAggregator:
 
     @staticmethod
     def _publish_recency_key(item: NewsItem) -> float:
-        """
-        Stable recency sort key for mixed naive/aware publish_time values.
+        """Stable recency sort key for mixed naive/aware publish_time values.
         Smaller means newer. Missing timestamps are pushed to the end.
         """
         age_s = _safe_age_seconds_from_now(getattr(item, "publish_time", None))
@@ -356,8 +353,7 @@ class NewsAggregator:
         stock_code: str | None = None,
         _news: list[NewsItem] | None = None,
     ) -> dict:
-        """
-        Get aggregated sentiment for stock or market.
+        """Get aggregated sentiment for stock or market.
 
         FIX Bug 2: Accept optional _news parameter to break recursive call
         chain. When called from get_news_features(), the already-fetched
@@ -590,8 +586,7 @@ class NewsAggregator:
         stock_code: str | None = None,
         hours_lookback: int = 24,
     ) -> dict[str, float]:
-        """
-        Get numerical features from news for AI model input.
+        """Get numerical features from news for AI model input.
         These can be appended to the technical feature vector.
 
         FIX Bug 2: Fetch news once and pass to get_sentiment_summary
@@ -788,8 +783,7 @@ class NewsAggregator:
     def get_institutional_snapshot(
         self, stock_code: str | None = None, hours_lookback: int = 24
     ) -> dict[str, object]:
-        """
-        Institutional-grade unified news snapshot.
+        """Institutional-grade unified news snapshot.
         Includes sentiment, model features, source health, and freshness stats.
         """
         news = (

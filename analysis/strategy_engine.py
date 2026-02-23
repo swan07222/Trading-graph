@@ -27,8 +27,7 @@ class StrategySignal:
 
 
 class StrategyScriptEngine:
-    """
-    Lightweight strategy script runner.
+    """Lightweight strategy script runner.
 
     Strategy script contract:
     - Optional: strategy_meta() -> dict(name, version, description)
@@ -91,8 +90,7 @@ class StrategyScriptEngine:
         symbol: str,
         context: dict[str, Any] | None = None,
     ) -> tuple[float, list[str]]:
-        """
-        Evaluate all strategy scripts and return:
+        """Evaluate all strategy scripts and return:
         - bias score contribution in [-25, +25]
         - human-readable reasons list
         """

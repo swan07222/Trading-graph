@@ -65,8 +65,7 @@ def _resolve_learning_rate(explicit_lr: float | None = None) -> float:
 
 
 def _resolve_ensemble_model_class() -> type[Any]:
-    """
-    Resolve the ensemble class via models.trainer when available.
+    """Resolve the ensemble class via models.trainer when available.
 
     This keeps runtime behavior unchanged while preserving testability when
     tests monkeypatch `models.trainer.EnsembleModel`.
@@ -97,8 +96,7 @@ def train(
     lookback_bars: int = None,
     learning_rate: float = None,
 ) -> dict:
-    """
-    Train complete pipeline:
+    """Train complete pipeline:
     1) Classification ensemble for trading signals
     2) Multi-step forecaster for AI-generated price curves
     """
@@ -619,8 +617,7 @@ def _train_forecaster(
     learning_rate: float,
     forecast_save_path: Path | None = None,
 ) -> bool:
-    """
-    Train multi-step forecaster. Returns True if successful.
+    """Train multi-step forecaster. Returns True if successful.
 
     FIX CANCEL2: Re-raises CancelledException instead of swallowing it,
     so the caller (train()) knows to return cancelled status.

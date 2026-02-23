@@ -36,8 +36,7 @@ def make_fill_uid(
     price: float,
     qty: int,
 ) -> str:
-    """
-    Create a globally-unique, stable Fill.id for OMS primary key.
+    """Create a globally-unique, stable Fill.id for OMS primary key.
 
     Format with broker_fill_id:
       FILL|<YYYY-MM-DD>|<broker>|<broker_fill_id>|<symbol>
@@ -64,8 +63,7 @@ def make_fill_uid(
 
 
 def parse_broker_status(status_str: str) -> OrderStatus:
-    """
-    Parse broker/native status strings into internal OrderStatus.
+    """Parse broker/native status strings into internal OrderStatus.
 
     Handles both English keywords and common Chinese statuses.
     Unicode escapes are used for Chinese terms to avoid source-encoding drift.

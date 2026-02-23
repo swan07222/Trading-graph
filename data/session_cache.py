@@ -42,8 +42,7 @@ def _norm_symbol(symbol: str) -> str:
 
 
 def _parse_epoch_timestamp(value: float) -> datetime:
-    """
-    Parse epoch numeric values in seconds or milliseconds.
+    """Parse epoch numeric values in seconds or milliseconds.
     """
     v = float(value)
     if abs(v) >= 1e11:
@@ -134,8 +133,7 @@ def _interprocess_file_lock(
     path: Path,
     timeout_s: float = 10.0,
 ) -> Iterator[None]:
-    """
-    Best-effort cross-process lock for one cache file.
+    """Best-effort cross-process lock for one cache file.
 
     Uses an adjacent ``.lock`` file so read-modify-write cycles do not race
     across multiple app processes.
@@ -179,8 +177,7 @@ def _interprocess_file_lock(
 
 
 class SessionBarCache:
-    """
-    Persists bars captured during a UI session so auto-learning can reuse
+    """Persists bars captured during a UI session so auto-learning can reuse
     recently seen market data without refetching.
     """
 
@@ -291,8 +288,7 @@ class SessionBarCache:
 
     @classmethod
     def _load_last_csv_row(cls, path: Path) -> dict[str, str] | None:
-        """
-        Fast-path parser for the last CSV row.
+        """Fast-path parser for the last CSV row.
 
         Assumes cache files use the canonical column order written by
         `_write_raw_frame_locked`.
@@ -328,8 +324,7 @@ class SessionBarCache:
         return row if row else None
 
     def _reference_close_from_db(self, symbol: str) -> float:
-        """
-        Best-effort local reference close for cache segment selection.
+        """Best-effort local reference close for cache segment selection.
         Uses DB only (no network) to keep this path deterministic/offline-safe.
         """
         sym = _norm_symbol(symbol)
@@ -355,8 +350,7 @@ class SessionBarCache:
         return 0.0
 
     def _cleanup_corrupt_files(self) -> None:
-        """
-        Startup cleanup: quarantine obviously wrong-scale intraday cache files.
+        """Startup cleanup: quarantine obviously wrong-scale intraday cache files.
         """
         try:
             files = sorted(self._root.glob("*.csv"))
@@ -520,8 +514,7 @@ class SessionBarCache:
         *,
         force: bool = False,
     ) -> bool:
-        """
-        Compact one cache file if retention thresholds are exceeded.
+        """Compact one cache file if retention thresholds are exceeded.
 
         Caller must hold the per-file lock.
         """
@@ -718,8 +711,7 @@ class SessionBarCache:
         is_final: bool,
         source: str,
     ) -> None:
-        """
-        Fast append path for monotonic bars.
+        """Fast append path for monotonic bars.
 
         Caller must hold per-file + interprocess lock.
         """
@@ -801,8 +793,7 @@ class SessionBarCache:
         )
 
     def _read_raw_frame_locked(self, path: Path) -> pd.DataFrame:
-        """
-        Read cache CSV with minimal normalization.
+        """Read cache CSV with minimal normalization.
 
         Caller must hold the per-file lock.
         """
@@ -858,8 +849,7 @@ class SessionBarCache:
         *,
         apply_retention: bool = True,
     ) -> None:
-        """
-        Write normalized cache frame back to disk.
+        """Write normalized cache frame back to disk.
 
         Caller must hold the per-file lock.
         """
@@ -1000,8 +990,7 @@ class SessionBarCache:
         symbol: str,
         interval: str,
     ) -> dict[str, object]:
-        """
-        Describe cache window markers for one symbol/interval.
+        """Describe cache window markers for one symbol/interval.
 
         Returns timestamps as naive Asia/Shanghai ``datetime`` objects.
         """
@@ -1089,8 +1078,7 @@ class SessionBarCache:
         *,
         since_ts: datetime | str | float | int | None = None,
     ) -> int:
-        """
-        Remove non-official-history rows for one symbol/interval from cache.
+        """Remove non-official-history rows for one symbol/interval from cache.
 
         Returns number of removed rows.
         """
@@ -1130,8 +1118,7 @@ class SessionBarCache:
         source: str = "akshare",
         is_final: bool = True,
     ) -> int:
-        """
-        Upsert OHLCV rows into session cache in one batch.
+        """Upsert OHLCV rows into session cache in one batch.
 
         Intended for writing official bars fetched from trusted history providers.
         """

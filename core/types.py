@@ -57,8 +57,7 @@ class SystemStatus(Enum):
     KILL_SWITCH = "kill_switch"
 
 class AutoTradeMode(Enum):
-    """
-    Trading mode that controls how signals are acted upon.
+    """Trading mode that controls how signals are acted upon.
 
     MANUAL:    Signals displayed only; user must click Buy/Sell manually.
     AUTO:      Signals that meet all thresholds are executed automatically
@@ -533,8 +532,7 @@ class TradeSignal:
 
 @dataclass
 class AutoTradeAction:
-    """
-    Records a single auto-trade decision (executed, skipped, or pending).
+    """Records a single auto-trade decision (executed, skipped, or pending).
 
     Used for:
     - Audit trail of all auto-trade decisions
@@ -595,8 +593,7 @@ class AutoTradeAction:
 
 @dataclass
 class AutoTradeState:
-    """
-    Runtime state of the auto-trader.
+    """Runtime state of the auto-trader.
 
     Tracks:
     - Whether auto-trading is currently active

@@ -622,8 +622,7 @@ class DataFetcher:
 
     @staticmethod
     def validate_stock_code(code: str) -> tuple[bool, str]:
-        """
-        Validate a stock code format.
+        """Validate a stock code format.
 
         Returns:
             (is_valid, error_message) tuple.
@@ -1335,8 +1334,7 @@ def get_fetcher(
     force_new: bool = False,
     registry: FetcherRegistry[object] | None = None,
 ) -> DataFetcher:
-    """
-    Get/create fetcher instance by key.
+    """Get/create fetcher instance by key.
 
     Default scope is thread-local (`TRADING_FETCHER_SCOPE=thread`) to avoid
     cross-thread mutable-cache coupling. Set `TRADING_FETCHER_SCOPE=process`

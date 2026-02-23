@@ -14,8 +14,7 @@ def _intraday_quality_caps(
     cls: Any,
     interval: str | None,
 ) -> tuple[float, float, float, float]:
-    """
-    Return (body_cap, span_cap, wick_cap, jump_cap) for intraday cleanup.
+    """Return (body_cap, span_cap, wick_cap, jump_cap) for intraday cleanup.
 
     Values are deliberately generous to avoid corrupting legitimate price
     moves (China A-shares can move +/-10% intraday; ST stocks +/-5%).
@@ -33,8 +32,7 @@ def _intraday_frame_quality(
     df: pd.DataFrame,
     interval: str,
 ) -> dict[str, float | bool]:
-    """
-    Score intraday frame quality.
+    """Score intraday frame quality.
     Higher score = cleaner and more usable bars.
     """
     if df is None or df.empty:
@@ -242,8 +240,7 @@ def _daily_consensus_quorum_meta(
     cls,
     collected: list[dict[str, Any]],
 ) -> dict[str, object]:
-    """
-    Compute daily provider quorum metadata.
+    """Compute daily provider quorum metadata.
 
     Quorum passes when at least ``required_sources`` providers align on a
     bar for a sufficient fraction of overlapping bars.
@@ -413,8 +410,7 @@ def _merge_daily_by_consensus(
     *,
     interval: str = "1d",
 ) -> pd.DataFrame:
-    """
-    Compare overlapping daily bars across sources and keep the row closest
+    """Compare overlapping daily bars across sources and keep the row closest
     to per-timestamp consensus close price.
     """
     valid = [c for c in collected if isinstance(c.get("df"), pd.DataFrame) and not c["df"].empty]

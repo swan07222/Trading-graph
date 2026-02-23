@@ -1,5 +1,4 @@
-"""
-China Network Optimization Module
+"""China Network Optimization Module
 
 Provides enhanced connectivity for China mainland users with:
 - Multiple Chinese CDN and DNS resolvers
@@ -16,14 +15,13 @@ import socket
 import ssl
 import threading
 import time
-from collections import deque
-from dataclasses import dataclass, field
-from datetime import datetime, timedelta
-from typing import Any, Callable
+from dataclasses import dataclass
+from datetime import datetime
+from typing import Any
+from collections.abc import Callable
 
 import requests
 from requests.adapters import HTTPAdapter
-from urllib3.poolmanager import PoolManager
 from urllib3.util.retry import Retry
 
 from utils.logger import get_logger
@@ -162,8 +160,7 @@ class EndpointQuality:
 
 
 class ChinaNetworkOptimizer:
-    """
-    Singleton optimizer for China network connectivity.
+    """Singleton optimizer for China network connectivity.
 
     Features:
     - Endpoint quality monitoring and automatic failover
@@ -176,7 +173,7 @@ class ChinaNetworkOptimizer:
     _instance = None
     _lock = threading.Lock()
 
-    def __new__(cls) -> "ChinaNetworkOptimizer":
+    def __new__(cls) -> ChinaNetworkOptimizer:
         if cls._instance is None:
             with cls._lock:
                 if cls._instance is None:
@@ -394,8 +391,7 @@ class ChinaNetworkOptimizer:
         url: str,
         timeout: float = 5.0,
     ) -> tuple[bool, float]:
-        """
-        Test endpoint connectivity.
+        """Test endpoint connectivity.
 
         Returns:
             Tuple of (success, latency_ms)
@@ -436,8 +432,7 @@ class ChinaNetworkOptimizer:
                     log.debug(f"Endpoint probe error: {e}")
 
     def resolve_dns(self, hostname: str) -> str | None:
-        """
-        Resolve DNS using Chinese DNS servers.
+        """Resolve DNS using Chinese DNS servers.
 
         Returns:
             Resolved IP address or None
@@ -504,8 +499,7 @@ class ChinaNetworkOptimizer:
 
 
 class ChinaHTTPAdapter(HTTPAdapter):
-    """
-    HTTP adapter optimized for China network conditions.
+    """HTTP adapter optimized for China network conditions.
 
     Features:
     - Larger connection pool
@@ -595,8 +589,7 @@ def is_proxy_enabled() -> bool:
 # ==================== DECORATORS ====================
 
 def china_optimized(provider: str):
-    """
-    Decorator for functions that fetch from Chinese endpoints.
+    """Decorator for functions that fetch from Chinese endpoints.
 
     Automatically:
     - Selects best endpoint

@@ -1,5 +1,4 @@
-"""
-Momentum Breakout Strategy.
+"""Momentum Breakout Strategy.
 
 Identifies stocks breaking out of consolidation with high volume.
 """
@@ -13,8 +12,7 @@ from strategies import BaseStrategy, Signal, SignalStrength, register_strategy
 
 @register_strategy
 class MomentumBreakoutStrategy(BaseStrategy):
-    """
-    Momentum Breakout Strategy.
+    """Momentum Breakout Strategy.
 
     Identifies stocks breaking out of N-day highs with volume confirmation.
 

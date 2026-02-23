@@ -44,8 +44,7 @@ class StockCodeValidator:
     def validate(
         cls, code: str, market: str = "a_share"
     ) -> ValidationResult:
-        """
-        Validate and normalise a stock code.
+        """Validate and normalise a stock code.
 
         CN (a_share):
             Strips common prefixes/suffixes, zero-pads to 6 digits,
@@ -166,8 +165,7 @@ class DateRangeValidator:
         max_range_days: int = 3650,
         allow_future: bool = False,
     ) -> ValidationResult:
-        """
-        Validate and normalise a date range.
+        """Validate and normalise a date range.
 
         Args:
             start_date: Start date (str, date, or datetime).
@@ -258,8 +256,7 @@ class OHLCVValidator:
         check_dates: bool = True,
         fix_errors: bool = True,
     ) -> ValidationResult:
-        """
-        Validate an OHLCV DataFrame.
+        """Validate an OHLCV DataFrame.
 
         When ``fix_errors=True`` the method attempts to repair minor
         inconsistencies (duplicate dates, unsorted index, high/low
@@ -369,8 +366,7 @@ class OHLCVValidator:
         df: pd.DataFrame,
         fix_errors: bool,
     ) -> tuple[pd.DataFrame, list[str]]:
-        """
-        Validate OHLC price relationships in a single pass.
+        """Validate OHLC price relationships in a single pass.
 
         Builds a composite mask of rows with irrecoverable issues
         (non-positive prices), drops them, then fixes repairable
@@ -442,8 +438,7 @@ class FeatureValidator:
         max_inf_pct: float = 0.01,
         fix_errors: bool = True,
     ) -> ValidationResult:
-        """
-        Validate a feature DataFrame.
+        """Validate a feature DataFrame.
 
         When ``fix_errors=True``:
         - Replaces ±inf with NaN.
@@ -544,8 +539,7 @@ class OrderValidator:
         order_type: str = "limit",
         market: str = "a_share",
     ) -> ValidationResult:
-        """
-        Validate order parameters.
+        """Validate order parameters.
 
         Args:
             symbol:     Stock code.
@@ -652,8 +646,7 @@ class ConfigValidator:
     def validate_risk_config(
         cls, config: Any
     ) -> ValidationResult:
-        """
-        Validate risk configuration.
+        """Validate risk configuration.
 
         Accepts either a dict or a RiskConfig dataclass.
         """
@@ -770,8 +763,7 @@ class TradingDayValidator:
         d: Any,
         allow_non_trading: bool = False,
     ) -> ValidationResult:
-        """
-        Validate that *d* is a trading day.
+        """Validate that *d* is a trading day.
 
         Args:
             d: A date, datetime, or date-string.

@@ -97,8 +97,7 @@ def sanitize_watch_list(
 
 
 def collect_live_readiness_failures() -> list[str]:
-    """
-    Return failed required institutional controls for LIVE mode.
+    """Return failed required institutional controls for LIVE mode.
     Empty list means readiness checks passed or could not be evaluated.
     """
     try:
@@ -119,8 +118,7 @@ def collect_live_readiness_failures() -> list[str]:
 
 
 class RealTimeMonitor(QThread):
-    """
-    Real-time market monitoring thread.
+    """Real-time market monitoring thread.
     Continuously checks for trading signals using the predictor.
     """
 

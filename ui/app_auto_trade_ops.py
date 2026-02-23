@@ -561,11 +561,11 @@ def _refresh_auto_trade_ui(self: Any) -> None:
         else:
             color = ModernColors.ACCENT_INFO
         mode_label.setStyleSheet(
-            (
+            
                 f"color: {color}; "
                 f"font-size: {ModernFonts.SIZE_XL}px; "
                 f"font-weight: {ModernFonts.WEIGHT_BOLD};"
-            )
+            
         )
 
     trades_label = self.auto_trade_labels.get("trades")
@@ -582,11 +582,11 @@ def _refresh_auto_trade_ui(self: Any) -> None:
         )
         pnl_label.setText(f"CNY {pnl:+,.2f}")
         pnl_label.setStyleSheet(
-            (
+            
                 f"color: {pnl_color}; "
                 f"font-size: {ModernFonts.SIZE_XL}px; "
                 f"font-weight: {ModernFonts.WEIGHT_BOLD};"
-            )
+            
         )
 
     status_label = self.auto_trade_labels.get("status")
@@ -594,11 +594,11 @@ def _refresh_auto_trade_ui(self: Any) -> None:
         if state.is_safety_paused:
             status_label.setText(f"Paused: {state.pause_reason}")
             status_label.setStyleSheet(
-                (
+                
                     f"color: {ModernColors.ACCENT_DANGER}; "
                     f"font-size: {ModernFonts.SIZE_LG}px; "
                     f"font-weight: {ModernFonts.WEIGHT_BOLD};"
-                )
+                
             )
         elif state.is_running:
             last_scan = ""
@@ -607,19 +607,19 @@ def _refresh_auto_trade_ui(self: Any) -> None:
                 last_scan = f" ({elapsed:.0f}s ago)"
             status_label.setText(f"Running{last_scan}")
             status_label.setStyleSheet(
-                (
+                
                     f"color: {ModernColors.ACCENT_SUCCESS}; "
                     f"font-size: {ModernFonts.SIZE_LG}px; "
                     f"font-weight: {ModernFonts.WEIGHT_BOLD};"
-                )
+                
             )
         else:
             status_label.setText("Idle")
             status_label.setStyleSheet(
-                (
+                
                     f"color: {ModernColors.ACCENT_INFO}; "
                     f"font-size: {ModernFonts.SIZE_LG}px;"
-                )
+                
             )
 
     if state.is_safety_paused or state.is_paused:

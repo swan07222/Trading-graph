@@ -148,8 +148,7 @@ def save_baseline_entries(path: Path, issues: set[str]) -> None:
 
 
 def summarize_issue_counts(issues: set[str]) -> dict[str, dict[str, int]]:
-    """
-    Summarize issue keys into per-file, per-code counts.
+    """Summarize issue keys into per-file, per-code counts.
 
     Input key format:
       path:line:code

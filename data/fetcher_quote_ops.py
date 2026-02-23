@@ -209,8 +209,7 @@ def _fill_from_single_source_quotes(
     result: dict[str, Quote],
     sources: list[DataSource],
 ) -> None:
-    """
-    Fill missing symbols using per-symbol source APIs.
+    """Fill missing symbols using per-symbol source APIs.
     Only uses sources that do NOT have a batch method (to avoid double-calling).
     """
     if not missing:

@@ -323,8 +323,7 @@ class KillSwitch:
             }
 
     def _save_state(self) -> None:
-        """
-        Save state to disk atomically.
+        """Save state to disk atomically.
 
         Uses temp file + rename pattern to prevent corruption on crash.
         """
@@ -375,8 +374,7 @@ class KillSwitch:
                     pass
 
     def _load_state(self) -> None:
-        """
-        Load state from disk.
+        """Load state from disk.
 
         NOTE: A previously-active kill switch is INTENTIONALLY restored.
         This is a safety feature — the operator must explicitly deactivate

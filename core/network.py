@@ -1,7 +1,6 @@
 # core/network.py
 
 import inspect
-import os
 import threading
 import time
 from dataclasses import dataclass
@@ -32,8 +31,7 @@ class NetworkEnv:
 
 
 class NetworkDetector:
-    """
-    Singleton that probes endpoints to determine network environment.
+    """Singleton that probes endpoints to determine network environment.
 
     Results are cached for `ttl_seconds` to avoid repeated probing.
     Thread-safe.
@@ -72,8 +70,7 @@ class NetworkDetector:
         return (t_now - float(self._env_time)) < float(self._ttl)
 
     def get_env(self, force_refresh: bool = False) -> NetworkEnv:
-        """
-        Get current network environment (cached).
+        """Get current network environment (cached).
 
         FIX Bug 11: The lock is released during the slow HTTP probing
         phase so that other threads can still read the (stale but usable)
@@ -103,8 +100,7 @@ class NetworkDetector:
             return self._env  # type: ignore[return-value]
 
     def _run_detect(self, prev_env: NetworkEnv | None) -> NetworkEnv:
-        """
-        Call detector while supporting legacy/monkeypatched zero-arg callables.
+        """Call detector while supporting legacy/monkeypatched zero-arg callables.
         """
         detect_fn = self._detect
         try:
@@ -122,8 +118,7 @@ class NetworkDetector:
             self._env_time = 0.0
 
     def peek_env(self) -> NetworkEnv | None:
-        """
-        Return cached environment without probing.
+        """Return cached environment without probing.
         Returns None when cache is missing/stale.
         """
         with self._probe_lock:
@@ -132,8 +127,7 @@ class NetworkDetector:
             return self._env
 
     def _detect(self, prev_env: NetworkEnv | None = None) -> NetworkEnv:
-        """
-        Probe endpoints concurrently and determine network environment.
+        """Probe endpoints concurrently and determine network environment.
 
         Args:
             prev_env: Previous environment snapshot for fallback logic.

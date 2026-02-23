@@ -8,7 +8,7 @@ from typing import Any
 from config.settings import CONFIG
 from utils.logger import get_logger
 from utils.recoverable import JSON_RECOVERABLE_EXCEPTIONS
-from utils.type_utils import safe_float, safe_int, clamp
+from utils.type_utils import clamp, safe_float, safe_int
 
 log = get_logger(__name__)
 _AUTO_LEARNER_RECOVERABLE_EXCEPTIONS = JSON_RECOVERABLE_EXCEPTIONS

@@ -20,8 +20,7 @@ _DB_SOFT_EXCEPTIONS = (sqlite3.Error, OSError, RuntimeError, TypeError, ValueErr
 _SCHEMA_VERSION = 2
 
 class MarketDatabase:
-    """
-    Local market data database with proper lifecycle management.
+    """Local market data database with proper lifecycle management.
 
     Tables:
     - _meta: Schema version tracking
@@ -97,8 +96,7 @@ class MarketDatabase:
         return self._local.conn
 
     def _cleanup_dead_threads(self):
-        """
-        Remove and close connections for threads that no longer exist.
+        """Remove and close connections for threads that no longer exist.
 
         FIX #3: Called under _connections_lock by the caller.
         """
@@ -168,8 +166,7 @@ class MarketDatabase:
         conn.commit()
 
     def _create_or_migrate(self):
-        """
-        Create tables or migrate from older schema versions.
+        """Create tables or migrate from older schema versions.
 
         FIX #9: Migration connection is tracked and always closed.
         """
@@ -325,8 +322,7 @@ class MarketDatabase:
 
     @classmethod
     def _validate_ohlcv_consistency(cls, df: pd.DataFrame) -> pd.DataFrame:
-        """
-        Validate and repair basic OHLCV consistency.
+        """Validate and repair basic OHLCV consistency.
 
         Ensures high >= max(open, close), low <= min(open, close).
         """
@@ -347,8 +343,7 @@ class MarketDatabase:
         aggressive: bool = False,
         preserve_truth: bool = True,
     ) -> pd.DataFrame:
-        """
-        Repair anomalous price bars that exceed caps.
+        """Repair anomalous price bars that exceed caps.
 
         FIX: Extracted from _sanitize_intraday_frame for clarity.
         """
@@ -390,8 +385,7 @@ class MarketDatabase:
         cls,
         df: pd.DataFrame,
     ) -> pd.DataFrame:
-        """
-        Drop stale/flat bars with no price movement or volume.
+        """Drop stale/flat bars with no price movement or volume.
 
         FIX: Extracted from _sanitize_intraday_frame for clarity.
         """
@@ -426,8 +420,7 @@ class MarketDatabase:
         preserve_truth: bool = True,
         wick_cap: float = 0.012,  # Default fallback
     ) -> pd.DataFrame:
-        """
-        Handle impossible inter-bar price jumps.
+        """Handle impossible inter-bar price jumps.
 
         FIX: Extracted from _sanitize_intraday_frame for clarity.
         """
@@ -607,8 +600,7 @@ class MarketDatabase:
     def _sanitize_daily_frame(
         cls, df: pd.DataFrame
     ) -> pd.DataFrame:
-        """
-        Sanitize daily OHLCV rows before write.
+        """Sanitize daily OHLCV rows before write.
 
         FIX #23: Applies basic quality checks analogous to intraday
         sanitization — ensures high >= low, positive close, non-negative
@@ -816,8 +808,7 @@ class MarketDatabase:
     def _build_intraday_rows(
         self, code: str, interval: str, work: pd.DataFrame
     ) -> list[tuple]:
-        """
-        Build rows for intraday bar insert.
+        """Build rows for intraday bar insert.
 
         FIX #19: Uses itertuples() instead of iterrows() for performance.
         """
@@ -893,8 +884,7 @@ class MarketDatabase:
     # ------------------------------------------------------------------
 
     def upsert_bars(self, code: str, df: pd.DataFrame):
-        """
-        Insert/update daily bars with column validation and sanitization.
+        """Insert/update daily bars with column validation and sanitization.
 
         FIX #23: Now sanitizes daily bars (high >= low, positive close, etc.)
         for symmetry with intraday sanitization.
@@ -943,8 +933,7 @@ class MarketDatabase:
     def _build_daily_rows(
         self, code: str, work: pd.DataFrame
     ) -> list[tuple]:
-        """
-        Build rows for daily bar insert.
+        """Build rows for daily bar insert.
 
         FIX #19: Uses itertuples() instead of iterrows() for performance.
         """
@@ -979,8 +968,7 @@ class MarketDatabase:
         end_date: date = None,
         limit: int = None,
     ) -> pd.DataFrame:
-        """
-        Get daily bars for a stock.
+        """Get daily bars for a stock.
 
         Returns:
             DataFrame with OHLCV data indexed by date (empty on error)
@@ -1159,8 +1147,7 @@ class MarketDatabase:
         return stats
 
     def vacuum(self):
-        """
-        Optimize database.
+        """Optimize database.
 
         FIX #15: Uses a dedicated connection for VACUUM to avoid
         mutating the shared thread-local connection's isolation_level.
@@ -1233,8 +1220,7 @@ def get_database() -> MarketDatabase:
     return _db
 
 def reset_database() -> None:
-    """
-    Reset global database instance (for testing).
+    """Reset global database instance (for testing).
 
     FIX #21: Provides a way to cleanly shut down and reset
     the global database singleton.

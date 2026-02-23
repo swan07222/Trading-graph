@@ -96,8 +96,7 @@ def _validate_codes(codes: list) -> list[str]:
 
 
 def _fallback_codes() -> list[str]:
-    """
-    Build robust offline fallback universe.
+    """Build robust offline fallback universe.
 
     FIX Bug 9: Uses shared fallback_stocks module instead of importing
     from data.discovery, which would create a circular import.
@@ -115,8 +114,7 @@ def _fallback_codes() -> list[str]:
 
 
 def _can_use_akshare() -> bool:
-    """
-    Decide if AkShare/Eastmoney is worth trying.
+    """Decide if AkShare/Eastmoney is worth trying.
 
     AkShare is backed by EastMoney; if EastMoney probe fails, skip it
     to avoid repeated connection-aborted warnings.
@@ -152,8 +150,7 @@ def _find_first_column(candidates: list[str], columns: list[str]) -> str | None:
 
 
 def _rank_codes_by_liquidity(df) -> list[str]:
-    """
-    Rank universe candidates by liquidity/size when columns are available.
+    """Rank universe candidates by liquidity/size when columns are available.
     Falls back to the original code order if ranking fields are missing.
     """
     cols = list(getattr(df, "columns", []))
@@ -269,8 +266,7 @@ def _extract_codes_from_df(df) -> list[str]:
 
 
 def _try_akshare_fetch(timeout: int = 20) -> list[str] | None:
-    """
-    Try to fetch stock universe from AkShare.
+    """Try to fetch stock universe from AkShare.
 
     FIX Bug 10: Uses ThreadPoolExecutor for timeout instead of
     socket.setdefaulttimeout which is process-global and racy.
@@ -358,8 +354,7 @@ def get_universe_codes(
     force_refresh: bool = False,
     max_age_hours: float = 12.0,
 ) -> list[str]:
-    """
-    Return all known A-share stock codes.
+    """Return all known A-share stock codes.
 
     FIX: Always tries AkShare first, regardless of network detection.
     Falls back to cache, then CONFIG.stock_pool.
@@ -409,8 +404,7 @@ def get_universe_codes(
 
 
 def refresh_universe() -> dict:
-    """
-    Refresh universe from AkShare.
+    """Refresh universe from AkShare.
 
     FIX: Removed network detection check - just try to fetch.
     """
@@ -454,8 +448,7 @@ def get_new_listings(
     force_refresh: bool = False,
     max_age_seconds: float = 5.0,
 ) -> list[str]:
-    """
-    Return codes of stocks listed within the last N days.
+    """Return codes of stocks listed within the last N days.
 
     FIX Bug 14: Atomic snapshot reads and writes under lock.
     """

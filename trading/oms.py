@@ -25,8 +25,7 @@ log = get_logger(__name__)
 _OMS_RECOVERABLE_EXCEPTIONS = COMMON_RECOVERABLE_EXCEPTIONS
 
 class OrderStateMachine:
-    """
-    Valid order state transitions.
+    """Valid order state transitions.
     Prevents invalid state changes.
     
     FIX #12: Added CANCELLED transition from PENDING to allow
@@ -66,8 +65,7 @@ class OrderStateMachine:
             )
 
 class OrderManagementSystem:
-    """
-    Production Order Management System.
+    """Production Order Management System.
 
     Features:
     - SQLite persistence with atomic transactions
@@ -118,8 +116,7 @@ class OrderManagementSystem:
         return account
 
     def _reconstruct_reservations(self):
-        """
-        Reconstruct cash/share reservations from active orders.
+        """Reconstruct cash/share reservations from active orders.
         Called on recovery to fix available cash and frozen shares.
         """
         active_orders = self._db.load_active_orders()
@@ -392,8 +389,7 @@ class OrderManagementSystem:
         filled_qty: int = None,
         avg_price: float = None
     ) -> Order | None:
-        """
-        Update order status with state machine validation.
+        """Update order status with state machine validation.
         Idempotent: same-status updates just refresh metadata.
         """
         with self._lock:
@@ -605,8 +601,7 @@ class OrderManagementSystem:
         fill.price = price
 
     def process_fill(self, order: Order, fill: Fill):
-        """
-        Process order fill — IDEMPOTENT.
+        """Process order fill — IDEMPOTENT.
         All mutations happen inside the transaction block.
 
         Thread Safety:
@@ -933,8 +928,7 @@ class OrderManagementSystem:
         return self._db.load_fills(order_id)
 
     def get_order_timeline(self, order_id: str, limit: int = 200) -> list[dict]:
-        """
-        Return order lifecycle events in ascending time order.
+        """Return order lifecycle events in ascending time order.
         Useful for UI/ops troubleshooting of OMS state transitions.
         """
         return self._db.load_order_events(order_id, limit=limit)
@@ -1070,8 +1064,7 @@ class OrderManagementSystem:
         broker_cash: float,
         broker_available: float = None
     ):
-        """
-        Force sync OMS state from broker.
+        """Force sync OMS state from broker.
         WARNING: This overwrites OMS state.
         Clears T+1 pending for removed positions.
         """

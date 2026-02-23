@@ -18,8 +18,7 @@ if TYPE_CHECKING:
 log = get_logger(__name__)
 
 class AutoTrader:
-    """
-    Autonomous trading engine that scans the watchlist using the AI
+    """Autonomous trading engine that scans the watchlist using the AI
     predictor and submits orders via ExecutionEngine when signals meet
     the configured thresholds.
 
@@ -152,8 +151,7 @@ class AutoTrader:
             return copy.deepcopy(self.state.pending_approvals)
 
     def _passes_precision_quality_gate(self, pred) -> tuple[bool, str]:
-        """
-        Additional precision guardrails for autonomous trading.
+        """Additional precision guardrails for autonomous trading.
         Uses entropy and directional edge thresholds from PrecisionConfig.
         """
         try:
@@ -211,8 +209,7 @@ class AutoTrader:
         shares: int,
         price: float,
     ) -> tuple[int, str]:
-        """
-        Cap model-proposed BUY size using RiskManager position sizing.
+        """Cap model-proposed BUY size using RiskManager position sizing.
 
         Keeps the model quantity as an upper bound and never increases size.
         """
@@ -367,8 +364,7 @@ class AutoTrader:
     # -----------------------------------------------------------------
 
     def _scan_loop(self):
-        """
-        Main auto-trading scan loop.
+        """Main auto-trading scan loop.
 
         Runs on a dedicated worker thread. Each cycle:
         1. Check pre-conditions (market open, broker connected, etc.)
@@ -430,8 +426,7 @@ class AutoTrader:
         log.info("Auto-trade scan loop exited")
 
     def _should_scan(self) -> bool:
-        """
-        Check all pre-conditions for scanning.
+        """Check all pre-conditions for scanning.
         MUST be called with ``_lock`` held.
         """
         cfg = CONFIG.auto_trade
@@ -466,8 +461,7 @@ class AutoTrader:
         return True
 
     def _run_scan_cycle(self):
-        """
-        Execute one scan cycle: predict 鈫?filter 鈫?execute/queue.
+        """Execute one scan cycle: predict 鈫?filter 鈫?execute/queue.
         Called WITHOUT lock held (acquires as needed).
         """
         with self._lock:
@@ -738,8 +732,7 @@ class AutoTrader:
                     )
 
     def _execute_action(self, action: AutoTradeAction) -> bool:
-        """
-        Execute a single auto-trade action via ExecutionEngine.submit().
+        """Execute a single auto-trade action via ExecutionEngine.submit().
 
         Returns True if the signal was accepted by the engine.
         MUST be called with ``_lock`` held (for state updates).

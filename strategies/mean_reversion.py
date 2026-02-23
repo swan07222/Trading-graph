@@ -1,5 +1,4 @@
-"""
-Mean Reversion Strategy.
+"""Mean Reversion Strategy.
 
 Trades based on the principle that prices tend to revert to their mean.
 """
@@ -15,8 +14,7 @@ from strategies import BaseStrategy, Signal, SignalStrength, register_strategy
 
 @register_strategy
 class MeanReversionStrategy(BaseStrategy):
-    """
-    Mean Reversion Strategy.
+    """Mean Reversion Strategy.
 
     Trades based on the principle that prices tend to revert to their mean.
     Buys when price is significantly below moving average,

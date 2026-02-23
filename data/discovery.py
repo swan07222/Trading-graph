@@ -109,8 +109,7 @@ _TENCENT_CHUNK_SIZE: int = 80
 # ====================================================================== #
 
 def _is_st(name: str | None) -> bool:
-    """
-    Check if a stock name indicates ST status.
+    """Check if a stock name indicates ST status.
 
     FIX Bug 6: Uses word-boundary regex to avoid false positives
     on names like "BEST" or "FASTEST".
@@ -157,8 +156,7 @@ class DiscoveredStock:
     # ------------------------------------------------------------------ #
     @staticmethod
     def _clean_code(code: str) -> str:
-        """
-        Clean and normalise a stock code to bare 6-digit form.
+        """Clean and normalise a stock code to bare 6-digit form.
 
         FIX Bug 12: Properly handles BSE codes that might be 5 digits;
         only zero-pads when the result is a valid prefix.
@@ -221,8 +219,7 @@ class DiscoveredStock:
 # ====================================================================== #
 
 class UniversalStockDiscovery:
-    """
-    Discovers A-share stocks using the best available data source
+    """Discovers A-share stocks using the best available data source
     given the current network environment.
 
     Priority:
@@ -289,8 +286,7 @@ class UniversalStockDiscovery:
         fetch_func: Callable[[], object],
         description: str = "data",
     ) -> object | None:
-        """
-        Execute *fetch_func* with retries and per-call timeout.
+        """Execute *fetch_func* with retries and per-call timeout.
 
         Uses a ThreadPoolExecutor with future.result(timeout=...) instead
         of socket.setdefaulttimeout() which is process-global and racy
@@ -327,8 +323,7 @@ class UniversalStockDiscovery:
         min_market_cap: float = 0,
         include_st: bool = False,
     ) -> list[DiscoveredStock]:
-        """
-        Discover stocks from the best available source.
+        """Discover stocks from the best available source.
 
         Args:
             callback:        ``(message, count_so_far) -> None`` progress hook.
@@ -455,8 +450,7 @@ class UniversalStockDiscovery:
         max_stocks: int | None,
         min_market_cap: float,
     ) -> list[DiscoveredStock]:
-        """
-        Centralised post-processing applied exactly once to every
+        """Centralised post-processing applied exactly once to every
         discovery path. Eliminates the old duplicated logic.
 
         Args:
@@ -499,8 +493,7 @@ class UniversalStockDiscovery:
     # ================================================================== #
     @staticmethod
     def _calculate_score(stock: DiscoveredStock) -> float:
-        """
-        Deterministic score in [0, 1]. No network calls.
+        """Deterministic score in [0, 1]. No network calls.
 
         Components
         ----------
@@ -545,8 +538,7 @@ class UniversalStockDiscovery:
         callback: Callable | None = None,
         include_st: bool = False,
     ) -> tuple[list[DiscoveredStock] | None, bool]:
-        """
-        Full AkShare discovery — China direct IP only.
+        """Full AkShare discovery — China direct IP only.
 
         Returns:
             Tuple of (discovered_stocks_or_None, used_index_fallback_bool).
@@ -627,8 +619,7 @@ class UniversalStockDiscovery:
     # FIX Bug 8: Supports BSE stocks via 'bj' prefix
     # ================================================================== #
     def _discover_via_tencent(self) -> list[DiscoveredStock]:
-        """
-        Verify fallback stocks via Tencent HTTP quotes.
+        """Verify fallback stocks via Tencent HTTP quotes.
         Works from any IP.  Returns only stocks with a valid live price.
         """
         if requests is None:

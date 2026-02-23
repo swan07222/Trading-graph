@@ -28,8 +28,7 @@ def get_realtime_forecast_curve(
     use_realtime_price: bool = True,
     history_allow_online: bool = True,
 ) -> tuple[list[float], list[float]]:
-    """
-    Get real-time forecast curve for charting.
+    """Get real-time forecast curve for charting.
 
     Returns:
         (actual_prices, predicted_prices)
@@ -238,8 +237,7 @@ def _stabilize_forecast_curve(
     current_price: float,
     atr_pct: float,
 ) -> list[float]:
-    """
-    Clamp/smooth forecast curve so one noisy step cannot create
+    """Clamp/smooth forecast curve so one noisy step cannot create
     unrealistic V-shapes in real-time chart updates.
     """
     if not values:
@@ -384,8 +382,7 @@ def _append_warning_once(pred: Prediction, message: str) -> None:
     pred.warnings.append(text)
 
 def _refresh_prediction_uncertainty(self, pred: Prediction) -> None:
-    """
-    Derive uncertainty and tail-risk from signal quality metrics.
+    """Derive uncertainty and tail-risk from signal quality metrics.
 
     Also moderates confidence when entropy/adverse-risk is high to avoid
     over-confident chart narratives.
@@ -460,8 +457,7 @@ def _refresh_prediction_uncertainty(self, pred: Prediction) -> None:
     pred.tail_risk_score = float(tail_risk)
 
 def _apply_tail_risk_guard(self, pred: Prediction) -> None:
-    """
-    Block actionable signals when adverse-tail probability is too high.
+    """Block actionable signals when adverse-tail probability is too high.
     """
     if pred.signal == Signal.HOLD:
         return
@@ -490,8 +486,7 @@ def _apply_tail_risk_guard(self, pred: Prediction) -> None:
     )
 
 def _build_prediction_bands(self, pred: Prediction) -> None:
-    """
-    Build per-step prediction intervals to visualize uncertainty.
+    """Build per-step prediction intervals to visualize uncertainty.
     """
     values = [
         float(v)
@@ -586,8 +581,7 @@ def _apply_high_precision_gate(self, pred: Prediction) -> None:
     )
 
 def _apply_runtime_signal_quality_gate(self, pred: Prediction) -> None:
-    """
-    Always-on runtime guard to reduce low-quality actionable signals.
+    """Always-on runtime guard to reduce low-quality actionable signals.
     This improves precision by preferring HOLD when edge quality is weak.
     """
     if pred.signal == Signal.HOLD:
@@ -639,8 +633,7 @@ def _apply_runtime_signal_quality_gate(self, pred: Prediction) -> None:
     )
 
 def _get_cache_ttl(self, use_realtime: bool, interval: str) -> float:
-    """
-    Adaptive cache TTL.
+    """Adaptive cache TTL.
     Real-time paths get shorter TTL to reduce stale guesses.
     """
     base = float(self._CACHE_TTL)
@@ -706,8 +699,7 @@ def _get_news_sentiment(
     stock_code: str,
     interval: str,
 ) -> tuple[float, float, int]:
-    """
-    Return (sentiment, confidence, count) for stock news.
+    """Return (sentiment, confidence, count) for stock news.
     Sentiment is in [-1, 1], confidence in [0, 1].
     """
     self._ensure_news_cache_state()
@@ -760,8 +752,7 @@ def _compute_news_bias(
     count: int,
     interval: str,
 ) -> float:
-    """
-    Convert news metrics into a bounded directional bias.
+    """Convert news metrics into a bounded directional bias.
     Positive => bullish tilt, negative => bearish tilt.
     """
     s = float(np.clip(np.nan_to_num(sentiment, nan=0.0), -1.0, 1.0))
@@ -780,8 +771,7 @@ def _apply_news_influence(
     stock_code: str,
     interval: str,
 ) -> float:
-    """
-    Blend news sentiment into class probabilities and confidence.
+    """Blend news sentiment into class probabilities and confidence.
     Returns the directional bias used for forecast shaping.
     """
     sentiment, conf, count = self._get_news_sentiment(stock_code, interval)

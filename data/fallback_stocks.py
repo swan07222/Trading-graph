@@ -1,6 +1,5 @@
 # data/fallback_stocks.py
-"""
-Shared fallback stock list used by both discovery.py and universe.py.
+"""Shared fallback stock list used by both discovery.py and universe.py.
 Extracted to break the circular import: universe → discovery → universe.
 """
 

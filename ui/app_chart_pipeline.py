@@ -17,8 +17,7 @@ log = get_logger(__name__)
 
 _APP_CHART_RECOVERABLE_EXCEPTIONS = COMMON_RECOVERABLE_EXCEPTIONS
 def _on_price_updated(self: Any, code: str, price: float) -> None:
-    """
-    Handle price update from monitor.
+    """Handle price update from monitor.
 
     FIXED: No longer calls update_data() which was overwriting candles.
     Instead, updates the current bar's close price so the candle
@@ -735,8 +734,7 @@ def _prepare_chart_bars_for_interval(
     *,
     symbol: str = "",
 ) -> list[dict[str, Any]]:
-    """
-    Final chart-only scrub to enforce one interval and normalized buckets.
+    """Final chart-only scrub to enforce one interval and normalized buckets.
     Prevents malformed/mixed bars from rendering giant candle bodies.
     """
     iv = self._normalize_interval_token(interval)

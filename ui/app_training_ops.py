@@ -25,8 +25,7 @@ def _lazy_get(module: str, name: str) -> Any:
     return getattr(import_module(module), name)
 
 def _get_trained_stock_codes(self) -> list[str]:
-    """
-    Read trained stock list from loaded predictor metadata.
+    """Read trained stock list from loaded predictor metadata.
 
     FIX: Added TTL-based caching to avoid repeated predictor calls.
     """
@@ -59,8 +58,7 @@ def _get_trained_stock_codes(self) -> list[str]:
     return []
 
 def _invalidate_trained_stock_cache(self) -> None:
-    """
-    Invalidate trained stock cache.
+    """Invalidate trained stock cache.
 
     FIX: Call this when models are retrained or reloaded.
     """
@@ -403,8 +401,7 @@ def _focus_trained_stocks_tab(self) -> None:
         tabs.setCurrentIndex(idx)
 
 def _get_infor_trained_stocks(self) -> None:
-    """
-    Refresh 29-day AKShare history for all trained stocks.
+    """Refresh 29-day AKShare history for all trained stocks.
 
     If data already exists in the target window, only fetches from the
     last saved timestamp forward.
@@ -517,8 +514,7 @@ def _get_infor_trained_stocks(self) -> None:
     worker.start()
 
 def _train_trained_stocks(self) -> None:
-    """
-    Train only already-trained stocks using latest cached data.
+    """Train only already-trained stocks using latest cached data.
 
     A dialog asks for stock count (N). The model is retrained on the
     N stocks with the oldest last-train timestamps.

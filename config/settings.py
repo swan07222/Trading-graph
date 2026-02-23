@@ -231,8 +231,7 @@ class AlertConfig:
 
 @dataclass
 class AutoTradeConfig:
-    """
-    Auto-trading configuration.
+    """Auto-trading configuration.
 
     Controls the autonomous trading engine that can execute trades
     without manual confirmation when enabled.
@@ -287,8 +286,7 @@ class AutoTradeConfig:
 
 @dataclass
 class PrecisionConfig:
-    """
-    Precision-oriented controls for higher hit-rate/lower-frequency operation.
+    """Precision-oriented controls for higher hit-rate/lower-frequency operation.
 
     All options are optional and default-safe (disabled) so existing workflows
     keep behaving the same unless explicitly enabled.
@@ -340,8 +338,7 @@ class PrecisionConfig:
 
 
 class Config:
-    """
-    Production-grade configuration manager.
+    """Production-grade configuration manager.
 
     Usage:
         from config.settings import CONFIG
@@ -367,8 +364,7 @@ class Config:
 
     @classmethod
     def reset_instance(cls) -> None:
-        """
-        Destroy singleton for testing.
+        """Destroy singleton for testing.
         Call between tests to get a fresh Config.
         """
         with cls._instance_lock:
@@ -497,8 +493,7 @@ class Config:
         return obj
 
     def __getattr__(self, name: str) -> Any:
-        """
-        Legacy compatibility: CONFIG.SEQUENCE_LENGTH 鈫?CONFIG.model.sequence_length
+        """Legacy compatibility: CONFIG.SEQUENCE_LENGTH 鈫?CONFIG.model.sequence_length
 
         Only called when normal attribute lookup fails,
         so @property definitions always take precedence.
@@ -846,8 +841,7 @@ class Config:
     # ==================== VALIDATION ====================
 
     def _validate(self) -> None:
-        """
-        Validate configuration without raising (except LIVE mode).
+        """Validate configuration without raising (except LIVE mode).
         Collects warnings accessible via self.validation_warnings.
         """
         self._validation_warnings.clear()
@@ -1140,8 +1134,7 @@ class Config:
     # ==================== MARKET HOURS ====================
 
     def is_market_open(self) -> bool:
-        """
-        FIX: Robust market-open check with proper timezone handling.
+        """FIX: Robust market-open check with proper timezone handling.
 
         Always compares naive time objects to avoid tz-aware vs tz-naive
         mismatch with TradingConfig time fields.

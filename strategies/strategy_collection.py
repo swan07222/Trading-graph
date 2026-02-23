@@ -1,5 +1,4 @@
-"""
-Strategy Collection - 30+ diverse trading strategies across multiple categories.
+"""Strategy Collection - 30+ diverse trading strategies across multiple categories.
 
 This module provides pre-built strategy templates for the Strategy Marketplace.
 """
@@ -10,13 +9,11 @@ from typing import Any
 from core.types import OrderSide
 from strategies import BaseStrategy, Signal, SignalStrength, register_strategy
 
-
 # ==================== TREND FOLLOWING STRATEGIES ====================
 
 @register_strategy
 class DualMovingAverageStrategy(BaseStrategy):
-    """
-    Dual Moving Average Crossover Strategy.
+    """Dual Moving Average Crossover Strategy.
     
     Classic trend-following strategy using two moving averages.
     
@@ -89,8 +86,7 @@ class DualMovingAverageStrategy(BaseStrategy):
 
 @register_strategy
 class TripleMovingAverageStrategy(BaseStrategy):
-    """
-    Triple Moving Average Strategy.
+    """Triple Moving Average Strategy.
     
     Uses three MAs for stronger trend confirmation.
     """
@@ -154,8 +150,7 @@ class TripleMovingAverageStrategy(BaseStrategy):
 
 @register_strategy
 class ADXTrendStrategy(BaseStrategy):
-    """
-    ADX Trend Strength Strategy.
+    """ADX Trend Strength Strategy.
     
     Uses Average Directional Index to identify strong trends.
     """
@@ -215,8 +210,7 @@ class ADXTrendStrategy(BaseStrategy):
 
 @register_strategy
 class ZScoreMeanReversionStrategy(BaseStrategy):
-    """
-    Z-Score Mean Reversion Strategy.
+    """Z-Score Mean Reversion Strategy.
     
     Trades when price deviates significantly from moving average.
     """
@@ -283,8 +277,7 @@ class ZScoreMeanReversionStrategy(BaseStrategy):
 
 @register_strategy
 class BollingerBandReversionStrategy(BaseStrategy):
-    """
-    Bollinger Band Mean Reversion.
+    """Bollinger Band Mean Reversion.
     
     Fades moves to outer bands with middle band target.
     """
@@ -342,8 +335,7 @@ class BollingerBandReversionStrategy(BaseStrategy):
 
 @register_strategy
 class RSIReversalStrategy(BaseStrategy):
-    """
-    RSI Reversal Strategy.
+    """RSI Reversal Strategy.
     
     Trades RSI extremes with trend confirmation.
     """
@@ -399,8 +391,7 @@ class RSIReversalStrategy(BaseStrategy):
 
 @register_strategy
 class RateOfChangeMomentumStrategy(BaseStrategy):
-    """
-    Rate of Change Momentum Strategy.
+    """Rate of Change Momentum Strategy.
     
     Trades strong positive/negative momentum.
     """
@@ -453,8 +444,7 @@ class RateOfChangeMomentumStrategy(BaseStrategy):
 
 @register_strategy
 class StochasticMomentumStrategy(BaseStrategy):
-    """
-    Stochastic Oscillator Momentum Strategy.
+    """Stochastic Oscillator Momentum Strategy.
     
     Uses stochastic crossovers for entry signals.
     """
@@ -516,8 +506,7 @@ class StochasticMomentumStrategy(BaseStrategy):
 
 @register_strategy
 class DonchianBreakoutStrategy(BaseStrategy):
-    """
-    Donchian Channel Breakout Strategy.
+    """Donchian Channel Breakout Strategy.
     
     Classic Turtle Trading breakout system.
     """
@@ -581,8 +570,7 @@ class DonchianBreakoutStrategy(BaseStrategy):
 
 @register_strategy
 class VolatilityBreakoutStrategy(BaseStrategy):
-    """
-    Volatility Compression Breakout Strategy.
+    """Volatility Compression Breakout Strategy.
     
     Trades breakouts from low volatility periods.
     """
@@ -601,9 +589,8 @@ class VolatilityBreakoutStrategy(BaseStrategy):
     def generate_signal(self, data: dict[str, Any]) -> Signal | None:
         indicators = data.get("indicators", {})
         bb_width = indicators.get("bb_width", 0)
-        atr = indicators.get("atr", 0)
         current_price = data.get("current_price", 0)
-        
+
         # Detect squeeze (narrow Bollinger Bands)
         if bb_width > 0 and bb_width < 0.05:  # Compression detected
             # Wait for expansion and breakout
@@ -643,8 +630,7 @@ class VolatilityBreakoutStrategy(BaseStrategy):
 
 @register_strategy
 class VolumeWeightedAveragePriceStrategy(BaseStrategy):
-    """
-    VWAP Mean Reversion Strategy.
+    """VWAP Mean Reversion Strategy.
     
     Trades deviations from VWAP with volume confirmation.
     """
@@ -707,8 +693,7 @@ class VolumeWeightedAveragePriceStrategy(BaseStrategy):
 
 @register_strategy
 class OnBalanceVolumeStrategy(BaseStrategy):
-    """
-    On-Balance Volume Divergence Strategy.
+    """On-Balance Volume Divergence Strategy.
     
     Detects OBV divergences for reversal signals.
     """
@@ -766,8 +751,7 @@ class OnBalanceVolumeStrategy(BaseStrategy):
 
 @register_strategy
 class CandlestickPatternStrategy(BaseStrategy):
-    """
-    Candlestick Pattern Recognition Strategy.
+    """Candlestick Pattern Recognition Strategy.
     
     Detects and trades classic candlestick patterns.
     """
@@ -871,8 +855,7 @@ class CandlestickPatternStrategy(BaseStrategy):
 
 @register_strategy
 class MultiFactorAlphaStrategy(BaseStrategy):
-    """
-    Multi-Factor Alpha Strategy.
+    """Multi-Factor Alpha Strategy.
     
     Combines momentum, value, and quality factors.
     """
@@ -949,8 +932,7 @@ class MultiFactorAlphaStrategy(BaseStrategy):
 
 @register_strategy
 class EarningsAnnouncementStrategy(BaseStrategy):
-    """
-    Earnings Announcement Strategy.
+    """Earnings Announcement Strategy.
     
     Trades pre and post-earnings momentum.
     """
@@ -1018,8 +1000,7 @@ class EarningsAnnouncementStrategy(BaseStrategy):
 
 @register_strategy
 class OrderFlowScalpingStrategy(BaseStrategy):
-    """
-    Order Flow Scalping Strategy.
+    """Order Flow Scalping Strategy.
     
     Quick scalps based on order flow imbalances.
     """
@@ -1087,8 +1068,7 @@ class OrderFlowScalpingStrategy(BaseStrategy):
 
 @register_strategy
 class PairsTradingStrategy(BaseStrategy):
-    """
-    Pairs Trading Strategy.
+    """Pairs Trading Strategy.
     
     Statistical arbitrage between correlated assets.
     """
@@ -1145,8 +1125,7 @@ class PairsTradingStrategy(BaseStrategy):
 
 @register_strategy
 class MLClassifierStrategy(BaseStrategy):
-    """
-    Machine Learning Classifier Strategy.
+    """Machine Learning Classifier Strategy.
     
     Uses pre-trained ML model for signal generation.
     """
@@ -1204,8 +1183,7 @@ class MLClassifierStrategy(BaseStrategy):
 
 @register_strategy
 class SentimentMomentumStrategy(BaseStrategy):
-    """
-    Sentiment Momentum Strategy.
+    """Sentiment Momentum Strategy.
     
     Combines news sentiment with price momentum.
     """

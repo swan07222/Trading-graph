@@ -71,8 +71,7 @@ __all__ = [
 ]
 # AUTO-TRADER
 class ExecutionEngine:
-    """
-    Production execution engine with correct broker synchronization.
+    """Production execution engine with correct broker synchronization.
 
     DESIGN PRINCIPLES:
     1. Fills are ONLY processed from broker.get_fills() - never fabricated
@@ -156,8 +155,7 @@ class ExecutionEngine:
     # -----------------------------------------------------------------
 
     def _evaluate_live_start_readiness(self) -> tuple[bool, str]:
-        """
-        Check institutional controls before enabling LIVE execution.
+        """Check institutional controls before enabling LIVE execution.
 
         Returns:
             (ok, message). message is empty when ok=True.
@@ -266,8 +264,7 @@ class ExecutionEngine:
             return None
 
     def _persist_synthetic_exits(self, force: bool = False) -> None:
-        """
-        Persist synthetic exit plans atomically.
+        """Persist synthetic exit plans atomically.
 
         This makes synthetic brackets/OCO plans recoverable after restarts.
         """
@@ -346,8 +343,7 @@ class ExecutionEngine:
             log.debug(f"Synthetic exit state restore failed: {e}")
 
     def _resolve_price(self, symbol: str, hinted_price: float = 0.0) -> float:
-        """
-        Resolve one authoritative price for this submission.
+        """Resolve one authoritative price for this submission.
         """
         try:
             px = float(hinted_price or 0.0)
@@ -506,8 +502,7 @@ class ExecutionEngine:
             return None
 
     def _acquire_runtime_lease(self) -> bool:
-        """
-        Acquire a local single-writer runtime lease.
+        """Acquire a local single-writer runtime lease.
 
         This prevents split-brain auto execution when two engine processes
         run against the same working directory.
@@ -655,8 +650,7 @@ class ExecutionEngine:
     def _get_quote_snapshot(
         self, symbol: str
     ) -> tuple[float, datetime | None, str, bool]:
-        """
-        Returns (price, timestamp, source, is_delayed).
+        """Returns (price, timestamp, source, is_delayed).
         """
         # 1) feed cache
         try:
@@ -701,8 +695,7 @@ class ExecutionEngine:
     def _coerce_quote_snapshot(
         snapshot: object,
     ) -> tuple[float, datetime | None, str, bool]:
-        """
-        Backward-compatible snapshot parser.
+        """Backward-compatible snapshot parser.
 
         Accepts both legacy 3-tuple ``(px, ts, src)`` and current 4-tuple.
         """
@@ -737,8 +730,7 @@ class ExecutionEngine:
         max_age_seconds: float = 15.0,
         block_delayed: bool = False,
     ) -> tuple[bool, str, float]:
-        """
-        Strict quote freshness gate for order submission.
+        """Strict quote freshness gate for order submission.
         Returns (ok, message, price).
         """
         px, ts, src, delayed = self._coerce_quote_snapshot(
@@ -816,8 +808,7 @@ class ExecutionEngine:
     def _check_submission_guardrails(
         self, signal: TradeSignal
     ) -> tuple[bool, str]:
-        """
-        Extra exchange-style guardrails:
+        """Extra exchange-style guardrails:
         - duplicate suppression
         - per-symbol burst cap
         - max single-order notional cap
@@ -997,8 +988,7 @@ class ExecutionEngine:
                 log.error(f"Fill sync loop error: {e}")
 
     def _prune_processed_fills_unlocked(self, max_size: int = 50000) -> None:
-        """
-        Prevent unbounded growth of processed fill IDs.
+        """Prevent unbounded growth of processed fill IDs.
         MUST be called with self._fills_lock already held.
 
         FIX: Single lock acquisition instead of double-lock pattern.

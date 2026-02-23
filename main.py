@@ -19,8 +19,7 @@ def check_dependencies(
     require_security: bool = True,
     require_live: bool = False,
 ) -> bool:
-    """
-    Check required dependencies.
+    """Check required dependencies.
 
     Startup optimization:
     - Use find_spec() instead of importing heavy modules.
@@ -401,10 +400,9 @@ def main() -> int:
             trainer.train(epochs=args.epochs)
 
         elif args.train_stock:
-            from models.trainer import Trainer
             from data.fetcher import DataFetcher
-            fetcher = DataFetcher()
-            
+            from models.trainer import Trainer
+
             # Validate stock code
             stock_code = DataFetcher.clean_code(args.train_stock)
             if not stock_code:
@@ -542,8 +540,7 @@ def main() -> int:
     return exit_code
 
 def run_recovery_drill() -> None:
-    """
-    Recovery drill:
+    """Recovery drill:
     1) Create isolated OMS DB in temp folder
     2) Submit an order, process a fill
     3) Simulate crash: drop OMS instance

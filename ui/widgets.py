@@ -27,11 +27,8 @@ from ui.modern_theme import (
 )
 from utils.logger import get_logger
 from utils.type_utils import (
-    safe_float,
     safe_float_attr,
-    safe_int,
     safe_int_attr,
-    safe_str,
     safe_str_attr,
 )
 
@@ -104,11 +101,11 @@ class SignalPanel(QFrame):
         down_label = QLabel("DOWN")
         down_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         down_label.setStyleSheet(
-            (
+            
                 f"color: {ModernColors.ACCENT_DANGER}; "
                 f"font-weight: {ModernFonts.WEIGHT_SEMIBOLD}; "
                 f"font-size: {ModernFonts.SIZE_SM}px;"
-            )
+            
         )
         self.prob_down = QProgressBar()
         self.prob_down.setFormat("%p%")
@@ -122,11 +119,11 @@ class SignalPanel(QFrame):
         neutral_label = QLabel("NEUTRAL")
         neutral_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         neutral_label.setStyleSheet(
-            (
+            
                 f"color: {ModernColors.ACCENT_WARNING}; "
                 f"font-weight: {ModernFonts.WEIGHT_SEMIBOLD}; "
                 f"font-size: {ModernFonts.SIZE_SM}px;"
-            )
+            
         )
         self.prob_neutral = QProgressBar()
         self.prob_neutral.setFormat("%p%")
@@ -140,11 +137,11 @@ class SignalPanel(QFrame):
         up_label = QLabel("UP")
         up_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         up_label.setStyleSheet(
-            (
+            
                 f"color: {ModernColors.ACCENT_SUCCESS}; "
                 f"font-weight: {ModernFonts.WEIGHT_SEMIBOLD}; "
                 f"font-size: {ModernFonts.SIZE_SM}px;"
-            )
+            
         )
         self.prob_up = QProgressBar()
         self.prob_up.setFormat("%p%")
@@ -486,8 +483,7 @@ class LogWidget(QTextEdit):
             scrollbar.setValue(scrollbar.maximum())
 
     def _trim_old_lines(self):
-        """
-        Remove oldest lines to keep log bounded.
+        """Remove oldest lines to keep log bounded.
         Uses document-level block removal instead of fragile cursor manipulation.
         FIX: Improved trim logic to prevent text corruption.
         """
@@ -571,11 +567,11 @@ class MetricCard(QFrame):
         title_text = f"{icon} {title}" if icon else title
         title_label = QLabel(title_text)
         title_label.setStyleSheet(
-            (
+            
                 f"color: {ModernColors.TEXT_SECONDARY}; "
                 f"font-size: {ModernFonts.SIZE_SM}px; "
                 f"font-weight: {ModernFonts.WEIGHT_SEMIBOLD};"
-            )
+            
         )
         layout.addWidget(title_label)
 

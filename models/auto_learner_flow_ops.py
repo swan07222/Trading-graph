@@ -59,8 +59,7 @@ def _session_continuous_window_seconds(
     interval: str,
     max_bars: int = 5000,
 ) -> float:
-    """
-    Longest continuous cached window for a symbol/interval in seconds.
+    """Longest continuous cached window for a symbol/interval in seconds.
     Uses session bars captured during trading, including partial bars.
     """
     try:
@@ -118,8 +117,7 @@ def _filter_priority_session_codes(
     interval: str,
     min_seconds: float = 3600.0,
 ) -> list[str]:
-    """
-    Keep only session-priority symbols with enough continuous captured data.
+    """Keep only session-priority symbols with enough continuous captured data.
     For intraday training this enforces >=1 hour of contiguous session bars.
     """
     iv = str(interval or "").strip().lower()
@@ -164,8 +162,7 @@ def _prioritize_codes_by_news(
     interval: str,
     max_probe: int = 16,
 ) -> list[str]:
-    """
-    Reorder candidate symbols by fresh market/stock news relevance.
+    """Reorder candidate symbols by fresh market/stock news relevance.
     Keeps original order for ties and when news is unavailable.
     """
     ordered = [self._norm_code(c) for c in list(codes or [])]

@@ -45,8 +45,7 @@ else:
     _CRYPTO_IMPORT_ERROR = None
 
 class SecureStorage:
-    """
-    Secure storage for sensitive credentials.
+    """Secure storage for sensitive credentials.
 
     Fail-closed design:
     - requires cryptography/Fernet
@@ -191,8 +190,7 @@ class SecureStorage:
             self._cache = {}
 
     def _save(self) -> None:
-        """
-        Save to storage atomically.
+        """Save to storage atomically.
 
         Uses temp file + rename pattern with proper file descriptor cleanup.
         FIX: Ensures file descriptors are always closed, even on error.
@@ -268,8 +266,7 @@ class SecureStorage:
             return key in self._cache
 
     def close(self) -> None:
-        """
-        FIX #1: Explicitly close storage.
+        """FIX #1: Explicitly close storage.
         Flushes any pending state. Idempotent.
         """
         with self._lock:
@@ -309,8 +306,7 @@ class AuditRecord:
         }
 
 def _atexit_close_audit(ref: weakref.ReferenceType[AuditLog]) -> None:
-    """
-    FIX #4: atexit callback using weakref.
+    """FIX #4: atexit callback using weakref.
     If the AuditLog was already garbage collected, this is a no-op.
     """
     obj = ref()
@@ -318,8 +314,7 @@ def _atexit_close_audit(ref: weakref.ReferenceType[AuditLog]) -> None:
         obj.close()
 
 class AuditLog:
-    """
-    Comprehensive audit logging for compliance.
+    """Comprehensive audit logging for compliance.
 
     FIXES:
     - _flush only clears buffer on success (#3)
@@ -419,8 +414,7 @@ class AuditLog:
         return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
     def _flush(self) -> None:
-        """
-        FIX #3: Flush buffer to file. Only clears buffer on SUCCESS.
+        """FIX #3: Flush buffer to file. Only clears buffer on SUCCESS.
         """
         if not self._buffer:
             return
@@ -588,8 +582,7 @@ class AuditLog:
             return False
 
     def prune_old_files(self, retention_days: int) -> dict[str, int]:
-        """
-        Delete audit files older than retention_days, except legal-hold files.
+        """Delete audit files older than retention_days, except legal-hold files.
         """
         stats = {"deleted": 0, "held": 0, "kept": 0}
         try:
@@ -635,8 +628,7 @@ class AuditLog:
         event_type: str | None = None,
         limit: int = 1000,
     ) -> list[dict[str, Any]]:
-        """
-        Query audit records.
+        """Query audit records.
 
         FIX #6: Flushes current buffer first so recent records are included.
         """
@@ -694,8 +686,7 @@ class AuditLog:
         end_date: datetime | None = None,
         limit: int = 100000,
     ) -> dict[str, Any]:
-        """
-        Verify tamper-evident hash chain across queried audit records.
+        """Verify tamper-evident hash chain across queried audit records.
         """
         records = self.query(start_date=start_date, end_date=end_date, limit=limit)
         checked = 0
@@ -731,8 +722,7 @@ class AuditLog:
         return {"ok": True, "checked": checked, "last_hash": prev_hash}
 
 class RateLimiter:
-    """
-    Rate limiter for API calls and trading actions.
+    """Rate limiter for API calls and trading actions.
 
     FIX #7: check() and wait_if_needed() don't double-count.
     FIX #8: set_limit validates value.
@@ -761,8 +751,7 @@ class RateLimiter:
             return timedelta(seconds=1)
 
     def check(self, limit_type: str, consume: bool = True) -> bool:
-        """
-        Check if action is allowed.
+        """Check if action is allowed.
 
         FIX #7: Added `consume` parameter. When False, does a read-only check
         (used by wait_if_needed to avoid double-counting).
@@ -794,8 +783,7 @@ class RateLimiter:
             return True
 
     def wait_if_needed(self, limit_type: str, timeout: float = 60.0) -> bool:
-        """
-        Wait until action is allowed, then consume a slot.
+        """Wait until action is allowed, then consume a slot.
 
         FIX #7: Uses consume=False for polling, then consume=True once allowed.
         """
@@ -815,8 +803,7 @@ class RateLimiter:
             _time.sleep(0.1)
 
     def set_limit(self, limit_type: str, value: int) -> None:
-        """
-        Set rate limit.
+        """Set rate limit.
 
         FIX #8: Validates the value.
         """
@@ -845,8 +832,7 @@ class RateLimiter:
             }
 
 class AccessControl:
-    """
-    Access control for trading operations.
+    """Access control for trading operations.
 
     FIX #10: Lazy audit with explicit recursion guard.
     FIX #11: Input validation on all public methods.
@@ -1144,8 +1130,7 @@ def get_access_control() -> AccessControl:
     return _access_control
 
 def reset_security_singletons() -> None:
-    """
-    Reset all singletons for testing only.
+    """Reset all singletons for testing only.
     Closes resources cleanly before discarding.
     """
     global _secure_storage, _audit_log, _rate_limiter, _access_control

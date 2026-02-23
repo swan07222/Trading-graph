@@ -40,8 +40,7 @@ def is_live_mode(mode: Any) -> bool:
 
 
 def should_escalate_exception(mode: Any, exc: BaseException) -> bool:
-    """
-    Decide whether an exception should be re-raised instead of soft-failed.
+    """Decide whether an exception should be re-raised instead of soft-failed.
 
     The default policy is fail-fast for bug-like exceptions; this can be relaxed
     via configuration for legacy environments.

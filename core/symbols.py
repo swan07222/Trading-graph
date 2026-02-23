@@ -1,5 +1,4 @@
-"""
-Stock symbol utilities for consistent code handling.
+"""Stock symbol utilities for consistent code handling.
 
 This module provides centralized stock code cleaning, validation, and normalization
 functions to replace duplicated implementations across the codebase.
@@ -10,7 +9,6 @@ import re
 from typing import Final
 
 from core.instruments import parse_instrument
-
 
 # CN stock prefixes
 CN_PREFIXES: Final[tuple[str, ...]] = (
@@ -58,8 +56,7 @@ def _digits_only(s: str) -> str:
 
 
 def clean_code(code: str) -> str:
-    """
-    Normalize a stock code to bare 6-digit form for CN stocks.
+    """Normalize a stock code to bare 6-digit form for CN stocks.
 
     Handles:
     - Prefixes: sh., sz., bj., SH, SZ, BJ, etc.
@@ -92,8 +89,7 @@ def clean_code(code: str) -> str:
 
 
 def normalize_cn_code(code: str) -> str:
-    """
-    Canonical CN stock code normalization for UI/feeds/execution.
+    """Canonical CN stock code normalization for UI/feeds/execution.
 
     Uses parse_instrument for comprehensive market detection.
 
@@ -110,8 +106,7 @@ def normalize_cn_code(code: str) -> str:
 
 
 def normalize_stock_code(code: str) -> str:
-    """
-    Normalize stock code preserving market-specific formatting.
+    """Normalize stock code preserving market-specific formatting.
 
     For CN stocks: returns 6-digit code.
     For HK stocks: returns 5-digit code.
@@ -149,8 +144,7 @@ def normalize_stock_code(code: str) -> str:
 
 
 def validate_stock_code(code: str) -> tuple[bool, str]:
-    """
-    Validate a stock code format.
+    """Validate a stock code format.
 
     Checks:
     - Not empty after cleaning
@@ -196,8 +190,7 @@ def validate_stock_code(code: str) -> tuple[bool, str]:
 
 
 def is_st_stock(name: str) -> bool:
-    """
-    Check if a stock name indicates ST (Special Treatment) status.
+    """Check if a stock name indicates ST (Special Treatment) status.
 
     ST stocks are financially troubled companies under special supervision.
 
@@ -213,8 +206,7 @@ def is_st_stock(name: str) -> bool:
 
 
 def format_yahoo_symbol(code: str, market: str = "CN") -> str:
-    """
-    Format a stock code for Yahoo Finance API.
+    """Format a stock code for Yahoo Finance API.
 
     Args:
         code: Stock code (cleaned).

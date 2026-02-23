@@ -52,8 +52,7 @@ class RuntimeLeaseClient:
         raise NotImplementedError
 
     def close(self) -> None:
-        """
-        Explicit cleanup method for resource release.
+        """Explicit cleanup method for resource release.
 
         FIX: Provides deterministic cleanup beyond __del__ which may not run
         if process crashes. Subclasses should override to release locks,
@@ -63,8 +62,7 @@ class RuntimeLeaseClient:
 
 
 class FileRuntimeLeaseClient(RuntimeLeaseClient):
-    """
-    JSON file lease backend.
+    """JSON file lease backend.
 
     Works for single-host/mounted-volume scenarios.
     """
@@ -84,8 +82,7 @@ class FileRuntimeLeaseClient(RuntimeLeaseClient):
 
     @contextmanager
     def _file_guard(self):
-        """
-        Best-effort inter-process lock for file-backed lease updates.
+        """Best-effort inter-process lock for file-backed lease updates.
 
         Uses a sidecar lock file created with O_EXCL so read-modify-write
         cycles are serialized across processes.
@@ -240,8 +237,7 @@ class FileRuntimeLeaseClient(RuntimeLeaseClient):
         return self._read()
 
     def close(self) -> None:
-        """
-        Explicit cleanup: remove stale lock file if we own it.
+        """Explicit cleanup: remove stale lock file if we own it.
 
         FIX: Provides deterministic cleanup beyond __del__.
         """
@@ -261,8 +257,7 @@ class FileRuntimeLeaseClient(RuntimeLeaseClient):
 
 
 class SqliteRuntimeLeaseClient(RuntimeLeaseClient):
-    """
-    SQLite lease backend with transactional updates + fencing token.
+    """SQLite lease backend with transactional updates + fencing token.
 
     This is safer for active/standby failover than plain file leases.
     """
@@ -481,8 +476,7 @@ class SqliteRuntimeLeaseClient(RuntimeLeaseClient):
             conn.close()
 
     def close(self) -> None:
-        """
-        Explicit cleanup: close any open connections.
+        """Explicit cleanup: close any open connections.
 
         FIX: Provides deterministic cleanup beyond __del__.
         """

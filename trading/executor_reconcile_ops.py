@@ -56,8 +56,7 @@ def _reconciliation_loop(self) -> None:
 
 
 def _submit_with_retry(self, order: Order, attempts: int = 3) -> Order:
-    """
-    Retry broker.submit_order for transient failures.
+    """Retry broker.submit_order for transient failures.
     Does NOT retry validation failures (broker REJECTED).
     """
     total_attempts = max(1, int(attempts))

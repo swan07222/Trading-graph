@@ -108,10 +108,10 @@ def _start_monitoring(self: Any) -> None:
 
     self.monitor_label.setText("Monitoring: ACTIVE")
     self.monitor_label.setStyleSheet(
-        (
+        
             f"color: {ModernColors.ACCENT_SUCCESS}; "
             f"font-weight: {ModernFonts.WEIGHT_BOLD};"
-        )
+        
     )
     self.monitor_action.setText("Stop Monitoring")
 
@@ -211,8 +211,7 @@ def _on_signal_detected(self: Any, pred: Any) -> None:
 
 
 def _refresh_live_chart_forecast(self: Any) -> None:
-    """
-    Periodic chart refresh for selected symbol.
+    """Periodic chart refresh for selected symbol.
     Ensures guessed graph updates in real time even with sparse feed ticks.
     """
     analyze_worker = self.workers.get("analyze")

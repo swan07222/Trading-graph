@@ -357,8 +357,7 @@ class EnsembleModel:
         horizon: int | None = None,
         learning_rate: float | None = None,
     ) -> dict:
-        """
-        Train all models in the ensemble.
+        """Train all models in the ensemble.
 
         Args:
             X_train: Training features (N, seq_len, n_features)
@@ -475,8 +474,7 @@ class EnsembleModel:
         callback: Callable | None = None,
         stop_flag: Any = None,
     ) -> tuple[dict, float]:
-        """
-        Train one model with early stopping, warmup + cosine schedule,
+        """Train one model with early stopping, warmup + cosine schedule,
         optional AMP.
 
         FIX RESTORE: best_state is always restored even when
@@ -636,8 +634,7 @@ class EnsembleModel:
         return history, best_val_acc
 
     def _update_weights(self, val_accuracies: dict[str, float]) -> None:
-        """
-        Update ensemble weights from validation accuracies.
+        """Update ensemble weights from validation accuracies.
 
         If training is partial (e.g., cancelled mid-cycle), only the trained
         models are reweighted while untrained models retain their prior mass.
@@ -731,8 +728,7 @@ class EnsembleModel:
     # ------------------------------------------------------------------
 
     def predict(self, X: np.ndarray) -> EnsemblePrediction:
-        """
-        Predict a single sample.
+        """Predict a single sample.
 
         Args:
             X: Input array of shape (seq_len, n_features) or (1, seq_len, n_features)
@@ -759,8 +755,7 @@ class EnsembleModel:
     def predict_batch(
         self, X: np.ndarray, batch_size: int = 1024
     ) -> list[EnsemblePrediction]:
-        """
-        Batch prediction.
+        """Batch prediction.
 
         Args:
             X: Input array of shape (N, seq_len, n_features)
@@ -877,8 +872,7 @@ class EnsembleModel:
     # ------------------------------------------------------------------
 
     def save(self, path: str | Path | None = None) -> None:
-        """
-        Save ensemble atomically.
+        """Save ensemble atomically.
 
         FIX SAVE: Captures state_dict copies under lock to prevent
         concurrent model mutation during serialization.
@@ -973,8 +967,7 @@ class EnsembleModel:
         log.info(f"Ensemble saved -> {path_obj}")
 
     def load(self, path: str | Path | None = None) -> bool:
-        """
-        Load ensemble from file.
+        """Load ensemble from file.
 
         Args:
             path: Source file path (default: ensemble_1m_30.pt)
@@ -1162,8 +1155,7 @@ class EnsembleModel:
                 model.train()
 
     def to(self, device: str) -> EnsembleModel:
-        """
-        Move all models to specified device.
+        """Move all models to specified device.
 
         Args:
             device: Target device ('cpu', 'cuda', 'cuda:0', etc.)

@@ -444,8 +444,7 @@ class WebSocketFeed(DataFeed):
 
     @staticmethod
     def _resolve_host_with_timeout(host: str, timeout_s: float) -> bool | None:
-        """
-        Resolve host with a hard timeout.
+        """Resolve host with a hard timeout.
 
         Returns:
             True/False when resolution completes within timeout,
@@ -470,8 +469,7 @@ class WebSocketFeed(DataFeed):
         return bool(result.get("ok", False))
 
     def _host_resolves(self, host: str) -> bool:
-        """
-        Best-effort DNS pre-check to avoid WS spin on invalid host.
+        """Best-effort DNS pre-check to avoid WS spin on invalid host.
 
         Timeout path returns True (unknown) to avoid startup/UI stalls; actual
         connect path will still fail over to polling if endpoint is unreachable.

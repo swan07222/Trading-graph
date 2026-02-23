@@ -9,8 +9,7 @@ import numpy as np
 
 
 def to_float(x, default: float = 0.0) -> float:
-    """
-    Safely convert to float with NaN/Inf handling.
+    """Safely convert to float with NaN/Inf handling.
 
     Returns *default* for None, NaN, Inf, and unconvertible values.
     """
@@ -26,8 +25,7 @@ def to_float(x, default: float = 0.0) -> float:
 
 
 def to_int(x, default: int = 0) -> int:
-    """
-    Safely convert to int with NaN/Inf handling.
+    """Safely convert to int with NaN/Inf handling.
 
     FIX: Uses round() instead of int() truncation so that
     2.9 → 3 instead of 2. Falls back to *default* on failure.
@@ -43,8 +41,7 @@ def to_int(x, default: int = 0) -> int:
 
 
 def format_number(n: float, decimals: int = 2) -> str:
-    """
-    Format a number with Chinese unit suffixes (亿, 万).
+    """Format a number with Chinese unit suffixes (亿, 万).
 
     Args:
         n: Number to format
@@ -76,8 +73,7 @@ def format_number(n: float, decimals: int = 2) -> str:
 
 
 def format_pct(n: float, decimals: int = 2) -> str:
-    """
-    Format a number as a percentage with sign.
+    """Format a number as a percentage with sign.
 
     Args:
         n: Percentage value (e.g., 5.25 for 5.25%)
@@ -106,8 +102,7 @@ def format_pct(n: float, decimals: int = 2) -> str:
 
 
 def format_price(n: float, currency: str = "¥") -> str:
-    """
-    Format a price with currency symbol.
+    """Format a price with currency symbol.
 
     Args:
         n: Price value
@@ -135,8 +130,7 @@ def get_trading_dates(
     end: datetime,
     exclude_weekends: bool = True,
 ) -> list[datetime]:
-    """
-    Get list of potential trading dates between start and end (inclusive).
+    """Get list of potential trading dates between start and end (inclusive).
 
     NOTE: This only filters weekends. It does NOT account for Chinese
     market holidays (Spring Festival, National Day, etc.). For
@@ -168,8 +162,7 @@ def calculate_sharpe(
     risk_free_annual: float = 0.03,
     periods_per_year: int = 252,
 ) -> float:
-    """
-    Calculate annualized Sharpe ratio.
+    """Calculate annualized Sharpe ratio.
 
     Args:
         returns: Array of periodic returns (e.g., daily returns as decimals)
@@ -200,8 +193,7 @@ def calculate_sharpe(
 def calculate_max_drawdown(
     equity: np.ndarray | Sequence[float],
 ) -> float:
-    """
-    Calculate maximum drawdown from an equity curve.
+    """Calculate maximum drawdown from an equity curve.
 
     Args:
         equity: Array of portfolio values over time (must be positive)

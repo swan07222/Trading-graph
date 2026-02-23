@@ -15,8 +15,7 @@ _colorama_available = False
 
 
 def _ensure_colorama() -> bool:
-    """
-    Thread-safe, lazy colorama initialization.
+    """Thread-safe, lazy colorama initialization.
     Returns True if colorama is available and initialized.
     """
     global _colorama_initialized, _colorama_available
@@ -39,8 +38,7 @@ def _ensure_colorama() -> bool:
 
 
 class ColorFormatter(logging.Formatter):
-    """
-    Custom formatter with ANSI colors for terminal output.
+    """Custom formatter with ANSI colors for terminal output.
 
     Uses a shallow copy of the LogRecord instead of mutating
     the original, which is shared across handlers in multi-handler setups.
@@ -66,8 +64,7 @@ class ColorFormatter(logging.Formatter):
 
 
 class SafeConsoleHandler(logging.StreamHandler):
-    """
-    Console handler resilient to terminal encoding limitations.
+    """Console handler resilient to terminal encoding limitations.
 
     On Windows GBK consoles, symbols like '¥' can raise UnicodeEncodeError.
     This handler falls back to ASCII-safe output instead of emitting
@@ -92,8 +89,7 @@ class SafeConsoleHandler(logging.StreamHandler):
 
 
 class LoggerManager:
-    """
-    Thread-safe singleton logger manager.
+    """Thread-safe singleton logger manager.
 
     Creates and caches loggers with consistent formatting.
     Supports optional file logging with rotation.
@@ -138,8 +134,7 @@ class LoggerManager:
         max_bytes: int = 10 * 1024 * 1024,  # 10 MB
         backup_count: int = 5,
     ) -> None:
-        """
-        Setup or reconfigure logging.
+        """Setup or reconfigure logging.
 
         Safe to call multiple times — closes previous file handler first.
         """
@@ -202,8 +197,7 @@ class LoggerManager:
             return logger
 
     def teardown(self) -> None:
-        """
-        Remove all handlers and clear cached loggers.
+        """Remove all handlers and clear cached loggers.
         Call during shutdown or between tests.
         """
         with self._logger_lock:

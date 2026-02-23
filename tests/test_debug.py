@@ -1,10 +1,16 @@
 """Tests for debugging and profiling utilities."""
-import pytest
 import time
+
+import pytest
+
 from utils.debug import (
-    profile_function, profile_context, TimingContext,
-    TimingStats, slow_call_threshold, diagnose_performance,
+    TimingContext,
+    TimingStats,
+    diagnose_performance,
     memory_tracker,
+    profile_context,
+    profile_function,
+    slow_call_threshold,
 )
 
 

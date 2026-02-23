@@ -85,8 +85,7 @@ def _endpoint_candidates(
     env_key: str,
     defaults: tuple[str, ...] | list[str],
 ) -> list[str]:
-    """
-    Resolve endpoint templates from environment with safe fallback.
+    """Resolve endpoint templates from environment with safe fallback.
 
     Format: comma-separated URLs/templates. Empty/invalid values are ignored.
     """
@@ -162,8 +161,7 @@ def _run_with_timeout(
     task: Callable[[], object],
     timeout_s: float,
 ) -> object | None:
-    """
-    Run a callable with a timeout without mutating process-global socket defaults.
+    """Run a callable with a timeout without mutating process-global socket defaults.
     """
     executor = ThreadPoolExecutor(max_workers=1)
     future = executor.submit(task)

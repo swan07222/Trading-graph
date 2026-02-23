@@ -38,8 +38,7 @@ from utils.logger import get_logger
 log = get_logger(__name__)
 
 class AutoLearnDialog(QDialog):
-    """
-    Dialog for automatic learning with two tabs:
+    """Dialog for automatic learning with two tabs:
     - Auto Learn: random stock rotation (existing)
     - Train by Search: user-selected stocks (new)
     """
@@ -487,8 +486,7 @@ class AutoLearnDialog(QDialog):
     # =========================================================================
 
     def _normalize_code(self, code: str) -> str:
-        """
-        Normalize stock code input.
+        """Normalize stock code input.
 
         The fetcher's clean_code() strips prefixes anyway, but we add
         them here so the UI shows a recognizable format and the code
@@ -961,8 +959,7 @@ class AutoLearnDialog(QDialog):
     # =========================================================================
 
     def _set_running(self, running: bool, mode: str = ""):
-        """
-        Set UI running state.
+        """Set UI running state.
         Disables all interactive controls while training is active.
         """
         self._is_running = running

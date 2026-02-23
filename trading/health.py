@@ -120,8 +120,7 @@ def _get_disk_percent() -> float:
             return 0.0
 
 class HealthMonitor:
-    """
-    Comprehensive health monitoring system.
+    """Comprehensive health monitoring system.
     """
 
     def __init__(self):
@@ -217,8 +216,7 @@ class HealthMonitor:
             self._check_status_change(health)
 
     def _check_database(self):
-        """
-        Check database health.
+        """Check database health.
 
         FIX: Tests the market data database directly instead of importing
         OMS (which creates a circular dependency risk and tests the wrong

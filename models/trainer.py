@@ -93,8 +93,7 @@ _TAIL_EVENT_SHOCK_MAX_PCT = 6.0
 
 
 class Trainer:
-    """
-    Complete training pipeline with proper data handling.
+    """Complete training pipeline with proper data handling.
 
     CRITICAL: Features are computed and labels are created WITHIN each
     temporal split to prevent leakage.
@@ -146,8 +145,7 @@ class Trainer:
 
     @staticmethod
     def _default_lookback_bars(interval: str) -> int:
-        """
-        Default training lookback.
+        """Default training lookback.
         1m training uses at least 10080 bars.
         Other intraday intervals use a strict 7-day window.
         """
@@ -268,8 +266,7 @@ class Trainer:
         horizon: int,
         interval: str,
     ) -> tuple[dict[str, dict[str, pd.DataFrame]], bool]:
-        """
-        Split all stocks temporally, compute features per split,
+        """Split all stocks temporally, compute features per split,
         and fit scaler on training data.
 
         Returns:
@@ -366,8 +363,7 @@ class Trainer:
         val_returns: np.ndarray | None,
         test_returns: np.ndarray | None,
     ) -> dict[str, Any]:
-        """
-        Detect train/eval regime drift from return distribution changes.
+        """Detect train/eval regime drift from return distribution changes.
 
         Returns a score and a confidence-floor boost recommendation.
         """
@@ -494,8 +490,7 @@ class Trainer:
         }
     @staticmethod
     def _risk_adjusted_score(metrics: dict[str, Any]) -> float:
-        """
-        Compute a deployment score using risk-first metrics, not accuracy alone.
+        """Compute a deployment score using risk-first metrics, not accuracy alone.
         """
         accuracy = float(np.clip(metrics.get("accuracy", 0.0), 0.0, 1.0))
         trading = metrics.get("trading", {}) or {}

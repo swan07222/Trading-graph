@@ -13,8 +13,7 @@ from utils.logger import get_logger
 log = get_logger(__name__)
 
 class OrderDatabase:
-    """
-    SQLite-backed order persistence.
+    """SQLite-backed order persistence.
     Uses WAL mode for better concurrency.
     """
 
@@ -206,8 +205,7 @@ class OrderDatabase:
                 )
 
     def _ensure_orders_schema(self, conn: sqlite3.Connection) -> None:
-        """
-        Apply non-destructive schema upgrades for legacy OMS databases.
+        """Apply non-destructive schema upgrades for legacy OMS databases.
         """
         cols = {
             str(row["name"])
@@ -379,8 +377,7 @@ class OrderDatabase:
     # ------------------------------------------------------------------
 
     def save_fill(self, fill: Fill, conn: sqlite3.Connection = None) -> bool:
-        """
-        Save fill with deduplication.
+        """Save fill with deduplication.
         Returns True if new, False if duplicate.
         """
         target = conn or self._conn

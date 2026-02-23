@@ -1,5 +1,4 @@
-"""
-Modern UI tokens and shared styles for Trading Graph.
+"""Modern UI tokens and shared styles for Trading Graph.
 
 This module centralizes colors, typography, spacing, and reusable style helpers
 to keep the desktop UI visually consistent.
@@ -500,50 +499,50 @@ def get_tab_widget_style() -> str:
 
 
 def get_scroll_area_style() -> str:
-    return f"""
-        QScrollArea {{
+    return """
+        QScrollArea {
             background: transparent;
             border: none;
-        }}
-        QScrollBar:vertical {{
+        }
+        QScrollBar:vertical {
             background: #111f37;
             width: 11px;
             margin: 2px;
             border-radius: 5px;
-        }}
-        QScrollBar::handle:vertical {{
+        }
+        QScrollBar::handle:vertical {
             background: #33527f;
             min-height: 30px;
             border-radius: 5px;
-        }}
-        QScrollBar::handle:vertical:hover {{
+        }
+        QScrollBar::handle:vertical:hover {
             background: #4d78ad;
-        }}
-        QScrollBar:horizontal {{
+        }
+        QScrollBar:horizontal {
             background: #111f37;
             height: 11px;
             margin: 2px;
             border-radius: 5px;
-        }}
-        QScrollBar::handle:horizontal {{
+        }
+        QScrollBar::handle:horizontal {
             background: #33527f;
             min-width: 28px;
             border-radius: 5px;
-        }}
-        QScrollBar::handle:horizontal:hover {{
+        }
+        QScrollBar::handle:horizontal:hover {
             background: #4d78ad;
-        }}
+        }
         QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical,
-        QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{
+        QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {
             border: none;
             background: none;
             width: 0;
             height: 0;
-        }}
+        }
         QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical,
-        QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal {{
+        QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal {
             background: none;
-        }}
+        }
     """
 
 

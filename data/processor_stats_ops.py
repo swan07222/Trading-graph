@@ -20,8 +20,7 @@ def prepare_single_sequence(
 
 
 def get_class_distribution(self, y: np.ndarray) -> dict[str, int]:
-    """
-    Get class distribution for logging.
+    """Get class distribution for logging.
     Dynamically handles any NUM_CLASSES value.
 
     FIX BINCOUNT: Guards against negative labels which would crash bincount.

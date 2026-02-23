@@ -40,8 +40,7 @@ def collect_institutional_readiness(
     policy_payload: dict[str, Any] | None = None,
     policy_path: Path | None = None,
 ) -> dict[str, Any]:
-    """
-    Evaluate operational controls required for HA/DR + regulated live trading.
+    """Evaluate operational controls required for HA/DR + regulated live trading.
 
     Returns a JSON-serializable report with required/recommended controls.
     """

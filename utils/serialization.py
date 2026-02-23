@@ -1,5 +1,4 @@
-"""
-Serialization utilities for dataclass and object (de)serialization.
+"""Serialization utilities for dataclass and object (de)serialization.
 
 This module provides centralized serialization functions to replace
 duplicated implementations across the codebase.
@@ -14,8 +13,7 @@ from typing import Any
 
 
 def _coerce_bool(value: Any) -> tuple[bool, bool]:
-    """
-    Coerce common bool representations.
+    """Coerce common bool representations.
 
     Returns (ok, parsed_value). When ok is False, parsed_value is undefined.
     """
@@ -44,8 +42,7 @@ def _coerce_bool(value: Any) -> tuple[bool, bool]:
 
 
 def safe_dataclass_from_dict(dc_instance: Any, data: dict[str, Any]) -> list[str]:
-    """
-    Apply dict values to a dataclass instance with type checking.
+    """Apply dict values to a dataclass instance with type checking.
 
     Args:
         dc_instance: Dataclass instance to update.
@@ -110,8 +107,7 @@ def safe_dataclass_from_dict(dc_instance: Any, data: dict[str, Any]) -> list[str
 
 
 def dataclass_to_dict(dc_instance: Any) -> dict[str, Any]:
-    """
-    Serialize a dataclass to dict, handling special types.
+    """Serialize a dataclass to dict, handling special types.
 
     Args:
         dc_instance: Dataclass instance to serialize.
@@ -153,8 +149,7 @@ def dataclass_to_dict(dc_instance: Any) -> dict[str, Any]:
 
 
 def to_serializable(obj: Any) -> Any:
-    """
-    Convert an object to a JSON-serializable representation.
+    """Convert an object to a JSON-serializable representation.
 
     Handles common non-serializable types like datetime, date, Enum, Path.
 

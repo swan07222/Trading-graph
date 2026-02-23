@@ -10,8 +10,7 @@ from utils.logger import get_logger
 log = get_logger(__name__)
 
 def _to_shanghai_naive_ts(cls: Any, value: object) -> pd.Timestamp:
-    """
-    Parse one timestamp-like value -> Asia/Shanghai naive time.
+    """Parse one timestamp-like value -> Asia/Shanghai naive time.
     Returns NaT on failure.
     """
     if value is None:
@@ -63,8 +62,7 @@ def _normalize_datetime_index(
     cls: Any,
     idx: object,
 ) -> pd.DatetimeIndex | None:
-    """
-    Convert an index-like object to DatetimeIndex in Asia/Shanghai naive time.
+    """Convert an index-like object to DatetimeIndex in Asia/Shanghai naive time.
     Returns None when conversion is unreliable.
     """
     if isinstance(idx, pd.DatetimeIndex):
@@ -100,8 +98,7 @@ def _clean_dataframe(
     aggressive_repairs: bool | None = None,
     allow_synthetic_index: bool | None = None,
 ) -> pd.DataFrame:
-    """
-    Standardize and validate an OHLCV dataframe.
+    """Standardize and validate an OHLCV dataframe.
 
     Defaults are truth-preserving:
     - no synthetic intraday timestamps unless explicitly enabled

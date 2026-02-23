@@ -114,8 +114,7 @@ class EventHandler(ABC):
         pass
 
 class EventBus:
-    """
-    Central event bus for publish-subscribe pattern.
+    """Central event bus for publish-subscribe pattern.
     Thread-safe with async support.
 
     FIX: Uses deque(maxlen=N) for O(1) bounded history instead of
@@ -175,8 +174,7 @@ class EventBus:
                 pass
 
     def clear_subscribers(self, event_type: EventType = None):
-        """
-        Clear all subscribers for a given event type,
+        """Clear all subscribers for a given event type,
         or all subscribers if event_type is None.
         Useful for testing.
         """
@@ -187,8 +185,7 @@ class EventBus:
                 self._subscribers.clear()
 
     def publish(self, event: Event, async_: bool = True):
-        """
-        Publish event (thread-safe).
+        """Publish event (thread-safe).
 
         FIX: deque.append is O(1) and auto-bounded by maxlen,
         no manual trimming needed.
@@ -202,8 +199,7 @@ class EventBus:
             self._dispatch(event)
 
     def _dispatch(self, event: Event):
-        """
-        Dispatch event to subscribers.
+        """Dispatch event to subscribers.
 
         Note: Handlers receive a copy of the subscriber list and may safely
         subscribe/unsubscribe during dispatch. However, handlers should avoid
@@ -318,8 +314,7 @@ class EventBus:
         event_type: EventType = None,
         limit: int = 100
     ) -> list[Event]:
-        """
-        Get event history.
+        """Get event history.
 
         Thread-safe: returns a snapshot copy of history.
         """

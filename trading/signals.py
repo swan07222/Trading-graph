@@ -31,8 +31,7 @@ class SignalConfidence(Enum):
 
 @dataclass
 class TradingSignal:
-    """
-    Complete trading signal with all analysis components.
+    """Complete trading signal with all analysis components.
 
     Attributes:
         stock_code: Stock ticker symbol
@@ -134,8 +133,7 @@ class TradingSignal:
         return reward / risk
 
 class SignalGenerator:
-    """
-    Generates trading signals by combining:
+    """Generates trading signals by combining:
     - AI predictions (50% weight)
     - Technical analysis (30% weight)
     - Sentiment analysis (20% weight)
@@ -209,8 +207,7 @@ class SignalGenerator:
 
     @staticmethod
     def _safe_get(obj: object, attr: str, default=None):
-        """
-        Safely get attribute from object with default value.
+        """Safely get attribute from object with default value.
 
         Args:
             obj: Object to get attribute from
@@ -233,8 +230,7 @@ class SignalGenerator:
         df: pd.DataFrame | None = None,
         include_sentiment: bool = True
     ) -> TradingSignal:
-        """
-        Generate comprehensive trading signal from prediction and market data.
+        """Generate comprehensive trading signal from prediction and market data.
 
         Args:
             prediction: AI model prediction result
@@ -361,8 +357,7 @@ class SignalGenerator:
         )
 
     def _calculate_ai_score(self, prediction) -> float:
-        """
-        Calculate AI component score from prediction probabilities.
+        """Calculate AI component score from prediction probabilities.
 
         The score is weighted by confidence and model agreement.
 
@@ -397,8 +392,7 @@ class SignalGenerator:
         reasons: list[str], 
         warnings: list[str]
     ) -> tuple[float, str, str, dict[str, float]]:
-        """
-        Perform technical analysis on price data.
+        """Perform technical analysis on price data.
 
         Args:
             df: DataFrame with OHLCV data
@@ -460,8 +454,7 @@ class SignalGenerator:
         include_sentiment: bool,
         reasons: list[str]
     ) -> tuple[float, str, int]:
-        """
-        Analyze stock sentiment using both legacy and institutional sources.
+        """Analyze stock sentiment using both legacy and institutional sources.
 
         Blending strategy:
         - Legacy scraper score (if available)
@@ -552,8 +545,7 @@ class SignalGenerator:
         combined_score: float, 
         ai_confidence: float
     ) -> tuple[Signal, float]:
-        """
-        Determine final trading signal from combined score.
+        """Determine final trading signal from combined score.
 
         Args:
             combined_score: Weighted combined score (-100 to +100)
@@ -590,8 +582,7 @@ class SignalGenerator:
         model_agreement: float,
         score_strength: float
     ) -> SignalConfidence:
-        """
-        Determine overall signal confidence level.
+        """Determine overall signal confidence level.
 
         Args:
             ai_confidence: AI model confidence (0 to 1)
@@ -624,8 +615,7 @@ class SignalGenerator:
         trend: str,
         signal: Signal
     ) -> None:
-        """
-        Generate warning messages based on analysis.
+        """Generate warning messages based on analysis.
 
         Args:
             warnings: List to append warnings to (modified in place)
@@ -664,8 +654,7 @@ class SignalGenerator:
         min_ai_confidence: float | None = None,
         max_warnings: int | None = None,
     ) -> list[TradingSignal]:
-        """
-        Scan multiple stocks and filter by signal quality criteria.
+        """Scan multiple stocks and filter by signal quality criteria.
 
         Args:
             predictions: List of AI predictions
@@ -730,8 +719,7 @@ class SignalGenerator:
         predictions: list[Prediction],
         n: int = 5
     ) -> dict[str, list[TradingSignal]]:
-        """
-        Get top N buy and sell opportunities.
+        """Get top N buy and sell opportunities.
 
         Args:
             predictions: List of AI predictions
@@ -757,8 +745,7 @@ class SignalGenerator:
         }
 
     def get_signal_summary(self, signal: TradingSignal) -> str:
-        """
-        Generate human-readable summary of trading signal.
+        """Generate human-readable summary of trading signal.
 
         Args:
             signal: TradingSignal to summarize

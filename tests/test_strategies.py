@@ -1,15 +1,26 @@
 """Tests for trading strategies."""
 import pytest
+
 from core.types import OrderSide
 from strategies import (
-    BaseStrategy, Signal, SignalStrength,
-    get_strategy, list_strategies, register_strategy,
-    MomentumBreakoutStrategy, MeanReversionStrategy,
-    TrendFollowingStrategy, VolumeProfileStrategy,
-    SupportResistanceStrategy, MACDDivergenceStrategy,
-    BollingerBreakoutStrategy, RSIOversoldStrategy,
-    GoldenCrossStrategy, GapAndGoStrategy,
-    VWAPReversionStrategy, EarningsMomentumStrategy,
+    BaseStrategy,
+    BollingerBreakoutStrategy,
+    EarningsMomentumStrategy,
+    GapAndGoStrategy,
+    GoldenCrossStrategy,
+    MACDDivergenceStrategy,
+    MeanReversionStrategy,
+    MomentumBreakoutStrategy,
+    RSIOversoldStrategy,
+    Signal,
+    SignalStrength,
+    SupportResistanceStrategy,
+    TrendFollowingStrategy,
+    VolumeProfileStrategy,
+    VWAPReversionStrategy,
+    get_strategy,
+    list_strategies,
+    register_strategy,
 )
 
 

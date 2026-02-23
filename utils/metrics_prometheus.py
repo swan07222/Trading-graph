@@ -1,5 +1,4 @@
-"""
-Prometheus metrics exporter for Trading Graph.
+"""Prometheus metrics exporter for Trading Graph.
 
 Provides Prometheus-compatible metrics for monitoring and alerting.
 """
@@ -30,8 +29,7 @@ class MetricSample:
 
 
 class MetricsRegistry:
-    """
-    Thread-safe metrics registry.
+    """Thread-safe metrics registry.
 
     Example:
         registry = MetricsRegistry()
@@ -58,8 +56,7 @@ class MetricsRegistry:
         labels: dict[str, str] | None = None,
         help_text: str = "",
     ) -> None:
-        """
-        Record a gauge metric value.
+        """Record a gauge metric value.
 
         Gauges represent a single numerical value that can arbitrarily go up
         and down (e.g., memory usage, temperature).
@@ -100,8 +97,7 @@ class MetricsRegistry:
         labels: dict[str, str] | None = None,
         help_text: str = "",
     ) -> None:
-        """
-        Increment a counter metric.
+        """Increment a counter metric.
 
         Counters only go up (e.g., number of requests, errors).
 
@@ -168,8 +164,7 @@ class MetricsRegistry:
         ),
         help_text: str = "",
     ) -> None:
-        """
-        Record a histogram metric value.
+        """Record a histogram metric value.
 
         Histograms track distribution of values (e.g., request latency).
 
@@ -197,8 +192,7 @@ class MetricsRegistry:
             self.counter(f"{name}_count", 1, labels, help_text)
 
     def generate_prometheus_output(self) -> str:
-        """
-        Generate Prometheus text format output.
+        """Generate Prometheus text format output.
 
         Returns:
             Prometheus-formatted metrics string
@@ -272,8 +266,7 @@ def start_metrics_server(
     host: str = "127.0.0.1",
     registry: MetricsRegistry | None = None,
 ) -> HTTPServer:
-    """
-    Start Prometheus metrics HTTP server.
+    """Start Prometheus metrics HTTP server.
 
     Args:
         port: Port to listen on

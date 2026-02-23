@@ -12,8 +12,7 @@ log = get_logger(__name__)
 _EPS = 1e-8
 
 class FeatureEngine:
-    """
-    Creates technical analysis features from OHLCV data.
+    """Creates technical analysis features from OHLCV data.
 
     ALL features use only past data (strictly causal).
     """
@@ -75,8 +74,7 @@ class FeatureEngine:
     # ------------------------------------------------------------------
 
     def create_features(self, df: pd.DataFrame) -> pd.DataFrame:
-        """
-        Create all technical features — strictly causal.
+        """Create all technical features — strictly causal.
 
         Args:
             df: DataFrame with columns [open, high, low, close, volume]
@@ -277,8 +275,7 @@ class FeatureEngine:
         close: pd.Series, high: pd.Series, low: pd.Series,
         s: int = 7, m: int = 14, long_window: int = 28,
     ) -> pd.Series:
-        """
-        Ultimate Oscillator (Williams) — no external dependency.
+        """Ultimate Oscillator (Williams) — no external dependency.
 
         FIX UONAN: prev_close from shift(1) produces NaN on first row.
         np.minimum/np.maximum propagate NaN correctly, and rolling sums

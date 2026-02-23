@@ -11,8 +11,7 @@ class CancelledException(Exception):
     pass
 
 class CancellationToken:
-    """
-    Thread-safe cancellation token for cooperative cancellation.
+    """Thread-safe cancellation token for cooperative cancellation.
 
     Usage:
         token = CancellationToken()
@@ -41,8 +40,7 @@ class CancellationToken:
         return self._cancelled.is_set()
 
     def cancel(self) -> None:
-        """
-        Request cancellation and invoke registered callbacks.
+        """Request cancellation and invoke registered callbacks.
 
         Thread-safe. Idempotent — safe to call multiple times.
         """
@@ -62,8 +60,7 @@ class CancellationToken:
                 pass
 
     def on_cancel(self, callback: Callable) -> Callable:
-        """
-        Register a callback to run when cancellation is requested.
+        """Register a callback to run when cancellation is requested.
 
         If already cancelled, the callback fires immediately.
 
@@ -86,8 +83,7 @@ class CancellationToken:
         return callback
 
     def remove_callback(self, callback: Callable) -> bool:
-        """
-        Remove a previously registered callback.
+        """Remove a previously registered callback.
 
         Args:
             callback: The callback to remove
@@ -103,8 +99,7 @@ class CancellationToken:
                 return False
 
     def raise_if_cancelled(self) -> None:
-        """
-        Raise CancelledException if cancellation was requested.
+        """Raise CancelledException if cancellation was requested.
 
         Use this as a checkpoint in loops:
             for batch in data:
@@ -115,8 +110,7 @@ class CancellationToken:
             raise CancelledException("Operation was cancelled")
 
     def wait(self, timeout: float | None = None) -> bool:
-        """
-        Block until cancellation is requested or timeout expires.
+        """Block until cancellation is requested or timeout expires.
 
         Args:
             timeout: Max seconds to wait (None = wait forever)
@@ -127,8 +121,7 @@ class CancellationToken:
         return self._cancelled.wait(timeout)
 
     def __call__(self) -> bool:
-        """
-        Check cancellation state. For use as a stop_flag callable.
+        """Check cancellation state. For use as a stop_flag callable.
 
         Returns:
             True if cancelled, False otherwise
@@ -136,8 +129,7 @@ class CancellationToken:
         return self._cancelled.is_set()
 
     def __bool__(self) -> bool:
-        """
-        Always returns True.
+        """Always returns True.
 
         This ensures `if token:` doesn't accidentally skip logic.
         Use `token.is_cancelled` or `token()` to check state.
@@ -145,8 +137,7 @@ class CancellationToken:
         return True
 
     def reset(self, clear_callbacks: bool = True) -> None:
-        """
-        Reset the token for reuse.
+        """Reset the token for reuse.
 
         Args:
             clear_callbacks: If True (default), remove all callbacks.
@@ -159,8 +150,7 @@ class CancellationToken:
 
 @contextmanager
 def cancellable_operation(token: CancellationToken | None = None):
-    """
-    Context manager for cancellable operations.
+    """Context manager for cancellable operations.
 
     Yields a check function that raises CancelledException if
     the token has been cancelled.

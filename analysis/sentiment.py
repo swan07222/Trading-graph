@@ -188,8 +188,7 @@ class SentimentAnalyzer:
 
 
 class NewsScraper:
-    """
-    Enhanced news scraper with China network optimization.
+    """Enhanced news scraper with China network optimization.
     
     Features:
     - Multiple Chinese news providers (Sina, EastMoney, Jin10, Xueqiu, Yahoo China)
@@ -202,7 +201,7 @@ class NewsScraper:
     def __init__(self):
         # Use optimized session from China network module
         try:
-            from core.china_network import get_optimized_session, get_best_endpoint
+            from core.china_network import get_best_endpoint, get_optimized_session
             self._china_optimized = True
             self._get_provider_session = lambda name: get_optimized_session(name)
             self._get_best_endpoint = get_best_endpoint
@@ -320,8 +319,7 @@ class NewsScraper:
         return list(codes)
 
     def _network_available(self) -> bool:
-        """
-        Fast connectivity probe for external news providers.
+        """Fast connectivity probe for external news providers.
 
         Cached for a short TTL so offline environments do not repeatedly pay
         provider-level HTTP timeout costs.
@@ -357,8 +355,7 @@ class NewsScraper:
             log.debug(f"China network init skipped: {e}")
 
     def scrape_jin10(self, max_items: int = 40) -> list[NewsItem]:
-        """
-        Scrape Jin10 financial news (fastest China financial news service).
+        """Scrape Jin10 financial news (fastest China financial news service).
         
         Jin10 provides real-time financial news and announcements.
         """
@@ -441,8 +438,7 @@ class NewsScraper:
         return items
 
     def scrape_xueqiu(self, max_items: int = 30) -> list[NewsItem]:
-        """
-        Scrape Xueqiu (Snowball) social sentiment.
+        """Scrape Xueqiu (Snowball) social sentiment.
         
         Xueqiu is China's leading social investment platform.
         """

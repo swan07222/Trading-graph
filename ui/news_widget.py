@@ -26,15 +26,13 @@ from utils.type_utils import (
     safe_float,
     safe_float_attr,
     safe_int,
-    safe_str,
     safe_str_attr,
 )
 
 log = get_logger(__name__)
 
 class NewsFetchThread(QThread):
-    """
-    Background thread to fetch news.
+    """Background thread to fetch news.
 
     Uses custom signals for data delivery. Does NOT redefine 'finished'
     to avoid collision with QThread.finished.
@@ -161,11 +159,11 @@ class SentimentGauge(QFrame):
 
         self.score_label.setText(f"{sentiment_tag} {score:+.2f}")
         self.score_label.setStyleSheet(
-            (
+            
                 f"color: {color}; "
                 f"font-size: {ModernFonts.SIZE_XL}px; "
                 f"font-weight: {ModernFonts.WEIGHT_BOLD};"
-            )
+            
         )
 
         # Map score (-1.0 to 1.0) to bar (0 to 100)
@@ -185,19 +183,18 @@ class SentimentGauge(QFrame):
         """Reset gauge to default state."""
         self.score_label.setText("--")
         self.score_label.setStyleSheet(
-            (
+            
                 f"font-size: {ModernFonts.SIZE_XL}px; "
                 f"font-weight: {ModernFonts.WEIGHT_BOLD}; "
                 f"color: {ModernColors.TEXT_SECONDARY};"
-            )
+            
         )
         self.bar.setValue(50)
         self.bar.setStyleSheet(get_progress_bar_style("warning"))
         self.counts_label.setText("")
 
 class NewsPanel(QWidget):
-    """
-    Complete news panel with:
+    """Complete news panel with:
     - Sentiment gauge
     - News table with color-coded sentiment
     - Auto-refresh every 5 minutes
@@ -316,8 +313,7 @@ class NewsPanel(QWidget):
         self.refresh(force=True)
 
     def refresh(self, force: bool = False):
-        """
-        Fetch news in background safely.
+        """Fetch news in background safely.
 
         Guards:
         - Won't start if already fetching

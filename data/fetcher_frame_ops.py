@@ -98,8 +98,7 @@ def history_cache_store_rows(
     *,
     normalize_interval_token: Callable[[str | None], str],
 ) -> int:
-    """
-    Compute how many rows to keep in the shared history cache key.
+    """Compute how many rows to keep in the shared history cache key.
 
     A larger shared window prevents cache-key fragmentation while still
     bounding memory and disk usage.

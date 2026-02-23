@@ -43,8 +43,7 @@ _TAIL_EVENT_SHOCK_MIN_PCT = 1.0
 _TAIL_EVENT_SHOCK_MAX_PCT = 6.0
 
 def _assess_raw_data_quality(self, df: pd.DataFrame) -> dict[str, Any]:
-    """
-    Validate raw OHLC quality before feature engineering.
+    """Validate raw OHLC quality before feature engineering.
 
     This blocks obvious bad data that can create misleading backtests.
     """
@@ -141,8 +140,7 @@ def _split_single_stock(
     horizon: int,
     feature_cols: list[str],
 ) -> dict[str, pd.DataFrame] | None:
-    """
-    Split a single stock's RAW data temporally, compute features
+    """Split a single stock's RAW data temporally, compute features
     and labels WITHIN each split, and invalidate warmup rows.
     """
     n = len(df_raw)
@@ -482,8 +480,7 @@ def _rebalance_train_samples(
     y_train: np.ndarray,
     r_train: np.ndarray | None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray | None, dict[str, Any]]:
-    """
-    Reduce low-signal noise and increase tail-event exposure in training.
+    """Reduce low-signal noise and increase tail-event exposure in training.
 
     This is deterministic and only activates on sufficiently large,
     non-flat return distributions.
@@ -651,8 +648,7 @@ def _fallback_temporal_validation_split(
     np.ndarray,
     np.ndarray | None,
 ]:
-    """
-    Build a temporal validation holdout with embargo when val split is empty.
+    """Build a temporal validation holdout with embargo when val split is empty.
 
     This avoids random slicing leakage by preserving order and introducing
     a non-overlap gap before validation.
@@ -723,8 +719,7 @@ def prepare_data(
     prediction_horizon: int = None,
     lookback_bars: int = None,
 ) -> tuple:
-    """
-    Prepare training data with proper temporal split.
+    """Prepare training data with proper temporal split.
 
     Returns:
         Tuple of (X_train, y_train, r_train,

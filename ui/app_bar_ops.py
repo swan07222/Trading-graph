@@ -65,8 +65,7 @@ def _trained_stock_window_bars(
     return int(max(1, round(float(wd) * max(0.01, bpd))))
 
 def _recommended_lookback(self: Any, interval: str) -> int:
-    """
-    Recommended lookback for analysis/forecast per interval.
+    """Recommended lookback for analysis/forecast per interval.
     Startup 1m uses a true 7-day 1m window; higher intervals keep a
     minimum depth for feature generation stability.
     """
@@ -103,8 +102,7 @@ def _schedule_analysis_recovery(
     interval: str,
     warnings: list[str] | None = None,
 ) -> None:
-    """
-    Retry analysis once with a forced history refresh when output is partial.
+    """Retry analysis once with a forced history refresh when output is partial.
     Throttled per symbol/interval to avoid retry loops.
     """
     sym = self._ui_norm(symbol)
@@ -379,8 +377,7 @@ def _bars_needed_from_base_interval(
     target_bars: int,
     base_interval: str = "1m",
 ) -> int:
-    """
-    Estimate how many base-interval bars are needed to render
+    """Estimate how many base-interval bars are needed to render
     `target_bars` in `target_interval`.
     """
     tgt = self._normalize_interval_token(target_interval)
@@ -410,8 +407,7 @@ def _resample_chart_bars(
     source_interval: str,
     target_interval: str,
 ) -> list[dict[str, Any]]:
-    """
-    Aggregate OHLC bars from source interval to target interval.
+    """Aggregate OHLC bars from source interval to target interval.
     Keeps candle integrity (open/close ordering, high/low envelope).
     """
     src = self._normalize_interval_token(source_interval)
@@ -547,8 +543,7 @@ def _effective_anchor_price(
     symbol: str,
     candidate: float | None = None,
 ) -> float:
-    """
-    Resolve a robust anchor price for chart scale repair.
+    """Resolve a robust anchor price for chart scale repair.
     Prefers live/watchlist quote when candidate is obviously off-scale.
     """
     sym = self._ui_norm(symbol)
@@ -602,8 +597,7 @@ def _stabilize_chart_depth(
     interval: str,
     candidate: list[dict[str, Any]] | None,
 ) -> list[dict[str, Any]]:
-    """
-    Avoid replacing a healthy deep window with a transient tiny window.
+    """Avoid replacing a healthy deep window with a transient tiny window.
     """
     cand = list(candidate or [])
     if not cand:
@@ -817,8 +811,7 @@ def _filter_bars_to_market_session(
     return out
 
 def _bar_safety_caps(self: Any, interval: str) -> tuple[float, float]:
-    """
-    Return (max_jump_pct, max_range_pct) for bar sanitization.
+    """Return (max_jump_pct, max_range_pct) for bar sanitization.
     Values are intentionally conservative for intraday feeds.
     """
     iv = self._normalize_interval_token(interval)
@@ -837,8 +830,7 @@ def _bar_safety_caps(self: Any, interval: str) -> tuple[float, float]:
     return 0.20, 0.15
 
 def _synthetic_tick_jump_cap(self: Any, interval: str) -> float:
-    """
-    Stricter jump cap for tick-driven synthetic bar updates.
+    """Stricter jump cap for tick-driven synthetic bar updates.
     Prevents stale or spiky quotes from creating giant intraday bodies.
     """
     iv = self._normalize_interval_token(interval)
@@ -863,8 +855,7 @@ def _sanitize_ohlc(
     interval: str,
     ref_close: float | None = None,
 ) -> tuple[float, float, float, float] | None:
-    """
-    Normalize and clamp OHLC values to avoid malformed long candles
+    """Normalize and clamp OHLC values to avoid malformed long candles
     from bad ticks/partial bars.
     """
     try:
@@ -956,8 +947,7 @@ def _sanitize_ohlc(
 def _is_outlier_tick(
     self: Any, prev_price: float, new_price: float, interval: str = "1m"
 ) -> bool:
-    """
-    Guard against bad ticks creating abnormal long candles.
+    """Guard against bad ticks creating abnormal long candles.
     Uses interval-aware thresholds to avoid rejecting valid fast moves.
     """
     prev = float(prev_price or 0.0)
@@ -992,8 +982,7 @@ def _scrub_chart_bars(
     symbol: str = "",
     anchor_price: float | None = None,
 ) -> list[dict[str, Any]]:
-    """
-    Prepare bars for charting and never fall back to unsanitized rows.
+    """Prepare bars for charting and never fall back to unsanitized rows.
     """
     arr_in = list(bars or [])
     arr_out = self._prepare_chart_bars_for_interval(
@@ -1046,8 +1035,7 @@ def _rescale_chart_bars_to_anchor(
     interval: str,
     symbol: str = "",
 ) -> list[dict[str, Any]]:
-    """
-    Repair obvious price-scale mismatches (e.g., 1.5 vs 1500) so bars
+    """Repair obvious price-scale mismatches (e.g., 1.5 vs 1500) so bars
     are not fully dropped by jump filters.
     """
     arr = list(bars or [])
@@ -1133,8 +1121,7 @@ def _recover_chart_bars_from_close(
     symbol: str = "",
     anchor_price: float | None = None,
 ) -> list[dict[str, Any]]:
-    """
-    Minimal recovery path when strict scrub drops all bars.
+    """Minimal recovery path when strict scrub drops all bars.
     Builds stable OHLC from close/prev-close so chart remains usable.
     """
     iv = self._normalize_interval_token(interval)

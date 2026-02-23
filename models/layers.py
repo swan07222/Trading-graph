@@ -37,8 +37,7 @@ class PositionalEncoding(nn.Module):
         return self.dropout(x)
 
 class MultiHeadAttention(nn.Module):
-    """
-    Multi-Head Self-Attention.
+    """Multi-Head Self-Attention.
 
     Uses PyTorch's scaled_dot_product_attention when available (torch >= 2.0)
     for flash-attention / memory-efficient kernels.
@@ -72,8 +71,7 @@ class MultiHeadAttention(nn.Module):
         causal: bool = False,
         mask: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor | None]:
-        """
-        Args:
+        """Args:
             x: (batch, seq_len, d_model)
             causal: if True, apply causal (lower-triangular) mask
             mask: optional additive or boolean mask

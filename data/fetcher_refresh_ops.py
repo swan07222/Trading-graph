@@ -24,8 +24,7 @@ def refresh_trained_stock_history(
     replace_realtime_after_close: bool = True,
     get_session_bar_cache_fn: Callable[[], Any] | None = None,
 ) -> dict[str, object]:
-    """
-    Refresh recent history for trained stocks from online providers and persist to DB.
+    """Refresh recent history for trained stocks from online providers and persist to DB.
 
     Incremental behavior:
     - Default anchor is the last saved official-history cache timestamp.

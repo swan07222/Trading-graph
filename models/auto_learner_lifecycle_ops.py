@@ -290,8 +290,7 @@ def _save_state(self):
         log.warning(f"State save failed: {e}")
 
 def _load_state(self):
-    """
-    Load learner state from disk.
+    """Load learner state from disk.
 
     FIX PRIV: Uses public StockRotator methods for state migration
     instead of directly accessing private attributes.

@@ -43,13 +43,6 @@ from core.types import (
     AutoTradeMode,
     OrderSide,
 )
-from ui.modern_theme import (
-    ModernColors,
-    ModernFonts,
-    get_monospace_font_family,
-    get_primary_font_family,
-    get_status_badge_style,
-)
 from ui import app_analysis_ops as _app_analysis_ops
 from ui import app_bar_ops as _app_bar_ops
 from ui import app_feed_ops as _app_feed_ops
@@ -207,6 +200,13 @@ from ui.background_tasks import (
 from ui.background_tasks import (
     sanitize_watch_list as _sanitize_watch_list,
 )
+from ui.modern_theme import (
+    ModernColors,
+    ModernFonts,
+    get_monospace_font_family,
+    get_primary_font_family,
+    get_status_badge_style,
+)
 from utils.logger import get_logger
 from utils.recoverable import COMMON_RECOVERABLE_EXCEPTIONS
 
@@ -218,8 +218,7 @@ def _lazy_get(module: str, name: str) -> Any:
     return getattr(import_module(module), name)
 
 class MainApp(MainAppCommonMixin, QMainWindow):
-    """
-    Professional AI Stock Trading Application
+    """Professional AI Stock Trading Application
 
     Features:
     - Real-time signal monitoring with multiple intervals
@@ -835,10 +834,10 @@ class MainApp(MainAppCommonMixin, QMainWindow):
                     f"Model: Loaded ({num_models} networks)"
                 )
                 self.model_status.setStyleSheet(
-                    (
+                    
                         f"color: {ModernColors.ACCENT_SUCCESS}; "
                         f"font-weight: {ModernFonts.WEIGHT_BOLD};"
-                    )
+                    
                 )
                 self._sync_ui_to_loaded_model(
                     interval,
@@ -855,10 +854,10 @@ class MainApp(MainAppCommonMixin, QMainWindow):
             else:
                 self.model_status.setText("Model: Not trained")
                 self.model_status.setStyleSheet(
-                    (
+                    
                         f"color: {ModernColors.ACCENT_WARNING}; "
                         f"font-weight: {ModernFonts.WEIGHT_BOLD};"
-                    )
+                    
                 )
                 self.model_info.setText(
                     "Train a model to enable predictions"
@@ -874,10 +873,10 @@ class MainApp(MainAppCommonMixin, QMainWindow):
             self.predictor = None
             self.model_status.setText("Model: Error")
             self.model_status.setStyleSheet(
-                (
+                
                     f"color: {ModernColors.ACCENT_DANGER}; "
                     f"font-weight: {ModernFonts.WEIGHT_BOLD};"
-                )
+                
             )
             self._update_trained_stocks_ui([])
 
@@ -900,8 +899,7 @@ class MainApp(MainAppCommonMixin, QMainWindow):
         self.log("System initialized - Ready for trading", "info")
 
     def _prune_caches(self) -> None:
-        """
-        Prune internal caches to prevent memory leaks.
+        """Prune internal caches to prevent memory leaks.
 
         FIX: Called periodically to bound cache sizes.
         """
@@ -1298,10 +1296,10 @@ class MainApp(MainAppCommonMixin, QMainWindow):
                 f"Market Open | Trading Hours: {hours_text}"
             )
             self.market_label.setStyleSheet(
-                (
+                
                     f"color: {ModernColors.ACCENT_SUCCESS};"
                     f" font-weight: {ModernFonts.WEIGHT_BOLD};"
-                )
+                
             )
         else:
             next_open = self._next_market_open(now_sh)

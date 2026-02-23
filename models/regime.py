@@ -1,5 +1,4 @@
-"""
-Market Regime Detection Module
+"""Market Regime Detection Module
 
 Detects market regimes to improve prediction accuracy through:
 1. Adaptive thresholds based on volatility
@@ -49,8 +48,7 @@ class RegimeResult:
 
 
 class MarketRegimeDetector:
-    """
-    Market regime detection using multiple indicators.
+    """Market regime detection using multiple indicators.
     
     Uses:
     - Moving average relationships for trend
@@ -81,8 +79,7 @@ class MarketRegimeDetector:
         }
     
     def detect(self, df: pd.DataFrame) -> RegimeResult:
-        """
-        Detect current market regime.
+        """Detect current market regime.
         
         Args:
             df: DataFrame with OHLCV columns
@@ -316,8 +313,7 @@ class MarketRegimeDetector:
         )
     
     def get_adaptive_thresholds(self, regime: RegimeType) -> dict[str, float]:
-        """
-        Get adaptive thresholds for label creation based on regime.
+        """Get adaptive thresholds for label creation based on regime.
         
         Returns thresholds that account for:
         - Typical price movements in this regime

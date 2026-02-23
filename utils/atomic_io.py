@@ -50,8 +50,7 @@ _lock_cache: OrderedDict[str, threading.Lock] = OrderedDict()
 _cache_lock = threading.Lock()
 
 def _get_lock(path: Path) -> threading.Lock:
-    """
-    Get or create a lock for a specific file path.
+    """Get or create a lock for a specific file path.
 
     Uses a bounded LRU cache to prevent unbounded memory growth.
     """
@@ -75,8 +74,7 @@ _dir_lock_cache: OrderedDict[str, threading.Lock] = OrderedDict()
 _dir_cache_lock = threading.Lock()
 
 def _get_dir_lock(path: Path) -> threading.Lock:
-    """
-    Get or create a lock for the DIRECTORY containing path.
+    """Get or create a lock for the DIRECTORY containing path.
 
     This serializes all atomic writes to the same directory,
     preventing fd reuse races when multiple threads write to
@@ -97,8 +95,7 @@ def _get_dir_lock(path: Path) -> threading.Lock:
         return lock
 
 def _make_tmp_path(path: Path) -> Path:
-    """
-    Create a unique temp file path in the same directory as target.
+    """Create a unique temp file path in the same directory as target.
 
     Uses PID and thread ID to avoid collisions between processes/threads.
     """
@@ -108,8 +105,7 @@ def _make_tmp_path(path: Path) -> Path:
     return path.with_suffix(path.suffix + suffix)
 
 def _fsync_file(f: Any) -> None:
-    """
-    Flush and fsync a file object.
+    """Flush and fsync a file object.
 
     FIX EBADF: Wrapped in try/except OSError. If the fd is somehow
     invalid, we continue. flush() already pushes data to OS buffers.
@@ -134,8 +130,7 @@ def _cleanup_tmp(tmp: Path) -> None:
         pass
 
 def _safe_replace(src: Path, dst: Path, max_retries: int = 3) -> None:
-    """
-    Replace dst with src, with retry logic for Windows.
+    """Replace dst with src, with retry logic for Windows.
 
     FIX REPLACE: On Windows, os.replace can fail with PermissionError
     if the target file is momentarily open by another process (e.g.
@@ -156,8 +151,7 @@ def atomic_write_bytes(
     data: bytes,
     use_lock: bool = True,
 ) -> None:
-    """
-    Atomically write bytes to a file.
+    """Atomically write bytes to a file.
 
     Uses write-to-temp-then-rename pattern to prevent corruption.
 
@@ -200,8 +194,7 @@ def atomic_write_text(
     encoding: str = "utf-8",
     use_lock: bool = True,
 ) -> None:
-    """
-    Atomically write text to a file.
+    """Atomically write text to a file.
 
     Args:
         path: Target file path
@@ -220,8 +213,7 @@ def atomic_write_json(
     ensure_ascii: bool = False,
     use_lock: bool = True,
 ) -> None:
-    """
-    Atomically write a JSON-serializable object to a file.
+    """Atomically write a JSON-serializable object to a file.
 
     Args:
         path: Target file path
@@ -243,8 +235,7 @@ def atomic_pickle_dump(
     use_lock: bool = True,
     write_checksum: bool = True,
 ) -> None:
-    """
-    Atomically pickle an object to a file.
+    """Atomically pickle an object to a file.
 
     Args:
         path: Target file path
@@ -271,8 +262,7 @@ def atomic_torch_save(
     use_lock: bool = True,
     write_checksum: bool = True,
 ) -> None:
-    """
-    Atomically save a PyTorch object to a file.
+    """Atomically save a PyTorch object to a file.
 
     FIX EBADF: Opens file handle ourselves, passes to torch.save(),
     then fsyncs the SAME handle. No close/reopen gap.
@@ -326,8 +316,7 @@ _DEFAULT_MAX_PICKLE_BYTES = 500 * 1024 * 1024  # 500 MB
 _CHECKSUM_SUFFIX = ".sha256"
 
 def read_bytes(path: str | Path) -> bytes:
-    """
-    Read entire file contents as bytes.
+    """Read entire file contents as bytes.
 
     Note: Not truly atomic. If another process is performing an
     atomic write to the same path, you will always read a complete
@@ -349,8 +338,7 @@ def read_text(
     path: str | Path,
     encoding: str = "utf-8",
 ) -> str:
-    """
-    Read file contents as text.
+    """Read file contents as text.
 
     Args:
         path: File path
@@ -362,8 +350,7 @@ def read_text(
     return read_bytes(path).decode(encoding)
 
 def read_json(path: str | Path) -> Any:
-    """
-    Read and parse a JSON file.
+    """Read and parse a JSON file.
 
     Args:
         path: File path
@@ -377,8 +364,7 @@ def read_json(path: str | Path) -> Any:
     return json.loads(read_text(path))
 
 def artifact_checksum_path(path: str | Path) -> Path:
-    """
-    Return sidecar checksum path for an artifact.
+    """Return sidecar checksum path for an artifact.
 
     Example:
         model.pt -> model.pt.sha256
@@ -398,8 +384,7 @@ def _sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 def write_checksum_sidecar(path: str | Path) -> Path:
-    """
-    Write SHA-256 sidecar for the artifact and return sidecar path.
+    """Write SHA-256 sidecar for the artifact and return sidecar path.
     """
     src = Path(path)
     sidecar = artifact_checksum_path(src)
@@ -412,8 +397,7 @@ def verify_checksum_sidecar(
     *,
     require: bool = True,
 ) -> bool:
-    """
-    Verify artifact checksum sidecar.
+    """Verify artifact checksum sidecar.
 
     Args:
         path: Artifact file path.
@@ -449,8 +433,7 @@ def pickle_load(
     require_checksum: bool = True,
     allow_unsafe: bool = False,
 ) -> Any:
-    """
-    Load a pickled object from a file.
+    """Load a pickled object from a file.
 
     WARNING: Only load pickle files you created yourself.
     Pickle can execute arbitrary code during deserialization.
@@ -503,8 +486,7 @@ def pickle_load_bytes(
     max_bytes: int = _DEFAULT_MAX_PICKLE_BYTES,
     allow_unsafe: bool = False,
 ) -> Any:
-    """
-    Load a pickled object from in-memory bytes.
+    """Load a pickled object from in-memory bytes.
 
     This function keeps unsafe deserialization explicit at the callsite.
     
@@ -545,8 +527,7 @@ def torch_load(
     require_checksum: bool = True,
     allow_unsafe: bool = False,
 ) -> Any:
-    """
-    Load a PyTorch object from a file.
+    """Load a PyTorch object from a file.
 
     Args:
         path: File path
@@ -589,8 +570,7 @@ def torch_load(
         )
 
 def safe_remove(path: str | Path) -> bool:
-    """
-    Remove a file, returning False instead of raising if it fails.
+    """Remove a file, returning False instead of raising if it fails.
 
     Args:
         path: File path
@@ -605,8 +585,7 @@ def safe_remove(path: str | Path) -> bool:
         return False
 
 def ensure_parent_dir(path: str | Path) -> Path:
-    """
-    Ensure the parent directory of a path exists.
+    """Ensure the parent directory of a path exists.
 
     Args:
         path: File path

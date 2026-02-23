@@ -1,5 +1,4 @@
-"""
-Type conversion utilities for safe and consistent type handling.
+"""Type conversion utilities for safe and consistent type handling.
 
 This module provides centralized safe type conversion functions to replace
 duplicated implementations across the codebase.
@@ -11,8 +10,7 @@ from typing import Any
 
 
 def safe_float(value: Any, default: float = 0.0) -> float:
-    """
-    Safely convert a value to float with fallback.
+    """Safely convert a value to float with fallback.
 
     Handles None, NaN, Inf, and conversion errors gracefully.
 
@@ -35,8 +33,7 @@ def safe_float(value: Any, default: float = 0.0) -> float:
 
 
 def safe_int(value: Any, default: int = 0) -> int:
-    """
-    Safely convert a value to int with fallback.
+    """Safely convert a value to int with fallback.
 
     Handles None and conversion errors gracefully.
 
@@ -56,8 +53,7 @@ def safe_int(value: Any, default: int = 0) -> int:
 
 
 def safe_str(value: Any, default: str = "") -> str:
-    """
-    Safely convert a value to string with fallback.
+    """Safely convert a value to string with fallback.
 
     Handles None and conversion errors gracefully.
 
@@ -77,8 +73,7 @@ def safe_str(value: Any, default: str = "") -> str:
 
 
 def safe_attr(obj: Any, attr: str, default: Any = None) -> Any:
-    """
-    Safely extract an attribute from an object with fallback.
+    """Safely extract an attribute from an object with fallback.
 
     Args:
         obj: Object to extract attribute from.
@@ -95,8 +90,7 @@ def safe_attr(obj: Any, attr: str, default: Any = None) -> Any:
 
 
 def safe_float_attr(obj: Any, attr: str, default: float = 0.0) -> float:
-    """
-    Safely extract a float attribute from an object.
+    """Safely extract a float attribute from an object.
 
     Combines safe_attr and safe_float for convenient attribute access.
 
@@ -112,8 +106,7 @@ def safe_float_attr(obj: Any, attr: str, default: float = 0.0) -> float:
 
 
 def safe_int_attr(obj: Any, attr: str, default: int = 0) -> int:
-    """
-    Safely extract an int attribute from an object.
+    """Safely extract an int attribute from an object.
 
     Combines safe_attr and safe_int for convenient attribute access.
 
@@ -129,8 +122,7 @@ def safe_int_attr(obj: Any, attr: str, default: int = 0) -> int:
 
 
 def safe_str_attr(obj: Any, attr: str, default: str = "") -> str:
-    """
-    Safely extract a string attribute from an object.
+    """Safely extract a string attribute from an object.
 
     Combines safe_attr and safe_str for convenient attribute access.
 
@@ -146,8 +138,7 @@ def safe_str_attr(obj: Any, attr: str, default: str = "") -> str:
 
 
 def clamp(value: float, min_value: float, max_value: float) -> float:
-    """
-    Clamp a value between min and max bounds.
+    """Clamp a value between min and max bounds.
 
     Args:
         value: Value to clamp.

@@ -24,8 +24,7 @@ _SAVE_SLICE: int = _MAX_EQUITY_HISTORY  # save everything we keep in memory
 
 @dataclass
 class Trade:
-    """
-    Immutable record of a single executed trade.
+    """Immutable record of a single executed trade.
 
     `id` is auto-generated when left empty.
     Basic validation runs in __post_init__.
@@ -112,8 +111,7 @@ class PortfolioStats:
     monthly_pnl_pct: float
 
 class Portfolio:
-    """
-    Thread-safe portfolio management system.
+    """Thread-safe portfolio management system.
 
     Responsibilities:
         - Track positions, cash, and equity over time
@@ -173,8 +171,7 @@ class Portfolio:
     # ------------------------------------------------------------------
 
     def update_from_account(self, account: Account) -> None:
-        """
-        Sync portfolio state from broker account.
+        """Sync portfolio state from broker account.
 
         Uses deep copy so Position objects are fully isolated.
         """
@@ -496,8 +493,7 @@ class Portfolio:
     # ------------------------------------------------------------------
 
     def _calculate_returns(self) -> np.ndarray:
-        """
-        Daily returns from equity history.
+        """Daily returns from equity history.
 
         Returns empty array when fewer than 2 distinct trading days exist.
         """
@@ -521,8 +517,7 @@ class Portfolio:
         return cast(np.ndarray, daily.pct_change().dropna().to_numpy(dtype=np.float64))
 
     def _get_equity_at_date(self, target_date: date) -> float:
-        """
-        Find the most recent equity value on or before *target_date*.
+        """Find the most recent equity value on or before *target_date*.
 
         Falls back to `initial_capital` if no history exists before that date.
         Uses binary-style reverse scan (short-circuit).
@@ -540,8 +535,7 @@ class Portfolio:
         return Path(CONFIG.data_dir) / "portfolio.json"
 
     def _save_unlocked(self) -> None:
-        """
-        Persist portfolio state to JSON (caller MUST hold self._lock).
+        """Persist portfolio state to JSON (caller MUST hold self._lock).
 
         Saves the full bounded equity_history (consistent with _MAX_EQUITY_HISTORY).
         Also persists daily_performance so it survives restarts.

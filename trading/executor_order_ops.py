@@ -969,8 +969,7 @@ def _submit_synthetic_exit(
 
 
 def _status_sync_loop(self):
-    """
-    Poll broker for order status updates.
+    """Poll broker for order status updates.
     Includes stuck order watchdog.
     """
     from trading.oms import get_oms

@@ -1,9 +1,13 @@
 """RSI Oversold/Overbought Strategy."""
 from __future__ import annotations
+
 from typing import Any
+
 import numpy as np
+
 from core.types import OrderSide
 from strategies import BaseStrategy, Signal, SignalStrength, register_strategy
+
 
 @register_strategy
 class RSIOversoldStrategy(BaseStrategy):

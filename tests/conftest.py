@@ -50,8 +50,7 @@ def temp_model_dir(tmp_path):
 
 @pytest.fixture(autouse=True, scope="session")
 def force_offline_for_tests():
-    """
-    Make pytest deterministic and fast:
+    """Make pytest deterministic and fast:
     - Avoid network calls (AkShare/Yahoo)
     - Allow tests to run even without data sources
     """

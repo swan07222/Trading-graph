@@ -19,8 +19,7 @@ def _sync_ui_to_loaded_model(
     requested_horizon: int | None = None,
     preserve_requested_interval: bool = False,
 ) -> tuple[str, int]:
-    """
-    Align UI controls to the actual loaded model metadata.
+    """Align UI controls to the actual loaded model metadata.
     Prevents 'UI says 1m/120 while model runs 1d/5' mismatches.
     """
     if not self.predictor:
@@ -545,8 +544,7 @@ def _prepare_chart_predicted_prices(
     current_price: float | None = None,
     target_steps: int | None = None,
 ) -> list[float]:
-    """
-    Shape forecast for chart display stability.
+    """Shape forecast for chart display stability.
     - Clamp implausible per-step spikes.
     - When model interval != chart interval, project a smooth path to avoid
       abrupt vertical zig-zags on intraday charts.
@@ -732,8 +730,7 @@ def _chart_prediction_uncertainty_profile(
     self,
     symbol: str,
 ) -> tuple[float, float, float]:
-    """
-    Resolve (uncertainty, tail_risk, confidence) for chart forecast bands.
+    """Resolve (uncertainty, tail_risk, confidence) for chart forecast bands.
     """
     uncertainty = 0.55
     tail_risk = 0.55
@@ -872,8 +869,7 @@ def _render_chart_state(
     allow_legacy_candles: bool = False,
     reset_view_on_symbol_switch: bool = False,
 ) -> list[dict[str, Any]]:
-    """
-    Unified chart rendering path used by bar/tick/analysis updates.
+    """Unified chart rendering path used by bar/tick/analysis updates.
     """
     iv = self._normalize_interval_token(interval)
     arr = self._safe_list(bars)

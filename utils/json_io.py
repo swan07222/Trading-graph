@@ -1,5 +1,4 @@
-"""
-JSON I/O utilities for consistent file operations.
+"""JSON I/O utilities for consistent file operations.
 
 This module provides centralized JSON file read/write functions to replace
 duplicated implementations across the codebase.
@@ -16,8 +15,7 @@ _log = get_logger()
 
 
 def read_json_safe(path: Path | str, default: Any = None) -> Any:
-    """
-    Read JSON file safely with error handling.
+    """Read JSON file safely with error handling.
 
     Args:
         path: Path to JSON file.
@@ -30,7 +28,7 @@ def read_json_safe(path: Path | str, default: Any = None) -> Any:
         file_path = Path(path)
         if not file_path.exists():
             return default
-        with open(file_path, "r", encoding="utf-8") as f:
+        with open(file_path, encoding="utf-8") as f:
             return json.load(f)
     except json.JSONDecodeError as e:
         _log.warning(f"Invalid JSON in {path}: {e}")
@@ -44,8 +42,7 @@ def read_json_safe(path: Path | str, default: Any = None) -> Any:
 
 
 def write_json_safe(path: Path | str, data: Any, *, indent: int = 2) -> bool:
-    """
-    Write JSON file safely with error handling.
+    """Write JSON file safely with error handling.
 
     Args:
         path: Path to JSON file.
@@ -73,8 +70,7 @@ def write_json_safe(path: Path | str, data: Any, *, indent: int = 2) -> bool:
 
 
 def read_jsonl(path: Path | str) -> list[dict[str, Any]]:
-    """
-    Read JSONL file (one JSON object per line).
+    """Read JSONL file (one JSON object per line).
 
     Args:
         path: Path to JSONL file.
@@ -87,7 +83,7 @@ def read_jsonl(path: Path | str) -> list[dict[str, Any]]:
         file_path = Path(path)
         if not file_path.exists():
             return results
-        with open(file_path, "r", encoding="utf-8") as f:
+        with open(file_path, encoding="utf-8") as f:
             for line_num, line in enumerate(f, 1):
                 line = line.strip()
                 if not line:
@@ -106,8 +102,7 @@ def read_jsonl(path: Path | str) -> list[dict[str, Any]]:
 
 
 def write_jsonl(path: Path | str, data: list[dict[str, Any]]) -> bool:
-    """
-    Write JSONL file (one JSON object per line).
+    """Write JSONL file (one JSON object per line).
 
     Args:
         path: Path to JSONL file.

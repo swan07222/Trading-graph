@@ -119,8 +119,7 @@ class LRUCache:
     def get(
         self, key: str, max_age_hours: float = None
     ) -> Any:
-        """
-        Get value from cache.
+        """Get value from cache.
 
         Returns _SENTINEL (module-level) on miss so that ``None``
         can be a valid cached value.
@@ -202,8 +201,7 @@ class LRUCache:
 
     @staticmethod
     def _estimate_size(value: Any, _depth: int = 0) -> int:
-        """
-        Estimate object memory footprint.
+        """Estimate object memory footprint.
 
         FIX #20: Added max depth to prevent infinite recursion on
         self-referencing structures.
@@ -254,8 +252,7 @@ class LRUCache:
 
 
 class DiskCache:
-    """
-    Disk-based cache with atomic writes.
+    """Disk-based cache with atomic writes.
 
     Uses write-to-temp-then-rename to prevent corruption on crash.
 
@@ -281,8 +278,7 @@ class DiskCache:
     def get(
         self, key: str, max_age_hours: float = None
     ) -> Any:
-        """
-        Read from disk cache.
+        """Read from disk cache.
 
         Returns _SENTINEL on miss/expiry/error.
 
@@ -352,8 +348,7 @@ class DiskCache:
             return _SENTINEL
 
     def set(self, key: str, value: Any):
-        """
-        Atomic write: temp file → rename.
+        """Atomic write: temp file → rename.
 
         FIX C4: Close the file descriptor from mkstemp IMMEDIATELY
         before opening the file with gzip.open or open().
@@ -442,8 +437,7 @@ class DiskCache:
 
 
 class TieredCache:
-    """
-    Three-tier caching system.
+    """Three-tier caching system.
 
     L1: Fast in-memory LRU with TTL
     L2: Disk cache (fast reads)
@@ -487,8 +481,7 @@ class TieredCache:
         )
 
     def _get_compute_lock(self, key: str) -> threading.Lock:
-        """
-        Get or create a per-key lock for compute operations.
+        """Get or create a per-key lock for compute operations.
 
         Uses LRU eviction policy to prevent unbounded growth while
         preserving recently used locks.
@@ -509,8 +502,7 @@ class TieredCache:
             return self._compute_locks[key]
 
     def _release_compute_lock(self, key: str) -> None:
-        """
-        Release and remove per-key lock if no longer needed.
+        """Release and remove per-key lock if no longer needed.
         
         FIX #6: Call this after compute to clean up unused locks.
         """
@@ -521,8 +513,7 @@ class TieredCache:
 
     @staticmethod
     def _clone_cache_value(value: Any) -> Any:
-        """
-        Return a defensive clone for mutable payloads.
+        """Return a defensive clone for mutable payloads.
 
         This prevents accidental caller mutation from corrupting cache state and
         keeps asynchronous tier writes consistent with the snapshot at set-time.
@@ -548,8 +539,7 @@ class TieredCache:
             return value
 
     def get(self, key: str, max_age_hours: float = None) -> Any:
-        """
-        Get value with tiered lookup.
+        """Get value with tiered lookup.
 
         FIX #2: Returns MISSING sentinel on miss (not None).
         This allows None to be a valid cached value.
@@ -650,8 +640,7 @@ class TieredCache:
         max_age_hours: float = None,
         persist: bool = True,
     ) -> T:
-        """
-        Get from cache or compute and store.
+        """Get from cache or compute and store.
 
         FIX #2: Uses MISSING sentinel so None return values are cacheable.
         FIX #5: Uses per-key locking to prevent double-compute race.
@@ -710,8 +699,7 @@ def get_cache() -> TieredCache:
 
 
 def reset_cache() -> None:
-    """
-    Reset global cache instance (for testing).
+    """Reset global cache instance (for testing).
 
     Shuts down the existing cache cleanly before clearing.
     """
@@ -730,8 +718,7 @@ def cached(
     max_age_hours: float = None,
     persist: bool = True,
 ):
-    """
-    Caching decorator.
+    """Caching decorator.
 
     Args:
         key_fn: Function to compute cache key from args/kwargs.

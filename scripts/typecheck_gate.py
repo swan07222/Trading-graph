@@ -68,8 +68,7 @@ def _normalize_path(path: str) -> str:
 
 
 def parse_mypy_errors(raw_output: str) -> set[str]:
-    """
-    Parse mypy output into stable issue keys.
+    """Parse mypy output into stable issue keys.
 
     Key format:
       path:line:code:message

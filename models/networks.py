@@ -24,8 +24,7 @@ def _pick_num_groups(channels: int, preferred: int = 8) -> int:
     return 1
 
 def _init_weights(module: nn.Module):
-    """
-    Apply sensible weight initialization.
+    """Apply sensible weight initialization.
 
     FIX INIT: Skip LSTM/GRU modules — they use orthogonal initialization
     by default in PyTorch which is better for recurrent networks.
@@ -51,8 +50,7 @@ def _count_parameters(model: nn.Module) -> int:
 # Building blocks (previously in layers.py)
 
 class PositionalEncoding(nn.Module):
-    """
-    Sinusoidal positional encoding for Transformer models.
+    """Sinusoidal positional encoding for Transformer models.
     Strictly causal — only encodes position, no future information.
     """
 
@@ -74,8 +72,7 @@ class PositionalEncoding(nn.Module):
         self.register_buffer("pe", pe.unsqueeze(0))  # (1, max_len, d_model)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """
-        Args:
+        """Args:
             x: (batch, seq_len, d_model)
         Returns:
             (batch, seq_len, d_model) with positional encoding added
@@ -85,8 +82,7 @@ class PositionalEncoding(nn.Module):
         return self.dropout(x)
 
 class TransformerBlock(nn.Module):
-    """
-    Single Transformer encoder block with optional causal masking.
+    """Single Transformer encoder block with optional causal masking.
 
     FIX ATTN_MASK: Causal mask is created dynamically to handle
     variable sequence lengths, and shaped correctly for
@@ -126,8 +122,7 @@ class TransformerBlock(nn.Module):
         self._mask_cache_size: int = 0
 
     def _get_causal_mask(self, seq_len: int, device: torch.device) -> torch.Tensor:
-        """
-        Get or create causal attention mask.
+        """Get or create causal attention mask.
 
         Returns upper-triangular mask where True means "do not attend".
         Shape: (seq_len, seq_len) — broadcast over batch and heads.
@@ -145,8 +140,7 @@ class TransformerBlock(nn.Module):
         return mask
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """
-        Args:
+        """Args:
             x: (batch, seq_len, d_model)
         Returns:
             (batch, seq_len, d_model)
@@ -170,8 +164,7 @@ class TransformerBlock(nn.Module):
         return x
 
 class LSTMBlock(nn.Module):
-    """
-    LSTM block with proper dropout handling.
+    """LSTM block with proper dropout handling.
 
     FIX LSTM_DROPOUT: When num_layers=1, PyTorch warns that dropout
     has no effect. We set dropout=0 in that case.
@@ -201,8 +194,7 @@ class LSTMBlock(nn.Module):
         self.dropout = nn.Dropout(dropout)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """
-        Args:
+        """Args:
             x: (batch, seq_len, input_size)
         Returns:
             (batch, seq_len, hidden_size * num_directions)
@@ -211,8 +203,7 @@ class LSTMBlock(nn.Module):
         return self.dropout(output)
 
 class TemporalConvBlock(nn.Module):
-    """
-    Causal temporal convolution block with residual connection.
+    """Causal temporal convolution block with residual connection.
 
     Uses left-padding to ensure strict causality: output at time t
     depends only on inputs at times <= t.
@@ -252,8 +243,7 @@ class TemporalConvBlock(nn.Module):
             self.residual_proj = None
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """
-        Args:
+        """Args:
             x: (batch, channels, seq_len)
         Returns:
             (batch, out_channels, seq_len)
@@ -282,8 +272,7 @@ class TemporalConvBlock(nn.Module):
         return out
 
 class AttentionPooling(nn.Module):
-    """
-    Attention-based pooling over the sequence dimension.
+    """Attention-based pooling over the sequence dimension.
 
     Learns to weight different time steps, producing a fixed-size
     representation from variable-length sequences.
@@ -298,8 +287,7 @@ class AttentionPooling(nn.Module):
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """
-        Args:
+        """Args:
             x: (batch, seq_len, hidden_size)
         Returns:
             (batch, hidden_size) — weighted average over time
@@ -361,8 +349,7 @@ class LSTMModel(nn.Module):
         self.apply(_init_weights)
 
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        """
-        Args:
+        """Args:
             x: (batch, seq_len, input_size)
         Returns:
             (logits, confidence) where logits is (batch, num_classes)
@@ -407,8 +394,7 @@ class TransformerModel(nn.Module):
         self.apply(_init_weights)
 
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        """
-        Args:
+        """Args:
             x: (batch, seq_len, input_size)
         Returns:
             (logits, confidence)
@@ -457,8 +443,7 @@ class GRUModel(nn.Module):
         self.apply(_init_weights)
 
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        """
-        Args:
+        """Args:
             x: (batch, seq_len, input_size)
         Returns:
             (logits, confidence)
@@ -504,8 +489,7 @@ class TCNModel(nn.Module):
         self.apply(_init_weights)
 
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        """
-        Args:
+        """Args:
             x: (batch, seq_len, input_size)
         Returns:
             (logits, confidence)
@@ -567,8 +551,7 @@ class HybridModel(nn.Module):
         self.apply(_init_weights)
 
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        """
-        Args:
+        """Args:
             x: (batch, seq_len, input_size)
         Returns:
             (logits, confidence)

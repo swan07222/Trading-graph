@@ -24,8 +24,7 @@ except ImportError:
 
 if HAS_PYQTGRAPH:
     class CandlestickItem(pg.GraphicsObject):
-        """
-        Custom candlestick chart item for pyqtgraph.
+        """Custom candlestick chart item for pyqtgraph.
 
         Data format: list of (x, open, close, low, high) tuples.
         """
@@ -145,8 +144,7 @@ else:
 # MAIN STOCK CHART - FIXED VERSION
 
 class StockChart(QWidget):
-    """
-    Interactive stock chart with THREE layers:
+    """Interactive stock chart with THREE layers:
 
     Layer 1 (BOTTOM): Prediction line (dashed green) - AI forecast
     Layer 2 (MIDDLE): Price line (solid blue) - connects close prices  
@@ -564,8 +562,7 @@ class StockChart(QWidget):
         predicted_prices_high: list[float] = None,
         levels: dict[str, float] = None,
     ):
-        """
-        UNIFIED update method - draws all three layers together.
+        """UNIFIED update method - draws all three layers together.
 
         This is the PRIMARY method that should be called for updates.
         Both update_candles() and update_data() now delegate to this.
@@ -1020,8 +1017,7 @@ class StockChart(QWidget):
         predicted_prices_high: list[float] = None,
         levels: dict[str, float] = None,
     ):
-        """
-        Update chart with candlestick bar data.
+        """Update chart with candlestick bar data.
 
         BACKWARD COMPATIBLE: This now delegates to update_chart()
         so all three layers are drawn together.
@@ -1042,8 +1038,7 @@ class StockChart(QWidget):
         predicted_prices_high: list[float] = None,
         levels: dict[str, float] = None
     ):
-        """
-        Update chart with line data.
+        """Update chart with line data.
 
         BACKWARD COMPATIBLE: Converts price list to bar format,
         then delegates to update_chart() so all three layers work.
@@ -1387,8 +1382,7 @@ class StockChart(QWidget):
                 pass
 
     def set_overlay_enabled(self, key: str, enabled: bool):
-        """
-        Public overlay toggle for UI controls.
+        """Public overlay toggle for UI controls.
         For Bollinger, use key='bbands' to control both bands.
         """
         if key == "bbands":

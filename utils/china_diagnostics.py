@@ -1,5 +1,4 @@
-"""
-China Network Diagnostics Utility
+"""China Network Diagnostics Utility
 
 Provides comprehensive network testing for China mainland users:
 - Great Firewall connectivity tests
@@ -47,8 +46,7 @@ class TestResult:
 
 
 class ChinaNetworkDiagnostics:
-    """
-    Comprehensive network diagnostics for China users.
+    """Comprehensive network diagnostics for China users.
     
     Tests:
     - Financial data provider connectivity
@@ -144,7 +142,7 @@ class ChinaNetworkDiagnostics:
             error = "Timeout"
         except requests.exceptions.ConnectionError as e:
             error = f"Connection error: {str(e)[:50]}"
-        except socket.timeout:
+        except TimeoutError:
             error = "Socket timeout"
         except Exception as e:
             error = str(e)[:100]
@@ -247,13 +245,11 @@ class ChinaNetworkDiagnostics:
         )
 
     def run_all_tests(self, proxy_url: str | None = None) -> dict[str, Any]:
-        """
-        Run comprehensive network diagnostics.
+        """Run comprehensive network diagnostics.
         
         Returns:
             Dictionary with test results and recommendations
         """
-        import requests
 
         self.results = []
 
@@ -273,7 +269,6 @@ class ChinaNetworkDiagnostics:
 
         # Test DNS resolution
         log.info("Testing DNS resolution...")
-        test_hostname = "www.eastmoney.com"
         for dns_ip, dns_name in self.CHINA_DNS:
             # Note: This uses system DNS, not the specified server
             # Real DNS server testing requires dnspython library
@@ -444,8 +439,7 @@ class ChinaNetworkDiagnostics:
 
 
 def run_diagnostics(proxy_url: str | None = None) -> dict[str, Any]:
-    """
-    Run China network diagnostics.
+    """Run China network diagnostics.
     
     Args:
         proxy_url: Optional proxy URL to test

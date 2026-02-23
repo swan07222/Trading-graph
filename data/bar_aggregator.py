@@ -30,8 +30,7 @@ class VolumeMode(Enum):
 # Bar aggregator - FIXED to emit partial bars
 
 class BarAggregator:
-    """
-    Aggregates ticks into OHLCV bars with configurable interval.
+    """Aggregates ticks into OHLCV bars with configurable interval.
 
     FIXED: Now emits PARTIAL bars on every tick so the chart
     updates in real-time, not just on bar boundaries.
@@ -52,8 +51,7 @@ class BarAggregator:
 
     @staticmethod
     def _to_shanghai_naive(ts_raw) -> datetime:
-        """
-        Normalize quote timestamps to naive Asia/Shanghai time.
+        """Normalize quote timestamps to naive Asia/Shanghai time.
         """
         try:
             from zoneinfo import ZoneInfo
@@ -90,8 +88,7 @@ class BarAggregator:
 
     @staticmethod
     def _is_cn_session_time(ts_val: datetime) -> bool:
-        """
-        Check whether a timestamp is within CN A-share regular trading session.
+        """Check whether a timestamp is within CN A-share regular trading session.
         """
         if not isinstance(ts_val, datetime):
             return False
@@ -120,8 +117,7 @@ class BarAggregator:
             self._volume_mode = mode
 
     def on_tick(self, quote):
-        """
-        Process incoming tick/quote.
+        """Process incoming tick/quote.
 
         FIXED: Now emits partial bar on EVERY tick for real-time updates.
         """
@@ -267,8 +263,7 @@ class BarAggregator:
             self._last_partial_emit_ts.clear()
 
     def _emit_bar(self, symbol: str, bar: dict, final: bool = True):
-        """
-        Emit bar to callbacks.
+        """Emit bar to callbacks.
 
         Args:
             symbol: Stock symbol
