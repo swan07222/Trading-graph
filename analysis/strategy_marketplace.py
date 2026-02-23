@@ -15,13 +15,9 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
-import shutil
-import tempfile
-import time
 import zipfile
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -165,6 +161,10 @@ class StrategyEntry:
     params: dict[str, Any] = field(default_factory=dict)
     weight: float = 1.0
     _resolved_file: str = ""
+
+    def __getitem__(self, key: str) -> Any:
+        """Allow dict-like access for backward compatibility."""
+        return getattr(self, key, None)
 
     def to_dict(self) -> dict[str, Any]:
         return {

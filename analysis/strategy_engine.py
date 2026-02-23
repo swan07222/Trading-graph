@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import inspect
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import datetime
 from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
@@ -46,13 +46,39 @@ class StrategyScriptEngine:
         files = self._marketplace.get_enabled_files()
         if files:
             return files
-        # If marketplace metadata exists, treat enabled set as authoritative.
-        # This avoids executing disabled scripts via legacy fallback.
+        # If marketplace metadata exists with strategies, respect the enabled list.
+        # For empty/fresh manifests (no strategies listed), use legacy fallback.
         if self._marketplace.manifest_path.exists():
-            return []
+            # Check if manifest has any strategies defined
+            try:
+                import json
+                manifest_data = json.loads(self._marketplace.manifest_path.read_text(encoding="utf-8"))
+                has_strategies = bool(manifest_data.get("strategies"))
+            except Exception:
+                has_strategies = False
+            
+            if has_strategies:
+                # Manifest has strategies - check if enabled.json exists
+                if not self._marketplace.enabled_path.exists():
+                    # Use strategies marked enabled_by_default from manifest
+                    default_enabled = self._marketplace.get_enabled_ids()
+                    if default_enabled:
+                        # Return files for default-enabled strategies
+                        result = []
+                        for item in self._marketplace.list_entries():
+                            if item.id in default_enabled and item._resolved_file:
+                                file_path = Path(item._resolved_file)
+                                if file_path.exists() and file_path.is_file():
+                                    result.append(file_path)
+                        if result:
+                            return result
+                # If manifest exists with strategies but none are enabled, return empty
+                return []
+            # Empty manifest - fall through to legacy file discovery
+        
         if not self._dir.exists():
             return []
-        # Fallback for repos without marketplace metadata.
+        # Fallback for repos without marketplace metadata or with empty manifest.
         return sorted(
             p for p in self._dir.glob("*.py")
             if p.is_file() and not p.name.startswith("_")
@@ -85,10 +111,11 @@ class StrategyScriptEngine:
         strategy_meta_by_path: dict[str, dict[str, Any]] = {}
         try:
             for row in self._marketplace.get_enabled_entries():
-                resolved = Path(str(row.get("_resolved_file", "")))
+                resolved = Path(str(getattr(row, "_resolved_file", "")))
                 if not resolved:
                     continue
-                strategy_meta_by_path[str(resolved.resolve())] = dict(row)
+                # Use dataclasses.asdict() to properly convert dataclass to dict
+                strategy_meta_by_path[str(resolved.resolve())] = asdict(row)
         except Exception:
             strategy_meta_by_path = {}
 
