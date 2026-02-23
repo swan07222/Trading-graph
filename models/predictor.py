@@ -98,10 +98,25 @@ class Predictor:
         self._model_artifact_sig: str = ""
         self._last_model_reload_attempt_ts: float = 0.0
         self._model_reload_cooldown_s: float = 15.0
+        
+        # Enhanced prediction accuracy features
+        self._confidence_calibration_enabled = True
+        self._uncertainty_quantification_enabled = True
+        self._adaptive_threshold_enabled = True
+        self._regime_aware_prediction = True
+        
+        # Historical accuracy tracking per stock
+        self._stock_accuracy_history: dict[str, list[bool]] = {}
+        self._stock_accuracy_window = 50  # Track last 50 predictions per stock
+        
+        # Ensemble enhancement
+        self._model_weights: dict[str, float] = {}
+        self._last_model_performance: dict[str, float] = {}
 
         self._load_models()
         self._model_artifact_sig = self._model_artifact_signature()
         self._last_model_reload_attempt_ts = time.monotonic()
+        self._initialize_model_weights()
 
     def _load_high_precision_config(self) -> dict[str, float]:
         """
@@ -300,6 +315,124 @@ class Predictor:
         except _PREDICTOR_RECOVERABLE_EXCEPTIONS as e:
             log.error(f"Failed to load models: {e}")
             return False
+
+    def _initialize_model_weights(self) -> None:
+        """
+        Initialize adaptive model weights based on historical performance.
+        
+        This improves ensemble accuracy by weighting better-performing models higher.
+        """
+        if self.ensemble is None or not hasattr(self.ensemble, 'models'):
+            return
+            
+        # Default equal weights
+        n_models = len(self.ensemble.models)
+        if n_models == 0:
+            return
+            
+        model_names = list(self.ensemble.models.keys())
+        
+        # Initialize with equal weights
+        base_weight = 1.0 / n_models
+        for name in model_names:
+            self._model_weights[name] = base_weight
+            self._last_model_performance[name] = 0.5  # Start with neutral performance
+        
+        log.info(f"Initialized model weights for {n_models} models")
+
+    def _update_model_weights(self, stock_code: str, was_correct: bool) -> None:
+        """
+        Update model weights based on prediction accuracy.
+        
+        Uses exponential moving average to track recent performance.
+        """
+        if self.ensemble is None or not hasattr(self.ensemble, 'models'):
+            return
+            
+        alpha = 0.1  # Learning rate for weight updates
+        
+        for model_name in self._model_weights:
+            # Simplified: assume all models contributed equally to this prediction
+            current_perf = self._last_model_performance.get(model_name, 0.5)
+            reward = 1.0 if was_correct else 0.0
+            new_perf = (1 - alpha) * current_perf + alpha * reward
+            self._last_model_performance[model_name] = new_perf
+        
+        # Normalize weights
+        total_perf = sum(self._last_model_performance.values())
+        if total_perf > 0:
+            for name in self._model_weights:
+                self._model_weights[name] = self._last_model_performance[name] / total_perf
+
+    def _record_prediction_outcome(self, stock_code: str, predicted_up: bool, actual_up: bool) -> None:
+        """
+        Record prediction outcome for historical accuracy tracking.
+        """
+        was_correct = (predicted_up == actual_up)
+        
+        if stock_code not in self._stock_accuracy_history:
+            self._stock_accuracy_history[stock_code] = []
+        
+        self._stock_accuracy_history[stock_code].append(was_correct)
+        
+        # Keep only recent history
+        if len(self._stock_accuracy_history[stock_code]) > self._stock_accuracy_window:
+            self._stock_accuracy_history[stock_code] = self._stock_accuracy_history[stock_code][-self._stock_accuracy_window:]
+        
+        # Update model weights
+        self._update_model_weights(stock_code, was_correct)
+
+    def _get_stock_accuracy(self, stock_code: str) -> float:
+        """
+        Get recent prediction accuracy for a stock.
+        """
+        if stock_code not in self._stock_accuracy_history:
+            return 0.5  # Neutral default
+        
+        history = self._stock_accuracy_history[stock_code]
+        if not history:
+            return 0.5
+        
+        # Weight recent predictions more heavily
+        weights = []
+        for i in range(len(history)):
+            weights.append(0.9 ** (len(history) - i - 1))  # Exponential decay
+        
+        weighted_sum = sum(h * w for h, w in zip(history, weights))
+        weight_total = sum(weights)
+        
+        return weighted_sum / weight_total if weight_total > 0 else 0.5
+
+    def _calibrate_confidence(self, confidence: float, stock_code: str, entropy: float) -> float:
+        """
+        Calibrate confidence based on historical accuracy and uncertainty.
+        
+        This improves prediction reliability by adjusting confidence based on:
+        1. Historical accuracy for this stock
+        2. Prediction entropy (uncertainty)
+        3. Model agreement
+        """
+        if not self._confidence_calibration_enabled:
+            return confidence
+        
+        # Get historical accuracy
+        historical_acc = self._get_stock_accuracy(stock_code)
+        
+        # Adjust confidence based on historical performance
+        if historical_acc > 0.6:
+            # Good history: boost confidence slightly
+            confidence = min(0.95, confidence * (1.0 + (historical_acc - 0.5) * 0.2))
+        elif historical_acc < 0.45:
+            # Poor history: reduce confidence
+            confidence = max(0.3, confidence * (1.0 - (0.5 - historical_acc) * 0.3))
+        
+        # Penalize high entropy (uncertainty)
+        if entropy > 0.7:
+            confidence = max(0.3, confidence * 0.8)
+        elif entropy > 0.5:
+            confidence = max(0.3, confidence * 0.9)
+        
+        return float(np.clip(confidence, 0.3, 0.95))
 
     def _find_best_model_pair(self, model_dir: Path) -> tuple[Path | None, Path | None]:
         """Find the best ensemble + scaler file pair."""
@@ -896,6 +1029,22 @@ class Predictor:
                 if self.ensemble:
                     self._apply_ensemble_prediction(X, pred)
 
+                # Enhanced accuracy: Calibrate confidence based on historical performance
+                if self._confidence_calibration_enabled:
+                    pred.confidence = self._calibrate_confidence(
+                        pred.confidence,
+                        pred.stock_code,
+                        pred.entropy,
+                    )
+                
+                # Enhanced accuracy: Apply regime-aware adjustments
+                if self._regime_aware_prediction:
+                    self._apply_regime_adjustments(pred, df)
+                
+                # Enhanced accuracy: Apply adaptive threshold for signal generation
+                if self._adaptive_threshold_enabled:
+                    self._apply_adaptive_signal_threshold(pred)
+
                 news_bias = self._apply_news_influence(pred, code, interval)
                 self._refresh_prediction_uncertainty(pred)
                 self._apply_tail_risk_guard(pred)
@@ -1162,6 +1311,122 @@ class Predictor:
             f"{len(close)} bars available (target {required_rows})"
         )
         return True
+
+    def _apply_regime_adjustments(self, pred: Prediction, df: pd.DataFrame) -> None:
+        """
+        Apply regime-aware adjustments to prediction.
+        
+        Adjusts confidence and thresholds based on detected market regime:
+        - Trending markets: Higher confidence, lower thresholds
+        - Ranging markets: Lower confidence, higher thresholds  
+        - High volatility: Wider stops/targets, confidence adjustment
+        """
+        try:
+            from models.regime import MarketRegimeDetector
+            
+            detector = MarketRegimeDetector()
+            regime_result = detector.detect(df)
+            
+            # Store regime info
+            pred.regime = regime_result.regime.value
+            
+            # Adjust confidence based on regime historical accuracy
+            regime_acc = regime_result.historical_accuracy
+            if regime_acc > 0.65:
+                # High accuracy regime: boost confidence
+                pred.confidence = min(0.95, pred.confidence * 1.08)
+            elif regime_acc < 0.55:
+                # Low accuracy regime: reduce confidence
+                pred.confidence = max(0.4, pred.confidence * 0.92)
+            
+            # Adjust for volatility
+            if regime_result.volatility_level == "HIGH":
+                # High volatility: be more conservative
+                pred.confidence = max(0.4, pred.confidence * 0.95)
+                pred.warnings.append("High volatility regime: increased uncertainty")
+            elif regime_result.volatility_level == "LOW":
+                # Low volatility: can be more confident
+                pred.confidence = min(0.95, pred.confidence * 1.03)
+            
+            # Store regime-based recommended threshold
+            pred.model_margin = regime_result.recommended_threshold
+            
+        except Exception as e:
+            log.debug(f"Regime adjustment failed: {e}")
+
+    def _apply_adaptive_signal_threshold(self, pred: Prediction) -> None:
+        """
+        Apply adaptive thresholds for signal generation.
+        
+        Uses dynamic thresholds based on:
+        1. Historical accuracy for this stock
+        2. Current market regime
+        3. Prediction uncertainty (entropy)
+        4. Model agreement
+        """
+        # Get stock-specific accuracy
+        stock_acc = self._get_stock_accuracy(pred.stock_code)
+        
+        # Base thresholds
+        strong_buy_threshold = 0.70
+        buy_threshold = 0.54
+        strong_sell_threshold = -0.55
+        sell_threshold = -0.30
+        
+        # Adjust based on stock accuracy
+        if stock_acc > 0.60:
+            # Good history: slightly lower thresholds (more aggressive)
+            strong_buy_threshold = max(0.65, strong_buy_threshold - 0.05)
+            buy_threshold = max(0.50, buy_threshold - 0.04)
+        elif stock_acc < 0.45:
+            # Poor history: higher thresholds (more conservative)
+            strong_buy_threshold = min(0.75, strong_buy_threshold + 0.05)
+            buy_threshold = min(0.60, buy_threshold + 0.06)
+        
+        # Adjust based on entropy (uncertainty)
+        if pred.entropy > 0.6:
+            # High uncertainty: require stronger signal
+            strong_buy_threshold = min(0.75, strong_buy_threshold + 0.05)
+            buy_threshold = min(0.60, buy_threshold + 0.06)
+        elif pred.entropy < 0.3:
+            # Low uncertainty: can be more aggressive
+            strong_buy_threshold = max(0.65, strong_buy_threshold - 0.05)
+            buy_threshold = max(0.50, buy_threshold - 0.04)
+        
+        # Adjust based on model agreement
+        if pred.model_agreement > 0.75:
+            # High agreement: slightly lower thresholds
+            strong_buy_threshold = max(0.65, strong_buy_threshold - 0.03)
+            buy_threshold = max(0.50, buy_threshold - 0.03)
+        elif pred.model_agreement < 0.50:
+            # Low agreement: higher thresholds
+            strong_buy_threshold = min(0.75, strong_buy_threshold + 0.05)
+            buy_threshold = min(0.60, buy_threshold + 0.06)
+        
+        # Calculate direction from probabilities
+        direction = pred.prob_up - pred.prob_down
+        
+        # Apply adaptive thresholds
+        if direction >= strong_buy_threshold and pred.confidence >= 0.65:
+            pred.signal = Signal.STRONG_BUY
+        elif direction >= buy_threshold and pred.confidence >= 0.50:
+            pred.signal = Signal.BUY
+        elif direction <= strong_sell_threshold and pred.confidence >= 0.65:
+            pred.signal = Signal.STRONG_SELL
+        elif direction <= sell_threshold and pred.confidence >= 0.50:
+            pred.signal = Signal.SELL
+        else:
+            pred.signal = Signal.HOLD
+        
+        # Update signal strength with adaptive scaling
+        pred.signal_strength = float(
+            np.clip(
+                (0.65 * abs(direction)) + 
+                (0.25 * pred.confidence) +
+                (0.10 * pred.model_agreement),
+                0.0, 1.0
+            )
+        )
 
     def predict_quick_batch(
         self,

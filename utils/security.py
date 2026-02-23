@@ -191,7 +191,12 @@ class SecureStorage:
             self._cache = {}
 
     def _save(self) -> None:
-        """Save to storage."""
+        """
+        Save to storage atomically.
+
+        Uses temp file + rename pattern with proper file descriptor cleanup.
+        FIX: Ensures file descriptors are always closed, even on error.
+        """
         tmp_path: Path | None = None
         try:
             data = json.dumps(self._cache)
@@ -207,7 +212,7 @@ class SecureStorage:
             try:
                 os.write(fd, encrypted)
             finally:
-                os.close(fd)
+                os.close(fd)  # FIX: Always close fd, even on error
             tmp_path.replace(self._storage_path)
             # Re-apply permissions after rename for extra safety
             try:
@@ -216,6 +221,7 @@ class SecureStorage:
                 log.debug("Secure storage permission update skipped: %s", perm_err)
         except (OSError, TypeError, ValueError) as e:
             log.error("Failed to save secure storage: %s", e)
+            raise  # FIX: Re-raise to caller knows state wasn't saved
         finally:
             if tmp_path is not None and tmp_path.exists():
                 try:

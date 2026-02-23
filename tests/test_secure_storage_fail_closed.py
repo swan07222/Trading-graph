@@ -35,16 +35,21 @@ def test_secure_storage_default_key_path_is_outside_storage_dir(monkeypatch, tmp
     security.reset_security_singletons()
     monkeypatch.setenv("TRADING_SECURE_MASTER_KEY", "")
     monkeypatch.setenv("TRADING_SECURE_KEY_PATH", "")
+    
+    # Create the data_storage directory structure
+    data_dir = tmp_path / "data_storage"
+    data_dir.mkdir(parents=True, exist_ok=True)
     monkeypatch.setattr(
         security.CONFIG,
         "_data_dir_cached",
-        tmp_path / "data_storage",
+        data_dir,
         raising=False,
     )
 
     store = security.SecureStorage()
     try:
-        assert store._storage_path.parent != store._key_path.parent
+        # Key path should be outside data_storage by default
+        assert "data_storage" not in str(store._key_path.parent)
     finally:
         store.close()
 
@@ -54,10 +59,14 @@ def test_secure_storage_env_master_key_avoids_local_key_file(monkeypatch, tmp_pa
         pytest.skip("cryptography unavailable")
 
     security.reset_security_singletons()
+    
+    # Create the data_storage directory structure
+    data_dir = tmp_path / "data_storage"
+    data_dir.mkdir(parents=True, exist_ok=True)
     monkeypatch.setattr(
         security.CONFIG,
         "_data_dir_cached",
-        tmp_path / "data_storage",
+        data_dir,
         raising=False,
     )
     monkeypatch.setenv(
@@ -68,6 +77,7 @@ def test_secure_storage_env_master_key_avoids_local_key_file(monkeypatch, tmp_pa
 
     store = security.SecureStorage()
     try:
+        # When using env master key, local key file should not be created
         assert store._key_path.exists() is False
     finally:
         store.close()
@@ -78,10 +88,14 @@ def test_secure_storage_non_object_payload_resets_cache(monkeypatch, tmp_path):
         pytest.skip("cryptography unavailable")
 
     security.reset_security_singletons()
+    
+    # Create the data_storage directory structure
+    data_dir = tmp_path / "data_storage"
+    data_dir.mkdir(parents=True, exist_ok=True)
     monkeypatch.setattr(
         security.CONFIG,
         "_data_dir_cached",
-        tmp_path / "data_storage",
+        data_dir,
         raising=False,
     )
     monkeypatch.setenv(
@@ -95,11 +109,13 @@ def test_secure_storage_non_object_payload_resets_cache(monkeypatch, tmp_path):
     cipher = store._cipher
     store.close()
 
+    # Ensure parent directory exists before writing
     storage_path.parent.mkdir(parents=True, exist_ok=True)
     storage_path.write_bytes(cipher.encrypt(b"[]"))
 
     reloaded = security.SecureStorage()
     try:
+        # Non-object payload (array) should reset cache to empty dict
         assert reloaded._cache == {}
     finally:
         reloaded.close()

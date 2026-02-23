@@ -42,6 +42,7 @@ from core.types import (
     AutoTradeMode,
     OrderSide,
 )
+from ui.modern_theme import ModernFonts
 from ui import app_analysis_ops as _app_analysis_ops
 from ui import app_bar_ops as _app_bar_ops
 from ui import app_feed_ops as _app_feed_ops
@@ -1365,7 +1366,7 @@ def _bind_mainapp_extracted_ops() -> None:
 _bind_mainapp_extracted_ops()
 
 def run_app() -> None:
-    """Run the application"""
+    """Run the application with modern professional theme"""
     os.environ.setdefault('QT_AUTO_SCREEN_SCALE_FACTOR', '1')
 
     app = QApplication(sys.argv)
@@ -1375,8 +1376,13 @@ def run_app() -> None:
     app.setApplicationVersion("2.0")
     app.setOrganizationName("AI Trading")
 
-    font = QFont("Segoe UI", 10)
+    # Set modern font
+    font = QFont(ModernFonts.FAMILY_PRIMARY, ModernFonts.SIZE_BASE)
     app.setFont(font)
+    
+    # Apply modern theme
+    from ui.modern_theme import apply_modern_theme
+    apply_modern_theme(app)
 
     window = MainApp()
     window.show()

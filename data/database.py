@@ -76,11 +76,12 @@ class MarketDatabase:
                 self._cleanup_dead_threads()
                 self._connections[tid] = conn
         else:
-            # FIX: Periodic cleanup every 100 accesses to prevent connection accumulation
+            # FIX: Periodic cleanup every 50 accesses (reduced from 100)
+            # to prevent connection accumulation more aggressively
             if not hasattr(self._local, "access_count"):
                 self._local.access_count = 0
             self._local.access_count += 1
-            if self._local.access_count % 100 == 0:
+            if self._local.access_count % 50 == 0:
                 with self._connections_lock:
                     self._cleanup_dead_threads()
 
@@ -396,7 +397,11 @@ class MarketDatabase:
         same_close = out["close"].diff().abs() <= (close_safe * 1e-6)
         flat_body = (out["open"] - out["close"]).abs() <= (close_safe * 1e-6)
         flat_span = (out["high"] - out["low"]).abs() <= (close_safe * 2e-6)
-        vol = out["volume"].fillna(0) if "volume" in out.columns else pd.Series(0.0, index=out.index)
+        vol = out["volume"].fillna(0)
+        if "volume" not in out.columns:
+            vol = pd.Series(0.0, index=out.index)
+        else:
+            vol = out["volume"].fillna(0)
         stale_flat = same_close & flat_body & flat_span & (vol <= 0)
 
         if bool(stale_flat.any()):

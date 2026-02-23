@@ -10,6 +10,14 @@ class OrderSide(Enum):
     BUY = "buy"
     SELL = "sell"
 
+class Signal(Enum):
+    """Trading signal for predictions."""
+    STRONG_BUY = "STRONG_BUY"
+    BUY = "BUY"
+    HOLD = "HOLD"
+    SELL = "SELL"
+    STRONG_SELL = "STRONG_SELL"
+
 class OrderStatus(Enum):
     PENDING = "pending"
     SUBMITTED = "submitted"

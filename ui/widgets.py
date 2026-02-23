@@ -16,6 +16,15 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from ui.modern_theme import (
+    ModernColors,
+    ModernFonts,
+    ModernSpacing,
+    get_signal_bg,
+    get_signal_color,
+    get_signal_panel_style,
+    get_progress_bar_style,
+)
 from utils.logger import get_logger
 
 log = get_logger(__name__)
@@ -29,119 +38,83 @@ def _get_signal_enum():
         return None
 
 class SignalPanel(QFrame):
-    """Large signal display panel with professional styling"""
+    """Large signal display panel with modern professional styling"""
 
     def __init__(self):
         super().__init__()
-        self.setMinimumHeight(220)
+        self.setObjectName("signalPanelFrame")
+        self.setMinimumHeight(240)
         self._setup_ui()
 
     def _setup_ui(self):
         layout = QVBoxLayout(self)
-        layout.setSpacing(12)
-        layout.setContentsMargins(24, 24, 24, 24)
+        layout.setSpacing(ModernSpacing.LG)
+        layout.setContentsMargins(ModernSpacing.XXL, ModernSpacing.XXL, ModernSpacing.XXL, ModernSpacing.XXL)
+        
+        # Apply modern card style
+        self.setStyleSheet(f"""
+            QFrame#signalPanelFrame {{
+                background-color: {ModernColors.BG_SECONDARY};
+                border: 2px solid {ModernColors.BORDER_DEFAULT};
+                border-radius: 16px;
+            }}
+        """)
 
         self.signal_label = QLabel("WAITING")
-        self.signal_label.setFont(QFont("Segoe UI", 36, QFont.Weight.Bold))
+        self.signal_label.setObjectName("signalLabel")
+        self.signal_label.setFont(QFont(ModernFonts.FAMILY_PRIMARY, ModernFonts.SIZE_HERO, QFont.Weight.Bold))
         self.signal_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(self.signal_label)
 
         self.info_label = QLabel("Enter a stock code to analyze")
-        self.info_label.setFont(QFont("Segoe UI", 13))
+        self.info_label.setFont(QFont(ModernFonts.FAMILY_PRIMARY, ModernFonts.SIZE_BASE))
         self.info_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.info_label.setStyleSheet(f"color: {ModernColors.TEXT_SECONDARY};")
         layout.addWidget(self.info_label)
 
         prob_widget = QWidget()
         prob_layout = QHBoxLayout(prob_widget)
-        prob_layout.setSpacing(16)
-        prob_layout.setContentsMargins(0, 12, 0, 12)
+        prob_layout.setSpacing(ModernSpacing.LG)
+        prob_layout.setContentsMargins(0, ModernSpacing.BASE, 0, ModernSpacing.BASE)
 
         down_container = QVBoxLayout()
-        down_container.setSpacing(6)
+        down_container.setSpacing(ModernSpacing.XS)
         down_label = QLabel("▼ DOWN")
         down_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         down_label.setStyleSheet(
-            "color: #f87171; font-weight: 700; font-size: 11px;"
+            f"color: {ModernColors.ACCENT_DANGER}; font-weight: {ModernFonts.WEIGHT_SEMIBOLD}; font-size: {ModernFonts.SIZE_SM}px;"
         )
         self.prob_down = QProgressBar()
         self.prob_down.setFormat("%p%")
-        self.prob_down.setStyleSheet("""
-            QProgressBar {
-                background: #1f2937;
-                border: none;
-                border-radius: 8px;
-                text-align: center;
-                color: #fecaca;
-                height: 24px;
-                font-weight: 600;
-                font-size: 11px;
-            }
-            QProgressBar::chunk {
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                    stop:0 #f87171, stop:1 #dc2626);
-                border-radius: 7px;
-            }
-        """)
+        self.prob_down.setStyleSheet(get_progress_bar_style("danger"))
         down_container.addWidget(down_label)
         down_container.addWidget(self.prob_down)
         prob_layout.addLayout(down_container)
 
         neutral_container = QVBoxLayout()
-        neutral_container.setSpacing(6)
+        neutral_container.setSpacing(ModernSpacing.XS)
         neutral_label = QLabel("● NEUTRAL")
         neutral_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         neutral_label.setStyleSheet(
-            "color: #fbbf24; font-weight: 700; font-size: 11px;"
+            f"color: {ModernColors.ACCENT_WARNING}; font-weight: {ModernFonts.WEIGHT_SEMIBOLD}; font-size: {ModernFonts.SIZE_SM}px;"
         )
         self.prob_neutral = QProgressBar()
         self.prob_neutral.setFormat("%p%")
-        self.prob_neutral.setStyleSheet("""
-            QProgressBar {
-                background: #1f2937;
-                border: none;
-                border-radius: 8px;
-                text-align: center;
-                color: #fef3c7;
-                height: 24px;
-                font-weight: 600;
-                font-size: 11px;
-            }
-            QProgressBar::chunk {
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                    stop:0 #fbbf24, stop:1 #d97706);
-                border-radius: 7px;
-            }
-        """)
+        self.prob_neutral.setStyleSheet(get_progress_bar_style("warning"))
         neutral_container.addWidget(neutral_label)
         neutral_container.addWidget(self.prob_neutral)
         prob_layout.addLayout(neutral_container)
 
         up_container = QVBoxLayout()
-        up_container.setSpacing(6)
+        up_container.setSpacing(ModernSpacing.XS)
         up_label = QLabel("▲ UP")
         up_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         up_label.setStyleSheet(
-            "color: #34d399; font-weight: 700; font-size: 11px;"
+            f"color: {ModernColors.ACCENT_SUCCESS}; font-weight: {ModernFonts.WEIGHT_SEMIBOLD}; font-size: {ModernFonts.SIZE_SM}px;"
         )
         self.prob_up = QProgressBar()
         self.prob_up.setFormat("%p%")
-        self.prob_up.setStyleSheet("""
-            QProgressBar {
-                background: #1f2937;
-                border: none;
-                border-radius: 8px;
-                text-align: center;
-                color: #d1fae5;
-                height: 24px;
-                font-weight: 600;
-                font-size: 11px;
-            }
-            QProgressBar::chunk {
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                    stop:0 #34d399, stop:1 #059669);
-                border-radius: 7px;
-            }
-        """)
+        self.prob_up.setStyleSheet(get_progress_bar_style("success"))
         up_container.addWidget(up_label)
         up_container.addWidget(self.prob_up)
         prob_layout.addLayout(up_container)

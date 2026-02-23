@@ -603,8 +603,13 @@ class OrderManagementSystem:
 
     def process_fill(self, order: Order, fill: Fill):
         """
-        Process order fill 鈥?IDEMPOTENT.
+        Process order fill — IDEMPOTENT.
         All mutations happen inside the transaction block.
+
+        Thread Safety:
+        - Acquires self._lock (RLock) for entire operation
+        - Transaction is atomic with rollback on failure
+        - Fill deduplication via database unique constraint
         """
         with self._lock:
             self._check_new_day()
@@ -621,6 +626,7 @@ class OrderManagementSystem:
             if not fill.symbol:
                 fill.symbol = order.symbol
 
+            # Idempotent: check if fill already exists
             if self._db.fill_exists(fill):
                 log.debug("Fill already processed, skipping")
                 return

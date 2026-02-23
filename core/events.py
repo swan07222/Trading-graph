@@ -293,18 +293,18 @@ class EventBus:
         """
         Get event history.
 
-        FIX: Returns a proper list from deque.
-        Thread-safe because deque iteration is safe.
+        Thread-safe: returns a snapshot copy of history.
         """
-        if event_type:
-            filtered = [
-                e for e in self._history
-                if e.type == event_type
-            ]
-            return filtered[-limit:]
-        else:
-            history_list = list(self._history)
-            return history_list[-limit:]
+        with self._sub_lock:
+            if event_type:
+                filtered = [
+                    e for e in self._history
+                    if e.type == event_type
+                ]
+                return filtered[-limit:]
+            else:
+                history_list = list(self._history)
+                return history_list[-limit:]
 
     def clear_history(self):
         """Clear event history."""
@@ -319,5 +319,6 @@ class EventBus:
     def is_running(self) -> bool:
         """Whether async processing is active."""
         return self._running
+
 
 EVENT_BUS = EventBus()

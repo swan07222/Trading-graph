@@ -332,13 +332,13 @@ class DiskCache:
                 return pickle_load_bytes(
                     payload,
                     max_bytes=_DISK_CACHE_MAX_PICKLE_BYTES,
-                    allow_unsafe=True,
+                    allow_unsafe=False,  # FIX: Security - disable unsafe pickle
                 )
             else:
                 return pickle_load(
                     path,
                     max_bytes=_DISK_CACHE_MAX_PICKLE_BYTES,
-                    allow_unsafe=True,
+                    allow_unsafe=False,  # FIX: Security - disable unsafe pickle
                 )
         except (OSError, ValueError, TypeError, pickle.UnpicklingError) as e:
             log.warning(

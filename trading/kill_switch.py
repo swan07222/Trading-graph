@@ -5,6 +5,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from enum import Enum
+from pathlib import Path
 
 from config.settings import CONFIG
 from core.events import EVENT_BUS, Event, EventType
@@ -322,6 +323,11 @@ class KillSwitch:
             }
 
     def _save_state(self) -> None:
+        """
+        Save state to disk atomically.
+
+        Uses temp file + rename pattern to prevent corruption on crash.
+        """
         path = CONFIG.data_dir / self.STATE_FILE
 
         state = {
@@ -351,11 +357,22 @@ class KillSwitch:
             },
         }
 
+        tmp_path: Path | None = None
         try:
-            with open(path, 'w') as f:
+            tmp_path = path.with_suffix('.tmp')
+            with open(tmp_path, 'w') as f:
                 json.dump(state, f, indent=2)
+            tmp_path.replace(path)
+            tmp_path = None  # Successfully moved
         except Exception as e:
             log.error(f"Failed to save kill switch state: {e}")
+            raise  # FIX: Re-raise to caller knows state wasn't saved
+        finally:
+            if tmp_path is not None and tmp_path.exists():
+                try:
+                    tmp_path.unlink()
+                except OSError:
+                    pass
 
     def _load_state(self) -> None:
         """
