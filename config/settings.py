@@ -70,6 +70,25 @@ class DataConfig:
     history_quorum_required_sources: int = 2
     history_quorum_tolerance_bps: float = 80.0
     history_quorum_min_ratio: float = 0.55
+    
+    # China network optimization
+    china_network_optimized: bool = True
+    china_endpoint_probe_interval: int = 120  # seconds
+    china_proxy_enabled: bool = False
+    china_proxy_url: str = ""
+    china_dns_servers: list[str] = field(default_factory=lambda: [
+        "114.114.114.114",
+        "223.5.5.5",
+        "119.29.29.29",
+    ])
+    # Provider priority for China (higher = preferred)
+    china_provider_priority: dict[str, float] = field(default_factory=lambda: {
+        "eastmoney": 1.2,
+        "jin10": 1.3,
+        "sina": 1.1,
+        "tencent": 1.1,
+        "xueqiu": 1.0,
+    })
 
 
 @dataclass

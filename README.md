@@ -2,6 +2,8 @@
 
 Desktop AI trading system for China A-shares with:
 - multi-source market data (Tencent, AkShare/EastMoney, Sina, Yahoo fallback)
+- **China network optimization** (auto failover, proxy support, DNS optimization)
+- **Enhanced sentiment analysis** (Jin10, Xueqiu, EastMoney, Sina)
 - model training and prediction
 - auto-trade execution and risk controls
 - PyQt real-time charting and operations UI
@@ -11,6 +13,35 @@ Desktop AI trading system for China A-shares with:
 This project is desktop-first and single-node. It is suitable for personal and small-team workflows, not full institutional deployment.
 Tooling is Python-only (`pyproject.toml` + `pip` requirements); no Node/NPM step is required.
 Runtime singleton behavior can be disabled with `TRADING_DISABLE_SINGLETONS=1` to create isolated in-process instances for testing/multi-run tooling.
+
+## China Network Support
+
+**Fully optimized for mainland China network conditions:**
+
+- ✅ 5 Chinese financial data providers with auto-failover
+- ✅ Proxy support (HTTP/SOCKS5) for VPN users
+- ✅ China-optimized DNS resolution
+- ✅ Connection pooling for Chinese ISPs
+- ✅ Extended timeouts for Great Firewall conditions
+- ✅ Network diagnostics utility
+
+**Quick setup for China:**
+
+```bash
+# Run network diagnostics
+python -m utils.china_diagnostics
+
+# Configure proxy (if using VPN)
+export TRADING_PROXY_URL=http://127.0.0.1:7890
+
+# Force VPN mode
+export TRADING_VPN=1
+
+# Or force China direct mode
+export TRADING_CHINA_DIRECT=1
+```
+
+See [docs/CHINA_NETWORK.md](docs/CHINA_NETWORK.md) for detailed guide.
 
 ## Key Capabilities
 

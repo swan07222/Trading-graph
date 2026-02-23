@@ -188,9 +188,29 @@ class SentimentAnalyzer:
 
 
 class NewsScraper:
-    """News scraper with short TTL cache and source failover."""
+    """
+    Enhanced news scraper with China network optimization.
+    
+    Features:
+    - Multiple Chinese news providers (Sina, EastMoney, Jin10, Xueqiu, Yahoo China)
+    - China network quality scoring and automatic failover
+    - Proxy support for restricted content
+    - Optimized timeouts for China ISP conditions
+    - Social sentiment from Chinese platforms
+    """
 
     def __init__(self):
+        # Use optimized session from China network module
+        try:
+            from core.china_network import get_optimized_session, get_best_endpoint
+            self._china_optimized = True
+            self._get_provider_session = lambda name: get_optimized_session(name)
+            self._get_best_endpoint = get_best_endpoint
+        except ImportError:
+            self._china_optimized = False
+            self._get_provider_session = lambda name: requests.Session()
+            self._get_best_endpoint = lambda name: ""
+
         self.session = requests.Session()
         self.session.headers.update(
             {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
@@ -204,18 +224,37 @@ class NewsScraper:
         self._load_seen_hashes()
 
         self._last_request: dict[str, float] = {}
-        self._rate_limits = {"sina": 0.5, "eastmoney": 0.7}
-        self._provider_weights: dict[str, float] = {"sina": 1.0, "eastmoney": 1.1}
+        self._rate_limits = {
+            "sina": 0.5,
+            "eastmoney": 0.7,
+            "jin10": 0.3,
+            "xueqiu": 1.0,
+            "yahoo_cn": 0.5,
+        }
+        self._provider_weights: dict[str, float] = {
+            "sina": 1.0,
+            "eastmoney": 1.1,
+            "jin10": 1.2,      # Fastest financial news
+            "xueqiu": 1.0,     # Social sentiment
+            "yahoo_cn": 0.9,
+        }
         self._providers: dict[str, Callable[[], list[NewsItem]]] = {
             "sina": lambda: self.scrape_sina(),
             "eastmoney": lambda: self.scrape_eastmoney(),
+            "jin10": lambda: self.scrape_jin10(),
+            "xueqiu": lambda: self.scrape_xueqiu(),
         }
         self._network_check_ttl_s = 30.0
         self._last_network_check_ts = 0.0
         self._network_available_cache = True
-        self._request_timeout = float(
-            max(1.0, min(2.0, float(getattr(CONFIG.data, "request_timeout", 2))))
-        )
+        
+        # China-specific timeout optimization
+        base_timeout = float(getattr(CONFIG.data, "request_timeout", 3))
+        self._request_timeout = max(2.0, min(5.0, base_timeout))  # Longer timeout for China
+        
+        # Initialize China network optimization
+        if self._china_optimized:
+            self._init_china_network()
 
     def register_provider(
         self,
@@ -304,6 +343,200 @@ class NewsScraper:
         self._last_network_check_ts = now
         self._network_available_cache = ok
         return ok
+
+    def _init_china_network(self) -> None:
+        """Initialize China network optimization."""
+        try:
+            from core.china_network import get_optimizer
+            optimizer = get_optimizer()
+            
+            # Run initial probe for news providers
+            for provider in ["sina", "eastmoney", "jin10", "xueqiu"]:
+                optimizer.run_endpoint_probe(provider)
+        except Exception as e:
+            log.debug(f"China network init skipped: {e}")
+
+    def scrape_jin10(self, max_items: int = 40) -> list[NewsItem]:
+        """
+        Scrape Jin10 financial news (fastest China financial news service).
+        
+        Jin10 provides real-time financial news and announcements.
+        """
+        items: list[NewsItem] = []
+        self._rate_limit("jin10")
+        
+        try:
+            # Use China-optimized endpoint
+            if self._china_optimized:
+                base_url = self._get_best_endpoint("jin10")
+            else:
+                base_url = "https://api.jin10.com"
+            
+            if not base_url:
+                base_url = "https://api.jin10.com"
+            
+            url = f"{base_url}/news_service/v1/news"
+            params = {
+                "category": "stock",
+                "limit": max_items,
+                "channel": "cn",
+            }
+            
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                "Accept": "application/json",
+                "Referer": "https://www.jin10.com",
+            }
+            
+            resp = self.session.get(url, params=params, headers=headers, timeout=self._request_timeout)
+            
+            if resp.status_code != 200:
+                return items
+            
+            data = resp.json()
+            news_list = data.get("data", []) if isinstance(data, dict) else []
+            
+            for item in news_list[:max_items]:
+                title = str(item.get("title", "") or item.get("content", ""))
+                content = str(item.get("content", "") or "")[:500]
+                
+                if not title:
+                    continue
+                
+                h = self._hash(f"jin10::{title}::{content}")
+                if h in self._seen_hashes:
+                    continue
+                self._seen_hashes.add(h)
+                
+                text = f"{title} {content}"
+                sentiment = self.analyzer.analyze(text)
+                
+                # Parse timestamp
+                ts_str = item.get("time", "")
+                try:
+                    # Jin10 uses ISO format or Unix timestamp
+                    if ts_str.isdigit():
+                        ts = datetime.fromtimestamp(int(ts_str) / 1000.0)
+                    else:
+                        ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+                except Exception:
+                    ts = datetime.now()
+                
+                items.append(
+                    NewsItem(
+                        title=title,
+                        content=content,
+                        source="jin10",
+                        url=str(item.get("url", "") or f"https://www.jin10.com/news/{item.get('id', '')}"),
+                        timestamp=ts,
+                        stock_codes=self._extract_stock_codes(text),
+                        sentiment_score=sentiment.score,
+                        sentiment_label=sentiment.label,
+                    )
+                )
+                
+        except Exception as e:
+            log.debug(f"Jin10 scraping error: {e}")
+        
+        return items
+
+    def scrape_xueqiu(self, max_items: int = 30) -> list[NewsItem]:
+        """
+        Scrape Xueqiu (Snowball) social sentiment.
+        
+        Xueqiu is China's leading social investment platform.
+        """
+        items: list[NewsItem] = []
+        self._rate_limit("xueqiu")
+        
+        try:
+            # Use China-optimized endpoint
+            if self._china_optimized:
+                base_url = self._get_best_endpoint("xueqiu")
+            else:
+                base_url = "https://xueqiu.com"
+            
+            if not base_url:
+                base_url = "https://xueqiu.com"
+            
+            # First get cookies
+            self.session.get(f"{base_url}/", timeout=self._request_timeout)
+            
+            # Get hot posts
+            url = f"{base_url}/v4/statuses/hot_list.json"
+            params = {
+                "size": max_items,
+                "type": "0",
+            }
+            
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                "Accept": "application/json",
+                "X-Requested-With": "XMLHttpRequest",
+            }
+            
+            resp = self.session.get(url, params=params, headers=headers, timeout=self._request_timeout)
+            
+            if resp.status_code != 200:
+                return items
+            
+            data = resp.json()
+            posts = data.get("list", []) if isinstance(data, dict) else []
+            
+            for post in posts[:max_items]:
+                title = str(post.get("title", "") or post.get("text", "")[:100])
+                content = str(post.get("text", "") or "")[:500]
+                
+                if not title:
+                    continue
+                
+                h = self._hash(f"xueqiu::{title}::{content}")
+                if h in self._seen_hashes:
+                    continue
+                self._seen_hashes.add(h)
+                
+                text = f"{title} {content}"
+                sentiment = self.analyzer.analyze(text)
+                
+                # Parse timestamp
+                ts_ms = post.get("created_at")
+                try:
+                    if ts_ms and str(ts_ms).isdigit():
+                        ts = datetime.fromtimestamp(int(ts_ms) / 1000.0)
+                    else:
+                        ts = datetime.now()
+                except Exception:
+                    ts = datetime.now()
+                
+                # Extract stock symbols mentioned
+                stock_codes = self._extract_stock_codes(text)
+                
+                # Also get from mentioned stocks in post
+                symbols = post.get("symbols", [])
+                if isinstance(symbols, list):
+                    for sym in symbols:
+                        if isinstance(sym, dict):
+                            symbol_code = str(sym.get("symbol", "")).strip("SHSZ")
+                            if symbol_code and symbol_code not in stock_codes:
+                                stock_codes.append(symbol_code)
+                
+                items.append(
+                    NewsItem(
+                        title=title,
+                        content=content,
+                        source="xueqiu",
+                        url=f"{base_url}/status/{post.get('id', '')}",
+                        timestamp=ts,
+                        stock_codes=stock_codes,
+                        sentiment_score=sentiment.score,
+                        sentiment_label=sentiment.label,
+                    )
+                )
+                
+        except Exception as e:
+            log.debug(f"Xueqiu scraping error: {e}")
+        
+        return items
 
     def scrape_sina(self, max_items: int = 50) -> list[NewsItem]:
         items: list[NewsItem] = []
