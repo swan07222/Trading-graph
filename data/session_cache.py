@@ -17,6 +17,7 @@ import pandas as pd
 from config.settings import CONFIG
 from data.session_cache_read_ops import read_history as _read_history_impl
 from utils.logger import get_logger
+from utils.type_utils import safe_float
 
 log = get_logger(__name__)
 
@@ -241,30 +242,20 @@ class SessionBarCache:
             return dt.isoformat()
         return datetime.now(timezone.utc).isoformat()
 
-    @staticmethod
-    def _safe_float(value: object, default: float = 0.0) -> float:
-        try:
-            out = float(value)
-        except Exception:
-            return float(default)
-        if not math.isfinite(out):
-            return float(default)
-        return float(out)
-
     def _load_last_close_hint(self, path: Path) -> float | None:
         """Read last cached close for outlier-write guard."""
         if not path.exists():
             return None
         row = self._load_last_csv_row(path)
         if row:
-            v = self._safe_float(row.get("close", 0.0), 0.0)
+            v = safe_float(row.get("close", 0.0))
             if v > 0:
                 return float(v)
         try:
             df = pd.read_csv(path, usecols=["close"])
             if df is None or df.empty:
                 return None
-            v = self._safe_float(df["close"].iloc[-1], 0.0)
+            v = safe_float(df["close"].iloc[-1])
             return float(v) if v > 0 else None
         except Exception:
             return None

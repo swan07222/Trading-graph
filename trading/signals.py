@@ -9,6 +9,7 @@ import numpy as np
 
 from config.settings import CONFIG
 from utils.logger import get_logger
+from utils.type_utils import safe_float, safe_int
 
 # Type-checking imports (no runtime cost)
 if TYPE_CHECKING:
@@ -226,30 +227,10 @@ class SignalGenerator:
             log.debug("Safe attribute access failed (%s): %s", attr, e)
             return default
 
-    @staticmethod
-    def _safe_float(value, default: float = 0.0) -> float:
-        """Safely convert value to float."""
-        try:
-            if value is None:
-                return default
-            return float(value)
-        except (TypeError, ValueError):
-            return default
-
-    @staticmethod
-    def _safe_int(value, default: int = 0) -> int:
-        """Safely convert value to int."""
-        try:
-            if value is None:
-                return default
-            return int(value)
-        except (TypeError, ValueError):
-            return default
-
     def generate(
-        self, 
-        prediction: Prediction, 
-        df: pd.DataFrame | None = None, 
+        self,
+        prediction: Prediction,
+        df: pd.DataFrame | None = None,
         include_sentiment: bool = True
     ) -> TradingSignal:
         """
@@ -274,12 +255,12 @@ class SignalGenerator:
 
         stock_code = str(self._safe_get(prediction, "stock_code", "") or "")
         stock_name = str(self._safe_get(prediction, "stock_name", "") or "")
-        current_price = self._safe_float(self._safe_get(prediction, "current_price"), 0.0)
+        current_price = safe_float(self._safe_get(prediction, "current_price"), 0.0)
 
         # === AI Score ===
         ai_score = self._calculate_ai_score(prediction)
-        ai_conf = self._safe_float(self._safe_get(prediction, "confidence"), 0.0)
-        model_agreement = self._safe_float(
+        ai_conf = safe_float(self._safe_get(prediction, "confidence"), 0.0)
+        model_agreement = safe_float(
             self._safe_get(prediction, "model_agreement", 
                           self._safe_get(prediction, "agreement", 1.0)),
             1.0
@@ -354,8 +335,8 @@ class SignalGenerator:
 
             ai_signal=ai_signal_str,
             ai_confidence=ai_conf,
-            ai_prob_up=self._safe_float(self._safe_get(prediction, "prob_up"), 0.33),
-            ai_prob_down=self._safe_float(self._safe_get(prediction, "prob_down"), 0.33),
+            ai_prob_up=safe_float(self._safe_get(prediction, "prob_up"), 0.33),
+            ai_prob_down=safe_float(self._safe_get(prediction, "prob_down"), 0.33),
 
             tech_signal=tech_signal,
             tech_score=tech_score,
@@ -367,13 +348,13 @@ class SignalGenerator:
 
             combined_score=combined_score,
 
-            entry_price=self._safe_float(self._safe_get(levels, "entry"), 0.0),
-            stop_loss=self._safe_float(self._safe_get(levels, "stop_loss"), 0.0),
-            take_profit_1=self._safe_float(self._safe_get(levels, "target_1"), 0.0),
-            take_profit_2=self._safe_float(self._safe_get(levels, "target_2"), 0.0),
-            position_size=self._safe_int(self._safe_get(position, "shares"), 0),
-            position_value=self._safe_float(self._safe_get(position, "value"), 0.0),
-            risk_amount=self._safe_float(self._safe_get(position, "risk_amount"), 0.0),
+            entry_price=safe_float(self._safe_get(levels, "entry"), 0.0),
+            stop_loss=safe_float(self._safe_get(levels, "stop_loss"), 0.0),
+            take_profit_1=safe_float(self._safe_get(levels, "target_1"), 0.0),
+            take_profit_2=safe_float(self._safe_get(levels, "target_2"), 0.0),
+            position_size=safe_int(self._safe_get(position, "shares"), 0),
+            position_value=safe_float(self._safe_get(position, "value"), 0.0),
+            risk_amount=safe_float(self._safe_get(position, "risk_amount"), 0.0),
 
             reasons=reasons,
             warnings=warnings,
@@ -391,14 +372,14 @@ class SignalGenerator:
         Returns:
             AI score in range [-100, +100]
         """
-        prob_up = self._safe_float(self._safe_get(prediction, "prob_up"), 0.33)
-        prob_down = self._safe_float(self._safe_get(prediction, "prob_down"), 0.33)
-        conf = self._safe_float(self._safe_get(prediction, "confidence"), 0.0)
+        prob_up = safe_float(self._safe_get(prediction, "prob_up"), 0.33)
+        prob_down = safe_float(self._safe_get(prediction, "prob_down"), 0.33)
+        conf = safe_float(self._safe_get(prediction, "confidence"), 0.0)
 
         agreement = self._safe_get(prediction, "model_agreement", None)
         if agreement is None:
             agreement = self._safe_get(prediction, "agreement", 1.0)
-        agreement = self._safe_float(agreement, 1.0)
+        agreement = safe_float(agreement, 1.0)
 
         score = (prob_up - prob_down) * 100.0
 
@@ -438,7 +419,7 @@ class SignalGenerator:
         try:
             tech_summary = self.tech_analyzer.analyze(df)
 
-            tech_score = self._safe_float(
+            tech_score = safe_float(
                 self._safe_get(tech_summary, "overall_score"), 0.0
             )
 
@@ -506,7 +487,7 @@ class SignalGenerator:
                 legacy_weight = 0.45 + (0.65 * sent_conf)
                 components.append((sent_score, legacy_weight))
                 news_count_candidates.append(
-                    self._safe_int(market_sent.get("news_count", 0), 0)
+                    safe_int(market_sent.get("news_count", 0), 0)
                 )
             except Exception as e:
                 log.debug(f"Legacy sentiment unavailable for {stock_code}: {e}")
@@ -518,19 +499,19 @@ class SignalGenerator:
             agg = get_news_aggregator()
             summary = agg.get_sentiment_summary(stock_code)
             if isinstance(summary, dict):
-                inst_score = self._safe_float(summary.get("overall_sentiment"), 0.0)
+                inst_score = safe_float(summary.get("overall_sentiment"), 0.0)
                 inst_score = float(np.clip(inst_score, -1.0, 1.0))
                 inst_conf = float(
-                    np.clip(self._safe_float(summary.get("confidence"), 0.0), 0.0, 1.0)
+                    np.clip(safe_float(summary.get("confidence"), 0.0), 0.0, 1.0)
                 )
                 source_div = float(
                     np.clip(
-                        self._safe_float(summary.get("source_diversity"), 0.0),
+                        safe_float(summary.get("source_diversity"), 0.0),
                         0.0,
                         1.0,
                     )
                 )
-                total_news = self._safe_int(summary.get("total", 0), 0)
+                total_news = safe_int(summary.get("total", 0), 0)
                 inst_weight = 0.55 + (0.45 * inst_conf) + (0.20 * source_div)
                 components.append((inst_score, inst_weight))
                 news_count_candidates.append(total_news)
@@ -595,7 +576,7 @@ class SignalGenerator:
         else:
             signal = Signal.HOLD
 
-        min_confidence = self._safe_float(CONFIG.MIN_CONFIDENCE, 0.55)
+        min_confidence = safe_float(CONFIG.MIN_CONFIDENCE, 0.55)
         if ai_confidence < min_confidence:
             if signal in (Signal.BUY, Signal.SELL):
                 signal = Signal.HOLD
@@ -654,7 +635,7 @@ class SignalGenerator:
             trend: Current trend string
             signal: Final signal
         """
-        min_confidence = self._safe_float(CONFIG.MIN_CONFIDENCE, 0.55)
+        min_confidence = safe_float(CONFIG.MIN_CONFIDENCE, 0.55)
 
         if ai_conf < min_confidence:
             warnings.append(f"Low AI model confidence ({ai_conf:.0%})")
@@ -699,9 +680,9 @@ class SignalGenerator:
         signals: list[TradingSignal] = []
 
         conf_floor = (
-            self._safe_float(min_ai_confidence, self._safe_float(CONFIG.MIN_CONFIDENCE, 0.55))
+            safe_float(min_ai_confidence, safe_float(CONFIG.MIN_CONFIDENCE, 0.55))
             if min_ai_confidence is not None
-            else self._safe_float(CONFIG.MIN_CONFIDENCE, 0.55)
+            else safe_float(CONFIG.MIN_CONFIDENCE, 0.55)
         )
         warning_cap = int(max_warnings) if max_warnings is not None else None
 

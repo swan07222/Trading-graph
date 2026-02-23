@@ -140,17 +140,13 @@ class NetworkDetector:
         """
         from concurrent.futures import ThreadPoolExecutor, as_completed
 
+        from config.runtime_env import env_flag
+
         env = NetworkEnv(detected_at=datetime.now())
         start = time.time()
 
-        def _env_bool(key: str) -> bool | None:
-            val = os.environ.get(key)
-            if val is None:
-                return None
-            return str(val).strip().lower() in ("1", "true", "yes", "on")
-
-        force_vpn = _env_bool("TRADING_VPN")
-        force_china_direct = _env_bool("TRADING_CHINA_DIRECT")
+        force_vpn = env_flag("TRADING_VPN")
+        force_china_direct = env_flag("TRADING_CHINA_DIRECT")
 
         probes = {
             "tencent_ok": ("https://qt.gtimg.cn/q=sh600519", 5),

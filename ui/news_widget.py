@@ -21,6 +21,7 @@ from ui.modern_theme import (
     get_progress_bar_style,
 )
 from utils.logger import get_logger
+from utils.type_utils import safe_float, safe_int, safe_str, safe_float_attr, safe_str_attr
 
 log = get_logger(__name__)
 
@@ -129,39 +130,17 @@ class SentimentGauge(QFrame):
 
         layout.addStretch()
 
-    @staticmethod
-    def _safe_float(data: dict, key: str, default: float = 0.0) -> float:
-        """Safely extract float from dict."""
-        try:
-            val = data.get(key, default)
-            if val is None:
-                return float(default)
-            return float(val)
-        except (TypeError, ValueError):
-            return float(default)
-
-    @staticmethod
-    def _safe_int(data: dict, key: str, default: int = 0) -> int:
-        """Safely extract int from dict."""
-        try:
-            val = data.get(key, default)
-            if val is None:
-                return int(default)
-            return int(val)
-        except (TypeError, ValueError):
-            return int(default)
-
     def update_sentiment(self, summary: dict):
         """Update gauge with sentiment summary data."""
         if not summary or not isinstance(summary, dict):
             self.reset()
             return
 
-        score = self._safe_float(summary, 'overall_sentiment')
+        score = safe_float(summary.get('overall_sentiment'))
         label = str(summary.get('label', 'neutral') or 'neutral')
-        pos = self._safe_int(summary, 'positive_count')
-        neg = self._safe_int(summary, 'negative_count')
-        total = self._safe_int(summary, 'total')
+        pos = safe_int(summary.get('positive_count'))
+        neg = safe_int(summary.get('negative_count'))
+        total = safe_int(summary.get('total'))
 
         if label == "positive":
             color = ModernColors.ACCENT_SUCCESS
@@ -428,28 +407,6 @@ class NewsPanel(QWidget):
             except (RuntimeError, AttributeError):
                 pass
 
-    @staticmethod
-    def _safe_item_attr(item, attr: str, default=""):
-        """Safely get attribute from a news item."""
-        try:
-            val = getattr(item, attr, None)
-            if val is None:
-                return default
-            return val
-        except Exception:
-            return default
-
-    @staticmethod
-    def _safe_float_attr(item, attr: str, default: float = 0.0) -> float:
-        """Safely get float attribute from a news item."""
-        try:
-            val = getattr(item, attr, None)
-            if val is None:
-                return float(default)
-            return float(val)
-        except (TypeError, ValueError):
-            return float(default)
-
     def _on_news_received(self, news_items: list):
         """Update table with received news and handle missing attributes."""
         if self._is_stale_sender():
@@ -464,9 +421,7 @@ class NewsPanel(QWidget):
 
         for row, item in enumerate(news_items):
             time_str = "--"
-            publish_time = self._safe_item_attr(
-                item, 'publish_time', None
-            )
+            publish_time = safe_str_attr(item, 'publish_time', None)
             if publish_time is not None:
                 try:
                     if hasattr(publish_time, 'strftime'):
@@ -480,7 +435,7 @@ class NewsPanel(QWidget):
             time_item.setForeground(QColor(ModernColors.TEXT_SECONDARY))
             self.table.setItem(row, 0, time_item)
 
-            score = self._safe_float_attr(item, "sentiment_score", 0.0)
+            score = safe_float_attr(item, "sentiment_score", 0.0)
 
             if score > 0.2:
                 sent_text = f"POS {score:+.1f}"
@@ -499,7 +454,7 @@ class NewsPanel(QWidget):
             )
             self.table.setItem(row, 1, sent_item)
 
-            title = str(self._safe_item_attr(item, "title", ""))
+            title = safe_str_attr(item, "title", "")
             title_item = QTableWidgetItem(title)
 
             if score > 0.3:
@@ -510,7 +465,7 @@ class NewsPanel(QWidget):
                 title_item.setForeground(QColor(ModernColors.TEXT_PRIMARY))
             self.table.setItem(row, 2, title_item)
 
-            source = str(self._safe_item_attr(item, "source", ""))
+            source = safe_str_attr(item, "source", "")
             source_item = QTableWidgetItem(source)
             source_item.setForeground(QColor(ModernColors.TEXT_SECONDARY))
             self.table.setItem(row, 3, source_item)

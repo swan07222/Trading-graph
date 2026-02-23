@@ -123,21 +123,7 @@ class Predictor:
         Optional high-precision runtime gate.
         Disabled by default so existing behavior is unchanged.
         """
-        def _env_bool(name: str, default: bool = False) -> bool:
-            raw = os.environ.get(name)
-            if raw is None:
-                return default
-            return str(raw).strip().lower() in ("1", "true", "yes", "on")
-
-        def _env_float(name: str, default: float) -> float:
-            raw = os.environ.get(name)
-            if raw is None:
-                return float(default)
-            try:
-                return float(raw)
-            except _PREDICTOR_RECOVERABLE_EXCEPTIONS as e:
-                log.debug("Invalid float env override %s=%r: %s", name, raw, e)
-                return float(default)
+        from config.runtime_env import env_flag, env_text
 
         precision_cfg = getattr(CONFIG, "precision", None)
         enabled_default = bool(getattr(precision_cfg, "enabled", False))
@@ -151,12 +137,13 @@ class Predictor:
         )
         max_entropy_default = float(getattr(precision_cfg, "max_entropy", 0.45))
         min_edge_default = float(getattr(precision_cfg, "min_edge", 0.10))
+        enabled_env = env_flag("TRADING_HIGH_PRECISION_MODE", "1" if enabled_default else "0")
         cfg = {
-            "enabled": 1.0 if _env_bool("TRADING_HIGH_PRECISION_MODE", enabled_default) else 0.0,
-            "min_confidence": _env_float("TRADING_HP_MIN_CONFIDENCE", min_conf_default),
-            "min_agreement": _env_float("TRADING_HP_MIN_AGREEMENT", min_agree_default),
-            "max_entropy": _env_float("TRADING_HP_MAX_ENTROPY", max_entropy_default),
-            "min_edge": _env_float("TRADING_HP_MIN_EDGE", min_edge_default),
+            "enabled": 1.0 if enabled_env else 0.0,
+            "min_confidence": float(env_text("TRADING_HP_MIN_CONFIDENCE", str(min_conf_default))),
+            "min_agreement": float(env_text("TRADING_HP_MIN_AGREEMENT", str(min_agree_default))),
+            "max_entropy": float(env_text("TRADING_HP_MAX_ENTROPY", str(max_entropy_default))),
+            "min_edge": float(env_text("TRADING_HP_MIN_EDGE", str(min_edge_default))),
             "regime_routing": 1.0 if bool(getattr(precision_cfg, "regime_routing", True)) else 0.0,
             "range_conf_boost": float(getattr(precision_cfg, "range_confidence_boost", 0.04)),
             "high_vol_conf_boost": float(getattr(precision_cfg, "high_vol_confidence_boost", 0.05)),
@@ -180,10 +167,10 @@ class Predictor:
             log.debug("High precision profile load failed: %s", e)
 
         # Final environment override (highest priority)
-        cfg["min_confidence"] = _env_float("TRADING_HP_MIN_CONFIDENCE", cfg["min_confidence"])
-        cfg["min_agreement"] = _env_float("TRADING_HP_MIN_AGREEMENT", cfg["min_agreement"])
-        cfg["max_entropy"] = _env_float("TRADING_HP_MAX_ENTROPY", cfg["max_entropy"])
-        cfg["min_edge"] = _env_float("TRADING_HP_MIN_EDGE", cfg["min_edge"])
+        cfg["min_confidence"] = float(env_text("TRADING_HP_MIN_CONFIDENCE", str(cfg["min_confidence"])))
+        cfg["min_agreement"] = float(env_text("TRADING_HP_MIN_AGREEMENT", str(cfg["min_agreement"])))
+        cfg["max_entropy"] = float(env_text("TRADING_HP_MAX_ENTROPY", str(cfg["max_entropy"])))
+        cfg["min_edge"] = float(env_text("TRADING_HP_MIN_EDGE", str(cfg["min_edge"])))
 
         if cfg["enabled"] > 0:
             log.info(

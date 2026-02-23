@@ -8,30 +8,10 @@ from typing import Any
 from config.settings import CONFIG
 from utils.logger import get_logger
 from utils.recoverable import JSON_RECOVERABLE_EXCEPTIONS
+from utils.type_utils import safe_float, safe_int, clamp
 
 log = get_logger(__name__)
 _AUTO_LEARNER_RECOVERABLE_EXCEPTIONS = JSON_RECOVERABLE_EXCEPTIONS
-
-
-def _safe_float(value: object, default: float = 0.0) -> float:
-    try:
-        out = float(value)
-    except (TypeError, ValueError):
-        return float(default)
-    if math.isnan(out) or math.isinf(out):
-        return float(default)
-    return float(out)
-
-
-def _safe_int(value: object, default: int = 0) -> int:
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return int(default)
-
-
-def _clamp(value: float, lo: float, hi: float) -> float:
-    return max(float(lo), min(float(hi), float(value)))
 
 
 def _quantile(values: list[float], q: float) -> float:
@@ -39,14 +19,14 @@ def _quantile(values: list[float], q: float) -> float:
         return 0.0
     clean: list[float] = []
     for v in values:
-        val = _safe_float(v, default=math.nan)
+        val = safe_float(v, default=math.nan)
         if math.isnan(val):
             continue
         clean.append(float(val))
     clean.sort()
     if not clean:
         return 0.0
-    q = _clamp(float(q), 0.0, 1.0)
+    q = clamp(float(q), 0.0, 1.0)
     pos = (len(clean) - 1) * q
     lo = int(math.floor(pos))
     hi = int(math.ceil(pos))
@@ -59,13 +39,13 @@ def _quantile(values: list[float], q: float) -> float:
 def _wilson_lower_bound(rate: float, n: int, z: float) -> float:
     if n <= 0:
         return 0.0
-    p = _clamp(rate, 0.0, 1.0)
+    p = clamp(rate, 0.0, 1.0)
     n_f = float(max(1, n))
     z2 = float(z * z)
     denom = 1.0 + z2 / n_f
     center = p + z2 / (2.0 * n_f)
     margin = z * math.sqrt((p * (1.0 - p) + z2 / (4.0 * n_f)) / n_f)
-    return _clamp((center - margin) / denom, 0.0, 1.0)
+    return clamp((center - margin) / denom, 0.0, 1.0)
 
 
 def _extract_trade_samples(samples: list[dict[str, Any]]) -> list[dict[str, float]]:
@@ -73,26 +53,26 @@ def _extract_trade_samples(samples: list[dict[str, Any]]) -> list[dict[str, floa
     for row in list(samples or []):
         if not isinstance(row, dict):
             continue
-        pred_cls = _safe_int(row.get("predicted", 1), default=1)
+        pred_cls = safe_int(row.get("predicted", 1), default=1)
         if pred_cls not in (0, 2):
             continue
-        prob_up = _clamp(_safe_float(row.get("prob_up", 0.33), default=0.33), 0.0, 1.0)
-        prob_dn = _clamp(
-            _safe_float(row.get("prob_down", 0.33), default=0.33), 0.0, 1.0
+        prob_up = clamp(safe_float(row.get("prob_up", 0.33), default=0.33), 0.0, 1.0)
+        prob_dn = clamp(
+            safe_float(row.get("prob_down", 0.33), default=0.33), 0.0, 1.0
         )
         out.append(
             {
-                "confidence": _clamp(
-                    _safe_float(row.get("confidence", 0.0), default=0.0), 0.0, 1.0
+                "confidence": clamp(
+                    safe_float(row.get("confidence", 0.0), default=0.0), 0.0, 1.0
                 ),
-                "agreement": _clamp(
-                    _safe_float(row.get("agreement", 0.0), default=0.0), 0.0, 1.0
+                "agreement": clamp(
+                    safe_float(row.get("agreement", 0.0), default=0.0), 0.0, 1.0
                 ),
-                "entropy": _clamp(
-                    _safe_float(row.get("entropy", 1.0), default=1.0), 0.0, 1.0
+                "entropy": clamp(
+                    safe_float(row.get("entropy", 1.0), default=1.0), 0.0, 1.0
                 ),
-                "edge": _clamp(abs(prob_up - prob_dn), 0.0, 1.0),
-                "future_return": _safe_float(row.get("future_return", 0.0), default=0.0),
+                "edge": clamp(abs(prob_up - prob_dn), 0.0, 1.0),
+                "future_return": safe_float(row.get("future_return", 0.0), default=0.0),
             }
         )
     return out
@@ -102,16 +82,16 @@ def _infer_regime(samples: list[dict[str, float]]) -> str:
     if not samples:
         return "unknown"
     cfg = getattr(CONFIG, "precision", None)
-    high_vol_ret = _safe_float(
+    high_vol_ret = safe_float(
         getattr(cfg, "validation_high_vol_return_pct", 1.2), default=1.2
     )
-    low_signal_edge = _safe_float(
+    low_signal_edge = safe_float(
         getattr(cfg, "validation_low_signal_edge", 0.10), default=0.10
     )
 
-    abs_ret = [abs(_safe_float(s.get("future_return", 0.0), default=0.0)) for s in samples]
-    edges = [_safe_float(s.get("edge", 0.0), default=0.0) for s in samples]
-    entropy = [_safe_float(s.get("entropy", 1.0), default=1.0) for s in samples]
+    abs_ret = [abs(safe_float(s.get("future_return", 0.0), default=0.0)) for s in samples]
+    edges = [safe_float(s.get("edge", 0.0), default=0.0) for s in samples]
+    entropy = [safe_float(s.get("entropy", 1.0), default=1.0) for s in samples]
 
     q75_abs_ret = _quantile(abs_ret, 0.75)
     med_edge = _quantile(edges, 0.50)
@@ -142,7 +122,7 @@ def _load_previous_profile_thresholds() -> dict[str, float]:
     out: dict[str, float] = {}
     for key in ("min_confidence", "min_agreement", "max_entropy", "min_edge"):
         if key in thresholds:
-            out[key] = _safe_float(thresholds[key], default=0.0)
+            out[key] = safe_float(thresholds[key], default=0.0)
     return out
 
 
@@ -168,25 +148,25 @@ def _build_threshold_candidates(
 
     max_per_axis = max(
         4,
-        _safe_int(getattr(cfg, "tuning_max_candidates_per_axis", 7), default=7),
+        safe_int(getattr(cfg, "tuning_max_candidates_per_axis", 7), default=7),
     )
 
-    conf_values = [_safe_float(s.get("confidence", 0.0), default=0.0) for s in samples]
-    agree_values = [_safe_float(s.get("agreement", 0.0), default=0.0) for s in samples]
-    entropy_values = [_safe_float(s.get("entropy", 1.0), default=1.0) for s in samples]
-    edge_values = [_safe_float(s.get("edge", 0.0), default=0.0) for s in samples]
+    conf_values = [safe_float(s.get("confidence", 0.0), default=0.0) for s in samples]
+    agree_values = [safe_float(s.get("agreement", 0.0), default=0.0) for s in samples]
+    entropy_values = [safe_float(s.get("entropy", 1.0), default=1.0) for s in samples]
+    edge_values = [safe_float(s.get("edge", 0.0), default=0.0) for s in samples]
 
-    base_conf = _clamp(
-        _safe_float(getattr(cfg, "min_confidence", 0.78), default=0.78), 0.0, 1.0
+    base_conf = clamp(
+        safe_float(getattr(cfg, "min_confidence", 0.78), default=0.78), 0.0, 1.0
     )
-    base_agree = _clamp(
-        _safe_float(getattr(cfg, "min_agreement", 0.72), default=0.72), 0.0, 1.0
+    base_agree = clamp(
+        safe_float(getattr(cfg, "min_agreement", 0.72), default=0.72), 0.0, 1.0
     )
-    base_entropy = _clamp(
-        _safe_float(getattr(cfg, "max_entropy", 0.35), default=0.35), 0.0, 1.0
+    base_entropy = clamp(
+        safe_float(getattr(cfg, "max_entropy", 0.35), default=0.35), 0.0, 1.0
     )
-    base_edge = _clamp(
-        _safe_float(getattr(cfg, "min_edge", 0.14), default=0.14), 0.0, 1.0
+    base_edge = clamp(
+        safe_float(getattr(cfg, "min_edge", 0.14), default=0.14), 0.0, 1.0
     )
 
     conf_grid = [
@@ -261,16 +241,16 @@ def _build_threshold_candidates(
         edge_grid.extend([base_edge + 0.03, base_edge + 0.06])
 
     conf_candidates = _compress_candidates(
-        [_clamp(v, 0.45, 0.98) for v in conf_grid], max_size=max_per_axis
+        [clamp(v, 0.45, 0.98) for v in conf_grid], max_size=max_per_axis
     )
     agree_candidates = _compress_candidates(
-        [_clamp(v, 0.45, 0.98) for v in agree_grid], max_size=max_per_axis
+        [clamp(v, 0.45, 0.98) for v in agree_grid], max_size=max_per_axis
     )
     entropy_candidates = _compress_candidates(
-        [_clamp(v, 0.10, 0.95) for v in entropy_grid], max_size=max_per_axis
+        [clamp(v, 0.10, 0.95) for v in entropy_grid], max_size=max_per_axis
     )
     edge_candidates = _compress_candidates(
-        [_clamp(v, 0.01, 0.90) for v in edge_grid], max_size=max_per_axis
+        [clamp(v, 0.01, 0.90) for v in edge_grid], max_size=max_per_axis
     )
     return (
         conf_candidates,
@@ -282,11 +262,11 @@ def _build_threshold_candidates(
 
 
 def _score_candidate(metrics: dict[str, float], regime: str, min_trades: int) -> float:
-    pf = _safe_float(metrics.get("profit_factor", 0.0), default=0.0)
-    precision = _safe_float(metrics.get("precision", 0.0), default=0.0)
-    expectancy = _safe_float(metrics.get("expectancy", 0.0), default=0.0)
-    trade_rate = _safe_float(metrics.get("trade_rate", 0.0), default=0.0)
-    trades = _safe_float(metrics.get("trades", 0.0), default=0.0)
+    pf = safe_float(metrics.get("profit_factor", 0.0), default=0.0)
+    precision = safe_float(metrics.get("precision", 0.0), default=0.0)
+    expectancy = safe_float(metrics.get("expectancy", 0.0), default=0.0)
+    trade_rate = safe_float(metrics.get("trade_rate", 0.0), default=0.0)
+    trades = safe_float(metrics.get("trades", 0.0), default=0.0)
 
     if regime == "high_vol":
         score = (pf * 2.25) + (precision * 1.00) + (expectancy * 0.30) - (trade_rate * 0.12)
@@ -316,8 +296,8 @@ def tune_precision_thresholds(self, samples: list[dict[str, Any]]) -> dict[str, 
     ) = _build_threshold_candidates(filtered)
 
     cfg = getattr(CONFIG, "precision", None)
-    min_trade_rate = _clamp(
-        _safe_float(getattr(cfg, "tuning_min_trade_rate", 0.03), default=0.03),
+    min_trade_rate = clamp(
+        safe_float(getattr(cfg, "tuning_min_trade_rate", 0.03), default=0.03),
         0.005,
         0.50,
     )
@@ -358,17 +338,17 @@ def tune_precision_thresholds(self, samples: list[dict[str, Any]]) -> dict[str, 
                             "min_agreement": float(a),
                             "max_entropy": float(e),
                             "min_edge": float(edge),
-                            "precision": _safe_float(
+                            "precision": safe_float(
                                 metrics.get("precision", 0.0), default=0.0
                             ),
-                            "profit_factor": _safe_float(
+                            "profit_factor": safe_float(
                                 metrics.get("profit_factor", 0.0), default=0.0
                             ),
-                            "expectancy": _safe_float(
+                            "expectancy": safe_float(
                                 metrics.get("expectancy", 0.0), default=0.0
                             ),
-                            "trades": _safe_float(metrics.get("trades", 0.0), default=0.0),
-                            "trade_rate": _safe_float(
+                            "trades": safe_float(metrics.get("trades", 0.0), default=0.0),
+                            "trade_rate": safe_float(
                                 metrics.get("trade_rate", 0.0), default=0.0
                             ),
                             "regime": str(regime),
@@ -382,17 +362,17 @@ def tune_precision_thresholds(self, samples: list[dict[str, Any]]) -> dict[str, 
 
     # Fallback: keep the current precision profile defaults if no candidate passes.
     base_cfg = getattr(CONFIG, "precision", None)
-    fallback_conf = _clamp(
-        _safe_float(getattr(base_cfg, "min_confidence", 0.78), default=0.78), 0.45, 0.98
+    fallback_conf = clamp(
+        safe_float(getattr(base_cfg, "min_confidence", 0.78), default=0.78), 0.45, 0.98
     )
-    fallback_agree = _clamp(
-        _safe_float(getattr(base_cfg, "min_agreement", 0.72), default=0.72), 0.45, 0.98
+    fallback_agree = clamp(
+        safe_float(getattr(base_cfg, "min_agreement", 0.72), default=0.72), 0.45, 0.98
     )
-    fallback_entropy = _clamp(
-        _safe_float(getattr(base_cfg, "max_entropy", 0.35), default=0.35), 0.10, 0.95
+    fallback_entropy = clamp(
+        safe_float(getattr(base_cfg, "max_entropy", 0.35), default=0.35), 0.10, 0.95
     )
-    fallback_edge = _clamp(
-        _safe_float(getattr(base_cfg, "min_edge", 0.14), default=0.14), 0.01, 0.90
+    fallback_edge = clamp(
+        safe_float(getattr(base_cfg, "min_edge", 0.14), default=0.14), 0.01, 0.90
     )
     metrics = self._score_thresholds(
         samples,
@@ -408,11 +388,11 @@ def tune_precision_thresholds(self, samples: list[dict[str, Any]]) -> dict[str, 
         "min_agreement": float(fallback_agree),
         "max_entropy": float(fallback_entropy),
         "min_edge": float(fallback_edge),
-        "precision": _safe_float(metrics.get("precision", 0.0), default=0.0),
-        "profit_factor": _safe_float(metrics.get("profit_factor", 0.0), default=0.0),
-        "expectancy": _safe_float(metrics.get("expectancy", 0.0), default=0.0),
-        "trades": _safe_float(metrics.get("trades", 0.0), default=0.0),
-        "trade_rate": _safe_float(metrics.get("trade_rate", 0.0), default=0.0),
+        "precision": safe_float(metrics.get("precision", 0.0), default=0.0),
+        "profit_factor": safe_float(metrics.get("profit_factor", 0.0), default=0.0),
+        "expectancy": safe_float(metrics.get("expectancy", 0.0), default=0.0),
+        "trades": safe_float(metrics.get("trades", 0.0), default=0.0),
+        "trade_rate": safe_float(metrics.get("trade_rate", 0.0), default=0.0),
         "regime": str(regime),
         "search_space_size": float(search_space_size),
         "min_required_trades": float(min_required),
@@ -436,11 +416,11 @@ def validate_and_decide(
     post_val = self._guardian.validate_model(
         interval, horizon, holdout_snapshot, lookback, collect_samples=True
     )
-    post_acc = _clamp(_safe_float(post_val.get("accuracy", 0.0), default=0.0), 0.0, 1.0)
-    post_conf = _clamp(
-        _safe_float(post_val.get("avg_confidence", 0.0), default=0.0), 0.0, 1.0
+    post_acc = clamp(safe_float(post_val.get("accuracy", 0.0), default=0.0), 0.0, 1.0)
+    post_conf = clamp(
+        safe_float(post_val.get("avg_confidence", 0.0), default=0.0), 0.0, 1.0
     )
-    post_preds = max(0, _safe_int(post_val.get("predictions_made", 0), default=0))
+    post_preds = max(0, safe_int(post_val.get("predictions_made", 0), default=0))
     samples = _extract_trade_samples(list(post_val.get("samples", []) or []))
 
     self.progress.old_stock_accuracy = post_acc
@@ -449,47 +429,47 @@ def validate_and_decide(
     cfg = getattr(CONFIG, "precision", None)
     min_preds = max(
         int(getattr(self, "_MIN_HOLDOUT_PREDICTIONS", 3)),
-        _safe_int(getattr(cfg, "validation_min_predictions", 5), default=5),
+        safe_int(getattr(cfg, "validation_min_predictions", 5), default=5),
     )
-    z = max(0.5, _safe_float(getattr(cfg, "validation_confidence_z", 1.64), default=1.64))
+    z = max(0.5, safe_float(getattr(cfg, "validation_confidence_z", 1.64), default=1.64))
     post_lb = _wilson_lower_bound(post_acc, post_preds, z=z)
 
-    base_min_lb = _clamp(
-        _safe_float(getattr(cfg, "validation_min_accept_lb", 0.30), default=0.30),
+    base_min_lb = clamp(
+        safe_float(getattr(cfg, "validation_min_accept_lb", 0.30), default=0.30),
         0.05,
         0.95,
     )
-    base_acc_deg = _clamp(
-        _safe_float(
+    base_acc_deg = clamp(
+        safe_float(
             getattr(cfg, "validation_max_accuracy_degradation", 0.15), default=0.15
         ),
         0.01,
         0.90,
     )
-    base_conf_deg = _clamp(
-        _safe_float(
+    base_conf_deg = clamp(
+        safe_float(
             getattr(cfg, "validation_max_confidence_degradation", 0.18), default=0.18
         ),
         0.01,
         0.90,
     )
-    max_train_holdout_gap = _clamp(
-        _safe_float(getattr(cfg, "validation_max_train_holdout_gap", 0.40), default=0.40),
+    max_train_holdout_gap = clamp(
+        safe_float(getattr(cfg, "validation_max_train_holdout_gap", 0.40), default=0.40),
         0.05,
         1.00,
     )
-    conf_margin = _clamp(
-        _safe_float(getattr(cfg, "validation_confidence_margin", 0.03), default=0.03),
+    conf_margin = clamp(
+        safe_float(getattr(cfg, "validation_confidence_margin", 0.03), default=0.03),
         0.00,
         0.30,
     )
-    high_vol_relax = _clamp(
-        _safe_float(getattr(cfg, "validation_high_vol_relax", 0.05), default=0.05),
+    high_vol_relax = clamp(
+        safe_float(getattr(cfg, "validation_high_vol_relax", 0.05), default=0.05),
         0.0,
         0.40,
     )
-    low_signal_tighten = _clamp(
-        _safe_float(getattr(cfg, "validation_low_signal_tighten", 0.04), default=0.04),
+    low_signal_tighten = clamp(
+        safe_float(getattr(cfg, "validation_low_signal_tighten", 0.04), default=0.04),
         0.0,
         0.40,
     )
@@ -530,7 +510,7 @@ def validate_and_decide(
 
     pre_preds = max(
         0,
-        _safe_int((pre_val or {}).get("predictions_made", 0), default=0),
+        safe_int((pre_val or {}).get("predictions_made", 0), default=0),
     )
     if not pre_val or pre_preds < min_preds:
         log.info(
@@ -546,11 +526,11 @@ def validate_and_decide(
         )
         return True
 
-    pre_acc = _clamp(
-        _safe_float(pre_val.get("accuracy", 0.0), default=0.0), 0.0, 1.0
+    pre_acc = clamp(
+        safe_float(pre_val.get("accuracy", 0.0), default=0.0), 0.0, 1.0
     )
-    pre_conf = _clamp(
-        _safe_float(pre_val.get("avg_confidence", 0.0), default=0.0), 0.0, 1.0
+    pre_conf = clamp(
+        safe_float(pre_val.get("avg_confidence", 0.0), default=0.0), 0.0, 1.0
     )
     pre_lb = _wilson_lower_bound(pre_acc, pre_preds, z=z)
     acc_deg = (

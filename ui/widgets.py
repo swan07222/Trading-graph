@@ -23,6 +23,7 @@ from ui.modern_theme import (
     get_progress_bar_style,
 )
 from utils.logger import get_logger
+from utils.type_utils import safe_float, safe_int, safe_str, safe_float_attr, safe_int_attr, safe_str_attr
 
 log = get_logger(__name__)
 
@@ -185,39 +186,6 @@ class SignalPanel(QFrame):
             """
         )
 
-    @staticmethod
-    def _safe_float(obj, attr, default=0.0):
-        """Safely extract float attribute with fallback."""
-        try:
-            val = getattr(obj, attr, None)
-            if val is None:
-                return float(default)
-            return float(val)
-        except (TypeError, ValueError):
-            return float(default)
-
-    @staticmethod
-    def _safe_int(obj, attr, default=0):
-        """Safely extract int attribute with fallback."""
-        try:
-            val = getattr(obj, attr, None)
-            if val is None:
-                return int(default)
-            return int(val)
-        except (TypeError, ValueError):
-            return int(default)
-
-    @staticmethod
-    def _safe_str(obj, attr, default=""):
-        """Safely extract string attribute with fallback."""
-        try:
-            val = getattr(obj, attr, None)
-            if val is None:
-                return str(default)
-            return str(val)
-        except Exception:
-            return str(default)
-
     def update_prediction(self, pred):
         """Update display with prediction data (robust to missing fields)."""
         Signal = _get_signal_enum()
@@ -227,16 +195,16 @@ class SignalPanel(QFrame):
             sig.value if hasattr(sig, "value") else (str(sig) if sig else "HOLD")
         )
 
-        code = self._safe_str(pred, "stock_code")
-        name = self._safe_str(pred, "stock_name")
-        price = self._safe_float(pred, "current_price")
+        code = safe_str_attr(pred, "stock_code")
+        name = safe_str_attr(pred, "stock_name")
+        price = safe_float_attr(pred, "current_price")
 
         self.signal_label.setText(sig_text)
         self.info_label.setText(f"{code} - {name} | CNY {price:.2f}")
 
-        prob_down = self._safe_float(pred, "prob_down", 0.33)
-        prob_neutral = self._safe_float(pred, "prob_neutral", 0.34)
-        prob_up = self._safe_float(pred, "prob_up", 0.33)
+        prob_down = safe_float_attr(pred, "prob_down", 0.33)
+        prob_neutral = safe_float_attr(pred, "prob_neutral", 0.34)
+        prob_up = safe_float_attr(pred, "prob_up", 0.33)
 
         self.prob_down.setValue(int(prob_down * 100))
         self.prob_neutral.setValue(int(prob_neutral * 100))
@@ -244,10 +212,10 @@ class SignalPanel(QFrame):
 
         pos = getattr(pred, "position", None)
         levels = getattr(pred, "levels", None)
-        shares = self._safe_int(pos, "shares") if pos else 0
-        entry = self._safe_float(levels, "entry") if levels else 0.0
-        stop = self._safe_float(levels, "stop_loss") if levels else 0.0
-        tgt2 = self._safe_float(levels, "target_2") if levels else 0.0
+        shares = safe_int_attr(pos, "shares") if pos else 0
+        entry = safe_float_attr(levels, "entry") if levels else 0.0
+        stop = safe_float_attr(levels, "stop_loss") if levels else 0.0
+        tgt2 = safe_float_attr(levels, "target_2") if levels else 0.0
 
         if Signal is not None and shares > 0:
             if sig in (Signal.STRONG_BUY, Signal.BUY):
@@ -262,15 +230,15 @@ class SignalPanel(QFrame):
         else:
             self.action_label.setText("HOLD - Wait for clearer signal")
 
-        confidence = self._safe_float(pred, "confidence")
-        agreement = self._safe_float(
+        confidence = safe_float_attr(pred, "confidence")
+        agreement = safe_float_attr(
             pred,
             "model_agreement",
-            self._safe_float(pred, "agreement", 1.0),
+            safe_float_attr(pred, "agreement", 1.0),
         )
-        strength = self._safe_float(pred, "signal_strength")
-        uncertainty = self._safe_float(pred, "uncertainty_score", 0.5)
-        tail_risk = self._safe_float(pred, "tail_risk_score", 0.5)
+        strength = safe_float_attr(pred, "signal_strength")
+        uncertainty = safe_float_attr(pred, "uncertainty_score", 0.5)
+        tail_risk = safe_float_attr(pred, "tail_risk_score", 0.5)
 
         self.conf_label.setText(
             f"Confidence: {confidence:.0%} | "

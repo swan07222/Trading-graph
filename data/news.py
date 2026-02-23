@@ -12,6 +12,7 @@ from pathlib import Path
 import requests
 
 from utils.logger import get_logger
+from utils.type_utils import safe_float
 
 log = get_logger(__name__)
 
@@ -258,17 +259,6 @@ def _safe_age_hours_from_now(
     if age_s is None:
         return None
     return float(age_s / 3600.0)
-
-
-def _safe_float(value: object, default: float = 0.0) -> float:
-    """Best-effort float conversion with finite guard."""
-    try:
-        out = float(value)
-    except (TypeError, ValueError):
-        return float(default)
-    if not math.isfinite(out):
-        return float(default)
-    return out
 
 
 def analyze_sentiment(text: str) -> tuple[float, str]:
