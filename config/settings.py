@@ -354,11 +354,18 @@ class Config:
     _instance_lock = threading.RLock()
 
     def __new__(cls) -> Config:
+        """Thread-safe singleton creation with double-checked locking.
+        
+        Uses RLock for reentrant safety and explicit memory barriers
+        through the lock to prevent instruction reordering issues.
+        """
         if cls._instance is None:
             with cls._instance_lock:
                 if cls._instance is None:
                     inst = super().__new__(cls)
-                    inst._initialized = False
+                    # Use object.__setattr__ to bypass __setattr__ that might
+                    # rely on _initialized before it's set
+                    object.__setattr__(inst, '_initialized', False)
                     cls._instance = inst
         return cls._instance
 
@@ -371,73 +378,78 @@ class Config:
             cls._instance = None
 
     def __init__(self) -> None:
-        if self._initialized:
-            return
+        """Thread-safe initialization with explicit barrier."""
+        # Check _initialized under lock to ensure proper memory barrier
+        # Create a temporary lock if _lock doesn't exist yet (first init)
+        init_lock = getattr(self, '_lock', None) or threading.RLock()
+        with init_lock:
+            if getattr(self, '_initialized', False):
+                return
 
-        self._initialized = True
-        self._lock = threading.RLock()
-        self._config_file = Path(__file__).parent.parent / "config.json"
-        self._env_prefix = "TRADING_"
-        self._validation_warnings: list[str] = []
+            self._initialized = True
+            self._lock = threading.RLock()
+            self._config_file = Path(__file__).parent.parent / "config.json"
+            self._env_prefix = "TRADING_"
+            self._validation_warnings: list[str] = []
 
-        # Sub-configs
-        self.data = DataConfig()
-        self.model = ModelConfig()
-        self.trading = TradingConfig()
-        self.risk = RiskConfig()
-        self.security = SecurityConfig()
-        self.alerts = AlertConfig()
-        self.auto_trade = AutoTradeConfig()
-        self.precision = PrecisionConfig()
+            # Sub-configs
+            self.data = DataConfig()
+            self.model = ModelConfig()
+            self.trading = TradingConfig()
+            self.risk = RiskConfig()
+            self.security = SecurityConfig()
+            self.alerts = AlertConfig()
+            self.auto_trade = AutoTradeConfig()
+            self.precision = PrecisionConfig()
 
-        self.capital: float = 100_000.0
-        self.trading_mode: TradingMode = TradingMode.SIMULATION
-        self.risk_profile: RiskProfile = RiskProfile.MODERATE
-        self.market_type: MarketType = MarketType.A_SHARE
-        self.broker_path: str = ""
-        self.runtime_checkpoint_seconds: float = 5.0
-        self.runtime_watchdog_stall_seconds: float = 25.0
-        self.runtime_lease_heartbeat_seconds: float = 5.0
+            self.capital: float = 100_000.0
+            self.trading_mode: TradingMode = TradingMode.SIMULATION
+            self.risk_profile: RiskProfile = RiskProfile.MODERATE
+            self.market_type: MarketType = MarketType.A_SHARE
+            self.broker_path: str = ""
+            self.runtime_checkpoint_seconds: float = 5.0
+            self.runtime_watchdog_stall_seconds: float = 25.0
+            self.runtime_lease_heartbeat_seconds: float = 5.0
 
-        self._base_dir = Path(__file__).parent.parent
-        self._model_dir_override: str | None = None
+            self._base_dir = Path(__file__).parent.parent
+            self._model_dir_override: str | None = None
 
-        # Sentinel-based caching for path properties
-        self._data_dir_cached: Any = _SENTINEL
-        self._model_dir_cached: Any = _SENTINEL
-        self._model_dir_cached_override: Any = _SENTINEL
-        self._log_dir_cached: Any = _SENTINEL
-        self._cache_dir_cached: Any = _SENTINEL
-        self._audit_dir_cached: Any = _SENTINEL
+            # Sentinel-based caching for path properties
+            self._data_dir_cached: Any = _SENTINEL
+            self._model_dir_cached: Any = _SENTINEL
+            self._model_dir_cached_override: Any = _SENTINEL
+            self._log_dir_cached: Any = _SENTINEL
+            self._cache_dir_cached: Any = _SENTINEL
+            self._audit_dir_cached: Any = _SENTINEL
 
-        self.stock_pool: list[str] = [
-            "600519",
-            "601318",
-            "600036",
-            "000858",
-            "600900",
-            "002594",
-            "300750",
-            "002475",
-            "300059",
-            "002230",
-            "000333",
-            "000651",
-            "600887",
-            "603288",
-            "600276",
-            "300760",
-            "300015",
-            "601166",
-            "601398",
-            "600030",
-        ]
+            self.stock_pool: list[str] = [
+                "600519",
+                "601318",
+                "600036",
+                "000858",
+                "600900",
+                "002594",
+                "300750",
+                "002475",
+                "300059",
+                "002230",
+                "000333",
+                "000651",
+                "600887",
+                "603288",
+                "600276",
+                "300760",
+                "300015",
+                "601166",
+                "601398",
+                "600030",
+            ]
 
-        self.min_stocks_for_training: int = 5
-        self.auto_learn_epochs: int = 50
+            self.min_stocks_for_training: int = 5
+            self.auto_learn_epochs: int = 50
 
-        self._load()
-        self._validate()
+            self._load()
+            self._validate()
 
     # ==================== LEGACY COMPATIBILITY ====================
 

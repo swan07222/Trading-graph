@@ -18,6 +18,9 @@ from utils.recoverable import JSON_RECOVERABLE_EXCEPTIONS
 
 log = get_logger(__name__)
 
+# Type alias for numpy float arrays
+# Note: While we use float64 for the type alias, actual computations may
+# use float32 for memory efficiency. This alias is for type checking only.
 FloatArray: TypeAlias = NDArray[np.float64]
 
 __all__ = [

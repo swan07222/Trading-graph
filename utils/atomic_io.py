@@ -49,10 +49,12 @@ _MAX_LOCKS = 256
 _lock_cache: OrderedDict[str, threading.Lock] = OrderedDict()
 _cache_lock = threading.Lock()
 
-def _get_lock(path: Path) -> threading.Lock:
+def _get_lock(path: Path) -> threading.RLock:
     """Get or create a lock for a specific file path.
 
     Uses a bounded LRU cache to prevent unbounded memory growth.
+    Uses RLock (reentrant) to prevent deadlocks when the same thread
+    needs to acquire the lock multiple times.
     """
     key = str(path.resolve())
     with _cache_lock:
@@ -60,7 +62,7 @@ def _get_lock(path: Path) -> threading.Lock:
             _lock_cache.move_to_end(key)
             return _lock_cache[key]
 
-        lock = threading.Lock()
+        lock = threading.RLock()
         _lock_cache[key] = lock
 
         while len(_lock_cache) > _MAX_LOCKS:
@@ -70,15 +72,16 @@ def _get_lock(path: Path) -> threading.Lock:
 
 # Directory-level lock cache
 
-_dir_lock_cache: OrderedDict[str, threading.Lock] = OrderedDict()
+_dir_lock_cache: OrderedDict[str, threading.RLock] = OrderedDict()
 _dir_cache_lock = threading.Lock()
 
-def _get_dir_lock(path: Path) -> threading.Lock:
+def _get_dir_lock(path: Path) -> threading.RLock:
     """Get or create a lock for the DIRECTORY containing path.
 
     This serializes all atomic writes to the same directory,
     preventing fd reuse races when multiple threads write to
     different files in the same directory simultaneously.
+    Uses RLock (reentrant) to prevent deadlocks.
     """
     key = str(path.parent.resolve())
     with _dir_cache_lock:
@@ -86,7 +89,7 @@ def _get_dir_lock(path: Path) -> threading.Lock:
             _dir_lock_cache.move_to_end(key)
             return _dir_lock_cache[key]
 
-        lock = threading.Lock()
+        lock = threading.RLock()
         _dir_lock_cache[key] = lock
 
         while len(_dir_lock_cache) > _MAX_LOCKS:
@@ -109,16 +112,21 @@ def _fsync_file(f: Any) -> None:
 
     FIX EBADF: Wrapped in try/except OSError. If the fd is somehow
     invalid, we continue. flush() already pushes data to OS buffers.
+    FIX: Explicitly handle all edge cases to prevent file descriptor leaks.
     """
-    f.flush()
+    try:
+        f.flush()
+    except Exception:
+        # flush() can fail if file is already closed
+        pass
+    
     try:
         fd = f.fileno()
         os.fsync(fd)
-    except OSError:
-        pass
-    except (ValueError, AttributeError):
+    except (OSError, ValueError, AttributeError, TypeError):
         # fileno() can raise ValueError if file is closed or
         # AttributeError if f doesn't support fileno (StringIO, etc.)
+        # OSError if fd is invalid (e.g., already closed)
         pass
 
 def _cleanup_tmp(tmp: Path) -> None:

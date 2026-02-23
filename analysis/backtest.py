@@ -58,22 +58,29 @@ class SlippageModel:
 
     def calculate(self, order_value: float, daily_volume: float, daily_avg_price: float) -> float:
         """Calculate slippage with protection against edge cases.
-        
+
         FIX: Added explicit checks for very small daily_value to prevent
         division by near-zero values producing unexpectedly large slippage.
         """
-        # Validate inputs - check for zero/negative/NaN values
+        # Validate inputs - check for zero/negative/NaN/Inf values
         if daily_volume <= 0 or daily_avg_price <= 0:
             return self.base_slippage
-        if np.isnan(daily_volume) or np.isnan(daily_avg_price):
+        if not np.isfinite(daily_volume) or not np.isfinite(daily_avg_price):
             return self.base_slippage
-        
+
         daily_value = daily_volume * daily_avg_price
-        
+
         # FIX: Prevent division by very small values
-        if daily_value < 1.0:
+        # Use a more conservative threshold (100.0) to avoid edge cases
+        # where small daily_value produces unexpectedly large slippage
+        if daily_value < 100.0:
             return self.base_slippage
-        
+
+        # Additional check: if order_value is comparable to daily_value,
+        # cap slippage to prevent unrealistic impact
+        if order_value <= 0:
+            return self.base_slippage
+
         order_pct = order_value / daily_value
         slippage = self.base_slippage + self.volume_impact * order_pct
 

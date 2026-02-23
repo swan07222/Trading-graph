@@ -1,4 +1,5 @@
 # data/cache.py
+import atexit
 import gzip
 import hashlib
 import os
@@ -686,6 +687,23 @@ class TieredCache:
 
 _cache: TieredCache | None = None
 _cache_lock = threading.Lock()
+
+
+def _shutdown_cache() -> None:
+    """Shutdown cache executor on process exit.
+    
+    Registered with atexit to ensure proper cleanup of thread pools.
+    """
+    global _cache
+    if _cache is not None:
+        try:
+            _cache.shutdown()
+        except Exception:
+            pass
+
+
+# Register shutdown handler to ensure thread pool cleanup
+atexit.register(_shutdown_cache)
 
 
 def get_cache() -> TieredCache:

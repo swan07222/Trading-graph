@@ -234,8 +234,16 @@ FONTS = {
 # Match "ST" or "*ST" at the start, followed by either:
 # - A word boundary (for ASCII: "ST ABC")
 # - Any non-ASCII character (for Chinese: "ST 中珠")
+# - End of string (for names that are just "ST" or "*ST")
 # This avoids false positives like "BEST" or "FASTEST".
-_ST_PREFIX_PATTERN = re.compile(r"^\s*\*?\s*ST(?:\b|[^\x00-\x7F])", re.IGNORECASE)
+# 
+# FIX: Improved pattern to handle Chinese Unicode characters more reliably
+# by explicitly matching CJK Unicode range (U+4E00 to U+9FFF) in addition
+# to non-ASCII characters.
+_ST_PREFIX_PATTERN = re.compile(
+    r"^\s*\*?\s*ST(?:\b|[\u4e00-\u9fff]|[^\x00-\x7F]|$)",
+    re.IGNORECASE | re.UNICODE
+)
 
 
 def get_exchange(code: str) -> str:
