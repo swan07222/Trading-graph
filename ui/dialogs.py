@@ -28,205 +28,18 @@ from PyQt6.QtWidgets import (
 )
 
 from config.settings import CONFIG, TradingMode
+from ui.modern_theme import (
+    ModernFonts,
+    get_dialog_style,
+    get_monospace_font_family,
+)
 from utils.logger import get_logger
 
 log = get_logger(__name__)
 
 def _apply_dialog_theme(dialog: QDialog) -> None:
     """Apply consistent professional theme for modal dialogs."""
-    dialog.setStyleSheet("""
-        /* ===== DIALOG BASE ===== */
-        QDialog {
-            background: #0a0e1a;
-            color: #e6e9f0;
-            font-family: 'Segoe UI', 'Inter', sans-serif;
-        }
-
-        /* ===== GROUP BOX ===== */
-        QGroupBox {
-            border: 1px solid #1f2937;
-            border-radius: 12px;
-            margin-top: 14px;
-            padding-top: 14px;
-            font-weight: 600;
-            font-size: 12px;
-            color: #93c5fd;
-            background: #111827;
-        }
-        QGroupBox::title {
-            left: 14px;
-            padding: 0 8px;
-            color: #60a5fa;
-        }
-
-        /* ===== LABELS ===== */
-        QLabel {
-            color: #e6e9f0;
-            font-size: 12px;
-            background: transparent;
-        }
-
-        /* ===== INPUT FIELDS ===== */
-        QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox, QListWidget, QTextEdit {
-            background: #1f2937;
-            color: #e6e9f0;
-            border: 1px solid #374151;
-            border-radius: 8px;
-            padding: 8px 12px;
-            selection-background-color: #3b82f6;
-            selection-color: #ffffff;
-            font-size: 13px;
-            min-height: 36px;
-        }
-        QLineEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus, QComboBox:focus, QTextEdit:focus, QListWidget:focus {
-            border-color: #60a5fa;
-            background: #1f2937;
-            outline: none;
-        }
-        QLineEdit:hover, QSpinBox:hover, QDoubleSpinBox:hover, QComboBox:hover, QTextEdit:hover, QListWidget:hover {
-            border-color: #4b5563;
-        }
-
-        /* ===== BUTTONS ===== */
-        QPushButton {
-            background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                stop:0 #3b82f6, stop:1 #2563eb);
-            color: #ffffff;
-            border: 1px solid #1d4ed8;
-            border-radius: 10px;
-            padding: 10px 20px;
-            font-weight: 600;
-            font-size: 13px;
-            min-height: 38px;
-        }
-        QPushButton:hover {
-            background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                stop:0 #60a5fa, stop:1 #3b82f6);
-            border-color: #3b82f6;
-        }
-        QPushButton:pressed {
-            background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                stop:0 #2563eb, stop:1 #1d4ed8);
-            transform: translateY(1px);
-        }
-        QPushButton:disabled {
-            background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                stop:0 #374151, stop:1 #1f2937);
-            color: #6b7280;
-            border-color: #374151;
-        }
-
-        /* ===== PROGRESS BAR ===== */
-        QProgressBar {
-            border: 1px solid #374151;
-            border-radius: 8px;
-            background: #1f2937;
-            color: #e6e9f0;
-            text-align: center;
-            min-height: 20px;
-            font-weight: 600;
-            font-size: 11px;
-        }
-        QProgressBar::chunk {
-            border-radius: 7px;
-            background: qlineargradient(
-                x1:0, y1:0, x2:1, y2:0,
-                stop:0 #3b82f6, stop:1 #10b981
-            );
-        }
-
-        /* ===== TABLES & LISTS ===== */
-        QTableWidget, QTableView, QListWidget {
-            background: #111827;
-            color: #e6e9f0;
-            border: 1px solid #1f2937;
-            border-radius: 10px;
-            gridline-color: #1f2937;
-            selection-background-color: #1e3a5f;
-            selection-color: #ffffff;
-            alternate-background-color: #0f1724;
-            outline: none;
-            font-size: 12px;
-        }
-        QTableWidget::item, QTableView::item, QListWidget::item {
-            padding: 8px 10px;
-            border: none;
-        }
-        QTableWidget::item:hover, QTableView::item:hover, QListWidget::item:hover {
-            background: #1f2937;
-        }
-        QHeaderView::section {
-            background: #1f2937;
-            color: #93c5fd;
-            padding: 10px 12px;
-            border: none;
-            border-right: 1px solid #1f2937;
-            border-bottom: 1px solid #1f2937;
-            font-weight: 600;
-            font-size: 11px;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-        }
-
-        /* ===== TABS ===== */
-        QTabWidget::pane {
-            border: 1px solid #1f2937;
-            background: #111827;
-            border-radius: 10px;
-            top: -1px;
-        }
-        QTabBar::tab {
-            background: #1f2937;
-            color: #9ca3af;
-            padding: 10px 18px;
-            border-top-left-radius: 8px;
-            border-top-right-radius: 8px;
-            margin-right: 4px;
-            min-width: 80px;
-            font-weight: 500;
-        }
-        QTabBar::tab:selected {
-            background: #374151;
-            color: #e6e9f0;
-            border: 1px solid #4b5563;
-            border-bottom: 1px solid #374151;
-        }
-        QTabBar::tab:hover:!selected {
-            color: #e6e9f0;
-            background: #2d3748;
-        }
-
-        /* ===== SCROLLBARS ===== */
-        QScrollBar:vertical {
-            background: #111827;
-            width: 12px;
-            margin: 3px;
-            border-radius: 6px;
-        }
-        QScrollBar::handle:vertical {
-            background: #4b5563;
-            border-radius: 6px;
-            min-height: 30px;
-        }
-        QScrollBar::handle:vertical:hover {
-            background: #6b7280;
-        }
-        QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
-            border: none;
-            background: none;
-            height: 0;
-        }
-
-        /* ===== TOOLTIPS ===== */
-        QToolTip {
-            background: #1f2937;
-            color: #e6e9f0;
-            border: 1px solid #374151;
-            border-radius: 6px;
-            padding: 8px 12px;
-            font-size: 12px;
-        }
-    """)
+    dialog.setStyleSheet(get_dialog_style())
 
 def _get_cancellation_token():
     """Get CancellationToken class."""
@@ -449,8 +262,11 @@ class TrainingDialog(QDialog):
         prog_layout.addWidget(self.status)
 
         self.logs = QTextEdit()
+        self.logs.setObjectName("dialogLog")
         self.logs.setReadOnly(True)
-        self.logs.setFont(QFont("Consolas", 10))
+        self.logs.setFont(
+            QFont(get_monospace_font_family(), ModernFonts.SIZE_SM)
+        )
         prog_layout.addWidget(self.logs)
 
         layout.addWidget(prog_group)
@@ -774,8 +590,11 @@ class TrainTrainedStocksDialog(QDialog):
         self.status = QLabel("Ready")
         progress_layout.addWidget(self.status)
         self.logs = QTextEdit()
+        self.logs.setObjectName("dialogLog")
         self.logs.setReadOnly(True)
-        self.logs.setFont(QFont("Consolas", 10))
+        self.logs.setFont(
+            QFont(get_monospace_font_family(), ModernFonts.SIZE_SM)
+        )
         progress_layout.addWidget(self.logs)
         layout.addWidget(progress_group)
 
@@ -1028,8 +847,11 @@ class BacktestDialog(QDialog):
         layout.addWidget(settings_group)
 
         self.logs = QTextEdit()
+        self.logs.setObjectName("dialogLog")
         self.logs.setReadOnly(True)
-        self.logs.setFont(QFont("Consolas", 10))
+        self.logs.setFont(
+            QFont(get_monospace_font_family(), ModernFonts.SIZE_SM)
+        )
         layout.addWidget(self.logs)
 
         self.progress = QProgressBar()

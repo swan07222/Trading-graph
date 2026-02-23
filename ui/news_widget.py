@@ -280,13 +280,12 @@ class NewsPanel(QWidget):
 
         btn_layout = QHBoxLayout()
         self.refresh_btn = QPushButton("Refresh")
+        self.refresh_btn.setObjectName("smallGhostButton")
         self.refresh_btn.clicked.connect(lambda: self.refresh(force=True))
         btn_layout.addWidget(self.refresh_btn)
 
         self.mode_label = QLabel(self._mode_text())
-        self.mode_label.setStyleSheet(
-            f"color: {ModernColors.ACCENT_INFO}; font-size: {ModernFonts.SIZE_SM}px;"
-        )
+        self.mode_label.setObjectName("sentimentModeLabel")
         btn_layout.addWidget(self.mode_label)
 
         btn_layout.addStretch()

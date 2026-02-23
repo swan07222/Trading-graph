@@ -69,8 +69,10 @@ def _create_left_panel(self: Any) -> QWidget:
     btn_layout = QHBoxLayout()
     btn_layout.setSpacing(10)
     add_btn = QPushButton("+ Add")
+    add_btn.setObjectName("smallGhostButton")
     add_btn.clicked.connect(self._add_to_watchlist)
     remove_btn = QPushButton("- Remove")
+    remove_btn.setObjectName("smallGhostButton")
     remove_btn.clicked.connect(self._remove_from_watchlist)
     btn_layout.addWidget(add_btn)
     btn_layout.addWidget(remove_btn)
@@ -170,12 +172,14 @@ def _create_left_panel(self: Any) -> QWidget:
     ai_layout.addWidget(self.trained_stocks_hint)
 
     self.open_trained_tab_btn = QPushButton("Open Trained Stocks")
+    self.open_trained_tab_btn.setObjectName("smallGhostButton")
     self.open_trained_tab_btn.clicked.connect(
         self._focus_trained_stocks_tab
     )
     ai_layout.addWidget(self.open_trained_tab_btn)
 
     self.get_infor_btn = QPushButton("Get Infor (29d)")
+    self.get_infor_btn.setObjectName("smallGhostButton")
     self.get_infor_btn.setToolTip(
         "Fetch 29-day history for all trained stocks from AKShare.\n"
         "If market is closed, replaces saved realtime rows with AKShare rows.\n"
@@ -379,16 +383,19 @@ def _create_right_panel(self: Any) -> QWidget:
     auto_btn_layout.setSpacing(10)
 
     self.auto_pause_btn = QPushButton("Pause Auto")
+    self.auto_pause_btn.setObjectName("smallGhostButton")
     self.auto_pause_btn.clicked.connect(self._toggle_auto_pause)
     self.auto_pause_btn.setEnabled(False)
     auto_btn_layout.addWidget(self.auto_pause_btn)
 
     self.auto_approve_all_btn = QPushButton("Approve All")
+    self.auto_approve_all_btn.setObjectName("smallGhostButton")
     self.auto_approve_all_btn.clicked.connect(self._approve_all_pending)
     self.auto_approve_all_btn.setEnabled(False)
     auto_btn_layout.addWidget(self.auto_approve_all_btn)
 
     self.auto_reject_all_btn = QPushButton("Reject All")
+    self.auto_reject_all_btn.setObjectName("smallGhostButton")
     self.auto_reject_all_btn.clicked.connect(self._reject_all_pending)
     self.auto_reject_all_btn.setEnabled(False)
     auto_btn_layout.addWidget(self.auto_reject_all_btn)

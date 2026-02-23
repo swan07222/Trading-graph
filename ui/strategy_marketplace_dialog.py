@@ -12,6 +12,7 @@ from PyQt6.QtWidgets import (
 )
 
 from analysis.strategy_marketplace import StrategyMarketplace
+from ui.modern_theme import ModernColors, ModernFonts, get_dialog_style
 from utils.logger import get_logger
 
 log = get_logger(__name__)
@@ -32,9 +33,11 @@ class StrategyMarketplaceDialog(QDialog):
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
+        self.setObjectName("strategyMarketplaceDialog")
         self.setWindowTitle("Strategy Marketplace")
         self.setMinimumSize(980, 560)
         self.resize(1100, 650)
+        self.setStyleSheet(get_dialog_style())
         self._marketplace = StrategyMarketplace()
         self._rows: list[dict] = []
         self._setup_ui()
@@ -48,7 +51,10 @@ class StrategyMarketplaceDialog(QDialog):
             "Only enabled and integrity-valid scripts are executed."
         )
         info.setWordWrap(True)
-        info.setStyleSheet("color: #aac3ec; font-size: 12px;")
+        info.setStyleSheet(
+            f"color: {ModernColors.TEXT_SECONDARY};"
+            f"font-size: {ModernFonts.SIZE_SM}px;"
+        )
         layout.addWidget(info)
 
         self.table = QTableWidget(0, 9)
@@ -74,14 +80,17 @@ class StrategyMarketplaceDialog(QDialog):
 
         btns = QHBoxLayout()
         self.reload_btn = QPushButton("Reload")
+        self.reload_btn.setObjectName("smallGhostButton")
         self.reload_btn.clicked.connect(self._reload)
         btns.addWidget(self.reload_btn)
 
         self.enable_all_btn = QPushButton("Enable All")
+        self.enable_all_btn.setObjectName("smallGhostButton")
         self.enable_all_btn.clicked.connect(self._enable_all)
         btns.addWidget(self.enable_all_btn)
 
         self.disable_all_btn = QPushButton("Disable All")
+        self.disable_all_btn.setObjectName("smallGhostButton")
         self.disable_all_btn.clicked.connect(self._disable_all)
         btns.addWidget(self.disable_all_btn)
         btns.addStretch()
@@ -91,6 +100,7 @@ class StrategyMarketplaceDialog(QDialog):
         btns.addWidget(self.save_btn)
 
         self.close_btn = QPushButton("Close")
+        self.close_btn.setObjectName("smallGhostButton")
         self.close_btn.clicked.connect(self.close)
         btns.addWidget(self.close_btn)
 

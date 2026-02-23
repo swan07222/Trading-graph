@@ -640,10 +640,18 @@ class MainApp(MainAppCommonMixin, QMainWindow):
             self.chart.setAlignment(Qt.AlignmentFlag.AlignCenter)
         chart_layout.addWidget(self.chart)
 
-        chart_actions = QHBoxLayout()
+        chart_action_frame = QFrame()
+        chart_action_frame.setObjectName("chartActionStrip")
+        chart_actions = QHBoxLayout(chart_action_frame)
+        chart_actions.setContentsMargins(10, 8, 10, 8)
+        chart_actions.setSpacing(10)
+
         self.zoom_in_btn = QPushButton("Zoom In")
         self.zoom_out_btn = QPushButton("Zoom Out")
         self.zoom_reset_btn = QPushButton("Reset View")
+        self.zoom_in_btn.setObjectName("chartToolButton")
+        self.zoom_out_btn.setObjectName("chartToolButton")
+        self.zoom_reset_btn.setObjectName("chartToolButton")
         self.zoom_in_btn.setMaximumWidth(110)
         self.zoom_out_btn.setMaximumWidth(110)
         self.zoom_reset_btn.setMaximumWidth(120)
@@ -666,6 +674,7 @@ class MainApp(MainAppCommonMixin, QMainWindow):
         self._chart_overlay_checks: dict[str, QCheckBox] = {}
         for label, key, default_enabled in overlay_specs:
             chk = QCheckBox(label)
+            chk.setObjectName("overlayToggle")
             chk.setChecked(bool(default_enabled))
             chk.toggled.connect(
                 lambda v, overlay_key=key: self._set_chart_overlay(
@@ -677,7 +686,7 @@ class MainApp(MainAppCommonMixin, QMainWindow):
             chart_actions.addWidget(chk)
 
         chart_actions.addStretch(1)
-        chart_layout.addLayout(chart_actions)
+        chart_layout.addWidget(chart_action_frame)
 
         self.chart_latest_label = QLabel("Latest --")
         self.chart_latest_label.setObjectName("chartLatestLabel")
