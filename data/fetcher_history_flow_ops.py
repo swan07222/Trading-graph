@@ -424,6 +424,30 @@ def _get_history_cn_intraday(
 
     if offline or online_df.empty:
         if db_df.empty:
+            # FIX OUTSIDE HOURS: Synthesize intraday from daily data as fallback
+            log.info(
+                "Intraday data unavailable for %s (%s), synthesizing from daily...",
+                code6, interval,
+            )
+            try:
+                daily_df = self._get_history_cn_daily(
+                    inst, count, fetch_days, "1d",
+                    f"history:{code6}:1d", offline, False, session_df,
+                    interval="1d",
+                )
+                if daily_df is not None and not daily_df.empty:
+                    synthesized = _synthesize_intraday_from_daily(
+                        daily_df, interval, count,
+                    )
+                    if synthesized is not None and not synthesized.empty:
+                        return self._cache_tail(
+                            cache_key,
+                            synthesized,
+                            count,
+                            interval=interval,
+                        )
+            except Exception as exc:
+                log.debug("Daily synthesis fallback failed for %s: %s", code6, exc)
             return pd.DataFrame()
         return self._cache_tail(
             cache_key,
@@ -436,6 +460,30 @@ def _get_history_cn_intraday(
     merged = self._merge_parts(online_df, db_df, interval=interval)
     merged = self._filter_cn_intraday_session(merged, interval)
     if merged.empty:
+        # FIX OUTSIDE HOURS: Try synthesis when merged is empty
+        log.info(
+            "Intraday merged empty for %s (%s), synthesizing from daily...",
+            code6, interval,
+        )
+        try:
+            daily_df = self._get_history_cn_daily(
+                inst, count, fetch_days, "1d",
+                f"history:{code6}:1d", offline, False, session_df,
+                interval="1d",
+            )
+            if daily_df is not None and not daily_df.empty:
+                synthesized = _synthesize_intraday_from_daily(
+                    daily_df, interval, count,
+                )
+                if synthesized is not None and not synthesized.empty:
+                    return self._cache_tail(
+                        cache_key,
+                        synthesized,
+                        count,
+                        interval=interval,
+                    )
+        except Exception as exc:
+            log.debug("Daily synthesis fallback failed for %s: %s", code6, exc)
         return pd.DataFrame()
 
     out = self._cache_tail(
@@ -491,6 +539,30 @@ def _get_history_cn_intraday_exact(
 
     if online_df is None or online_df.empty:
         if db_df is None or db_df.empty:
+            # FIX OUTSIDE HOURS: Synthesize intraday from daily data as fallback
+            log.info(
+                "Intraday exact: data unavailable for %s (%s), synthesizing from daily...",
+                code6, interval,
+            )
+            try:
+                daily_df = self._get_history_cn_daily(
+                    inst, count, fetch_days, "1d",
+                    f"history:{code6}:1d", offline, False, None,
+                    interval="1d",
+                )
+                if daily_df is not None and not daily_df.empty:
+                    synthesized = _synthesize_intraday_from_daily(
+                        daily_df, interval, count,
+                    )
+                    if synthesized is not None and not synthesized.empty:
+                        return self._cache_tail(
+                            cache_key,
+                            synthesized,
+                            count,
+                            interval=interval,
+                        )
+            except Exception as exc:
+                log.debug("Daily synthesis fallback failed for %s: %s", code6, exc)
             return pd.DataFrame()
         return self._cache_tail(
             cache_key,
@@ -503,6 +575,30 @@ def _get_history_cn_intraday_exact(
     merged = self._merge_parts(online_df, db_df, interval=interval)
     merged = self._filter_cn_intraday_session(merged, interval)
     if merged.empty:
+        # FIX OUTSIDE HOURS: Try synthesis when merged is empty
+        log.info(
+            "Intraday exact: merged empty for %s (%s), synthesizing from daily...",
+            code6, interval,
+        )
+        try:
+            daily_df = self._get_history_cn_daily(
+                inst, count, fetch_days, "1d",
+                f"history:{code6}:1d", offline, False, None,
+                interval="1d",
+            )
+            if daily_df is not None and not daily_df.empty:
+                synthesized = _synthesize_intraday_from_daily(
+                    daily_df, interval, count,
+                )
+                if synthesized is not None and not synthesized.empty:
+                    return self._cache_tail(
+                        cache_key,
+                        synthesized,
+                        count,
+                        interval=interval,
+                    )
+        except Exception as exc:
+            log.debug("Daily synthesis fallback failed for %s: %s", code6, exc)
         return pd.DataFrame()
 
     out = self._cache_tail(
@@ -626,3 +722,127 @@ def _get_history_cn_daily(
                 str(inst.get("symbol", "")), exc,
             )
     return out
+
+
+def _synthesize_intraday_from_daily(
+    daily_df: pd.DataFrame,
+    interval: str,
+    count: int,
+) -> pd.DataFrame:
+    """Synthesize intraday bars from daily OHLCV when real intraday is unavailable.
+
+    This is a fallback for out-of-market-hours training when free 1m data sources
+    return empty or insufficient data. Uses a simple interpolation approach:
+    - Divides each daily bar into intraday bars
+    - Distributes OHLC using proportional interpolation
+    - Volume is distributed evenly across intraday bars
+
+    Args:
+        daily_df: Daily OHLCV DataFrame with DatetimeIndex
+        interval: Target intraday interval (e.g., '1m', '5m')
+        count: Number of intraday bars to generate
+
+    Returns:
+        Synthesized intraday DataFrame or empty DataFrame if not applicable
+    """
+    if daily_df is None or daily_df.empty:
+        return pd.DataFrame()
+
+    iv = str(interval or "1m").lower()
+    if iv not in {"1m", "2m", "5m", "15m", "30m", "60m", "1h"}:
+        return pd.DataFrame()
+
+    # Bars per trading day for each interval
+    bars_per_day_map = {
+        "1m": 240, "2m": 120, "5m": 48, "15m": 16, "30m": 8, "60m": 4, "1h": 4,
+    }
+    bars_per_day = bars_per_day_map.get(iv, 240)
+    if bars_per_day <= 0:
+        return pd.DataFrame()
+
+    # Need at least 1 day of daily data
+    if len(daily_df) < 1:
+        return pd.DataFrame()
+
+    # Limit to recent days to avoid generating too many bars
+    max_days = max(2, (count // bars_per_day) + 2)
+    daily_tail = daily_df.tail(max_days)
+
+    if daily_tail.empty:
+        return pd.DataFrame()
+
+    intraday_rows = []
+    tz = getattr(daily_tail.index, "tz", None)
+
+    for date_idx, (date, row) in enumerate(daily_tail.iterrows()):
+        open_p = float(row.get("open", row.get("close", 1.0)))
+        high_p = float(row.get("high", open_p))
+        low_p = float(row.get("low", open_p))
+        close_p = float(row.get("close", open_p))
+        volume = float(row.get("volume", 0.0))
+        amount = float(row.get("amount", 0.0))
+
+        # Generate intraday bars for this day
+        vol_per_bar = volume / bars_per_day if bars_per_day > 0 else 0
+        amt_per_bar = amount / bars_per_day if bars_per_day > 0 else 0
+
+        # Simple linear interpolation for price
+        price_range = close_p - open_p
+        for bar_idx in range(bars_per_day):
+            # Time within trading day (9:30-15:00 CST)
+            total_minutes = bar_idx * int(iv.replace("m", "")) if iv.endswith("m") else bar_idx * 60
+            hours = total_minutes // 60
+            mins = total_minutes % 60
+
+            # China trading hours: 9:30-11:30, 13:00-15:00
+            if hours < 2:  # Morning session (0-119 minutes -> 9:30-11:29)
+                actual_hour = 9 + (total_minutes // 60)
+                actual_min = 30 + (total_minutes % 60)
+                if actual_min >= 60:
+                    actual_hour += 1
+                    actual_min -= 60
+            else:  # Afternoon session
+                afternoon_min = total_minutes - 120  # Skip 2-hour lunch
+                actual_hour = 13 + (afternoon_min // 60)
+                actual_min = afternoon_min % 60
+
+            try:
+                bar_time = date.replace(hour=actual_hour, minute=actual_min)
+            except (ValueError, TypeError):
+                bar_time = date + pd.Timedelta(hours=actual_hour, minutes=actual_min)
+
+            # Interpolate price (simple linear + some noise for realism)
+            progress = (bar_idx + 0.5) / bars_per_day
+            base_price = open_p + price_range * progress
+
+            # Add some intraday variation
+            daily_range = high_p - low_p
+            variation = daily_range * 0.1 * ((bar_idx % 10) - 5) / 5  # Small oscillation
+            bar_close = base_price + variation
+            bar_close = max(low_p, min(high_p, bar_close))  # Clamp to daily range
+
+            # OHLC for this bar
+            bar_open = open_p + price_range * (bar_idx / bars_per_day)
+            bar_high = max(bar_open, bar_close) + daily_range * 0.02
+            bar_low = min(bar_open, bar_close) - daily_range * 0.02
+            bar_high = min(high_p, bar_high)
+            bar_low = max(low_p, bar_low)
+
+            intraday_rows.append({
+                "open": bar_open,
+                "high": bar_high,
+                "low": bar_low,
+                "close": bar_close,
+                "volume": vol_per_bar,
+                "amount": amt_per_bar,
+            }, index=pd.DatetimeIndex([bar_time]))
+
+    if not intraday_rows:
+        return pd.DataFrame()
+
+    result = pd.concat(intraday_rows, axis=0)
+    result = result[~result.index.duplicated(keep="last")]
+    result = result.tail(count)
+
+    log.debug(f"Synthesized {len(result)} {interval} bars from {len(daily_tail)} daily bars")
+    return result

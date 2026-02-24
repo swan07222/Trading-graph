@@ -1075,6 +1075,23 @@ class ParallelFetcher:
 
         semaphore = threading.Semaphore(max_concurrent)
 
+        def _paced_wait(seconds: float) -> bool:
+            """Wait with cooperative cancellation checks.
+
+            Returns True if stop was requested during the wait.
+            """
+            wait_s = max(0.0, float(seconds))
+            if wait_s <= 0.0:
+                return bool(stop_check())
+            deadline = time.monotonic() + wait_s
+            while True:
+                if stop_check():
+                    return True
+                remaining = deadline - time.monotonic()
+                if remaining <= 0.0:
+                    return False
+                time.sleep(min(0.05, remaining))
+
         def fetch_one(code: str) -> tuple[str, bool]:
             if stop_check():
                 return code, False
@@ -1089,7 +1106,7 @@ class ParallelFetcher:
             min_cache_bars = int(max(2 * bpd, 2))
 
             with semaphore:
-                if self._cancel_token.wait(timeout=max(0.0, float(delay))):
+                if _paced_wait(delay):
                     return code, False
                 try:
                     try:

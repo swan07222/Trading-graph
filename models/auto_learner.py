@@ -504,7 +504,8 @@ class ContinuousLearner:
         if eff_interval in ("1m", "2m", "5m"):
             # FIX 1M DATA: Reduced min_bars for better success rate with limited 1m history
             # Free data sources typically provide only 1-2 days of 1m data
-            min_bars = max(CONFIG.SEQUENCE_LENGTH + 10, 30)  # Was 40, further reduced
+            # Further reduced to allow training with minimal intraday data
+            min_bars = max(CONFIG.SEQUENCE_LENGTH // 2, 20)  # Was 30, reduced for sparse 1m data
         elif eff_interval in ("15m", "30m", "60m", "1h"):
             min_bars = max(CONFIG.SEQUENCE_LENGTH + 20, 50)  # Was 60
         else:

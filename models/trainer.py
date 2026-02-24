@@ -703,6 +703,7 @@ class Trainer:
 Trainer._assess_raw_data_quality = _assess_raw_data_quality_impl
 Trainer._split_single_stock = _split_single_stock_impl
 Trainer._fetch_raw_data = _fetch_raw_data_impl
+Trainer._validate_temporal_split_integrity = _validate_temporal_split_integrity_impl
 Trainer._create_sequences_from_splits = _create_sequences_from_splits_impl
 Trainer._rebalance_train_samples = _rebalance_train_samples_impl
 Trainer._effective_confidence_floor = _effective_confidence_floor_impl

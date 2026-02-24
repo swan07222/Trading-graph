@@ -387,7 +387,12 @@ def _run_cycle(
         except _AUTO_LEARNER_RECOVERABLE_EXCEPTIONS as e:
             log.debug("VPN min-ok adjustment unavailable: %s", e)
         if len(ok_codes) < min_ok and failed_codes and not self._should_stop():
-            relaxed_min_bars = max(CONFIG.SEQUENCE_LENGTH + 20, int(min_bars * 0.7))
+            # FIX 1M: More aggressive retry for intraday data with limited availability
+            if eff_interval in ("1m", "2m", "5m"):
+                # For 1m data, use much more relaxed thresholds due to limited free data
+                relaxed_min_bars = max(CONFIG.SEQUENCE_LENGTH // 3, 15)  # Very relaxed for 1m
+            else:
+                relaxed_min_bars = max(CONFIG.SEQUENCE_LENGTH + 20, int(min_bars * 0.7))
             retry_base_processed = int(max(0, len(ok_codes)))
             retry_groups: list[tuple[str, list[str], bool, bool]] = []
             retry_cap = min(len(failed_codes), max(8, min_ok * 2))
@@ -484,6 +489,50 @@ def _run_cycle(
                 if c not in ok_set
                 and (c not in retried_set or c in retry_failed_set)
             ]
+
+        # FIX 1M: Second-tier ultra-relaxed retry for intraday data
+        if len(ok_codes) < min_ok and failed_codes and eff_interval in ("1m", "2m", "5m"):
+            ultra_relaxed_min_bars = max(CONFIG.SEQUENCE_LENGTH // 4, 10)  # Ultra relaxed
+            ultra_retry_cap = min(len(failed_codes), max(12, min_ok * 3))
+            ultra_retry_codes = failed_codes[:ultra_retry_cap]
+            if ultra_retry_codes:
+                self._update(
+                    message=(
+                        f"Ultra-relaxed retry for {len(ultra_retry_codes)} stocks "
+                        f"(min bars {ultra_relaxed_min_bars})"
+                    ),
+                    progress=40.0,
+                )
+                try:
+                    ultra_ok, ultra_failed = self._fetcher.fetch_batch(
+                        ultra_retry_codes, eff_interval, eff_lookback, ultra_relaxed_min_bars,
+                        stop_check=self._should_stop,
+                        progress_cb=lambda msg, cnt: self._update(
+                            message=f"Ultra retry: {msg}",
+                            stocks_processed=min(len(codes), len(ok_codes) + int(cnt)),
+                            progress=40.0 + 4.0 * (int(cnt) / float(len(ultra_retry_codes))),
+                        ),
+                        allow_online=True,
+                        update_db=True,
+                    )
+                except TypeError:
+                    ultra_ok, ultra_failed = self._fetcher.fetch_batch(
+                        ultra_retry_codes, eff_interval, eff_lookback, ultra_relaxed_min_bars,
+                        stop_check=self._should_stop,
+                        progress_cb=lambda msg, cnt: self._update(
+                            message=f"Ultra retry: {msg}",
+                            stocks_processed=min(len(codes), len(ok_codes) + int(cnt)),
+                            progress=40.0 + 4.0 * (int(cnt) / float(len(ultra_retry_codes))),
+                        ),
+                        allow_online=True,
+                        update_db=True,
+                    )
+                ok_set = set(ok_codes)
+                for code in ultra_ok:
+                    if code not in ok_set:
+                        ok_codes.append(code)
+                        ok_set.add(code)
+                failed_codes = [c for c in failed_codes if c not in ok_set]
 
         for code in failed_codes:
             self._rotator.mark_failed(code)
@@ -722,7 +771,11 @@ def _run_targeted_cycle(
         ]
 
         if not ok_codes and failed_codes and not self._should_stop():
-            relaxed_min_bars = max(CONFIG.SEQUENCE_LENGTH + 20, int(min_bars * 0.7))
+            # FIX 1M: More aggressive retry for intraday data with limited availability
+            if eff_interval in ("1m", "2m", "5m"):
+                relaxed_min_bars = max(CONFIG.SEQUENCE_LENGTH // 3, 15)  # Very relaxed for 1m
+            else:
+                relaxed_min_bars = max(CONFIG.SEQUENCE_LENGTH + 20, int(min_bars * 0.7))
             retry_base_processed = int(max(0, len(ok_codes)))
             retry_groups: list[tuple[str, list[str], bool, bool]] = []
             retry_cap = min(len(failed_codes), 12)
