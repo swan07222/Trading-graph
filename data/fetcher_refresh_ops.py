@@ -18,7 +18,7 @@ def refresh_trained_stock_history(
     codes: list[str],
     *,
     interval: str = "1m",
-    window_days: int = 29,
+    window_days: int = 7,  # Changed default from 29 to 7
     allow_online: bool = True,
     sync_session_cache: bool = True,
     replace_realtime_after_close: bool = True,
@@ -32,9 +32,12 @@ def refresh_trained_stock_history(
     - After market close, if realtime rows exist and replacement is enabled,
       fetch from the first realtime timestamp and replace those realtime rows
       with official-history rows in session cache.
+    
+    FIX 7D WINDOW: Default window reduced from 29 to 7 days for faster sync
+    and to avoid API rate limits. Fetches incrementally from last saved point.
     """
     iv = self._normalize_interval_token(interval)
-    wd = max(1, int(window_days or 29))
+    wd = max(1, int(window_days or 7))  # Changed default from 29 to 7
     intraday = iv not in {"1d", "1wk", "1mo"}
     bpd = float(BARS_PER_DAY.get(iv, 1.0) or 1.0)
     if bpd <= 0:

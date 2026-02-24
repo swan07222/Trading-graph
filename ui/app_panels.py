@@ -178,12 +178,12 @@ def _create_left_panel(self: Any) -> QWidget:
     )
     ai_layout.addWidget(self.open_trained_tab_btn)
 
-    self.get_infor_btn = QPushButton("Get Infor (29d)")
+    self.get_infor_btn = QPushButton("Get Infor (7d)")
     self.get_infor_btn.setObjectName("smallGhostButton")
     self.get_infor_btn.setToolTip(
-        "Fetch 29-day history for all trained stocks from AKShare.\n"
-        "If market is closed, replaces saved realtime rows with AKShare rows.\n"
-        "Otherwise fetches incrementally from the last saved AKShare point."
+        "Fetch 7-day history for all trained stocks from AKShare.\n"
+        "Fetches incrementally from the last saved timestamp.\n"
+        "If market is closed, replaces saved realtime rows with AKShare rows."
     )
     self.get_infor_btn.clicked.connect(self._get_infor_trained_stocks)
     ai_layout.addWidget(self.get_infor_btn)
