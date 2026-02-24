@@ -2,12 +2,11 @@ from __future__ import annotations
 
 import argparse
 import importlib.util
+import subprocess
 import sys
 from pathlib import Path
 
-from scripts.gate_common import normalize_path
 from scripts.typecheck_common import (
-    ERROR_RE,
     load_baseline_entries,
     parse_mypy_errors,
     run_mypy,
@@ -91,33 +90,6 @@ def _iter_target_batches(
     for i in range(0, len(targets), size):
         out.append(tuple(targets[i:i + size]))
     return out
-
-
-def run_mypy(targets: tuple[str, ...], flags: tuple[str, ...]) -> tuple[int, str, set[str]]:
-    if not targets:
-        return 0, "", set()
-
-    batches = _iter_target_batches(targets, DEFAULT_BATCH_SIZE)
-    if len(batches) == 1:
-        return _run_mypy_once(batches[0], flags)
-
-    all_issues: set[str] = set()
-    output_parts: list[str] = []
-    max_code = 0
-
-    for index, batch in enumerate(batches, start=1):
-        return_code, combined, issues = _run_mypy_once(batch, flags)
-        max_code = max(max_code, int(return_code))
-        all_issues.update(issues)
-        if combined:
-            output_parts.append(
-                f"[batch {index}/{len(batches)}] targets={','.join(batch)}\n{combined}"
-            )
-        if return_code not in (0, 1):
-            break
-
-    output = "\n\n".join(output_parts).strip()
-    return max_code, output, all_issues
 
 
 def main() -> int:

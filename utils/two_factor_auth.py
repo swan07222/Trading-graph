@@ -238,19 +238,49 @@ class TwoFactorAuth:
     
     def __init__(self, storage_path: Path | str | None = None) -> None:
         """Initialize 2FA manager.
-        
+
         Args:
             storage_path: Path to store 2FA configs
         """
         self.storage_path = storage_path
         self._cache: dict[str, User2FA] = {}
         self._authenticator = TOTPAuthenticator()
-        
+        self._storage: Any | None = None  # Lazy init to avoid env dependency in tests
+
         # Rate limiting
         self._failed_attempts: dict[str, list[datetime]] = {}
         self._lockout_duration = timedelta(minutes=15)
         self._max_attempts = 5
-    
+
+    def _get_storage(self) -> Any:
+        """Get storage instance, using custom path if provided."""
+        if self._storage is None:
+            if self.storage_path is not None:
+                # Create a dedicated SecureStorage for this instance
+                from utils.security import SecureStorage
+                # If storage_path is a directory, create a file path inside it
+                import os
+                storage_path = Path(self.storage_path)
+                if storage_path.is_dir():
+                    storage_file = storage_path / ".tfa_storage.enc"
+                else:
+                    storage_file = storage_path
+                # Temporarily override the storage path env var
+                old_path = os.getenv("TRADING_SECURE_STORAGE_PATH")
+                os.environ["TRADING_SECURE_STORAGE_PATH"] = str(storage_file)
+                try:
+                    self._storage = SecureStorage()
+                finally:
+                    # Restore original env var
+                    if old_path is None:
+                        os.environ.pop("TRADING_SECURE_STORAGE_PATH", None)
+                    else:
+                        os.environ["TRADING_SECURE_STORAGE_PATH"] = old_path
+            else:
+                from utils.security import get_secure_storage
+                self._storage = get_secure_storage()
+        return self._storage
+
     def setup_2fa(self, user_id: str) -> dict[str, Any]:
         """Setup 2FA for a user.
         
@@ -524,9 +554,9 @@ class TwoFactorAuth:
     
     def _save_user(self, user_id: str) -> None:
         """Save user 2FA config."""
-        # In production, this should use secure storage
-        storage = get_secure_storage()
-        
+        # In production, use secure storage
+        storage = self._get_storage()
+
         user_config = self._cache.get(user_id)
         if user_config:
             data = {
@@ -539,18 +569,18 @@ class TwoFactorAuth:
                 'failed_attempts': user_config.failed_attempts,
                 'locked_until': user_config.locked_until.isoformat() if user_config.locked_until else None,
             }
-            
+
             # Encrypt and store
             storage.set(f"2fa_{user_id}", json.dumps(data))
-    
+
     def _load_user(self, user_id: str) -> User2FA | None:
         """Load user 2FA config."""
         # Check cache first
         if user_id in self._cache:
             return self._cache[user_id]
-        
+
         # Load from storage
-        storage = get_secure_storage()
+        storage = self._get_storage()
         data_str = storage.get(f"2fa_{user_id}")
         
         if not data_str:

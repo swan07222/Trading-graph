@@ -17,13 +17,10 @@ Features:
 """
 from __future__ import annotations
 
-import hashlib
 import threading
-import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from enum import Enum
-from typing import Optional
 
 import numpy as np
 
@@ -75,8 +72,8 @@ class ProviderStats:
     successful_requests: int = 0
     failed_requests: int = 0
     avg_latency_ms: float = 0.0
-    last_success_time: Optional[datetime] = None
-    last_failure_time: Optional[datetime] = None
+    last_success_time: datetime | None = None
+    last_failure_time: datetime | None = None
     consecutive_failures: int = 0
     health: ProviderHealth = ProviderHealth.UNKNOWN
 
@@ -391,7 +388,7 @@ class ProviderHealthMonitor:
                 if stats.health == ProviderHealth.HEALTHY
             ]
 
-    def get_best_provider(self) -> Optional[str]:
+    def get_best_provider(self) -> str | None:
         """Get best provider based on health and latency."""
         with self._lock:
             healthy = [
@@ -471,7 +468,7 @@ class MultiSourceValidator:
         symbol: str,
         source: str,
         price: float,
-    ) -> tuple[bool, str, Optional[float]]:
+    ) -> tuple[bool, str, float | None]:
         """
         Validate price against other sources.
 
@@ -530,7 +527,7 @@ class MultiSourceValidator:
         current = self._source_reliability.get(source, 0.5)
         self._source_reliability[source] = max(0.0, current - 0.1)
 
-    def get_consensus_price(self, symbol: str) -> Optional[float]:
+    def get_consensus_price(self, symbol: str) -> float | None:
         """Get consensus price for symbol."""
         with self._lock:
             if symbol not in self._latest_prices:

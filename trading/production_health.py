@@ -20,10 +20,10 @@ from __future__ import annotations
 import os
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime
 from enum import Enum
-from typing import Callable, Optional
 
 import numpy as np
 
@@ -54,8 +54,8 @@ class HealthCheckResult:
     name: str
     status: HealthStatus
     message: str
-    value: Optional[str] = None
-    expected: Optional[str] = None
+    value: str | None = None
+    expected: str | None = None
     timestamp: datetime = field(default_factory=datetime.now)
     details: dict = field(default_factory=dict)
 
@@ -82,7 +82,7 @@ class SystemHealth:
     errors: list[str]
     warnings: list[str]
     uptime_seconds: float
-    last_healthy_time: Optional[datetime]
+    last_healthy_time: datetime | None
 
     def to_dict(self) -> dict:
         """Convert to dictionary."""
@@ -126,11 +126,11 @@ class ProductionHealthMonitor:
 
         self._lock = threading.RLock()
         self._running = False
-        self._monitor_thread: Optional[threading.Thread] = None
+        self._monitor_thread: threading.Thread | None = None
         self._checks: list[Callable[[], HealthCheckResult]] = []
         self._last_results: list[HealthCheckResult] = []
-        self._start_time: Optional[datetime] = None
-        self._last_healthy_time: Optional[datetime] = None
+        self._start_time: datetime | None = None
+        self._last_healthy_time: datetime | None = None
         self._errors: list[str] = []
         self._warnings: list[str] = []
 
@@ -718,7 +718,7 @@ class ProductionGate:
             "required_checks": self.required_checks,
             "failed_required": [
                 name for name in self.required_checks
-                if self._last_results.get(name)?.status != HealthStatus.HEALTHY
+                if (result := self._last_results.get(name)) and result.status != HealthStatus.HEALTHY
             ],
         }
 

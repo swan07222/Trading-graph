@@ -1198,14 +1198,28 @@ class MultiAssetPosition:
     @property
     def unrealized_pnl(self) -> float:
         """Get unrealized P&L."""
-        if self.quantity == 0 or self.avg_cost == 0:
-            return 0
         if self.asset_type == AssetType.FUTURES:
             # Futures P&L calculation
+            if self.long_qty == 0 and self.short_qty == 0:
+                return 0
             long_pnl = (self.current_price - self.long_avg_cost) * self.long_qty
             short_pnl = (self.short_avg_cost - self.current_price) * self.short_qty
             return long_pnl + short_pnl
-        return (self.current_price - self.avg_cost) * self.quantity
+        else:
+            # Stock/standard P&L
+            if self.quantity == 0 or self.avg_cost == 0:
+                return 0
+            return (self.current_price - self.avg_cost) * self.quantity
+
+    @property
+    def cost_basis(self) -> float:
+        """Get cost basis for position."""
+        if self.asset_type == AssetType.FUTURES:
+            # For futures, cost basis is margin used
+            return self.margin_used if self.margin_used > 0 else abs(self.net_quantity) * self.current_price * 0.1
+        else:
+            # For stocks, cost basis is quantity * avg_cost
+            return self.quantity * self.avg_cost if self.quantity > 0 and self.avg_cost > 0 else 0.0
     
     def to_dict(self) -> dict:
         """Serialize to dictionary."""

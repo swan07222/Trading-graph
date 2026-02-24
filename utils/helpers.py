@@ -4,8 +4,10 @@ from __future__ import annotations
 import math
 from collections.abc import Sequence
 from datetime import datetime, timedelta
+from typing import Union
 
 import numpy as np
+from numpy.typing import ArrayLike
 
 
 def to_float(x, default: float = 0.0) -> float:
@@ -191,7 +193,7 @@ def calculate_sharpe(
 
 
 def calculate_max_drawdown(
-    equity: np.ndarray | Sequence[float],
+    equity: ArrayLike,
 ) -> float:
     """Calculate maximum drawdown from an equity curve.
 

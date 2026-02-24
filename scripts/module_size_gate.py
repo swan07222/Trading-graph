@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
+from typing import Iterable
 
 from scripts.gate_common import normalize_path, iter_python_files
 
@@ -24,6 +25,16 @@ BASELINE_HEADER = [
     "# Format: path:line_count",
     "",
 ]
+
+
+def _normalize_path(path: Path | str) -> str:
+    """Normalize path for consistent comparison."""
+    return normalize_path(str(path))
+
+
+def _iter_python_files(targets: Iterable[str]) -> Iterable[Path]:
+    """Iterate over Python files from targets."""
+    return iter_python_files(targets)
 
 
 def collect_oversized_modules(targets: tuple[str, ...], max_lines: int) -> dict[str, int]:

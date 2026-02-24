@@ -14,7 +14,8 @@ import pandas as pd
 from config.runtime_env import env_flag as _read_env_flag
 from config.runtime_env import env_text as _read_env_text
 from config.settings import CONFIG
-from core.symbols import clean_code as _clean_code, validate_stock_code as _validate_stock_code
+from core.symbols import clean_code as _clean_code
+from core.symbols import validate_stock_code as _validate_stock_code
 from data.cache import get_cache
 from data.database import get_database
 from data.fetcher_clean_ops import (

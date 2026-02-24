@@ -28,7 +28,7 @@ class TestResult:
     success: bool
     latency_ms: float = 0.0
     error: str = ""
-    details: dict[str, Any] = None
+    details: dict[str, Any] | None = None
 
     def __post_init__(self) -> None:
         if self.details is None:

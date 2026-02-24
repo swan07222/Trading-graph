@@ -115,24 +115,40 @@ class GlobalExplanation:
     dataset_name: str = ""
     num_samples: int = 0
     num_features: int = 0
-    
+
     # Feature importance
-    feature_importances: list[FeatureImportance] = field(default_factory=list)
-    
+    _feature_importances: list[FeatureImportance] = field(default_factory=list)
+
     # Summary statistics
     mean_shap_values: dict[str, float] = field(default_factory=dict)
     std_shap_values: dict[str, float] = field(default_factory=dict)
-    
+
     # Dependence
     dependence_plots: dict[str, dict[str, list[float]]] = field(default_factory=dict)
-    
+
     # Clustering
     feature_clusters: list[list[str]] = field(default_factory=list)
-    
+
     def __post_init__(self) -> None:
-        # Sort by importance
-        self.feature_importances.sort(key=lambda x: abs(x.shap_abs_mean), reverse=True)
-        for i, imp in enumerate(self.feature_importances):
+        # Sort by absolute mean importance (descending)
+        self._sort_feature_importances()
+
+    @property
+    def feature_importances(self) -> list[FeatureImportance]:
+        """Get sorted feature importances."""
+        return self._feature_importances
+
+    @feature_importances.setter
+    def feature_importances(self, value: list[FeatureImportance]) -> None:
+        """Set and sort feature importances."""
+        self._feature_importances = value
+        self._sort_feature_importances()
+
+    def _sort_feature_importances(self) -> None:
+        """Sort feature importances by absolute mean importance."""
+        self._feature_importances.sort(key=lambda x: abs(x.shap_abs_mean), reverse=True)
+        # Update ranks after sorting
+        for i, imp in enumerate(self._feature_importances):
             imp.rank = i + 1
     
     @property
@@ -277,13 +293,13 @@ class ModelExplainer:
     def _get_prediction_class(self, prediction: float) -> str:
         """Get prediction class label."""
         if self.model_type == "classifier":
-            if prediction > 0.7:
+            if prediction >= 0.8:
                 return "STRONG_BUY"
-            elif prediction > 0.55:
+            elif prediction >= 0.55:
                 return "BUY"
-            elif prediction > 0.45:
+            elif prediction >= 0.45:
                 return "HOLD"
-            elif prediction > 0.3:
+            elif prediction >= 0.25:
                 return "SELL"
             return "STRONG_SELL"
         return "PREDICTION"
@@ -401,11 +417,9 @@ class ModelExplainer:
         if len(X) > max_samples:
             indices = np.random.choice(len(X), max_samples, replace=False)
             X_sample = X[indices]
-            y_sample = y[indices] if y is not None else None
         else:
             X_sample = X
-            y_sample = y
-        
+
         # Initialize SHAP if needed
         if self._shap_explainer is None:
             self._init_shap()

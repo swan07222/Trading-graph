@@ -10,7 +10,7 @@ Provides advanced uncertainty estimation for deep learning models:
 from __future__ import annotations
 
 import threading
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
@@ -245,15 +245,15 @@ class DeepEnsemble:
             # Get predictions from all models
             individual_predictions = []
             weights = []
-            
-            for model, weight in zip(self._models, self._model_weights):
+
+            for model, weight in zip(self._models, self._model_weights, strict=False):
                 if hasattr(model, 'predict'):
                     pred = model.predict(X.reshape(1, -1))
                 elif hasattr(model, 'predict_proba'):
                     pred = model.predict_proba(X.reshape(1, -1))[:, 1]
                 else:
                     continue
-                
+
                 individual_predictions.append(pred)
                 weights.append(weight)
             
@@ -313,10 +313,10 @@ class DeepEnsemble:
             # Calculate pairwise correlations
             correlations = []
             for i in range(len(self._models)):
-                for j in range(i + 1, len(self._models)):
+                for _j in range(i + 1, len(self._models)):
                     # Simplified - would need actual predictions
                     correlations.append(0.9)  # Placeholder
-            
+
             return float(np.mean(correlations)) if correlations else 1.0
 
 
@@ -358,9 +358,9 @@ class ConformalPredictor:
         """
         with self._lock:
             self._calibration_scores = []
-            
+
             # Calculate nonconformity scores
-            for x, y in zip(X_cal, y_cal):
+            for x, y in zip(X_cal, y_cal, strict=False):
                 pred = model.predict(x.reshape(1, -1))[0]
                 score = abs(pred - y)
                 self._calibration_scores.append(score)

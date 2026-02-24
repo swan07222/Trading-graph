@@ -89,7 +89,9 @@ def safe_dataclass_from_dict(dc_instance: Any, data: dict[str, Any]) -> list[str
                 setattr(dc_instance, key, value)
             elif isinstance(current_value, time) and isinstance(value, str):
                 parts = [int(p) for p in value.split(":")]
-                setattr(dc_instance, key, time(*parts))
+                # time() requires at least hour and minute
+                if len(parts) >= 2:
+                    setattr(dc_instance, key, time(parts[0], parts[1], parts[2] if len(parts) > 2 else 0, parts[3] if len(parts) > 3 else 0))
             elif isinstance(current_value, date) and isinstance(value, str):
                 setattr(dc_instance, key, datetime.fromisoformat(value).date())
             elif isinstance(current_value, datetime) and isinstance(value, str):

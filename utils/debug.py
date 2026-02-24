@@ -18,12 +18,14 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime
 from io import StringIO
+import logging
 from pathlib import Path
 from typing import Any
 
 from utils.logger import get_logger
 
 log = get_logger(__name__)
+_log_module = logging
 
 
 @dataclass
@@ -333,8 +335,8 @@ def trace_execution(
     # Setup log file if provided
     if log_file:
         log_file.parent.mkdir(parents=True, exist_ok=True)
-        handler = log.FileHandler(log_file)
-        log.getLogger().addHandler(handler)
+        handler = _log_module.FileHandler(log_file)
+        _log_module.getLogger().addHandler(handler)
 
     try:
         sys.settrace(trace_calls)
@@ -344,10 +346,10 @@ def trace_execution(
 
         # Cleanup log file handler
         if log_file:
-            for handler in log.getLogger().handlers[:]:
-                if isinstance(handler, log.FileHandler):
+            for handler in _log_module.getLogger().handlers[:]:
+                if isinstance(handler, _log_module.FileHandler):
                     handler.close()
-                    log.getLogger().removeHandler(handler)
+                    _log_module.getLogger().removeHandler(handler)
 
 
 @dataclass

@@ -17,15 +17,14 @@ Features:
 from __future__ import annotations
 
 import threading
-import time
-from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from collections.abc import Callable
+from dataclasses import dataclass
+from datetime import datetime
 from enum import Enum
-from typing import Callable, Optional
 
 import numpy as np
 
-from core.types import Fill, Order, OrderSide, OrderType
+from core.types import Fill, Order, OrderSide
 from utils.logger import get_logger
 
 log = get_logger(__name__)
@@ -389,7 +388,7 @@ class SmartOrderRouter:
             if latency_ms is not None:
                 self._broker_latencies[broker_id] = latency_ms
 
-    def get_best_broker(self) -> Optional[str]:
+    def get_best_broker(self) -> str | None:
         """Get the healthiest broker with lowest latency."""
         with self._lock:
             healthy_brokers = [
@@ -483,7 +482,7 @@ class ExecutionValidator:
         with self._lock:
             self._recent_prices[symbol] = (price, datetime.now())
 
-    def get_recent_price(self, symbol: str) -> Optional[float]:
+    def get_recent_price(self, symbol: str) -> float | None:
         """Get most recent price for symbol."""
         with self._lock:
             if symbol not in self._recent_prices:

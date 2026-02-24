@@ -31,10 +31,10 @@ if HAS_PYQTGRAPH:
 
         def __init__(self) -> None:
             super().__init__()
-            self.data = []
-            self._picture = None
+            self.data: list[tuple] = []
+            self._picture: pg.QtGui.QPicture | None = None
 
-        def setData(self, data) -> None:
+        def setData(self, data: list[tuple] | None) -> None:
             """Set candlestick data. Each item: (x, open, close, low, high)."""
             self.data = data or []
             self._picture = None
@@ -109,14 +109,14 @@ if HAS_PYQTGRAPH:
             p.end()
             self._picture = pic
 
-        def paint(self, p, *args) -> None:
+        def paint(self, p: pg.QtGui.QPainter, *args: object) -> None:
             """Paint the candlestick item."""
             if self._picture is None:
                 self._generate_picture()
             if self._picture is not None:
                 p.drawPicture(0, 0, self._picture)
 
-        def boundingRect(self):
+        def boundingRect(self) -> pg.QtCore.QRectF:
             """Return bounding rectangle of all candle data."""
             if not self.data:
                 return pg.QtCore.QRectF()

@@ -47,7 +47,7 @@ class LazyImport(Generic[T]):
             self._module = import_module(self._module_name)
         return getattr(self._module, self._attr_name)
 
-    def __call__(self, *args: Any, **kwargs: Any) -> T:
+    def __call__(self, *args: Any, **kwargs: Any) -> Any:
         """Call the imported callable."""
         return self._import()(*args, **kwargs)
 
@@ -80,7 +80,7 @@ class CachedLazyImport(Generic[T]):
             self._module = import_module(self._module_name)
         return getattr(self._module, self._attr_name)
 
-    def __call__(self, *args: Any, **kwargs: Any) -> T:
+    def __call__(self, *args: Any, **kwargs: Any) -> Any:
         """Call the imported callable with TTL caching."""
         now = time.time()
         if self._cache_val is not None and (now - self._cache_ts) < self._ttl:
@@ -105,7 +105,7 @@ def make_lazy_getter(module: str, name: str, *, cache: bool = False, ttl: float 
         A callable that performs lazy import on first call.
     """
     if cache:
-        lazy = CachedLazyImport(module, name, ttl=ttl)
+        lazy: CachedLazyImport[Any] = CachedLazyImport(module, name, ttl=ttl)
     else:
-        lazy = LazyImport(module, name)
+        lazy: LazyImport[Any] = LazyImport(module, name)
     return lazy

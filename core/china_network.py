@@ -171,10 +171,10 @@ class ChinaNetworkOptimizer:
     - DNS resolution optimization
     """
 
-    _instance = None
+    _instance: "ChinaNetworkOptimizer | None" = None
     _lock = threading.Lock()
 
-    def __new__(cls) -> ChinaNetworkOptimizer:
+    def __new__(cls) -> "ChinaNetworkOptimizer":
         if cls._instance is None:
             with cls._lock:
                 if cls._instance is None:
@@ -183,7 +183,7 @@ class ChinaNetworkOptimizer:
         return cls._instance
 
     def __init__(self) -> None:
-        if self._initialized:
+        if hasattr(self, "_initialized") and self._initialized:
             return
         self._initialized = True
 
@@ -377,7 +377,7 @@ class ChinaNetworkOptimizer:
                     })
 
                 # Sort by quality score
-                endpoints_data.sort(key=lambda x: x["quality_score"], reverse=True)
+                endpoints_data.sort(key=lambda x: float(x["quality_score"]), reverse=True)
 
                 report[prov] = {
                     "endpoints": endpoints_data,
@@ -470,7 +470,7 @@ class ChinaNetworkOptimizer:
 
     def get_network_status(self) -> dict[str, Any]:
         """Get comprehensive network status report."""
-        status = {
+        status: dict[str, Any] = {
             "timestamp": datetime.now().isoformat(),
             "proxy_enabled": self._proxy_enabled,
             "proxy_url": self._mask_proxy_url(self._proxy_url) if self._proxy_url else None,
@@ -478,7 +478,7 @@ class ChinaNetworkOptimizer:
             "overall_quality": 0.0,
         }
 
-        quality_scores = []
+        quality_scores: list[float] = []
         for provider in CHINA_ENDPOINTS.keys():
             report = self.get_endpoint_quality_report(provider)
             if provider in report:

@@ -18,10 +18,10 @@ from __future__ import annotations
 
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from enum import Enum
-from typing import Callable, Optional
 
 from utils.logger import get_logger
 
@@ -101,14 +101,14 @@ class CircuitBreaker:
     when thresholds are breached.
     """
 
-    def __init__(self, config: CircuitBreakerConfig = None) -> None:
+    def __init__(self, config: CircuitBreakerConfig | None = None) -> None:
         self.config = config or CircuitBreakerConfig()
         self._lock = threading.RLock()
 
         self._state = TradingState.NORMAL
         self._events: list[CircuitBreakerEvent] = []
-        self._last_trigger_time: Optional[datetime] = None
-        self._cooldown_until: Optional[datetime] = None
+        self._last_trigger_time: datetime | None = None
+        self._cooldown_until: datetime | None = None
 
         # Metrics tracking
         self._daily_pnl_pct: float = 0.0
@@ -122,7 +122,7 @@ class CircuitBreaker:
         # Network/data health
         self._data_latency_ms: float = 0.0
         self._consecutive_failures: int = 0
-        self._last_heartbeat: Optional[datetime] = None
+        self._last_heartbeat: datetime | None = None
 
         # Order tracking
         self._orders_last_minute: list[datetime] = []
@@ -152,15 +152,15 @@ class CircuitBreaker:
 
     def update_metrics(
         self,
-        daily_pnl_pct: float = None,
-        weekly_pnl_pct: float = None,
-        monthly_pnl_pct: float = None,
-        drawdown_pct: float = None,
-        volatility: float = None,
-        var_95: float = None,
-        data_latency_ms: float = None,
-        total_exposure_pct: float = None,
-        largest_position_pct: float = None,
+        daily_pnl_pct: float | None = None,
+        weekly_pnl_pct: float | None = None,
+        monthly_pnl_pct: float | None = None,
+        drawdown_pct: float | None = None,
+        volatility: float | None = None,
+        var_95: float | None = None,
+        data_latency_ms: float | None = None,
+        total_exposure_pct: float | None = None,
+        largest_position_pct: float | None = None,
     ) -> None:
         """Update risk metrics."""
         with self._lock:
@@ -430,7 +430,7 @@ class CircuitBreaker:
 
     def get_events(
         self,
-        since: datetime = None,
+        since: datetime | None = None,
         limit: int = 100,
     ) -> list[CircuitBreakerEvent]:
         """Get circuit breaker events."""
@@ -498,11 +498,11 @@ class RedundantHealthMonitor:
 
         self._lock = threading.RLock()
         self._running = False
-        self._monitor_thread: Optional[threading.Thread] = None
+        self._monitor_thread: threading.Thread | None = None
         self._health_checks: list[Callable[[], bool]] = []
-        self._last_check_time: Optional[datetime] = None
+        self._last_check_time: datetime | None = None
         self._consecutive_failures = 0
-        self._external_heartbeat: Optional[datetime] = None
+        self._external_heartbeat: datetime | None = None
 
     def register_health_check(self, check_fn: Callable[[], bool]) -> None:
         """Register a health check function."""
@@ -624,7 +624,7 @@ class ComplianceChecker:
     - Order value limits
     """
 
-    def __init__(self, config: ComplianceConfig = None) -> None:
+    def __init__(self, config: ComplianceConfig | None = None) -> None:
         self.config = config or ComplianceConfig()
         self._lock = threading.RLock()
         self._today_buys: dict[str, int] = {}  # symbol -> quantity

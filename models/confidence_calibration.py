@@ -15,12 +15,10 @@ Features:
 """
 from __future__ import annotations
 
-import math
 import threading
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime
 from enum import Enum
-from typing import Optional
 
 import numpy as np
 
@@ -183,29 +181,29 @@ class ConfidenceCalibrator:
         with self._lock:
             # Symbol-specific calibration if available
             if symbol and symbol in self._calibration_map:
-                base_calibration = self._calibration_map[symbol]
-            else:
-                # Find calibration from nearest bucket
-                if not self._calibration_map:
-                    return raw_confidence  # No calibration data yet
+                return self._calibration_map[symbol]
+            
+            # Find calibration from nearest bucket
+            if not self._calibration_map:
+                return raw_confidence  # No calibration data yet
 
-                # Linear interpolation
-                sorted_points = sorted(self._calibration_map.keys())
-                if raw_confidence <= sorted_points[0]:
-                    return self._calibration_map[sorted_points[0]]
-                if raw_confidence >= sorted_points[-1]:
-                    return self._calibration_map[sorted_points[-1]]
+            # Linear interpolation
+            sorted_points = sorted(self._calibration_map.keys())
+            if raw_confidence <= sorted_points[0]:
+                return self._calibration_map[sorted_points[0]]
+            if raw_confidence >= sorted_points[-1]:
+                return self._calibration_map[sorted_points[-1]]
 
-                # Find bracketing points
-                for i in range(len(sorted_points) - 1):
-                    low = sorted_points[i]
-                    high = sorted_points[i + 1]
-                    if low <= raw_confidence < high:
-                        # Linear interpolation
-                        t = (raw_confidence - low) / (high - low)
-                        cal_low = self._calibration_map[low]
-                        cal_high = self._calibration_map[high]
-                        return cal_low + t * (cal_high - cal_low)
+            # Find bracketing points
+            for i in range(len(sorted_points) - 1):
+                low = sorted_points[i]
+                high = sorted_points[i + 1]
+                if low <= raw_confidence < high:
+                    # Linear interpolation
+                    t = (raw_confidence - low) / (high - low)
+                    cal_low = self._calibration_map[low]
+                    cal_high = self._calibration_map[high]
+                    return cal_low + t * (cal_high - cal_low)
 
             return raw_confidence
 

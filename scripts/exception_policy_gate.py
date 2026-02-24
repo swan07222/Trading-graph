@@ -4,6 +4,7 @@ import argparse
 import ast
 import json
 from pathlib import Path
+from typing import Iterable
 
 from scripts.gate_common import normalize_path, iter_python_files
 
@@ -25,6 +26,16 @@ BASELINE_HEADER = [
     "# Format: path:line:code",
     "",
 ]
+
+
+def _normalize_path(path: Path | str) -> str:
+    """Normalize path for consistent comparison."""
+    return normalize_path(str(path))
+
+
+def _iter_python_files(targets: Iterable[str]) -> Iterable[Path]:
+    """Iterate over Python files from targets."""
+    return iter_python_files(targets)
 
 
 def _is_broad_exception_type(node: ast.expr | None) -> bool:

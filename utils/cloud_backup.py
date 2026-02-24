@@ -174,40 +174,40 @@ class CloudBackup:
                 endpoint_url=self.config.endpoint_url,
                 config=client_config,
             )
-            
+
             # Ensure bucket exists
             self._ensure_bucket()
-            
-        except ImportError:
-            raise ImportError("Install boto3: pip install boto3")
-    
+
+        except ImportError as e:
+            raise ImportError("Install boto3: pip install boto3") from e
+
     def _init_azure_client(self) -> None:
         """Initialize Azure Blob Storage client."""
         try:
             from azure.storage.blob import BlobServiceClient
-            
+
             if self.config.connection_string:
                 self._client = BlobServiceClient.from_connection_string(
                     self.config.connection_string
                 )
             else:
                 raise ValueError("Azure connection_string required")
-                
-        except ImportError:
-            raise ImportError("Install azure-storage-blob: pip install azure-storage-blob")
-    
+
+        except ImportError as e:
+            raise ImportError("Install azure-storage-blob: pip install azure-storage-blob") from e
+
     def _init_gcs_client(self) -> None:
         """Initialize Google Cloud Storage client."""
         try:
             from google.cloud import storage
-            
+
             if self.config.credentials_path:
                 os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = self.config.credentials_path
-            
+
             self._client = storage.Client(project=self.config.project_id)
-            
-        except ImportError:
-            raise ImportError("Install google-cloud-storage: pip install google-cloud-storage")
+
+        except ImportError as e:
+            raise ImportError("Install google-cloud-storage: pip install google-cloud-storage") from e
     
     def _ensure_bucket(self) -> None:
         """Ensure bucket exists (S3)."""

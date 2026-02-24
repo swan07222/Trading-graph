@@ -17,11 +17,9 @@ Features:
 from __future__ import annotations
 
 import threading
-import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from enum import Enum
-from typing import Optional
 
 import numpy as np
 
@@ -65,8 +63,8 @@ class ModelPerformance:
     correct_predictions: int = 0
     avg_confidence: float = 0.0
     avg_error_pct: float = 0.0
-    last_prediction_time: Optional[datetime] = None
-    last_retrain_time: Optional[datetime] = None
+    last_prediction_time: datetime | None = None
+    last_retrain_time: datetime | None = None
     train_samples: int = 0
 
     @property
@@ -114,7 +112,7 @@ class RegimeDetector:
         self._lock = threading.RLock()
         self._price_history: dict[str, list[tuple[datetime, float]]] = {}
         self._volume_history: dict[str, list[tuple[datetime, float]]] = {}
-        self._current_regime: Optional[RegimeMetrics] = None
+        self._current_regime: RegimeMetrics | None = None
         self._regime_history: list[RegimeMetrics] = []
 
     def update_price(
@@ -174,7 +172,7 @@ class RegimeDetector:
             )
 
         # Extract price series
-        timestamps, price_series = zip(*prices)
+        timestamps, price_series = zip(*prices, strict=False)
         price_array = np.array(price_series)
 
         # Calculate trend (bull/bear)
@@ -585,7 +583,7 @@ class RegimeAwareEnsemble:
         self._lock = threading.RLock()
         self._model_weights: dict[str, EnsembleWeight] = {}
         self._regime_detector = RegimeDetector()
-        self._current_regime: Optional[MarketRegime] = None
+        self._current_regime: MarketRegime | None = None
 
     def register_model(
         self,

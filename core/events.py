@@ -121,7 +121,7 @@ class EventBus:
     list with pop(0) which is O(n).
     """
 
-    _instance = None
+    _instance: "EventBus | None" = None
     _lock = threading.RLock()
 
     def __new__(cls) -> "EventBus":
@@ -133,7 +133,7 @@ class EventBus:
         return cls._instance
 
     def __init__(self) -> None:
-        if self._initialized:
+        if hasattr(self, "_initialized") and self._initialized:
             return
 
         self._initialized = True
