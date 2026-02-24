@@ -235,6 +235,11 @@ _RECOVERABLE_FETCH_EXCEPTIONS = (
     TypeError,
     ValueError,
     json.JSONDecodeError,
+    # FIX #11: Add network-related exceptions for better error handling
+    ConnectionError,
+    ConnectionResetError,
+    ConnectionAbortedError,
+    ConnectionRefusedError,
 )
 _SOURCE_CLASSES: dict[str, type[DataSource]] = {
     "tencent": TencentQuoteSource,
@@ -848,6 +853,61 @@ class DataFetcher:
             allow_synthetic_index=allow_synthetic_index,
         )
 
+    @staticmethod
+    def _validate_ohlcv_frame(frame: pd.DataFrame, require_positive_volume: bool = True) -> bool:
+        """Validate OHLCV DataFrame has valid data for caching.
+        
+        FIX #7: Ensures data quality before caching.
+        
+        Args:
+            frame: DataFrame to validate
+            require_positive_volume: Whether to require positive volume
+            
+        Returns:
+            True if valid, False otherwise
+        """
+        if frame is None or frame.empty:
+            return False
+        
+        required_cols = {"open", "high", "low", "close"}
+        if not required_cols.issubset(frame.columns):
+            return False
+        
+        # Check for NaN values in required columns
+        for col in required_cols:
+            if frame[col].isna().all():
+                return False
+        
+        # Check for Inf values
+        import numpy as np
+        for col in required_cols:
+            if np.isinf(frame[col]).any():
+                return False
+        
+        # Check OHLC relationships: high >= low, high >= open, high >= close, low <= open, low <= close
+        if not (frame["high"] >= frame["low"]).all():
+            return False
+        if not (frame["high"] >= frame["open"]).all():
+            return False
+        if not (frame["high"] >= frame["close"]).all():
+            return False
+        if not (frame["low"] <= frame["open"]).all():
+            return False
+        if not (frame["low"] <= frame["close"]).all():
+            return False
+        
+        # Check for positive prices
+        for col in ["open", "high", "low", "close"]:
+            if (frame[col] <= 0).any():
+                return False
+        
+        # Check volume if required
+        if require_positive_volume and "volume" in frame.columns:
+            if (frame["volume"] < 0).any():
+                return False
+        
+        return True
+
     # ------------------------------------------------------------------
     # History orchestration (unchanged logic, minor robustness improvements)
     # ------------------------------------------------------------------
@@ -1082,13 +1142,33 @@ class DataFetcher:
         *,
         interval: str | None = None,
     ) -> pd.DataFrame:
+        """Cache DataFrame tail with validation.
+        
+        FIX #7: Validates data before caching to prevent storing invalid data.
+        """
+        # FIX #7: Validate input DataFrame
+        if df is None or df.empty:
+            log.debug("Cache write skipped: empty DataFrame for %s", cache_key)
+            return pd.DataFrame()
+        
+        # FIX #7: Validate OHLCV data quality before caching
+        if not self._validate_ohlcv_frame(df):
+            log.warning("Cache write skipped: invalid OHLCV data for %s", cache_key)
+            return df.tail(count).copy() if len(df) >= count else df.copy()
+        
         out = df.tail(count).copy()
         keep_rows = min(
             len(df),
             self._history_cache_store_rows(interval, count),
         )
         cache_df = df.tail(max(1, int(keep_rows))).copy()
-        self._cache.set(cache_key, cache_df)
+        
+        # FIX #10: Wrap cache write in try-except
+        try:
+            self._cache.set(cache_key, cache_df)
+        except Exception as exc:
+            log.warning("Cache write failed for %s: %s", cache_key, exc)
+        
         return out
 
     def _get_session_history(

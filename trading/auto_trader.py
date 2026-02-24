@@ -156,7 +156,7 @@ class AutoTrader:
         """
         try:
             p_cfg = getattr(CONFIG, "precision", None)
-            if not p_cfg or not bool(getattr(p_cfg, "enabled", True)):
+            if not p_cfg:
                 return True, ""
 
             block_short_history = bool(

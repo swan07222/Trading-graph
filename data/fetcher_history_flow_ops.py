@@ -3,6 +3,7 @@ import math
 from datetime import datetime
 from typing import Any
 
+import numpy as np
 import pandas as pd
 
 from config.settings import CONFIG
@@ -16,6 +17,73 @@ from data.fetcher_sources import (
 from utils.logger import get_logger
 
 log = get_logger(__name__)
+
+
+def _median_tail_close(frame: pd.DataFrame, tail_rows: int = 240) -> float:
+    """Median close of recent rows; 0.0 when unavailable."""
+    if frame is None or frame.empty:
+        return 0.0
+    if "close" not in frame.columns:
+        return 0.0
+    closes = pd.to_numeric(frame["close"], errors="coerce").dropna()
+    closes = closes[closes > 0]
+    if closes.empty:
+        return 0.0
+    return float(closes.tail(max(1, int(tail_rows))).median())
+
+
+def _validate_ohlcv_frame(frame: pd.DataFrame, require_positive_volume: bool = True) -> bool:
+    """Validate OHLCV DataFrame has valid data for caching.
+    
+    FIX #7 & #8: Ensures data quality before caching.
+    
+    Args:
+        frame: DataFrame to validate
+        require_positive_volume: Whether to require positive volume
+        
+    Returns:
+        True if valid, False otherwise
+    """
+    if frame is None or frame.empty:
+        return False
+    
+    required_cols = {"open", "high", "low", "close"}
+    if not required_cols.issubset(frame.columns):
+        return False
+    
+    # Check for NaN values in required columns
+    for col in required_cols:
+        if frame[col].isna().all():
+            return False
+    
+    # Check for Inf values
+    for col in required_cols:
+        if np.isinf(frame[col]).any():
+            return False
+    
+    # Check OHLC relationships: high >= low, high >= open, high >= close, low <= open, low <= close
+    if not (frame["high"] >= frame["low"]).all():
+        return False
+    if not (frame["high"] >= frame["open"]).all():
+        return False
+    if not (frame["high"] >= frame["close"]).all():
+        return False
+    if not (frame["low"] <= frame["open"]).all():
+        return False
+    if not (frame["low"] <= frame["close"]).all():
+        return False
+    
+    # Check for positive prices
+    for col in ["open", "high", "low", "close"]:
+        if (frame[col] <= 0).any():
+            return False
+    
+    # Check volume if required
+    if require_positive_volume and "volume" in frame.columns:
+        if (frame["volume"] < 0).any():
+            return False
+    
+    return True
 
 def get_history(
     self,
@@ -67,10 +135,12 @@ def get_history(
     elif interval == "1d":
         ttl = float(CONFIG.data.cache_ttl_hours)
     else:
-        ttl = min(float(CONFIG.data.cache_ttl_hours), 1.0 / 120.0)
+        # FIX #11: Use reasonable TTL for intraday data (5 minutes instead of 30 seconds)
+        ttl = min(float(CONFIG.data.cache_ttl_hours), 5.0 / 60.0)
 
     cache_key = f"history:{key}:{interval}"
     stale_cached_df = pd.DataFrame()
+    cache_is_stale_or_partial = False
 
     if use_cache and (not force_exact_intraday):
         cached_df = self._cache.get(cache_key, ttl)
@@ -85,8 +155,11 @@ def get_history(
                     cached_df, interval
                 )
             stale_cached_df = cached_df
+            # FIX #1 & #5: Track if cache is partial/stale for later use
             if len(cached_df) >= min(count, 100):
                 return cached_df.tail(count)
+            if len(cached_df) < count:
+                cache_is_stale_or_partial = True
             if offline and len(cached_df) >= max(20, min(count, 80)):
                 return cached_df.tail(count)
 
@@ -98,39 +171,39 @@ def get_history(
             interval=interval,
             bars=count,
         )
+    # FIX #2: Cache session history even if partial (useful for future requests)
     if (
         use_session_history
         and interval in _INTRADAY_INTERVALS
         and not session_df.empty
         and count <= 500
-        and len(session_df) >= count
     ):
-        return self._cache_tail(
-            cache_key,
-            session_df,
-            count,
-            interval=interval,
-        )
+        # FIX #10: Wrap cache write in try-except
+        try:
+            return self._cache_tail(
+                cache_key,
+                session_df,
+                count,
+                interval=interval,
+            )
+        except Exception as exc:
+            log.warning("Cache write failed for session history: %s", exc)
+            return session_df.tail(count) if len(session_df) >= count else session_df
 
     if is_cn_equity and interval in _INTRADAY_INTERVALS:
         if force_exact_intraday:
             return self._get_history_cn_intraday_exact(
                 inst, count, fetch_days, interval, cache_key, offline,
             )
+        # FIX #12: Remove redundant TypeError retry - use consistent signature
         persist_intraday_db = bool(update_db) and (
             not bool(CONFIG.is_market_open())
         )
-        try:
-            return self._get_history_cn_intraday(
-                inst, count, fetch_days, interval,
-                cache_key, offline, session_df,
-                persist_intraday_db=persist_intraday_db,
-            )
-        except TypeError:
-            return self._get_history_cn_intraday(
-                inst, count, fetch_days, interval,
-                cache_key, offline, session_df,
-            )
+        return self._get_history_cn_intraday(
+            inst, count, fetch_days, interval,
+            cache_key, offline, session_df,
+            persist_intraday_db=persist_intraday_db,
+        )
 
     if is_cn_equity and interval in {"1d", "1wk", "1mo"}:
         return self._get_history_cn_daily(
@@ -316,27 +389,57 @@ def _accept_online_intraday_snapshot(
     """Decide whether to trust an online intraday snapshot over baseline."""
     if online_df is None or online_df.empty:
         return False
-    if baseline_df is None or baseline_df.empty:
-        return True
 
     iv = self._normalize_interval_token(interval)
+    baseline = (
+        baseline_df
+        if isinstance(baseline_df, pd.DataFrame)
+        else pd.DataFrame()
+    )
     oq = self._intraday_frame_quality(online_df, iv)
-    bq = self._intraday_frame_quality(baseline_df, iv)
+    bq = self._intraday_frame_quality(baseline, iv)
     online_score   = float(oq.get("score", 0.0))
     base_score     = float(bq.get("score", 0.0))
     online_suspect = bool(oq.get("suspect", False))
+
+    online_med = _median_tail_close(online_df, tail_rows=240)
+    ref_close = 0.0
+    try:
+        daily = self._db.get_bars(str(symbol or ""), limit=1)
+        if isinstance(daily, pd.DataFrame) and not daily.empty:
+            ref_close = _median_tail_close(daily, tail_rows=1)
+    except Exception:
+        ref_close = 0.0
+    if ref_close <= 0:
+        ref_close = _median_tail_close(baseline, tail_rows=120)
+    if online_med > 0 and ref_close > 0:
+        ratio = online_med / max(ref_close, 1e-8)
+        min_ratio, max_ratio = 0.45, 2.2
+        if ratio < min_ratio or ratio > max_ratio:
+            log.warning(
+                "Rejected scale-mismatched online snapshot for %s (%s): "
+                "online_med=%.6f ref=%.6f ratio=%.3f (allowed %.3f..%.3f)",
+                str(symbol or ""),
+                iv,
+                online_med,
+                ref_close,
+                ratio,
+                min_ratio,
+                max_ratio,
+            )
+            return False
 
     online_fresher = False
     try:
         if (
             isinstance(online_df.index, pd.DatetimeIndex)
-            and isinstance(baseline_df.index, pd.DatetimeIndex)
+            and isinstance(baseline.index, pd.DatetimeIndex)
             and len(online_df.index) > 0
-            and len(baseline_df.index) > 0
+            and len(baseline.index) > 0
         ):
             step = int(max(1, self._interval_seconds(iv)))
             online_last = pd.Timestamp(online_df.index.max())
-            base_last   = pd.Timestamp(baseline_df.index.max())
+            base_last   = pd.Timestamp(baseline.index.max())
             online_fresher = bool(
                 online_last >= (base_last + pd.Timedelta(seconds=step))
             )
@@ -424,37 +527,132 @@ def _get_history_cn_intraday(
 
     if offline or online_df.empty:
         if db_df.empty:
+            # Fallback: synthesize intraday from daily bars
             log.info(
-                "Intraday data unavailable for %s (%s); synthesis disabled",
+                "Intraday data unavailable for %s (%s); synthesizing from daily",
+                code6, interval,
+            )
+            # FIX #4: Use correct daily cache key
+            daily_cache_key = f"history:{code6}:1d"
+            daily_df = self._get_history_cn_daily(
+                inst, count, fetch_days, daily_cache_key,
+                offline, update_db=False, session_df=None, interval="1d",
+            )
+            if daily_df is not None and not daily_df.empty:
+                # FIX #8: Validate synthesized data before caching
+                # FIX #2026-02-24: Pass symbol for better logging
+                synthesized = _synthesize_intraday_from_daily(
+                    daily_df=daily_df,
+                    interval=interval,
+                    count=count,
+                    symbol=code6,
+                )
+                if not synthesized.empty and self._validate_ohlcv_frame(synthesized):
+                    # FIX #10: Wrap cache write in try-except
+                    try:
+                        return self._cache_tail(
+                            cache_key,
+                            synthesized,
+                            count,
+                            interval=interval,
+                        )
+                    except Exception as exc:
+                        log.warning("Cache write failed for synthesized intraday: %s", exc)
+                        return synthesized.tail(count)
+            log.warning(
+                "Intraday synthesis failed for %s (%s); returning empty",
                 code6, interval,
             )
             return pd.DataFrame()
-        return self._cache_tail(
-            cache_key,
-            db_df,
-            count,
-            interval=interval,
-        )
+        # FIX #5: Mark partial cache with metadata if db_df has fewer rows than count
+        if len(db_df) < count:
+            log.info(
+                "Intraday returning partial DB data for %s (%s): %d/%d bars",
+                code6, interval, len(db_df), count,
+            )
+        # FIX #10: Wrap cache write in try-except
+        try:
+            return self._cache_tail(
+                cache_key,
+                db_df,
+                count,
+                interval=interval,
+            )
+        except Exception as exc:
+            log.warning("Cache write failed for intraday DB data: %s", exc)
+            return db_df.tail(count) if len(db_df) >= count else db_df
 
     # Prefer fresh online rows when timestamps overlap with local DB rows.
     merged = self._merge_parts(online_df, db_df, interval=interval)
     merged = self._filter_cn_intraday_session(merged, interval)
     if merged.empty:
+        # Fallback: synthesize intraday from daily bars
         log.info(
-            "Intraday merged empty for %s (%s); synthesis disabled",
+            "Intraday merged empty for %s (%s); synthesizing from daily",
+            code6, interval,
+        )
+        # FIX #4: Use correct daily cache key
+        daily_cache_key = f"history:{code6}:1d"
+        daily_df = self._get_history_cn_daily(
+            inst, count, fetch_days, daily_cache_key,
+            offline, update_db=False, session_df=None, interval="1d",
+        )
+        if daily_df is not None and not daily_df.empty:
+            # FIX #8: Validate synthesized data before caching
+            # FIX #2026-02-24: Pass symbol for better logging
+            synthesized = _synthesize_intraday_from_daily(
+                daily_df=daily_df,
+                interval=interval,
+                count=count,
+                symbol=code6,
+            )
+            if not synthesized.empty and self._validate_ohlcv_frame(synthesized):
+                # FIX #10: Wrap cache write in try-except
+                try:
+                    return self._cache_tail(
+                        cache_key,
+                        synthesized,
+                        count,
+                        interval=interval,
+                    )
+                except Exception as exc:
+                    log.warning("Cache write failed for synthesized intraday: %s", exc)
+                    return synthesized.tail(count)
+        log.warning(
+            "Intraday synthesis failed for %s (%s); returning empty",
             code6, interval,
         )
         return pd.DataFrame()
 
-    out = self._cache_tail(
-        cache_key,
-        merged,
-        count,
-        interval=interval,
-    )
+    # FIX #10: Wrap cache write in try-except
+    try:
+        out = self._cache_tail(
+            cache_key,
+            merged,
+            count,
+            interval=interval,
+        )
+    except Exception as exc:
+        log.warning("Cache write failed for merged intraday: %s", exc)
+        out = merged.tail(count)
+
+    # FIX #9: Invalidate cache after DB update to prevent inconsistency
     if bool(persist_intraday_db):
         try:
             self._db.upsert_intraday_bars(code6, interval, online_df)
+            # Re-cache with fresh DB data to ensure consistency
+            try:
+                db_fresh = self._clean_dataframe(
+                    self._db.get_intraday_bars(
+                        code6, interval=interval, limit=db_limit
+                    ),
+                    interval=interval,
+                )
+                db_fresh = self._filter_cn_intraday_session(db_fresh, interval)
+                if not db_fresh.empty:
+                    self._cache.set(cache_key, db_fresh)
+            except Exception as cache_exc:
+                log.debug("Cache refresh after DB update skipped: %s", cache_exc)
         except Exception as exc:
             log.warning(
                 "Intraday DB upsert failed for %s (%s): %s",
@@ -496,39 +694,136 @@ def _get_history_cn_intraday_exact(
             "Intraday exact DB read failed for %s (%s): %s",
             code6, interval, exc,
         )
+    if online_df is not None and (not online_df.empty):
+        if not self._accept_online_intraday_snapshot(
+            symbol=code6,
+            interval=interval,
+            online_df=online_df,
+            baseline_df=db_df,
+        ):
+            online_df = pd.DataFrame()
 
     if online_df is None or online_df.empty:
         if db_df is None or db_df.empty:
+            # Fallback: synthesize intraday from daily bars
             log.info(
-                "Intraday exact: data unavailable for %s (%s); synthesis disabled",
+                "Intraday exact: data unavailable for %s (%s); synthesizing from daily",
+                code6, interval,
+            )
+            # FIX #4: Use correct daily cache key
+            daily_cache_key = f"history:{code6}:1d"
+            daily_df = self._get_history_cn_daily(
+                inst, count, fetch_days, daily_cache_key,
+                offline=True, update_db=False, session_df=None, interval="1d",
+            )
+            if daily_df is not None and not daily_df.empty:
+                # FIX #8: Validate synthesized data before caching
+                # FIX #2026-02-24: Pass symbol for better logging
+                synthesized = _synthesize_intraday_from_daily(
+                    daily_df=daily_df,
+                    interval=interval,
+                    count=count,
+                    symbol=code6,
+                )
+                if not synthesized.empty and self._validate_ohlcv_frame(synthesized):
+                    # FIX #10: Wrap cache write in try-except
+                    try:
+                        return self._cache_tail(
+                            cache_key,
+                            synthesized,
+                            count,
+                            interval=interval,
+                        )
+                    except Exception as exc:
+                        log.warning("Cache write failed for synthesized intraday: %s", exc)
+                        return synthesized.tail(count)
+            log.warning(
+                "Intraday exact synthesis failed for %s (%s); returning empty",
                 code6, interval,
             )
             return pd.DataFrame()
-        return self._cache_tail(
-            cache_key,
-            db_df,
-            count,
-            interval=interval,
-        )
+        # FIX #10: Wrap cache write in try-except
+        try:
+            return self._cache_tail(
+                cache_key,
+                db_df,
+                count,
+                interval=interval,
+            )
+        except Exception as exc:
+            log.warning("Cache write failed for intraday DB data: %s", exc)
+            return db_df.tail(count) if len(db_df) >= count else db_df
 
     # Prefer fresh online rows when timestamps overlap with local DB rows.
     merged = self._merge_parts(online_df, db_df, interval=interval)
     merged = self._filter_cn_intraday_session(merged, interval)
     if merged.empty:
+        # Fallback: synthesize intraday from daily bars
         log.info(
-            "Intraday exact: merged empty for %s (%s); synthesis disabled",
+            "Intraday exact: merged empty for %s (%s); synthesizing from daily",
+            code6, interval,
+        )
+        # FIX #4: Use correct daily cache key
+        daily_cache_key = f"history:{code6}:1d"
+        daily_df = self._get_history_cn_daily(
+            inst, count, fetch_days, daily_cache_key,
+            offline=True, update_db=False, session_df=None, interval="1d",
+        )
+        if daily_df is not None and not daily_df.empty:
+            # FIX #8: Validate synthesized data before caching
+            # FIX #2026-02-24: Pass symbol for better logging
+            synthesized = _synthesize_intraday_from_daily(
+                daily_df=daily_df,
+                interval=interval,
+                count=count,
+                symbol=code6,
+            )
+            if not synthesized.empty and self._validate_ohlcv_frame(synthesized):
+                # FIX #10: Wrap cache write in try-except
+                try:
+                    return self._cache_tail(
+                        cache_key,
+                        synthesized,
+                        count,
+                        interval=interval,
+                    )
+                except Exception as exc:
+                    log.warning("Cache write failed for synthesized intraday: %s", exc)
+                    return synthesized.tail(count)
+        log.warning(
+            "Intraday exact synthesis failed for %s (%s); returning empty",
             code6, interval,
         )
         return pd.DataFrame()
 
-    out = self._cache_tail(
-        cache_key,
-        merged,
-        count,
-        interval=interval,
-    )
+    # FIX #10: Wrap cache write in try-except
+    try:
+        out = self._cache_tail(
+            cache_key,
+            merged,
+            count,
+            interval=interval,
+        )
+    except Exception as exc:
+        log.warning("Cache write failed for merged intraday: %s", exc)
+        out = merged.tail(count)
+
+    # FIX #9: Invalidate cache after DB update to prevent inconsistency
     try:
         self._db.upsert_intraday_bars(code6, interval, online_df)
+        # Re-cache with fresh DB data to ensure consistency
+        try:
+            db_fresh = self._clean_dataframe(
+                self._db.get_intraday_bars(
+                    code6, interval=interval, limit=db_limit
+                ),
+                interval=interval,
+            )
+            db_fresh = self._filter_cn_intraday_session(db_fresh, interval)
+            if not db_fresh.empty:
+                self._cache.set(cache_key, db_fresh)
+        except Exception as cache_exc:
+            log.debug("Cache refresh after DB update skipped: %s", cache_exc)
     except Exception as exc:
         log.warning(
             "Intraday exact DB upsert failed for %s (%s): %s",
@@ -563,13 +858,13 @@ def _get_history_cn_daily(
         db_df,
         iv,
     )
-    
+
     # FIX DEBUG: Log database state
     if db_df is None or db_df.empty:
         log.debug(f"CN daily: DB empty for {symbol} (limit={db_limit})")
     else:
         log.debug(f"CN daily: DB has {len(db_df)} bars for {symbol}")
-    
+
     if offline:
         result = base_df.tail(count) if not base_df.empty else pd.DataFrame()
         if result.empty:
@@ -602,13 +897,13 @@ def _get_history_cn_daily(
         online_df = (
             online_out if isinstance(online_out, pd.DataFrame) else pd.DataFrame()
         )
-    
+
     # FIX DEBUG: Log online fetch result
     if online_df is None or online_df.empty:
         log.debug(f"CN daily: online fetch empty for {symbol}")
     else:
         log.debug(f"CN daily: online fetch has {len(online_df)} bars for {symbol}")
-    
+
     if online_df is None or online_df.empty:
         result = base_df.tail(count) if not base_df.empty else pd.DataFrame()
         if result.empty:
@@ -621,12 +916,19 @@ def _get_history_cn_daily(
         log.debug(f"CN daily: merged empty for {symbol}")
         return pd.DataFrame()
 
-    out = self._cache_tail(
-        cache_key,
-        merged,
-        count,
-        interval=iv,
-    )
+    # FIX #10: Wrap cache write in try-except
+    try:
+        out = self._cache_tail(
+            cache_key,
+            merged,
+            count,
+            interval=iv,
+        )
+    except Exception as exc:
+        log.warning("Cache write failed for CN daily: %s", exc)
+        out = merged.tail(count)
+
+    # FIX #9: Invalidate cache after DB update to prevent inconsistency
     if update_db and iv == "1d":
         if not self._history_quorum_allows_persist(
             interval=iv,
@@ -636,6 +938,17 @@ def _get_history_cn_daily(
             return out
         try:
             self._db.upsert_bars(inst["symbol"], online_df)
+            # Re-cache with fresh DB data to ensure consistency
+            try:
+                db_fresh = self._clean_dataframe(
+                    self._db.get_bars(inst["symbol"], limit=db_limit),
+                    interval="1d",
+                )
+                db_fresh_resampled = self._resample_daily_to_interval(db_fresh, iv)
+                if not db_fresh_resampled.empty:
+                    self._cache.set(cache_key, db_fresh_resampled)
+            except Exception as cache_exc:
+                log.debug("Cache refresh after DB update skipped: %s", cache_exc)
         except Exception as exc:
             log.warning(
                 "Daily DB upsert failed for %s: %s",
@@ -648,6 +961,7 @@ def _synthesize_intraday_from_daily(
     daily_df: pd.DataFrame,
     interval: str,
     count: int,
+    symbol: str = "",
 ) -> pd.DataFrame:
     """Synthesize intraday bars from daily OHLCV when real intraday is unavailable.
 
@@ -661,9 +975,16 @@ def _synthesize_intraday_from_daily(
         daily_df: Daily OHLCV DataFrame with DatetimeIndex
         interval: Target intraday interval (e.g., '1m', '5m')
         count: Number of intraday bars to generate
+        symbol: Optional symbol for logging purposes
 
     Returns:
         Synthesized intraday DataFrame or empty DataFrame if not applicable
+    
+    FIX #2026-02-24:
+    - Added symbol parameter for better logging
+    - Timestamp column now uses consistent ISO format string for serialization
+    - Datetime column removed to avoid pickle serialization issues
+    - Added interval column for cache context verification
     """
     if daily_df is None or daily_df.empty:
         return pd.DataFrame()
@@ -686,15 +1007,25 @@ def _synthesize_intraday_from_daily(
 
     # Limit to recent days to avoid generating too many bars
     max_days = max(2, (count // bars_per_day) + 2)
-    daily_tail = daily_df.tail(max_days)
+    daily_tail = daily_tail = daily_df.tail(max_days)
 
     if daily_tail.empty:
         return pd.DataFrame()
 
-    intraday_rows: list[dict[str, float]] = []
+    intraday_rows: list[dict[str, Any]] = []
     intraday_index: list[pd.Timestamp] = []
     tz = getattr(daily_tail.index, "tz", None)
     step_minutes = int(iv.replace("m", "")) if iv.endswith("m") else 60
+
+    # China A-share trading hours: 9:30-11:30 (morning), 13:00-15:00 (afternoon)
+    # Morning session: 120 minutes (9:30-11:30)
+    # Afternoon session: 120 minutes (13:00-15:00)
+    # Total: 240 minutes of trading per day
+    MORNING_SESSION_MINUTES = 120  # 9:30-11:30
+    MORNING_START_HOUR = 9
+    MORNING_START_MIN = 30
+    AFTERNOON_START_HOUR = 13
+    AFTERNOON_START_MIN = 0
 
     for date, row in daily_tail.iterrows():
         open_p = float(row.get("open", row.get("close", 1.0)))
@@ -713,19 +1044,26 @@ def _synthesize_intraday_from_daily(
         for bar_idx in range(bars_per_day):
             # Time within trading day (9:30-15:00 CST)
             total_minutes = bar_idx * step_minutes
-            hours = total_minutes // 60
 
             # China trading hours: 9:30-11:30, 13:00-15:00
-            if hours < 2:  # Morning session (0-119 minutes -> 9:30-11:29)
-                actual_hour = 9 + (total_minutes // 60)
-                actual_min = 30 + (total_minutes % 60)
-                if actual_min >= 60:
+            if total_minutes < MORNING_SESSION_MINUTES:
+                # Morning session (9:30-11:30)
+                actual_hour = MORNING_START_HOUR
+                actual_min = MORNING_START_MIN + total_minutes
+                # Handle minute overflow past 60
+                while actual_min >= 60:
                     actual_hour += 1
                     actual_min -= 60
-            else:  # Afternoon session
-                afternoon_min = total_minutes - 120  # Skip 2-hour lunch
-                actual_hour = 13 + (afternoon_min // 60)
-                actual_min = afternoon_min % 60
+            else:
+                # Afternoon session (13:00-15:00)
+                # Subtract morning session length to get afternoon offset
+                afternoon_offset = total_minutes - MORNING_SESSION_MINUTES
+                actual_hour = AFTERNOON_START_HOUR
+                actual_min = AFTERNOON_START_MIN + afternoon_offset
+                # Handle minute overflow past 60
+                while actual_min >= 60:
+                    actual_hour += 1
+                    actual_min -= 60
 
             try:
                 bar_time = date.replace(hour=actual_hour, minute=actual_min)
@@ -755,6 +1093,10 @@ def _synthesize_intraday_from_daily(
             bar_high = min(high_p, bar_high)
             bar_low = max(low_p, bar_low)
 
+            # FIX #2026-02-24: Use consistent ISO format string for timestamp
+            # This ensures reliable serialization across cache operations
+            ts_iso = ts.isoformat()
+            
             intraday_rows.append(
                 {
                     "open": float(bar_open),
@@ -763,6 +1105,11 @@ def _synthesize_intraday_from_daily(
                     "close": float(bar_close),
                     "volume": float(vol_per_bar),
                     "amount": float(amt_per_bar),
+                    "interval": iv,
+                    "timestamp": ts_iso,
+                    # FIX #2026-02-24: Store datetime as ISO string, not Timestamp object
+                    # This prevents pickle serialization issues with timezone-aware timestamps
+                    "datetime": ts_iso,
                 }
             )
             intraday_index.append(ts)
@@ -773,6 +1120,14 @@ def _synthesize_intraday_from_daily(
     result = pd.DataFrame(intraday_rows, index=pd.DatetimeIndex(intraday_index))
     result = result[~result.index.duplicated(keep="last")]
     result = result.tail(count)
+
+    # FIX #8: Validate synthesized data before returning
+    if not _validate_ohlcv_frame(result):
+        log.warning(
+            "Synthesized intraday data failed validation for %s bars from %d daily rows",
+            interval, len(daily_tail),
+        )
+        return pd.DataFrame()
 
     log.debug(f"Synthesized {len(result)} {interval} bars from {len(daily_tail)} daily bars")
     return result

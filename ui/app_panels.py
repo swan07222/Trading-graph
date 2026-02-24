@@ -114,8 +114,8 @@ def _create_left_panel(self: Any) -> QWidget:
     self.forecast_spin = QSpinBox()
     self.forecast_spin.setRange(5, 120)
     self.forecast_spin.setValue(self.GUESS_FORECAST_BARS)
-    self.forecast_spin.setSuffix(" min")
-    self.forecast_spin.setToolTip("Minutes to forecast ahead")
+    self.forecast_spin.setSuffix(" bars")
+    self.forecast_spin.setToolTip("Number of bars to forecast ahead (actual time depends on interval)")
     self._add_labeled(settings_layout, 4, "Forecast:", self.forecast_spin)
 
     self.lookback_spin = QSpinBox()

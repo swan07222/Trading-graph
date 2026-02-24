@@ -73,6 +73,15 @@ def _interval_safety_caps(interval: str) -> tuple[float, float]:
     return 0.20, 0.15
 
 
+def _reference_scale_bounds(interval: str) -> tuple[float, float]:
+    """Return (min_ratio, max_ratio) against DB reference close."""
+    iv = str(interval or "1m").strip().lower()
+    if iv in ("1d", "1wk", "1mo"):
+        return 0.25, 4.0
+    # Intraday source snapshots should remain reasonably close to baseline.
+    return 0.45, 2.2
+
+
 def _bars_per_day_for_interval(interval: str) -> float:
     iv = str(interval or "1m").strip().lower()
     mapping = {
@@ -180,10 +189,24 @@ class SessionBarCache:
     recently seen market data without refetching.
     """
 
-    def __init__(self, root: Path | None = None) -> None:
+    def __init__(
+        self,
+        root: Path | None = None,
+        *,
+        enable_reference_scale_guard: bool | None = None,
+    ) -> None:
         base = Path(root) if root else (CONFIG.data_dir / "session_bars")
         self._root = base
         self._root.mkdir(parents=True, exist_ok=True)
+        if enable_reference_scale_guard is None:
+            try:
+                default_root = (CONFIG.data_dir / "session_bars").resolve()
+                enable_reference_scale_guard = bool(
+                    self._root.resolve() == default_root
+                )
+            except Exception:
+                enable_reference_scale_guard = False
+        self._enable_reference_scale_guard = bool(enable_reference_scale_guard)
         self._locks: dict[str, threading.Lock] = {}
         self._last_row_fingerprint: dict[
             str,
@@ -199,6 +222,9 @@ class SessionBarCache:
     @property
     def root(self) -> Path:
         return self._root
+
+    def _reference_scale_guard_enabled(self) -> bool:
+        return bool(getattr(self, "_enable_reference_scale_guard", False))
 
     def _lock_for(self, key: str) -> threading.Lock:
         with self._global_lock:
@@ -350,6 +376,8 @@ class SessionBarCache:
 
     def _cleanup_corrupt_files(self) -> None:
         """Startup cleanup: quarantine obviously wrong-scale intraday cache files."""
+        if not self._reference_scale_guard_enabled():
+            return
         try:
             files = sorted(self._root.glob("*.csv"))
         except Exception:
@@ -385,7 +413,8 @@ class SessionBarCache:
                 continue
             ratio = med / float(ref)
             checked += 1
-            if 0.2 <= ratio <= 5.0:
+            min_ratio, max_ratio = _reference_scale_bounds(iv_norm)
+            if min_ratio <= ratio <= max_ratio:
                 continue
             try:
                 qpath = path.with_suffix(
@@ -589,28 +618,6 @@ class SessionBarCache:
         with lock:
             writes_now = 0
             with _interprocess_file_lock(path):
-                prev_close = self._last_close_hint.get(path.name)
-                if prev_close is None:
-                    prev_close = self._load_last_close_hint(path)
-                    if prev_close and prev_close > 0:
-                        self._last_close_hint[path.name] = float(prev_close)
-                if prev_close and prev_close > 0:
-                    ratio = max(close, float(prev_close)) / max(
-                        min(close, float(prev_close)),
-                        1e-8,
-                    )
-                    if ratio >= 20.0:
-                        log.debug(
-                            "Session cache dropped extreme-scale write %s_%s: "
-                            "prev=%.6f new=%.6f ratio=%.2fx",
-                            sym,
-                            iv,
-                            float(prev_close),
-                            float(close),
-                            float(ratio),
-                        )
-                        return False
-
                 dt = self._to_shanghai_naive_datetime(timestamp)
                 if dt is None:
                     return False
@@ -620,6 +627,57 @@ class SessionBarCache:
                     last_ts = self._load_last_timestamp_hint(path)
                     if last_ts is not None:
                         self._last_ts_hint[path.name] = last_ts
+
+                prev_close = self._last_close_hint.get(path.name)
+                if prev_close is None:
+                    prev_close = self._load_last_close_hint(path)
+                    if prev_close and prev_close > 0:
+                        self._last_close_hint[path.name] = float(prev_close)
+                if prev_close and prev_close > 0:
+                    jump_cap, _ = _interval_safety_caps(iv)
+                    intraday = iv not in ("1d", "1wk", "1mo")
+                    same_day = True
+                    if intraday and last_ts is not None:
+                        try:
+                            same_day = bool(last_ts.date() == dt.date())
+                        except Exception:
+                            same_day = True
+
+                    prev_val = float(prev_close)
+                    ratio = max(close, float(prev_close)) / max(
+                        min(close, float(prev_close)),
+                        1e-8,
+                    )
+                    jump = abs(float(close) / max(prev_val, 1e-8) - 1.0)
+                    if intraday:
+                        jump_limit = (
+                            max(float(jump_cap) * 2.5, 0.22)
+                            if same_day
+                            else max(float(jump_cap) * 4.0, 0.55)
+                        )
+                        if jump > float(jump_limit):
+                            log.debug(
+                                "Session cache dropped jump outlier %s_%s: "
+                                "prev=%.6f new=%.6f jump=%.2f%% same_day=%s",
+                                sym,
+                                iv,
+                                prev_val,
+                                float(close),
+                                float(jump) * 100.0,
+                                bool(same_day),
+                            )
+                            return False
+                    if ratio >= 6.0:
+                        log.debug(
+                            "Session cache dropped extreme-scale write %s_%s: "
+                            "prev=%.6f new=%.6f ratio=%.2fx",
+                            sym,
+                            iv,
+                            prev_val,
+                            float(close),
+                            float(ratio),
+                        )
+                        return False
 
                 # Include OHLC envelope in dedupe key so same-close updates with
                 # refined high/low are not silently dropped.
@@ -1192,6 +1250,35 @@ class SessionBarCache:
             work = work.loc[mask]
             if work.empty:
                 return 0
+            if self._reference_scale_guard_enabled():
+                try:
+                    ref_close = float(self._reference_close_from_db(sym))
+                except Exception:
+                    ref_close = 0.0
+                if ref_close > 0:
+                    closes = pd.to_numeric(
+                        work.get("close", pd.Series(dtype=float)),
+                        errors="coerce",
+                    ).dropna()
+                    closes = closes[closes > 0]
+                    if not closes.empty:
+                        med_close = float(closes.tail(min(240, len(closes))).median())
+                        ratio = med_close / max(ref_close, 1e-8)
+                        min_ratio, max_ratio = _reference_scale_bounds(iv)
+                        if ratio < min_ratio or ratio > max_ratio:
+                            log.warning(
+                                "Session cache rejected history upsert %s_%s due to "
+                                "scale mismatch: ref=%.6f med=%.6f ratio=%.3f "
+                                "(allowed %.3f..%.3f)",
+                                sym,
+                                iv,
+                                ref_close,
+                                med_close,
+                                ratio,
+                                min_ratio,
+                                max_ratio,
+                            )
+                            return 0
 
         src = str(source or "").strip().lower()
         work["source"] = src

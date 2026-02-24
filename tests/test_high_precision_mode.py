@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from config.settings import PrecisionConfig
 from models.predictor import Prediction, Predictor, Signal
 
 
@@ -7,6 +8,10 @@ def _make_predictor(cfg: dict) -> Predictor:
     p = Predictor.__new__(Predictor)
     p._high_precision = cfg
     return p
+
+
+def test_precision_mode_default_is_disabled() -> None:
+    assert PrecisionConfig().enabled is False
 
 
 def test_high_precision_disabled_keeps_signal() -> None:

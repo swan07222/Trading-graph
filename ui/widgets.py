@@ -304,10 +304,13 @@ class SignalPanel(QFrame):
 
         # UI stability guard: avoid displaying hard 0/100/0 for HOLD when
         # probabilities are numerically saturated near neutral.
+        sig_is_hold = bool(
+            (Signal is not None and sig == Signal.HOLD)
+            or str(sig_text).strip().upper() == "HOLD"
+        )
         if (
             not prediction_unavailable
-            and Signal is not None
-            and sig == Signal.HOLD
+            and sig_is_hold
             and prob_neutral >= 0.985
             and (prob_up + prob_down) <= 0.02
         ):
@@ -361,7 +364,7 @@ class SignalPanel(QFrame):
         )
         strength = safe_float_attr(pred, "signal_strength")
         display_strength = strength
-        if Signal is not None and sig == Signal.HOLD:
+        if sig_is_hold:
             # HOLD should emphasize directional edge, not confidence.
             display_strength = max(0.0, min(1.0, abs(prob_up - prob_down)))
         uncertainty = safe_float_attr(pred, "uncertainty_score", 0.5)

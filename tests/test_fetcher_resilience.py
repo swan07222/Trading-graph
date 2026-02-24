@@ -790,7 +790,7 @@ def test_get_history_cn_intraday_does_not_use_session_shortcut() -> None:
     fetcher._get_session_history = lambda symbol, interval, bars: session_df.tail(bars)  # noqa: ARG005
     called = {"intraday": 0}
 
-    def _fake_intraday(inst, count, fetch_days, interval, cache_key, offline, session):  # noqa: ARG001
+    def _fake_intraday(inst, count, fetch_days, interval, cache_key, offline, session, *, persist_intraday_db=True):  # noqa: ARG001
         called["intraday"] += 1
         idx_local = pd.date_range("2026-02-12 09:30:00", periods=int(count), freq="min")
         return pd.DataFrame(
@@ -1066,7 +1066,7 @@ def test_get_history_normalizes_interval_alias_before_source_routing() -> None:
 
     captured: dict[str, str] = {}
 
-    def _fake_intraday(inst, count, fetch_days, interval, cache_key, offline, session):  # noqa: ARG001
+    def _fake_intraday(inst, count, fetch_days, interval, cache_key, offline, session, *, persist_intraday_db=True):  # noqa: ARG001
         captured["interval"] = str(interval)
         idx = pd.date_range("2026-02-12 10:00:00", periods=int(count), freq="h")
         return pd.DataFrame(

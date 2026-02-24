@@ -315,8 +315,9 @@ class MainApp(MainAppCommonMixin, QMainWindow):
         self._setup_statusbar()
         self._setup_timers()
         self._apply_professional_style()
-        self.bar_received.connect(self._on_bar_ui)
-        self.quote_received.connect(self._on_price_updated)
+        from PyQt6.QtCore import Qt as _Qt
+        self.bar_received.connect(self._on_bar_ui, _Qt.ConnectionType.QueuedConnection)
+        self.quote_received.connect(self._on_price_updated, _Qt.ConnectionType.QueuedConnection)
 
         try:
             self._load_state()

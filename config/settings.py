@@ -283,6 +283,49 @@ class AutoTradeConfig:
     auto_disable_on_model_drift: bool = True
     model_drift_pause_seconds: int = 3600
 
+    # FIX #16: Add validation method for configuration consistency
+    def validate(self) -> list[str]:
+        """Validate auto-trade configuration consistency.
+        
+        Returns:
+            List of validation error messages (empty if valid)
+        """
+        errors: list[str] = []
+        
+        # Validate confidence thresholds are in valid range (0, 1]
+        if not (0.0 < self.min_confidence <= 1.0):
+            errors.append(f"min_confidence must be in (0, 1], got {self.min_confidence}")
+        if not (0.0 < self.min_signal_strength <= 1.0):
+            errors.append(f"min_signal_strength must be in (0, 1], got {self.min_signal_strength}")
+        if not (0.0 < self.min_model_agreement <= 1.0):
+            errors.append(f"min_model_agreement must be in (0, 1], got {self.min_model_agreement}")
+        
+        # Validate position limits are positive
+        if self.max_auto_positions <= 0:
+            errors.append(f"max_auto_positions must be positive, got {self.max_auto_positions}")
+        if self.max_auto_position_pct <= 0:
+            errors.append(f"max_auto_position_pct must be positive, got {self.max_auto_position_pct}")
+        if self.max_auto_order_value <= 0:
+            errors.append(f"max_auto_order_value must be positive, got {self.max_auto_order_value}")
+        
+        # Validate timing constraints
+        if self.scan_interval_seconds < 10:
+            errors.append(f"scan_interval_seconds must be >= 10, got {self.scan_interval_seconds}")
+        if self.cooldown_after_trade_seconds < 60:
+            errors.append(f"cooldown_after_trade_seconds must be >= 60, got {self.cooldown_after_trade_seconds}")
+        if self.max_trades_per_day <= 0:
+            errors.append(f"max_trades_per_day must be positive, got {self.max_trades_per_day}")
+        
+        # Validate volatility threshold
+        if self.volatility_pause_threshold <= 0:
+            errors.append(f"volatility_pause_threshold must be positive, got {self.volatility_pause_threshold}")
+        
+        # Validate trailing stop
+        if self.trailing_stop_enabled and self.trailing_stop_pct <= 0:
+            errors.append(f"trailing_stop_pct must be positive when enabled, got {self.trailing_stop_pct}")
+        
+        return errors
+
 
 @dataclass
 class PrecisionConfig:
@@ -292,7 +335,7 @@ class PrecisionConfig:
     keep behaving the same unless explicitly enabled.
     """
 
-    enabled: bool = True
+    enabled: bool = False
 
     # Predictor runtime gating
     min_confidence: float = 0.78
@@ -313,6 +356,8 @@ class PrecisionConfig:
 
     # Auto-trader: optionally allow only strong signals.
     force_strong_signals_auto_trade: bool = True
+    block_auto_trade_on_short_history_fallback: bool = True
+    fail_closed_on_quality_gate_error: bool = True
 
     # Auto-learner threshold tuning
     enable_threshold_tuning: bool = True
@@ -390,24 +435,30 @@ class Config:
 
     def __init__(self) -> None:
         """Thread-safe initialization with explicit barrier.
-        
-        FIX C3: Now checks _initialized which is set in __new__,
-        preventing double initialization under concurrent access.
+
+        FIX C3: Now uses object.__getattribute__ to safely check
+        _initialized flag, preventing race condition where two threads
+        could both pass the check and both attempt initialization.
         """
-        # Early exit if already initialized (set in __new__)
-        if getattr(self, '_initialized', False):
-            # Check if this instance has been fully initialized
-            # by checking if _lock exists
-            if hasattr(self, '_lock') and hasattr(self, 'data'):
-                return
-        
+        # Early exit if already initialized - use object.__getattribute__
+        # to avoid triggering __getattr__ during partial initialization
+        try:
+            initialized = object.__getattribute__(self, '_initialized')
+            if initialized and hasattr(self, '_lock'):
+                # Check if fully initialized by checking for data attribute
+                if hasattr(self, 'data'):
+                    return
+        except AttributeError:
+            # _initialized not set yet, proceed with initialization
+            pass
+
         # Acquire lock for initialization
         with self._lock:
             # Double-check after acquiring lock
             if hasattr(self, 'data'):
                 return
-            
-            # Mark as initialized (already done in __new__, but be safe)
+
+            # Mark as initialized
             object.__setattr__(self, '_initialized', True)
             self._config_file = Path(__file__).parent.parent / "config.json"
             self._env_prefix = "TRADING_"

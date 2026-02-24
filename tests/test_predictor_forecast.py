@@ -1009,3 +1009,73 @@ def test_tail_risk_guard_filters_fragile_actionable_signal() -> None:
 
     assert pred.signal == Signal.HOLD
     assert any("Tail-risk guard filtered signal" in x for x in pred.warnings)
+
+
+def test_adaptive_signal_threshold_keeps_strong_directional_signal() -> None:
+    predictor = Predictor.__new__(Predictor)
+    predictor._get_stock_accuracy = lambda _code: 0.55
+
+    pred = Prediction(
+        stock_code="600519",
+        signal=Signal.STRONG_BUY,
+        confidence=0.83,
+        prob_up=0.57,
+        prob_neutral=0.25,
+        prob_down=0.18,
+        entropy=0.20,
+        model_agreement=0.80,
+    )
+
+    predictor._apply_adaptive_signal_threshold(pred)
+
+    assert pred.signal in (Signal.BUY, Signal.STRONG_BUY)
+
+
+def test_adaptive_signal_threshold_can_promote_hold_on_clear_edge() -> None:
+    predictor = Predictor.__new__(Predictor)
+    predictor._get_stock_accuracy = lambda _code: 0.55
+
+    pred = Prediction(
+        stock_code="600519",
+        signal=Signal.HOLD,
+        confidence=0.78,
+        prob_up=0.48,
+        prob_neutral=0.35,
+        prob_down=0.17,
+        entropy=0.28,
+        model_agreement=0.82,
+    )
+
+    predictor._apply_adaptive_signal_threshold(pred)
+
+    assert pred.signal in (Signal.BUY, Signal.STRONG_BUY)
+
+
+def test_regime_adjustments_keep_model_margin_semantics(monkeypatch) -> None:
+    class _Detector:
+        def detect(self, _df):
+            return SimpleNamespace(
+                regime=SimpleNamespace(value="TRENDING"),
+                historical_accuracy=0.72,
+                volatility_level="LOW",
+                recommended_threshold=0.66,
+            )
+
+    monkeypatch.setattr(
+        "models.regime.MarketRegimeDetector",
+        _Detector,
+        raising=True,
+    )
+
+    predictor = Predictor.__new__(Predictor)
+    pred = Prediction(
+        stock_code="600519",
+        confidence=0.70,
+        model_margin=0.08,
+    )
+    df = _mk_df(100.0).tail(80)
+
+    predictor._apply_regime_adjustments(pred, df)
+
+    assert abs(float(pred.model_margin) - 0.08) < 1e-12
+    assert abs(float(getattr(pred, "regime_threshold", 0.0)) - 0.66) < 1e-12

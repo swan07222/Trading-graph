@@ -18,6 +18,7 @@ def _load_chart_history_bars(
     symbol: str,
     interval: str,
     lookback_bars: int,
+    _recursion_depth: int = 0,
 ) -> list[dict[str, Any]]:
     """Load historical OHLC bars for chart rendering."""
     if not self.predictor:
@@ -116,10 +117,7 @@ def _load_chart_history_bars(
                     min_required,
                     int(max(120, float(source_lookback) * float(depth_ratio))),
                 )
-        if (
-            (df is None or df.empty or len(df) < min_required)
-            and bool(fallback_allow_online)
-        ):
+        if df is None or df.empty or len(df) < min_required:
             try:
                 df_online = fetcher.get_history(
                     symbol,
@@ -349,7 +347,8 @@ def _load_chart_history_bars(
                 r_vol = float(row.get("volume", 0) or 0)
             except _APP_CHART_RECOVERABLE_EXCEPTIONS:
                 r_vol = 0.0
-            if r_vol >= e_vol:
+            # Only replace DB bar when session cache has strictly higher volume.
+            if r_vol > e_vol:
                 merged[key] = row
         out = list(merged.values())
         out.sort(
@@ -401,7 +400,7 @@ def _load_chart_history_bars(
                     if math.isfinite(ep_q):
                         epochs.append(ep_q)
                 except _APP_CHART_RECOVERABLE_EXCEPTIONS as exc:
-                    log.debug("Suppressed exception in ui/app.py", exc_info=exc)
+                    log.debug("Suppressed exception in app_chart_history_load_ops", exc_info=exc)
 
             deg_ratio = (
                 float(degenerate_q) / float(max(1, total_q))
@@ -434,7 +433,8 @@ def _load_chart_history_bars(
                     level="warning",
                 )
                 self._queue_history_refresh(symbol, norm_iv)
-                return self._load_chart_history_bars(symbol, norm_iv, lookback)
+                if _recursion_depth < 1:
+                    return self._load_chart_history_bars(symbol, norm_iv, lookback, _recursion_depth=_recursion_depth + 1)
         return out
     except _APP_CHART_RECOVERABLE_EXCEPTIONS as e:
         log.debug(f"Historical chart load failed for {symbol}: {e}")

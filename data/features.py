@@ -96,6 +96,21 @@ class FeatureEngine:
                 f"got {len(df)}"
             )
 
+        # FIX #7: Validate data quality before feature computation
+        # Check for all-NaN columns
+        for col in required:
+            if df[col].isna().all():
+                raise ValueError(f"Column '{col}' contains only NaN values")
+            # Check for non-positive prices (shouldn't happen in valid data)
+            if col in ["open", "high", "low", "close"]:
+                if (df[col] <= 0).all():
+                    raise ValueError(f"Column '{col}' contains only non-positive values")
+        
+        # Check for infinite values in critical columns
+        for col in required:
+            if not np.isfinite(df[col]).all():
+                log.warning(f"Column '{col}' contains infinite values, will be handled")
+
         # Suppress RuntimeWarning only inside this method
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", RuntimeWarning)

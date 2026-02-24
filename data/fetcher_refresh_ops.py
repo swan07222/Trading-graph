@@ -288,6 +288,25 @@ def refresh_trained_stock_history(
                     fetched = fetched.loc[fetched.index >= lower_bound]
                     fetched_meta["selected_rows"] = int(len(fetched))
 
+                if intraday and (not fetched.empty):
+                    accept_fn = getattr(self, "_accept_online_intraday_snapshot", None)
+                    if callable(accept_fn):
+                        baseline_df = (
+                            db_recent
+                            if isinstance(db_recent, pd.DataFrame)
+                            else pd.DataFrame()
+                        )
+                        if not bool(
+                            accept_fn(
+                                symbol=code6,
+                                interval=iv,
+                                online_df=fetched,
+                                baseline_df=baseline_df,
+                            )
+                        ):
+                            fetched_meta["rejected_scale_mismatch"] = True
+                            fetched = pd.DataFrame()
+
                 if not fetched.empty:
                     if intraday:
                         self._db.upsert_intraday_bars(code6, iv, fetched)

@@ -15,7 +15,8 @@ _SEED = 42
 _EPS = 1e-8
 
 # Stop check interval for batch loops (check every N batches)
-_STOP_CHECK_INTERVAL = 10
+# FIX STOP: Reduced from 10 to 3 for faster cancellation response
+_STOP_CHECK_INTERVAL = 3
 _TRAINING_INTERVAL_LOCK = "1m"
 # FIX 1M: Reduced from 10080 to 480 bars - free sources provide 1-2 days of 1m data
 _MIN_1M_LOOKBACK_BARS = 480
@@ -44,6 +45,14 @@ _MIN_TAIL_STRESS_SAMPLES = 24
 _TAIL_EVENT_SHOCK_MIN_PCT = 1.0
 _TAIL_EVENT_SHOCK_MAX_PCT = 6.0
 
+# Rebalancing hyperparameters (configurable ratios for noise reduction and tail upsampling)
+_REBAL_LOW_SIGNAL_PERCENTILE = 40  # Percentile for low-signal cutoff
+_REBAL_TAIL_PERCENTILE = 90  # Percentile for tail event cutoff
+_REBAL_LOW_SIGNAL_TARGET_RATIO = 0.50  # Target ratio of low-signal samples to keep
+_REBAL_LOW_SIGNAL_MIN_RATIO = 0.18  # Minimum ratio of low-signal samples to keep
+_REBAL_TAIL_TARGET_RATIO = 0.20  # Target ratio of tail events in final dataset
+_REBAL_MIN_DATASET_SIZE_RATIO = 0.35  # Minimum rebalanced dataset size ratio
+
 
 def _two_day_intraday_window_bars(interval: str) -> int:
     """Return strict latest-2-day bar budget for intraday intervals."""
@@ -54,7 +63,7 @@ def _two_day_intraday_window_bars(interval: str) -> int:
         from data.fetcher import BARS_PER_DAY
 
         bpd = float(BARS_PER_DAY.get(iv, 1.0) or 1.0)
-    except Exception:
+    except (ImportError, ValueError, TypeError, AttributeError):
         bpd = float(
             {
                 "1m": 240.0,
@@ -170,6 +179,20 @@ def _split_single_stock(
     """Split a single stock's RAW data temporally, compute features
     and labels WITHIN each split, and invalidate warmup rows.
     """
+    # FIX VALID: Validate input DataFrame before processing
+    if df_raw is None or len(df_raw) == 0:
+        log.warning("Split received empty or None DataFrame")
+        return None
+    
+    required_cols = ["open", "high", "low", "close", "volume"]
+    missing_cols = [col for col in required_cols if col not in df_raw.columns]
+    if missing_cols:
+        log.warning(
+            "Split missing required columns: %s",
+            ", ".join(missing_cols),
+        )
+        return None
+    
     n = len(df_raw)
     embargo = max(int(CONFIG.EMBARGO_BARS), horizon)
     seq_len = int(CONFIG.SEQUENCE_LENGTH)
@@ -181,8 +204,20 @@ def _split_single_stock(
     test_start = val_end + embargo
 
     if train_end < seq_len + 50:
+        log.warning(
+            "Train split too small: %s rows (need >=%s)",
+            train_end,
+            seq_len + 50,
+        )
         return None
     if val_start >= val_end or test_start >= n:
+        log.warning(
+            "Invalid split boundaries: val_start=%s, val_end=%s, test_start=%s, n=%s",
+            val_start,
+            val_end,
+            test_start,
+            n,
+        )
         return None
 
     train_raw = df_raw.iloc[:train_end].copy()
@@ -200,9 +235,11 @@ def _split_single_stock(
         ("test", test_raw),
     ]:
         if len(split_raw) < min_rows:
-            log.debug(
-                f"Split '{name}' has {len(split_raw)} rows < "
-                f"{min_rows} minimum for features"
+            log.warning(
+                "Split '%s' has %s rows < %s minimum for features",
+                name,
+                len(split_raw),
+                min_rows,
             )
             if name == "train":
                 return None
@@ -210,7 +247,7 @@ def _split_single_stock(
     try:
         train_df = self.feature_engine.create_features(train_raw)
     except ValueError as e:
-        log.debug(f"Train feature creation failed: {e}")
+        log.warning("Train feature creation failed: %s", e)
         return None
 
     try:
@@ -319,7 +356,7 @@ def _fetch_raw_data(
             consistency_guard["pending_codes"] = sorted(list(pending_codes))
     except Exception as exc:
         consistency_guard["error"] = str(exc)
-        log.debug("Consistency preflight failed: %s", exc)
+        log.warning("Consistency preflight failed: %s", exc)
 
     self._last_consistency_guard = dict(consistency_guard)
     iterator = tqdm(stocks, desc="Loading stocks") if verbose else stocks
@@ -335,7 +372,7 @@ def _fetch_raw_data(
                 clean_fn = getattr(self.fetcher, "clean_code", None)
                 if callable(clean_fn):
                     code_clean = str(clean_fn(code) or "").strip()
-            except Exception:
+            except (ValueError, TypeError, AttributeError):
                 code_clean = ""
             if not code_clean:
                 digits = "".join(ch for ch in str(code).strip() if ch.isdigit())
@@ -373,7 +410,7 @@ def _fetch_raw_data(
                     update_db=True,
                 )
             if df is None or df.empty:
-                log.debug(f"No data for {code}")
+                log.warning("No data for %s", code)
                 continue
 
             df, sanitize_meta = self._sanitize_raw_history(df, interval=interval)
@@ -438,9 +475,11 @@ def _fetch_raw_data(
 
             min_required = int(CONFIG.SEQUENCE_LENGTH + 80)
             if len(df) < min_required:
-                log.debug(
-                    f"Insufficient data for {code}: "
-                    f"{len(df)} bars (need {min_required})"
+                log.warning(
+                    "Insufficient data for %s: %s bars (need %s)",
+                    code,
+                    len(df),
+                    min_required,
                 )
                 continue
 
@@ -563,11 +602,16 @@ def _validate_temporal_split_integrity(
         if "label" in train_df.columns:
             label_isna = train_df["label"].isna()
             nan_count = int(label_isna.sum())
+            total_labels = len(train_df)
             expected_warmup = int(CONFIG.SEQUENCE_LENGTH + CONFIG.EMBARGO_BARS)
-            
+
             report["checks"]["label_nan_count"] = nan_count
             report["checks"]["expected_warmup"] = expected_warmup
-            
+
+            # FIX NaN: Calculate NaN ratio and block training if excessive
+            nan_ratio = float(nan_count) / float(max(1, total_labels))
+            report["checks"]["label_nan_ratio"] = round(nan_ratio, 4)
+
             # NaN labels should only be in the first ~SEQUENCE_LENGTH rows
             if nan_count > 0:
                 last_nan_idx = label_isna[::-1].idxmax() if label_isna.any() else None
@@ -579,24 +623,33 @@ def _validate_temporal_split_integrity(
                         if pd.isna(label_values[i]):
                             last_nan_pos = i + 1
                             break
-                    
+
                     report["checks"]["last_nan_position"] = last_nan_pos
-                    
+
                     # If NaN extends beyond warmup, suggests feature computation issue
                     if last_nan_pos > expected_warmup * 1.5:
                         report["warnings"].append(
                             f"label_nan_extends_beyond_warmup:"
                             f"{last_nan_pos}>{expected_warmup}"
                         )
+                    
+                    # FIX NaN: Block training if NaN ratio exceeds 15%
+                    if nan_ratio > 0.15:
+                        report["errors"].append(
+                            f"excessive_label_nan_ratio:{nan_ratio:.4f}"
+                        )
+                        report["passed"] = False
+                        return report
         
         # Check 4: Feature statistics continuity at boundaries
         # (Detects if validation/test data leaked into train features)
         if not val_df.empty and len(train_df) > 50 and len(val_df) > 50:
+            severe_leakage_detected = False
             for col in feature_cols[:5]:  # Check first 5 features for efficiency
                 if col in train_df.columns and col in val_df.columns:
                     train_end = train_df[col].tail(20).mean()
                     val_start = val_df[col].head(20).mean()
-                    
+
                     # Large jumps might indicate leakage or regime shift
                     if abs(train_end) > _EPS:
                         jump = abs(val_start - train_end) / abs(train_end)
@@ -604,12 +657,22 @@ def _validate_temporal_split_integrity(
                             report["warnings"].append(
                                 f"feature_jump_at_boundary:{col}:{jump:.2f}"
                             )
-        
+                        # FIX LEAK: Block training on severe leakage (>500% jump)
+                        if jump > 5.0:
+                            severe_leakage_detected = True
+                            report["errors"].append(
+                                f"severe_feature_leakage:{col}:{jump:.2f}"
+                            )
+            if severe_leakage_detected:
+                report["passed"] = False
+                return report
+
         # Check 5: Return-based leakage detection
         # If features contain future returns, correlation will be suspiciously high
         if "label" in train_df.columns and len(train_df) > 100:
             label_clean = train_df["label"].dropna()
             if len(label_clean) > 50:
+                severe_leakage_detected = False
                 for col in feature_cols[:3]:  # Sample check
                     if col in train_df.columns:
                         feature_clean = train_df[col].dropna()
@@ -625,8 +688,17 @@ def _validate_temporal_split_integrity(
                                     report["warnings"].append(
                                         f"suspicious_high_correlation:{col}:{corr:.3f}"
                                     )
+                                # FIX LEAK: Block training on extreme correlation (>0.95)
+                                if np.isfinite(corr) and abs(corr) > 0.95:
+                                    severe_leakage_detected = True
+                                    report["errors"].append(
+                                        f"extreme_leakage:{col}:{corr:.3f}"
+                                    )
                             except (ValueError, FloatingPointError):
                                 pass
+                if severe_leakage_detected:
+                    report["passed"] = False
+                    return report
         
         # Summary
         if report["errors"]:
@@ -662,14 +734,31 @@ def _create_sequences_from_splits(
     validation_report = self._validate_temporal_split_integrity(
         split_data, feature_cols
     )
-    
+
     if not validation_report["passed"]:
+        errors = validation_report.get("errors", [])
+        warnings = validation_report.get("warnings", [])
+        
+        # FIX LEAK: Block training on severe leakage indicators
+        severe_leakage_errors = [
+            e for e in errors 
+            if "severe_feature_leakage" in e or "extreme_leakage" in e
+        ]
+        if severe_leakage_errors:
+            log.error(
+                "Temporal split validation blocked training due to severe data leakage: %s",
+                ", ".join(severe_leakage_errors),
+            )
+            raise ValueError(
+                f"Severe data leakage detected: {', '.join(severe_leakage_errors)}"
+            )
+        
         log.warning(
             "Temporal split validation failed: %s | Warnings: %s",
-            ", ".join(validation_report.get("errors", [])),
-            ", ".join(validation_report.get("warnings", [])),
+            ", ".join(errors),
+            ", ".join(warnings),
         )
-        # Don't block training entirely, but log for investigation
+        # Don't block training for non-severe issues, but log for investigation
     
     storage = {
         "train": {"X": [], "y": [], "r": []},
@@ -693,8 +782,11 @@ def _create_sequences_from_splits(
                         if include_returns:
                             storage[split_name]["r"].append(r)
                 except Exception as e:
-                    log.debug(
-                        f"Sequence creation failed for {code}/{split_name}: {e}"
+                    log.warning(
+                        "Sequence creation failed for %s/%s: %s",
+                        code,
+                        split_name,
+                        e,
                     )
 
     return storage
@@ -751,8 +843,8 @@ def _rebalance_train_samples(
         report["reason"] = "insufficient_valid_returns"
         return X_train, y_train, r_train, report
 
-    low_cut = float(np.percentile(abs_returns, 40))
-    tail_cut = float(np.percentile(abs_returns, 90))
+    low_cut = float(np.percentile(abs_returns, _REBAL_LOW_SIGNAL_PERCENTILE))
+    tail_cut = float(np.percentile(abs_returns, _REBAL_TAIL_PERCENTILE))
     if (
         not np.isfinite(low_cut)
         or not np.isfinite(tail_cut)
@@ -776,9 +868,10 @@ def _rebalance_train_samples(
         report["reason"] = "empty_core_after_filter"
         return X_train, y_train, r_train, report
 
+    # FIX MAGIC: Use configurable ratios instead of hardcoded values
     keep_low_target = max(
-        int(round(len(core_idx) * 0.50)),
-        int(round(len(idx_valid) * 0.18)),
+        int(round(len(core_idx) * _REBAL_LOW_SIGNAL_TARGET_RATIO)),
+        int(round(len(idx_valid) * _REBAL_LOW_SIGNAL_MIN_RATIO)),
     )
     keep_low_target = int(min(len(low_idx), keep_low_target))
     if keep_low_target <= 0:
@@ -801,7 +894,7 @@ def _rebalance_train_samples(
     rebalance_idx = np.concatenate([np.sort(core_idx), kept_low], axis=0)
 
     current_tail = int(np.sum(np.isin(rebalance_idx, tail_idx)))
-    target_tail = int(round(len(rebalance_idx) * 0.20))
+    target_tail = int(round(len(rebalance_idx) * _REBAL_TAIL_TARGET_RATIO))
     needed_tail = max(0, target_tail - current_tail)
     max_tail_dup = int(
         min(
@@ -816,7 +909,7 @@ def _rebalance_train_samples(
     else:
         dup_tail = 0
 
-    if len(rebalance_idx) < max(120, int(round(n * 0.35))):
+    if len(rebalance_idx) < max(120, int(round(n * _REBAL_MIN_DATASET_SIZE_RATIO))):
         report["reason"] = "rebalance_too_aggressive"
         return X_train, y_train, r_train, report
 
@@ -1003,6 +1096,12 @@ def prepare_data(
     if X_train is None or len(X_train) == 0:
         raise ValueError("No training sequences available")
 
+    # FIX SHAPE: Validate array dimensions before accessing shape[2]
+    if X_train.ndim != 3:
+        raise ValueError(
+            f"X_train must be 3D array (samples, seq_len, features), "
+            f"got {X_train.ndim}D shape {X_train.shape}"
+        )
     self.input_size = int(X_train.shape[2])
 
     log.info("Data prepared:")

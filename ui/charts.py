@@ -397,8 +397,8 @@ class StockChart(QWidget):
             return
 
         tooltip_text = self._build_candle_tooltip(meta)
-        # FIX: Only update if index changed (not full text comparison)
-        if idx == self._last_hover_index:
+        # Refresh if index changed OR if tooltip text changed (live candle OHLC updates).
+        if idx == self._last_hover_index and tooltip_text == self._last_hover_tooltip:
             return
 
         self._last_hover_index = idx
@@ -1158,6 +1158,7 @@ class StockChart(QWidget):
                     level="warning",
                 )
 
+            self._rendered_bars = list(rendered_bars)  # cache for overlay toggle
             self._update_overlay_lines(rendered_bars, closes)
             self._update_level_lines()
 
@@ -1170,13 +1171,23 @@ class StockChart(QWidget):
                 n_candles = len(closes)
                 n_pred = len(self._predicted_prices) if self._predicted_prices else 0
                 if n_candles > 0 and n_pred > 0:
-                    # FIX: Calculate Y range with padding before applying
+                    # Use highs/lows from candle meta so wicks are not clipped.
+                    all_highs = [
+                        float(m.get("high", 0.0))
+                        for m in self._candle_meta
+                        if float(m.get("high", 0.0) or 0.0) > 0
+                    ]
+                    all_lows = [
+                        float(m.get("low", 0.0))
+                        for m in self._candle_meta
+                        if float(m.get("low", 0.0) or 0.0) > 0
+                    ]
                     closes_arr = np.array(closes, dtype=float)
-                    y_min = float(np.min(closes_arr))
-                    y_max = float(np.max(closes_arr))
+                    y_min = float(min(all_lows)) if all_lows else float(np.min(closes_arr))
+                    y_max = float(max(all_highs)) if all_highs else float(np.max(closes_arr))
                     y_range = y_max - y_min
                     y_padding = max(y_range * 0.08, y_max * 0.005, 0.1)
-                    
+
                     # Apply Y range with padding
                     self.plot_widget.setYRange(
                         max(0, y_min - y_padding),
@@ -1250,7 +1261,8 @@ class StockChart(QWidget):
                         "open": price,
                         "high": price,
                         "low": price,
-                        "close": price
+                        "close": price,
+                        "interval": "1m",
                     })
             except (ValueError, TypeError):
                 continue
@@ -1346,6 +1358,9 @@ class StockChart(QWidget):
             highs = []
             lows = []
             vols = []
+            # Build highs/lows/vols in lockstep with the closes array so
+            # indices align perfectly — skip any bar that closes <= 0 to
+            # match the closes-building loop above.
             for b in bars:
                 c = float(b.get("close", 0) or 0)
                 if c <= 0:
@@ -1356,7 +1371,10 @@ class StockChart(QWidget):
                 highs.append(h if h > 0 else c)
                 lows.append(low if low > 0 else c)
                 vols.append(max(0.0, v))
-            n = min(len(highs), len(arr))
+            # highs/lows/vols now has exactly len(closes) entries; use full length.
+            n = len(highs)
+            if n != len(arr):
+                n = min(len(highs), len(arr))
             if n <= 0:
                 return
             tp = (np.array(highs[:n]) + np.array(lows[:n]) + arr[:n]) / 3.0
@@ -1437,16 +1455,19 @@ class StockChart(QWidget):
             self.overlay_enabled["bb_lower"] = new_state
         else:
             self.overlay_enabled[key] = not self.overlay_enabled.get(key, True)
-        if self._bars:
+        # Use the last rendered (filtered) bars so overlay x-indices align
+        # with candlesticks. Fall back to raw self._bars if not yet rendered.
+        _overlay_bars = getattr(self, "_rendered_bars", None) or self._bars
+        if _overlay_bars:
             closes = []
-            for b in self._bars[-3000:]:
+            for b in _overlay_bars[-3000:]:
                 try:
                     c = float(b.get("close", 0) or 0)
                     if c > 0:
                         closes.append(c)
                 except Exception:
                     continue
-            self._update_overlay_lines(self._bars[-3000:], closes)
+            self._update_overlay_lines(_overlay_bars[-3000:], closes)
 
     def _update_level_lines(self) -> None:
         """Update horizontal lines for trading levels."""

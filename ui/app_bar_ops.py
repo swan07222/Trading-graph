@@ -166,7 +166,7 @@ def _ts_to_epoch(self: Any, ts_raw: Any) -> float:
                 v = v / 1000.0
             return v
     except _APP_SOFT_EXCEPTIONS as exc:
-        log.debug("Suppressed exception in ui/app.py", exc_info=exc)
+        log.debug("Suppressed exception in app_bar_ops", exc_info=exc)
 
     try:
         if isinstance(ts_raw, datetime):
@@ -257,7 +257,7 @@ def _merge_bars(
             r_vol = float(row.get("volume", 0) or 0)
         except _APP_SOFT_EXCEPTIONS:
             r_vol = 0.0
-        if r_vol >= e_vol:
+        if r_vol > e_vol:
             merged[key] = row
 
     for b in (base or []):
@@ -337,7 +337,10 @@ def _interval_seconds(self: Any, interval: str) -> int:
         "15m": 900,
         "30m": 1800,
         "60m": 3600,
+        "1h": 3600,
         "1d": 86400,
+        "1wk": 604800,
+        "1mo": 2592000,
     }
     if iv in mapping:
         return int(mapping[iv])
@@ -348,7 +351,7 @@ def _interval_seconds(self: Any, interval: str) -> int:
         if iv.endswith("s"):
             return max(1, int(float(iv[:-1])))
     except _APP_SOFT_EXCEPTIONS as exc:
-        log.debug("Suppressed exception in ui/app.py", exc_info=exc)
+        log.debug("Suppressed exception in app_bar_ops", exc_info=exc)
     return 60
 
 def _interval_token_from_seconds(self: Any, seconds: Any) -> str | None:
@@ -364,6 +367,8 @@ def _interval_token_from_seconds(self: Any, seconds: Any) -> str | None:
         1800: "30m",
         3600: "60m",
         86400: "1d",
+        604800: "1wk",
+        2592000: "1mo",
     }
     if sec in known:
         return known[sec]
@@ -490,8 +495,8 @@ def _resample_chart_bars(
             continue
 
         cur = buckets[key]
-        cur["high"] = float(max(float(cur["high"]), h, o, c))
-        cur["low"] = float(min(float(cur["low"]), low, o, c))
+        cur["high"] = float(max(float(cur["high"]), h, c))
+        cur["low"] = float(min(float(cur["low"]), low, c))
         cur["close"] = float(c)
         cur["_ts_epoch"] = float(max(float(cur["_ts_epoch"]), ep))
         cur["final"] = bool(cur.get("final", True) and bool(row.get("final", True)))
@@ -501,7 +506,7 @@ def _resample_chart_bars(
                 float(row.get("volume", 0) or 0.0),
             )
         except _APP_SOFT_EXCEPTIONS as exc:
-            log.debug("Suppressed exception in ui/app.py", exc_info=exc)
+            log.debug("Suppressed exception in app_bar_ops", exc_info=exc)
 
     out: list[dict[str, Any]] = []
     for val in buckets.values():
@@ -786,10 +791,9 @@ def _is_market_session_timestamp(self: Any, ts_raw: Any, interval: str) -> bool:
     cur_time = dt_val.time()
     t = CONFIG.trading
     morning = t.market_open_am <= cur_time <= t.market_close_am
-    # Exclude closing call auction (14:57-15:00) from intraday bars
-    # to prevent giant candles from auction price matching.
-    from datetime import time as _dt_time
-    afternoon = t.market_open_pm <= cur_time < _dt_time(14, 57)
+    # Include up to official close (15:00) so the live candle is visible
+    # during the closing session. Auction spikes are handled by sanitize_ohlc.
+    afternoon = t.market_open_pm <= cur_time <= t.market_close_pm
     return bool(morning or afternoon)
 
 def _filter_bars_to_market_session(

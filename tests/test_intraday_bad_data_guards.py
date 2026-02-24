@@ -167,3 +167,78 @@ def test_database_intraday_sanitizer_filters_bad_rows(tmp_path) -> None:
         assert float(span) <= 0.015
     finally:
         db.close_all()
+
+
+def test_database_intraday_upsert_rejects_scale_mismatch_vs_daily(tmp_path) -> None:
+    db = MarketDatabase(db_path=tmp_path / "market_data.db")
+    try:
+        daily_idx = pd.to_datetime(["2026-02-17"])
+        daily = pd.DataFrame(
+            {
+                "open": [26.1],
+                "high": [26.6],
+                "low": [25.9],
+                "close": [26.3],
+                "volume": [1_200_000],
+                "amount": [31_560_000.0],
+            },
+            index=daily_idx,
+        )
+        db.upsert_bars("600519", daily)
+
+        idx = pd.date_range("2026-02-18 14:00:00", periods=12, freq="min")
+        wrong_scale = pd.DataFrame(
+            {
+                "open": [10.2] * len(idx),
+                "high": [10.3] * len(idx),
+                "low": [10.1] * len(idx),
+                "close": [10.2] * len(idx),
+                "volume": [120] * len(idx),
+                "amount": [1224.0] * len(idx),
+            },
+            index=idx,
+        )
+        db.upsert_intraday_bars("600519", "1m", wrong_scale)
+
+        out = db.get_intraday_bars("600519", interval="1m", limit=200)
+        assert out.empty
+    finally:
+        db.close_all()
+
+
+def test_database_intraday_upsert_accepts_scale_aligned_with_daily(tmp_path) -> None:
+    db = MarketDatabase(db_path=tmp_path / "market_data.db")
+    try:
+        daily_idx = pd.to_datetime(["2026-02-17"])
+        daily = pd.DataFrame(
+            {
+                "open": [26.0],
+                "high": [26.5],
+                "low": [25.8],
+                "close": [26.2],
+                "volume": [900_000],
+                "amount": [23_580_000.0],
+            },
+            index=daily_idx,
+        )
+        db.upsert_bars("600519", daily)
+
+        idx = pd.date_range("2026-02-18 14:00:00", periods=8, freq="min")
+        aligned = pd.DataFrame(
+            {
+                "open": [26.2] * len(idx),
+                "high": [26.3] * len(idx),
+                "low": [26.1] * len(idx),
+                "close": [26.25] * len(idx),
+                "volume": [150] * len(idx),
+                "amount": [3937.5] * len(idx),
+            },
+            index=idx,
+        )
+        db.upsert_intraday_bars("600519", "1m", aligned)
+
+        out = db.get_intraday_bars("600519", interval="1m", limit=200)
+        assert not out.empty
+        assert len(out) == len(idx)
+    finally:
+        db.close_all()

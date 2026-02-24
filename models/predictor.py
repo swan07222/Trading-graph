@@ -1370,8 +1370,9 @@ class Predictor:
                 # Low volatility: can be more confident
                 pred.confidence = min(0.95, pred.confidence * 1.03)
 
-            # Store regime-based recommended threshold
-            pred.model_margin = float(
+            # Keep raw ensemble margin semantics intact for downstream
+            # uncertainty math; expose regime threshold on a separate field.
+            pred.regime_threshold = float(
                 getattr(regime_result, "recommended_threshold", 0.0) or 0.0
             )
 
@@ -1389,65 +1390,94 @@ class Predictor:
         """
         # Get stock-specific accuracy
         stock_acc = self._get_stock_accuracy(pred.stock_code)
-        
-        # Base thresholds
-        strong_buy_threshold = 0.70
-        buy_threshold = 0.54
-        strong_sell_threshold = -0.55
-        sell_threshold = -0.30
-        
+
+        # Thresholds operate on directional edge (prob_up - prob_down), so
+        # derive edge floors from configured probability thresholds.
+        buy_edge = float(
+            np.clip(float(CONFIG.BUY_THRESHOLD) - 0.50, 0.04, 0.28)
+        )
+        strong_edge = float(
+            np.clip(
+                float(CONFIG.STRONG_BUY_THRESHOLD) - 0.50,
+                buy_edge + 0.04,
+                0.45,
+            )
+        )
+
         # Adjust based on stock accuracy
         if stock_acc > 0.60:
-            # Good history: slightly lower thresholds (more aggressive)
-            strong_buy_threshold = max(0.65, strong_buy_threshold - 0.05)
-            buy_threshold = max(0.50, buy_threshold - 0.04)
+            buy_edge -= 0.02
+            strong_edge -= 0.03
         elif stock_acc < 0.45:
-            # Poor history: higher thresholds (more conservative)
-            strong_buy_threshold = min(0.75, strong_buy_threshold + 0.05)
-            buy_threshold = min(0.60, buy_threshold + 0.06)
-        
+            buy_edge += 0.03
+            strong_edge += 0.04
+
         # Adjust based on entropy (uncertainty)
         if pred.entropy > 0.6:
-            # High uncertainty: require stronger signal
-            strong_buy_threshold = min(0.75, strong_buy_threshold + 0.05)
-            buy_threshold = min(0.60, buy_threshold + 0.06)
+            buy_edge += 0.03
+            strong_edge += 0.04
         elif pred.entropy < 0.3:
-            # Low uncertainty: can be more aggressive
-            strong_buy_threshold = max(0.65, strong_buy_threshold - 0.05)
-            buy_threshold = max(0.50, buy_threshold - 0.04)
-        
+            buy_edge -= 0.02
+            strong_edge -= 0.02
+
         # Adjust based on model agreement
         if pred.model_agreement > 0.75:
-            # High agreement: slightly lower thresholds
-            strong_buy_threshold = max(0.65, strong_buy_threshold - 0.03)
-            buy_threshold = max(0.50, buy_threshold - 0.03)
+            buy_edge -= 0.01
+            strong_edge -= 0.015
         elif pred.model_agreement < 0.50:
-            # Low agreement: higher thresholds
-            strong_buy_threshold = min(0.75, strong_buy_threshold + 0.05)
-            buy_threshold = min(0.60, buy_threshold + 0.06)
-        
-        # Calculate direction from probabilities
-        direction = pred.prob_up - pred.prob_down
-        
-        # Apply adaptive thresholds
-        if direction >= strong_buy_threshold and pred.confidence >= 0.65:
-            pred.signal = Signal.STRONG_BUY
-        elif direction >= buy_threshold and pred.confidence >= 0.50:
-            pred.signal = Signal.BUY
-        elif direction <= strong_sell_threshold and pred.confidence >= 0.65:
-            pred.signal = Signal.STRONG_SELL
-        elif direction <= sell_threshold and pred.confidence >= 0.50:
-            pred.signal = Signal.SELL
+            buy_edge += 0.03
+            strong_edge += 0.04
+
+        buy_edge = float(np.clip(buy_edge, 0.04, 0.35))
+        strong_edge = float(
+            np.clip(max(strong_edge, buy_edge + 0.03), 0.08, 0.50)
+        )
+
+        direction = float(
+            np.clip(float(pred.prob_up) - float(pred.prob_down), -1.0, 1.0)
+        )
+        conf = float(np.clip(pred.confidence, 0.0, 1.0))
+        existing_signal = pred.signal
+
+        if direction >= strong_edge and conf >= 0.65:
+            new_signal = Signal.STRONG_BUY
+        elif direction >= buy_edge and conf >= 0.52:
+            new_signal = Signal.BUY
+        elif direction <= -strong_edge and conf >= 0.65:
+            new_signal = Signal.STRONG_SELL
+        elif direction <= -buy_edge and conf >= 0.52:
+            new_signal = Signal.SELL
         else:
-            pred.signal = Signal.HOLD
-        
-        # Update signal strength with adaptive scaling
+            new_signal = Signal.HOLD
+
+        # Do not erase a valid directional signal unless direction flipped.
+        if (
+            existing_signal in (Signal.BUY, Signal.STRONG_BUY, Signal.SELL, Signal.STRONG_SELL)
+            and new_signal == Signal.HOLD
+            and conf >= 0.50
+        ):
+            direction_conflict = bool(
+                (
+                    existing_signal in (Signal.BUY, Signal.STRONG_BUY)
+                    and direction <= -(buy_edge * 0.55)
+                )
+                or (
+                    existing_signal in (Signal.SELL, Signal.STRONG_SELL)
+                    and direction >= (buy_edge * 0.55)
+                )
+            )
+            if not direction_conflict:
+                new_signal = existing_signal
+
+        pred.signal = new_signal
+
         pred.signal_strength = float(
             np.clip(
-                (0.65 * abs(direction)) + 
-                (0.25 * pred.confidence) +
-                (0.10 * pred.model_agreement),
-                0.0, 1.0
+                (0.55 * abs(direction))
+                + (0.30 * conf)
+                + (0.15 * float(np.clip(pred.model_agreement, 0.0, 1.0))),
+                0.0,
+                1.0,
             )
         )
 

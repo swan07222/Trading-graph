@@ -23,7 +23,8 @@ try:
 except ImportError:
     atomic_torch_save = None
 
-_STOP_CHECK_INTERVAL = 10
+# FIX STOP: Reduced from 10 to 3 for faster cancellation response
+_STOP_CHECK_INTERVAL = 3
 _TRAINING_INTERVAL_LOCK = "1m"
 # FIX 1M: Reduced from 10080 to 480 bars - free sources provide 1-2 days of 1m data
 _MIN_1M_LOOKBACK_BARS = 480
@@ -47,7 +48,7 @@ def _write_artifact_checksum(path: Path) -> None:
         from utils.atomic_io import atomic_write_text
 
         atomic_write_text(checksum_path, payload)
-    except Exception:
+    except (ImportError, OSError, IOError):
         checksum_path.write_text(payload, encoding="utf-8")
 
 
@@ -159,6 +160,20 @@ def train(
 
     log.info(f"Loaded {len(raw_data)} stocks successfully")
 
+    # --- Phase 1.5: Early regime detection for incremental training ---
+    # FIX RACE: Check regime shift BEFORE processing data to avoid wasting resources
+    # on incremental training that will be blocked anyway
+    if incremental:
+        # Quick preliminary regime check using raw data statistics
+        preliminary_regime = self._preliminary_regime_check(raw_data, interval)
+        if preliminary_regime.get("level") == "high":
+            log.warning(
+                "Preliminary regime check indicates high shift (score=%.3f); "
+                "forcing full retrain before data processing",
+                float(preliminary_regime.get("score", 0.0)),
+            )
+            incremental = False  # Force full retrain early
+
     # --- Phase 2: Split and fit scaler ---
     split_data, scaler_ok = self._split_and_fit_scaler(
         raw_data, feature_cols, horizon, interval
@@ -183,6 +198,12 @@ def train(
     if X_train is None or len(X_train) == 0:
         raise ValueError("No training sequences available")
 
+    # FIX SHAPE: Validate array dimensions before accessing shape[2]
+    if X_train.ndim != 3:
+        raise ValueError(
+            f"X_train must be 3D array (samples, seq_len, features), "
+            f"got {X_train.ndim}D shape {X_train.shape}"
+        )
     self.input_size = int(X_train.shape[2])
     regime_profile = self._summarize_regime_shift(r_train, r_val, r_test)
     data_quality_summary = dict(self._last_data_quality_summary or {})
@@ -245,6 +266,12 @@ def train(
             if X_train is None or len(X_train) == 0:
                 raise ValueError(
                     "No training sequences available after scaler refit"
+                )
+            # FIX SHAPE: Validate array dimensions before accessing shape[2]
+            if X_train.ndim != 3:
+                raise ValueError(
+                    f"X_train must be 3D array (samples, seq_len, features), "
+                    f"got {X_train.ndim}D shape {X_train.shape}"
                 )
             self.input_size = int(X_train.shape[2])
             regime_profile = self._summarize_regime_shift(r_train, r_val, r_test)
@@ -529,9 +556,14 @@ def train(
                 deployment["promotion_errors"] = failed
                 if failed:
                     deployment["reason"] = "promotion_failed"
-                    log.warning(
-                        "Model quality passed but deployment promotion failed: %s",
+                    deployment["deployed"] = False
+                    log.error(
+                        "Deployment FAILED: Model quality passed but artifact promotion failed: %s",
                         ", ".join(failed),
+                    )
+                    # FIX DEPLOY: Raise exception to ensure caller knows deployment failed
+                    raise RuntimeError(
+                        f"Deployment failed: unable to promote artifacts: {', '.join(failed)}"
                     )
                 else:
                     deployment["deployed"] = True
@@ -835,13 +867,16 @@ def _train_forecaster(
             return True
 
     except CancelledException:
-        # FIX CANCEL2: Re-raise so train() can handle it
+        # FIX CANCEL4: Re-raise immediately without catching in outer Exception
         log.info("Forecaster training cancelled")
         raise
     except Exception as e:
         log.error(f"Forecaster training failed: {e}")
         import traceback
         traceback.print_exc()
+        # FIX CANCEL4: Don't catch CancelledException in generic handler
+        if isinstance(e, CancelledException):
+            raise
 
     return False
 

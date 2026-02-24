@@ -61,6 +61,8 @@ class SlippageModel:
 
         FIX: Added explicit checks for very small daily_value to prevent
         division by near-zero values producing unexpectedly large slippage.
+        FIX #6: Increased threshold from 100.0 to 10000.0 for more conservative
+        slippage calculation on low-volume stocks.
         """
         # Validate inputs - check for zero/negative/NaN/Inf values
         if daily_volume <= 0 or daily_avg_price <= 0:
@@ -70,11 +72,12 @@ class SlippageModel:
 
         daily_value = daily_volume * daily_avg_price
 
-        # FIX: Prevent division by very small values
-        # Use a more conservative threshold (100.0) to avoid edge cases
+        # FIX #6: Prevent division by very small values
+        # Use a more conservative threshold (10000.0) to avoid edge cases
         # where small daily_value produces unexpectedly large slippage
-        if daily_value < 100.0:
-            return self.base_slippage
+        if daily_value < 10000.0:
+            # Cap slippage at 5% for very low liquidity
+            return min(self.base_slippage * 5, 0.05)
 
         # Additional check: if order_value is comparable to daily_value,
         # cap slippage to prevent unrealistic impact
@@ -84,6 +87,7 @@ class SlippageModel:
         order_pct = order_value / daily_value
         slippage = self.base_slippage + self.volume_impact * order_pct
 
+        # Cap slippage at 5% maximum
         return min(slippage, 0.05)
 
 @dataclass

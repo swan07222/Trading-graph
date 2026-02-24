@@ -21,6 +21,10 @@ from utils.logger import get_logger
 log = get_logger(__name__)
 
 # Default safe classes for unpickling
+# FIX #2026-02-24: Removed potentially dangerous classes
+# - Removed numpy.dtype (can be exploited for code execution)
+# - Removed collections.namedtuple (can be used for RCE)
+# Kept only essential data classes for trading cache operations
 DEFAULT_SAFE_CLASSES: Set[str] = {
     # Builtins
     "builtins.list",
@@ -45,14 +49,14 @@ DEFAULT_SAFE_CLASSES: Set[str] = {
     "datetime.time",
     "datetime.timedelta",
     "datetime.timezone",
-    # Collections
+    # Collections (only safe ones)
     "collections.OrderedDict",
     "collections.defaultdict",
     "collections.deque",
-    "collections.namedtuple",
-    # Numpy (common in ML)
+    # FIX #2026-02-24: Removed collections.namedtuple (RCE risk)
+    # Numpy (common in ML) - restricted set
     "numpy.ndarray",
-    "numpy.dtype",
+    # FIX #2026-02-24: Removed numpy.dtype (can be exploited)
     "numpy.float64",
     "numpy.float32",
     "numpy.int64",

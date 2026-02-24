@@ -41,6 +41,13 @@ _MIN_TAIL_STRESS_SAMPLES = 24
 _TAIL_EVENT_SHOCK_MIN_PCT = 1.0
 _TAIL_EVENT_SHOCK_MAX_PCT = 6.0
 
+# Quality gate thresholds (centralized for maintainability)
+# These values are used by _build_quality_gate to determine deployment readiness
+_QUALITY_GATE_MIN_RISK_SCORE = 0.52
+_QUALITY_GATE_MIN_PROFIT_FACTOR = 1.05
+_QUALITY_GATE_MAX_DRAWDOWN = 0.25
+_QUALITY_GATE_MIN_WALK_STABILITY = 0.35
+
 def _walk_forward_validate(
     self,
     X_val: np.ndarray | None,
@@ -220,13 +227,13 @@ def _build_quality_gate(
     trade_count = int(max(0, trading.get("trades", 0)))
 
     checks = {
-        "risk_score": bool(risk_score >= 0.52),
-        "profit_factor": bool(float(trading.get("profit_factor", 0.0)) >= 1.05),
-        "drawdown": bool(float(trading.get("max_drawdown", 1.0)) <= 0.25),
+        "risk_score": bool(risk_score >= _QUALITY_GATE_MIN_RISK_SCORE),
+        "profit_factor": bool(float(trading.get("profit_factor", 0.0)) >= _QUALITY_GATE_MIN_PROFIT_FACTOR),
+        "drawdown": bool(float(trading.get("max_drawdown", 1.0)) <= _QUALITY_GATE_MAX_DRAWDOWN),
         "trade_count": bool(trade_count >= _MIN_BASELINE_TRADES),
         "overfit": not bool(overfit_report.get("detected", False)),
         "drift": str(drift_guard.get("action", "")) != "rollback_recommended",
-        "walk_forward": (not walk_enabled) or bool(walk_stability >= 0.35),
+        "walk_forward": (not walk_enabled) or bool(walk_stability >= _QUALITY_GATE_MIN_WALK_STABILITY),
         "data_quality": bool(data_quality_ok),
         "tail_stress": bool(tail_stress_ok),
         "cost_resilience": bool(cost_resilience_ok),
@@ -843,17 +850,23 @@ def _evaluate(
 
     # FIX EVAL: Use average='binary' style with safe extraction
     # labels=[2] with average=None returns arrays of length 1
-    pr, rc, f1, _ = precision_recall_fscore_support(
-        y_eval,
-        pred_classes,
-        labels=[2],
-        average=None,
-        zero_division=0,
-    )
-
-    up_precision = float(pr[0]) if len(pr) > 0 else 0.0
-    up_recall = float(rc[0]) if len(rc) > 0 else 0.0
-    up_f1 = float(f1[0]) if len(f1) > 0 else 0.0
+    # Also check if class 2 exists in predictions to avoid index errors
+    has_class_2 = bool(np.any(pred_classes == 2))
+    if has_class_2:
+        pr, rc, f1, _ = precision_recall_fscore_support(
+            y_eval,
+            pred_classes,
+            labels=[2],
+            average=None,
+            zero_division=0,
+        )
+        up_precision = float(pr[0]) if len(pr) > 0 else 0.0
+        up_recall = float(rc[0]) if len(rc) > 0 else 0.0
+        up_f1 = float(f1[0]) if len(f1) > 0 else 0.0
+    else:
+        up_precision = 0.0
+        up_recall = 0.0
+        up_f1 = 0.0
 
     confidences = np.array(
         [p.confidence for p in predictions[:min_len]]
@@ -1062,21 +1075,24 @@ def _simulate_trading(
         wins = trades[trades > 0]
         losses = trades[trades < 0]
 
-        win_rate = len(wins) / num_trades
+        # FIX DIV: Use safe division to prevent division by zero
+        win_rate = float(len(wins)) / float(max(1, num_trades))
 
         gross_profit = np.sum(wins) if len(wins) > 0 else 0.0
         gross_loss = (
             abs(np.sum(losses)) if len(losses) > 0 else _EPS
         )
-        profit_factor = gross_profit / gross_loss
+        # FIX DIV: Protect profit_factor division
+        profit_factor = gross_profit / max(gross_loss, _EPS)
 
         if len(trades) > 1 and np.std(trades) > 0:
             avg_holding = max(horizon, 1)
-            trades_per_year = 252 / avg_holding
+            # FIX DIV: Protect trades_per_year division
+            trades_per_year = 252.0 / float(max(1, avg_holding))
             sharpe = (
-                np.mean(trades)
-                / np.std(trades)
-                * np.sqrt(trades_per_year)
+                float(np.mean(trades))
+                / float(max(_EPS, np.std(trades)))
+                * float(np.sqrt(trades_per_year))
             )
         else:
             sharpe = 0.0
@@ -1087,7 +1103,8 @@ def _simulate_trading(
         cumulative = np.exp(cumulative_log)
 
         running_max = np.maximum.accumulate(cumulative)
-        drawdown = (cumulative - running_max) / (running_max + _EPS)
+        # FIX DIV: Protect drawdown division
+        drawdown = (cumulative - running_max) / np.maximum(running_max, _EPS)
         max_drawdown = (
             abs(float(np.min(drawdown)))
             if len(drawdown) > 0
@@ -1146,8 +1163,9 @@ def _simulate_trading(
         else 0
     )
 
-    trade_coverage = float(eligible_signals / max(up_signals, 1))
-    no_trade_rate = float(1.0 - (eligible_signals / max(signal_count, 1)))
+    # FIX DIV: Use float() and max() to ensure safe division
+    trade_coverage = float(eligible_signals) / float(max(1, up_signals))
+    no_trade_rate = 1.0 - (float(eligible_signals) / float(max(1, signal_count)))
 
     return {
         "total_return": float(total_return_pct),

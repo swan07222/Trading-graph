@@ -175,10 +175,10 @@ def test_session_cache_read_history_scrubs_outlier_jumps(tmp_path) -> None:
         },
         {
             "timestamp": "2026-02-12T09:31:00+00:00",
-            "open": 250.0,
-            "high": 255.0,
-            "low": 245.0,
-            "close": 250.0,
+            "open": 118.0,
+            "high": 119.0,
+            "low": 117.0,
+            "close": 118.5,
             "final": True,
         },
         {
@@ -197,7 +197,7 @@ def test_session_cache_read_history_scrubs_outlier_jumps(tmp_path) -> None:
     df = cache.read_history(symbol, interval, bars=10)
     assert not df.empty
     assert len(df) == 2
-    assert float(df["close"].max()) < 200.0
+    assert float(df["close"].max()) < 110.0
 
 
 def test_session_cache_prefers_recent_segment_after_scale_regime_jump(tmp_path) -> None:
@@ -599,3 +599,103 @@ def test_session_cache_upsert_respects_row_limit_retention_policy(tmp_path) -> N
         data_cfg.session_cache_compact_every_writes = old_every
         data_cfg.session_cache_retention_days = old_days
         data_cfg.session_cache_max_file_mb = old_mb
+
+
+def test_session_cache_upsert_history_frame_rejects_scale_mismatch(tmp_path) -> None:
+    cache = SessionBarCache(
+        root=tmp_path / "session_bars",
+        enable_reference_scale_guard=True,
+    )
+    cache._reference_close_from_db = lambda _sym: 26.0  # type: ignore[assignment]
+
+    idx = pd.date_range("2026-02-18 14:00:00", periods=6, freq="min")
+    wrong_scale = pd.DataFrame(
+        {
+            "open": [10.2] * len(idx),
+            "high": [10.3] * len(idx),
+            "low": [10.1] * len(idx),
+            "close": [10.2] * len(idx),
+            "volume": [120.0] * len(idx),
+            "amount": [1224.0] * len(idx),
+        },
+        index=idx,
+    )
+
+    wrote = cache.upsert_history_frame(
+        "600519",
+        "1m",
+        wrong_scale,
+        source="official_history",
+        is_final=True,
+    )
+    assert wrote == 0
+
+    out = cache.read_history("600519", "1m", bars=50, final_only=False)
+    assert out.empty
+
+
+def test_session_cache_read_history_drops_scale_mismatch_segment(tmp_path) -> None:
+    cache = SessionBarCache(
+        root=tmp_path / "session_bars",
+        enable_reference_scale_guard=True,
+    )
+    cache._reference_close_from_db = lambda _sym: 26.0  # type: ignore[assignment]
+
+    path = cache.root / "600519_1m.csv"
+    rows = [
+        ["2026-02-18T14:00:00+08:00", 10.2, 10.3, 10.1, 10.2, 120, 1224.0, True],
+        ["2026-02-18T14:01:00+08:00", 10.2, 10.3, 10.1, 10.2, 120, 1224.0, True],
+        ["2026-02-18T14:02:00+08:00", 10.2, 10.3, 10.1, 10.2, 120, 1224.0, True],
+    ]
+    with path.open("w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerow(
+            ["timestamp", "open", "high", "low", "close", "volume", "amount", "is_final"]
+        )
+        for row in rows:
+            writer.writerow(row)
+
+    out = cache.read_history("600519", "1m", bars=50, final_only=True)
+    assert out.empty
+
+
+def test_session_cache_startup_cleanup_quarantines_scale_mismatch(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    root = tmp_path / "session_bars"
+    root.mkdir(parents=True, exist_ok=True)
+    path = root / "600519_1m.csv"
+
+    with path.open("w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerow(
+            ["timestamp", "open", "high", "low", "close", "volume", "amount", "is_final"]
+        )
+        for i in range(5):
+            writer.writerow(
+                [
+                    f"2026-02-18T14:0{i}:00+08:00",
+                    10.2,
+                    10.3,
+                    10.1,
+                    10.2,
+                    120,
+                    1224.0,
+                    True,
+                ]
+            )
+
+    monkeypatch.setattr(
+        SessionBarCache,
+        "_reference_close_from_db",
+        lambda self, symbol: 26.0,
+    )
+    _ = SessionBarCache(
+        root=root,
+        enable_reference_scale_guard=True,
+    )
+
+    assert not path.exists()
+    quarantined = sorted(root.glob("600519_1m.csv.bad_*"))
+    assert quarantined

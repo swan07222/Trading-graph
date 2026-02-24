@@ -223,8 +223,32 @@ class Trainer:
         return False
 
     @staticmethod
-    def _safe_ratio(numerator: float, denominator: float) -> float:
-        return float(numerator) / float(max(1.0, float(denominator)))
+    def _safe_ratio(numerator: float, denominator: float, default: float = 0.0) -> float:
+        """Safely compute ratio with proper handling of edge cases.
+        
+        FIX DIV: Added explicit handling for NaN/inf inputs and configurable default.
+        
+        Args:
+            numerator: The numerator value
+            denominator: The denominator value (protected against zero)
+            default: Default value to return when result is NaN/inf (default: 0.0)
+        
+        Returns:
+            The ratio as a float, or default if result is invalid
+        """
+        try:
+            num = float(numerator) if numerator is not None else 0.0
+            denom = float(denominator) if denominator is not None else 1.0
+            
+            if not np.isfinite(num):
+                num = 0.0
+            if not np.isfinite(denom) or denom == 0.0:
+                denom = 1.0
+            
+            result = num / max(1.0, denom)
+            return float(result) if np.isfinite(result) else default
+        except (TypeError, ValueError, ZeroDivisionError):
+            return default
 
     @staticmethod
     def _sanitize_raw_history(
@@ -241,9 +265,11 @@ class Trainer:
                 "rows_removed": 0,
             }
 
-        out = df.copy()
+        # FIX COPY: Avoid unnecessary copy; use view when possible
+        # Only copy when we actually need to modify the DataFrame
+        out = df  # Start with reference, copy only if modifications needed
         iv = str(interval or _TRAINING_INTERVAL_LOCK).strip().lower()
-        rows_before = int(len(out))
+        rows_before = int(len(df))  # Use original for accurate counting
         duplicates_removed = 0
         repaired_rows = 0
         raw_invalid_ohlc_rows = 0
@@ -268,7 +294,7 @@ class Trainer:
                     | (low_s > close_s)
                 )
                 return int(np.sum(mask.fillna(False).to_numpy()))
-            except Exception:
+            except (ValueError, TypeError, AttributeError):
                 return 0
 
         # Keep integrity signal from source payload before any cleaner mutates rows.
@@ -291,7 +317,7 @@ class Trainer:
                     cleaned = clean_fn(out, interval=iv)
                 if isinstance(cleaned, pd.DataFrame) and not cleaned.empty:
                     out = cleaned
-        except Exception as e:
+        except (ValueError, TypeError, AttributeError, OSError) as e:
             log.debug("Fetcher raw-history cleaning failed: %s", e)
 
         # Normalize index from explicit datetime columns when needed.
@@ -301,7 +327,7 @@ class Trainer:
                     continue
                 try:
                     idx = pd.to_datetime(out[col], errors="coerce")
-                except Exception:
+                except (ValueError, TypeError, AttributeError):
                     continue
                 valid_ratio = (
                     float(idx.notna().sum()) / float(max(1, len(idx)))
@@ -420,7 +446,7 @@ class Trainer:
                         .fillna(False)
                     )
                     bad_jump = bad_jump & (~day_change)
-                except Exception:
+                except (ValueError, TypeError, AttributeError, IndexError):
                     pass
 
             if bool(bad_jump.any()):
@@ -645,6 +671,76 @@ class Trainer:
             "tail_ratio": float(tail_ratio),
             "mean_shift_z": float(mean_shift),
         }
+
+    def _preliminary_regime_check(
+        self,
+        raw_data: dict[str, pd.DataFrame],
+        interval: str,
+    ) -> dict[str, Any]:
+        """Quick preliminary regime shift detection before full processing.
+
+        FIX RACE: This allows early detection of high regime shifts to avoid
+        wasting resources on incremental training that will be blocked anyway.
+
+        Uses raw return statistics from the data to detect volatility shifts.
+        """
+        del interval  # Reserved for future interval-specific logic
+
+        all_returns: list[np.ndarray] = []
+        for df in raw_data.values():
+            if df is None or len(df) < 20:
+                continue
+            if "close" not in df.columns:
+                continue
+            close = pd.to_numeric(df["close"], errors="coerce").dropna()
+            if len(close) < 20:
+                continue
+            returns = close.pct_change().dropna().to_numpy(dtype=np.float64)
+            if len(returns) > 0:
+                all_returns.append(returns)
+
+        if len(all_returns) < 2:
+            return {
+                "detected": False,
+                "level": "unknown",
+                "score": 0.0,
+                "reason": "insufficient_data",
+            }
+
+        # Split into older half vs newer half for preliminary detection
+        mid = len(all_returns) // 2
+        older_returns = np.concatenate(all_returns[:mid]) if mid > 0 else np.array([])
+        newer_returns = np.concatenate(all_returns[mid:]) if mid < len(all_returns) else np.array([])
+
+        if len(older_returns) < 50 or len(newer_returns) < 50:
+            return {
+                "detected": False,
+                "level": "unknown",
+                "score": 0.0,
+                "reason": "insufficient_samples",
+            }
+
+        older_vol = float(np.std(older_returns))
+        newer_vol = float(np.std(newer_returns))
+        vol_ratio = newer_vol / (older_vol + _EPS)
+
+        score = 0.45 * abs(float(np.log(max(vol_ratio, _EPS))))
+
+        if score >= 0.85:
+            level = "high"
+        elif score >= 0.55:
+            level = "elevated"
+        else:
+            level = "normal"
+
+        return {
+            "detected": bool(score >= 0.55),
+            "level": level,
+            "score": float(score),
+            "volatility_ratio": float(vol_ratio),
+            "reason": "ok",
+        }
+
     @staticmethod
     def _assess_overfitting(history: dict[str, Any] | None) -> dict[str, Any]:
         """Detect overfitting from train/val loss divergence and late val-acc drop."""

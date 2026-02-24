@@ -260,13 +260,13 @@ class EnsembleModel:
         if is_cancelled is not None:
             try:
                 return bool(is_cancelled() if callable(is_cancelled) else is_cancelled)
-            except Exception:
+            except (ValueError, TypeError, AttributeError):
                 return False
 
         if callable(stop_flag):
             try:
                 return bool(stop_flag())
-            except Exception:
+            except (ValueError, TypeError, AttributeError):
                 return False
 
         return False
@@ -613,7 +613,7 @@ class EnsembleModel:
                     except CancelledException:
                         log.info(f"{name}: cancelled via callback at epoch {epoch + 1}")
                         raise
-                    except Exception:
+                    except (ValueError, TypeError, AttributeError, RuntimeError):
                         pass
 
         except CancelledException:

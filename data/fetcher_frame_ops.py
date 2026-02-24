@@ -50,13 +50,26 @@ def merge_parts(
     interval: str | None = None,
     clean_dataframe: Callable[[pd.DataFrame, str | None], pd.DataFrame],
 ) -> pd.DataFrame:
-    """Merge and deduplicate non-empty dataframes."""
+    """Merge and deduplicate non-empty dataframes.
+    
+    FIX #7: Deduplicates by timestamp, keeping the most recent data source's values.
+    """
     parts = [p for p in dfs if isinstance(p, pd.DataFrame) and not p.empty]
     if not parts:
         return pd.DataFrame()
     if len(parts) == 1:
         return clean_dataframe(parts[0], interval)
-    return clean_dataframe(pd.concat(parts, axis=0), interval)
+    
+    # Concatenate all parts
+    merged = pd.concat(parts, axis=0)
+    
+    # FIX #7: Deduplicate by index (timestamp), keeping last occurrence
+    # This ensures online data (typically passed first) takes precedence over DB data
+    if isinstance(merged.index, pd.DatetimeIndex):
+        merged = merged[~merged.index.duplicated(keep="last")]
+        merged = merged.sort_index()
+    
+    return clean_dataframe(merged, interval)
 
 
 def filter_cn_intraday_session(

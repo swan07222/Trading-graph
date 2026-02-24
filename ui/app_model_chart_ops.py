@@ -800,6 +800,7 @@ def _build_chart_prediction_bands(
     symbol: str,
     predicted_prices: list[float] | None,
     anchor_price: float | None,
+    chart_interval: str | None = None,
 ) -> tuple[list[float], list[float]]:
     """Build chart uncertainty envelope around predicted prices."""
     vals = []
@@ -820,34 +821,58 @@ def _build_chart_prediction_bands(
     if anchor <= 0:
         anchor = float(vals[0])
 
+    fallback_iv = "1m"
+    try:
+        fallback_iv = self._normalize_interval_token(
+            self.interval_combo.currentText(),
+            fallback="1m",
+        )
+    except _UI_RECOVERABLE_EXCEPTIONS:
+        fallback_iv = "1m"
+    iv = self._normalize_interval_token(
+        chart_interval,
+        fallback=fallback_iv,
+    )
+    max_total_move, max_step_move = self._chart_prediction_caps(iv)
+
     uncertainty, tail_risk, confidence = self._chart_prediction_uncertainty_profile(
         symbol
+    )
+    max_width = float(
+        np.clip(max_total_move * 0.60, max(max_step_move * 1.2, 0.006), 0.18)
     )
     base_width = float(
         np.clip(
             0.004
-            + (0.020 * uncertainty)
-            + (0.015 * tail_risk)
-            + (0.012 * (1.0 - confidence)),
+            + (0.010 * uncertainty)
+            + (0.008 * tail_risk)
+            + (0.006 * (1.0 - confidence)),
             0.004,
-            0.24,
+            max(0.008, max_width * 0.55),
         )
     )
 
     n = max(1, len(vals))
     lows: list[float] = []
     highs: list[float] = []
+    envelope_cap = float(
+        np.clip(
+            max_total_move * (0.82 + (0.18 * uncertainty)),
+            max(max_step_move * 2.0, 0.01),
+            max(max_total_move * 1.05, 0.02),
+        )
+    )
     for i, px in enumerate(vals, start=1):
-        growth = 1.0 + (float(i) / float(n)) * (0.90 + (0.70 * uncertainty))
-        width = float(np.clip(base_width * growth, 0.004, 0.32))
+        growth = 1.0 + (float(i) / float(n)) * (0.70 + (0.45 * uncertainty))
+        width = float(np.clip(base_width * growth, 0.004, max_width))
 
         lo = max(0.01, float(px) * (1.0 - width))
         hi = max(lo + 1e-6, float(px) * (1.0 + width))
 
         # Keep envelope centered on plausible anchor neighborhood.
         if anchor > 0:
-            lo = max(lo, anchor * 0.50)
-            hi = min(hi, anchor * 1.50)
+            lo = max(lo, anchor * (1.0 - envelope_cap))
+            hi = min(hi, anchor * (1.0 + envelope_cap))
             if hi <= lo:
                 hi = lo + max(1e-6, abs(lo) * 0.002)
 
@@ -974,6 +999,7 @@ def _render_chart_state(
         symbol=symbol,
         predicted_prices=chart_predicted,
         anchor_price=anchor_for_pred,
+        chart_interval=iv,
     )
     self._debug_forecast_quality(
         symbol=symbol,

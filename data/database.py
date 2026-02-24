@@ -119,13 +119,23 @@ class MarketDatabase:
 
     @contextmanager
     def _transaction(self):
-        """Transaction context manager with proper rollback."""
+        """Transaction context manager with proper rollback.
+        
+        FIX #9: Catch ALL exceptions to ensure rollback on any failure,
+        not just soft exceptions. This prevents partial writes and data
+        corruption.
+        """
         conn = self._conn
         try:
             yield conn
             conn.commit()
-        except _DB_SOFT_EXCEPTIONS:
-            conn.rollback()
+        except Exception:
+            # Catch ALL exceptions to ensure atomic transactions
+            try:
+                conn.rollback()
+            except Exception as rb_error:
+                # Log rollback failure but re-raise original exception
+                log.error(f"Transaction rollback failed: {rb_error}")
             raise
 
     # ------------------------------------------------------------------
@@ -696,6 +706,129 @@ class MarketDatabase:
     # Intraday bars
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _median_close_tail(frame: pd.DataFrame, tail_rows: int = 240) -> float:
+        if frame is None or frame.empty or "close" not in frame.columns:
+            return 0.0
+        closes = pd.to_numeric(frame["close"], errors="coerce").dropna()
+        closes = closes[closes > 0]
+        if closes.empty:
+            return 0.0
+        return float(closes.tail(max(1, int(tail_rows))).median())
+
+    def _latest_daily_close(
+        self, code: str
+    ) -> tuple[float, date | None]:
+        try:
+            cur = self._conn.execute(
+                """
+                SELECT date, close
+                FROM daily_bars
+                WHERE code = ?
+                ORDER BY date DESC
+                LIMIT 1
+                """,
+                (str(code).zfill(6),),
+            )
+            row = cur.fetchone()
+        except _DB_SOFT_EXCEPTIONS:
+            return 0.0, None
+        if row is None:
+            return 0.0, None
+        close_px = self._to_float(row[1], 0.0)
+        if close_px <= 0:
+            return 0.0, None
+        day_val = None
+        try:
+            day_val = datetime.strptime(str(row[0]), "%Y-%m-%d").date()
+        except (TypeError, ValueError):
+            day_val = None
+        return float(close_px), day_val
+
+    def _latest_intraday_close(
+        self, code: str, interval: str
+    ) -> float:
+        try:
+            cur = self._conn.execute(
+                """
+                SELECT close
+                FROM intraday_bars
+                WHERE code = ? AND interval = ?
+                ORDER BY ts DESC
+                LIMIT 1
+                """,
+                (str(code).zfill(6), str(interval or "1m").lower()),
+            )
+            row = cur.fetchone()
+        except _DB_SOFT_EXCEPTIONS:
+            return 0.0
+        if row is None:
+            return 0.0
+        close_px = self._to_float(row[0], 0.0)
+        return float(close_px) if close_px > 0 else 0.0
+
+    def _intraday_scale_guard_allows(
+        self,
+        *,
+        code: str,
+        interval: str,
+        work: pd.DataFrame,
+    ) -> bool:
+        iv = str(interval or "1m").strip().lower()
+        if iv in ("1d", "1wk", "1mo"):
+            return True
+
+        med_close = self._median_close_tail(work, tail_rows=240)
+        if med_close <= 0:
+            return False
+
+        daily_ref, daily_dt = self._latest_daily_close(code)
+        if daily_ref > 0:
+            min_ratio, max_ratio = 0.45, 2.2
+            if daily_dt is not None:
+                try:
+                    age_days = max(0, (date.today() - daily_dt).days)
+                except Exception:
+                    age_days = 0
+                if age_days > 45:
+                    min_ratio, max_ratio = 0.30, 3.5
+            ratio = med_close / max(daily_ref, 1e-8)
+            if ratio < min_ratio or ratio > max_ratio:
+                log.warning(
+                    "Skipped intraday DB upsert for %s (%s): median %.6f "
+                    "mismatches daily close %.6f (ratio=%.3f allowed %.3f..%.3f)",
+                    str(code).zfill(6),
+                    iv,
+                    med_close,
+                    daily_ref,
+                    ratio,
+                    min_ratio,
+                    max_ratio,
+                )
+                return False
+            return True
+
+        intra_ref = self._latest_intraday_close(code, iv)
+        if intra_ref > 0:
+            ratio = med_close / max(intra_ref, 1e-8)
+            min_ratio, max_ratio = 0.40, 3.5
+            if ratio < min_ratio or ratio > max_ratio:
+                log.warning(
+                    "Skipped intraday DB upsert for %s (%s): median %.6f "
+                    "mismatches prior intraday close %.6f (ratio=%.3f "
+                    "allowed %.3f..%.3f)",
+                    str(code).zfill(6),
+                    iv,
+                    med_close,
+                    intra_ref,
+                    ratio,
+                    min_ratio,
+                    max_ratio,
+                )
+                return False
+
+        return True
+
     def get_intraday_bars(
         self,
         code: str,
@@ -787,6 +920,12 @@ class MarketDatabase:
             work, interval=interval
         )
         if work.empty:
+            return
+        if not self._intraday_scale_guard_allows(
+            code=code,
+            interval=interval,
+            work=work,
+        ):
             return
 
         rows = self._build_intraday_rows(code, interval, work)

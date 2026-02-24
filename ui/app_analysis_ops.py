@@ -380,31 +380,44 @@ def _analyze_stock(self) -> None:
     # FIX: Tag worker with sequence number for stale detection
     worker._request_seq = current_seq
     
-    worker.result.connect(self._on_analysis_done)
-    worker.error.connect(self._on_analysis_error)
+    worker.result.connect(
+        lambda pred, seq=current_seq: self._on_analysis_done(
+            pred,
+            request_seq=seq,
+        )
+    )
+    worker.error.connect(
+        lambda error, seq=current_seq: self._on_analysis_error(
+            error,
+            request_seq=seq,
+        )
+    )
     self.workers["analyze"] = worker
     worker.start()
 
-def _on_analysis_done(self, pred: Any) -> None:
+def _on_analysis_done(self, pred: Any, request_seq: int | None = None) -> None:
     """Handle analysis completion; also triggers news fetch.
 
     FIX: Added stale result detection using sequence numbers.
     """
-    # FIX: Check for stale result using sequence number
-    worker = self.workers.get("analyze")
-    if worker is not None:
-        worker_seq = getattr(worker, '_request_seq', None)
-        current_seq = getattr(self, '_analyze_request_seq', None)
-        if worker_seq is not None and current_seq is not None and worker_seq != current_seq:
-            # Stale result from older request - discard
-            self._debug_console(
-                f"analyze_stale:{self._ui_norm(self.stock_input.text())}",
-                f"Discarded stale analysis result (seq {worker_seq} != {current_seq})",
-                min_gap_seconds=2.0,
-                level="debug",
-            )
-            self.workers.pop('analyze', None)
-            return
+    current_seq = getattr(self, "_analyze_request_seq", None)
+    if request_seq is None:
+        worker = self.workers.get("analyze")
+        if worker is not None:
+            request_seq = getattr(worker, "_request_seq", None)
+    if (
+        request_seq is not None
+        and current_seq is not None
+        and int(request_seq) != int(current_seq)
+    ):
+        # Stale result from older request - discard without touching current worker.
+        self._debug_console(
+            f"analyze_stale:{self._ui_norm(self.stock_input.text())}",
+            f"Discarded stale analysis result (seq {request_seq} != {current_seq})",
+            min_gap_seconds=2.0,
+            level="debug",
+        )
+        return
 
     self.analyze_action.setEnabled(True)
     self.progress.hide()
@@ -414,7 +427,16 @@ def _on_analysis_done(self, pred: Any) -> None:
     selected = self._ui_norm(self.stock_input.text())
     if selected and symbol and selected != symbol:
         # User switched symbol while worker was running; ignore stale result.
-        self.workers.pop('analyze', None)
+        worker = self.workers.get("analyze")
+        if worker is not None:
+            worker_seq = getattr(worker, "_request_seq", None)
+            if (
+                request_seq is not None
+                and worker_seq is not None
+                and int(worker_seq) != int(request_seq)
+            ):
+                return
+        self.workers.pop("analyze", None)
         return
 
     self.current_prediction = pred
@@ -714,10 +736,33 @@ def _on_analysis_done(self, pred: Any) -> None:
             )
         self._last_analysis_log = {"key": log_key, "ts": now_log_ts}
 
-    self.workers.pop('analyze', None)
+    worker = self.workers.get("analyze")
+    if worker is not None:
+        worker_seq = getattr(worker, "_request_seq", None)
+        if (
+            request_seq is not None
+            and worker_seq is not None
+            and int(worker_seq) != int(request_seq)
+        ):
+            return
+    self.workers.pop("analyze", None)
 
-def _on_analysis_error(self, error: str) -> None:
+def _on_analysis_error(self, error: str, request_seq: int | None = None) -> None:
     """Handle analysis error."""
+    current_seq = getattr(self, "_analyze_request_seq", None)
+    if (
+        request_seq is not None
+        and current_seq is not None
+        and int(request_seq) != int(current_seq)
+    ):
+        self._debug_console(
+            f"analyze_stale_err:{self._ui_norm(self.stock_input.text())}",
+            f"Ignored stale analysis error (seq {request_seq} != {current_seq})",
+            min_gap_seconds=2.0,
+            level="debug",
+        )
+        return
+
     self.analyze_action.setEnabled(True)
     self.progress.hide()
     self.status_label.setText("Ready")
@@ -725,7 +770,16 @@ def _on_analysis_error(self, error: str) -> None:
     self.log(f"Analysis failed: {error}", "error")
     QMessageBox.warning(self, "Error", f"Analysis failed:\n{error}")
 
-    self.workers.pop('analyze', None)
+    worker = self.workers.get("analyze")
+    if worker is not None:
+        worker_seq = getattr(worker, "_request_seq", None)
+        if (
+            request_seq is not None
+            and worker_seq is not None
+            and int(worker_seq) != int(request_seq)
+        ):
+            return
+    self.workers.pop("analyze", None)
 
 def _update_details(self, pred: Any) -> None:
     """Update analysis details with news sentiment."""

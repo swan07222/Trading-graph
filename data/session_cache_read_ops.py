@@ -38,6 +38,14 @@ def _interval_safety_caps(interval: str) -> tuple[float, float]:
         return 0.24, 0.22
     return 0.20, 0.15
 
+
+def _reference_scale_bounds(interval: str) -> tuple[float, float]:
+    """Return allowed (min_ratio, max_ratio) against DB reference close."""
+    iv = str(interval or "1m").strip().lower()
+    if iv in ("1d", "1wk", "1mo"):
+        return 0.25, 4.0
+    return 0.45, 2.2
+
 def read_history(
     self: Any,
     symbol: str,
@@ -272,16 +280,26 @@ def read_history(
         if not segments:
             return pd.DataFrame()
 
-        # Prefer the segment closest to DB reference close when possible,
-        # otherwise use the most recent segment.
-        selected = segments[-1]
+        # FIX #2026-02-24: Prefer the MOST RECENT segment by default, only
+        # switch to an older segment if it has SIGNIFICANTLY better scale match.
+        # This prevents showing outdated price data when scale is ambiguous.
+        selected = segments[-1]  # Start with most recent segment
         ref_close = 0.0
-        if iv not in ("1d", "1wk", "1mo"):
+        guard_enabled = True
+        try:
+            guard_fn = getattr(self, "_reference_scale_guard_enabled", None)
+            if callable(guard_fn):
+                guard_enabled = bool(guard_fn())
+        except Exception:
+            guard_enabled = True
+        if guard_enabled and iv not in ("1d", "1wk", "1mo"):
             ref_close = self._reference_close_from_db(sym)
         if ref_close > 0:
             best = selected
             best_err = float("inf")
-            for seg in segments:
+            # FIX #2026-02-24: Track index to prefer newer segments on ties
+            best_idx = len(segments) - 1
+            for seg_idx, seg in enumerate(segments):
                 closes = [
                     float(vals[3]) for _idx, vals in seg
                     if float(vals[3]) > 0
@@ -295,11 +313,40 @@ def read_history(
                 if ratio <= 0:
                     continue
                 err = abs(math.log(ratio))
-                # Prefer closer scale; break ties with newer segment.
-                if err < best_err:
+                # FIX #2026-02-24: Only switch to older segment if error is
+                # SIGNIFICANTLY better (5% threshold), prefer newer on ties
+                if err < best_err * 0.95:  # 5% improvement threshold
                     best = seg
                     best_err = err
+                    best_idx = seg_idx
+                # On tie, prefer newer segment (higher index)
+                elif abs(err - best_err) <= best_err * 0.01 and seg_idx > best_idx:
+                    best = seg
+                    best_err = err
+                    best_idx = seg_idx
             selected = best
+            closes_sel = [
+                float(vals[3]) for _idx, vals in selected
+                if float(vals[3]) > 0
+            ]
+            if closes_sel:
+                med_sel = float(pd.Series(closes_sel, dtype=float).median())
+                if med_sel > 0:
+                    ratio_sel = med_sel / float(ref_close)
+                    min_ratio, max_ratio = _reference_scale_bounds(iv)
+                    if ratio_sel < min_ratio or ratio_sel > max_ratio:
+                        log.warning(
+                            "Session cache dropped mismatched segment %s_%s: "
+                            "ref=%.6f med=%.6f ratio=%.3f (allowed %.3f..%.3f)",
+                            sym,
+                            iv,
+                            float(ref_close),
+                            med_sel,
+                            ratio_sel,
+                            min_ratio,
+                            max_ratio,
+                        )
+                        return pd.DataFrame()
 
         keep_idx = [idx for idx, _vals in selected]
         fixed = dict(selected)

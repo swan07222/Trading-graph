@@ -113,11 +113,14 @@ def _on_price_updated(self: Any, code: str, price: float) -> None:
                 level="info",
             )
     if arr and len(arr) > 1:
-        arr.sort(
-            key=lambda x: float(
-                x.get("_ts_epoch", self._ts_to_epoch(x.get("timestamp", "")))
+        try:
+            arr.sort(
+                key=lambda x: float(
+                    x.get("_ts_epoch", self._ts_to_epoch(x.get("timestamp", "")))
+                )
             )
-        )
+        except _APP_CHART_RECOVERABLE_EXCEPTIONS as exc:
+            log.debug(f"Bar sort failed for {code}: {exc}")
     if code == current_code:
         if arr and inferred_interval != ui_interval:
             interval = inferred_interval
@@ -311,7 +314,7 @@ def _on_price_updated(self: Any, code: str, price: float) -> None:
                             if len(arr) > keep:
                                 del arr[:-keep]
             except _APP_CHART_RECOVERABLE_EXCEPTIONS as exc:
-                log.debug("Suppressed exception in ui/app.py", exc_info=exc)
+                log.debug("Suppressed exception in app_chart_pipeline", exc_info=exc)
 
         if current_code == code and arr:
             try:
@@ -323,6 +326,9 @@ def _on_price_updated(self: Any, code: str, price: float) -> None:
                     current_price=price,
                     update_latest_label=True,
                 )
+                # Sync back so persistence uses the canonically scrubbed list.
+                if arr:
+                    self._bars_by_symbol[code] = arr
             except _APP_CHART_RECOVERABLE_EXCEPTIONS as e:
                 log.debug(f"Chart price refresh failed: {e}")
 
@@ -339,6 +345,21 @@ def _on_price_updated(self: Any, code: str, price: float) -> None:
         bucket_s = float(max(interval_s, 1))
         bucket_epoch = float(int(now_ts // bucket_s) * int(bucket_s))
         bucket_iso = self._epoch_to_iso(bucket_epoch)
+
+        # Check for outlier BEFORE creating a synthetic bar to avoid
+        # polluting _bars_by_symbol with a phantom bad-price entry.
+        if arr:
+            _last_for_outlier = arr[-1]
+            _ref_for_outlier = float(_last_for_outlier.get("close", price) or price)
+            if (
+                _ref_for_outlier > 0
+                and self._is_outlier_tick(_ref_for_outlier, float(price), interval=interval)
+            ):
+                log.debug(
+                    f"Skip outlier tick (pre-synthetic) for {code}: "
+                    f"prev={_ref_for_outlier:.2f} new={float(price):.2f}"
+                )
+                return
 
         if not arr:
             arr = [{
@@ -486,6 +507,9 @@ def _on_price_updated(self: Any, code: str, price: float) -> None:
                         current_price=price,
                         update_latest_label=True,
                     )
+                    # Sync back so persistence uses the canonically scrubbed list.
+                    if arr:
+                        self._bars_by_symbol[code] = arr
                 except _APP_CHART_RECOVERABLE_EXCEPTIONS as e:
                     log.debug(f"Chart price update failed: {e}")
 
@@ -563,7 +587,7 @@ def _on_price_updated(self: Any, code: str, price: float) -> None:
                         predicted_prepared=True,
                     )
                 except _APP_CHART_RECOVERABLE_EXCEPTIONS as exc:
-                    log.debug("Suppressed exception in ui/app.py", exc_info=exc)
+                    log.debug("Suppressed exception in app_chart_pipeline", exc_info=exc)
 
         self._debug_console(
             f"forecast_model_unavailable:{code}",
@@ -641,11 +665,15 @@ def _on_price_updated(self: Any, code: str, price: float) -> None:
 
     worker = WorkerThread(do_forecast, timeout_seconds=30)
     self._track_worker(worker)
+    worker._forecast_token = f"{code}:{time.monotonic():.6f}"
     self.workers["forecast_refresh"] = worker
     self._forecast_refresh_symbol = code
 
     def on_done(res: Any) -> None:
         try:
+            if self.workers.get("forecast_refresh") is not worker:
+                # Stale worker callback after a newer refresh started.
+                return
             if not res:
                 try:
                     if (
@@ -757,6 +785,7 @@ def _on_price_updated(self: Any, code: str, price: float) -> None:
                         symbol=code,
                         predicted_prices=display_predicted,
                         anchor_price=display_current if display_current > 0 else None,
+                        chart_interval=interval,
                     )
                 else:
                     low_band, high_band = [], []
@@ -795,15 +824,17 @@ def _on_price_updated(self: Any, code: str, price: float) -> None:
                     predicted_prepared=True,
                 )
         finally:
-            self.workers.pop("forecast_refresh", None)
-            if self._forecast_refresh_symbol == code:
-                self._forecast_refresh_symbol = ""
+            if self.workers.get("forecast_refresh") is worker:
+                self.workers.pop("forecast_refresh", None)
+                if self._forecast_refresh_symbol == code:
+                    self._forecast_refresh_symbol = ""
 
     worker.result.connect(on_done)
     def on_error(_e: Any) -> None:
-        self.workers.pop("forecast_refresh", None)
-        if self._forecast_refresh_symbol == code:
-            self._forecast_refresh_symbol = ""
+        if self.workers.get("forecast_refresh") is worker:
+            self.workers.pop("forecast_refresh", None)
+            if self._forecast_refresh_symbol == code:
+                self._forecast_refresh_symbol = ""
     worker.error.connect(on_error)
     worker.start()
 
