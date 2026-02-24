@@ -1136,16 +1136,16 @@ class ParallelFetcher:
                         )
                     if df is not None and not df.empty and len(df) >= min_bars:
                         return code, True
-                    # FIX DEBUG: Log why stock failed
+                    # FIX: Log at WARNING level for systematic failure detection
                     if df is None:
-                        log.debug(f"Fetch returned None for {code}")
+                        log.warning(f"Fetch returned None for {code} (interval={interval})")
                     elif df.empty:
-                        log.debug(f"Fetch returned empty DataFrame for {code} (interval={interval}, lookback={lookback}, min_bars={min_bars})")
+                        log.warning(f"Fetch returned empty DataFrame for {code} (interval={interval}, lookback={lookback}, min_bars={min_bars})")
                     else:
-                        log.debug(f"Fetch returned {len(df)} bars for {code}, need {min_bars}")
+                        log.warning(f"Fetch returned insufficient bars for {code}: got {len(df)}, need {min_bars} (interval={interval})")
                     return code, False
                 except _AUTO_LEARNER_RECOVERABLE_EXCEPTIONS as e:
-                    log.debug(f"Fetch failed for {code}: {e}")
+                    log.warning(f"Fetch failed for {code} (interval={interval}): {type(e).__name__}: {e}")
                     return code, False
 
         workers = min(self._max_workers, max_concurrent, len(codes))
