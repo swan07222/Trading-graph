@@ -246,6 +246,33 @@ class Trainer:
         rows_before = int(len(out))
         duplicates_removed = 0
         repaired_rows = 0
+        raw_invalid_ohlc_rows = 0
+
+        def _count_invalid_ohlc_rows(frame: pd.DataFrame) -> int:
+            if frame is None or frame.empty:
+                return 0
+            cols = {str(c).strip().lower(): c for c in list(frame.columns)}
+            required = ("open", "high", "low", "close")
+            if any(name not in cols for name in required):
+                return 0
+            try:
+                open_s = pd.to_numeric(frame[cols["open"]], errors="coerce")
+                high_s = pd.to_numeric(frame[cols["high"]], errors="coerce")
+                low_s = pd.to_numeric(frame[cols["low"]], errors="coerce")
+                close_s = pd.to_numeric(frame[cols["close"]], errors="coerce")
+                mask = (
+                    (high_s < low_s)
+                    | (high_s < open_s)
+                    | (high_s < close_s)
+                    | (low_s > open_s)
+                    | (low_s > close_s)
+                )
+                return int(np.sum(mask.fillna(False).to_numpy()))
+            except Exception:
+                return 0
+
+        # Keep integrity signal from source payload before any cleaner mutates rows.
+        raw_invalid_ohlc_rows = _count_invalid_ohlc_rows(out)
 
         # First pass through fetcher-level cleaner for timestamp/shape normalization.
         try:
@@ -310,6 +337,7 @@ class Trainer:
                 "duplicates_removed": duplicates_removed,
                 "repaired_rows": 0,
                 "rows_removed": rows_before,
+                "raw_invalid_ohlc_rows": 0,
             }
 
         out = out.replace([np.inf, -np.inf], np.nan)
@@ -322,6 +350,7 @@ class Trainer:
                 "duplicates_removed": duplicates_removed,
                 "repaired_rows": 0,
                 "rows_removed": rows_before,
+                "raw_invalid_ohlc_rows": 0,
             }
 
         if "open" not in out.columns:
@@ -340,6 +369,19 @@ class Trainer:
             out["low"] = out[["open", "close"]].min(axis=1)
         else:
             out["low"] = pd.to_numeric(out["low"], errors="coerce")
+
+        # Preserve pre-repair OHLC integrity signal for quality gating.
+        raw_broken_mask = (
+            (out["high"] < out["low"])
+            | (out["high"] < out["open"])
+            | (out["high"] < out["close"])
+            | (out["low"] > out["open"])
+            | (out["low"] > out["close"])
+        )
+        raw_invalid_ohlc_rows = max(
+            int(raw_invalid_ohlc_rows),
+            int(np.sum(raw_broken_mask.fillna(False).to_numpy())),
+        )
 
         # Ensure OHLC consistency even when source bars are partially broken.
         oc_top = out[["open", "close"]].max(axis=1)
@@ -430,6 +472,7 @@ class Trainer:
             "duplicates_removed": duplicates_removed,
             "repaired_rows": int(repaired_rows),
             "rows_removed": int(max(0, rows_before - rows_after)),
+            "raw_invalid_ohlc_rows": int(raw_invalid_ohlc_rows),
         }
     def _split_and_fit_scaler(
         self,

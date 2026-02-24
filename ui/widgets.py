@@ -302,9 +302,32 @@ class SignalPanel(QFrame):
             prob_neutral /= total
             prob_up /= total
 
-        self.prob_down.setValue(int(prob_down * 100))
-        self.prob_neutral.setValue(int(prob_neutral * 100))
-        self.prob_up.setValue(int(prob_up * 100))
+        # UI stability guard: avoid displaying hard 0/100/0 for HOLD when
+        # probabilities are numerically saturated near neutral.
+        if (
+            not prediction_unavailable
+            and Signal is not None
+            and sig == Signal.HOLD
+            and prob_neutral >= 0.985
+            and (prob_up + prob_down) <= 0.02
+        ):
+            neutral_mass = 0.90
+            side_mass = 1.0 - neutral_mass
+            side_total = prob_up + prob_down
+            if side_total > 1e-8:
+                up_ratio = prob_up / side_total
+            else:
+                up_ratio = 0.5
+            prob_up = side_mass * up_ratio
+            prob_down = side_mass - prob_up
+            prob_neutral = neutral_mass
+
+        self.prob_down.setValue(int(round(prob_down * 100)))
+        self.prob_neutral.setValue(int(round(prob_neutral * 100)))
+        self.prob_up.setValue(int(round(prob_up * 100)))
+        self.prob_down.setFormat(f"{prob_down * 100.0:.1f}%")
+        self.prob_neutral.setFormat(f"{prob_neutral * 100.0:.1f}%")
+        self.prob_up.setFormat(f"{prob_up * 100.0:.1f}%")
 
         pos = getattr(pred, "position", None)
         levels = getattr(pred, "levels", None)

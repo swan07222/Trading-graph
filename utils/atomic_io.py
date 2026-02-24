@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from utils.logger import get_logger
-from utils.safe_pickle import safe_pickle_load, safe_pickle_loads, safe_pickle_dump, safe_pickle_dumps
+from utils.safe_pickle import safe_pickle_load, safe_pickle_loads
 
 log = get_logger(__name__)
 

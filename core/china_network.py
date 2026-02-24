@@ -532,7 +532,7 @@ class ChinaNetworkOptimizer:
         # Final fallback: try each Chinese DNS server via system resolver
         # Note: This doesn't actually query the DNS server directly,
         # but attempts resolution in case system is configured to use them
-        for dns_server, _port in CHINA_DNS_SERVERS:
+        for _dns_server, _port in CHINA_DNS_SERVERS:
             try:
                 # Attempt to resolve - system may use configured DNS
                 ip = socket.gethostbyname(hostname)
@@ -620,7 +620,6 @@ class ChinaHTTPAdapter(HTTPAdapter):
         pool_kwargs["socket_options"] = existing_options + self._socket_options
 
         # Create proper SSL context for China network conditions
-        import ssl
         ssl_context = ssl.create_default_context()
         ssl_context.set_ciphers(
             "ECDHE+AESGCM:DHE+AESGCM:ECDHE+CHACHA20:DHE+CHACHA20:"

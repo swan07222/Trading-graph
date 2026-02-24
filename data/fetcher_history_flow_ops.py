@@ -691,10 +691,12 @@ def _synthesize_intraday_from_daily(
     if daily_tail.empty:
         return pd.DataFrame()
 
-    intraday_rows = []
+    intraday_rows: list[dict[str, float]] = []
+    intraday_index: list[pd.Timestamp] = []
     tz = getattr(daily_tail.index, "tz", None)
+    step_minutes = int(iv.replace("m", "")) if iv.endswith("m") else 60
 
-    for date_idx, (date, row) in enumerate(daily_tail.iterrows()):
+    for date, row in daily_tail.iterrows():
         open_p = float(row.get("open", row.get("close", 1.0)))
         high_p = float(row.get("high", open_p))
         low_p = float(row.get("low", open_p))
@@ -710,9 +712,8 @@ def _synthesize_intraday_from_daily(
         price_range = close_p - open_p
         for bar_idx in range(bars_per_day):
             # Time within trading day (9:30-15:00 CST)
-            total_minutes = bar_idx * int(iv.replace("m", "")) if iv.endswith("m") else bar_idx * 60
+            total_minutes = bar_idx * step_minutes
             hours = total_minutes // 60
-            mins = total_minutes % 60
 
             # China trading hours: 9:30-11:30, 13:00-15:00
             if hours < 2:  # Morning session (0-119 minutes -> 9:30-11:29)
@@ -730,6 +731,12 @@ def _synthesize_intraday_from_daily(
                 bar_time = date.replace(hour=actual_hour, minute=actual_min)
             except (ValueError, TypeError):
                 bar_time = date + pd.Timedelta(hours=actual_hour, minutes=actual_min)
+            ts = pd.Timestamp(bar_time)
+            if tz is not None and ts.tzinfo is None:
+                try:
+                    ts = ts.tz_localize(tz)
+                except (TypeError, ValueError):
+                    pass
 
             # Interpolate price (simple linear + some noise for realism)
             progress = (bar_idx + 0.5) / bars_per_day
@@ -748,19 +755,22 @@ def _synthesize_intraday_from_daily(
             bar_high = min(high_p, bar_high)
             bar_low = max(low_p, bar_low)
 
-            intraday_rows.append({
-                "open": bar_open,
-                "high": bar_high,
-                "low": bar_low,
-                "close": bar_close,
-                "volume": vol_per_bar,
-                "amount": amt_per_bar,
-            }, index=pd.DatetimeIndex([bar_time]))
+            intraday_rows.append(
+                {
+                    "open": float(bar_open),
+                    "high": float(bar_high),
+                    "low": float(bar_low),
+                    "close": float(bar_close),
+                    "volume": float(vol_per_bar),
+                    "amount": float(amt_per_bar),
+                }
+            )
+            intraday_index.append(ts)
 
     if not intraday_rows:
         return pd.DataFrame()
 
-    result = pd.concat(intraday_rows, axis=0)
+    result = pd.DataFrame(intraday_rows, index=pd.DatetimeIndex(intraday_index))
     result = result[~result.index.duplicated(keep="last")]
     result = result.tail(count)
 

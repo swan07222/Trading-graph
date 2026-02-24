@@ -398,6 +398,30 @@ def _fetch_raw_data(
                 sanitize_meta.get("trimmed_to_two_day_window", False)
             )
             q_report["window_bars"] = int(sanitize_meta.get("window_bars", len(df)))
+            raw_invalid_ohlc_rows = int(
+                sanitize_meta.get("raw_invalid_ohlc_rows", 0)
+            )
+            if raw_invalid_ohlc_rows > 0:
+                raw_rows_before = int(
+                    max(1, int(sanitize_meta.get("rows_before", len(df))))
+                )
+                raw_broken_ratio = self._safe_ratio(
+                    float(raw_invalid_ohlc_rows),
+                    float(raw_rows_before),
+                )
+                q_report["broken_ohlc_ratio"] = float(
+                    max(float(q_report.get("broken_ohlc_ratio", 0.0)), raw_broken_ratio)
+                )
+                if raw_broken_ratio > float(_DATA_QUALITY_MAX_BROKEN_OHLC_RATIO):
+                    reasons = [
+                        str(x).strip()
+                        for x in list(q_report.get("reasons", []) or [])
+                        if str(x).strip()
+                    ]
+                    if "invalid_ohlc_relations" not in reasons:
+                        reasons.append("invalid_ohlc_relations")
+                    q_report["reasons"] = reasons
+                    q_report["passed"] = False
             quality_reports[str(code)] = q_report
             if not bool(q_report.get("passed", False)):
                 for reason in list(q_report.get("reasons", []) or []):
@@ -511,7 +535,6 @@ def _validate_temporal_split_integrity(
     try:
         train_df = split_data.get("train", pd.DataFrame())
         val_df = split_data.get("val", pd.DataFrame())
-        test_df = split_data.get("test", pd.DataFrame())
         
         if train_df.empty:
             report["errors"].append("train_split_empty")

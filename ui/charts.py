@@ -46,6 +46,7 @@ if HAS_PYQTGRAPH:
             pic = pg.QtGui.QPicture()
             p = pg.QtGui.QPainter(pic)
             w = 0.18
+            body_ratio = 0.54  # keep a small visible gap between candles
             try:
                 xs = [float(d[0]) for d in self.data if len(d) >= 5]
                 if len(xs) >= 2:
@@ -56,7 +57,7 @@ if HAS_PYQTGRAPH:
                     if diffs.size > 0:
                         step = float(np.median(diffs))
                         # Keep body width proportional to local x spacing.
-                        w = max(step * 0.65, 1e-6)
+                        w = max(step * body_ratio, 1e-6)
                 elif len(xs) == 1:
                     # Single-bar fallback should stay narrow; avoid giant blocks.
                     w = 0.14
@@ -188,6 +189,7 @@ class StockChart(QWidget):
         }
         self._manual_zoom: bool = False
         self._dbg_last_emit: dict[str, float] = {}
+        self._forecast_x_gap: float = 0.18
 
         self._setup_ui()
 
@@ -648,7 +650,32 @@ class StockChart(QWidget):
             except Exception:
                 pass
 
-            render_bars = self._bars[-3000:]
+            render_bars = list(self._bars)
+            try:
+                def _bar_epoch(row: dict) -> float:
+                    raw = row.get("_ts_epoch", row.get("timestamp", row.get("time", 0)))
+                    try:
+                        if isinstance(raw, (int, float, np.integer, np.floating)):
+                            v = float(raw)
+                            if not np.isfinite(v):
+                                return 0.0
+                            if abs(v) >= 1e11:
+                                v /= 1000.0
+                            return float(v)
+                    except Exception:
+                        pass
+                    try:
+                        ts = pd.to_datetime(raw, errors="coerce")
+                        if pd.isna(ts):
+                            return 0.0
+                        return float(pd.Timestamp(ts).timestamp())
+                    except Exception:
+                        return 0.0
+
+                render_bars.sort(key=_bar_epoch)
+            except Exception:
+                pass
+            render_bars = render_bars[-3000:]
             diag = {
                 "rows_total": int(len(render_bars)),
                 "kept": 0,
@@ -710,7 +737,12 @@ class StockChart(QWidget):
                     # Fix missing OHLC values — prefer close (doji) over
                     # prev_close to avoid creating artificial directional candles.
                     if o <= 0:
-                        if is_intraday and prev_close is not None and prev_close > 0:
+                        if (
+                            is_intraday
+                            and (not day_boundary)
+                            and prev_close is not None
+                            and prev_close > 0
+                        ):
                             o = float(prev_close)
                         else:
                             o = c
@@ -962,26 +994,35 @@ class StockChart(QWidget):
                 if closes and self._predicted_prices:
                     # Start forecast one bar AFTER the last candle so
                     # the prediction line does not overlap the last candle.
-                    start_x = len(closes)
-                    x_pred = np.arange(
-                        start_x,
-                        start_x + len(self._predicted_prices)
+                    start_x = float(len(closes)) + float(self._forecast_x_gap)
+                    x_pred = start_x + np.arange(
+                        len(self._predicted_prices), dtype=float
                     )
                     y_pred = np.array(
                         list(self._predicted_prices),
                         dtype=float
                     )
-                    # Draw a thin connector from last close to first
-                    # prediction point so the forecast looks attached.
-                    x_conn = np.array(
-                        [len(closes) - 1, start_x], dtype=float
+                    # Avoid drawing a long artificial connector when the first
+                    # forecast point is too far from the last real close.
+                    last_close = float(closes[-1]) if closes else 0.0
+                    first_pred = float(self._predicted_prices[0])
+                    attach_cap = 0.035 if default_iv in {"1d", "1wk", "1mo"} else 0.018
+                    connect_forecast = bool(
+                        last_close > 0
+                        and abs(first_pred / max(last_close, 1e-8) - 1.0) <= attach_cap
                     )
-                    y_conn = np.array(
-                        [closes[-1], self._predicted_prices[0]], dtype=float
-                    )
-                    x_full = np.concatenate([x_conn, x_pred])
-                    y_full = np.concatenate([y_conn, y_pred])
-                    self.predicted_line.setData(x_full, y_full)
+                    if connect_forecast:
+                        x_conn = np.array(
+                            [len(closes) - 1, start_x], dtype=float
+                        )
+                        y_conn = np.array(
+                            [last_close, first_pred], dtype=float
+                        )
+                        x_full = np.concatenate([x_conn, x_pred])
+                        y_full = np.concatenate([y_conn, y_pred])
+                        self.predicted_line.setData(x_full, y_full)
+                    else:
+                        self.predicted_line.setData(x_pred, y_pred)
                     
                     # FIX: Ensure uncertainty bands are rendered
                     if (
@@ -1000,16 +1041,11 @@ class StockChart(QWidget):
                             list(self._predicted_prices_high),
                             dtype=float,
                         )
-                        y_low_full = np.concatenate([
-                            np.array([closes[-1], self._predicted_prices_low[0]]),
-                            y_low,
-                        ])
-                        y_high_full = np.concatenate([
-                            np.array([closes[-1], self._predicted_prices_high[0]]),
-                            y_high,
-                        ])
-                        self.predicted_low_line.setData(x_full, y_low_full)
-                        self.predicted_high_line.setData(x_full, y_high_full)
+                        # Do not connect uncertainty bands to last real close:
+                        # that creates an artificial long vertical band jump at
+                        # forecast start when band width is wide.
+                        self.predicted_low_line.setData(x_pred, y_low)
+                        self.predicted_high_line.setData(x_pred, y_high)
                     else:
                         # FIX: Clear bands only if data is truly missing
                         if self.predicted_low_line is not None:
@@ -1152,7 +1188,11 @@ class StockChart(QWidget):
                     pred_visible = max(1, int(n_pred * 0.3))
                     visible_candles = max(120, min(n_candles, 600))
                     x_min = max(0, n_candles - visible_candles)
-                    x_max = n_candles + pred_visible
+                    x_max = (
+                        float(n_candles)
+                        + float(self._forecast_x_gap)
+                        + float(pred_visible)
+                    )
                     self.plot_widget.setXRange(
                         x_min, x_max, padding=0.02
                     )
@@ -1516,7 +1556,11 @@ class StockChart(QWidget):
                 pred_visible = max(1, int(n_pred * 0.3)) if n_pred > 0 else 0
                 visible_candles = min(200, n_candles)
                 x_min = max(0, n_candles - visible_candles)
-                x_max = n_candles + pred_visible
+                x_max = (
+                    float(n_candles)
+                    + float(self._forecast_x_gap)
+                    + float(pred_visible)
+                )
                 
                 self.plot_widget.setXRange(
                     x_min, x_max, padding=0.02

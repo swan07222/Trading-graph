@@ -13,7 +13,6 @@ from __future__ import annotations
 import io
 import json
 import pickle
-import struct
 from pathlib import Path
 from typing import IO, Any, Set, Type
 

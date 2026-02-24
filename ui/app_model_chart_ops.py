@@ -530,8 +530,12 @@ def _chart_prediction_caps(self, interval: str) -> tuple[float, float]:
         return 0.065, 0.016
     if iv in ("60m", "1h"):
         return 0.100, 0.025
-    if iv in ("1d", "1wk", "1mo"):
-        return 0.160, 0.040
+    if iv == "1d":
+        return 0.120, 0.020
+    if iv == "1wk":
+        return 0.160, 0.028
+    if iv == "1mo":
+        return 0.220, 0.040
     return 0.070, 0.022
 
 def _prepare_chart_predicted_prices(
@@ -588,6 +592,20 @@ def _prepare_chart_predicted_prices(
         proj_total_cap = float(max_total_move)
         proj_step_cap = float(max_step_move)
         conservative_projection = False
+        if tf_ratio <= 0.20:
+            # Source is much finer than chart interval (for example 1m -> 1d).
+            # Compress micro-noise before projection to avoid sawtooth guessed
+            # curves on higher-timeframe charts.
+            conservative_projection = True
+            if iv_chart == "1d":
+                proj_total_cap = min(proj_total_cap, 0.10)
+                proj_step_cap = min(proj_step_cap, 0.012)
+            elif iv_chart in ("1wk", "1mo"):
+                proj_total_cap = min(proj_total_cap, 0.14)
+                proj_step_cap = min(proj_step_cap, 0.020)
+            else:
+                proj_total_cap = min(proj_total_cap, max_total_move * 0.80)
+                proj_step_cap = min(proj_step_cap, max_step_move * 0.75)
         if tf_ratio >= 8.0:
             conservative_projection = True
             if iv_chart == "1m":
@@ -601,6 +619,24 @@ def _prepare_chart_predicted_prices(
                 proj_step_cap = min(proj_step_cap, max_step_move * 0.85)
 
         src_curve: list[float] = [float(anchor)] + [float(v) for v in cleaned]
+        if tf_ratio <= 0.20 and len(src_curve) >= 6:
+            chunk = int(
+                max(
+                    3,
+                    min(
+                        len(src_curve) - 1,
+                        round(1.0 / max(tf_ratio, 1e-4)),
+                    ),
+                )
+            )
+            compressed = [float(src_curve[0])]
+            for start in range(1, len(src_curve), chunk):
+                seg = src_curve[start:start + chunk]
+                if not seg:
+                    continue
+                compressed.append(float(np.median(np.asarray(seg, dtype=float))))
+            if len(compressed) >= 2:
+                src_curve = compressed
         # Clamp total move while preserving path curvature.
         raw_net = float(src_curve[-1] / max(anchor, 1e-8) - 1.0)
         net_ret = float(max(-proj_total_cap, min(proj_total_cap, raw_net)))

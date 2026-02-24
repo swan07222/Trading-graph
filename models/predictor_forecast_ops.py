@@ -40,12 +40,36 @@ def get_realtime_forecast_curve(
             1,
             int(horizon_steps if horizon_steps is not None else 30),
         )
+        default_lookback = int(self._default_lookback_bars(interval))
+        if lookback_bars is None and self._is_intraday_interval(interval):
+            try:
+                from data.fetcher_sources import BARS_PER_DAY
+
+                bars_per_day = float(BARS_PER_DAY.get(interval, 1.0) or 1.0)
+            except _PREDICTOR_RECOVERABLE_EXCEPTIONS:
+                fallback_bars_per_day = {
+                    "1m": 240.0,
+                    "2m": 120.0,
+                    "3m": 80.0,
+                    "5m": 48.0,
+                    "15m": 16.0,
+                    "30m": 8.0,
+                    "60m": 4.0,
+                    "1h": 4.0,
+                }
+                bars_per_day = float(fallback_bars_per_day.get(interval, 1.0))
+            # Forecast-curve charts are more stable when seeded from
+            # roughly one trading week of intraday context.
+            default_lookback = max(
+                default_lookback,
+                int(round(max(1.0, bars_per_day) * 7.0)),
+            )
         lookback = max(
             120,
             int(
                 lookback_bars
                 if lookback_bars is not None
-                else self._default_lookback_bars(interval)
+                else default_lookback
             ),
         )
 
@@ -329,6 +353,46 @@ def _apply_ensemble_result(self, ensemble_pred: Any, pred: Prediction) -> None:
             0.33,
             0.34,
             0.33,
+        )
+
+    # Guard against collapsed one-hot neutral outputs that can happen when
+    # model logits saturate under noisy intraday inputs.
+    if (
+        float(pred.prob_neutral) >= 0.985
+        and float(max(pred.prob_up, pred.prob_down)) <= 0.015
+    ):
+        trend = str(getattr(pred, "trend", "") or "").upper()
+        macd = str(getattr(pred, "macd_signal", "") or "").upper()
+        try:
+            rsi = float(getattr(pred, "rsi", 50.0) or 50.0)
+        except (TypeError, ValueError):
+            rsi = 50.0
+        if not np.isfinite(rsi):
+            rsi = 50.0
+
+        bias = 0.0
+        if trend == "UPTREND":
+            bias += 0.10
+        elif trend == "DOWNTREND":
+            bias -= 0.10
+        if "BULL" in macd:
+            bias += 0.06
+        elif "BEAR" in macd:
+            bias -= 0.06
+        bias += float(np.clip((50.0 - rsi) / 500.0, -0.06, 0.06))
+        bias = float(np.clip(bias, -0.20, 0.20))
+
+        neutral_mass = 0.72
+        side_mass = 1.0 - neutral_mass
+        up = float(np.clip((side_mass * 0.5) + (side_mass * bias), 0.08, side_mass - 0.08))
+        down = float(max(0.08, side_mass - up))
+        norm = float(max(1e-8, up + down + neutral_mass))
+        pred.prob_up = float(up / norm)
+        pred.prob_down = float(down / norm)
+        pred.prob_neutral = float(neutral_mass / norm)
+        _append_warning_once(
+            pred,
+            "Extreme-neutral probability output was rebalanced for stability",
         )
 
     pred.confidence = float(
@@ -877,4 +941,3 @@ def _apply_news_influence(
             pred.reasons.append(msg)
 
     return float(news_bias)
-

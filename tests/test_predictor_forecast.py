@@ -871,6 +871,32 @@ def test_apply_ensemble_result_clips_and_normalizes_probabilities() -> None:
     assert abs((pred.prob_down + pred.prob_neutral + pred.prob_up) - 1.0) < 1e-9
 
 
+def test_apply_ensemble_result_rebalances_extreme_neutral_output() -> None:
+    predictor = Predictor.__new__(Predictor)
+    predictor._high_precision = {"enabled": 0.0}
+
+    pred = Prediction(
+        stock_code="600519",
+        trend="UPTREND",
+        macd_signal="BULLISH",
+        rsi=42.0,
+    )
+    ensemble_pred = SimpleNamespace(
+        probabilities=np.array([0.0, 1.0, 0.0], dtype=float),
+        predicted_class=1,
+        confidence=0.92,
+        agreement=1.0,
+        entropy=0.02,
+    )
+
+    predictor._apply_ensemble_result(ensemble_pred, pred)
+
+    assert pred.prob_neutral < 0.95
+    assert pred.prob_up > pred.prob_down
+    assert abs((pred.prob_down + pred.prob_neutral + pred.prob_up) - 1.0) < 1e-9
+    assert any("Extreme-neutral probability output" in w for w in pred.warnings)
+
+
 def test_determine_signal_requires_edge_in_sideways_regime() -> None:
     predictor = Predictor.__new__(Predictor)
     pred = Prediction(
@@ -886,6 +912,23 @@ def test_determine_signal_requires_edge_in_sideways_regime() -> None:
 
     out = predictor._determine_signal(ensemble_pred, pred)
     assert out == Signal.HOLD
+
+
+def test_determine_signal_allows_neutral_class_edge_override() -> None:
+    predictor = Predictor.__new__(Predictor)
+    pred = Prediction(
+        stock_code="600519",
+        trend="UPTREND",
+        prob_up=0.62,
+        prob_down=0.30,
+    )
+    ensemble_pred = SimpleNamespace(
+        confidence=0.99,
+        predicted_class=1,  # neutral class, but directional edge is strong
+    )
+
+    out = predictor._determine_signal(ensemble_pred, pred)
+    assert out == Signal.BUY
 
 
 def test_generate_reasons_keeps_existing_gate_warnings() -> None:

@@ -370,8 +370,8 @@ def _analyze_stock(self) -> None:
             interval=infer_interval,
             forecast_minutes=infer_horizon,
             lookback_bars=infer_lookback,
-            skip_cache=True,  # FIX: Bypass prediction cache for fresh data
-            history_allow_online=True,  # FIX: Force online fetch
+            skip_cache=skip_cache,  # FIX: Bypass prediction cache for fresh data
+            history_allow_online=history_allow_online,  # FIX: Force online fetch
         )
 
     worker = WorkerThread(analyze, timeout_seconds=120)
@@ -503,16 +503,55 @@ def _on_analysis_done(self, pred: Any) -> None:
             }]
 
         if arr and current_price > 0:
+            iv_norm = self._normalize_interval_token(interval)
+            is_wide_interval = iv_norm in {"1d", "1wk", "1mo"}
             update_last = True
             prev_ref: float | None = None
-            if len(arr) >= 2:
+            try:
+                last_epoch = self._bar_bucket_epoch(
+                    arr[-1].get("_ts_epoch", arr[-1].get("timestamp")),
+                    interval,
+                )
+            except _UI_RECOVERABLE_EXCEPTIONS:
+                last_epoch = self._bar_bucket_epoch(time.time(), interval)
+
+            # Daily/weekly/monthly charts must never overwrite a finalized
+            # historical bar with a realtime quote from a later period.
+            if is_wide_interval:
+                now_bucket = self._bar_bucket_epoch(time.time(), interval)
+                same_period = int(last_epoch) == int(now_bucket)
+                if not same_period:
+                    # Seed the new wide-interval bar from current price itself.
+                    # Using previous close as open here creates an artificial
+                    # giant body at period start (daily/weekly/monthly).
+                    s = self._sanitize_ohlc(
+                        current_price,
+                        current_price,
+                        current_price,
+                        current_price,
+                        interval=interval,
+                        ref_close=None,
+                    )
+                    if s is not None:
+                        o, h, low, c = s
+                        arr.append(
+                            {
+                                "open": o,
+                                "high": h,
+                                "low": low,
+                                "close": c,
+                                "timestamp": self._epoch_to_iso(now_bucket),
+                                "_ts_epoch": float(now_bucket),
+                                "final": False,
+                                "interval": interval,
+                            }
+                        )
+                    update_last = False
+
+            if update_last and len(arr) >= 2:
                 try:
                     prev_epoch = self._bar_bucket_epoch(
                         arr[-2].get("_ts_epoch", arr[-2].get("timestamp")),
-                        interval,
-                    )
-                    last_epoch = self._bar_bucket_epoch(
-                        arr[-1].get("_ts_epoch", arr[-1].get("timestamp")),
                         interval,
                     )
                     if not self._is_intraday_day_boundary(
@@ -535,6 +574,7 @@ def _on_analysis_done(self, pred: Any) -> None:
                         update_last = False
                 except _UI_RECOVERABLE_EXCEPTIONS:
                     update_last = True
+
             if update_last:
                 s = self._sanitize_ohlc(
                     float(arr[-1].get("open", current_price) or current_price),

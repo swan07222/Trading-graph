@@ -211,6 +211,8 @@ def _on_price_updated(self: Any, code: str, price: float) -> None:
                         # boundaries. Roll to a synthetic new bucket so the
                         # live candle and guessed graph do not freeze.
                         last_close = float(last.get("close", bar_price) or bar_price)
+                        iv_norm = self._normalize_interval_token(interval)
+                        is_wide_interval = iv_norm in ("1d", "1wk", "1mo")
                         day_boundary = self._is_intraday_day_boundary(
                             last_bucket,
                             now_bucket,
@@ -218,7 +220,11 @@ def _on_price_updated(self: Any, code: str, price: float) -> None:
                         )
                         ref_close_new = (
                             float(last_close)
-                            if (last_close > 0 and not day_boundary)
+                            if (
+                                last_close > 0
+                                and (not day_boundary)
+                                and (not is_wide_interval)
+                            )
                             else None
                         )
 
@@ -353,12 +359,22 @@ def _on_price_updated(self: Any, code: str, price: float) -> None:
                 last.get("_ts_epoch", last.get("timestamp", bucket_iso))
             )
             last_bucket = float(int(last_epoch // bucket_s) * int(bucket_s))
+            iv_norm = self._normalize_interval_token(interval)
+            is_wide_interval = iv_norm in ("1d", "1wk", "1mo")
             day_boundary = self._is_intraday_day_boundary(
                 last_bucket,
                 bucket_epoch,
                 interval,
             )
-            ref_close = float(prev_close) if (prev_close > 0 and not day_boundary) else None
+            ref_close = (
+                float(prev_close)
+                if (
+                    prev_close > 0
+                    and (not day_boundary)
+                    and (not is_wide_interval)
+                )
+                else None
+            )
             price_for_bar = float(price)
             if ref_close and ref_close > 0:
                 clamp_cap = float(self._synthetic_tick_jump_cap(interval))
@@ -987,6 +1003,8 @@ def _prepare_chart_bars_for_interval(
                     if (
                         span > boundary_span_cap
                         or body > boundary_body_cap
+                        or upper_wick > boundary_wick_cap
+                        or lower_wick > boundary_wick_cap
                         or ref_jump > boundary_jump_cap
                     ):
                         dropped_shape += 1

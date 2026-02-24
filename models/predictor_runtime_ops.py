@@ -533,7 +533,7 @@ def _forecast_seed(
                     # Quantize returns to reduce sensitivity to small changes
                     returns_quant = np.round(returns * 100).astype(np.int64)
                     # Hash the return pattern
-                    for i, val in enumerate(returns_quant[-min(20, len(returns_quant)):]):
+                    for _i, val in enumerate(returns_quant[-min(20, len(returns_quant)):]):
                         recent_hash = ((recent_hash * 137) + int(val)) & 0x7FFFFFFF
                 else:
                     # Fallback for single price
@@ -1031,6 +1031,13 @@ def _determine_signal(self, ensemble_pred: Any, pred: Prediction) -> Signal:
             return Signal.SELL
         elif confidence >= CONFIG.SELL_THRESHOLD:
             return Signal.SELL
+    else:  # NEUTRAL class: allow edge override when probabilities disagree.
+        edge_override_floor = edge_floor + 0.04
+        if confidence >= max(float(CONFIG.BUY_THRESHOLD), 0.60):
+            if edge >= edge_override_floor:
+                return Signal.BUY
+            if edge <= -edge_override_floor:
+                return Signal.SELL
 
     return Signal.HOLD
 
