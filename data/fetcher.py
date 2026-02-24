@@ -14,6 +14,7 @@ import pandas as pd
 from config.runtime_env import env_flag as _read_env_flag
 from config.runtime_env import env_text as _read_env_text
 from config.settings import CONFIG
+from core.symbols import clean_code as _clean_code, validate_stock_code as _validate_stock_code
 from data.cache import get_cache
 from data.database import get_database
 from data.fetcher_clean_ops import (
@@ -592,65 +593,23 @@ class DataFetcher:
 
     @staticmethod
     def clean_code(code: str) -> str:
-        """Normalize a stock code to bare 6-digit form."""
-        if code is None:
-            return ""
-        s = str(code).strip()
-        if not s:
-            return ""
-        s = s.replace(" ", "").replace("-", "").replace("_", "")
+        """Normalize a stock code to bare 6-digit form.
 
-        prefixes = (
-            "sh.", "sz.", "bj.", "SH.", "SZ.", "BJ.",
-            "sh", "sz", "bj", "SH", "SZ", "BJ",
-        )
-        for p in prefixes:
-            if s.startswith(p) and len(s) > len(p):
-                candidate = s[len(p):]
-                if candidate.replace(".", "").isdigit():
-                    s = candidate
-                    break
-
-        suffixes = (".SS", ".SZ", ".BJ", ".ss", ".sz", ".bj")
-        for suf in suffixes:
-            if s.endswith(suf):
-                s = s[: -len(suf)]
-                break
-
-        digits = "".join(ch for ch in s if ch.isdigit())
-        return digits.zfill(6) if digits else ""
+        Delegates to core.symbols.clean_code for canonical implementation.
+        """
+        return _clean_code(code)
 
     @staticmethod
     def validate_stock_code(code: str) -> tuple[bool, str]:
         """Validate a stock code format.
 
+        Delegates to core.symbols.validate_stock_code for canonical implementation.
+
         Returns:
             (is_valid, error_message) tuple.
             If valid, error_message is empty string.
         """
-        cleaned = DataFetcher.clean_code(code)
-        if not cleaned:
-            return False, f"Invalid stock code format: '{code}' (empty after cleaning)"
-        if not cleaned.isdigit():
-            return False, f"Invalid stock code format: '{code}' (must be numeric)"
-        if len(cleaned) != 6:
-            return False, f"Invalid stock code format: '{code}' (must be 6 digits, got {len(cleaned)})"
-        # Basic range checks for CN stocks
-        if cleaned.startswith("000") or cleaned.startswith("001"):
-            return True, ""  # SZSE main board
-        if cleaned.startswith("002"):
-            return True, ""  # SME board
-        if cleaned.startswith("300") or cleaned.startswith("301"):
-            return True, ""  # ChiNext
-        if cleaned.startswith("600") or cleaned.startswith("601") or cleaned.startswith("603") or cleaned.startswith("605"):
-            return True, ""  # SSE main board
-        if cleaned.startswith("688"):
-            return True, ""  # STAR Market
-        if cleaned.startswith("4") or cleaned.startswith("8") or cleaned.startswith("9"):
-            return True, ""  # BSE
-        # Unknown but valid format - allow with warning
-        log.debug("Stock code %s is in unknown range but format is valid", cleaned)
-        return True, ""
+        return _validate_stock_code(code)
 
     @staticmethod
     def _normalize_interval_token(interval: str | None) -> str:

@@ -8,6 +8,7 @@ from typing import Any
 from PyQt6.QtCore import QThread, pyqtSignal
 
 from config.settings import CONFIG
+from core.symbols import normalize_stock_code as _normalize_stock_code, validate_stock_code as _validate_stock_code
 from utils.logger import get_logger
 
 log = get_logger(__name__)
@@ -26,44 +27,20 @@ def _lazy_get(module: str, name: str) -> Any:
 
 
 def validate_stock_code(code: str) -> bool:
-    """Validate that a stock code is a valid 6-digit Chinese stock code."""
-    if not code:
-        return False
-    digits = "".join(c for c in str(code).strip() if c.isdigit())
-    if len(digits) != 6:
-        return False
-    valid_prefixes = (
-        "000",
-        "001",
-        "002",
-        "003",
-        "300",
-        "301",
-        "600",
-        "601",
-        "603",
-        "605",
-        "688",
-        "83",
-        "87",
-        "43",
-    )
-    return digits.startswith(valid_prefixes)
+    """Validate that a stock code is a valid 6-digit Chinese stock code.
+
+    Delegates to core.symbols.validate_stock_code for canonical implementation.
+    """
+    is_valid, _ = _validate_stock_code(code)
+    return is_valid
 
 
 def normalize_stock_code(text: str) -> str:
-    """Normalize stock code: strip prefixes/suffixes, keep digits, zero-pad."""
-    if not text:
-        return ""
-    normalized = str(text).strip()
-    for prefix in ("sh", "sz", "SH", "SZ", "bj", "BJ"):
-        if normalized.startswith(prefix):
-            normalized = normalized[len(prefix) :]
-    for suffix in (".SS", ".SZ", ".BJ"):
-        if normalized.endswith(suffix):
-            normalized = normalized[: -len(suffix)]
-    normalized = "".join(c for c in normalized if c.isdigit())
-    return normalized.zfill(6) if normalized else ""
+    """Normalize stock code: strip prefixes/suffixes, keep digits, zero-pad.
+
+    Delegates to core.symbols.normalize_stock_code for canonical implementation.
+    """
+    return _normalize_stock_code(text)
 
 
 def sanitize_watch_list(

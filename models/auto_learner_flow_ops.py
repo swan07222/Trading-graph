@@ -295,7 +295,10 @@ def validate_stock_code(
     *,
     get_fetcher_fn: Any | None = None,
 ) -> dict[str, Any]:
-    """Validate that a stock code exists and has sufficient data."""
+    """Validate that a stock code exists and has sufficient data.
+
+    Uses core.symbols.validate_stock_code for canonical validation.
+    """
     code = str(code).strip()
     if not code:
         return {

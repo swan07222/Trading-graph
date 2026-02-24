@@ -40,7 +40,11 @@ def load_baseline_entries(path: Path) -> set[str]:
     return rows
 
 
-def save_baseline_entries(path: Path, issues: set[str], header: str) -> None:
+def save_baseline_entries(
+    path: Path,
+    issues: set[str],
+    header: str = "# mypy baseline",
+) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     body = [
         header,

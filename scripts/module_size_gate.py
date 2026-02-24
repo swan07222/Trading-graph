@@ -4,6 +4,8 @@ import argparse
 import json
 from pathlib import Path
 
+from scripts.gate_common import normalize_path, iter_python_files
+
 DEFAULT_TARGETS: tuple[str, ...] = (
     "main.py",
     "analysis",
@@ -22,33 +24,6 @@ BASELINE_HEADER = [
     "# Format: path:line_count",
     "",
 ]
-
-
-def _normalize_path(path: str | Path) -> str:
-    return str(path).strip().replace("\\", "/")
-
-
-def _iter_python_files(targets: tuple[str, ...]) -> list[Path]:
-    out: list[Path] = []
-    seen: set[str] = set()
-    for target in targets:
-        candidate = Path(str(target).strip())
-        if not candidate.exists():
-            continue
-        if candidate.is_file():
-            if candidate.suffix.lower() == ".py":
-                norm = _normalize_path(candidate)
-                if norm not in seen:
-                    out.append(candidate)
-                    seen.add(norm)
-            continue
-        for py_file in sorted(candidate.rglob("*.py")):
-            norm = _normalize_path(py_file)
-            if norm in seen:
-                continue
-            out.append(py_file)
-            seen.add(norm)
-    return out
 
 
 def collect_oversized_modules(targets: tuple[str, ...], max_lines: int) -> dict[str, int]:

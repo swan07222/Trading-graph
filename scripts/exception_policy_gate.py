@@ -5,6 +5,8 @@ import ast
 import json
 from pathlib import Path
 
+from scripts.gate_common import normalize_path, iter_python_files
+
 DEFAULT_TARGETS: tuple[str, ...] = (
     "trading/executor.py",
     "data/fetcher.py",
@@ -23,33 +25,6 @@ BASELINE_HEADER = [
     "# Format: path:line:code",
     "",
 ]
-
-
-def _normalize_path(path: str | Path) -> str:
-    return str(path).strip().replace("\\", "/")
-
-
-def _iter_python_files(targets: tuple[str, ...]) -> list[Path]:
-    out: list[Path] = []
-    seen: set[str] = set()
-    for target in targets:
-        candidate = Path(str(target).strip())
-        if not candidate.exists():
-            continue
-        if candidate.is_file():
-            if candidate.suffix.lower() == ".py":
-                norm = _normalize_path(candidate)
-                if norm not in seen:
-                    out.append(candidate)
-                    seen.add(norm)
-            continue
-        for py_file in sorted(candidate.rglob("*.py")):
-            norm = _normalize_path(py_file)
-            if norm in seen:
-                continue
-            out.append(py_file)
-            seen.add(norm)
-    return out
 
 
 def _is_broad_exception_type(node: ast.expr | None) -> bool:
@@ -159,7 +134,7 @@ def summarize_issue_counts(issues: set[str]) -> dict[str, dict[str, int]]:
             path_part, _line_part, code = row.rsplit(":", 2)
         except ValueError:
             continue
-        p = _normalize_path(path_part)
+        p = normalize_path(path_part)
         code_key = str(code).strip().lower()
         if not p or not code_key:
             continue
