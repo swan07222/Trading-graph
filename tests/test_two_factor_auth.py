@@ -1,13 +1,12 @@
 """Tests for two-factor authentication module."""
-import pytest
-from datetime import datetime, timedelta
-from pathlib import Path
 import tempfile
+from pathlib import Path
+
+import pytest
 
 from utils.two_factor_auth import (
-    TwoFactorAuth,
     TOTPAuthenticator,
-    User2FA,
+    TwoFactorAuth,
 )
 
 

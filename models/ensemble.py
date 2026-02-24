@@ -956,12 +956,16 @@ class EnsembleModel:
 
         manifest_path = path_obj.parent / f"model_manifest_{path_obj.stem}.json"
 
-        if atomic_write_json is not None:
-            atomic_write_json(manifest_path, manifest)
-        else:
-            import json
-            with open(manifest_path, 'w') as f:
-                json.dump(manifest, f, indent=2)
+        # Save manifest with error handling
+        try:
+            if atomic_write_json is not None:
+                atomic_write_json(manifest_path, manifest)
+            else:
+                import json
+                with open(manifest_path, 'w', encoding='utf-8') as f:
+                    json.dump(manifest, f, indent=2)
+        except (OSError, RuntimeError, TypeError, ValueError) as e:
+            log.warning("Failed to write model manifest %s: %s", manifest_path, e)
 
         log.info(f"Ensemble saved -> {path_obj}")
 

@@ -19,6 +19,7 @@ import hmac
 import json
 import os
 import struct
+import threading
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
@@ -26,7 +27,6 @@ from pathlib import Path
 from typing import Any
 
 from utils.logger import get_logger
-from utils.security import get_secure_storage
 
 log = get_logger(__name__)
 
@@ -191,8 +191,9 @@ class TOTPAuthenticator:
             QR code as base64-encoded PNG
         """
         try:
-            import qrcode
             import io
+
+            import qrcode
             
             qr = qrcode.QRCode(
                 version=1,
@@ -244,8 +245,10 @@ class TwoFactorAuth:
         """
         self.storage_path = storage_path
         self._cache: dict[str, User2FA] = {}
+        self._cache_lock = threading.RLock()  # Protect cache access
         self._authenticator = TOTPAuthenticator()
         self._storage: Any | None = None  # Lazy init to avoid env dependency in tests
+        self._storage_lock = threading.RLock()  # Protect _storage initialization
 
         # Rate limiting
         self._failed_attempts: dict[str, list[datetime]] = {}
@@ -254,12 +257,21 @@ class TwoFactorAuth:
 
     def _get_storage(self) -> Any:
         """Get storage instance, using custom path if provided."""
-        if self._storage is None:
+        # Fast path: already initialized
+        if self._storage is not None:
+            return self._storage
+
+        # Thread-safe initialization
+        with self._storage_lock:
+            if self._storage is not None:
+                return self._storage
+
             if self.storage_path is not None:
                 # Create a dedicated SecureStorage for this instance
-                from utils.security import SecureStorage
                 # If storage_path is a directory, create a file path inside it
                 import os
+
+                from utils.security import SecureStorage
                 storage_path = Path(self.storage_path)
                 if storage_path.is_dir():
                     storage_file = storage_path / ".tfa_storage.enc"
@@ -428,16 +440,16 @@ class TwoFactorAuth:
     ) -> bool:
         """Verify backup code."""
         code = code.strip().upper().replace('-', '')
-        
+
         for i, backup_code in enumerate(user_config.backup_codes):
             if backup_code.upper() == code:
                 # Mark as used
                 user_config.backup_codes.pop(i)
                 user_config.last_used = datetime.now()
-                self._save_user(user_id=user_config.user_id)
+                self._save_user(user_config.user_id)
                 log.info(f"Backup code used for user {user_config.user_id}")
                 return True
-        
+
         return False
     
     def _is_rate_limited(self, user_id: str) -> bool:
@@ -553,56 +565,126 @@ class TwoFactorAuth:
         }
     
     def _save_user(self, user_id: str) -> None:
-        """Save user 2FA config."""
+        """Save user 2FA config to encrypted storage.
+
+        Args:
+            user_id: User identifier
+
+        Note:
+            This method logs errors but does not raise exceptions to avoid
+            disrupting user workflows. Check logs for save failures.
+        """
         # In production, use secure storage
-        storage = self._get_storage()
+        try:
+            storage = self._get_storage()
+        except Exception as e:
+            log.error(f"Failed to initialize storage for user {user_id}: {e}")
+            return
 
-        user_config = self._cache.get(user_id)
-        if user_config:
-            data = {
-                'user_id': user_config.user_id,
-                'enabled': user_config.enabled,
-                'secret': user_config.secret,
-                'backup_codes': user_config.backup_codes,
-                'created_at': user_config.created_at.isoformat() if user_config.created_at else None,
-                'last_used': user_config.last_used.isoformat() if user_config.last_used else None,
-                'failed_attempts': user_config.failed_attempts,
-                'locked_until': user_config.locked_until.isoformat() if user_config.locked_until else None,
-            }
+        # Thread-safe cache access
+        with self._cache_lock:
+            user_config = self._cache.get(user_id)
+            if not user_config:
+                log.warning(f"Cannot save 2FA config for user {user_id}: not in cache")
+                return
 
-            # Encrypt and store
+            # Validate required fields before saving
+            if not user_config.user_id or not user_config.user_id.strip():
+                log.error(f"Cannot save 2FA config: invalid user_id for user {user_id}")
+                return
+
+            # Build data dictionary with validation
+            try:
+                data = {
+                    'user_id': user_config.user_id,
+                    'enabled': bool(user_config.enabled),
+                    'secret': str(user_config.secret) if user_config.secret else '',
+                    'backup_codes': list(user_config.backup_codes) if user_config.backup_codes else [],
+                    'created_at': user_config.created_at.isoformat() if user_config.created_at else None,
+                    'last_used': user_config.last_used.isoformat() if user_config.last_used else None,
+                    'failed_attempts': int(user_config.failed_attempts) if user_config.failed_attempts is not None else 0,
+                    'locked_until': user_config.locked_until.isoformat() if user_config.locked_until else None,
+                }
+            except (TypeError, ValueError, AttributeError) as e:
+                log.error(f"Failed to serialize 2FA config for user {user_id}: {e}")
+                return
+
+        # Encrypt and store with error handling (outside cache lock)
+        try:
             storage.set(f"2fa_{user_id}", json.dumps(data))
+        except (OSError, RuntimeError, TypeError, ValueError) as e:
+            log.error(f"Failed to save 2FA config for user {user_id}: {e}")
+            # Remove from cache to avoid stale data
+            with self._cache_lock:
+                self._cache.pop(user_id, None)
+            return
+
+        log.debug(f"Saved 2FA config for user {user_id}")
 
     def _load_user(self, user_id: str) -> User2FA | None:
-        """Load user 2FA config."""
-        # Check cache first
-        if user_id in self._cache:
-            return self._cache[user_id]
+        """Load user 2FA config from encrypted storage.
+
+        Args:
+            user_id: User identifier
+
+        Returns:
+            User2FA config if found and valid, None otherwise
+        """
+        # Check cache first (thread-safe)
+        with self._cache_lock:
+            if user_id in self._cache:
+                return self._cache[user_id]
 
         # Load from storage
-        storage = self._get_storage()
-        data_str = storage.get(f"2fa_{user_id}")
-        
+        try:
+            storage = self._get_storage()
+        except Exception as e:
+            log.error(f"Failed to initialize storage for loading user {user_id}: {e}")
+            return None
+
+        try:
+            data_str = storage.get(f"2fa_{user_id}")
+        except (OSError, RuntimeError) as e:
+            log.error(f"Failed to read 2FA config for user {user_id}: {e}")
+            return None
+
         if not data_str:
             return None
-        
+
         try:
             data = json.loads(data_str)
+        except json.JSONDecodeError as e:
+            log.error(f"Failed to parse 2FA config for user {user_id}: {e}")
+            return None
+
+        if not isinstance(data, dict):
+            log.error(f"Invalid 2FA config format for user {user_id}: expected dict")
+            return None
+
+        # Validate required field
+        if not isinstance(data.get('user_id'), str) or not data['user_id'].strip():
+            log.error(f"Invalid user_id in 2FA config for user {user_id}")
+            return None
+
+        try:
             user_config = User2FA(
                 user_id=data['user_id'],
-                enabled=data.get('enabled', False),
-                secret=data.get('secret', ''),
-                backup_codes=data.get('backup_codes', []),
+                enabled=bool(data.get('enabled', False)),
+                secret=str(data.get('secret', '')) if data.get('secret') else '',
+                backup_codes=list(data.get('backup_codes', [])) if data.get('backup_codes') else [],
                 created_at=datetime.fromisoformat(data['created_at']) if data.get('created_at') else None,
                 last_used=datetime.fromisoformat(data['last_used']) if data.get('last_used') else None,
-                failed_attempts=data.get('failed_attempts', 0),
+                failed_attempts=int(data.get('failed_attempts', 0)) if data.get('failed_attempts') is not None else 0,
                 locked_until=datetime.fromisoformat(data['locked_until']) if data.get('locked_until') else None,
             )
-            self._cache[user_id] = user_config
-            return user_config
-        except Exception as e:
-            log.error(f"Failed to load 2FA config: {e}")
+        except (TypeError, ValueError, AttributeError) as e:
+            log.error(f"Failed to deserialize 2FA config for user {user_id}: {e}")
             return None
+
+        # Thread-safe cache update
+        with self._cache_lock:
+            self._cache[user_id] = user_config
+        return user_config
 
 
 # Global instance

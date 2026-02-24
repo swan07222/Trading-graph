@@ -1,14 +1,15 @@
 """Tests for ML model explainability module."""
-import pytest
-import numpy as np
-from pathlib import Path
 import tempfile
+from pathlib import Path
+
+import numpy as np
+import pytest
 
 from models.explainability import (
-    ModelExplainer,
-    LocalExplanation,
-    GlobalExplanation,
     FeatureImportance,
+    GlobalExplanation,
+    LocalExplanation,
+    ModelExplainer,
     explain_prediction,
 )
 

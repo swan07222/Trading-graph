@@ -896,21 +896,23 @@ class AggregatedFeed(DataFeed):
 class FeedManager:
     """Central manager for all data feeds."""
 
-    _instance = None
+    _instance: "FeedManager | None" = None
     _cls_lock = threading.Lock()
+    _initialized: bool
 
     def __new__(cls: type["FeedManager"]) -> "FeedManager":
         if cls._instance is None:
             with cls._cls_lock:
                 if cls._instance is None:
-                    cls._instance = super().__new__(cls)
-                    cls._instance._initialized = False
+                    instance = super().__new__(cls)
+                    object.__setattr__(instance, "_initialized", False)
+                    cls._instance = instance
         return cls._instance
 
     def __init__(self) -> None:
-        if hasattr(self, "_initialized") and self._initialized:
+        if getattr(self, "_initialized", False):
             return
-        self._initialized = True
+        object.__setattr__(self, "_initialized", True)
         self._feeds: dict[str, DataFeed] = {}
         self._active_feed: DataFeed | None = None
         self._subscriptions: set[str] = set()

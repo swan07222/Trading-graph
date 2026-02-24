@@ -638,9 +638,9 @@ class NewsScraper:
                 mtime = cache_path.stat().st_mtime
                 if (time.time() - mtime) < ttl_seconds:
                     with open(cache_path, "rb") as f:
-                        items = pickle.load(f)
-                    if isinstance(items, list):
-                        return items
+                        cached_items = pickle.load(f)
+                    if isinstance(cached_items, list):
+                        return cached_items
         except Exception:
             pass
 

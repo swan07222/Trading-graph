@@ -105,9 +105,9 @@ class MonteCarloDropout:
             
             predictions: list[np.ndarray] = []
             
-            # Enable training mode for dropout during inference
+            # Enable training mode only for nn.Dropout layers (MC Dropout)
             for module in model.modules():
-                if hasattr(module, 'dropout'):
+                if isinstance(module, torch.nn.Dropout):
                     module.train()
             
             # Generate stochastic predictions
@@ -285,9 +285,9 @@ class DeepEnsemble:
             # Uncertainty from ensemble disagreement (epistemic)
             epistemic = np.std(predictions, axis=0)
             
-            # Aleatoric estimation (average individual uncertainty)
-            aleatoric = np.mean(np.abs(predictions - mean_pred), axis=0)
-            
+            # Aleatoric estimation: use std of absolute deviations (consistent units)
+            aleatoric = np.std(np.abs(predictions - mean_pred), axis=0)
+
             total_uncertainty = np.sqrt(epistemic ** 2 + aleatoric ** 2)
             
             decomposition = UncertaintyDecomposition(
@@ -314,9 +314,14 @@ class DeepEnsemble:
             correlations = []
             for i in range(len(self._models)):
                 for _j in range(i + 1, len(self._models)):
-                    # Simplified - would need actual predictions
-                    correlations.append(0.9)  # Placeholder
+                    # Placeholder: actual agreement requires stored per-sample predictions.
+                    # Log a warning so callers are aware the metric is not real.
+                    correlations.append(0.9)
 
+            log.debug(
+                "get_model_agreement: returning placeholder 0.9 "
+                "(no per-sample prediction history stored yet)"
+            )
             return float(np.mean(correlations)) if correlations else 1.0
 
 
@@ -365,16 +370,17 @@ class ConformalPredictor:
                 score = abs(pred - y)
                 self._calibration_scores.append(score)
             
-            # Calculate quantile for desired coverage
+            # Calculate quantile for desired coverage (finite-sample valid formula)
             n = len(self._calibration_scores)
             if n > 0:
                 alpha = 1 - self.coverage
-                quantile_level = np.ceil((n + 1) * (1 - alpha)) / n
-                quantile_level = min(quantile_level, 1.0)
-                self._quantile = np.quantile(
-                    self._calibration_scores,
-                    quantile_level,
-                )
+                quantile_idx = int(np.ceil((n + 1) * (1 - alpha)))
+                if quantile_idx > n:
+                    # Not enough calibration data to guarantee coverage
+                    self._quantile = float("inf")
+                else:
+                    sorted_scores = np.sort(self._calibration_scores)
+                    self._quantile = float(sorted_scores[quantile_idx - 1])
     
     def predict_with_interval(
         self,

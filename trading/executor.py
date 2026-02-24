@@ -96,6 +96,16 @@ class ExecutionEngine:
     _ACTIVE_ENGINES_LOCK = threading.RLock()
     _ACTIVE_ENGINES: weakref.WeakSet[ExecutionEngine] = weakref.WeakSet()
 
+    # Thread attributes (initialized in _exec_init_impl)
+    _exec_thread: threading.Thread | None
+    _fill_sync_thread: threading.Thread | None
+    _status_sync_thread: threading.Thread | None
+    _recon_thread: threading.Thread | None
+    _reconnect_thread: threading.Thread | None
+    _watchdog_thread: threading.Thread | None
+    _checkpoint_thread: threading.Thread | None
+    _processed_fill_ids: set[str]
+
     def __init__(self, mode: TradingMode = None) -> None:
         _exec_init_impl(self, mode=mode)
 

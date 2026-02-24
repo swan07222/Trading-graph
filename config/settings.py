@@ -415,12 +415,13 @@ class Config:
             self._model_dir_override: str | None = None
 
             # Sentinel-based caching for path properties
-            self._data_dir_cached: Any = _SENTINEL
-            self._model_dir_cached: Any = _SENTINEL
-            self._model_dir_cached_override: Any = _SENTINEL
-            self._log_dir_cached: Any = _SENTINEL
-            self._cache_dir_cached: Any = _SENTINEL
-            self._audit_dir_cached: Any = _SENTINEL
+            # Use `object` as sentinel type to avoid Any propagation
+            self._data_dir_cached: Path | object = _SENTINEL
+            self._model_dir_cached: Path | object = _SENTINEL
+            self._model_dir_cached_override: str | None | object = _SENTINEL
+            self._log_dir_cached: Path | object = _SENTINEL
+            self._cache_dir_cached: Path | object = _SENTINEL
+            self._audit_dir_cached: Path | object = _SENTINEL
 
             self.stock_pool: list[str] = [
                 "600519",
@@ -592,7 +593,7 @@ class Config:
     def data_dir(self) -> Path:
         if self._data_dir_cached is _SENTINEL:
             self._data_dir_cached = self._base_dir / "data_storage"
-        return self._data_dir_cached
+        return self._data_dir_cached  # type: ignore[return-value]
 
     @property
     def model_dir(self) -> Path:
@@ -606,25 +607,25 @@ class Config:
             else:
                 self._model_dir_cached = self._base_dir / "models_saved"
             self._model_dir_cached_override = override
-        return self._model_dir_cached
+        return self._model_dir_cached  # type: ignore[return-value]
 
     @property
     def log_dir(self) -> Path:
         if self._log_dir_cached is _SENTINEL:
             self._log_dir_cached = self._base_dir / "logs"
-        return self._log_dir_cached
+        return self._log_dir_cached  # type: ignore[return-value]
 
     @property
     def cache_dir(self) -> Path:
         if self._cache_dir_cached is _SENTINEL:
             self._cache_dir_cached = self._base_dir / "cache"
-        return self._cache_dir_cached
+        return self._cache_dir_cached  # type: ignore[return-value]
 
     @property
     def audit_dir(self) -> Path:
         if self._audit_dir_cached is _SENTINEL:
             self._audit_dir_cached = self._base_dir / "audit"
-        return self._audit_dir_cached
+        return self._audit_dir_cached  # type: ignore[return-value]
 
     def ensure_dirs(self) -> None:
         """Create all directories explicitly. Call once at startup."""
@@ -731,7 +732,7 @@ class Config:
             value = os.environ.get(full_key)
             if value is not None and value.strip():
                 try:
-                    self._set_nested(attr_path, converter(value.strip()))
+                    self._set_nested(attr_path, converter(value.strip()))  # type: ignore[operator]
                 except (AttributeError, TypeError, ValueError) as e:
                     _log.warning(
                         "Failed to apply env %s=%r: %s",

@@ -223,7 +223,7 @@ class MainApp(MainAppCommonMixin, QMainWindow):
     Features:
     - Real-time signal monitoring with multiple intervals
     - Custom AI model with ensemble neural networks
-    - Professional dark theme
+    - Professional modern theme
     - Live/Paper trading support
     - Comprehensive risk management
     - AI-generated price forecast curves
@@ -238,7 +238,7 @@ class MainApp(MainAppCommonMixin, QMainWindow):
     def __init__(self) -> None:
         super().__init__()
 
-        self.setWindowTitle("AI Stock Trading System v2.0")
+        self.setWindowTitle("Trading Graph Pro")
         self.setMinimumSize(980, 640)
         self._set_initial_window_geometry()
 

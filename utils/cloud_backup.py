@@ -435,7 +435,6 @@ class CloudBackup:
         """Load manifest from cloud storage."""
         try:
             if self.config.provider.lower() == "s3":
-                import io
                 
                 response = self._client.get_object(
                     Bucket=self.config.bucket_name,

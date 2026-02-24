@@ -2,14 +2,11 @@ from __future__ import annotations
 
 import argparse
 import importlib.util
-import sys
 from pathlib import Path
 
-from scripts.gate_common import normalize_path
 from scripts.typecheck_common import (
-    ERROR_RE,
     load_baseline_entries,
-    parse_mypy_errors,
+    parse_mypy_errors,  # noqa: F401 - used by tests
     run_mypy,
     save_baseline_entries,
 )

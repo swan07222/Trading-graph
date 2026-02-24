@@ -8,6 +8,7 @@ from __future__ import annotations
 import cProfile
 import functools
 import linecache
+import logging
 import os
 import pstats
 import sys
@@ -18,7 +19,6 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime
 from io import StringIO
-import logging
 from pathlib import Path
 from typing import Any
 

@@ -105,7 +105,6 @@ def make_lazy_getter(module: str, name: str, *, cache: bool = False, ttl: float 
         A callable that performs lazy import on first call.
     """
     if cache:
-        lazy: CachedLazyImport[Any] = CachedLazyImport(module, name, ttl=ttl)
+        return CachedLazyImport(module, name, ttl=ttl)  # type: ignore[return-value]
     else:
-        lazy: LazyImport[Any] = LazyImport(module, name)
-    return lazy
+        return LazyImport(module, name)  # type: ignore[return-value]

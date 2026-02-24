@@ -171,21 +171,28 @@ class ChinaNetworkOptimizer:
     - DNS resolution optimization
     """
 
-    _instance: "ChinaNetworkOptimizer | None" = None
+    _instance: ChinaNetworkOptimizer | None = None
     _lock = threading.Lock()
+    _initialized: bool
 
-    def __new__(cls) -> "ChinaNetworkOptimizer":
+    def __new__(cls) -> ChinaNetworkOptimizer:
         if cls._instance is None:
             with cls._lock:
                 if cls._instance is None:
-                    cls._instance = super().__new__(cls)
-                    cls._instance._initialized = False
+                    instance = super().__new__(cls)
+                    cls._instance = instance
+                    # Mark as not initialized yet - __init__ will set it
+                    object.__setattr__(instance, "_initialized", False)
         return cls._instance
 
     def __init__(self) -> None:
-        if hasattr(self, "_initialized") and self._initialized:
+        # Double-check initialization to prevent race conditions
+        if getattr(self, "_initialized", False):
             return
-        self._initialized = True
+        
+        # Mark as initialized BEFORE actual initialization
+        # This prevents re-entry if __init__ is called from multiple threads
+        object.__setattr__(self, "_initialized", True)
 
         # Quality tracking
         self._endpoint_quality: dict[str, dict[str, EndpointQuality]] = {}
@@ -270,7 +277,10 @@ class ChinaNetworkOptimizer:
             self._sessions.clear()
 
     def _get_session(self, provider: str) -> requests.Session:
-        """Get or create a cached session with connection pooling."""
+        """Get or create a cached session with connection pooling.
+        
+        Thread-safe: Uses locks to protect proxy configuration access.
+        """
         with self._session_lock:
             if provider in self._sessions:
                 return self._sessions[provider]
@@ -278,7 +288,7 @@ class ChinaNetworkOptimizer:
             # Create new session with optimized settings for China
             session = requests.Session()
 
-            # Connection pooling
+            # Connection pooling with retry logic
             adapter = ChinaHTTPAdapter(
                 pool_connections=10,
                 pool_maxsize=50,
@@ -303,11 +313,17 @@ class ChinaNetworkOptimizer:
                 "Connection": "keep-alive",
             })
 
-            # Configure proxy if enabled
-            if self._proxy_enabled and self._proxy_url:
+            # Configure proxy if enabled (thread-safe access)
+            # Note: We're already holding _session_lock, but we need
+            # _quality_lock for proxy config to avoid race conditions
+            with self._quality_lock:
+                proxy_enabled = self._proxy_enabled
+                proxy_url = self._proxy_url
+            
+            if proxy_enabled and proxy_url:
                 session.proxies.update({
-                    "http": self._proxy_url,
-                    "https": self._proxy_url,
+                    "http": proxy_url,
+                    "https": proxy_url,
                 })
 
             self._sessions[provider] = session
@@ -414,29 +430,58 @@ class ChinaNetworkOptimizer:
             return False, latency_ms
 
     def run_endpoint_probe(self, provider: str) -> None:
-        """Run connectivity probe for all endpoints of a provider."""
+        """Run connectivity probe for all endpoints of a provider.
+        
+        Thread-safe: Uses ThreadPoolExecutor with proper error handling.
+        """
         endpoints = CHINA_ENDPOINTS.get(provider, [])
+        if not endpoints:
+            log.debug(f"No endpoints configured for provider: {provider}")
+            return
 
-        def test_one(endpoint: str) -> None:
+        def test_one(endpoint: str) -> tuple[str, bool, float]:
+            """Test single endpoint and return results."""
             success, latency = self.test_endpoint(endpoint)
-            self.update_endpoint_quality(provider, endpoint, success, latency)
+            return endpoint, success, latency
 
-        # Test endpoints concurrently
-        from concurrent.futures import ThreadPoolExecutor, as_completed
+        # Test endpoints concurrently with proper error handling
+        from concurrent.futures import ThreadPoolExecutor, as_completed, Future
 
-        with ThreadPoolExecutor(max_workers=min(5, len(endpoints))) as executor:
-            futures = [executor.submit(test_one, ep) for ep in endpoints]
+        max_workers = min(5, max(1, len(endpoints)))
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures: dict[Future, str] = {
+                executor.submit(test_one, ep): ep for ep in endpoints
+            }
+            
             for future in as_completed(futures):
+                endpoint = futures[future]
                 try:
-                    future.result()
+                    result = future.result(timeout=10.0)
+                    if result is not None:
+                        ep, success, latency = result
+                        self.update_endpoint_quality(provider, ep, success, latency)
+                        log.debug(
+                            f"Probe {provider}/{ep}: "
+                            f"{'OK' if success else 'FAIL'} ({latency:.0f}ms)"
+                        )
+                except TimeoutError:
+                    log.warning(f"Endpoint probe timeout for {endpoint}")
+                    self.update_endpoint_quality(provider, endpoint, False, 10000.0)
                 except Exception as e:
-                    log.debug(f"Endpoint probe error: {e}")
+                    log.debug(f"Endpoint probe error for {endpoint}: {e}")
+                    self.update_endpoint_quality(provider, endpoint, False, 0.0)
 
     def resolve_dns(self, hostname: str) -> str | None:
         """Resolve DNS using Chinese DNS servers.
 
         Returns:
             Resolved IP address or None
+
+        Note:
+            This method attempts to use Chinese DNS servers for better
+            resolution within China. However, Python's standard library
+            doesn't support custom DNS servers directly, so we use
+            DNS-over-HTTPS (DoH) as a fallback.
         """
         # Check cache first
         now = time.time()
@@ -445,7 +490,7 @@ class ChinaNetworkOptimizer:
             if now - cached_at < self._dns_cache_ttl:
                 return ip
 
-        # Try standard resolution first
+        # Try standard resolution first (fastest path)
         try:
             ip = socket.gethostbyname(hostname)
             self._dns_cache[hostname] = (ip, now)
@@ -453,19 +498,51 @@ class ChinaNetworkOptimizer:
         except socket.gaierror:
             pass
 
-        # Try Chinese DNS servers
-        for dns_server, port in CHINA_DNS_SERVERS:
+        # Try DNS-over-HTTPS (DoH) with Chinese providers
+        # This works around the limitation of not being able to use
+        # custom DNS servers directly from Python standard library
+        for doh_url in DOH_ENDPOINTS:
             try:
-                # Simple DNS query (simplified - in production use dnspython)
-                resolver = socket.getaddrinfo(dns_server, port)
-                if resolver:
-                    # Fallback to system resolver with specific DNS
-                    ip = socket.gethostbyname(hostname)
-                    self._dns_cache[hostname] = (ip, now)
-                    return ip
-            except Exception:
+                import json as json_module
+                # DNS query for A record (type 1)
+                response = requests.get(
+                    doh_url,
+                    params={
+                        "name": hostname,
+                        "type": "A",
+                    },
+                    headers={
+                        "Accept": "application/dns-json",
+                    },
+                    timeout=3.0,
+                )
+                if response.status_code == 200:
+                    data = json_module.loads(response.text)
+                    if data.get("Status") == 0 and "Answer" in data:
+                        for answer in data["Answer"]:
+                            if answer.get("type") == 1:  # A record
+                                ip = answer.get("data")
+                                if ip:
+                                    self._dns_cache[hostname] = (ip, now)
+                                    return ip
+            except Exception as e:
+                log.debug(f"DoH resolution failed ({doh_url}): {e}")
                 continue
 
+        # Final fallback: try each Chinese DNS server via system resolver
+        # Note: This doesn't actually query the DNS server directly,
+        # but attempts resolution in case system is configured to use them
+        for dns_server, _port in CHINA_DNS_SERVERS:
+            try:
+                # Attempt to resolve - system may use configured DNS
+                ip = socket.gethostbyname(hostname)
+                if ip:
+                    self._dns_cache[hostname] = (ip, now)
+                    return ip
+            except socket.gaierror:
+                continue
+
+        log.warning(f"All DNS resolution attempts failed for {hostname}")
         return None
 
     def get_network_status(self) -> dict[str, Any]:
@@ -507,7 +584,25 @@ class ChinaHTTPAdapter(HTTPAdapter):
     - Keep-alive connections
     - Optimized socket options
     - Better retry logic for intermittent failures
+    - Proper SSL context configuration
     """
+
+    def __init__(
+        self,
+        pool_connections: int = 10,
+        pool_maxsize: int = 50,
+        pool_block: bool = False,
+        max_retries: Retry | None = None,
+    ) -> None:
+        # Store socket options for later use
+        self._socket_options = [
+            (socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1),
+            (socket.IPPROTO_TCP, socket.TCP_KEEPIDLE, 60),
+            (socket.IPPROTO_TCP, socket.TCP_KEEPINTVL, 10),
+            (socket.IPPROTO_TCP, socket.TCP_KEEPCNT, 3),
+            (socket.SOL_TCP, socket.TCP_NODELAY, 1),
+        ]
+        super().__init__(pool_connections, pool_maxsize, pool_block, max_retries)
 
     def init_poolmanager(
         self,
@@ -516,20 +611,33 @@ class ChinaHTTPAdapter(HTTPAdapter):
         block: bool = False,
         **pool_kwargs: Any,
     ) -> None:
-        # Enable keep-alive
+        # Enable keep-alive with optimized socket options
         pool_kwargs["maxsize"] = maxsize
         pool_kwargs["block"] = block
-        pool_kwargs["socket_options"] = [
-            (socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1),
-            (socket.IPPROTO_TCP, socket.TCP_KEEPIDLE, 60),
-            (socket.IPPROTO_TCP, socket.TCP_KEEPINTVL, 10),
-            (socket.IPPROTO_TCP, socket.TCP_KEEPCNT, 3),
-            (socket.SOL_TCP, socket.TCP_NODELAY, 1),
-        ]
+        
+        # Merge socket options (preserve existing if any)
+        existing_options = pool_kwargs.get("socket_options", [])
+        pool_kwargs["socket_options"] = existing_options + self._socket_options
 
-        # SSL optimization
-        pool_kwargs["ssl_version"] = ssl.PROTOCOL_TLS_CLIENT
-        pool_kwargs["cert_reqs"] = ssl.CERT_REQUIRED
+        # Create proper SSL context for China network conditions
+        import ssl
+        ssl_context = ssl.create_default_context()
+        ssl_context.set_ciphers(
+            "ECDHE+AESGCM:DHE+AESGCM:ECDHE+CHACHA20:DHE+CHACHA20:"
+            "ECDHE+AES:DHE+AES:!aNULL:!eNULL:!aDSS:!SHA1:!AESCCM"
+        )
+        ssl_context.minimum_version = ssl.TLSVersion.TLSv1_2
+        ssl_context.options |= (
+            ssl.OP_NO_SSLv2 |
+            ssl.OP_NO_SSLv3 |
+            ssl.OP_NO_TLSv1 |
+            ssl.OP_NO_TLSv1_1
+        )
+        # Enable SNI for proper HTTPS support
+        ssl_context.check_hostname = True
+        ssl_context.verify_mode = ssl.CERT_REQUIRED
+        
+        pool_kwargs["ssl_context"] = ssl_context
 
         super().init_poolmanager(connections, maxsize, block, **pool_kwargs)
 

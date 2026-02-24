@@ -123,20 +123,22 @@ class EventBus:
 
     _instance: "EventBus | None" = None
     _lock = threading.RLock()
+    _initialized: bool
 
     def __new__(cls) -> "EventBus":
         if cls._instance is None:
             with cls._lock:
                 if cls._instance is None:
-                    cls._instance = super().__new__(cls)
-                    cls._instance._initialized = False
+                    instance = super().__new__(cls)
+                    object.__setattr__(instance, "_initialized", False)
+                    cls._instance = instance
         return cls._instance
 
     def __init__(self) -> None:
-        if hasattr(self, "_initialized") and self._initialized:
+        if getattr(self, "_initialized", False):
             return
 
-        self._initialized = True
+        object.__setattr__(self, "_initialized", True)
         self._subscribers: dict[EventType, list[Callable]] = defaultdict(list)
         self._queue: queue.Queue = queue.Queue()
         self._running = False

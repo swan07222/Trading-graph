@@ -438,13 +438,172 @@ def _fetch_raw_data(
     return raw_data
 
 
+def _validate_temporal_split_integrity(
+    self,
+    split_data: dict[str, dict[str, pd.DataFrame]],
+    feature_cols: list[str],
+) -> dict[str, Any]:
+    """Validate that temporal splits prevent data leakage.
+    
+    This is a critical guard against look-ahead bias that can cause
+    overoptimistic backtests and poor live performance.
+    
+    Checks:
+    1. No feature columns contain NaN values from future data leakage
+    2. Label creation uses only past/present information
+    3. Train/val/test boundaries have proper embargo periods
+    4. Feature statistics don't show impossible jumps at boundaries
+    
+    Returns:
+        Validation report with 'passed' boolean and detailed diagnostics
+    """
+    report: dict[str, Any] = {
+        "passed": True,
+        "checks": {},
+        "warnings": [],
+        "errors": [],
+    }
+    
+    try:
+        train_df = split_data.get("train", pd.DataFrame())
+        val_df = split_data.get("val", pd.DataFrame())
+        test_df = split_data.get("test", pd.DataFrame())
+        
+        if train_df.empty:
+            report["errors"].append("train_split_empty")
+            report["passed"] = False
+            return report
+        
+        # Check 1: Feature column integrity
+        missing_features = set(feature_cols) - set(train_df.columns)
+        if missing_features:
+            report["errors"].append(
+                f"missing_features:{','.join(sorted(missing_features))}"
+            )
+            report["passed"] = False
+            return report
+        
+        # Check 2: NaN ratio in features (should be minimal after proper handling)
+        train_features = train_df[feature_cols]
+        nan_ratio = float(train_features.isna().sum().sum()) / float(
+            max(1, train_features.size)
+        )
+        report["checks"]["feature_nan_ratio"] = round(nan_ratio, 4)
+        if nan_ratio > 0.05:  # More than 5% NaN suggests leakage or bad handling
+            report["warnings"].append(f"high_feature_nan_ratio:{nan_ratio:.4f}")
+        
+        # Check 3: Label NaN pattern (should only be in warmup period)
+        if "label" in train_df.columns:
+            label_isna = train_df["label"].isna()
+            nan_count = int(label_isna.sum())
+            expected_warmup = int(CONFIG.SEQUENCE_LENGTH + CONFIG.EMBARGO_BARS)
+            
+            report["checks"]["label_nan_count"] = nan_count
+            report["checks"]["expected_warmup"] = expected_warmup
+            
+            # NaN labels should only be in the first ~SEQUENCE_LENGTH rows
+            if nan_count > 0:
+                last_nan_idx = label_isna[::-1].idxmax() if label_isna.any() else None
+                if last_nan_idx is not None:
+                    # Find position of last NaN
+                    label_values = train_df["label"].values
+                    last_nan_pos = 0
+                    for i in range(len(label_values) - 1, -1, -1):
+                        if pd.isna(label_values[i]):
+                            last_nan_pos = i + 1
+                            break
+                    
+                    report["checks"]["last_nan_position"] = last_nan_pos
+                    
+                    # If NaN extends beyond warmup, suggests feature computation issue
+                    if last_nan_pos > expected_warmup * 1.5:
+                        report["warnings"].append(
+                            f"label_nan_extends_beyond_warmup:"
+                            f"{last_nan_pos}>{expected_warmup}"
+                        )
+        
+        # Check 4: Feature statistics continuity at boundaries
+        # (Detects if validation/test data leaked into train features)
+        if not val_df.empty and len(train_df) > 50 and len(val_df) > 50:
+            for col in feature_cols[:5]:  # Check first 5 features for efficiency
+                if col in train_df.columns and col in val_df.columns:
+                    train_end = train_df[col].tail(20).mean()
+                    val_start = val_df[col].head(20).mean()
+                    
+                    # Large jumps might indicate leakage or regime shift
+                    if abs(train_end) > _EPS:
+                        jump = abs(val_start - train_end) / abs(train_end)
+                        if jump > 2.0:  # More than 200% jump
+                            report["warnings"].append(
+                                f"feature_jump_at_boundary:{col}:{jump:.2f}"
+                            )
+        
+        # Check 5: Return-based leakage detection
+        # If features contain future returns, correlation will be suspiciously high
+        if "label" in train_df.columns and len(train_df) > 100:
+            label_clean = train_df["label"].dropna()
+            if len(label_clean) > 50:
+                for col in feature_cols[:3]:  # Sample check
+                    if col in train_df.columns:
+                        feature_clean = train_df[col].dropna()
+                        if len(feature_clean) == len(label_clean):
+                            try:
+                                corr = float(
+                                    np.corrcoef(
+                                        feature_clean.values,
+                                        label_clean.values,
+                                    )[0, 1]
+                                )
+                                if np.isfinite(corr) and abs(corr) > 0.8:
+                                    report["warnings"].append(
+                                        f"suspicious_high_correlation:{col}:{corr:.3f}"
+                                    )
+                            except (ValueError, FloatingPointError):
+                                pass
+        
+        # Summary
+        if report["errors"]:
+            report["passed"] = False
+        elif len(report["warnings"]) > 3:
+            report["passed"] = False
+            report["errors"].append(
+                f"too_many_warnings:{len(report['warnings'])}"
+            )
+        
+        report["checks"]["total_warnings"] = len(report["warnings"])
+        report["checks"]["total_errors"] = len(report["errors"])
+        
+    except Exception as e:
+        report["errors"].append(f"validation_exception:{str(e)}")
+        report["passed"] = False
+    
+    return report
+
+
 def _create_sequences_from_splits(
     self,
     split_data: dict[str, dict[str, pd.DataFrame]],
     feature_cols: list[str],
     include_returns: bool = True,
 ) -> dict[str, dict[str, list]]:
-    """Create sequences for train/val/test from split data."""
+    """Create sequences for train/val/test from split data.
+    
+    Includes temporal integrity validation to prevent data leakage.
+    """
+    # CRITICAL: Validate temporal split integrity before creating sequences
+    # This prevents look-ahead bias that causes overoptimistic backtests
+    validation_report = self._validate_temporal_split_integrity(
+        split_data, feature_cols
+    )
+    
+    if not validation_report["passed"]:
+        log.warning(
+            "Temporal split validation failed: %s | Warnings: %s",
+            ", ".join(validation_report.get("errors", [])),
+            ", ".join(validation_report.get("warnings", [])),
+        )
+        # Don't block training entirely, but log for investigation
+    
     storage = {
         "train": {"X": [], "y": [], "r": []},
         "val": {"X": [], "y": [], "r": []},

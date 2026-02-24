@@ -307,7 +307,7 @@ def tune_precision_thresholds(self, samples: list[dict[str, Any]]) -> dict[str, 
     )
 
     best_score = -1e18
-    best: dict[str, float] | None = None
+    best: dict[str, Any] | None = None
     search_space_size = (
         len(conf_candidates)
         * len(agree_candidates)

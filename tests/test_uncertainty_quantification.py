@@ -1,13 +1,12 @@
 """Tests for uncertainty quantification module."""
-import pytest
 import numpy as np
 
 from models.uncertainty_quantification import (
-    UncertaintyDecomposition,
     ConformalPrediction,
-    MonteCarloDropout,
-    DeepEnsemble,
     ConformalPredictor,
+    DeepEnsemble,
+    MonteCarloDropout,
+    UncertaintyDecomposition,
     UncertaintyQuantifier,
 )
 

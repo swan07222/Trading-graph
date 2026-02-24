@@ -139,7 +139,7 @@ if HAS_PYQTGRAPH:
                 return pg.QtCore.QRectF()
 
 else:
-    CandlestickItem = None
+    CandlestickItem = None  # type: ignore[assignment]
 
 # MAIN STOCK CHART - FIXED VERSION
 
@@ -164,16 +164,16 @@ class StockChart(QWidget):
         self._predicted_prices_high: list[float] = []
         self._levels: dict[str, float] = {}
         self._candle_meta: list[dict] = []
-        self._hover_proxy = None
+        self._hover_proxy: object | None = None
         self._last_hover_index: int | None = None
         self._last_hover_tooltip: str = ""
 
-        self.plot_widget = None
-        self.candles = None           # Layer 3: Candlesticks (top)
-        self.actual_line = None       # Layer 2: Price line (middle)
-        self.predicted_line = None    # Layer 1: Prediction (bottom)
-        self.predicted_low_line = None
-        self.predicted_high_line = None
+        self.plot_widget: object | None = None
+        self.candles: object | None = None           # Layer 3: Candlesticks (top)
+        self.actual_line: object | None = None       # Layer 2: Price line (middle)
+        self.predicted_line: object | None = None    # Layer 1: Prediction (bottom)
+        self.predicted_low_line: object | None = None
+        self.predicted_high_line: object | None = None
         self.level_lines: dict[str, object] = {}
         self.overlay_lines: dict[str, object] = {}
         self.overlay_enabled: dict[str, bool] = {
@@ -202,7 +202,7 @@ class StockChart(QWidget):
             self._setup_fallback()
 
     @staticmethod
-    def _coerce_list(values):
+    def _coerce_list(values: object | None) -> list[object]:
         """Convert optional iterable values to a list safely."""
         if values is None:
             return []
@@ -237,7 +237,7 @@ class StockChart(QWidget):
     @staticmethod
     def _format_bar_timestamp(bar: dict) -> str:
         if not isinstance(bar, dict):
-            return ""
+            return ""  # type: ignore[unreachable]
         for key in ("timestamp", "time", "datetime", "date", "_ts_epoch"):
             raw = bar.get(key)
             if raw is None:
@@ -279,8 +279,8 @@ class StockChart(QWidget):
                 and int(getattr(ts_obj, "minute", 0)) == 0
                 and int(getattr(ts_obj, "second", 0)) == 0
             ):
-                return ts_obj.strftime("%Y-%m-%d")
-            return ts_obj.strftime("%Y-%m-%d %H:%M")
+                return ts_obj.strftime("%Y-%m-%d")  # type: ignore[no-any-return]
+            return ts_obj.strftime("%Y-%m-%d %H:%M")  # type: ignore[no-any-return]
         return ""
 
     @staticmethod
@@ -343,9 +343,9 @@ class StockChart(QWidget):
         except Exception:
             pass
 
-    def _on_plot_mouse_moved(self, evt) -> None:
+    def _on_plot_mouse_moved(self, evt: object) -> None:
         if not HAS_PYQTGRAPH or self.plot_widget is None:
-            return
+            return  # type: ignore[unreachable]
         if not self._candle_meta:
             self._hide_candle_tooltip()
             return

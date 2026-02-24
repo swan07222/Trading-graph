@@ -73,38 +73,35 @@ class ModernColors:
 class ModernFonts:
     """Typography tokens for desktop UI."""
 
-    FAMILY_PRIMARY = "Aptos"
-    FAMILY_DISPLAY = "Bahnschrift SemiBold"
-    FAMILY_MONOSPACE = "Cascadia Code"
+    FAMILY_PRIMARY = "IBM Plex Sans"
+    FAMILY_DISPLAY = "Sora SemiBold"
+    FAMILY_MONOSPACE = "JetBrains Mono"
 
     PRIMARY_CANDIDATES = (
+        "IBM Plex Sans",
+        "Sora",
         "Aptos",
         "Segoe UI Variable Text",
         "Bahnschrift",
-        "Segoe UI",
-        "Trebuchet MS",
         "Microsoft YaHei UI",
         "Microsoft YaHei",
         "DejaVu Sans",
     )
     DISPLAY_CANDIDATES = (
+        "Sora SemiBold",
+        "Sora",
+        "IBM Plex Sans Medium",
         "Aptos Display",
         "Bahnschrift SemiBold",
-        "Aptos",
-        "Bahnschrift",
         "Segoe UI Semibold",
-        "Segoe UI",
         "Microsoft YaHei UI",
-        "Microsoft YaHei",
         "DejaVu Sans",
     )
     MONOSPACE_CANDIDATES = (
-        "Cascadia Code",
         "JetBrains Mono",
+        "Cascadia Code",
         "Cascadia Mono",
         "Consolas",
-        "Lucida Console",
-        "Courier New",
         "DejaVu Sans Mono",
     )
 
@@ -213,7 +210,6 @@ def get_central_widget_style() -> str:
     return f"""
         QWidget {{
             color: {ModernColors.TEXT_PRIMARY};
-            background-color: transparent;
             font-family: "{primary_font}";
             font-size: {ModernFonts.SIZE_BASE}px;
         }}
@@ -808,6 +804,13 @@ def get_app_stylesheet() -> str:
                 spacing: 10px;
                 padding: 8px 10px;
             }}
+            QToolBar QLabel {{
+                color: {ModernColors.TEXT_SECONDARY};
+                font-size: {ModernFonts.SIZE_SM}px;
+                font-weight: {ModernFonts.WEIGHT_SEMIBOLD};
+                padding: 0 2px;
+                background: transparent;
+            }}
             QToolButton {{
                 background: #1b3559;
                 color: {ModernColors.TEXT_PRIMARY};
@@ -851,6 +854,74 @@ def get_app_stylesheet() -> str:
                 border: 1px solid {ModernColors.BORDER_DEFAULT};
                 border-radius: 7px;
                 padding: 6px 8px;
+            }}
+            QMessageBox {{
+                background: #10213a;
+                color: {ModernColors.TEXT_PRIMARY};
+                border: 1px solid {ModernColors.BORDER_SUBTLE};
+            }}
+            QMessageBox QLabel {{
+                background: transparent;
+                color: {ModernColors.TEXT_PRIMARY};
+                min-width: 260px;
+            }}
+            QMessageBox QAbstractButton {{
+                background: #1c3458;
+                color: {ModernColors.TEXT_STRONG};
+                border: 1px solid {ModernColors.BORDER_DEFAULT};
+                border-radius: 9px;
+                min-height: 30px;
+                min-width: 74px;
+                padding: 5px 10px;
+                font-size: {ModernFonts.SIZE_SM}px;
+                font-weight: {ModernFonts.WEIGHT_SEMIBOLD};
+            }}
+            QMessageBox QAbstractButton:hover {{
+                background: #285182;
+                border-color: {ModernColors.BORDER_FOCUS};
+            }}
+            QPushButton#primaryActionButton {{
+                background: {ModernColors.GRADIENT_PRIMARY};
+                border: 1px solid {ModernColors.BORDER_FOCUS};
+                color: {ModernColors.TEXT_STRONG};
+                min-height: 36px;
+                min-width: 96px;
+                border-radius: 10px;
+                font-size: {ModernFonts.SIZE_BASE}px;
+                font-weight: {ModernFonts.WEIGHT_BOLD};
+                padding: 8px 14px;
+            }}
+            QPushButton#primaryActionButton:hover {{
+                border-color: #9be9ff;
+            }}
+            QPushButton#secondaryActionButton {{
+                background: #1a3256;
+                border: 1px solid {ModernColors.BORDER_SUBTLE};
+                color: {ModernColors.TEXT_PRIMARY};
+                min-height: 34px;
+                min-width: 88px;
+                border-radius: 10px;
+                font-size: {ModernFonts.SIZE_SM}px;
+                font-weight: {ModernFonts.WEIGHT_SEMIBOLD};
+                padding: 7px 12px;
+            }}
+            QPushButton#secondaryActionButton:hover {{
+                background: #214169;
+                border-color: {ModernColors.BORDER_FOCUS};
+            }}
+            QPushButton#dangerActionButton {{
+                background: {ModernColors.GRADIENT_SELL};
+                border: 1px solid #ff8fa0;
+                color: {ModernColors.TEXT_STRONG};
+                min-height: 34px;
+                min-width: 88px;
+                border-radius: 10px;
+                font-size: {ModernFonts.SIZE_SM}px;
+                font-weight: {ModernFonts.WEIGHT_SEMIBOLD};
+                padding: 7px 12px;
+            }}
+            QPushButton#dangerActionButton:hover {{
+                border-color: #ffb5c0;
             }}
             QLabel#metaLabel {{
                 color: {ModernColors.TEXT_MUTED};
@@ -975,6 +1046,119 @@ def get_dialog_style() -> str:
             QMessageBox {{
                 background: #0f1f36;
                 color: {ModernColors.TEXT_PRIMARY};
+            }}
+            QMessageBox QLabel {{
+                background: transparent;
+                color: {ModernColors.TEXT_PRIMARY};
+                min-width: 260px;
+            }}
+            QMessageBox QAbstractButton {{
+                background: #1c3458;
+                color: {ModernColors.TEXT_STRONG};
+                border: 1px solid {ModernColors.BORDER_DEFAULT};
+                border-radius: 9px;
+                min-height: 30px;
+                min-width: 74px;
+                padding: 5px 10px;
+                font-size: {ModernFonts.SIZE_SM}px;
+                font-weight: {ModernFonts.WEIGHT_SEMIBOLD};
+            }}
+            QMessageBox QAbstractButton:hover {{
+                background: #285182;
+                border-color: {ModernColors.BORDER_FOCUS};
+            }}
+            QLabel#dialogTitle {{
+                color: {ModernColors.ACCENT_INFO};
+                font-size: {ModernFonts.SIZE_XL}px;
+                font-weight: {ModernFonts.WEIGHT_BOLD};
+                padding: 2px 0 2px 0;
+            }}
+            QLabel#dialogSubtitle {{
+                color: {ModernColors.TEXT_SECONDARY};
+                font-size: {ModernFonts.SIZE_SM}px;
+                padding: 0 0 8px 0;
+            }}
+            QLabel#dialogStatus {{
+                color: {ModernColors.TEXT_PRIMARY};
+                font-size: {ModernFonts.SIZE_BASE}px;
+                font-weight: {ModernFonts.WEIGHT_BOLD};
+            }}
+            QLabel#dialogMetricValue {{
+                color: {ModernColors.ACCENT_INFO};
+                font-size: {ModernFonts.SIZE_LG}px;
+                font-weight: {ModernFonts.WEIGHT_BOLD};
+            }}
+            QFrame#dialogSection {{
+                background: qlineargradient(
+                    x1:0, y1:0, x2:0, y2:1,
+                    stop:0 #132947,
+                    stop:1 #101f37
+                );
+                border: 1px solid {ModernColors.BORDER_SUBTLE};
+                border-radius: 12px;
+            }}
+            QListWidget#dialogStockList {{
+                background: #0f1d34;
+                border: 1px solid {ModernColors.BORDER_SUBTLE};
+                border-radius: 10px;
+                color: {ModernColors.TEXT_PRIMARY};
+                padding: 2px;
+            }}
+            QListWidget#dialogStockList::item {{
+                padding: 6px 10px;
+                border-radius: 7px;
+                margin: 1px 2px;
+            }}
+            QListWidget#dialogStockList::item:selected {{
+                background: #2d5b90;
+                color: {ModernColors.TEXT_STRONG};
+            }}
+            QDialogButtonBox QPushButton {{
+                min-height: 34px;
+                min-width: 90px;
+            }}
+            QPushButton#primaryActionButton {{
+                background: {ModernColors.GRADIENT_PRIMARY};
+                border: 1px solid {ModernColors.BORDER_FOCUS};
+                color: {ModernColors.TEXT_STRONG};
+                min-height: 36px;
+                min-width: 96px;
+                border-radius: 10px;
+                font-size: {ModernFonts.SIZE_BASE}px;
+                font-weight: {ModernFonts.WEIGHT_BOLD};
+                padding: 8px 14px;
+            }}
+            QPushButton#primaryActionButton:hover {{
+                border-color: #9be9ff;
+            }}
+            QPushButton#secondaryActionButton {{
+                background: #1a3256;
+                border: 1px solid {ModernColors.BORDER_SUBTLE};
+                color: {ModernColors.TEXT_PRIMARY};
+                min-height: 34px;
+                min-width: 88px;
+                border-radius: 10px;
+                font-size: {ModernFonts.SIZE_SM}px;
+                font-weight: {ModernFonts.WEIGHT_SEMIBOLD};
+                padding: 7px 12px;
+            }}
+            QPushButton#secondaryActionButton:hover {{
+                background: #214169;
+                border-color: {ModernColors.BORDER_FOCUS};
+            }}
+            QPushButton#dangerActionButton {{
+                background: {ModernColors.GRADIENT_SELL};
+                border: 1px solid #ff8fa0;
+                color: {ModernColors.TEXT_STRONG};
+                min-height: 34px;
+                min-width: 88px;
+                border-radius: 10px;
+                font-size: {ModernFonts.SIZE_SM}px;
+                font-weight: {ModernFonts.WEIGHT_SEMIBOLD};
+                padding: 7px 12px;
+            }}
+            QPushButton#dangerActionButton:hover {{
+                border-color: #ffb5c0;
             }}
             QLabel#dialogHint {{
                 color: {ModernColors.TEXT_SECONDARY};

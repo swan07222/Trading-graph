@@ -436,11 +436,11 @@ class LogWidget(QTextEdit):
             f"""
             QTextEdit {{
                 background: {ModernColors.BG_PRIMARY};
-                color: #b6f3df;
+                color: {ModernColors.TEXT_PRIMARY};
                 border: 1px solid {ModernColors.BORDER_SUBTLE};
                 border-radius: 10px;
                 padding: 8px;
-                selection-background-color: #2c6b9d;
+                selection-background-color: #2f689d;
                 selection-color: {ModernColors.TEXT_STRONG};
                 font-family: '{mono_font}', monospace;
             }}
@@ -451,7 +451,7 @@ class LogWidget(QTextEdit):
     def log(self, message: str, level: str = "info") -> None:
         """Add log message with color coding."""
         colors = {
-            "info": "#9cead6",
+            "info": ModernColors.ACCENT_SECONDARY,
             "warning": ModernColors.ACCENT_WARNING,
             "error": ModernColors.ACCENT_DANGER,
             "success": ModernColors.ACCENT_SUCCESS,
@@ -577,8 +577,8 @@ class MetricCard(QFrame):
 
         self.value_label = QLabel(str(value))
         self.value_label.setStyleSheet(
-            """
-            color: #6ebbf2;
+            f"""
+            color: {ModernColors.ACCENT_PRIMARY};
             font-size: 26px;
             font-weight: 700;
             """

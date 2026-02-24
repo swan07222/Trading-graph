@@ -9,7 +9,6 @@ from pathlib import Path
 from scripts.typecheck_common import (
     load_baseline_entries,
     parse_mypy_errors,
-    run_mypy,
     save_baseline_entries,
 )
 
@@ -90,6 +89,32 @@ def _iter_target_batches(
     for i in range(0, len(targets), size):
         out.append(tuple(targets[i:i + size]))
     return out
+
+
+def run_mypy(
+    targets: tuple[str, ...],
+    flags: tuple[str, ...],
+) -> tuple[int, str, set[str]]:
+    """Run mypy in batches to avoid memory/CPU spikes on large target sets.
+    
+    Returns aggregate (return_code, output, issues).
+    """
+    batches = _iter_target_batches(targets, DEFAULT_BATCH_SIZE)
+    all_issues: set[str] = set()
+    output_lines: list[str] = []
+    worst_code = 0
+    
+    for idx, batch in enumerate(batches, start=1):
+        output_lines.append(f"batch {idx}/{len(batches)}")
+        code, out, issues = _run_mypy_once(batch, flags)
+        output_lines.append(out)
+        all_issues.update(issues)
+        if code > worst_code:
+            worst_code = code
+            if code >= 2:
+                break
+    
+    return worst_code, "\n".join(output_lines), all_issues
 
 
 def main() -> int:

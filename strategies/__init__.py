@@ -11,6 +11,8 @@ from datetime import datetime
 from enum import Enum
 from typing import Any
 
+import numpy as np
+
 from core.types import OrderSide
 
 
@@ -62,6 +64,9 @@ class Signal:
 
 class BaseStrategy(ABC):
     """Abstract base class for trading strategies.
+    
+    FIX REGIME AWARENESS: Added regime-aware confidence adjustment
+    to improve signal quality across different market conditions.
 
     All strategies must implement the generate_signal method.
 
@@ -81,6 +86,16 @@ class BaseStrategy(ABC):
 
     # Minimum confidence threshold (0.0 to 1.0)
     min_confidence: float = 0.5
+    
+    # Regime-specific confidence adjustments
+    _regime_multipliers: dict[str, float] = {
+        "bull_low_vol": 1.05,      # Slight boost in stable bull markets
+        "bull_high_vol": 0.95,     # Reduce confidence in volatile bull
+        "bear_low_vol": 0.90,      # Cautious in stable bear
+        "bear_high_vol": 0.80,     # Very cautious in volatile bear
+        "crisis": 0.70,            # Minimum confidence in crisis
+        "sideways": 0.85,          # Reduce confidence in choppy markets
+    }
 
     @abstractmethod
     def generate_signal(self, data: dict[str, Any]) -> Signal | None:
@@ -97,6 +112,86 @@ class BaseStrategy(ABC):
             Signal object if signal generated, None otherwise
         """
         pass
+    
+    def _detect_market_regime(self, data: dict[str, Any]) -> str:
+        """Detect current market regime from data.
+        
+        Uses price action and volatility to classify regime:
+        - bull_low_vol: Uptrend with low volatility
+        - bull_high_vol: Uptrend with high volatility
+        - bear_low_vol: Downtrend with low volatility
+        - bear_high_vol: Downtrend with high volatility
+        - crisis: Extreme volatility/drawdown
+        - sideways: No clear trend
+        
+        Returns:
+            Regime string
+        """
+        bars = data.get("bars", [])
+        if len(bars) < 60:
+            return "sideways"  # Default with insufficient data
+        
+        closes = [b["close"] for b in bars]
+        
+        # Calculate trend (60-day return)
+        if len(closes) >= 60:
+            trend_return = (closes[-1] - closes[-60]) / closes[-60]
+        else:
+            trend_return = (closes[-1] - closes[0]) / closes[0] if closes else 0.0
+        
+        # Calculate volatility (20-day std of returns)
+        if len(closes) >= 21:
+            returns = [
+                (closes[i] - closes[i-1]) / closes[i-1]
+                for i in range(len(closes)-20, len(closes))
+            ]
+            volatility = float(np.std(returns)) if returns else 0.0
+        else:
+            volatility = 0.02  # Default
+        
+        # Classify regime
+        if volatility > 0.04:  # >4% daily vol = extreme
+            return "crisis"
+        elif volatility > 0.025:  # >2.5% = high vol
+            if trend_return > 0.05:
+                return "bull_high_vol"
+            elif trend_return < -0.05:
+                return "bear_high_vol"
+            else:
+                return "sideways"
+        else:  # Low vol
+            if trend_return > 0.03:
+                return "bull_low_vol"
+            elif trend_return < -0.03:
+                return "bear_low_vol"
+            else:
+                return "sideways"
+    
+    def _apply_regime_adjustment(
+        self,
+        confidence: float,
+        regime: str = None,
+    ) -> float:
+        """Adjust confidence based on market regime.
+        
+        FIX REGIME AWARENESS: Different regimes require different
+        confidence thresholds for actionable signals.
+        
+        Args:
+            confidence: Raw signal confidence
+            regime: Market regime (auto-detected if None)
+            
+        Returns:
+            Regime-adjusted confidence
+        """
+        if regime is None:
+            regime = "sideways"
+        
+        multiplier = self._regime_multipliers.get(regime, 1.0)
+        adjusted = confidence * multiplier
+        
+        # Ensure confidence stays in valid range
+        return float(np.clip(adjusted, 0.0, 1.0))
 
     def validate_signal(self, signal: Signal) -> bool:
         """Validate a generated signal.

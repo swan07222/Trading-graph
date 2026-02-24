@@ -8,7 +8,8 @@ from typing import Any
 from PyQt6.QtCore import QThread, pyqtSignal
 
 from config.settings import CONFIG
-from core.symbols import normalize_stock_code as _normalize_stock_code, validate_stock_code as _validate_stock_code
+from core.symbols import normalize_stock_code as _normalize_stock_code
+from core.symbols import validate_stock_code as _validate_stock_code
 from utils.logger import get_logger
 
 log = get_logger(__name__)

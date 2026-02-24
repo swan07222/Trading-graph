@@ -3,10 +3,10 @@ from __future__ import annotations
 import argparse
 import ast
 import json
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Iterable
 
-from scripts.gate_common import normalize_path, iter_python_files
+from scripts.gate_common import iter_python_files, normalize_path
 
 DEFAULT_TARGETS: tuple[str, ...] = (
     "trading/executor.py",

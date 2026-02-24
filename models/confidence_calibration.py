@@ -109,7 +109,9 @@ class ConfidenceCalibrator:
         self._lock = threading.RLock()
         self._buckets: list[ConfidenceBucket] = self._create_buckets()
         self._all_predictions: list[CalibratedPrediction] = []
-        self._calibration_map: dict[str, float] = {}  # symbol -> calibration factor
+        # Keyed by bucket midpoint float; NOT by symbol (see _update_calibration_map)
+        self._calibration_map: dict[float, float] = {}
+        self._symbol_calibration_map: dict[str, float] = {}  # per-symbol overrides
 
     def _create_buckets(self) -> list[ConfidenceBucket]:
         """Create confidence buckets."""
@@ -128,15 +130,43 @@ class ConfidenceCalibrator:
         self,
         prediction: CalibratedPrediction,
     ) -> None:
-        """Record prediction for calibration tracking."""
+        """Record prediction for calibration tracking.
+        
+        FIX CALIBRATION: Added validation to ensure prediction has valid
+        confidence values and bucket tracking is consistent.
+        """
         with self._lock:
+            # Validate prediction confidence is in valid range
+            raw_conf = float(getattr(prediction, "raw_confidence", prediction.calibrated_confidence))
+            if not (0.0 <= raw_conf <= 1.0):
+                log.warning(
+                    "Invalid raw_confidence %.4f for %s - clamping to [0, 1]",
+                    raw_conf, prediction.symbol
+                )
+                raw_conf = float(np.clip(raw_conf, 0.0, 1.0))
+            
             self._all_predictions.append(prediction)
 
             # Find appropriate bucket
+            bucket_found = False
             for bucket in self._buckets:
-                if bucket.min_confidence <= prediction.raw_confidence < bucket.max_confidence:
+                if bucket.min_confidence <= raw_conf < bucket.max_confidence:
                     bucket.total += 1
+                    bucket_found = True
                     break
+            
+            # Handle edge case where confidence equals max boundary
+            if not bucket_found and raw_conf >= 1.0:
+                # Assign to last bucket
+                if self._buckets:
+                    self._buckets[-1].total += 1
+                    bucket_found = True
+            
+            if not bucket_found:
+                log.warning(
+                    "Confidence %.4f did not match any bucket for %s",
+                    raw_conf, prediction.symbol
+                )
 
             # Keep last 10000 predictions
             if len(self._all_predictions) > 10000:
@@ -147,14 +177,53 @@ class ConfidenceCalibrator:
         prediction: CalibratedPrediction,
         was_correct: bool,
     ) -> None:
-        """Mark prediction outcome for calibration."""
+        """Mark prediction outcome for calibration.
+        
+        FIX CALIBRATION: Added validation to ensure record_prediction was
+        called first and bucket accounting is consistent.
+        
+        Must be called after record_prediction for the same prediction so that
+        bucket.total is always >= bucket.correct.
+        """
         with self._lock:
-            # Find and update bucket
+            # Find and update bucket — only increment correct, never total
+            # (total is managed exclusively by record_prediction)
+            raw_conf = float(getattr(prediction, "raw_confidence", prediction.calibrated_confidence))
+            bucket_found = False
+            
             for bucket in self._buckets:
-                if bucket.min_confidence <= prediction.raw_confidence < bucket.max_confidence:
+                if bucket.min_confidence <= raw_conf < bucket.max_confidence:
+                    bucket_found = True
                     if was_correct:
-                        bucket.correct += 1
+                        # Guard: don't let correct exceed total
+                        if bucket.correct < bucket.total:
+                            bucket.correct += 1
+                        else:
+                            # This indicates record_prediction was not called first
+                            log.warning(
+                                "mark_outcome called before record_prediction or "
+                                "bucket accounting error for %s (correct=%d, total=%d)",
+                                prediction.symbol, bucket.correct, bucket.total
+                            )
+                            # Still increment to maintain consistency
+                            bucket.correct += 1
+                            bucket.total += 1
                     break
+            
+            # Handle edge case where confidence equals max boundary
+            if not bucket_found and raw_conf >= 1.0:
+                if self._buckets:
+                    bucket_found = True
+                    if was_correct and self._buckets[-1].correct < self._buckets[-1].total:
+                        self._buckets[-1].correct += 1
+            
+            if not bucket_found:
+                log.warning(
+                    "mark_outcome: confidence %.4f did not match any bucket for %s",
+                    raw_conf, prediction.symbol
+                )
+                # Don't update calibration map if bucket not found
+                return
 
             # Update calibration map
             self._update_calibration_map()
@@ -179,9 +248,9 @@ class ConfidenceCalibrator:
             Calibrated confidence (0-1)
         """
         with self._lock:
-            # Symbol-specific calibration if available
-            if symbol and symbol in self._calibration_map:
-                return self._calibration_map[symbol]
+            # Symbol-specific calibration if available (uses separate map)
+            if symbol and symbol in self._symbol_calibration_map:
+                return self._symbol_calibration_map[symbol]
             
             # Find calibration from nearest bucket
             if not self._calibration_map:

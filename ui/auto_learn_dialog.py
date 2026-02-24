@@ -3,6 +3,7 @@
 from datetime import datetime
 
 from PyQt6.QtCore import Qt
+from PyQt6.QtGui import QFont
 from PyQt6.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
@@ -32,6 +33,12 @@ from ui.auto_learn_workers import (
     TargetedLearnWorker,
     _get_auto_learner,
     normalize_training_interval,
+)
+from ui.modern_theme import (
+    ModernColors,
+    ModernFonts,
+    get_dialog_style,
+    get_monospace_font_family,
 )
 from utils.logger import get_logger
 
@@ -82,14 +89,12 @@ class AutoLearnDialog(QDialog):
         root_layout.setContentsMargins(10, 10, 10, 10)
 
         header = QLabel("Automatic Stock Discovery and Learning")
-        header.setStyleSheet(
-            "font-size: 20px; font-weight: 700; color: #9ecbff;"
-        )
+        header.setObjectName("dialogTitle")
         root_layout.addWidget(header)
 
         scroll = QScrollArea()
+        scroll.setObjectName("dialogScroll")
         scroll.setWidgetResizable(True)
-        scroll.setStyleSheet("QScrollArea { border: none; }")
         root_layout.addWidget(scroll)
 
         content = QWidget()
@@ -99,32 +104,7 @@ class AutoLearnDialog(QDialog):
         scroll.setWidget(content)
 
         self.tabs = QTabWidget()
-        self.tabs.setStyleSheet("""
-            QTabWidget::pane {
-                border: 1px solid #2f4466;
-                border-radius: 8px;
-                background: #0f1b2e;
-            }
-            QTabBar::tab {
-                background: #14243d;
-                color: #aac3ec;
-                padding: 10px 20px;
-                margin-right: 2px;
-                border-top-left-radius: 8px;
-                border-top-right-radius: 8px;
-                font-weight: bold;
-                font-size: 13px;
-            }
-            QTabBar::tab:selected {
-                background: #0f1b2e;
-                color: #79a6ff;
-                border-bottom: 2px solid #79a6ff;
-            }
-            QTabBar::tab:hover:!selected {
-                background: #2f4466;
-                color: #dbe4f3;
-            }
-        """)
+        self.tabs.setObjectName("dialogTabs")
 
         # Tab 1: Auto Learn
         auto_tab = self._create_auto_tab()
@@ -140,9 +120,7 @@ class AutoLearnDialog(QDialog):
         progress_layout = QVBoxLayout()
 
         self.status_label = QLabel("Ready to start")
-        self.status_label.setStyleSheet(
-            "font-weight: bold; font-size: 13px;"
-        )
+        self.status_label.setObjectName("dialogStatus")
         progress_layout.addWidget(self.status_label)
 
         self.progress_bar = QProgressBar()
@@ -158,8 +136,12 @@ class AutoLearnDialog(QDialog):
         log_layout = QVBoxLayout()
 
         self.log_text = QTextEdit()
+        self.log_text.setObjectName("dialogLog")
         self.log_text.setReadOnly(True)
         self.log_text.setMinimumHeight(120)
+        self.log_text.setFont(
+            QFont(get_monospace_font_family(), ModernFonts.SIZE_SM)
+        )
         log_layout.addWidget(self.log_text)
 
         log_group.setLayout(log_layout)
@@ -189,7 +171,7 @@ class AutoLearnDialog(QDialog):
             "and train the AI model on new patterns."
         )
         desc.setWordWrap(True)
-        desc.setStyleSheet("color: #aac3ec; font-size: 12px;")
+        desc.setObjectName("dialogHint")
         layout.addWidget(desc)
 
         settings_group = QGroupBox("Settings")
@@ -252,7 +234,7 @@ class AutoLearnDialog(QDialog):
         settings_layout.addWidget(self.use_session_cache_check, 7, 0, 1, 2)
 
         self.session_seed_label = QLabel("")
-        self.session_seed_label.setStyleSheet("color: #aac3ec; font-size: 11px;")
+        self.session_seed_label.setObjectName("dialogHint")
         settings_layout.addWidget(self.session_seed_label, 8, 0, 1, 2)
 
         settings_group.setLayout(settings_layout)
@@ -292,7 +274,7 @@ class AutoLearnDialog(QDialog):
             "and add them to the training list."
         )
         desc.setWordWrap(True)
-        desc.setStyleSheet("color: #aac3ec; font-size: 12px;")
+        desc.setObjectName("dialogHint")
         layout.addWidget(desc)
 
         # --- Search section ---
@@ -325,9 +307,7 @@ class AutoLearnDialog(QDialog):
         search_layout.addLayout(search_row)
 
         self.search_result_label = QLabel("")
-        self.search_result_label.setStyleSheet(
-            "font-size: 12px; padding: 4px;"
-        )
+        self.search_result_label.setObjectName("searchResultLabel")
         search_layout.addWidget(self.search_result_label)
 
         search_group.setLayout(search_layout)
@@ -339,7 +319,7 @@ class AutoLearnDialog(QDialog):
 
         quick_row = QHBoxLayout()
         quick_label = QLabel("Quick add:")
-        quick_label.setStyleSheet("color: #aac3ec; font-size: 11px;")
+        quick_label.setObjectName("dialogHint")
         quick_row.addWidget(quick_label)
 
         # Popular stocks - codes match CONFIG.STOCK_POOL format (bare 6-digit)
@@ -356,21 +336,7 @@ class AutoLearnDialog(QDialog):
             btn = QPushButton(name)
             btn.setToolTip(code)
             btn.setMaximumHeight(28)
-            btn.setStyleSheet("""
-                QPushButton {
-                    background: #14243d;
-                    color: #aac3ec;
-                    border: 1px solid #2f4466;
-                    border-radius: 4px;
-                    padding: 2px 8px;
-                    font-size: 11px;
-                }
-                QPushButton:hover {
-                    background: #2f4466;
-                    color: #79a6ff;
-                    border-color: #79a6ff;
-                }
-            """)
+            btn.setObjectName("chipButton")
             btn.clicked.connect(
                 lambda checked, c=code: self._quick_add_stock(c)
             )
@@ -381,29 +347,10 @@ class AutoLearnDialog(QDialog):
 
         self.stock_list = QListWidget()
         self.stock_list.setMinimumHeight(120)
+        self.stock_list.setObjectName("dialogStockList")
         self.stock_list.setSelectionMode(
             QAbstractItemView.SelectionMode.ExtendedSelection
         )
-        self.stock_list.setStyleSheet("""
-            QListWidget {
-                background: #0c1728;
-                border: 1px solid #2f4466;
-                border-radius: 6px;
-                color: #dbe4f3;
-                font-size: 12px;
-            }
-            QListWidget::item {
-                padding: 6px 10px;
-                border-bottom: 1px solid #14243d;
-            }
-            QListWidget::item:selected {
-                background: #2f5fda;
-                color: white;
-            }
-            QListWidget::item:hover:!selected {
-                background: #0f1b2e;
-            }
-        """)
         list_layout.addWidget(self.stock_list)
 
         list_btn_row = QHBoxLayout()
@@ -419,9 +366,7 @@ class AutoLearnDialog(QDialog):
         list_btn_row.addStretch()
 
         self.stock_count_label = QLabel("0 stocks in list")
-        self.stock_count_label.setStyleSheet(
-            "color: #aac3ec; font-size: 12px;"
-        )
+        self.stock_count_label.setObjectName("stockCountLabel")
         list_btn_row.addWidget(self.stock_count_label)
 
         list_layout.addLayout(list_btn_row)
@@ -522,7 +467,7 @@ class AutoLearnDialog(QDialog):
         raw = self.search_input.text().strip()
         if not raw:
             self.search_result_label.setText(
-                '<span style="color: #d8a03a;">'
+                f'<span style="color: {ModernColors.ACCENT_WARNING};">'
                 "Please enter a stock code"
                 "</span>"
             )
@@ -532,7 +477,7 @@ class AutoLearnDialog(QDialog):
 
         if code in self._targeted_stock_codes:
             self.search_result_label.setText(
-                f'<span style="color: #d8a03a;">'
+                f'<span style="color: {ModernColors.ACCENT_WARNING};">'
                 f"Warning: {code} is already in the list"
                 f"</span>"
             )
@@ -542,7 +487,7 @@ class AutoLearnDialog(QDialog):
         self.search_btn.setText("Searching...")
         self.add_btn.setEnabled(False)
         self.search_result_label.setText(
-            f'<span style="color: #aac3ec;">'
+            f'<span style="color: {ModernColors.TEXT_SECONDARY};">'
             f"Validating {code}..."
             f"</span>"
         )
@@ -579,7 +524,7 @@ class AutoLearnDialog(QDialog):
             display += f" - {bars} bars"
 
             self.search_result_label.setText(
-                f'<span style="color: #2f9e44;">Valid: {display}</span>'
+                f'<span style="color: {ModernColors.ACCENT_SUCCESS};">Valid: {display}</span>'
             )
             self.add_btn.setEnabled(True)
 
@@ -588,7 +533,7 @@ class AutoLearnDialog(QDialog):
             self._last_validated_bars = bars
         else:
             self.search_result_label.setText(
-                f'<span style="color: #c92a2a;">Invalid: {code}: {message}</span>'
+                f'<span style="color: {ModernColors.ACCENT_DANGER};">Invalid: {code}: {message}</span>'
             )
             self.add_btn.setEnabled(False)
             self._last_validated_code = ""
@@ -603,7 +548,7 @@ class AutoLearnDialog(QDialog):
 
         if code in self._targeted_stock_codes:
             self.search_result_label.setText(
-                f'<span style="color: #d8a03a;">'
+                f'<span style="color: {ModernColors.ACCENT_WARNING};">'
                 f"Warning: {code} already in list"
                 f"</span>"
             )
@@ -616,7 +561,7 @@ class AutoLearnDialog(QDialog):
 
         self.search_input.clear()
         self.search_result_label.setText(
-            f'<span style="color: #2f9e44;">'
+            f'<span style="color: {ModernColors.ACCENT_SUCCESS};">'
             f"Added {code} to training list"
             f"</span>"
         )
@@ -691,7 +636,8 @@ class AutoLearnDialog(QDialog):
         if count == 0:
             self.stock_count_label.setText("0 stocks in list")
             self.stock_count_label.setStyleSheet(
-                "color: #aac3ec; font-size: 12px;"
+                f"color: {ModernColors.TEXT_SECONDARY}; "
+                f"font-size: {ModernFonts.SIZE_SM}px;"
             )
         else:
             suffix = "s" if count != 1 else ""
@@ -699,7 +645,8 @@ class AutoLearnDialog(QDialog):
                 f"{count} stock{suffix} in list"
             )
             self.stock_count_label.setStyleSheet(
-                "color: #35b57c; font-size: 12px;"
+                f"color: {ModernColors.ACCENT_SUCCESS}; "
+                f"font-size: {ModernFonts.SIZE_SM}px;"
             )
 
     def _load_seed_stocks(self) -> None:
@@ -1192,10 +1139,10 @@ class AutoLearnDialog(QDialog):
         timestamp = datetime.now().strftime("%H:%M:%S")
 
         colors = {
-            "info": "#d3dbe3",
-            "success": "#6fd08c",
-            "warning": "#f2c14e",
-            "error": "#ff8a80",
+            "info": ModernColors.TEXT_SECONDARY,
+            "success": ModernColors.ACCENT_SUCCESS,
+            "warning": ModernColors.ACCENT_WARNING,
+            "error": ModernColors.ACCENT_DANGER,
         }
         tags = {
             "info": "INFO",
@@ -1203,12 +1150,12 @@ class AutoLearnDialog(QDialog):
             "warning": "WARN",
             "error": "ERROR",
         }
-        color = colors.get(level, "#d3dbe3")
+        color = colors.get(level, ModernColors.TEXT_SECONDARY)
         tag = tags.get(level, "INFO")
 
         self.log_text.append(
-            f'<span style="color: #6e7681;">[{timestamp}]</span> '
-            f'<span style="color: #6e7681;">[{tag}]</span> '
+            f'<span style="color: {ModernColors.TEXT_MUTED};">[{timestamp}]</span> '
+            f'<span style="color: {ModernColors.TEXT_MUTED};">[{tag}]</span> '
             f'<span style="color: {color};">{message}</span>'
         )
 
@@ -1224,23 +1171,25 @@ class AutoLearnDialog(QDialog):
     def _green_button_style() -> str:
         return """
             QPushButton {
-                background: #1f8a59;
-                color: white;
-                border: 1px solid #1a774c;
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                    stop:0 #1f8f5f, stop:1 #30b475);
+                color: #f5f9ff;
+                border: 1px solid #49cd95;
                 padding: 11px 24px;
-                border-radius: 8px;
+                border-radius: 10px;
                 font-weight: 600;
                 font-size: 14px;
             }
             QPushButton:hover {
-                background: #249f66;
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                    stop:0 #24a96e, stop:1 #3bc487);
             }
             QPushButton:pressed {
-                background: #1e7c52;
+                background: #1d7f53;
             }
             QPushButton:disabled {
-                background: #172633;
-                border-color: #253754;
+                background: #13243d;
+                border-color: #2a3f5f;
                 color: #6b7d9c;
             }
         """
@@ -1249,23 +1198,25 @@ class AutoLearnDialog(QDialog):
     def _blue_button_style() -> str:
         return """
             QPushButton {
-                background: #2b63d9;
-                color: white;
-                border: 1px solid #2a56b8;
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                    stop:0 #2f67de, stop:1 #3b82f6);
+                color: #f5f9ff;
+                border: 1px solid #5d95ff;
                 padding: 11px 24px;
-                border-radius: 8px;
+                border-radius: 10px;
                 font-weight: 600;
                 font-size: 14px;
             }
             QPushButton:hover {
-                background: #3674f0;
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                    stop:0 #3b75ec, stop:1 #4a95ff);
             }
             QPushButton:pressed {
-                background: #2a5fc9;
+                background: #2a5fcc;
             }
             QPushButton:disabled {
-                background: #172633;
-                border-color: #253754;
+                background: #13243d;
+                border-color: #2a3f5f;
                 color: #6b7d9c;
             }
         """
@@ -1274,112 +1225,60 @@ class AutoLearnDialog(QDialog):
     # =========================================================================
 
     def _apply_style(self) -> None:
-        self.setStyleSheet("""
-            QDialog {
-                background: #0b1422;
-            }
-            QGroupBox {
-                font-weight: 600;
-                border: 1px solid #253754;
-                border-radius: 11px;
-                margin-top: 12px;
-                padding-top: 14px;
-                color: #9ab8ea;
-                background: #0f1b2e;
-            }
-            QGroupBox::title {
-                subcontrol-origin: margin;
-                left: 12px;
-                padding: 0 6px;
-            }
-            QLabel {
-                color: #dbe4f3;
-            }
-            QComboBox, QSpinBox {
-                padding: 8px;
-                border: 1px solid #324968;
-                border-radius: 8px;
-                background: #13223a;
-                color: #dbe4f3;
-                min-width: 120px;
-            }
-            QComboBox:focus, QSpinBox:focus {
-                border-color: #4a7bff;
-            }
-            QComboBox::drop-down {
-                border: none;
-                padding-right: 10px;
-            }
-            QLineEdit {
-                padding: 8px 12px;
-                border: 1px solid #324968;
-                border-radius: 8px;
-                background: #13223a;
-                color: #dbe4f3;
-                font-size: 13px;
-            }
-            QLineEdit:focus {
-                border-color: #4a7bff;
-            }
-            QCheckBox {
-                color: #dbe4f3;
-                spacing: 8px;
-            }
-            QCheckBox::indicator {
-                width: 18px;
-                height: 18px;
-                border-radius: 4px;
-                border: 1px solid #3b5479;
-                background: #13223a;
-            }
-            QCheckBox::indicator:checked {
-                background: #2f5fda;
-                border-color: #2f5fda;
-            }
-            QProgressBar {
-                border: 1px solid #304968;
-                background: #101f34;
-                border-radius: 8px;
-                text-align: center;
-                color: #dbe4f3;
-                min-height: 24px;
-            }
-            QProgressBar::chunk {
-                background: qlineargradient(
-                    x1:0, y1:0, x2:1, y2:0,
-                    stop:0 #2f6be0, stop:1 #39b982
-                );
-                border-radius: 7px;
-            }
-            QTextEdit {
+        self.setStyleSheet(
+            get_dialog_style()
+            + f"""
+            QLabel#dialogTitle {{
+                font-size: {ModernFonts.SIZE_XXL}px;
+                font-weight: {ModernFonts.WEIGHT_BOLD};
+                color: {ModernColors.ACCENT_INFO};
+                padding: 2px 0 4px 0;
+            }}
+            QLabel#dialogStatus {{
+                font-weight: {ModernFonts.WEIGHT_BOLD};
+                font-size: {ModernFonts.SIZE_BASE}px;
+                color: {ModernColors.TEXT_PRIMARY};
+            }}
+            QLabel#searchResultLabel {{
+                font-size: {ModernFonts.SIZE_SM}px;
+                padding: 4px 2px;
+                color: {ModernColors.TEXT_SECONDARY};
+            }}
+            QPushButton#chipButton {{
+                background: #14243d;
+                color: {ModernColors.TEXT_SECONDARY};
+                border: 1px solid {ModernColors.BORDER_SUBTLE};
+                border-radius: 6px;
+                padding: 2px 8px;
+                font-size: {ModernFonts.SIZE_XS}px;
+                min-height: 26px;
+            }}
+            QPushButton#chipButton:hover {{
+                background: #20406b;
+                color: {ModernColors.TEXT_STRONG};
+                border-color: {ModernColors.BORDER_FOCUS};
+            }}
+            QListWidget#dialogStockList {{
                 background: #0c1728;
-                color: #dbe4f3;
-                border: 1px solid #253754;
+                border: 1px solid {ModernColors.BORDER_SUBTLE};
                 border-radius: 8px;
-                font-family: 'Consolas', 'Monaco', monospace;
-                font-size: 12px;
-            }
-            QPushButton {
-                background: #1c3253;
-                color: #eaf1ff;
-                border: 1px solid #3d5f8f;
-                padding: 10px 20px;
-                border-radius: 8px;
-                font-weight: 600;
-            }
-            QPushButton:hover {
-                background: #24416b;
-                border-color: #4a7bff;
-            }
-            QPushButton:pressed {
-                background: #2a4977;
-            }
-            QPushButton:disabled {
-                background: #12223a;
-                border-color: #253754;
-                color: #6b7d9c;
-            }
-        """)
+                color: {ModernColors.TEXT_PRIMARY};
+                font-size: {ModernFonts.SIZE_SM}px;
+            }}
+            QListWidget#dialogStockList::item {{
+                padding: 6px 10px;
+                border-bottom: 1px solid #14243d;
+            }}
+            QListWidget#dialogStockList::item:selected {{
+                background: #2f5fda;
+                color: {ModernColors.TEXT_STRONG};
+            }}
+            QLabel#stockCountLabel {{
+                color: {ModernColors.TEXT_SECONDARY};
+                font-size: {ModernFonts.SIZE_SM}px;
+            }}
+            """
+        )
 
     # =========================================================================
     # =========================================================================

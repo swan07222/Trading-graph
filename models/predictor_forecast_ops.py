@@ -641,30 +641,66 @@ def _get_cache_ttl(self, use_realtime: bool, interval: str) -> float:
         return float(max(0.2, min(base, self._CACHE_TTL_REALTIME)))
     return float(max(0.2, min(base, 2.0)))
 
+def _get_cache_version(self) -> str:
+    """Get current model cache version.
+    
+    FIX CACHE INVALIDATION: Version changes when models are reloaded,
+    ensuring stale predictions aren't served after model updates.
+    """
+    # Use model artifact signature as version
+    return str(getattr(self, "_model_artifact_sig", "v1"))
+
 def _get_cached_prediction(
     self, cache_key: str, ttl: float | None = None
 ) -> Prediction | None:
-    """Get cached prediction if still valid."""
+    """Get cached prediction if still valid.
+    
+    FIX CACHE INVALIDATION: Includes version check to invalidate
+    all cached predictions when models are reloaded.
+    """
     ttl_s = float(self._CACHE_TTL if ttl is None else ttl)
+    cache_version = self._get_cache_version()
+    
     with self._cache_lock:
         entry = self._pred_cache.get(cache_key)
         if entry is not None:
-            ts, pred = entry
-            if (time.time() - ts) < ttl_s:
-                return copy.deepcopy(pred)
-            del self._pred_cache[cache_key]
+            # Entry format: (timestamp, prediction, cache_version)
+            if len(entry) >= 3:
+                ts, pred, version = entry
+                # Invalidate if version mismatch (model was reloaded)
+                if version != cache_version:
+                    del self._pred_cache[cache_key]
+                    return None
+                # Check TTL
+                if (time.time() - ts) < ttl_s:
+                    return copy.deepcopy(pred)
+            else:
+                # Old format without version - invalidate
+                del self._pred_cache[cache_key]
+                return None
     return None
 
 def _set_cached_prediction(self, cache_key: str, pred: Prediction) -> None:
-    """Cache a prediction result with bounded size."""
+    """Cache a prediction result with bounded size.
+    
+    FIX CACHE INVALIDATION: Stores model version with each prediction
+    to enable bulk invalidation on model reload.
+    """
+    cache_version = self._get_cache_version()
+    
     with self._cache_lock:
-        self._pred_cache[cache_key] = (time.time(), copy.deepcopy(pred))
+        # Store version with prediction for invalidation checking
+        self._pred_cache[cache_key] = (
+            time.time(), 
+            copy.deepcopy(pred),
+            cache_version,
+        )
 
         if len(self._pred_cache) > self._MAX_CACHE_SIZE:
             now = time.time()
             expired = [
-                k for k, (ts, _) in self._pred_cache.items()
-                if (now - ts) > self._CACHE_TTL
+                k for k, entry in self._pred_cache.items()
+                if len(entry) >= 1 and (now - entry[0]) > self._CACHE_TTL
             ]
             for k in expired:
                 del self._pred_cache[k]
@@ -673,7 +709,7 @@ def _set_cached_prediction(self, cache_key: str, pred: Prediction) -> None:
             if len(self._pred_cache) > self._MAX_CACHE_SIZE:
                 sorted_keys = sorted(
                     self._pred_cache.keys(),
-                    key=lambda k: self._pred_cache[k][0]
+                    key=lambda k: self._pred_cache[k][0] if len(self._pred_cache[k]) >= 1 else 0
                 )
                 for k in sorted_keys[:len(sorted_keys) // 2]:
                     del self._pred_cache[k]

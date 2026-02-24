@@ -28,6 +28,7 @@ from models.trainer_data_ops import (
 from models.trainer_data_ops import _fetch_raw_data as _fetch_raw_data_impl
 from models.trainer_data_ops import _rebalance_train_samples as _rebalance_train_samples_impl
 from models.trainer_data_ops import _split_single_stock as _split_single_stock_impl
+from models.trainer_data_ops import _validate_temporal_split_integrity as _validate_temporal_split_integrity_impl
 from models.trainer_data_ops import prepare_data as _prepare_data_impl
 from models.trainer_eval_ops import (
     _build_explainability_samples as _build_explainability_samples_impl,

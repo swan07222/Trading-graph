@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from typing import Any
 
 import numpy as np
@@ -295,9 +296,25 @@ def _sanitize_history_df(
         out.index = pd.Index(cleaned_idx)
     return out
 
-def invalidate_cache(self, code: str | None = None) -> None:
-    """Invalidate cache for a specific code or all codes."""
+def invalidate_cache(self, code: str | None = None, force_version_bump: bool = False) -> None:
+    """Invalidate cache for a specific code or all codes.
+    
+    FIX CACHE INVALIDATION: Added force_version_bump option to invalidate
+    all cached predictions by changing the model version signature.
+    
+    Args:
+        code: Specific stock code to invalidate, or None for all
+        force_version_bump: If True, bump model version to invalidate all cache
+    """
     with self._cache_lock:
+        if force_version_bump:
+            # Bump version to invalidate all cached predictions at once
+            # This is more efficient than iterating through all entries
+            current_sig = str(getattr(self, "_model_artifact_sig", "v1"))
+            new_sig = f"{current_sig}.bump.{int(time.time() * 1000) % 10000}"
+            self._model_artifact_sig = new_sig
+            log.debug("Cache version bumped to: %s", new_sig)
+        
         if code:
             key = str(code).strip()
             code6 = self._clean_code(key)
@@ -432,15 +449,30 @@ def _forecast_seed(
     horizon: int,
     seed_context: str = "",
     recent_prices: list[float] | None = None,
+    volatility_context: float = 0.0,
 ) -> int:
     """Deterministic seed for forecast noise.
+    
     Includes symbol/interval context to avoid repeated template curves
     when feature signatures are similar across symbols.
+    
+    FIX DIVERSITY: Enhanced with volatility context and time-based
+    decorrelation to prevent template-like forecasts across stocks.
     """
+    # Context hash from symbol/interval
     ctx_hash = 0
-    for ch in str(seed_context or ""):
+    context_str = str(seed_context or "")
+    for ch in context_str:
         ctx_hash = ((ctx_hash * 131) + ord(ch)) & 0x7FFFFFFF
-
+    
+    # Add price-level invariant hash (avoids similar seeds for similar-priced stocks)
+    price_log_hash = 0
+    if current_price > 0:
+        # Use log price to make seed invariant to price scale
+        price_normalized = int(abs(np.log(max(current_price, 1.0)) * 1000)) & 0x7FFFFFFF
+        price_log_hash = price_normalized
+    
+    # Recent price pattern hash (captures recent volatility pattern)
     recent_hash = 0
     if recent_prices is not None:
         try:
@@ -449,24 +481,50 @@ def _forecast_seed(
                 dtype=float,
             )
             if rp.size > 0:
-                tail = rp[-min(12, rp.size):]
-                weights = np.arange(1, tail.size + 1, dtype=float)
-                recent_hash = int(
-                    abs(np.sum(np.round(tail, 4) * weights) * 10.0)
-                )
+                # Use returns instead of absolute prices for better invariance
+                if rp.size > 1:
+                    returns = np.diff(np.log(rp))
+                    # Quantize returns to reduce sensitivity to small changes
+                    returns_quant = np.round(returns * 100).astype(np.int64)
+                    # Hash the return pattern
+                    for i, val in enumerate(returns_quant[-min(20, len(returns_quant)):]):
+                        recent_hash = ((recent_hash * 137) + int(val)) & 0x7FFFFFFF
+                else:
+                    # Fallback for single price
+                    tail = rp[-min(12, rp.size):]
+                    weights = np.arange(1, tail.size + 1, dtype=float)
+                    recent_hash = int(
+                        abs(np.sum(np.round(tail, 4) * weights) * 10.0)
+                    ) & 0x7FFFFFFF
         except (TypeError, ValueError):
             recent_hash = 0
-
+    
+    # Volatility context adds regime-specific variation
+    vol_hash = 0
+    if volatility_context > 0:
+        vol_hash = int(abs(volatility_context) * 10000) & 0x7FFFFFFF
+    
+    # Direction hint contribution (ensures different seeds for different biases)
+    dir_hash = int((float(np.clip(direction_hint, -1.0, 1.0)) + 1.0) * 500000) & 0x7FFFFFFF
+    
+    # Combine all components with different prime multipliers for mixing
     seed = (
-        int(abs(float(current_price)) * 100)
-        ^ int(abs(float(sequence_signature)) * 1000)
-        ^ int((float(direction_hint) + 1.0) * 100000)
-        ^ int(max(1, int(horizon)) * 131)
-        ^ int(ctx_hash)
-        ^ int(recent_hash)
+        (int(abs(float(sequence_signature)) * 1000) * 17)
+        ^ (int(max(1, int(horizon)) * 131) * 23)
+        ^ (ctx_hash * 31)
+        ^ (price_log_hash * 37)
+        ^ (recent_hash * 41)
+        ^ (vol_hash * 43)
+        ^ dir_hash
     ) % (2**31 - 1)
-
-    return 1 if seed == 0 else int(seed)
+    
+    # Ensure non-zero seed with better distribution
+    if seed == 0:
+        seed = (ctx_hash + price_log_hash + recent_hash) % (2**31 - 1)
+        if seed == 0:
+            seed = 42  # Fallback constant
+    
+    return int(seed)
 
 def _generate_forecast(
     self,
@@ -606,6 +664,7 @@ def _generate_forecast(
             )
 
             # Deterministic symbol-specific residual to avoid template-like tails.
+            # FIX DIVERSITY: Pass volatility context for better seed differentiation
             seed = self._forecast_seed(
                 current_price=current_price,
                 sequence_signature=sequence_signature,
@@ -613,6 +672,7 @@ def _generate_forecast(
                 horizon=horizon,
                 seed_context=seed_context,
                 recent_prices=recent_prices,
+                volatility_context=float(atr_pct),
             )
             rng = np.random.RandomState(seed)
 
@@ -779,6 +839,7 @@ def _generate_forecast(
             price = current_price
 
             # Deterministic seed using sequence signature to keep each symbol distinct.
+            # FIX DIVERSITY: Pass volatility context for better seed differentiation
             seed = self._forecast_seed(
                 current_price=current_price,
                 sequence_signature=sequence_signature,
@@ -786,6 +847,7 @@ def _generate_forecast(
                 horizon=horizon,
                 seed_context=seed_context,
                 recent_prices=recent_prices,
+                volatility_context=float(atr_pct),
             )
             rng = np.random.RandomState(seed)
 
@@ -867,6 +929,7 @@ def _generate_forecast(
 
     max_step = float(max(float(atr_pct) * 0.22, 0.0012))
     drift = float(np.clip(ret_mu + (news_bias * 0.0012), -max_step * 0.45, max_step * 0.45))
+    # FIX DIVERSITY: Pass volatility context for better seed differentiation
     seed = self._forecast_seed(
         current_price=current_price,
         sequence_signature=sequence_signature,
@@ -874,6 +937,7 @@ def _generate_forecast(
         horizon=horizon,
         seed_context=seed_context,
         recent_prices=recent_prices,
+        volatility_context=float(atr_pct),
     )
     rng = np.random.RandomState(seed)
 

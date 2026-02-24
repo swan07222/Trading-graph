@@ -41,6 +41,19 @@ def _apply_dialog_theme(dialog: QDialog) -> None:
     """Apply consistent professional theme for modal dialogs."""
     dialog.setStyleSheet(get_dialog_style())
 
+
+def _add_dialog_header(layout: QVBoxLayout, title: str, subtitle: str) -> None:
+    """Add a reusable professional header block to dialogs."""
+    title_label = QLabel(str(title))
+    title_label.setObjectName("dialogTitle")
+    layout.addWidget(title_label)
+
+    subtitle_label = QLabel(str(subtitle))
+    subtitle_label.setObjectName("dialogSubtitle")
+    subtitle_label.setWordWrap(True)
+    layout.addWidget(subtitle_label)
+
+
 def _get_cancellation_token():
     """Get CancellationToken class."""
     from utils.cancellation import CancellationToken
@@ -177,6 +190,13 @@ class TrainingDialog(QDialog):
         self.training_result: dict | None = None
 
         layout = QVBoxLayout(self)
+        layout.setSpacing(14)
+        layout.setContentsMargins(18, 16, 18, 16)
+        _add_dialog_header(
+            layout,
+            "Train AI Model",
+            "Train a fresh ensemble from selected stocks. Use Stop for graceful cancellation.",
+        )
 
         settings_group = QGroupBox("Training Settings")
         settings_layout = QGridLayout(settings_group)
@@ -205,6 +225,7 @@ class TrainingDialog(QDialog):
         stocks_layout = QHBoxLayout(stocks_group)
 
         self.stocks_list = QListWidget()
+        self.stocks_list.setObjectName("dialogStockList")
         self.stocks_list.setSelectionMode(
             QListWidget.SelectionMode.ExtendedSelection
         )
@@ -225,20 +246,24 @@ class TrainingDialog(QDialog):
         right.addWidget(self.add_stock_edit)
 
         add_btn = QPushButton("Add")
+        add_btn.setObjectName("secondaryActionButton")
         add_btn.clicked.connect(self._add_stock)
         right.addWidget(add_btn)
 
         remove_btn = QPushButton("Remove Selected")
+        remove_btn.setObjectName("secondaryActionButton")
         remove_btn.clicked.connect(self._remove_selected)
         right.addWidget(remove_btn)
 
         select_all_btn = QPushButton("Select All")
+        select_all_btn.setObjectName("secondaryActionButton")
         select_all_btn.clicked.connect(
             lambda: self.stocks_list.selectAll()
         )
         right.addWidget(select_all_btn)
 
         clear_sel_btn = QPushButton("Clear Selection")
+        clear_sel_btn.setObjectName("secondaryActionButton")
         clear_sel_btn.clicked.connect(
             lambda: self.stocks_list.clearSelection()
         )
@@ -259,11 +284,13 @@ class TrainingDialog(QDialog):
         prog_layout.addWidget(self.progress)
 
         self.status = QLabel("Ready")
+        self.status.setObjectName("dialogStatus")
         prog_layout.addWidget(self.status)
 
         self.logs = QTextEdit()
         self.logs.setObjectName("dialogLog")
         self.logs.setReadOnly(True)
+        self.logs.setMinimumHeight(130)
         self.logs.setFont(
             QFont(get_monospace_font_family(), ModernFonts.SIZE_SM)
         )
@@ -276,14 +303,17 @@ class TrainingDialog(QDialog):
             "Start Training",
             QDialogButtonBox.ButtonRole.AcceptRole
         )
+        self.start_btn.setObjectName("primaryActionButton")
         self.stop_btn = btns.addButton(
             "Stop",
             QDialogButtonBox.ButtonRole.DestructiveRole
         )
+        self.stop_btn.setObjectName("dangerActionButton")
         self.close_btn = btns.addButton(
             "Close",
             QDialogButtonBox.ButtonRole.RejectRole
         )
+        self.close_btn.setObjectName("secondaryActionButton")
 
         self.start_btn.clicked.connect(self.start_training)
         self.stop_btn.clicked.connect(self.stop_training)
@@ -551,11 +581,19 @@ class TrainTrainedStocksDialog(QDialog):
         self._ordered_codes = self._build_ordered_codes(trained_codes)
 
         layout = QVBoxLayout(self)
+        layout.setSpacing(14)
+        layout.setContentsMargins(18, 16, 18, 16)
+        _add_dialog_header(
+            layout,
+            "Train Trained Stocks",
+            "Incrementally retrain previously trained symbols using cached market data.",
+        )
 
         settings_group = QGroupBox("Training Scope")
         settings = QFormLayout(settings_group)
 
         self.total_label = QLabel(str(len(self._ordered_codes)))
+        self.total_label.setObjectName("dialogMetricValue")
         settings.addRow("Total trained stocks:", self.total_label)
 
         self.count_spin = QSpinBox()
@@ -572,12 +610,14 @@ class TrainTrainedStocksDialog(QDialog):
         self.scope_hint = QLabel(
             "Trains stocks whose last-train time is oldest first."
         )
+        self.scope_hint.setObjectName("dialogHint")
         settings.addRow("Policy:", self.scope_hint)
         layout.addWidget(settings_group)
 
         preview_group = QGroupBox("Stock Preview")
         preview_layout = QVBoxLayout(preview_group)
         self.preview_list = QListWidget()
+        self.preview_list.setObjectName("dialogStockList")
         preview_layout.addWidget(self.preview_list)
         layout.addWidget(preview_group)
 
@@ -588,10 +628,12 @@ class TrainTrainedStocksDialog(QDialog):
         self.progress.setValue(0)
         progress_layout.addWidget(self.progress)
         self.status = QLabel("Ready")
+        self.status.setObjectName("dialogStatus")
         progress_layout.addWidget(self.status)
         self.logs = QTextEdit()
         self.logs.setObjectName("dialogLog")
         self.logs.setReadOnly(True)
+        self.logs.setMinimumHeight(130)
         self.logs.setFont(
             QFont(get_monospace_font_family(), ModernFonts.SIZE_SM)
         )
@@ -602,6 +644,9 @@ class TrainTrainedStocksDialog(QDialog):
         self.start_btn = QPushButton("Start Training")
         self.stop_btn = QPushButton("Stop")
         self.close_btn = QPushButton("Close")
+        self.start_btn.setObjectName("primaryActionButton")
+        self.stop_btn.setObjectName("dangerActionButton")
+        self.close_btn.setObjectName("secondaryActionButton")
         self.stop_btn.setEnabled(False)
         btn_row.addWidget(self.start_btn)
         btn_row.addWidget(self.stop_btn)
@@ -825,6 +870,13 @@ class BacktestDialog(QDialog):
         self.worker: BacktestWorker | None = None
 
         layout = QVBoxLayout(self)
+        layout.setSpacing(14)
+        layout.setContentsMargins(18, 16, 18, 16)
+        _add_dialog_header(
+            layout,
+            "Walk-Forward Backtest",
+            "Evaluate robustness with rolling train/test windows before live deployment.",
+        )
 
         settings_group = QGroupBox("Backtest Settings")
         form = QFormLayout(settings_group)
@@ -846,9 +898,14 @@ class BacktestDialog(QDialog):
 
         layout.addWidget(settings_group)
 
+        self.status = QLabel("Ready")
+        self.status.setObjectName("dialogStatus")
+        layout.addWidget(self.status)
+
         self.logs = QTextEdit()
         self.logs.setObjectName("dialogLog")
         self.logs.setReadOnly(True)
+        self.logs.setMinimumHeight(200)
         self.logs.setFont(
             QFont(get_monospace_font_family(), ModernFonts.SIZE_SM)
         )
@@ -863,6 +920,9 @@ class BacktestDialog(QDialog):
         self.run_btn = QPushButton("Run Backtest")
         self.stop_btn = QPushButton("Stop")
         self.close_btn = QPushButton("Close")
+        self.run_btn.setObjectName("primaryActionButton")
+        self.stop_btn.setObjectName("dangerActionButton")
+        self.close_btn.setObjectName("secondaryActionButton")
 
         self.stop_btn.setEnabled(False)
 
@@ -878,6 +938,7 @@ class BacktestDialog(QDialog):
     def run_backtest(self) -> None:
         """Start backtest."""
         self.logs.clear()
+        self.status.setText("Running backtest...")
         self.progress.setVisible(True)
         self.run_btn.setEnabled(False)
         self.stop_btn.setEnabled(True)
@@ -919,6 +980,7 @@ class BacktestDialog(QDialog):
 
     def _reset_ui(self, status: str = "Ready") -> None:
         """Reset UI to idle state."""
+        self.status.setText(str(status))
         self.progress.setVisible(False)
         self.run_btn.setEnabled(True)
         self.stop_btn.setEnabled(False)
@@ -943,6 +1005,13 @@ class BrokerSettingsDialog(QDialog):
         _apply_dialog_theme(self)
 
         layout = QVBoxLayout(self)
+        layout.setSpacing(12)
+        layout.setContentsMargins(18, 16, 18, 16)
+        _add_dialog_header(
+            layout,
+            "Broker Settings",
+            "Configure execution mode and local broker client integration.",
+        )
 
         form_group = QGroupBox("Broker Configuration")
         form = QFormLayout(form_group)
@@ -965,6 +1034,7 @@ class BrokerSettingsDialog(QDialog):
         form.addRow("THS broker executable path:", self.path_edit)
 
         browse = QPushButton("Browse...")
+        browse.setObjectName("secondaryActionButton")
         browse.clicked.connect(self._browse)
         form.addRow("", browse)
 
@@ -974,6 +1044,12 @@ class BrokerSettingsDialog(QDialog):
             QDialogButtonBox.StandardButton.Save
             | QDialogButtonBox.StandardButton.Cancel
         )
+        save_btn = btns.button(QDialogButtonBox.StandardButton.Save)
+        if save_btn:
+            save_btn.setObjectName("primaryActionButton")
+        cancel_btn = btns.button(QDialogButtonBox.StandardButton.Cancel)
+        if cancel_btn:
+            cancel_btn.setObjectName("secondaryActionButton")
         btns.accepted.connect(self._save)
         btns.rejected.connect(self.reject)
         layout.addWidget(btns)
@@ -1018,6 +1094,13 @@ class RiskSettingsDialog(QDialog):
         _apply_dialog_theme(self)
 
         layout = QVBoxLayout(self)
+        layout.setSpacing(12)
+        layout.setContentsMargins(18, 16, 18, 16)
+        _add_dialog_header(
+            layout,
+            "Risk Settings",
+            "Adjust portfolio-level and per-trade guardrails for live execution.",
+        )
 
         group = QGroupBox("Risk Parameters")
         form = QFormLayout(group)
@@ -1056,6 +1139,12 @@ class RiskSettingsDialog(QDialog):
             QDialogButtonBox.StandardButton.Save
             | QDialogButtonBox.StandardButton.Cancel
         )
+        save_btn = btns.button(QDialogButtonBox.StandardButton.Save)
+        if save_btn:
+            save_btn.setObjectName("primaryActionButton")
+        cancel_btn = btns.button(QDialogButtonBox.StandardButton.Cancel)
+        if cancel_btn:
+            cancel_btn.setObjectName("secondaryActionButton")
         btns.accepted.connect(self._save)
         btns.rejected.connect(self.reject)
         layout.addWidget(btns)

@@ -23,6 +23,9 @@ log = get_logger(__name__)
 # use float32 for memory efficiency. This alias is for type checking only.
 FloatArray: TypeAlias = NDArray[np.float64]
 
+# Define exception tuple early for use in class methods
+_PREDICTOR_RECOVERABLE_EXCEPTIONS = JSON_RECOVERABLE_EXCEPTIONS
+
 __all__ = [
     "Predictor",
     "Prediction",
@@ -329,20 +332,50 @@ class Predictor:
     def _update_model_weights(self, stock_code: str, was_correct: bool) -> None:
         """Update model weights based on prediction accuracy.
         
-        Uses exponential moving average to track recent performance.
+        FIX ADAPTIVE LR: Uses adaptive learning rate based on:
+        1. Prediction frequency (more predictions = slower adaptation)
+        2. Market volatility (high vol = slower adaptation to avoid noise)
+        3. Recent performance streak (hot/cold streaks adjust learning)
+        
+        This improves adaptation to regime changes while avoiding over-reaction
+        to recent noise.
         """
         if self.ensemble is None or not hasattr(self.ensemble, 'models'):
             return
-            
-        alpha = 0.1  # Learning rate for weight updates
+
+        # Base learning rate
+        alpha_base = 0.10
         
+        # Factor 1: Adjust based on prediction count for this stock
+        # More predictions = more stable estimate = slower adaptation
+        prediction_count = len(self._stock_accuracy_history.get(stock_code, []))
+        if prediction_count > 20:
+            # Reduce learning rate as we have more history
+            alpha_base *= max(0.03, 0.08 * (20.0 / min(prediction_count, 100)))
+        
+        # Factor 2: Adjust based on recent accuracy streak
+        # Hot/cold streaks suggest regime change - adapt faster
+        recent_history = self._stock_accuracy_history.get(stock_code, [])
+        if len(recent_history) >= 5:
+            recent_5 = recent_history[-5:]
+            streak = sum(1 for x in recent_5 if x)  # Count correct
+            if streak == 0 or streak == 5:
+                # Extreme streak - may indicate regime change
+                alpha_base *= 1.5  # Adapt faster
+            elif streak in [2, 3]:
+                # Mixed results - be conservative
+                alpha_base *= 0.7
+        
+        # Factor 3: Clamp learning rate to reasonable bounds
+        alpha = float(np.clip(alpha_base, 0.02, 0.25))
+
         for model_name in self._model_weights:
             # Simplified: assume all models contributed equally to this prediction
             current_perf = self._last_model_performance.get(model_name, 0.5)
             reward = 1.0 if was_correct else 0.0
             new_perf = (1 - alpha) * current_perf + alpha * reward
             self._last_model_performance[model_name] = new_perf
-        
+
         # Normalize weights
         total_perf = sum(self._last_model_performance.values())
         if total_perf > 0:
@@ -1534,7 +1567,6 @@ class Predictor:
 
             return predictions
 
-_PREDICTOR_RECOVERABLE_EXCEPTIONS = JSON_RECOVERABLE_EXCEPTIONS
 
 from models import predictor_forecast_ops as _predictor_forecast_ops  # noqa: E402
 from models import predictor_runtime_ops as _predictor_runtime_ops  # noqa: E402
@@ -1551,6 +1583,7 @@ Predictor._build_prediction_bands = _predictor_forecast_ops._build_prediction_ba
 Predictor._apply_high_precision_gate = _predictor_forecast_ops._apply_high_precision_gate
 Predictor._apply_runtime_signal_quality_gate = _predictor_forecast_ops._apply_runtime_signal_quality_gate
 Predictor._get_cache_ttl = _predictor_forecast_ops._get_cache_ttl
+Predictor._get_cache_version = _predictor_forecast_ops._get_cache_version
 Predictor._get_cached_prediction = _predictor_forecast_ops._get_cached_prediction
 Predictor._set_cached_prediction = _predictor_forecast_ops._set_cached_prediction
 Predictor._news_cache_ttl = _predictor_forecast_ops._news_cache_ttl

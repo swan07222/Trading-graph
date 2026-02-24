@@ -1,16 +1,14 @@
 """Tests for multi-asset trading types (futures, options, forex, crypto)."""
-import pytest
-from datetime import date, datetime
+from datetime import date
 
 from core.types import (
     AssetType,
-    FuturesContract,
-    OptionsContract,
-    ForexPair,
     CryptoAsset,
+    ForexPair,
+    FuturesContract,
     MultiAssetPosition,
+    OptionsContract,
     OptionType,
-    ExerciseStyle,
 )
 
 
