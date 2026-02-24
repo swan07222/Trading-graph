@@ -51,17 +51,17 @@ class SignalPanel(QFrame):
     def __init__(self) -> None:
         super().__init__()
         self.setObjectName("signalPanelFrame")
-        self.setMinimumHeight(220)
+        self.setMinimumHeight(160)
         self._setup_ui()
 
     def _setup_ui(self) -> None:
         layout = QVBoxLayout(self)
-        layout.setSpacing(ModernSpacing.LG)
+        layout.setSpacing(ModernSpacing.BASE)
         layout.setContentsMargins(
-            ModernSpacing.XL,
-            ModernSpacing.XL,
-            ModernSpacing.XL,
-            ModernSpacing.XL,
+            ModernSpacing.LG,
+            ModernSpacing.LG,
+            ModernSpacing.LG,
+            ModernSpacing.LG,
         )
 
         self.signal_label = QLabel("WAITING")
@@ -69,7 +69,7 @@ class SignalPanel(QFrame):
         self.signal_label.setFont(
             QFont(
                 get_display_font_family(),
-                ModernFonts.SIZE_HERO,
+                ModernFonts.SIZE_XXL,
                 QFont.Weight.Bold,
             )
         )
@@ -78,7 +78,7 @@ class SignalPanel(QFrame):
 
         self.info_label = QLabel("Enter a stock code to analyze")
         self.info_label.setFont(
-            QFont(get_primary_font_family(), ModernFonts.SIZE_BASE)
+            QFont(get_primary_font_family(), ModernFonts.SIZE_SM)
         )
         self.info_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.info_label.setStyleSheet(
@@ -109,6 +109,7 @@ class SignalPanel(QFrame):
         )
         self.prob_down = QProgressBar()
         self.prob_down.setFormat("%p%")
+        self.prob_down.setFixedHeight(14)
         self.prob_down.setStyleSheet(get_progress_bar_style("danger"))
         down_container.addWidget(down_label)
         down_container.addWidget(self.prob_down)
@@ -127,6 +128,7 @@ class SignalPanel(QFrame):
         )
         self.prob_neutral = QProgressBar()
         self.prob_neutral.setFormat("%p%")
+        self.prob_neutral.setFixedHeight(14)
         self.prob_neutral.setStyleSheet(get_progress_bar_style("warning"))
         neutral_container.addWidget(neutral_label)
         neutral_container.addWidget(self.prob_neutral)
@@ -145,6 +147,7 @@ class SignalPanel(QFrame):
         )
         self.prob_up = QProgressBar()
         self.prob_up.setFormat("%p%")
+        self.prob_up.setFixedHeight(14)
         self.prob_up.setStyleSheet(get_progress_bar_style("success"))
         up_container.addWidget(up_label)
         up_container.addWidget(self.prob_up)
@@ -154,18 +157,18 @@ class SignalPanel(QFrame):
 
         self.action_label = QLabel("")
         self.action_label.setFont(
-            QFont(get_primary_font_family(), ModernFonts.SIZE_BASE)
+            QFont(get_primary_font_family(), ModernFonts.SIZE_SM)
         )
         self.action_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.action_label.setWordWrap(True)
         self.action_label.setStyleSheet(
-            f"color: {ModernColors.TEXT_SECONDARY}; padding: 8px 0;"
+            f"color: {ModernColors.TEXT_SECONDARY}; padding: 4px 0;"
         )
         layout.addWidget(self.action_label)
 
         self.conf_label = QLabel("")
         self.conf_label.setFont(
-            QFont(get_primary_font_family(), ModernFonts.SIZE_SM)
+            QFont(get_primary_font_family(), ModernFonts.SIZE_XS)
         )
         self.conf_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.conf_label.setStyleSheet(
@@ -184,7 +187,7 @@ class SignalPanel(QFrame):
                     stop:0 {ModernColors.BG_SECONDARY},
                     stop:1 {ModernColors.BG_PRIMARY}
                 );
-                border-radius: 14px;
+                border-radius: 12px;
                 border: 1px solid {ModernColors.BORDER_DEFAULT};
             }}
             QLabel {{
@@ -205,27 +208,93 @@ class SignalPanel(QFrame):
         code = safe_str_attr(pred, "stock_code")
         name = safe_str_attr(pred, "stock_name")
         price = safe_float_attr(pred, "current_price")
+        warnings = [
+            str(x).strip()
+            for x in list(getattr(pred, "warnings", []) or [])
+            if str(x).strip()
+        ]
+        forecast_vals = list(getattr(pred, "predicted_prices", []) or [])
+        model_missing = any(
+            "no trained model artifacts loaded" in w.lower()
+            for w in warnings
+        )
+        data_not_ready = any(
+            ("insufficient data" in w.lower()) or ("prediction error" in w.lower())
+            for w in warnings
+        )
+        prediction_unavailable = bool(
+            (model_missing and not forecast_vals)
+            or (data_not_ready and not forecast_vals)
+        )
 
-        self.signal_label.setText(sig_text)
+        if model_missing and prediction_unavailable:
+            self.signal_label.setText("NO_MODEL")
+        elif data_not_ready and prediction_unavailable:
+            self.signal_label.setText("WARMING_UP")
+        else:
+            self.signal_label.setText(sig_text)
         self.info_label.setText(f"{code} - {name} | CNY {price:.2f}")
 
-        # FIX: Ensure probabilities sum to 100% by normalizing
-        prob_down = safe_float_attr(pred, "prob_down", 0.33)
-        prob_neutral = safe_float_attr(pred, "prob_neutral", 0.34)
-        prob_up = safe_float_attr(pred, "prob_up", 0.33)
-        
+        # Compute probabilities from model output; fallback to signal-derived
+        # distribution only when explicit probabilities are missing.
+        confidence = safe_float_attr(pred, "confidence", 0.5)
+
+        def _opt_prob(attr: str) -> float | None:
+            raw = getattr(pred, attr, None)
+            if raw is None:
+                return None
+            try:
+                val = float(raw)
+            except (TypeError, ValueError, OverflowError):
+                return None
+            if not (val >= 0.0):
+                return None
+            return val
+
+        # Try explicit model probabilities first.
+        prob_down = _opt_prob("prob_down")
+        prob_neutral = _opt_prob("prob_neutral")
+        prob_up = _opt_prob("prob_up")
+
+        # If probabilities not provided, derive from signal and confidence
+        if prob_down is None or prob_neutral is None or prob_up is None:
+            if Signal is not None and sig is not None:
+                if sig in (Signal.STRONG_BUY, Signal.BUY):
+                    # Bullish: high up probability
+                    base_up = 0.70 if sig == Signal.STRONG_BUY else 0.55
+                    prob_up = min(0.95, base_up + confidence * 0.25)
+                    prob_down = max(0.05, (1.0 - prob_up) * 0.3)
+                    prob_neutral = 1.0 - prob_up - prob_down
+                elif sig in (Signal.STRONG_SELL, Signal.SELL):
+                    # Bearish: high down probability
+                    base_down = 0.70 if sig == Signal.STRONG_SELL else 0.55
+                    prob_down = min(0.95, base_down + confidence * 0.25)
+                    prob_up = max(0.05, (1.0 - prob_down) * 0.3)
+                    prob_neutral = 1.0 - prob_down - prob_up
+                else:
+                    # HOLD: neutral dominant
+                    prob_neutral = 0.60 + confidence * 0.30
+                    prob_up = (1.0 - prob_neutral) * 0.5
+                    prob_down = 1.0 - prob_neutral - prob_up
+            else:
+                # Default uniform distribution
+                prob_down, prob_neutral, prob_up = 0.33, 0.34, 0.33
+
+        if prediction_unavailable:
+            prob_down, prob_neutral, prob_up = 0.0, 0.0, 0.0
+
         # Normalize to ensure they sum to 1.0 (100%)
         total = prob_down + prob_neutral + prob_up
         if total > 0 and abs(total - 1.0) > 1e-6:
             prob_down /= total
             prob_neutral /= total
             prob_up /= total
-        
+
         # Ensure all probabilities are in valid range [0, 1]
         prob_down = max(0.0, min(1.0, prob_down))
         prob_neutral = max(0.0, min(1.0, prob_neutral))
         prob_up = max(0.0, min(1.0, prob_up))
-        
+
         # Final normalization after clamping
         total = prob_down + prob_neutral + prob_up
         if total > 0:
@@ -244,7 +313,11 @@ class SignalPanel(QFrame):
         stop = safe_float_attr(levels, "stop_loss") if levels else 0.0
         tgt2 = safe_float_attr(levels, "target_2") if levels else 0.0
 
-        if Signal is not None and shares > 0:
+        if model_missing and prediction_unavailable:
+            self.action_label.setText("Model unavailable - train model to enable guessing")
+        elif data_not_ready and prediction_unavailable:
+            self.action_label.setText("Data warming up - waiting for enough valid candles")
+        elif Signal is not None and shares > 0:
             if sig in (Signal.STRONG_BUY, Signal.BUY):
                 self.action_label.setText(
                     f"BUY {shares:,} shares @ CNY {entry:.2f}\n"
@@ -264,16 +337,25 @@ class SignalPanel(QFrame):
             safe_float_attr(pred, "agreement", 1.0),
         )
         strength = safe_float_attr(pred, "signal_strength")
+        display_strength = strength
+        if Signal is not None and sig == Signal.HOLD:
+            # HOLD should emphasize directional edge, not confidence.
+            display_strength = max(0.0, min(1.0, abs(prob_up - prob_down)))
         uncertainty = safe_float_attr(pred, "uncertainty_score", 0.5)
         tail_risk = safe_float_attr(pred, "tail_risk_score", 0.5)
 
-        self.conf_label.setText(
-            f"Confidence: {confidence:.0%} | "
-            f"Model Agreement: {agreement:.0%} | "
-            f"Signal Strength: {strength:.0%} | "
-            f"Uncertainty: {uncertainty:.2f} | "
-            f"Tail Risk: {tail_risk:.2f}"
-        )
+        if model_missing and prediction_unavailable:
+            self.conf_label.setText("Confidence: N/A | Guessing disabled until model is trained")
+        elif data_not_ready and prediction_unavailable:
+            self.conf_label.setText("Confidence: N/A | Waiting for enough valid bars")
+        else:
+            self.conf_label.setText(
+                f"Confidence: {confidence:.0%} | "
+                f"Model Agreement: {agreement:.0%} | "
+                f"Signal Strength: {display_strength:.0%} | "
+                f"Uncertainty: {uncertainty:.2f} | "
+                f"Tail Risk: {tail_risk:.2f}"
+            )
 
         if Signal is not None:
             colors = {
@@ -294,8 +376,8 @@ class SignalPanel(QFrame):
                     x1:0, y1:0, x2:0, y2:1,
                     stop:0 {fg}22, stop:1 {bg}
                 );
-                border-radius: 14px;
-                border: 2px solid {fg};
+                border-radius: 12px;
+                border: 1px solid {fg};
             }}
             QLabel {{
                 color: {fg};
@@ -431,7 +513,8 @@ class LogWidget(QTextEdit):
         self.setReadOnly(True)
         mono_font = get_monospace_font_family()
         self.setFont(QFont(mono_font, ModernFonts.SIZE_SM))
-        self.setMaximumHeight(200)
+        self.setMinimumHeight(220)
+        self.setMaximumHeight(380)
         self.setStyleSheet(
             f"""
             QTextEdit {{

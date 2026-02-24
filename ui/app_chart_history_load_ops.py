@@ -184,7 +184,10 @@ def _load_chart_history_bars(
                 except _APP_CHART_RECOVERABLE_EXCEPTIONS:
                     o = 0.0
                 if o <= 0:
-                    o = float(ref_close if ref_close and ref_close > 0 else c)
+                    if source_iv in {"1d", "1wk", "1mo"}:
+                        o = float(c)
+                    else:
+                        o = float(ref_close if ref_close and ref_close > 0 else c)
                 h = float(row.get("high", max(o, c)) or max(o, c))
                 low = float(row.get("low", min(o, c)) or min(o, c))
                 sanitized = self._sanitize_ohlc(
@@ -230,7 +233,7 @@ def _load_chart_history_bars(
                 prev_epoch = float(epoch)
 
         # Include session-persisted bars so refresh/restart keeps data continuity.
-        if self._session_bar_cache is not None and not force_refresh:
+        if self._session_bar_cache is not None and not force_refresh and market_open:
             sdf = self._session_bar_cache.read_history(
                 symbol, source_iv, bars=source_lookback, final_only=False
             )
@@ -252,7 +255,10 @@ def _load_chart_history_bars(
                     except _APP_CHART_RECOVERABLE_EXCEPTIONS:
                         o = 0.0
                     if o <= 0:
-                        o = float(ref_close if ref_close and ref_close > 0 else c)
+                        if source_iv in {"1d", "1wk", "1mo"}:
+                            o = float(c)
+                        else:
+                            o = float(ref_close if ref_close and ref_close > 0 else c)
                     h = float(row.get("high", max(o, c)) or max(o, c))
                     low = float(row.get("low", min(o, c)) or min(o, c))
                     sanitized = self._sanitize_ohlc(

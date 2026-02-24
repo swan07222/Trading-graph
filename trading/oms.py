@@ -246,16 +246,25 @@ class OrderManagementSystem:
         return self._db.load_active_orders()
 
     def submit_order(self, order: Order) -> Order:
-        """Submit order with validation and reservation."""
+        """Submit order with validation and reservation.
+        
+        FIX C8: Added NaN/Inf validation to prevent invalid orders.
+        """
+        import math
+        
         with self._lock:
             self._check_new_day()
 
-            if order.quantity <= 0:
-                raise OrderValidationError("Quantity must be positive")
-
-            if order.price is None or float(order.price) <= 0:
+            # FIX C8: Validate quantity is positive and finite (not NaN/Inf)
+            if order.quantity <= 0 or not math.isfinite(order.quantity):
                 raise OrderValidationError(
-                    "Order price must be provided (>0) for OMS reservation"
+                    "Quantity must be positive and finite (not NaN or Inf)"
+                )
+
+            # FIX C8: Validate price is positive and finite (not NaN/Inf)
+            if order.price is None or float(order.price) <= 0 or not math.isfinite(float(order.price)):
+                raise OrderValidationError(
+                    "Order price must be positive and finite (not NaN or Inf)"
                 )
 
             from core.constants import get_lot_size

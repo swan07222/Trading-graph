@@ -203,6 +203,37 @@ def _analyze_stock(self) -> None:
         return
 
     if self.predictor is None or self.predictor.ensemble is None:
+        if hasattr(self.signal_panel, "reset"):
+            self.signal_panel.reset()
+        selected = self._ui_norm(code)
+        try:
+            if (
+                self.current_prediction
+                and getattr(self.current_prediction, "stock_code", "") == selected
+            ):
+                self.current_prediction.predicted_prices = []
+                self.current_prediction.predicted_prices_low = []
+                self.current_prediction.predicted_prices_high = []
+        except _UI_RECOVERABLE_EXCEPTIONS:
+            pass
+        try:
+            interval_no_model = self._normalize_interval_token(
+                self.interval_combo.currentText()
+            )
+            arr = list(self._bars_by_symbol.get(selected) or [])
+            if arr:
+                self._render_chart_state(
+                    symbol=selected,
+                    interval=interval_no_model,
+                    bars=arr,
+                    context="analyze_no_model",
+                    predicted_prices=[],
+                    source_interval=interval_no_model,
+                    target_steps=int(self.forecast_spin.value()),
+                    predicted_prepared=True,
+                )
+        except _UI_RECOVERABLE_EXCEPTIONS as exc:
+            log.debug("Suppressed exception in ui/app.py", exc_info=exc)
         self.log(
             "No model loaded. Please train a model first.", "error"
         )
@@ -339,8 +370,8 @@ def _analyze_stock(self) -> None:
             interval=infer_interval,
             forecast_minutes=infer_horizon,
             lookback_bars=infer_lookback,
-            skip_cache=bool(skip_cache),
-            history_allow_online=history_allow_online,
+            skip_cache=True,  # FIX: Bypass prediction cache for fresh data
+            history_allow_online=True,  # FIX: Force online fetch
         )
 
     worker = WorkerThread(analyze, timeout_seconds=120)
@@ -399,6 +430,8 @@ def _on_analysis_done(self, pred: Any) -> None:
         int(self.lookback_spin.value()),
         self._seven_day_lookback(interval),
     )
+
+    predicted_prices = list(getattr(pred, "predicted_prices", []) or [])
 
     if symbol:
         arr = self._load_chart_history_bars(symbol, interval, lookback)
@@ -539,7 +572,7 @@ def _on_analysis_done(self, pred: Any) -> None:
                     bars=arr,
                     context="analysis_done",
                     current_price=current_price if current_price > 0 else None,
-                    predicted_prices=getattr(pred, "predicted_prices", []) or [],
+                    predicted_prices=predicted_prices,
                     source_interval=self._normalize_interval_token(
                         getattr(pred, "interval", interval),
                         fallback=interval,
@@ -682,6 +715,12 @@ def _update_details(self, pred: Any) -> None:
     prob_neutral = safe_get(pred, 'prob_neutral', 0.34)
     prob_down = safe_get(pred, 'prob_down', 0.33)
     signal_strength = safe_get(pred, 'signal_strength', 0)
+    if signal == Signal.HOLD:
+        try:
+            signal_strength = max(0.0, min(1.0, abs(float(prob_up) - float(prob_down))))
+        except _UI_RECOVERABLE_EXCEPTIONS as exc:
+            log.debug("Suppressed exception in ui/app.py", exc_info=exc)
+            signal_strength = 0.0
     confidence = safe_get(pred, 'confidence', 0)
     agreement = safe_get(pred, 'model_agreement', 1.0)
     entropy = safe_get(pred, 'entropy', 0.0)
@@ -695,6 +734,18 @@ def _update_details(self, pred: Any) -> None:
     position = getattr(pred, 'position', None)
     reasons = getattr(pred, 'reasons', [])
     warnings = getattr(pred, 'warnings', [])
+    forecast_vals = list(getattr(pred, "predicted_prices", []) or [])
+    data_not_ready = bool(
+        (
+            safe_get(pred, "current_price", 0) <= 0
+            or any(
+                ("insufficient data" in str(w).lower())
+                or ("prediction error" in str(w).lower())
+                for w in list(warnings or [])
+            )
+        )
+        and not forecast_vals
+    )
 
     news_html = ""
     try:
@@ -779,6 +830,37 @@ def _update_details(self, pred: Any) -> None:
     except _UI_RECOVERABLE_EXCEPTIONS as e:
         log.debug(f"News sentiment fetch: {e}")
 
+    prediction_html = (
+        '<span class="label">AI Prediction: warming up (not enough valid bars yet)</span>'
+        if data_not_ready
+        else (
+            f'<span class="label">AI Prediction: </span>'
+            f'<span class="positive">UP {prob_up:.0%}</span> | '
+            f'<span class="neutral">NEUTRAL {prob_neutral:.0%}</span> | '
+            f'<span class="negative">DOWN {prob_down:.0%}</span>'
+        )
+    )
+    quality_html = (
+        '<span class="label">Model Quality: Confidence=N/A | Agreement=N/A | Entropy=N/A | Margin=N/A</span>'
+        if data_not_ready
+        else (
+            f'<span class="label">Model Quality: </span>'
+            f'Confidence={confidence:.0%} | '
+            f'Agreement={agreement:.0%} | '
+            f'Entropy={entropy:.2f} | '
+            f'Margin={margin:.2f}'
+        )
+    )
+    uncertainty_html = (
+        '<span class="label">Uncertainty: Score=N/A | Tail Risk=N/A</span>'
+        if data_not_ready
+        else (
+            f'<span class="label">Uncertainty: </span>'
+            f'Score={uncertainty_score:.2f} | '
+            f'Tail Risk={tail_risk_score:.2f}'
+        )
+    )
+
     html = f"""
     <style>
         body {{
@@ -808,24 +890,15 @@ def _update_details(self, pred: Any) -> None:
     </div>
 
     <div class="section">
-        <span class="label">AI Prediction: </span>
-        <span class="positive">UP {prob_up:.0%}</span> |
-        <span class="neutral">NEUTRAL {prob_neutral:.0%}</span> |
-        <span class="negative">DOWN {prob_down:.0%}</span>
+        {prediction_html}
     </div>
 
     <div class="section">
-        <span class="label">Model Quality: </span>
-        Confidence={confidence:.0%} |
-        Agreement={agreement:.0%} |
-        Entropy={entropy:.2f} |
-        Margin={margin:.2f}
+        {quality_html}
     </div>
 
     <div class="section">
-        <span class="label">Uncertainty: </span>
-        Score={uncertainty_score:.2f} |
-        Tail Risk={tail_risk_score:.2f}
+        {uncertainty_html}
     </div>
 
     {news_html}

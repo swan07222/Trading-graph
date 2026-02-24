@@ -424,30 +424,10 @@ def _get_history_cn_intraday(
 
     if offline or online_df.empty:
         if db_df.empty:
-            # FIX OUTSIDE HOURS: Synthesize intraday from daily data as fallback
             log.info(
-                "Intraday data unavailable for %s (%s), synthesizing from daily...",
+                "Intraday data unavailable for %s (%s); synthesis disabled",
                 code6, interval,
             )
-            try:
-                daily_df = self._get_history_cn_daily(
-                    inst, count, fetch_days, "1d",
-                    f"history:{code6}:1d", offline, False, session_df,
-                    interval="1d",
-                )
-                if daily_df is not None and not daily_df.empty:
-                    synthesized = _synthesize_intraday_from_daily(
-                        daily_df, interval, count,
-                    )
-                    if synthesized is not None and not synthesized.empty:
-                        return self._cache_tail(
-                            cache_key,
-                            synthesized,
-                            count,
-                            interval=interval,
-                        )
-            except Exception as exc:
-                log.debug("Daily synthesis fallback failed for %s: %s", code6, exc)
             return pd.DataFrame()
         return self._cache_tail(
             cache_key,
@@ -460,30 +440,10 @@ def _get_history_cn_intraday(
     merged = self._merge_parts(online_df, db_df, interval=interval)
     merged = self._filter_cn_intraday_session(merged, interval)
     if merged.empty:
-        # FIX OUTSIDE HOURS: Try synthesis when merged is empty
         log.info(
-            "Intraday merged empty for %s (%s), synthesizing from daily...",
+            "Intraday merged empty for %s (%s); synthesis disabled",
             code6, interval,
         )
-        try:
-            daily_df = self._get_history_cn_daily(
-                inst, count, fetch_days, "1d",
-                f"history:{code6}:1d", offline, False, session_df,
-                interval="1d",
-            )
-            if daily_df is not None and not daily_df.empty:
-                synthesized = _synthesize_intraday_from_daily(
-                    daily_df, interval, count,
-                )
-                if synthesized is not None and not synthesized.empty:
-                    return self._cache_tail(
-                        cache_key,
-                        synthesized,
-                        count,
-                        interval=interval,
-                    )
-        except Exception as exc:
-            log.debug("Daily synthesis fallback failed for %s: %s", code6, exc)
         return pd.DataFrame()
 
     out = self._cache_tail(
@@ -539,30 +499,10 @@ def _get_history_cn_intraday_exact(
 
     if online_df is None or online_df.empty:
         if db_df is None or db_df.empty:
-            # FIX OUTSIDE HOURS: Synthesize intraday from daily data as fallback
             log.info(
-                "Intraday exact: data unavailable for %s (%s), synthesizing from daily...",
+                "Intraday exact: data unavailable for %s (%s); synthesis disabled",
                 code6, interval,
             )
-            try:
-                daily_df = self._get_history_cn_daily(
-                    inst, count, fetch_days, "1d",
-                    f"history:{code6}:1d", offline, False, None,
-                    interval="1d",
-                )
-                if daily_df is not None and not daily_df.empty:
-                    synthesized = _synthesize_intraday_from_daily(
-                        daily_df, interval, count,
-                    )
-                    if synthesized is not None and not synthesized.empty:
-                        return self._cache_tail(
-                            cache_key,
-                            synthesized,
-                            count,
-                            interval=interval,
-                        )
-            except Exception as exc:
-                log.debug("Daily synthesis fallback failed for %s: %s", code6, exc)
             return pd.DataFrame()
         return self._cache_tail(
             cache_key,
@@ -575,30 +515,10 @@ def _get_history_cn_intraday_exact(
     merged = self._merge_parts(online_df, db_df, interval=interval)
     merged = self._filter_cn_intraday_session(merged, interval)
     if merged.empty:
-        # FIX OUTSIDE HOURS: Try synthesis when merged is empty
         log.info(
-            "Intraday exact: merged empty for %s (%s), synthesizing from daily...",
+            "Intraday exact: merged empty for %s (%s); synthesis disabled",
             code6, interval,
         )
-        try:
-            daily_df = self._get_history_cn_daily(
-                inst, count, fetch_days, "1d",
-                f"history:{code6}:1d", offline, False, None,
-                interval="1d",
-            )
-            if daily_df is not None and not daily_df.empty:
-                synthesized = _synthesize_intraday_from_daily(
-                    daily_df, interval, count,
-                )
-                if synthesized is not None and not synthesized.empty:
-                    return self._cache_tail(
-                        cache_key,
-                        synthesized,
-                        count,
-                        interval=interval,
-                    )
-        except Exception as exc:
-            log.debug("Daily synthesis fallback failed for %s: %s", code6, exc)
         return pd.DataFrame()
 
     out = self._cache_tail(

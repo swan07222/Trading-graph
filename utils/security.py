@@ -260,8 +260,14 @@ class SecureStorage:
                 self._save()
 
     def has(self, key: str) -> bool:
-        """Check if key exists (thread-safe)."""
-        # FIX #1: Acquire lock for consistency with set/delete
+        """Check if key exists (thread-safe).
+        
+        FIX C4: Added input validation for consistency with set/get/delete.
+        """
+        # FIX C4: Validate input before using lock
+        if not isinstance(key, str) or not key:
+            raise ValueError("key must be a non-empty string")
+        
         with self._lock:
             return key in self._cache
 

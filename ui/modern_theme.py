@@ -270,9 +270,9 @@ def get_group_box_style() -> str:
             );
             border: 1px solid {ModernColors.BORDER_SUBTLE};
             border-radius: 14px;
-            margin-top: 13px;
-            padding: 19px 13px 13px 13px;
-            font-size: {ModernFonts.SIZE_BASE}px;
+            margin-top: 11px;
+            padding: 15px 11px 11px 11px;
+            font-size: {ModernFonts.SIZE_SM}px;
             font-weight: {ModernFonts.WEIGHT_SEMIBOLD};
             color: {ModernColors.TEXT_SECONDARY};
         }}
@@ -322,9 +322,9 @@ def get_button_style(primary: bool = False, danger: bool = False) -> str:
             color: {ModernColors.TEXT_STRONG};
             border: 1px solid {border};
             border-radius: 10px;
-            padding: 8px 15px;
-            min-height: 36px;
-            font-size: {ModernFonts.SIZE_BASE}px;
+            padding: 6px 12px;
+            min-height: 32px;
+            font-size: {ModernFonts.SIZE_SM}px;
             font-weight: {ModernFonts.WEIGHT_SEMIBOLD};
         }}
         QPushButton:hover {{
@@ -467,11 +467,11 @@ def get_input_style() -> str:
             background: #152946;
             border: 1px solid {ModernColors.BORDER_SUBTLE};
             border-radius: 9px;
-            padding: 7px 10px;
+            padding: 6px 9px;
             color: {ModernColors.TEXT_PRIMARY};
             selection-background-color: #2f689d;
             selection-color: {ModernColors.TEXT_STRONG};
-            min-height: 30px;
+            min-height: 28px;
         }}
         QTextEdit, QPlainTextEdit {{
             min-height: 0;
@@ -522,10 +522,10 @@ def get_tab_widget_style() -> str:
             border: 1px solid transparent;
             border-top-left-radius: 9px;
             border-top-right-radius: 9px;
-            padding: 9px 16px;
+            padding: 7px 13px;
             margin-right: 5px;
-            min-width: 84px;
-            font-size: {ModernFonts.SIZE_BASE}px;
+            min-width: 78px;
+            font-size: {ModernFonts.SIZE_SM}px;
             font-weight: {ModernFonts.WEIGHT_MEDIUM};
         }}
         QTabBar::tab:selected {{
@@ -816,9 +816,9 @@ def get_app_stylesheet() -> str:
                 color: {ModernColors.TEXT_PRIMARY};
                 border: 1px solid {ModernColors.BORDER_SUBTLE};
                 border-radius: 9px;
-                padding: 6px 12px;
-                min-height: 30px;
-                font-size: {ModernFonts.SIZE_BASE}px;
+                padding: 5px 10px;
+                min-height: 28px;
+                font-size: {ModernFonts.SIZE_SM}px;
                 font-weight: {ModernFonts.WEIGHT_SEMIBOLD};
             }}
             QToolButton:hover {{
@@ -884,12 +884,12 @@ def get_app_stylesheet() -> str:
                 background: {ModernColors.GRADIENT_PRIMARY};
                 border: 1px solid {ModernColors.BORDER_FOCUS};
                 color: {ModernColors.TEXT_STRONG};
-                min-height: 36px;
-                min-width: 96px;
+                min-height: 32px;
+                min-width: 90px;
                 border-radius: 10px;
-                font-size: {ModernFonts.SIZE_BASE}px;
+                font-size: {ModernFonts.SIZE_SM}px;
                 font-weight: {ModernFonts.WEIGHT_BOLD};
-                padding: 8px 14px;
+                padding: 6px 12px;
             }}
             QPushButton#primaryActionButton:hover {{
                 border-color: #9be9ff;
@@ -898,12 +898,12 @@ def get_app_stylesheet() -> str:
                 background: #1a3256;
                 border: 1px solid {ModernColors.BORDER_SUBTLE};
                 color: {ModernColors.TEXT_PRIMARY};
-                min-height: 34px;
-                min-width: 88px;
+                min-height: 30px;
+                min-width: 84px;
                 border-radius: 10px;
-                font-size: {ModernFonts.SIZE_SM}px;
+                font-size: {ModernFonts.SIZE_XS}px;
                 font-weight: {ModernFonts.WEIGHT_SEMIBOLD};
-                padding: 7px 12px;
+                padding: 5px 10px;
             }}
             QPushButton#secondaryActionButton:hover {{
                 background: #214169;
@@ -913,12 +913,12 @@ def get_app_stylesheet() -> str:
                 background: {ModernColors.GRADIENT_SELL};
                 border: 1px solid #ff8fa0;
                 color: {ModernColors.TEXT_STRONG};
-                min-height: 34px;
-                min-width: 88px;
+                min-height: 30px;
+                min-width: 84px;
                 border-radius: 10px;
-                font-size: {ModernFonts.SIZE_SM}px;
+                font-size: {ModernFonts.SIZE_XS}px;
                 font-weight: {ModernFonts.WEIGHT_SEMIBOLD};
-                padding: 7px 12px;
+                padding: 5px 10px;
             }}
             QPushButton#dangerActionButton:hover {{
                 border-color: #ffb5c0;
@@ -969,8 +969,8 @@ def get_app_stylesheet() -> str:
             QPushButton#buyButton {{
                 background: {ModernColors.GRADIENT_BUY};
                 border: 1px solid #44dcaa;
-                min-height: 44px;
-                font-size: {ModernFonts.SIZE_XL}px;
+                min-height: 38px;
+                font-size: {ModernFonts.SIZE_LG}px;
                 font-weight: {ModernFonts.WEIGHT_BOLD};
             }}
             QPushButton#buyButton:hover {{
@@ -979,26 +979,26 @@ def get_app_stylesheet() -> str:
             QPushButton#sellButton {{
                 background: {ModernColors.GRADIENT_SELL};
                 border: 1px solid #ff8a99;
-                min-height: 44px;
-                font-size: {ModernFonts.SIZE_XL}px;
+                min-height: 38px;
+                font-size: {ModernFonts.SIZE_LG}px;
                 font-weight: {ModernFonts.WEIGHT_BOLD};
             }}
             QPushButton#sellButton:hover {{
                 border-color: {ModernColors.BORDER_FOCUS};
             }}
             QPushButton#chartToolButton {{
-                min-height: 30px;
+                min-height: 26px;
                 border-radius: 9px;
-                padding: 6px 12px;
-                font-size: {ModernFonts.SIZE_SM}px;
+                padding: 4px 9px;
+                font-size: {ModernFonts.SIZE_XS}px;
             }}
             QPushButton#smallGhostButton {{
                 background: #152c4b;
                 border: 1px solid {ModernColors.BORDER_SUBTLE};
                 border-radius: 9px;
-                min-height: 30px;
-                padding: 6px 10px;
-                font-size: {ModernFonts.SIZE_SM}px;
+                min-height: 26px;
+                padding: 4px 8px;
+                font-size: {ModernFonts.SIZE_XS}px;
             }}
             QPushButton#smallGhostButton:hover {{
                 border-color: {ModernColors.BORDER_FOCUS};
@@ -1006,7 +1006,19 @@ def get_app_stylesheet() -> str:
             }}
             QCheckBox#overlayToggle {{
                 color: {ModernColors.TEXT_SECONDARY};
-                font-size: {ModernFonts.SIZE_SM}px;
+                font-size: {ModernFonts.SIZE_XS}px;
+            }}
+            QGroupBox#chartPrimaryGroup {{
+                border-color: #2e5f96;
+                background: qlineargradient(
+                    x1:0, y1:0, x2:0, y2:1,
+                    stop:0 #153056,
+                    stop:1 #0f223d
+                );
+            }}
+            QGroupBox#analysisDetailsGroup,
+            QGroupBox#systemLogGroup {{
+                border-color: #2a507f;
             }}
             QLabel#sentimentModeLabel {{
                 color: {ModernColors.ACCENT_INFO};
@@ -1114,19 +1126,19 @@ def get_dialog_style() -> str:
                 color: {ModernColors.TEXT_STRONG};
             }}
             QDialogButtonBox QPushButton {{
-                min-height: 34px;
-                min-width: 90px;
+                min-height: 30px;
+                min-width: 84px;
             }}
             QPushButton#primaryActionButton {{
                 background: {ModernColors.GRADIENT_PRIMARY};
                 border: 1px solid {ModernColors.BORDER_FOCUS};
                 color: {ModernColors.TEXT_STRONG};
-                min-height: 36px;
-                min-width: 96px;
+                min-height: 32px;
+                min-width: 90px;
                 border-radius: 10px;
-                font-size: {ModernFonts.SIZE_BASE}px;
+                font-size: {ModernFonts.SIZE_SM}px;
                 font-weight: {ModernFonts.WEIGHT_BOLD};
-                padding: 8px 14px;
+                padding: 6px 12px;
             }}
             QPushButton#primaryActionButton:hover {{
                 border-color: #9be9ff;
@@ -1135,12 +1147,12 @@ def get_dialog_style() -> str:
                 background: #1a3256;
                 border: 1px solid {ModernColors.BORDER_SUBTLE};
                 color: {ModernColors.TEXT_PRIMARY};
-                min-height: 34px;
-                min-width: 88px;
+                min-height: 30px;
+                min-width: 84px;
                 border-radius: 10px;
-                font-size: {ModernFonts.SIZE_SM}px;
+                font-size: {ModernFonts.SIZE_XS}px;
                 font-weight: {ModernFonts.WEIGHT_SEMIBOLD};
-                padding: 7px 12px;
+                padding: 5px 10px;
             }}
             QPushButton#secondaryActionButton:hover {{
                 background: #214169;
@@ -1150,12 +1162,12 @@ def get_dialog_style() -> str:
                 background: {ModernColors.GRADIENT_SELL};
                 border: 1px solid #ff8fa0;
                 color: {ModernColors.TEXT_STRONG};
-                min-height: 34px;
-                min-width: 88px;
+                min-height: 30px;
+                min-width: 84px;
                 border-radius: 10px;
-                font-size: {ModernFonts.SIZE_SM}px;
+                font-size: {ModernFonts.SIZE_XS}px;
                 font-weight: {ModernFonts.WEIGHT_SEMIBOLD};
-                padding: 7px 12px;
+                padding: 5px 10px;
             }}
             QPushButton#dangerActionButton:hover {{
                 border-color: #ffb5c0;

@@ -904,6 +904,8 @@ def _sanitize_ohlc(
         anchor = c
     max_body = float(anchor) * float(max(jump_cap * 1.25, effective_range_cap * 0.9))
     if max_body > 0 and abs(o - c) > max_body:
+        if iv in ("1d", "1wk", "1mo"):
+            return None
         if ref > 0 and abs(c / ref - 1.0) <= jump_cap:
             o = ref
         else:
@@ -921,6 +923,8 @@ def _sanitize_ohlc(
     max_range = float(anchor) * float(effective_range_cap)
     curr_range = max(0.0, h - low)
     if max_range > 0 and curr_range > max_range:
+        if iv in ("1d", "1wk", "1mo"):
+            return None
         body = max(0.0, top - bot)
         if body > max_range:
             # Body this large is likely a corrupt open/close pair.
@@ -983,46 +987,55 @@ def _scrub_chart_bars(
 ) -> list[dict[str, Any]]:
     """Prepare bars for charting and never fall back to unsanitized rows."""
     arr_in = list(bars or [])
+    iv = self._normalize_interval_token(interval)
     arr_out = self._prepare_chart_bars_for_interval(
         arr_in,
-        interval,
+        iv,
         symbol=symbol,
     )
-    if arr_in and len(arr_in) >= 25 and len(arr_out) <= 2:
-        recovered = self._recover_chart_bars_from_close(
-            arr_in,
-            interval=interval,
-            symbol=symbol,
-            anchor_price=anchor_price,
-        )
-        if len(recovered) > len(arr_out):
-            arr_out = recovered
     if arr_out:
         arr_out = self._rescale_chart_bars_to_anchor(
             arr_out,
             anchor_price=anchor_price,
-            interval=interval,
+            interval=iv,
             symbol=symbol,
         )
     if arr_in and not arr_out:
-        recovered = self._recover_chart_bars_from_close(
-            arr_in,
-            interval=interval,
-            symbol=symbol,
-            anchor_price=anchor_price,
+        log.warning(
+            f"Chart scrub rejected all {len(arr_in)} bars for {self._ui_norm(symbol) or '--'} {iv}"
         )
-        if recovered:
-            return recovered
-        iv = self._normalize_interval_token(interval)
         sym = self._ui_norm(symbol)
+        existing_all = list(self._bars_by_symbol.get(sym) or [])
+        existing = [
+            b
+            for b in existing_all
+            if self._normalize_interval_token(
+                b.get("interval", iv),
+                fallback=iv,
+            ) == iv
+        ]
+        if existing:
+            keep = int(self._history_window_bars(iv))
+            self._debug_console(
+                f"chart_scrub_keep_prev:{sym or 'active'}:{iv}",
+                (
+                    f"chart scrub kept previous bars: symbol={sym or '--'} "
+                    f"iv={iv} prev={len(existing)} raw={len(arr_in)}"
+                ),
+                min_gap_seconds=1.0,
+                level="warning",
+            )
+            return existing[-keep:]
         self._debug_console(
             f"chart_scrub_empty:{sym or 'active'}:{iv}",
             (
-                f"chart scrub removed all rows: symbol={sym or '--'} "
-                f"iv={iv} raw={len(arr_in)}"
+                f"chart scrub rejected bars: symbol={sym or '--'} "
+                f"iv={iv} raw={len(arr_in)} kept=0"
             ),
             min_gap_seconds=1.0,
+            level="warning",
         )
+        return []
     return arr_out
 
 def _rescale_chart_bars_to_anchor(
@@ -1161,10 +1174,13 @@ def _recover_chart_bars_from_close(
                 o = float(row.get("open", 0) or 0)
             except _APP_SOFT_EXCEPTIONS:
                 o = 0.0
-            if o <= 0 and ref_close and ref_close > 0:
-                o = float(ref_close)
             if o <= 0:
-                o = c
+                if iv in ("1d", "1wk", "1mo"):
+                    o = c
+                elif ref_close and ref_close > 0:
+                    o = float(ref_close)
+                else:
+                    o = c
 
             try:
                 h = float(row.get("high", max(o, c)) or max(o, c))

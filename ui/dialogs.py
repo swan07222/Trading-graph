@@ -205,6 +205,8 @@ class TrainingDialog(QDialog):
         self.epochs_spin = QSpinBox()
         self.epochs_spin.setRange(5, 500)
         self.epochs_spin.setValue(CONFIG.EPOCHS)
+        self.epochs_spin.setMinimumHeight(30)
+        self.epochs_spin.setMaximumHeight(34)
         settings_layout.addWidget(self.epochs_spin, 0, 1)
 
         settings_layout.addWidget(QLabel("Sequence Length:"), 0, 2)
@@ -226,6 +228,7 @@ class TrainingDialog(QDialog):
 
         self.stocks_list = QListWidget()
         self.stocks_list.setObjectName("dialogStockList")
+        self.stocks_list.setMinimumHeight(210)
         self.stocks_list.setSelectionMode(
             QListWidget.SelectionMode.ExtendedSelection
         )
@@ -243,20 +246,28 @@ class TrainingDialog(QDialog):
         self.add_stock_edit.setPlaceholderText(
             "Add stock code (e.g. 600519)"
         )
+        self.add_stock_edit.setMinimumHeight(30)
+        self.add_stock_edit.setMaximumHeight(34)
         right.addWidget(self.add_stock_edit)
 
         add_btn = QPushButton("Add")
         add_btn.setObjectName("secondaryActionButton")
+        add_btn.setMinimumHeight(30)
+        add_btn.setMaximumHeight(34)
         add_btn.clicked.connect(self._add_stock)
         right.addWidget(add_btn)
 
         remove_btn = QPushButton("Remove Selected")
         remove_btn.setObjectName("secondaryActionButton")
+        remove_btn.setMinimumHeight(30)
+        remove_btn.setMaximumHeight(34)
         remove_btn.clicked.connect(self._remove_selected)
         right.addWidget(remove_btn)
 
         select_all_btn = QPushButton("Select All")
         select_all_btn.setObjectName("secondaryActionButton")
+        select_all_btn.setMinimumHeight(30)
+        select_all_btn.setMaximumHeight(34)
         select_all_btn.clicked.connect(
             lambda: self.stocks_list.selectAll()
         )
@@ -264,6 +275,8 @@ class TrainingDialog(QDialog):
 
         clear_sel_btn = QPushButton("Clear Selection")
         clear_sel_btn.setObjectName("secondaryActionButton")
+        clear_sel_btn.setMinimumHeight(30)
+        clear_sel_btn.setMaximumHeight(34)
         clear_sel_btn.clicked.connect(
             lambda: self.stocks_list.clearSelection()
         )
@@ -304,16 +317,22 @@ class TrainingDialog(QDialog):
             QDialogButtonBox.ButtonRole.AcceptRole
         )
         self.start_btn.setObjectName("primaryActionButton")
+        self.start_btn.setMinimumHeight(32)
+        self.start_btn.setMaximumHeight(36)
         self.stop_btn = btns.addButton(
             "Stop",
             QDialogButtonBox.ButtonRole.DestructiveRole
         )
         self.stop_btn.setObjectName("dangerActionButton")
+        self.stop_btn.setMinimumHeight(30)
+        self.stop_btn.setMaximumHeight(34)
         self.close_btn = btns.addButton(
             "Close",
             QDialogButtonBox.ButtonRole.RejectRole
         )
         self.close_btn.setObjectName("secondaryActionButton")
+        self.close_btn.setMinimumHeight(30)
+        self.close_btn.setMaximumHeight(34)
 
         self.start_btn.clicked.connect(self.start_training)
         self.stop_btn.clicked.connect(self.stop_training)
@@ -599,12 +618,16 @@ class TrainTrainedStocksDialog(QDialog):
         self.count_spin = QSpinBox()
         self.count_spin.setRange(1, max(1, len(self._ordered_codes)))
         self.count_spin.setValue(min(5, max(1, len(self._ordered_codes))))
+        self.count_spin.setMinimumHeight(30)
+        self.count_spin.setMaximumHeight(34)
         self.count_spin.valueChanged.connect(self._refresh_preview)
         settings.addRow("Number of stocks:", self.count_spin)
 
         self.epochs_spin = QSpinBox()
         self.epochs_spin.setRange(5, 500)
         self.epochs_spin.setValue(int(CONFIG.EPOCHS))
+        self.epochs_spin.setMinimumHeight(30)
+        self.epochs_spin.setMaximumHeight(34)
         settings.addRow("Epochs:", self.epochs_spin)
 
         self.scope_hint = QLabel(
@@ -618,6 +641,7 @@ class TrainTrainedStocksDialog(QDialog):
         preview_layout = QVBoxLayout(preview_group)
         self.preview_list = QListWidget()
         self.preview_list.setObjectName("dialogStockList")
+        self.preview_list.setMinimumHeight(160)
         preview_layout.addWidget(self.preview_list)
         layout.addWidget(preview_group)
 
@@ -647,6 +671,12 @@ class TrainTrainedStocksDialog(QDialog):
         self.start_btn.setObjectName("primaryActionButton")
         self.stop_btn.setObjectName("dangerActionButton")
         self.close_btn.setObjectName("secondaryActionButton")
+        self.start_btn.setMinimumHeight(32)
+        self.start_btn.setMaximumHeight(36)
+        self.stop_btn.setMinimumHeight(30)
+        self.stop_btn.setMaximumHeight(34)
+        self.close_btn.setMinimumHeight(30)
+        self.close_btn.setMaximumHeight(34)
         self.stop_btn.setEnabled(False)
         btn_row.addWidget(self.start_btn)
         btn_row.addWidget(self.stop_btn)

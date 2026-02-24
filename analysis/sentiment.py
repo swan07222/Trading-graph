@@ -15,6 +15,7 @@ import requests
 
 from config.settings import CONFIG
 from utils.logger import get_logger
+from utils.safe_pickle import load_cached_data
 
 log = get_logger(__name__)
 
@@ -637,11 +638,11 @@ class NewsScraper:
             if cache_path.exists():
                 mtime = cache_path.stat().st_mtime
                 if (time.time() - mtime) < ttl_seconds:
-                    with open(cache_path, "rb") as f:
-                        cached_items = pickle.load(f)
+                    cached_items = load_cached_data(cache_path)
                     if isinstance(cached_items, list):
                         return cached_items
-        except Exception:
+        except Exception as e:
+            log.debug(f"Sentiment cache load failed: {e}")
             pass
 
         items: list[NewsItem] = []

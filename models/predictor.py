@@ -1024,12 +1024,20 @@ class Predictor:
                         self._apply_news_influence(pred, code, interval)
                         self._set_cached_prediction(cache_key, pred)
                         return pred
-                    self._populate_minimal_snapshot(pred, code)
-                    pred.warnings.append(
-                        f"Insufficient data: got {data_len} bars, "
-                        f"need {required_rows}"
-                    )
-                    return pred
+                    
+                    # FIX: More aggressive fallback - try to get at least SOME data
+                    # Even 20 bars is enough for a minimal chart display
+                    minimal_ready = self._has_required_rows(df, max(20, int(required_rows // 6)))
+                    if minimal_ready:
+                        log.info(f"Using minimal data fallback: {data_len} bars (required {required_rows})")
+                        # Continue with feature engineering even with minimal data
+                    else:
+                        self._populate_minimal_snapshot(pred, code)
+                        pred.warnings.append(
+                            f"Insufficient data: got {data_len} bars, "
+                            f"need {required_rows}"
+                        )
+                        return pred
 
                 pred.stock_name = self._get_stock_name(code, df)
                 pred.current_price = float(df["close"].iloc[-1])

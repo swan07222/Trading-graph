@@ -241,9 +241,12 @@ class EventBus:
                         )
                         self._dispatch_error(error_event)
                     finally:
-                        # FIX: Ensure depth is always decremented even on exception
-                        self._local.error_depth = getattr(self._local, 'error_depth', 1) - 1
+                        # FIX C6: Ensure depth is always decremented even on exception
+                        # Use getattr with default to handle any edge cases
+                        current_depth = getattr(self._local, 'error_depth', 1)
+                        self._local.error_depth = max(0, current_depth - 1)
                 else:
+                    # Already in ERROR handler, just log
                     log.error(
                         f"Error in ERROR handler: {e}"
                     )

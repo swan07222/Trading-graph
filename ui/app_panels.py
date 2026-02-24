@@ -220,7 +220,7 @@ def _create_right_panel(self: Any) -> QWidget:
     panel = QWidget()
     panel.setObjectName("rightPanel")
     layout = QVBoxLayout(panel)
-    layout.setSpacing(14)
+    layout.setSpacing(12)
     layout.setContentsMargins(4, 4, 4, 4)
 
     self.right_tabs = QTabWidget()
@@ -404,9 +404,10 @@ def _create_right_panel(self: Any) -> QWidget:
 
     tabs.addTab(auto_trade_tab, "Auto-Trade")
 
-    layout.addWidget(tabs)
+    layout.addWidget(tabs, 4)
 
     log_group = QGroupBox("System Log")
+    log_group.setObjectName("systemLogGroup")
     log_layout = QVBoxLayout()
     try:
         from .widgets import LogWidget
@@ -414,10 +415,15 @@ def _create_right_panel(self: Any) -> QWidget:
     except ImportError:
         self.log_widget = QTextEdit()
         self.log_widget.setReadOnly(True)
-        self.log_widget.setMaximumHeight(150)
+        self.log_widget.setMinimumHeight(220)
+        self.log_widget.setMaximumHeight(380)
+    if hasattr(self.log_widget, "setMinimumHeight"):
+        self.log_widget.setMinimumHeight(220)
+    if hasattr(self.log_widget, "setMaximumHeight"):
+        self.log_widget.setMaximumHeight(380)
     log_layout.addWidget(self.log_widget)
     log_group.setLayout(log_layout)
-    layout.addWidget(log_group)
+    layout.addWidget(log_group, 2)
 
     action_frame = QFrame()
     action_frame.setObjectName("actionStrip")

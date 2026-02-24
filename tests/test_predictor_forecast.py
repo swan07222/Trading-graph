@@ -316,8 +316,8 @@ def test_prediction_cache_ttl_is_shorter_for_realtime_intraday() -> None:
     )
     predictor._set_cached_prediction("600519:1m:30:rt", pred)
 
-    ts, payload = predictor._pred_cache["600519:1m:30:rt"]
-    predictor._pred_cache["600519:1m:30:rt"] = (ts - 2.0, payload)
+    ts, payload, version = predictor._pred_cache["600519:1m:30:rt"]
+    predictor._pred_cache["600519:1m:30:rt"] = (ts - 2.0, payload, version)
 
     assert predictor._get_cached_prediction("600519:1m:30:rt", ttl=5.0) is not None
     assert predictor._get_cached_prediction("600519:1m:30:rt", ttl=1.2) is None

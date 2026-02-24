@@ -20,6 +20,55 @@ from utils.logger import get_logger
 
 log = get_logger(__name__)
 
+_FALLBACK_BARS_PER_DAY: dict[str, float] = {
+    "1m": 240.0,
+    "2m": 120.0,
+    "3m": 80.0,
+    "5m": 48.0,
+    "15m": 16.0,
+    "30m": 8.0,
+    "60m": 4.0,
+    "1h": 4.0,
+    "1d": 1.0,
+    "1wk": 0.2,
+    "1mo": 0.05,
+}
+_FALLBACK_INTERVAL_MAX_DAYS: dict[str, int] = {
+    "1m": 7,
+    "2m": 60,
+    "3m": 60,
+    "5m": 60,
+    "15m": 60,
+    "30m": 60,
+    "60m": 730,
+    "1h": 730,
+    "1d": 10_000,
+    "1wk": 10_000,
+    "1mo": 10_000,
+}
+
+def _resolve_interval_constants() -> tuple[dict[str, float], dict[str, int]]:
+    """Resolve interval constants from primary modules with safe fallback.
+
+    Some runtimes no longer export these constants from data.fetcher.
+    Keep predictor resilient by resolving from fetcher_sources first.
+    """
+    try:
+        from data.fetcher_sources import BARS_PER_DAY, INTERVAL_MAX_DAYS
+
+        return dict(BARS_PER_DAY), dict(INTERVAL_MAX_DAYS)
+    except _PREDICTOR_RECOVERABLE_EXCEPTIONS as e:
+        log.debug("Interval constants from fetcher_sources unavailable: %s", e)
+
+    try:
+        from data.fetcher_history_flow_ops import BARS_PER_DAY, INTERVAL_MAX_DAYS
+
+        return dict(BARS_PER_DAY), dict(INTERVAL_MAX_DAYS)
+    except _PREDICTOR_RECOVERABLE_EXCEPTIONS as e:
+        log.debug("Interval constants from fetcher_history_flow_ops unavailable: %s", e)
+
+    return dict(_FALLBACK_BARS_PER_DAY), dict(_FALLBACK_INTERVAL_MAX_DAYS)
+
 def _normalize_interval_token(self, interval: str | None) -> str:
     """Normalize common provider/UI aliases."""
     iv = str(interval or self.interval).strip().lower()
@@ -334,10 +383,9 @@ def _fetch_data(
 ) -> pd.DataFrame | None:
     """Fetch stock data with minimum data requirement."""
     try:
-        from data.fetcher import BARS_PER_DAY
-
         interval = self._normalize_interval_token(interval)
-        bpd = float(BARS_PER_DAY.get(interval, 1))
+        bars_per_day, _ = _resolve_interval_constants()
+        bpd = float(bars_per_day.get(interval, 1.0) or 1.0)
         min_days = (
             2
             if interval in {"1m", "2m", "3m", "5m", "15m", "30m", "60m", "1h"}
@@ -346,6 +394,8 @@ def _fetch_data(
         min_bars = int(max(min_days * bpd, min_days))
         bars = int(max(int(lookback), int(min_bars)))
 
+        log.info(f"[FETCH] {code}: interval={interval} lookback={lookback} bars={bars} online={history_allow_online}")
+        
         try:
             df = self.fetcher.get_history(
                 code,
@@ -363,13 +413,20 @@ def _fetch_data(
                 use_cache=True,
                 update_db=True,
             )
+        
+        log.info(f"[FETCH] {code}: got {len(df) if df is not None else 'None'} bars from fetcher")
+        
         if df is None or df.empty:
+            log.error(f"[FETCH] {code}: FINAL - No data available after all attempts")
             return None
 
         df = self._sanitize_history_df(df, interval)
         if df is None or df.empty:
+            log.error(f"[FETCH] {code}: Sanitized to empty")
             return None
 
+        log.info(f"[FETCH] {code}: SUCCESS - {len(df)} bars after sanitization")
+        
         if use_realtime:
             try:
                 quote = self.fetcher.get_realtime(code)
@@ -403,24 +460,13 @@ def _default_lookback_bars(self, interval: str | None) -> int:
     Intraday intervals use the latest 2-day window (e.g. 1m => 480 bars).
     """
     iv = self._normalize_interval_token(interval)
-    try:
-        from data.fetcher import BARS_PER_DAY, INTERVAL_MAX_DAYS
-        bpd = float(BARS_PER_DAY.get(iv, 1.0))
-        max_days = int(INTERVAL_MAX_DAYS.get(iv, 2))
-    except _PREDICTOR_RECOVERABLE_EXCEPTIONS as e:
-        log.debug("Falling back to default lookback constants for interval=%s: %s", iv, e)
-        bpd = float({
-            "1m": 240.0,
-            "2m": 120.0,
-            "3m": 80.0,
-            "5m": 48.0,
-            "15m": 16.0,
-            "30m": 8.0,
-            "60m": 4.0,
-            "1h": 4.0,
-            "1d": 1.0,
-        }.get(iv, 1.0))
-        max_days = 2 if iv in {"1m", "2m", "3m", "5m", "15m", "30m", "60m", "1h"} else 365
+    bars_per_day, interval_max_days = _resolve_interval_constants()
+    bpd = float(bars_per_day.get(iv, 1.0) or 1.0)
+    if iv in {"1m", "2m", "3m", "5m", "15m", "30m", "60m", "1h"}:
+        # Inference stays on latest 2-day intraday window, regardless of API max.
+        max_days = 2
+    else:
+        max_days = int(interval_max_days.get(iv, 365) or 365)
 
     if iv in {"1d", "1wk", "1mo"}:
         return max(60, int(round(min(365, max_days) * max(1.0, bpd))))

@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from utils.logger import get_logger
+from utils.safe_pickle import safe_pickle_load, safe_pickle_loads, safe_pickle_dump, safe_pickle_dumps
 
 log = get_logger(__name__)
 
@@ -439,34 +440,30 @@ def pickle_load(
     verify_checksum: bool = False,
     require_checksum: bool = True,
     allow_unsafe: bool = False,
+    safe_classes: set[str] | None = None,
 ) -> Any:
     """Load a pickled object from a file.
 
-    WARNING: Only load pickle files you created yourself.
-    Pickle can execute arbitrary code during deserialization.
+    SECURITY FIX: Now uses safe_pickle_load by default with restricted classes.
+    Only set allow_unsafe=True for legacy code migration.
 
     Args:
         path: File path
         max_bytes: Maximum file size to load (default: 500 MB).
                    Set to 0 to disable size check.
-        allow_unsafe: Must be explicitly True to load pickle files.
-                      This is a security measure to prevent accidental
-                      deserialization of untrusted data.
+        verify_checksum: Verify checksum sidecar before loading
+        require_checksum: Require checksum sidecar to exist
+        allow_unsafe: If True, uses unsafe pickle.load (NOT RECOMMENDED)
+        safe_classes: Custom set of allowed classes (only used if allow_unsafe=False)
 
     Returns:
         Deserialized object
 
     Raises:
-        ValueError: If file exceeds max_bytes or allow_unsafe is not True
+        ValueError: If file exceeds max_bytes or checksum verification fails
+        pickle.UnpicklingError: If disallowed class is encountered (safe mode)
     """
     path = Path(path)
-
-    if not allow_unsafe:
-        log.warning(
-            "pickle_load called with allow_unsafe=False; "
-            "pass allow_unsafe=True only for trusted local artifacts. "
-            "This call will be denied in a future version."
-        )
 
     if verify_checksum and not verify_checksum_sidecar(path, require=require_checksum):
         raise ValueError(
@@ -481,50 +478,68 @@ def pickle_load(
                 f"exceeding limit of {max_bytes:,} bytes"
             )
 
-    return pickle_load_bytes(
-        read_bytes(path),
-        max_bytes=max_bytes,
-        allow_unsafe=allow_unsafe,
-    )
+    if allow_unsafe:
+        log.warning(
+            "pickle_load called with allow_unsafe=True - "
+            "this is unsafe and will be removed in a future version. "
+            "Migrate to safe_pickle_load from utils.safe_pickle"
+        )
+        with open(path, "rb") as f:
+            return pickle.load(f)
+    else:
+        # Use safe unpickler by default
+        # FIX: Open file and pass file object to safe_pickle_load
+        with open(path, "rb") as f:
+            return safe_pickle_load(
+                f,  # Pass file object, not path
+                safe_classes=safe_classes,
+                max_bytes=max_bytes,
+            )
 
 
 def pickle_load_bytes(
     data: bytes,
     max_bytes: int = _DEFAULT_MAX_PICKLE_BYTES,
     allow_unsafe: bool = False,
+    safe_classes: set[str] | None = None,
 ) -> Any:
     """Load a pickled object from in-memory bytes.
 
-    This function keeps unsafe deserialization explicit at the callsite.
-    
+    SECURITY FIX: Now uses safe_pickle_loads by default with restricted classes.
+    Only set allow_unsafe=True for legacy code migration.
+
     Args:
         data: Pickled bytes data
         max_bytes: Maximum payload size (0 to disable check)
-        allow_unsafe: Must be True to deserialize. Warning logged if False.
-    
+        allow_unsafe: If True, uses unsafe pickle.loads (NOT RECOMMENDED)
+        safe_classes: Custom set of allowed classes (only used if allow_unsafe=False)
+
     Returns:
         Deserialized object
-    
+
     Raises:
         TypeError: If data is not bytes
         ValueError: If data exceeds max_bytes
+        pickle.UnpicklingError: If disallowed class is encountered (safe mode)
     """
     if not isinstance(data, bytes):
         raise TypeError(f"data must be bytes, got {type(data).__name__}")
-    
-    if not allow_unsafe:
-        log.warning(
-            "pickle_load_bytes called with allow_unsafe=False; "
-            "pass allow_unsafe=True only for trusted local artifacts. "
-            "This call will be denied in a future version."
-        )
-    
+
     if max_bytes > 0 and len(data) > max_bytes:
         raise ValueError(
             f"Pickle payload is {len(data):,} bytes, "
             f"exceeding limit of {max_bytes:,} bytes"
         )
-    return pickle.loads(data)
+
+    if allow_unsafe:
+        log.warning(
+            "pickle_load_bytes called with allow_unsafe=True - "
+            "this is unsafe and will be removed in a future version."
+        )
+        return pickle.loads(data)
+    else:
+        # Use safe unpickler by default
+        return safe_pickle_loads(data, safe_classes=safe_classes, max_bytes=0)
 
 def torch_load(
     path: str | Path,

@@ -6,10 +6,10 @@ from collections import Counter
 import numpy as np
 import pandas as pd
 from PyQt6.QtCore import Qt, pyqtSignal
-from PyQt6.QtGui import QCursor
+from PyQt6.QtGui import QCursor, QFont
 from PyQt6.QtWidgets import QLabel, QMenu, QToolTip, QVBoxLayout, QWidget
 
-from ui.modern_theme import ModernColors
+from ui.modern_theme import ModernColors, ModernFonts, get_primary_font_family
 from utils.logger import get_logger
 
 log = get_logger(__name__)
@@ -435,6 +435,20 @@ class StockChart(QWidget):
         self.plot_widget.customContextMenuRequested.connect(
             self._on_context_menu
         )
+        try:
+            plot_item = self.plot_widget.getPlotItem()
+            axis_pen = pg.mkPen(color=ModernColors.BORDER_DEFAULT, width=1)
+            text_pen = pg.mkPen(color=ModernColors.TEXT_SECONDARY, width=1)
+            tick_font = QFont(get_primary_font_family(), ModernFonts.SIZE_XS)
+            for axis_name in ("left", "bottom"):
+                axis = plot_item.getAxis(axis_name)
+                axis.setPen(axis_pen)
+                axis.setTextPen(text_pen)
+                axis.setTickFont(tick_font)
+            plot_item.showAxis("top", show=False)
+            plot_item.showAxis("right", show=False)
+        except Exception as exc:
+            log.debug("Chart axis styling failed: %s", exc)
 
         # === Layer 1 (BOTTOM): Prediction line - dashed cyan ===
         self.predicted_line = self.plot_widget.plot(
@@ -581,12 +595,21 @@ class StockChart(QWidget):
         self._levels = levels or {}
         self._candle_meta = []
 
+        # FIX: Add diagnostic logging for empty bars
+        if not self._bars:
+            log.warning("Chart update_chart called with EMPTY bars list")
+        
         if not HAS_PYQTGRAPH:
+            log.warning("Chart update skipped: pyqtgraph not available")
             return
 
         if not self._bars:
+            log.warning("Chart update skipped: no bars after coerce")
             self._clear_all()
             return
+        
+        # FIX: Log bar count for diagnostics
+        log.info(f"Chart update: {len(self._bars)} bars received")
 
         try:
             # Parse bar data - extract closes for line, OHLC for candles.
@@ -597,6 +620,7 @@ class StockChart(QWidget):
             closes: list[float] = []
             ohlc: list[tuple] = []
             prev_close: float | None = None
+            prev_day_key: str | None = None
 
             default_iv_raw = str(
                 self._bars[-1].get("interval", "1m") if self._bars else "1m"
@@ -675,11 +699,18 @@ class StockChart(QWidget):
                     if bar_iv != default_iv:
                         diag["drop_interval"] += 1
                         continue
+                    ts_text = self._format_bar_timestamp(b)
+                    day_key = str(ts_text[:10]) if len(ts_text) >= 10 else ""
+                    day_boundary = bool(
+                        prev_day_key is not None
+                        and day_key
+                        and day_key != prev_day_key
+                    )
 
                     # Fix missing OHLC values — prefer close (doji) over
                     # prev_close to avoid creating artificial directional candles.
                     if o <= 0:
-                        if prev_close is not None and prev_close > 0:
+                        if is_intraday and prev_close is not None and prev_close > 0:
                             o = float(prev_close)
                         else:
                             o = c
@@ -716,7 +747,12 @@ class StockChart(QWidget):
                         diag["drop_scale"] += 1
                         continue
 
-                    if prev_close is not None and prev_close > 0 and len(recent_closes) >= 2:
+                    if (
+                        (not day_boundary)
+                        and prev_close is not None
+                        and prev_close > 0
+                        and len(recent_closes) >= 2
+                    ):
                         jump = abs(float(c) / max(float(prev_close), 1e-8) - 1.0)
                         if jump > jump_cap:
                             diag["drop_shape"] += 1
@@ -728,11 +764,14 @@ class StockChart(QWidget):
                     bot = min(float(o), float(c))
                     upper_wick = max(0.0, float(h) - top) / ref_scale
                     lower_wick = max(0.0, bot - float(l_val)) / ref_scale
+                    shape_body_cap = float(body_cap * (2.6 if day_boundary else 1.0))
+                    shape_span_cap = float(span_cap * (2.8 if day_boundary else 1.0))
+                    shape_wick_cap = float(wick_cap * (2.8 if day_boundary else 1.0))
                     if (
-                        body_pct > body_cap
-                        or span_pct > span_cap
-                        or upper_wick > wick_cap
-                        or lower_wick > wick_cap
+                        body_pct > shape_body_cap
+                        or span_pct > shape_span_cap
+                        or upper_wick > shape_wick_cap
+                        or lower_wick > shape_wick_cap
                     ):
                         diag["drop_shape"] += 1
                         continue
@@ -780,13 +819,15 @@ class StockChart(QWidget):
                                 if (prev_close is not None and prev_close > 0)
                                 else None
                             ),
-                            "ts": self._format_bar_timestamp(b),
+                            "ts": ts_text,
                             "interval": str(bar_iv),
                         }
                     )
                     closes.append(c)
                     recent_closes.append(float(c))
                     prev_close = c
+                    if day_key:
+                        prev_day_key = day_key
                     diag["kept"] += 1
                 except (ValueError, TypeError):
                     diag["drop_parse"] += 1
@@ -809,6 +850,102 @@ class StockChart(QWidget):
                 )
                 self._clear_all()
                 return
+
+            # FIX: Verify arrays are aligned before rendering
+            if len(ohlc) != len(closes) or len(ohlc) != len(self._candle_meta):
+                # Arrays misaligned - rebuild from rendered_bars to ensure consistency
+                self._dbg_log(
+                    f"chart_render_realign:{default_iv}",
+                    (
+                        f"chart arrays misaligned iv={default_iv}: "
+                        f"ohlc={len(ohlc)} closes={len(closes)} meta={len(self._candle_meta)}"
+                    ),
+                    min_gap_seconds=1.0,
+                    level="warning",
+                )
+                # Rebuild from rendered_bars which is the source of truth
+                ohlc = []
+                closes = []
+                self._candle_meta = []
+                prev_close = None
+                for i, b in enumerate(rendered_bars):
+                    o = float(b.get("open", 0))
+                    c = float(b.get("close", 0))
+                    h = float(b.get("high", 0))
+                    l_val = float(b.get("low", 0))
+                    if o > 0 and c > 0 and h > 0 and l_val > 0:
+                        ohlc.append((i, o, c, l_val, h))
+                        closes.append(c)
+                        self._candle_meta.append({
+                            "x": i,
+                            "open": o,
+                            "high": h,
+                            "low": l_val,
+                            "close": c,
+                            "volume": float(b.get("volume", 0)),
+                            "amount": float(b.get("amount", 0)),
+                            "prev_close": prev_close,
+                            "ts": b.get("timestamp", ""),
+                            "interval": str(b.get("interval", default_iv)),
+                        })
+                        prev_close = c
+
+            if not closes or not ohlc:
+                log.warning(f"Chart render: NO CANDLES after processing! closes={len(closes)} ohlc={len(ohlc)} rendered_bars={len(rendered_bars)}")
+                
+                # FIX: Fallback - try to render at least doji candles from rendered_bars
+                if rendered_bars:
+                    log.info(f"Chart fallback: attempting to render {len(rendered_bars)} bars as-is")
+                    ohlc = []
+                    closes = []
+                    self._candle_meta = []
+                    prev_close = None
+                    for i, b in enumerate(rendered_bars[:100]):  # Limit to 100 bars
+                        try:
+                            o = float(b.get("open", 0))
+                            c = float(b.get("close", 0))
+                            h = float(b.get("high", c))
+                            l_val = float(b.get("low", c))
+                            
+                            # Create doji if OHLC invalid
+                            if o <= 0:
+                                o = c
+                            if h <= 0 or h < c:
+                                h = c
+                            if l_val <= 0 or l_val > c:
+                                l_val = c
+                            
+                            if c > 0:
+                                ohlc.append((i, o, c, l_val, h))
+                                closes.append(c)
+                                self._candle_meta.append({
+                                    "x": i,
+                                    "open": o,
+                                    "high": h,
+                                    "low": l_val,
+                                    "close": c,
+                                    "volume": float(b.get("volume", 0)),
+                                    "amount": float(b.get("amount", 0)),
+                                    "prev_close": prev_close,
+                                    "ts": b.get("timestamp", ""),
+                                    "interval": str(b.get("interval", default_iv)),
+                                })
+                                prev_close = c
+                        except Exception as e:
+                            log.debug(f"Fallback bar {i} failed: {e}")
+                    
+                    if not closes:
+                        log.error("Chart fallback failed: still no candles")
+                        self._clear_all()
+                        return
+                    log.info(f"Chart fallback: {len(ohlc)} candles rendered")
+                else:
+                    log.error("Chart render: no rendered_bars for fallback")
+                    self._clear_all()
+                    return
+            
+            # FIX: Log successful candle count
+            log.info(f"Chart render: {len(ohlc)} candles prepared, {len(closes)} closes")
 
             # === Layer 3 (TOP): Candlesticks ===
             if self.candles is not None:

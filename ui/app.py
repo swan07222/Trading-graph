@@ -536,7 +536,8 @@ class MainApp(MainAppCommonMixin, QMainWindow):
         main_splitter.setStretchFactor(0, 0)
         main_splitter.setStretchFactor(1, 1)
         main_splitter.setStretchFactor(2, 0)
-        main_splitter.setSizes([300, 780, 390])
+        # Favor center workspace while keeping right-side logs/details readable.
+        main_splitter.setSizes([280, 920, 340])
 
         layout.addWidget(main_splitter)
 
@@ -607,7 +608,7 @@ class MainApp(MainAppCommonMixin, QMainWindow):
         panel = QWidget()
         panel.setObjectName("centerPanel")
         layout = QVBoxLayout(panel)
-        layout.setSpacing(12)
+        layout.setSpacing(10)
         layout.setContentsMargins(0, 0, 0, 0)
 
         # Signal Display - lazy import
@@ -616,35 +617,39 @@ class MainApp(MainAppCommonMixin, QMainWindow):
             self.signal_panel = SignalPanel()
         except ImportError:
             self.signal_panel = QLabel("Signal Panel")
-            self.signal_panel.setMinimumHeight(72)
-        self.signal_panel.setMinimumHeight(230)
-        self.signal_panel.setMaximumHeight(300)
+            self.signal_panel.setMinimumHeight(68)
+        # Keep signal card compact so chart/details get more vertical room.
+        self.signal_panel.setMinimumHeight(160)
+        self.signal_panel.setMaximumHeight(210)
         self.signal_panel.setSizePolicy(
             QSizePolicy.Policy.Preferred,
             QSizePolicy.Policy.Fixed,
         )
-        layout.addWidget(self.signal_panel)
+        layout.addWidget(self.signal_panel, 0)
 
         chart_group = QGroupBox("Price Chart and AI Prediction")
+        chart_group.setObjectName("chartPrimaryGroup")
         chart_layout = QVBoxLayout()
+        chart_layout.setContentsMargins(8, 8, 8, 8)
+        chart_layout.setSpacing(8)
 
         try:
             from .charts import StockChart
             self.chart = StockChart()
-            self.chart.setMinimumHeight(260)
+            self.chart.setMinimumHeight(360)
             if hasattr(self.chart, "trade_requested"):
                 self.chart.trade_requested.connect(self._on_chart_trade_requested)
         except ImportError:
             self.chart = QLabel("Chart (charts module not found)")
-            self.chart.setMinimumHeight(260)
+            self.chart.setMinimumHeight(360)
             self.chart.setAlignment(Qt.AlignmentFlag.AlignCenter)
         chart_layout.addWidget(self.chart)
 
         chart_action_frame = QFrame()
         chart_action_frame.setObjectName("chartActionStrip")
         chart_actions = QHBoxLayout(chart_action_frame)
-        chart_actions.setContentsMargins(10, 8, 10, 8)
-        chart_actions.setSpacing(10)
+        chart_actions.setContentsMargins(8, 6, 8, 6)
+        chart_actions.setSpacing(8)
 
         self.zoom_in_btn = QPushButton("Zoom In")
         self.zoom_out_btn = QPushButton("Zoom Out")
@@ -652,9 +657,9 @@ class MainApp(MainAppCommonMixin, QMainWindow):
         self.zoom_in_btn.setObjectName("chartToolButton")
         self.zoom_out_btn.setObjectName("chartToolButton")
         self.zoom_reset_btn.setObjectName("chartToolButton")
-        self.zoom_in_btn.setMaximumWidth(110)
-        self.zoom_out_btn.setMaximumWidth(110)
-        self.zoom_reset_btn.setMaximumWidth(120)
+        self.zoom_in_btn.setMaximumWidth(100)
+        self.zoom_out_btn.setMaximumWidth(100)
+        self.zoom_reset_btn.setMaximumWidth(110)
         self.zoom_in_btn.clicked.connect(self._zoom_chart_in)
         self.zoom_out_btn.clicked.connect(self._zoom_chart_out)
         self.zoom_reset_btn.clicked.connect(self._zoom_chart_reset)
@@ -693,21 +698,25 @@ class MainApp(MainAppCommonMixin, QMainWindow):
         chart_layout.addWidget(self.chart_latest_label)
 
         chart_group.setLayout(chart_layout)
-        layout.addWidget(chart_group)
+        layout.addWidget(chart_group, 5)
 
         details_group = QGroupBox("Analysis Details")
+        details_group.setObjectName("analysisDetailsGroup")
         details_layout = QVBoxLayout()
+        details_layout.setContentsMargins(8, 8, 8, 8)
+        details_layout.setSpacing(6)
 
         self.details_text = QTextEdit()
         self.details_text.setReadOnly(True)
         self.details_text.setFont(
             QFont(get_monospace_font_family(), ModernFonts.SIZE_SM)
         )
-        self.details_text.setMaximumHeight(120)
+        self.details_text.setMinimumHeight(180)
+        self.details_text.setMaximumHeight(280)
         details_layout.addWidget(self.details_text)
 
         details_group.setLayout(details_layout)
-        layout.addWidget(details_group)
+        layout.addWidget(details_group, 2)
 
         return panel
 

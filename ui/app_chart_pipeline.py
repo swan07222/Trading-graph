@@ -159,8 +159,12 @@ def _on_price_updated(self: Any, code: str, price: float) -> None:
                             prev_ref = float(prev_bar.get("close", price) or price)
                     except _APP_CHART_RECOVERABLE_EXCEPTIONS:
                         prev_ref = None
+                # FIX: Store previous close BEFORE any modifications to prevent race condition
+                last_close_before_update = float(last.get("close", price) or price)
                 if prev_ref is None:
-                    prev_ref = float(last.get("close", price) or price)
+                    prev_ref = last_close_before_update
+                if last_close_before_update <= 0:
+                    last_close_before_update = float(price)
                 bar_price = float(price)
                 if prev_ref and prev_ref > 0:
                     clamp_cap = float(self._synthetic_tick_jump_cap(interval))
@@ -184,13 +188,14 @@ def _on_price_updated(self: Any, code: str, price: float) -> None:
                 )):
                     now_bucket = self._bar_bucket_epoch(now_ts, interval)
                     if int(last_bucket) == int(now_bucket):
+                        # FIX: Use last_close_before_update for OHLC sanitization reference
                         s = self._sanitize_ohlc(
-                            float(last.get("open", price) or price),
+                            float(last.get("open", last_close_before_update) or last_close_before_update),
                             max(float(last.get("high", bar_price) or bar_price), bar_price),
                             min(float(last.get("low", bar_price) or bar_price), bar_price),
                             bar_price,
                             interval=interval,
-                            ref_close=float(prev_ref) if prev_ref and prev_ref > 0 else None,
+                            ref_close=last_close_before_update if last_close_before_update > 0 else None,
                         )
                         if s is not None:
                             o, h, low, c = s
@@ -487,6 +492,71 @@ def _on_price_updated(self: Any, code: str, price: float) -> None:
     if not self.predictor:
         return
 
+    models_ready = False
+    try:
+        ready_fn = getattr(self.predictor, "_models_ready_for_runtime", None)
+        if callable(ready_fn):
+            models_ready = bool(ready_fn())
+        else:
+            models_ready = bool(
+                getattr(self.predictor, "ensemble", None) is not None
+                or getattr(self.predictor, "forecaster", None) is not None
+            )
+    except _APP_CHART_RECOVERABLE_EXCEPTIONS:
+        models_ready = bool(
+            getattr(self.predictor, "ensemble", None) is not None
+            or getattr(self.predictor, "forecaster", None) is not None
+        )
+
+    if not models_ready:
+        stale_cleared = False
+        try:
+            if (
+                self.current_prediction
+                and self.current_prediction.stock_code == code
+            ):
+                had_pred = bool(
+                    list(getattr(self.current_prediction, "predicted_prices", []) or [])
+                    or list(getattr(self.current_prediction, "predicted_prices_low", []) or [])
+                    or list(getattr(self.current_prediction, "predicted_prices_high", []) or [])
+                )
+                self.current_prediction.predicted_prices = []
+                self.current_prediction.predicted_prices_low = []
+                self.current_prediction.predicted_prices_high = []
+                stale_cleared = bool(had_pred)
+        except _APP_CHART_RECOVERABLE_EXCEPTIONS:
+            stale_cleared = False
+
+        if stale_cleared:
+            arr = self._bars_by_symbol.get(code) or []
+            if arr:
+                try:
+                    self._render_chart_state(
+                        symbol=code,
+                        interval=self._normalize_interval_token(
+                            self.interval_combo.currentText()
+                        ),
+                        bars=arr,
+                        context="forecast_model_unavailable",
+                        current_price=price if price > 0 else None,
+                        predicted_prices=[],
+                        source_interval=self._normalize_interval_token(
+                            self.interval_combo.currentText()
+                        ),
+                        target_steps=int(self.forecast_spin.value()),
+                        predicted_prepared=True,
+                    )
+                except _APP_CHART_RECOVERABLE_EXCEPTIONS as exc:
+                    log.debug("Suppressed exception in ui/app.py", exc_info=exc)
+
+        self._debug_console(
+            f"forecast_model_unavailable:{code}",
+            f"skipped guessed-curve refresh for {code}: model artifacts unavailable",
+            min_gap_seconds=3.0,
+            level="warning",
+        )
+        return
+
     ui_interval = self._normalize_interval_token(
         self.interval_combo.currentText()
     )
@@ -561,6 +631,16 @@ def _on_price_updated(self: Any, code: str, price: float) -> None:
     def on_done(res: Any) -> None:
         try:
             if not res:
+                try:
+                    if (
+                        self.current_prediction
+                        and self.current_prediction.stock_code == code
+                    ):
+                        self.current_prediction.predicted_prices = []
+                        self.current_prediction.predicted_prices_low = []
+                        self.current_prediction.predicted_prices_high = []
+                except _APP_CHART_RECOVERABLE_EXCEPTIONS:
+                    pass
                 self._debug_console(
                     f"forecast_empty:{code}:{interval}",
                     f"forecast worker returned empty for {code} {interval}",
@@ -581,24 +661,6 @@ def _on_price_updated(self: Any, code: str, price: float) -> None:
                     continue
                 if fv > 0 and math.isfinite(fv):
                     stable_predicted.append(float(fv))
-            if not stable_predicted:
-                if (
-                    self.current_prediction
-                    and self.current_prediction.stock_code == code
-                ):
-                    for v in self._safe_list(
-                        getattr(
-                            self.current_prediction,
-                            "predicted_prices",
-                            [],
-                        )
-                    ):
-                        try:
-                            fv = float(v)
-                        except _APP_CHART_RECOVERABLE_EXCEPTIONS:
-                            continue
-                        if fv > 0 and math.isfinite(fv):
-                            stable_predicted.append(float(fv))
             predicted_prices = stable_predicted
 
             try:
@@ -668,21 +730,20 @@ def _on_price_updated(self: Any, code: str, price: float) -> None:
                 target_steps=int(self.forecast_spin.value()),
             )
 
-            # Update current_prediction with new forecast.
-            # Only overwrite when we have actual data -- an empty list
-            # would permanently erase the prediction line for all
-            # subsequent tick renders that fall back to current_prediction.
+            # Keep prediction state aligned with latest forecast payload.
             if (
                 self.current_prediction
                 and self.current_prediction.stock_code == code
-                and display_predicted
             ):
-                self.current_prediction.predicted_prices = display_predicted
-                low_band, high_band = self._build_chart_prediction_bands(
-                    symbol=code,
-                    predicted_prices=display_predicted,
-                    anchor_price=display_current if display_current > 0 else None,
-                )
+                self.current_prediction.predicted_prices = list(display_predicted or [])
+                if display_predicted:
+                    low_band, high_band = self._build_chart_prediction_bands(
+                        symbol=code,
+                        predicted_prices=display_predicted,
+                        anchor_price=display_current if display_current > 0 else None,
+                    )
+                else:
+                    low_band, high_band = [], []
                 self.current_prediction.predicted_prices_low = low_band
                 self.current_prediction.predicted_prices_high = high_band
 
@@ -803,12 +864,6 @@ def _prepare_chart_bars_for_interval(
         recent_span: list[float] = []
         dropped_shape = 0
         dropped_extreme_body = 0
-        repaired_shape = 0
-        repaired_gap = 0
-        processed_count = 0
-        allow_shape_rebuild = True
-        rebuild_disabled = False
-        rebuild_streak = 0
         prev_close: float | None = None
         prev_epoch: float | None = None
 
@@ -834,10 +889,10 @@ def _prepare_chart_bars_for_interval(
             )
             ref_close = prev_close
             if day_boundary:
-                # Keep prev_close as ref for the first bar of a new day
-                # so overnight gaps are still clamped by _sanitize_ohlc
-                # (jump_cap of 8% for 1m already covers A-share 10% limit).
-                # Only clear rolling stats for adaptive caps.
+                # Do not force previous-day close as intraday reference.
+                # Corporate actions/ex-rights can reset price levels at open;
+                # carrying old ref_close over day boundary causes fake spikes/drops.
+                ref_close = None
                 recent_closes.clear()
                 recent_body.clear()
                 recent_span.clear()
@@ -854,50 +909,6 @@ def _prepare_chart_bars_for_interval(
                 dropped_shape += 1
                 continue
             o, h, low, c = sanitized
-            processed_count += 1
-            rebuilt_now = False
-            if (
-                allow_shape_rebuild
-                and ref_close
-                and float(ref_close) > 0
-            ):
-                ref_prev = max(float(ref_close), float(c), 1e-8)
-                body_prev = abs(o - c) / ref_prev
-                span_prev = abs(h - low) / ref_prev
-                jump_prev = abs(c / float(ref_close) - 1.0)
-                # Many fallback sources emit close-only intraday bars
-                # (open ~= close). Rebuild open from previous close so
-                # candles are readable without inventing large moves.
-                if (
-                    body_prev <= 0.00008
-                    and span_prev <= 0.0018
-                    and jump_prev <= 0.0025
-                ):
-                    o = float(ref_close)
-                    top0 = max(o, c)
-                    bot0 = min(o, c)
-                    h = max(h, top0)
-                    low = min(low, bot0)
-                    repaired_shape += 1
-                    rebuilt_now = True
-                    rebuild_streak += 1
-                    if (
-                        allow_shape_rebuild
-                        and (
-                            rebuild_streak >= 3
-                            or (
-                                processed_count >= 40
-                                and (
-                                    float(repaired_shape)
-                                    / float(max(1, processed_count))
-                                ) > 0.12
-                            )
-                        )
-                    ):
-                        allow_shape_rebuild = False
-                        rebuild_disabled = True
-            if not rebuilt_now:
-                rebuild_streak = 0
 
             ref_values = [
                 float(v) for v in recent_closes[-32:]
@@ -945,13 +956,14 @@ def _prepare_chart_bars_for_interval(
                         float(max(0.006, med_span * 5.0)),
                     )
 
-            if (
+            shape_outlier = bool(
                 ref_jump > ref_jump_cap
                 or body > eff_body_cap
                 or span > eff_span_cap
                 or upper_wick > eff_wick_cap
                 or lower_wick > eff_wick_cap
-            ):
+            )
+            if shape_outlier:
                 if body > eff_body_cap:
                     dropped_extreme_body += 1
                 dropped_shape += 1
@@ -968,8 +980,6 @@ def _prepare_chart_bars_for_interval(
             if prev_epoch is not None:
                 gap = max(0.0, row_epoch - float(prev_epoch))
                 if (not day_boundary) and gap > (iv_s * 3.0):
-                    # First bar after lunch/day gaps: repair extreme boundary bars
-                    # before deciding to drop them.
                     boundary_body_cap = float(max(0.004, min(eff_body_cap, 0.008)))
                     boundary_span_cap = float(max(0.006, min(eff_span_cap, 0.012)))
                     boundary_wick_cap = float(max(0.004, min(eff_wick_cap, 0.008)))
@@ -979,37 +989,8 @@ def _prepare_chart_bars_for_interval(
                         or body > boundary_body_cap
                         or ref_jump > boundary_jump_cap
                     ):
-                        if ref_close and float(ref_close) > 0:
-                            o = float(ref_close)
-                            jump_now = abs(c / max(float(ref_close), 1e-8) - 1.0)
-                            if jump_now > boundary_jump_cap:
-                                sign = 1.0 if c >= float(ref_close) else -1.0
-                                c = float(ref_close) * (
-                                    1.0 + (sign * boundary_jump_cap)
-                                )
-                            top = max(o, c)
-                            bot = min(o, c)
-                            ref_local = max(ref, c, o)
-                            wick_allow = float(ref_local) * float(boundary_wick_cap)
-                            h = min(max(h, top), top + wick_allow)
-                            low = max(min(low, bot), bot - wick_allow)
-                            if h < low:
-                                h, low = low, h
-                            span = abs(h - low) / max(ref_local, 1e-8)
-                            upper_wick = max(0.0, h - top) / max(ref_local, 1e-8)
-                            lower_wick = max(0.0, bot - low) / max(ref_local, 1e-8)
-                            body = abs(o - c) / max(ref_local, 1e-8)
-                            ref_jump = abs(c / max(ref_local, 1e-8) - 1.0)
-                            repaired_gap += 1
-                        if (
-                            body > (boundary_body_cap * 1.45)
-                            or span > (boundary_span_cap * 1.45)
-                            or upper_wick > (boundary_wick_cap * 1.60)
-                            or lower_wick > (boundary_wick_cap * 1.60)
-                            or ref_jump > (boundary_jump_cap * 1.80)
-                        ):
-                            dropped_shape += 1
-                            continue
+                        dropped_shape += 1
+                        continue
 
             row_out = dict(row)
             row_out["open"] = o
@@ -1042,27 +1023,6 @@ def _prepare_chart_bars_for_interval(
                 min_gap_seconds=1.0,
                 level="warning",
             )
-        if repaired_shape > 0 or repaired_gap > 0:
-            self._debug_console(
-                f"chart_shape_repair:{sym or 'active'}:{iv}",
-                (
-                    f"chart shape repair symbol={sym or '--'} iv={iv} "
-                    f"repaired={repaired_shape} gap_repaired={repaired_gap} "
-                    f"kept={len(filtered)}"
-                ),
-                min_gap_seconds=1.0,
-                level="info",
-            )
-        if rebuild_disabled:
-            self._debug_console(
-                f"chart_shape_repair_disable:{sym or 'active'}:{iv}",
-                (
-                    f"disabled close-only candle rebuild for {sym or '--'} {iv}: "
-                    f"repaired={repaired_shape} processed={processed_count}"
-                ),
-                min_gap_seconds=1.0,
-                level="warning",
-            )
         out = filtered[-keep:]
 
     if out and iv in ("1d", "1wk", "1mo"):
@@ -1086,7 +1046,6 @@ def _prepare_chart_bars_for_interval(
         recent_daily: list[float] = []
         prev_close_daily: float | None = None
         dropped_daily = 0
-        repaired_daily = 0
 
         for row in out:
             try:
@@ -1098,13 +1057,18 @@ def _prepare_chart_bars_for_interval(
                 dropped_daily += 1
                 continue
 
+            ref_close = (
+                float(prev_close_daily)
+                if (prev_close_daily and float(prev_close_daily) > 0)
+                else None
+            )
             sanitized = self._sanitize_ohlc(
                 o_raw,
                 h_raw,
                 l_raw,
                 c_raw,
                 interval=iv,
-                ref_close=prev_close_daily,
+                ref_close=ref_close,
             )
             if sanitized is None:
                 dropped_daily += 1
@@ -1113,8 +1077,8 @@ def _prepare_chart_bars_for_interval(
 
             if recent_daily:
                 ref = float(median(recent_daily[-24:]))
-            elif prev_close_daily and float(prev_close_daily) > 0:
-                ref = float(prev_close_daily)
+            elif ref_close and float(ref_close) > 0:
+                ref = float(ref_close)
             else:
                 ref = float(c)
             if not math.isfinite(ref) or ref <= 0:
@@ -1123,13 +1087,11 @@ def _prepare_chart_bars_for_interval(
                 dropped_daily += 1
                 continue
 
-            if prev_close_daily and float(prev_close_daily) > 0:
-                jump_prev = abs(c / float(prev_close_daily) - 1.0)
+            if ref_close and float(ref_close) > 0:
+                jump_prev = abs(c / float(ref_close) - 1.0)
                 if jump_prev > daily_jump_cap:
-                    sign = 1.0 if c >= float(prev_close_daily) else -1.0
-                    c = float(prev_close_daily) * (1.0 + (sign * daily_jump_cap))
-                    o = float(prev_close_daily)
-                    repaired_daily += 1
+                    dropped_daily += 1
+                    continue
 
             top = max(o, c)
             bot = min(o, c)
@@ -1139,47 +1101,14 @@ def _prepare_chart_bars_for_interval(
             span = abs(h - low) / max(ref, 1e-8)
             upper_wick = max(0.0, h - top) / max(ref, 1e-8)
             lower_wick = max(0.0, bot - low) / max(ref, 1e-8)
-
             if (
                 body > daily_body_cap
                 or span > daily_span_cap
                 or upper_wick > daily_wick_cap
                 or lower_wick > daily_wick_cap
             ):
-                max_span_px = float(ref) * float(daily_span_cap)
-                max_body_px = float(ref) * float(daily_body_cap)
-                body_px = float(max(0.0, top - bot))
-                if body_px > max_body_px:
-                    if c >= o:
-                        o = c - max_body_px
-                    else:
-                        o = c + max_body_px
-                    top = max(o, c)
-                    bot = min(o, c)
-                    body_px = float(max(0.0, top - bot))
-                if body_px > max_span_px:
-                    o = c
-                    top = c
-                    bot = c
-                    body_px = 0.0
-                wick_allow = max(0.0, max_span_px - body_px)
-                h = min(h, top + (wick_allow * 0.60))
-                low = max(low, bot - (wick_allow * 0.60))
-                if h < low:
-                    h, low = low, h
-                span = abs(h - low) / max(ref, 1e-8)
-                body = abs(o - c) / max(ref, 1e-8)
-                upper_wick = max(0.0, h - max(o, c)) / max(ref, 1e-8)
-                lower_wick = max(0.0, min(o, c) - low) / max(ref, 1e-8)
-                repaired_daily += 1
-                if (
-                    body > (daily_body_cap * 1.35)
-                    or span > (daily_span_cap * 1.35)
-                    or upper_wick > (daily_wick_cap * 1.40)
-                    or lower_wick > (daily_wick_cap * 1.40)
-                ):
-                    dropped_daily += 1
-                    continue
+                dropped_daily += 1
+                continue
 
             row_out = dict(row)
             row_out["open"] = float(o)
@@ -1190,13 +1119,12 @@ def _prepare_chart_bars_for_interval(
             recent_daily.append(float(c))
             prev_close_daily = float(c)
 
-        if dropped_daily > 0 or repaired_daily > 0:
+        if dropped_daily > 0:
             self._debug_console(
                 f"chart_daily_filter:{sym or 'active'}:{iv}",
                 (
                     f"daily filter symbol={sym or '--'} iv={iv} "
-                    f"repaired={repaired_daily} dropped={dropped_daily} "
-                    f"kept={len(daily_filtered)} raw={len(out)}"
+                    f"dropped={dropped_daily} kept={len(daily_filtered)} raw={len(out)}"
                 ),
                 min_gap_seconds=1.0,
                 level="info",

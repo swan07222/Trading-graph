@@ -369,6 +369,14 @@ def _apply_ensemble_result(self, ensemble_pred: Any, pred: Prediction) -> None:
     self._apply_high_precision_gate(pred)
     self._apply_runtime_signal_quality_gate(pred)
     self._apply_tail_risk_guard(pred)
+    
+    # FIX: Ensure probabilities are always valid even if ensemble failed
+    if not hasattr(pred, 'prob_up') or pred.prob_up is None:
+        pred.prob_up = 0.33
+    if not hasattr(pred, 'prob_down') or pred.prob_down is None:
+        pred.prob_down = 0.33
+    if not hasattr(pred, 'prob_neutral') or pred.prob_neutral is None:
+        pred.prob_neutral = 0.34
 
 def _append_warning_once(pred: Prediction, message: str) -> None:
     """Append warning only once to avoid noisy duplicates."""

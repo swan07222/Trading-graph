@@ -355,17 +355,22 @@ class Config:
 
     def __new__(cls) -> Config:
         """Thread-safe singleton creation with double-checked locking.
-        
+
         Uses RLock for reentrant safety and explicit memory barriers
         through the lock to prevent instruction reordering issues.
+        
+        FIX C3: Set _initialized to True here in __new__ to prevent
+        race condition where two threads could both pass the check in
+        __init__ and both attempt initialization.
         """
         if cls._instance is None:
             with cls._instance_lock:
                 if cls._instance is None:
                     inst = super().__new__(cls)
-                    # Use object.__setattr__ to bypass __setattr__ that might
-                    # rely on _initialized before it's set
-                    object.__setattr__(inst, '_initialized', False)
+                    # FIX: Set _initialized to True immediately to prevent
+                    # race condition during concurrent initialization
+                    object.__setattr__(inst, '_initialized', True)
+                    object.__setattr__(inst, '_lock', threading.RLock())
                     cls._instance = inst
         return cls._instance
 
@@ -375,19 +380,35 @@ class Config:
         Call between tests to get a fresh Config.
         """
         with cls._instance_lock:
+            if cls._instance is not None:
+                # Clean up any resources before resetting
+                try:
+                    cls._instance._lock.release()
+                except RuntimeError:
+                    pass  # Lock was not held
             cls._instance = None
 
     def __init__(self) -> None:
-        """Thread-safe initialization with explicit barrier."""
-        # Check _initialized under lock to ensure proper memory barrier
-        # Create a temporary lock if _lock doesn't exist yet (first init)
-        init_lock = getattr(self, '_lock', None) or threading.RLock()
-        with init_lock:
-            if getattr(self, '_initialized', False):
+        """Thread-safe initialization with explicit barrier.
+        
+        FIX C3: Now checks _initialized which is set in __new__,
+        preventing double initialization under concurrent access.
+        """
+        # Early exit if already initialized (set in __new__)
+        if getattr(self, '_initialized', False):
+            # Check if this instance has been fully initialized
+            # by checking if _lock exists
+            if hasattr(self, '_lock') and hasattr(self, 'data'):
                 return
-
-            self._initialized = True
-            self._lock = threading.RLock()
+        
+        # Acquire lock for initialization
+        with self._lock:
+            # Double-check after acquiring lock
+            if hasattr(self, 'data'):
+                return
+            
+            # Mark as initialized (already done in __new__, but be safe)
+            object.__setattr__(self, '_initialized', True)
             self._config_file = Path(__file__).parent.parent / "config.json"
             self._env_prefix = "TRADING_"
             self._validation_warnings: list[str] = []

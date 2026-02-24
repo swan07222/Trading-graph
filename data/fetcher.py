@@ -189,8 +189,10 @@ from data.fetcher_sources import (
     _LAST_GOOD_MAX_AGE,
     _MICRO_CACHE_TTL,
     AkShareSource,
+    BARS_PER_DAY,
     DataSource,
     DataSourceStatus,
+    INTERVAL_MAX_DAYS,
     Quote,
     SinaHistorySource,
     TencentQuoteSource,
@@ -205,10 +207,12 @@ from utils.logger import get_logger
 log = get_logger(__name__)
 __all__ = [
     "AkShareSource",
+    "BARS_PER_DAY",
     "DataFetcher",
     "DataSource",
     "DataSourceStatus",
     "FetcherRegistry",
+    "INTERVAL_MAX_DAYS",
     "Quote",
     "SinaHistorySource",
     "TencentQuoteSource",
