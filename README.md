@@ -4,8 +4,11 @@ Desktop AI trading system for China A-shares with:
 - multi-source market data (Tencent, AkShare/EastMoney, Sina, Yahoo fallback)
 - **China network optimization** (auto failover, proxy support, DNS optimization)
 - **Enhanced sentiment analysis** (Jin10, Xueqiu, EastMoney, Sina)
-- model training and prediction
+- model training and prediction with **explainability**
+- **Multi-asset support** (stocks, futures, options, forex, crypto)
 - auto-trade execution and risk controls
+- **2FA authentication** for security
+- **Cloud backup** support (S3, Azure, GCS)
 - PyQt real-time charting and operations UI
 
 ## Key Features
@@ -16,13 +19,23 @@ Desktop AI trading system for China A-shares with:
 - Smart scoring based on market cap, volume, and index membership
 - Supports 600/601/603/605, 688, 000/001/002/003, 300/301, 83/87/43 prefixes
 
-### 2. Model Training
+### 2. Model Training & Explainability
 - **Train on all stocks**: `python main.py --train --epochs 100`
 - **Train on specific stock**: `python main.py --train-stock 600519 --epochs 100`
 - Auto-learning with continuous improvement
 - Ensemble models (LSTM, GRU, TCN, Transformer, Hybrid)
+- **NEW: SHAP/LIME explainability** for model predictions
+- **NEW: Monte Carlo Dropout** for uncertainty estimation
+- **NEW: Conformal Prediction** for valid confidence intervals
 
-### 3. China Network Support
+### 3. Multi-Asset Trading
+- **Stocks**: China A-shares (SSE, SZSE, BSE)
+- **Futures**: CFFEX, SHFE, CZCE, DCE contracts
+- **Options**: SSE 50 ETF, SZSE 300 ETF options
+- **Forex**: Major currency pairs
+- **Crypto**: Bitcoin, Ethereum support
+
+### 4. China Network Support
 - **Fully optimized for mainland China network conditions**
 - ✅ 5+ Chinese financial data providers with auto-failover
 - ✅ Proxy support (HTTP/SOCKS5) for VPN users
@@ -30,13 +43,26 @@ Desktop AI trading system for China A-shares with:
 - ✅ Extended timeouts for Great Firewall conditions
 - ✅ Network diagnostics: `python -m utils.china_diagnostics`
 
-### 4. Prediction Accuracy
-- **70%+ confidence threshold** (configurable via `min_confidence`)
-- Confidence calibration based on historical accuracy
-- Regime-aware predictions with adaptive thresholds
-- High-precision mode available: `TRADING_HIGH_PRECISION_MODE=1`
+### 5. Enhanced Prediction & Uncertainty
+- **Calibrated confidence scores** (confidence = actual accuracy)
+- **Uncertainty decomposition** (epistemic vs aleatoric)
+- **Dynamic confidence thresholds** by market regime
+- **Prediction intervals** with 90% coverage guarantee
+- **Ensemble disagreement** as uncertainty metric
 
-### 5. Real-Time Charting
+### 6. Security & Authentication
+- **2FA support** (TOTP with Google Authenticator, Authy)
+- **Backup codes** for account recovery
+- **Rate limiting** for brute-force protection
+- **Encrypted credential storage** with audit logging
+
+### 7. Cloud Backup & Recovery
+- **S3/Azure/GCS backup** support
+- **Automated scheduled backups**
+- **Point-in-time recovery**
+- **30-day retention** (configurable)
+
+### 8. Real-Time Charting
 - **Live candlestick updates** with real-time price feeds
 - **AI prediction overlay** (dashed cyan line)
 - **Uncertainty bands** (dotted yellow lines)

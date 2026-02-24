@@ -11,3 +11,12 @@ pytest-cov>=5.0.0
 ruff>=0.6.0
 mypy>=1.11.0
 types-requests>=2.32.0.20240712
+
+# Optional: Enhanced explainability
+# pip install shap lime
+
+# Optional: Cloud backup
+# pip install boto3 azure-storage-blob google-cloud-storage
+
+# Optional: 2FA QR code generation
+# pip install qrcode[pil]

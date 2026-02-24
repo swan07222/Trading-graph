@@ -6,10 +6,28 @@ from enum import Enum
 from typing import Any
 
 
+class AssetType(Enum):
+    """Asset type for multi-asset trading support."""
+    STOCK = "stock"
+    FUTURES = "futures"
+    OPTIONS = "options"
+    FOREX = "forex"
+    CRYPTO = "crypto"
+    ETF = "etf"
+    BOND = "bond"
+
+
 class OrderSide(Enum):
     """Order side (buy or sell)."""
     BUY = "buy"
     SELL = "sell"
+    OPEN_LONG = "open_long"      # Futures: open long position
+    OPEN_SHORT = "open_short"    # Futures: open short position
+    CLOSE_LONG = "close_long"    # Futures: close long position
+    CLOSE_SHORT = "close_short"  # Futures: close short position
+    CLOSE_TODAY = "close_today"  # Futures: close today's position (SHFE)
+    CLOSE_YESTERDAY = "close_yesterday"  # Futures: close yesterday's position
+
 
 class Signal(Enum):
     """Trading signal for predictions."""
@@ -18,6 +36,7 @@ class Signal(Enum):
     HOLD = "HOLD"
     SELL = "SELL"
     STRONG_SELL = "STRONG_SELL"
+
 
 class OrderStatus(Enum):
     """Order execution status."""
@@ -30,6 +49,7 @@ class OrderStatus(Enum):
     REJECTED = "rejected"
     EXPIRED = "expired"
 
+
 class OrderType(Enum):
     """Order type."""
     MARKET = "market"
@@ -40,12 +60,17 @@ class OrderType(Enum):
     FOK = "fok"
     TRAIL_MARKET = "trail_market"
     TRAIL_LIMIT = "trail_limit"
+    PEGGED = "pegged"           # Futures: pegged to market
+    MARKET_ON_CLOSE = "moc"     # Market on close
+    LIMIT_ON_CLOSE = "loc"      # Limit on close
+
 
 class PositionSide(Enum):
     """Position side."""
     LONG = "long"
     SHORT = "short"
     FLAT = "flat"
+
 
 class RiskLevel(Enum):
     """Risk level classification."""
@@ -54,6 +79,7 @@ class RiskLevel(Enum):
     HIGH = "high"
     CRITICAL = "critical"
 
+
 class SystemStatus(Enum):
     """System operational status."""
     RUNNING = "running"
@@ -61,6 +87,7 @@ class SystemStatus(Enum):
     STOPPED = "stopped"
     ERROR = "error"
     KILL_SWITCH = "kill_switch"
+
 
 class AutoTradeMode(Enum):
     """Trading mode that controls how signals are acted upon.
@@ -74,6 +101,30 @@ class AutoTradeMode(Enum):
     MANUAL = "manual"
     AUTO = "auto"
     SEMI_AUTO = "semi_auto"
+
+
+class TimeInForce(Enum):
+    """Time in force for orders."""
+    DAY = "day"           # Valid for the day
+    GTC = "gtc"           # Good till cancelled
+    IOC = "ioc"           # Immediate or cancel
+    FOK = "fok"           # Fill or kill
+    GTD = "gtd"           # Good till date
+    OPG = "opg"           # On open
+    CLS = "cls"           # On close
+
+
+class OptionType(Enum):
+    """Option type (call or put)."""
+    CALL = "call"
+    PUT = "put"
+
+
+class ExerciseStyle(Enum):
+    """Option exercise style."""
+    EUROPEAN = "european"
+    AMERICAN = "american"
+    BERMUDAN = "bermudan"
 
 @dataclass
 class Order:
@@ -809,4 +860,363 @@ class AutoTradeState:
             'last_trade': self.last_trade_time.isoformat() if self.last_trade_time else None,
             'pending_approvals': len(self.pending_approvals),
             'recent_actions': len(self.recent_actions),
+        }
+
+
+# =============================================================================
+# Futures & Options Support - Multi-Asset Trading
+# =============================================================================
+
+@dataclass
+class FuturesContract:
+    """Futures contract specification for China futures exchanges.
+    
+    Attributes:
+        symbol: Contract symbol (e.g., "IF2603" for CSI 300 March 2026)
+        underlying: Underlying asset code (e.g., "IF" for CSI 300)
+        exchange: Exchange code (CFFEX, SHFE, CZCE, DCE)
+        expiry: Contract expiry/delivery date
+        multiplier: Contract multiplier (tick value)
+        tick_size: Minimum price fluctuation
+        margin_rate: Initial margin rate (e.g., 0.12 for 12%)
+        trading_hours: Trading hours specification
+        last_trading_day: Last trading day before delivery
+        delivery_month: Delivery month (YYYYMM format)
+    """
+    symbol: str = ""
+    underlying: str = ""
+    exchange: str = ""
+    expiry: date | None = None
+    multiplier: float = 1.0
+    tick_size: float = 0.01
+    margin_rate: float = 0.12
+    trading_hours: dict[str, Any] = field(default_factory=dict)
+    last_trading_day: date | None = None
+    delivery_month: str = ""
+    
+    # Pricing
+    last_price: float = 0.0
+    settlement_price: float = 0.0
+    open_interest: int = 0
+    volume: int = 0
+    
+    def __post_init__(self) -> None:
+        if not self.symbol and self.underlying and self.expiry:
+            # Auto-generate symbol: IF + 2603 (YYYYMM)
+            self.symbol = f"{self.underlying}{self.expiry.strftime('%y%m')}"
+    
+    @property
+    def is_active(self) -> bool:
+        """Check if contract is actively trading."""
+        if self.expiry is None:
+            return False
+        return datetime.now().date() < self.expiry
+    
+    @property
+    def notional_value(self) -> float:
+        """Get notional value of one contract."""
+        return self.last_price * self.multiplier
+    
+    @property
+    def margin_required(self) -> float:
+        """Get margin required for one contract."""
+        return self.notional_value * self.margin_rate
+    
+    def to_dict(self) -> dict:
+        """Serialize to dictionary."""
+        return {
+            'symbol': self.symbol,
+            'underlying': self.underlying,
+            'exchange': self.exchange,
+            'expiry': self.expiry.isoformat() if self.expiry else None,
+            'multiplier': self.multiplier,
+            'tick_size': self.tick_size,
+            'margin_rate': self.margin_rate,
+            'last_price': self.last_price,
+            'settlement_price': self.settlement_price,
+            'open_interest': self.open_interest,
+            'volume': self.volume,
+        }
+
+
+@dataclass
+class OptionsContract:
+    """Options contract specification for China equity options.
+    
+    Attributes:
+        symbol: Option symbol (e.g., "10005001" for SSE50 ETF call)
+        underlying: Underlying asset code (e.g., "000300" for CSI 300)
+        option_type: Call or Put
+        strike: Strike price
+        expiry: Expiration date
+        exercise_style: European, American, or Bermudan
+        multiplier: Contract multiplier
+        tick_size: Minimum price fluctuation
+        margin_rate: Margin rate for short positions
+    """
+    symbol: str = ""
+    underlying: str = ""
+    option_type: OptionType = OptionType.CALL
+    strike: float = 0.0
+    expiry: date | None = None
+    exercise_style: ExerciseStyle = ExerciseStyle.EUROPEAN
+    multiplier: float = 10000.0  # SSE 50 ETF options: 10000
+    tick_size: float = 0.0001
+    margin_rate: float = 0.20
+    
+    # Pricing (Greeks)
+    last_price: float = 0.0
+    bid: float = 0.0
+    ask: float = 0.0
+    implied_volatility: float = 0.0
+    delta: float = 0.0
+    gamma: float = 0.0
+    theta: float = 0.0
+    vega: float = 0.0
+    rho: float = 0.0
+    
+    # Volume & OI
+    volume: int = 0
+    open_interest: int = 0
+    
+    def __post_init__(self) -> None:
+        if not self.symbol and self.underlying and self.strike and self.expiry:
+            # Auto-generate symbol based on Chinese convention
+            type_code = "C" if self.option_type == OptionType.CALL else "P"
+            self.symbol = f"{self.underlying}{type_code}{int(self.strike)}{self.expiry.strftime('%m')}"
+    
+    @property
+    def is_in_the_money(self) -> bool:
+        """Check if option is in the money."""
+        if self.option_type == OptionType.CALL:
+            return self.last_price > self.strike
+        return self.last_price < self.strike
+    
+    @property
+    def intrinsic_value(self) -> float:
+        """Get intrinsic value of the option."""
+        if self.option_type == OptionType.CALL:
+            return max(0, self.last_price - self.strike)
+        return max(0, self.strike - self.last_price)
+    
+    @property
+    def time_value(self) -> float:
+        """Get time value of the option."""
+        return self.last_price - self.intrinsic_value
+    
+    @property
+    def is_active(self) -> bool:
+        """Check if option is actively trading."""
+        if self.expiry is None:
+            return False
+        return datetime.now().date() < self.expiry
+    
+    @property
+    def days_to_expiry(self) -> int:
+        """Get days remaining until expiry."""
+        if self.expiry is None:
+            return 0
+        return (self.expiry - datetime.now().date()).days
+    
+    @property
+    def margin_required(self) -> float:
+        """Get margin required for short position."""
+        return self.last_price * self.multiplier * self.margin_rate
+    
+    def to_dict(self) -> dict:
+        """Serialize to dictionary."""
+        return {
+            'symbol': self.symbol,
+            'underlying': self.underlying,
+            'option_type': self.option_type.value,
+            'strike': self.strike,
+            'expiry': self.expiry.isoformat() if self.expiry else None,
+            'exercise_style': self.exercise_style.value,
+            'multiplier': self.multiplier,
+            'last_price': self.last_price,
+            'implied_volatility': self.implied_volatility,
+            'delta': self.delta,
+            'gamma': self.gamma,
+            'theta': self.theta,
+            'vega': self.vega,
+            'volume': self.volume,
+            'open_interest': self.open_interest,
+        }
+
+
+@dataclass
+class ForexPair:
+    """Forex currency pair specification.
+    
+    Attributes:
+        symbol: Currency pair symbol (e.g., "USD/CNY")
+        base_currency: Base currency (e.g., "USD")
+        quote_currency: Quote currency (e.g., "CNY")
+        pip_size: Pip size (e.g., 0.0001 for most pairs)
+        pip_value: Value per pip
+        spread: Typical spread in pips
+        margin_rate: Margin rate for leveraged trading
+    """
+    symbol: str = ""
+    base_currency: str = ""
+    quote_currency: str = ""
+    pip_size: float = 0.0001
+    pip_value: float = 10.0
+    spread: float = 1.0
+    margin_rate: float = 0.05
+    
+    # Pricing
+    bid: float = 0.0
+    ask: float = 0.0
+    last_price: float = 0.0
+    
+    def __post_init__(self) -> None:
+        if not self.symbol and self.base_currency and self.quote_currency:
+            self.symbol = f"{self.base_currency}/{self.quote_currency}"
+    
+    @property
+    def mid_price(self) -> float:
+        """Get mid-market price."""
+        if self.bid and self.ask:
+            return (self.bid + self.ask) / 2
+        return self.last_price
+    
+    def to_dict(self) -> dict:
+        """Serialize to dictionary."""
+        return {
+            'symbol': self.symbol,
+            'base_currency': self.base_currency,
+            'quote_currency': self.quote_currency,
+            'pip_size': self.pip_size,
+            'bid': self.bid,
+            'ask': self.ask,
+            'last_price': self.last_price,
+            'spread': self.spread,
+        }
+
+
+@dataclass
+class CryptoAsset:
+    """Cryptocurrency asset specification.
+    
+    Attributes:
+        symbol: Asset symbol (e.g., "BTC", "ETH")
+        name: Full name (e.g., "Bitcoin")
+        decimals: Number of decimal places
+        min_order_size: Minimum order size
+    """
+    symbol: str = ""
+    name: str = ""
+    decimals: int = 8
+    min_order_size: float = 0.00001
+    
+    # Pricing
+    last_price: float = 0.0
+    bid: float = 0.0
+    ask: float = 0.0
+    volume_24h: float = 0.0
+    market_cap: float = 0.0
+    
+    def to_dict(self) -> dict:
+        """Serialize to dictionary."""
+        return {
+            'symbol': self.symbol,
+            'name': self.name,
+            'decimals': self.decimals,
+            'last_price': self.last_price,
+            'bid': self.bid,
+            'ask': self.ask,
+            'volume_24h': self.volume_24h,
+            'market_cap': self.market_cap,
+        }
+
+
+@dataclass
+class MultiAssetPosition:
+    """Position that supports multiple asset types.
+    
+    Extends Position with futures/options-specific fields.
+    """
+    # Basic position info
+    symbol: str = ""
+    name: str = ""
+    asset_type: AssetType = AssetType.STOCK
+    
+    quantity: int = 0
+    available_qty: int = 0
+    frozen_qty: int = 0
+    pending_buy: int = 0
+    pending_sell: int = 0
+    
+    avg_cost: float = 0.0
+    current_price: float = 0.0
+    
+    # P&L
+    realized_pnl: float = 0.0
+    commission_paid: float = 0.0
+    
+    # Futures-specific
+    long_qty: int = 0
+    short_qty: int = 0
+    long_avg_cost: float = 0.0
+    short_avg_cost: float = 0.0
+    today_long_qty: int = 0
+    today_short_qty: int = 0
+    yesterday_long_qty: int = 0
+    yesterday_short_qty: int = 0
+    
+    # Options-specific
+    option_contract: OptionsContract | None = None
+    underlying_position: int = 0  # Delta hedging
+    
+    # Margin
+    margin_used: float = 0.0
+    margin_available: float = 0.0
+    
+    opened_at: datetime | None = None
+    last_updated: datetime | None = None
+    
+    def __post_init__(self) -> None:
+        if self.last_updated is None:
+            self.last_updated = datetime.now()
+    
+    @property
+    def net_quantity(self) -> int:
+        """Get net position (long - short for futures)."""
+        if self.asset_type == AssetType.FUTURES:
+            return self.long_qty - self.short_qty
+        return self.quantity
+    
+    @property
+    def market_value(self) -> float:
+        """Get market value of position."""
+        if self.asset_type == AssetType.FUTURES:
+            # For futures, use contract multiplier
+            return abs(self.net_quantity) * self.current_price
+        return self.quantity * self.current_price
+    
+    @property
+    def unrealized_pnl(self) -> float:
+        """Get unrealized P&L."""
+        if self.quantity == 0 or self.avg_cost == 0:
+            return 0
+        if self.asset_type == AssetType.FUTURES:
+            # Futures P&L calculation
+            long_pnl = (self.current_price - self.long_avg_cost) * self.long_qty
+            short_pnl = (self.short_avg_cost - self.current_price) * self.short_qty
+            return long_pnl + short_pnl
+        return (self.current_price - self.avg_cost) * self.quantity
+    
+    def to_dict(self) -> dict:
+        """Serialize to dictionary."""
+        return {
+            'symbol': self.symbol,
+            'asset_type': self.asset_type.value,
+            'quantity': self.quantity,
+            'net_quantity': self.net_quantity,
+            'avg_cost': self.avg_cost,
+            'current_price': self.current_price,
+            'market_value': self.market_value,
+            'unrealized_pnl': self.unrealized_pnl,
+            'margin_used': self.margin_used,
         }
