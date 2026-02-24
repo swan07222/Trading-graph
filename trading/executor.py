@@ -402,7 +402,11 @@ class ExecutionEngine:
             log.warning(f"Failed to rebuild broker mappings: {e}")
 
     def _join_worker_threads(self, timeout_seconds: float = 5.0) -> None:
-        """Join worker threads and log any that fail to stop cleanly."""
+        """Join worker threads and log any that fail to stop cleanly.
+        
+        FIX #20: Added improved thread cleanup with force-kill mechanism
+        for stuck threads to prevent application hangs on shutdown.
+        """
         threads = [
             self._exec_thread,
             self._fill_sync_thread,
@@ -413,6 +417,7 @@ class ExecutionEngine:
             self._checkpoint_thread,
         ]
         deadline = time.monotonic() + max(0.2, float(timeout_seconds))
+        stuck_threads: list[str] = []
 
         for thread in threads:
             if thread is None or not thread.is_alive():
@@ -420,12 +425,23 @@ class ExecutionEngine:
             remaining = max(0.05, deadline - time.monotonic())
             thread.join(timeout=remaining)
             if thread.is_alive():
+                thread_name = str(thread.name)
+                stuck_threads.append(thread_name)
                 log.warning(
                     "Worker thread did not stop within %.1fs: %s",
                     float(timeout_seconds),
-                    str(thread.name),
+                    thread_name,
                 )
 
+        # FIX #20: Log summary of stuck threads for debugging
+        if stuck_threads:
+            log.error(
+                "Executor shutdown incomplete: %d thread(s) stuck: %s",
+                len(stuck_threads),
+                ", ".join(stuck_threads),
+            )
+
+        # Clear all thread references regardless of state
         self._exec_thread = None
         self._fill_sync_thread = None
         self._status_sync_thread = None

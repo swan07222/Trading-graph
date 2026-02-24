@@ -247,11 +247,12 @@ class OrderManagementSystem:
 
     def submit_order(self, order: Order) -> Order:
         """Submit order with validation and reservation.
-        
+
         FIX C8: Added NaN/Inf validation to prevent invalid orders.
+        FIX #4: Added maximum quantity/price limits to prevent overflow.
         """
         import math
-        
+
         with self._lock:
             self._check_new_day()
 
@@ -261,10 +262,24 @@ class OrderManagementSystem:
                     "Quantity must be positive and finite (not NaN or Inf)"
                 )
 
+            # FIX #4: Add maximum quantity limit to prevent integer overflow
+            MAX_QUANTITY = 10**9  # 1 billion shares
+            if order.quantity > MAX_QUANTITY:
+                raise OrderValidationError(
+                    f"Quantity {order.quantity} exceeds maximum allowed ({MAX_QUANTITY})"
+                )
+
             # FIX C8: Validate price is positive and finite (not NaN/Inf)
             if order.price is None or float(order.price) <= 0 or not math.isfinite(float(order.price)):
                 raise OrderValidationError(
                     "Order price must be positive and finite (not NaN or Inf)"
+                )
+
+            # FIX #4: Add maximum price limit to prevent overflow
+            MAX_PRICE = 10**6  # 1 million per share
+            if float(order.price) > MAX_PRICE:
+                raise OrderValidationError(
+                    f"Price {order.price} exceeds maximum allowed (CNY {MAX_PRICE})"
                 )
 
             from core.constants import get_lot_size

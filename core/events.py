@@ -131,6 +131,9 @@ class EventBus:
                 if cls._instance is None:
                     instance = super().__new__(cls)
                     object.__setattr__(instance, "_initialized", False)
+                    # FIX #1: Initialize thread-safe error depth tracking
+                    object.__setattr__(instance, "_error_depth_lock", threading.Lock())
+                    object.__setattr__(instance, "_error_depth", 0)
                     cls._instance = instance
         return cls._instance
 
@@ -148,10 +151,7 @@ class EventBus:
         # FIX: Use deque with maxlen for O(1) bounded history
         self._max_history = 1000
         self._history: deque = deque(maxlen=self._max_history)
-        
-        # FIX #5: Thread-local error dispatch depth counter to prevent
-        # infinite recursion if ERROR handlers consistently fail
-        self._local = threading.local()
+        # Note: _error_depth and _error_depth_lock initialized in __new__
 
     def subscribe(
         self,
@@ -208,8 +208,9 @@ class EventBus:
         blocking operations that could deadlock the event bus worker thread.
         Long-running handlers should use async execution or background threads.
 
-        FIX #5: Added error dispatch depth limit to prevent stack overflow
-        if ERROR handlers consistently fail.
+        FIX #1: Use class-level lock for error depth tracking instead of
+        thread-local storage to prevent race conditions and ensure reliable
+        recursion prevention across all thread configurations.
         """
         with self._sub_lock:
             handlers = self._subscribers.get(event.type, []).copy()
@@ -220,16 +221,21 @@ class EventBus:
             except Exception as e:
                 # Avoid recursion: don't dispatch ERROR for ERROR handlers
                 if event.type != EventType.ERROR:
-                    # FIX #5: Check error dispatch depth to prevent infinite recursion
-                    error_depth = getattr(self._local, 'error_depth', 0)
-                    if error_depth >= 3:
-                        # Last resort: just log it to break the recursion
+                    # FIX #1: Use class-level lock for thread-safe depth tracking
+                    should_skip = False
+                    with self._error_depth_lock:
+                        if self._error_depth >= 3:
+                            should_skip = True
+                        else:
+                            self._error_depth += 1
+
+                    if should_skip:
+                        # Max depth reached - just log to break recursion
                         log.error(
                             f"Error handler failed (max depth reached): {e}"
                         )
                         continue
 
-                    self._local.error_depth = error_depth + 1
                     try:
                         error_event = Event(
                             type=EventType.ERROR,
@@ -241,10 +247,9 @@ class EventBus:
                         )
                         self._dispatch_error(error_event)
                     finally:
-                        # FIX C6: Ensure depth is always decremented even on exception
-                        # Use getattr with default to handle any edge cases
-                        current_depth = getattr(self._local, 'error_depth', 1)
-                        self._local.error_depth = max(0, current_depth - 1)
+                        # FIX #1: Always decrement depth under lock
+                        with self._error_depth_lock:
+                            self._error_depth = max(0, self._error_depth - 1)
                 else:
                     # Already in ERROR handler, just log
                     log.error(

@@ -1,4 +1,6 @@
 # trading/kill_switch.py
+import hashlib
+import hmac
 import json
 import threading
 from collections.abc import Callable
@@ -13,6 +15,37 @@ from utils.logger import get_logger
 from utils.security import get_audit_log
 
 log = get_logger(__name__)
+
+# FIX #6: Use HMAC for integrity verification of kill switch state
+# This prevents tampering with the state file
+def _compute_state_hmac(state_json: str) -> str:
+    """Compute HMAC-SHA256 for state integrity verification."""
+    # Use a derived key from the secure storage key for HMAC
+    try:
+        from utils.security import SecureStorage
+        storage = SecureStorage()
+        # Get or derive a key for HMAC
+        key_material = storage.get("_hmac_key", None)
+        if key_material is None:
+            # Generate and store a new HMAC key
+            import secrets
+            key_material = secrets.token_hex(32)
+            storage.set("_hmac_key", key_material)
+        key = key_material.encode('utf-8')
+        return hmac.new(key, state_json.encode('utf-8'), hashlib.sha256).hexdigest()
+    except Exception as e:
+        # Fallback: use a simple hash (less secure but better than nothing)
+        log.warning(f"HMAC computation failed, using fallback: {e}")
+        return hashlib.sha256(state_json.encode('utf-8')).hexdigest()
+
+def _verify_state_hmac(state_json: str, expected_hmac: str) -> bool:
+    """Verify HMAC-SHA256 for state integrity."""
+    try:
+        computed = _compute_state_hmac(state_json)
+        return hmac.compare_digest(computed, expected_hmac)
+    except Exception as e:
+        log.error(f"HMAC verification failed: {e}")
+        return False
 
 class CircuitBreakerType(Enum):
     DAILY_LOSS = "daily_loss"
@@ -97,6 +130,14 @@ class KillSwitch:
         return datetime.now() >= cb.reset_at
 
     def activate(self, reason: str, activated_by: str = "system") -> bool:
+        """Activate kill switch with proper locking to prevent deadlocks.
+        
+        FIX #2: Move EVENT_BUS.publish outside the lock to prevent deadlock
+        if event handlers try to acquire the same lock.
+        """
+        callbacks_to_call: list[Callable[[str], object]] = []
+        event_to_publish: Event | None = None
+        
         with self._lock:
             if self._active:
                 return False
@@ -116,27 +157,42 @@ class KillSwitch:
 
             log.critical(f"🛑 KILL SWITCH ACTIVATED: {reason}")
 
-            for callback in self._on_activate:
-                try:
-                    callback(reason)
-                except Exception as e:
-                    log.error(f"Kill switch callback error: {e}")
-
-            EVENT_BUS.publish(Event(
+            # Copy callbacks while holding lock, call them outside
+            callbacks_to_call = list(self._on_activate)
+            
+            # Prepare event for publishing outside lock
+            event_to_publish = Event(
                 type=EventType.CIRCUIT_BREAKER,
                 data={
                     'action': 'kill_switch_activated',
                     'reason': reason,
                 },
-            ))
+            )
 
-            return True
+        # Call callbacks outside the lock to prevent deadlock
+        for callback in callbacks_to_call:
+            try:
+                callback(reason)
+            except Exception as e:
+                log.error(f"Kill switch callback error: {e}")
+
+        # Publish event outside the lock to prevent deadlock
+        if event_to_publish is not None:
+            EVENT_BUS.publish(event_to_publish)
+
+        return True
 
     def deactivate(
         self,
         deactivated_by: str = "system",
         override_code: str | None = None,
     ) -> bool:
+        """Deactivate kill switch with proper locking to prevent deadlocks.
+        
+        FIX #2: Move callback execution outside the lock to prevent deadlock.
+        """
+        callbacks_to_call: list[Callable[[], object]] = []
+        
         with self._lock:
             if not self._active:
                 return False
@@ -166,13 +222,17 @@ class KillSwitch:
 
             log.info(f"✅ Kill switch deactivated by {deactivated_by}")
 
-            for callback in self._on_deactivate:
-                try:
-                    callback()
-                except Exception as e:
-                    log.error(f"Kill switch callback error: {e}")
+            # Copy callbacks while holding lock, call them outside
+            callbacks_to_call = list(self._on_deactivate)
 
-            return True
+        # Call callbacks outside the lock to prevent deadlock
+        for callback in callbacks_to_call:
+            try:
+                callback()
+            except Exception as e:
+                log.error(f"Kill switch callback error: {e}")
+
+        return True
 
     def _get_override_code(self) -> str:
         import hashlib
@@ -323,9 +383,10 @@ class KillSwitch:
             }
 
     def _save_state(self) -> None:
-        """Save state to disk atomically.
+        """Save state to disk atomically with HMAC integrity protection.
 
         Uses temp file + rename pattern to prevent corruption on crash.
+        FIX #6: Added HMAC integrity verification to prevent tampering.
         """
         path = CONFIG.data_dir / self.STATE_FILE
 
@@ -356,6 +417,11 @@ class KillSwitch:
             },
         }
 
+        # FIX #6: Compute HMAC for integrity verification
+        state_json = json.dumps(state, indent=2)
+        state_hmac = _compute_state_hmac(state_json)
+        state['state_hmac'] = state_hmac
+
         tmp_path: Path | None = None
         try:
             tmp_path = path.with_suffix('.tmp')
@@ -374,12 +440,14 @@ class KillSwitch:
                     pass
 
     def _load_state(self) -> None:
-        """Load state from disk.
+        """Load state from disk with HMAC integrity verification.
 
         NOTE: A previously-active kill switch is INTENTIONALLY restored.
         This is a safety feature — the operator must explicitly deactivate
         the kill switch after investigating the cause. Auto-clearing on
         restart would defeat the purpose of an emergency stop.
+        
+        FIX #6: Added HMAC integrity verification to detect tampering.
         """
         path = CONFIG.data_dir / self.STATE_FILE
 
@@ -389,6 +457,21 @@ class KillSwitch:
         try:
             with open(path) as f:
                 state = json.load(f)
+
+            # FIX #6: Verify HMAC integrity
+            stored_hmac = state.pop('state_hmac', None)
+            if stored_hmac is not None:
+                state_json_for_verify = json.dumps(state, indent=2)
+                if not _verify_state_hmac(state_json_for_verify, stored_hmac):
+                    log.error(
+                        "⚠️ KILL SWITCH STATE INTEGRITY CHECK FAILED! "
+                        "State may have been tampered with. Refusing to load."
+                    )
+                    # Reset to safe state
+                    self._active = False
+                    return
+                # Restore hmac for re-save if needed
+                state['state_hmac'] = stored_hmac
 
             self._active = state.get('active', False)
 
@@ -431,6 +514,8 @@ class KillSwitch:
 
         except Exception as e:
             log.error(f"Failed to load kill switch state: {e}")
+            # On load error, stay in safe state (inactive)
+            self._active = False
 
     def on_activate(self, callback: Callable[[str], object]) -> None:
         self._on_activate.append(callback)

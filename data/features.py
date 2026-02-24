@@ -126,6 +126,11 @@ class FeatureEngine:
     # ------------------------------------------------------------------
 
     def _build(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Build features with comprehensive NaN handling.
+        
+        FIX #7: Added explicit NaN handling after each feature computation
+        to prevent feature corruption leading to bad predictions.
+        """
         out = df.copy()
 
         for col in ("open", "high", "low", "close", "volume"):
@@ -147,6 +152,10 @@ class FeatureEngine:
             # Also handle case where shift(1) produces NaN on first row
             ratio_clean = ratio.where(ratio > 0, np.nan)
             out["log_returns"] = np.log(ratio_clean) * 100
+        
+        # FIX #7: Explicitly handle NaN in returns
+        out["returns"] = out["returns"].fillna(0.0)
+        out["log_returns"] = out["log_returns"].fillna(0.0)
 
         # === Volatility (require full window to avoid garbage) ===
         out["volatility_5"] = out["returns"].rolling(5, min_periods=5).std()
@@ -155,6 +164,12 @@ class FeatureEngine:
         out["volatility_ratio"] = out["volatility_5"] / (
             out["volatility_20"] + _EPS
         )
+        
+        # FIX #7: Handle NaN in volatility features
+        out["volatility_5"] = out["volatility_5"].fillna(0.0)
+        out["volatility_10"] = out["volatility_10"].fillna(0.0)
+        out["volatility_20"] = out["volatility_20"].fillna(0.0)
+        out["volatility_ratio"] = out["volatility_ratio"].fillna(1.0)  # Neutral ratio
 
         # === Moving Averages ===
         ma5 = close.rolling(5, min_periods=5).mean()
@@ -167,6 +182,10 @@ class FeatureEngine:
         out["ma_ratio_10_50"] = (ma10 / (ma50 + _EPS) - 1) * 100
         out["ma_ratio_20_60"] = (ma20 / (ma60 + _EPS) - 1) * 100
         out["price_to_ma20"] = (close / (ma20 + _EPS) - 1) * 100
+        
+        # FIX #7: Handle NaN in MA ratios
+        for col in ["ma_ratio_5_20", "ma_ratio_10_50", "ma_ratio_20_60", "price_to_ma20"]:
+            out[col] = out[col].fillna(0.0)
 
         # === Indicator suite (consistent between ta / basic) ===
         self._add_momentum(out, close, high, low, volume)

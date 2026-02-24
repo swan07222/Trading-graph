@@ -407,7 +407,19 @@ class Backtester:
         initial_capital: float | None = None,
         top_k: int = 5,
     ) -> dict:
-        """Parameter sweep over walk-forward settings and execution assumptions."""
+        """Parameter sweep over walk-forward settings and execution assumptions.
+        
+        FIX #19: Added pre-validation of parameter combinations to prevent
+        wasted computation and confusing errors.
+        """
+        # FIX #19: Validate top_k
+        if top_k <= 0:
+            raise ValueError(f"top_k must be positive, got {top_k}")
+        
+        # FIX #19: Validate min_data_days
+        if min_data_days <= 0:
+            raise ValueError(f"min_data_days must be positive, got {min_data_days}")
+        
         train_opts = sorted(
             {int(x) for x in (train_months_options or [6, 9, 12, 18]) if int(x) > 0}
         )
@@ -445,6 +457,8 @@ class Backtester:
                 if float(x) >= 0.0
             }
         )
+        
+        # FIX #19: Validate options are not empty after filtering
         if (
             not train_opts
             or not test_opts
@@ -454,8 +468,40 @@ class Backtester:
             or not slippage_opts
             or not commission_opts
         ):
-            raise ValueError("Optimization options cannot be empty")
-
+            raise ValueError("Optimization options cannot be empty after filtering invalid values")
+        
+        # FIX #19: Validate logical consistency of train/test months
+        max_train_months = max(train_opts)
+        max_test_months = max(test_opts)
+        total_months_needed = max_train_months + max_test_months
+        if total_months_needed > 60:  # 5 years max reasonable lookback
+            log.warning(
+                f"Train ({max_train_months}m) + test ({max_test_months}m) = {total_months_needed} months. "
+                f"This may exceed available data for some stocks."
+            )
+        
+        # FIX #19: Validate confidence thresholds are reasonable
+        min_conf = min(conf_opts)
+        max_conf = max(conf_opts)
+        if min_conf < 0.5:
+            log.warning(
+                f"Minimum confidence {min_conf} is below 0.5, "
+                "which may produce low-quality signals."
+            )
+        if max_conf > 0.95:
+            log.warning(
+                f"Maximum confidence {max_conf} is above 0.95, "
+                "which may produce very few trades."
+            )
+        
+        # FIX #19: Validate participation limits
+        max_participation = max(part_opts)
+        if max_participation > 0.10:
+            log.warning(
+                f"Max volume participation {max_participation:.1%} is high, "
+                "which may overestimate fill rates."
+            )
+        
         combos = list(
             product(
                 train_opts,
@@ -467,6 +513,14 @@ class Backtester:
                 commission_opts,
             )
         )
+        
+        # FIX #19: Warn if combination count is very high
+        if len(combos) > 500:
+            log.warning(
+                f"Optimization has {len(combos)} combinations, which may take a long time. "
+                "Consider reducing parameter options."
+            )
+        
         trials: list[BacktestOptimizationTrial] = []
         old_conf = float(getattr(CONFIG.model, "min_confidence", 0.60))
         old_trade_horizon_present = hasattr(CONFIG.model, "backtest_trade_horizon")
@@ -553,6 +607,11 @@ class Backtester:
                         )
                     )
                 except Exception as exc:
+                    # FIX #5: Enhanced error logging with trial context
+                    error_msg = f"{type(exc).__name__}: {str(exc)}"
+                    log.warning(
+                        f"Optimization trial {idx}/{len(combos)} failed: {error_msg}"
+                    )
                     trials.append(
                         BacktestOptimizationTrial(
                             train_months=int(train_m),
@@ -563,7 +622,7 @@ class Backtester:
                             slippage_bps=float(slippage_bps),
                             commission_bps=float(commission_bps),
                             score=float("-inf"),
-                            error=str(exc),
+                            error=error_msg,
                         )
                     )
         finally:

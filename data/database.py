@@ -45,8 +45,44 @@ class MarketDatabase:
         self._connections_lock = threading.Lock()
         self._schema_lock = threading.Lock()
         self._schema_ready = threading.Event()
+        # FIX #4: Background cleanup thread for more robust connection management
+        self._cleanup_interval_seconds = 60
+        self._cleanup_stop_event = threading.Event()
+        self._cleanup_thread: threading.Thread | None = None
+        self._start_cleanup_thread()
         self._init_db()
         atexit.register(self.close_all)
+
+    def _start_cleanup_thread(self) -> None:
+        """FIX #4: Start background thread for periodic connection cleanup."""
+        self._cleanup_thread = threading.Thread(
+            target=self._cleanup_loop,
+            daemon=True,
+            name="db_connection_cleanup"
+        )
+        self._cleanup_thread.start()
+
+    def _cleanup_loop(self) -> None:
+        """FIX #4: Background cleanup loop for dead thread connections."""
+        while not self._cleanup_stop_event.wait(timeout=self._cleanup_interval_seconds):
+            try:
+                with self._connections_lock:
+                    self._cleanup_dead_threads()
+            except Exception as e:
+                log.debug(f"Background connection cleanup error: {e}")
+
+    def close_all(self) -> None:
+        """FIX #4: Close all connections and stop background cleanup."""
+        self._cleanup_stop_event.set()
+        if self._cleanup_thread:
+            self._cleanup_thread.join(timeout=5)
+        with self._connections_lock:
+            for tid, conn in list(self._connections.items()):
+                try:
+                    conn.close()
+                except (sqlite3.Error, OSError):
+                    pass
+            self._connections.clear()
 
     # ------------------------------------------------------------------
     # Connection management
@@ -54,11 +90,35 @@ class MarketDatabase:
 
     @property
     def _conn(self) -> sqlite3.Connection:
-        """Thread-local connection with automatic registration."""
+        """Thread-local connection with automatic registration.
+        
+        FIX #3: Track connections by thread ID with proper cleanup.
+        FIX #8: Add maximum connection limit to prevent resource exhaustion.
+        """
         if (
             not hasattr(self._local, "conn")
             or self._local.conn is None
         ):
+            # FIX #8: Check if we've hit max connections before creating new one
+            MAX_CONNECTIONS = 50  # Reasonable limit for SQLite
+            
+            with self._connections_lock:
+                self._cleanup_dead_threads()
+                # Check total connection count
+                if len(self._connections) >= MAX_CONNECTIONS:
+                    log.warning(
+                        f"Database connection limit ({MAX_CONNECTIONS}) reached. "
+                        "Closing oldest idle connection."
+                    )
+                    # Close oldest connection (first in dict)
+                    if self._connections:
+                        oldest_tid = next(iter(self._connections))
+                        old_conn = self._connections.pop(oldest_tid)
+                        try:
+                            old_conn.close()
+                        except (sqlite3.Error, OSError):
+                            pass
+            
             conn = sqlite3.connect(
                 str(self._db_path),
                 check_same_thread=False,
@@ -71,8 +131,6 @@ class MarketDatabase:
             self._local.conn = conn
             tid = threading.get_ident()
             with self._connections_lock:
-                # FIX #3: Clean up dead threads while registering
-                self._cleanup_dead_threads()
                 self._connections[tid] = conn
         else:
             # FIX #3 & #8: Periodic cleanup every 50 accesses with overflow protection
@@ -100,6 +158,7 @@ class MarketDatabase:
 
         FIX #3: Called under _connections_lock by the caller.
         FIX #10: Register atexit handler to ensure all connections are closed on shutdown.
+        FIX #8: Add logging for connection cleanup monitoring.
         """
         alive_ids = {
             t.ident for t in threading.enumerate() if t.ident is not None
@@ -109,13 +168,18 @@ class MarketDatabase:
             for tid in self._connections
             if tid not in alive_ids
         ]
-        for tid in dead_ids:  # noqa: B007 (tid used as dict key)
+        cleaned_count = 0
+        for tid in dead_ids:
             conn = self._connections.pop(tid, None)
             if conn is not None:
                 try:
                     conn.close()
+                    cleaned_count += 1
                 except (sqlite3.Error, OSError):
                     pass
+        
+        if cleaned_count > 0:
+            log.debug(f"Cleaned up {cleaned_count} dead thread database connections")
 
     @contextmanager
     def _transaction(self):

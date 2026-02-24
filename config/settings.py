@@ -283,15 +283,32 @@ class AutoTradeConfig:
     auto_disable_on_model_drift: bool = True
     model_drift_pause_seconds: int = 3600
 
+    # FIX #16: Add __post_init__ to automatically validate on instantiation
+    def __post_init__(self) -> None:
+        """Automatically validate configuration on instantiation.
+        
+        FIX #16: Ensures invalid auto-trade settings are caught early
+        rather than causing unexpected behavior at runtime.
+        """
+        errors = self.validate()
+        if errors:
+            # Log warnings but don't raise — allows partial configs to load
+            from utils.logger import get_logger
+            log = get_logger(__name__)
+            for error in errors:
+                log.warning(f"AutoTradeConfig validation warning: {error}")
+            # Store validation errors for later inspection
+            object.__setattr__(self, '_validation_errors', errors)
+
     # FIX #16: Add validation method for configuration consistency
     def validate(self) -> list[str]:
         """Validate auto-trade configuration consistency.
-        
+
         Returns:
             List of validation error messages (empty if valid)
         """
         errors: list[str] = []
-        
+
         # Validate confidence thresholds are in valid range (0, 1]
         if not (0.0 < self.min_confidence <= 1.0):
             errors.append(f"min_confidence must be in (0, 1], got {self.min_confidence}")
@@ -299,7 +316,7 @@ class AutoTradeConfig:
             errors.append(f"min_signal_strength must be in (0, 1], got {self.min_signal_strength}")
         if not (0.0 < self.min_model_agreement <= 1.0):
             errors.append(f"min_model_agreement must be in (0, 1], got {self.min_model_agreement}")
-        
+
         # Validate position limits are positive
         if self.max_auto_positions <= 0:
             errors.append(f"max_auto_positions must be positive, got {self.max_auto_positions}")
@@ -307,7 +324,7 @@ class AutoTradeConfig:
             errors.append(f"max_auto_position_pct must be positive, got {self.max_auto_position_pct}")
         if self.max_auto_order_value <= 0:
             errors.append(f"max_auto_order_value must be positive, got {self.max_auto_order_value}")
-        
+
         # Validate timing constraints
         if self.scan_interval_seconds < 10:
             errors.append(f"scan_interval_seconds must be >= 10, got {self.scan_interval_seconds}")
@@ -315,16 +332,20 @@ class AutoTradeConfig:
             errors.append(f"cooldown_after_trade_seconds must be >= 60, got {self.cooldown_after_trade_seconds}")
         if self.max_trades_per_day <= 0:
             errors.append(f"max_trades_per_day must be positive, got {self.max_trades_per_day}")
-        
+
         # Validate volatility threshold
         if self.volatility_pause_threshold <= 0:
             errors.append(f"volatility_pause_threshold must be positive, got {self.volatility_pause_threshold}")
-        
+
         # Validate trailing stop
         if self.trailing_stop_enabled and self.trailing_stop_pct <= 0:
             errors.append(f"trailing_stop_pct must be positive when enabled, got {self.trailing_stop_pct}")
-        
+
         return errors
+
+    def is_valid(self) -> bool:
+        """Check if configuration is valid."""
+        return len(self.validate()) == 0
 
 
 @dataclass

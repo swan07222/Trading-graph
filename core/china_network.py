@@ -749,3 +749,20 @@ def china_optimized(provider: str):
 
         return wrapper
     return decorator
+
+
+def close_all_sessions() -> None:
+    """FIX #9: Close all cached sessions to prevent resource leaks.
+    
+    Call this during application shutdown to properly clean up network resources.
+    """
+    optimizer = get_optimizer()
+    optimizer._clear_sessions()
+
+
+def shutdown() -> None:
+    """FIX #9: Shutdown network optimizer and clean up all resources.
+    
+    Call this during application shutdown.
+    """
+    close_all_sessions()

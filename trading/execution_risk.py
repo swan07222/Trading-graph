@@ -49,7 +49,7 @@ class OrderRoutingStrategy(Enum):
 @dataclass
 class ExecutionReport:
     """Post-trade execution quality report."""
-    order_id: int
+    order_id: str
     symbol: str
     side: OrderSide
     requested_price: float
@@ -258,7 +258,7 @@ class SmartOrderRouter:
                 order_type=order.order_type,
                 quantity=slice_qty,
                 price=order.price,
-                parent_order_id=order.id,
+                parent_id=order.id,
             )
             slices.append(child)
             remaining_qty -= slice_qty

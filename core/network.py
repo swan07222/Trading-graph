@@ -130,8 +130,11 @@ class NetworkDetector:
 
         Args:
             prev_env: Previous environment snapshot for fallback logic.
+            
+        FIX #12: Added overall timeout for network detection to prevent
+        application startup hangs if ThreadPoolExecutor doesn't clean up properly.
         """
-        from concurrent.futures import ThreadPoolExecutor, as_completed
+        from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError as FuturesTimeoutError
 
         from config.runtime_env import env_flag
 
@@ -171,18 +174,31 @@ class NetworkDetector:
             except Exception:
                 return False
 
+        # FIX #12: Add overall timeout for network detection
+        OVERALL_TIMEOUT = 20  # seconds
         try:
             with ThreadPoolExecutor(max_workers=4) as ex:
                 fut_map = {
                     ex.submit(run_probe, url, to): k
                     for k, (url, to) in probes.items()
                 }
-                for fut in as_completed(fut_map, timeout=14):
+                # FIX #12: Use overall timeout to prevent hangs
+                for fut in as_completed(fut_map, timeout=OVERALL_TIMEOUT):
                     k = fut_map[fut]
                     try:
                         setattr(env, k, bool(fut.result()))
                     except Exception:
                         setattr(env, k, False)
+        except FuturesTimeoutError:
+            log.warning(
+                f"Network detection timed out after {OVERALL_TIMEOUT}s. "
+                "Using fallback logic."
+            )
+            # All probes failed, use fallback
+            env.tencent_ok = False
+            env.eastmoney_ok = False
+            env.yahoo_ok = False
+            env.csindex_ok = False
         except Exception as e:
             log.debug(f"Network detection thread pool error: {e}")
 
