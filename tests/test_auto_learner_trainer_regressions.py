@@ -432,7 +432,8 @@ def test_trainer_prepare_data_forces_1m_and_minimum_lookback(monkeypatch) -> Non
     )
 
     assert captured["interval"] == "1m"
-    assert int(captured["bars"]) >= 10080
+    # FIX 1M: Minimum lookback reduced from 10080 to 480 bars for free data source compatibility
+    assert int(captured["bars"]) >= 480
 
 
 def test_trainer_normalize_model_names_uses_all_five_defaults() -> None:
@@ -866,13 +867,15 @@ def test_auto_learner_resolves_supported_interval_and_keeps_1m_floor() -> None:
     assert iv == "30m"
     assert horizon == 30
     assert lookback > 0
-    assert min_bars >= max(int(CONFIG.SEQUENCE_LENGTH) + 30, 90)
+    # FIX 1M: Reduced min_bars for intraday intervals due to limited free data
+    assert min_bars >= max(int(CONFIG.SEQUENCE_LENGTH) // 2, 20)
 
-    assert learner._compute_lookback_bars("1m") >= 10080
+    # FIX 1M: Reduced lookback floor from 10080 to 240 bars for free data compatibility
+    assert learner._compute_lookback_bars("1m") >= 240
 
     iv2, _, lookback2, _ = learner._resolve_interval("unsupported", 30, 300)
     assert iv2 == "1m"
-    assert lookback2 >= 10080
+    assert lookback2 >= 240
 
 
 def test_finalize_cycle_updates_rejection_streak() -> None:

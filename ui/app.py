@@ -1400,6 +1400,7 @@ def _bind_mainapp_extracted_ops() -> None:
         "_render_live_bar_update": _app_feed_ops._render_live_bar_update,
         "_update_chart_latest_label": _app_feed_ops._update_chart_latest_label,
         "_get_trained_stock_codes": _app_training_ops._get_trained_stock_codes,
+        "_invalidate_trained_stock_cache": _app_training_ops._invalidate_trained_stock_cache,
         "_sync_trained_stock_last_train_from_model": _app_training_ops._sync_trained_stock_last_train_from_model,
         "_get_trained_stock_set": _app_training_ops._get_trained_stock_set,
         "_is_trained_stock": _app_training_ops._is_trained_stock,

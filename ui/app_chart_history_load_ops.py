@@ -35,7 +35,11 @@ def _load_chart_history_bars(
         is_trained = self._is_trained_stock(symbol)
         if is_trained:
             target_floor = int(self._trained_stock_window_bars(norm_iv))
-            lookback = max(target_floor, int(lookback_bars))
+            if norm_iv in {"1d", "1wk", "1mo"}:
+                lookback = max(target_floor, int(lookback_bars))
+            else:
+                # Strictly keep trained intraday charts on the latest 2-day window.
+                lookback = int(target_floor)
             refresh_requested = bool(
                 self._consume_history_refresh(symbol, norm_iv)
             )

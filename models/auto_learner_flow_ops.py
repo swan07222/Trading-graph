@@ -25,7 +25,7 @@ def _compute_lookback_bars(self: Any, interval: str) -> int:
         max_d = self._INTERVAL_MAX_DAYS_FALLBACK.get(str(interval).lower(), 500)
     iv = str(interval).lower()
     is_intraday = iv in ("1m", "2m", "5m", "15m", "30m", "60m", "1h")
-    target_days = min(int(max_d), 7) if is_intraday else min(int(max_d), 365)
+    target_days = min(int(max_d), 2) if is_intraday else min(int(max_d), 365)
     bars = int(max(1, round(float(bpd) * float(target_days))))
     if str(iv) == "1m":
         return int(max(self._MIN_1M_LOOKBACK_BARS, bars))

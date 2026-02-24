@@ -1005,7 +1005,7 @@ class DataFetcher:
         codes: list[str],
         *,
         interval: str = "1m",
-        window_days: int = 29,
+        window_days: int = 2,
         allow_online: bool = True,
         sync_session_cache: bool = True,
         replace_realtime_after_close: bool = True,

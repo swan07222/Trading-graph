@@ -148,8 +148,8 @@ class Trainer:
     @staticmethod
     def _default_lookback_bars(interval: str) -> int:
         """Default training lookback.
-        1m training uses at least 10080 bars.
-        Other intraday intervals use a strict 7-day window.
+        1m training uses the latest 2 trading days.
+        Other intraday intervals also use a strict 2-day window.
         """
         iv = str(interval or "1m").strip().lower()
         try:
@@ -188,7 +188,7 @@ class Trainer:
         if iv == _TRAINING_INTERVAL_LOCK:
             return int(max(_MIN_1M_LOOKBACK_BARS, CONFIG.SEQUENCE_LENGTH + 20))
 
-        days = max(1, min(7, max_days))
+        days = max(1, min(2, max_days))
         return max(
             int(CONFIG.SEQUENCE_LENGTH) + 20,
             int(round(float(days) * max(1.0, bpd))),
@@ -229,18 +229,60 @@ class Trainer:
     @staticmethod
     def _sanitize_raw_history(
         df: pd.DataFrame,
+        interval: str | None = None,
     ) -> tuple[pd.DataFrame, dict[str, Any]]:
-        """Sort and deduplicate history to preserve chronological integrity."""
+        """Sort, deduplicate, and repair malformed OHLC history."""
         if df is None or len(df) == 0:
             return pd.DataFrame(), {
                 "rows_before": 0,
                 "rows_after": 0,
                 "duplicates_removed": 0,
+                "repaired_rows": 0,
+                "rows_removed": 0,
             }
 
         out = df.copy()
+        iv = str(interval or _TRAINING_INTERVAL_LOCK).strip().lower()
         rows_before = int(len(out))
         duplicates_removed = 0
+        repaired_rows = 0
+
+        # First pass through fetcher-level cleaner for timestamp/shape normalization.
+        try:
+            fetcher = get_fetcher()
+            clean_fn = getattr(fetcher, "_clean_dataframe", None)
+            if callable(clean_fn):
+                try:
+                    cleaned = clean_fn(
+                        out,
+                        interval=iv,
+                        preserve_truth=False,
+                        aggressive_repairs=True,
+                        allow_synthetic_index=False,
+                    )
+                except TypeError:
+                    cleaned = clean_fn(out, interval=iv)
+                if isinstance(cleaned, pd.DataFrame) and not cleaned.empty:
+                    out = cleaned
+        except Exception as e:
+            log.debug("Fetcher raw-history cleaning failed: %s", e)
+
+        # Normalize index from explicit datetime columns when needed.
+        if not isinstance(out.index, pd.DatetimeIndex):
+            for col in ("datetime", "timestamp", "date", "time"):
+                if col not in out.columns:
+                    continue
+                try:
+                    idx = pd.to_datetime(out[col], errors="coerce")
+                except Exception:
+                    continue
+                valid_ratio = (
+                    float(idx.notna().sum()) / float(max(1, len(idx)))
+                    if len(idx) > 0 else 0.0
+                )
+                if valid_ratio >= 0.80:
+                    out.index = idx
+                    break
 
         try:
             out = out.sort_index()
@@ -256,10 +298,138 @@ class Trainer:
             log.debug("Raw history duplicate cleanup failed: %s", e)
             duplicates_removed = 0
 
+        # Coerce OHLCV columns.
+        for col in ("open", "high", "low", "close", "volume", "amount"):
+            if col in out.columns:
+                out[col] = pd.to_numeric(out[col], errors="coerce")
+
+        if "close" not in out.columns:
+            return pd.DataFrame(), {
+                "rows_before": rows_before,
+                "rows_after": 0,
+                "duplicates_removed": duplicates_removed,
+                "repaired_rows": 0,
+                "rows_removed": rows_before,
+            }
+
+        out = out.replace([np.inf, -np.inf], np.nan)
+        out = out.dropna(subset=["close"])
+        out = out[out["close"] > 0]
+        if out.empty:
+            return pd.DataFrame(), {
+                "rows_before": rows_before,
+                "rows_after": 0,
+                "duplicates_removed": duplicates_removed,
+                "repaired_rows": 0,
+                "rows_removed": rows_before,
+            }
+
+        if "open" not in out.columns:
+            out["open"] = out["close"]
+        out["open"] = pd.to_numeric(out["open"], errors="coerce").fillna(0.0)
+        open_fix = out["open"] <= 0
+        if bool(open_fix.any()):
+            repaired_rows += int(np.sum(open_fix.to_numpy()))
+            out.loc[open_fix, "open"] = out.loc[open_fix, "close"]
+
+        if "high" not in out.columns:
+            out["high"] = out[["open", "close"]].max(axis=1)
+        else:
+            out["high"] = pd.to_numeric(out["high"], errors="coerce")
+        if "low" not in out.columns:
+            out["low"] = out[["open", "close"]].min(axis=1)
+        else:
+            out["low"] = pd.to_numeric(out["low"], errors="coerce")
+
+        # Ensure OHLC consistency even when source bars are partially broken.
+        oc_top = out[["open", "close"]].max(axis=1)
+        oc_bot = out[["open", "close"]].min(axis=1)
+        out["high"] = pd.concat([out["high"], oc_top], axis=1).max(axis=1)
+        out["low"] = pd.concat([out["low"], oc_bot], axis=1).min(axis=1)
+
+        bad_hilo = out["high"] < out["low"]
+        if bool(bad_hilo.any()):
+            repaired_rows += int(np.sum(bad_hilo.to_numpy()))
+            bad_hi = out.loc[bad_hilo, "high"].copy()
+            bad_lo = out.loc[bad_hilo, "low"].copy()
+            out.loc[bad_hilo, "high"] = np.maximum(
+                bad_hi.to_numpy(dtype=np.float64),
+                bad_lo.to_numpy(dtype=np.float64),
+            )
+            out.loc[bad_hilo, "low"] = np.minimum(
+                bad_hi.to_numpy(dtype=np.float64),
+                bad_lo.to_numpy(dtype=np.float64),
+            )
+
+        # Repair obvious intraday spike bars that create broken vertical candles.
+        if iv in {"1m", "2m", "5m", "15m", "30m", "60m", "1h"} and len(out) > 1:
+            jump_cap = 0.12 if iv in {"1m", "2m", "5m", "15m", "30m"} else 0.20
+            prev_close = out["close"].shift(1)
+            jump = (out["close"] / prev_close - 1.0).abs()
+            bad_jump = jump > float(jump_cap)
+            bad_jump = bad_jump.fillna(False)
+
+            if isinstance(out.index, pd.DatetimeIndex):
+                try:
+                    day_change = (
+                        pd.Series(out.index.normalize(), index=out.index)
+                        .diff()
+                        .ne(pd.Timedelta(0))
+                        .fillna(False)
+                    )
+                    bad_jump = bad_jump & (~day_change)
+                except Exception:
+                    pass
+
+            if bool(bad_jump.any()):
+                repaired_rows += int(np.sum(bad_jump.to_numpy()))
+                prev_vals = prev_close[bad_jump].astype(float).to_numpy(dtype=np.float64)
+                curr_vals = out.loc[bad_jump, "close"].astype(float).to_numpy(dtype=np.float64)
+                signs = np.where(curr_vals >= prev_vals, 1.0, -1.0)
+                clipped_close = prev_vals * (1.0 + (signs * float(jump_cap)))
+                out.loc[bad_jump, "open"] = prev_vals
+                out.loc[bad_jump, "close"] = clipped_close
+                top = out.loc[bad_jump, ["open", "close"]].max(axis=1).to_numpy(dtype=np.float64)
+                bot = out.loc[bad_jump, ["open", "close"]].min(axis=1).to_numpy(dtype=np.float64)
+                wick = np.maximum(clipped_close * 0.02, 1e-8)
+                out.loc[bad_jump, "high"] = np.minimum(
+                    np.maximum(out.loc[bad_jump, "high"].to_numpy(dtype=np.float64), top),
+                    top + wick,
+                )
+                out.loc[bad_jump, "low"] = np.maximum(
+                    np.minimum(out.loc[bad_jump, "low"].to_numpy(dtype=np.float64), bot),
+                    bot - wick,
+                )
+
+        if "volume" not in out.columns:
+            out["volume"] = 0.0
+        out["volume"] = pd.to_numeric(out["volume"], errors="coerce").fillna(0.0)
+        out.loc[out["volume"] < 0, "volume"] = 0.0
+
+        if "amount" not in out.columns:
+            out["amount"] = out["close"] * out["volume"]
+        else:
+            out["amount"] = pd.to_numeric(out["amount"], errors="coerce").fillna(0.0)
+            bad_amount = out["amount"] < 0
+            if bool(bad_amount.any()):
+                out.loc[bad_amount, "amount"] = 0.0
+            missing_amount = out["amount"] <= 0
+            if bool(missing_amount.any()):
+                out.loc[missing_amount, "amount"] = (
+                    out.loc[missing_amount, "close"] * out.loc[missing_amount, "volume"]
+                )
+
+        out = out.replace([np.inf, -np.inf], np.nan)
+        out = out.dropna(subset=["open", "high", "low", "close"])
+        out = out[~out.index.duplicated(keep="last")].sort_index()
+
+        rows_after = int(len(out))
         return out, {
             "rows_before": rows_before,
-            "rows_after": int(len(out)),
+            "rows_after": rows_after,
             "duplicates_removed": duplicates_removed,
+            "repaired_rows": int(repaired_rows),
+            "rows_removed": int(max(0, rows_before - rows_after)),
         }
     def _split_and_fit_scaler(
         self,

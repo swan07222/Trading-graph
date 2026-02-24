@@ -563,6 +563,57 @@ def _run_cycle(
                 )
             return False
 
+        # === 6. Recover fetched history before training ===
+        self._update(
+            stage="recovering",
+            progress=41.0,
+            message=f"Recovering {eff_interval} data integrity...",
+        )
+        try:
+            from data.fetcher import get_fetcher
+
+            fetcher = get_fetcher()
+            reconcile_fn = getattr(fetcher, "reconcile_pending_cache_sync", None)
+            if callable(reconcile_fn):
+                try:
+                    reconcile_fn(codes=list(ok_codes), interval=eff_interval)
+                except TypeError:
+                    reconcile_fn()
+
+            refresh_fn = getattr(fetcher, "refresh_trained_stock_history", None)
+            refreshed = 0
+            if callable(refresh_fn):
+                refresh_days = 2 if eff_interval in (
+                    "1m", "2m", "5m", "15m", "30m", "60m", "1h"
+                ) else 30
+                try:
+                    report = refresh_fn(
+                        list(ok_codes),
+                        interval=eff_interval,
+                        window_days=refresh_days,
+                        allow_online=True,
+                        sync_session_cache=True,
+                        replace_realtime_after_close=True,
+                    )
+                except TypeError:
+                    report = refresh_fn(
+                        list(ok_codes),
+                        interval=eff_interval,
+                        window_days=refresh_days,
+                    )
+                if isinstance(report, dict):
+                    refreshed = int(report.get("updated", 0) or 0)
+
+            self._update(
+                message=f"Recovered {refreshed}/{len(ok_codes)} stocks",
+                progress=41.8,
+            )
+        except _AUTO_LEARNER_RECOVERABLE_EXCEPTIONS as e:
+            log.warning("Pre-train data recovery skipped: %s", e)
+            self.progress.add_warning(
+                f"Pre-train data recovery skipped: {type(e).__name__}"
+            )
+
         # === 6. Backup model ===
         self._update(stage="backup", progress=42.0, message="Backing up current model...")
         self._guardian.backup_current(eff_interval, eff_horizon)
@@ -893,6 +944,57 @@ def _run_targeted_cycle(
                 f"All {len(train_codes)} stocks failed data fetch"
             )
             return False
+
+        # === 4. Recover fetched history before training ===
+        self._update(
+            stage="recovering",
+            progress=41.0,
+            message=f"Recovering {eff_interval} data integrity...",
+        )
+        try:
+            from data.fetcher import get_fetcher
+
+            fetcher = get_fetcher()
+            reconcile_fn = getattr(fetcher, "reconcile_pending_cache_sync", None)
+            if callable(reconcile_fn):
+                try:
+                    reconcile_fn(codes=list(ok_codes), interval=eff_interval)
+                except TypeError:
+                    reconcile_fn()
+
+            refresh_fn = getattr(fetcher, "refresh_trained_stock_history", None)
+            refreshed = 0
+            if callable(refresh_fn):
+                refresh_days = 2 if eff_interval in (
+                    "1m", "2m", "5m", "15m", "30m", "60m", "1h"
+                ) else 30
+                try:
+                    report = refresh_fn(
+                        list(ok_codes),
+                        interval=eff_interval,
+                        window_days=refresh_days,
+                        allow_online=True,
+                        sync_session_cache=True,
+                        replace_realtime_after_close=True,
+                    )
+                except TypeError:
+                    report = refresh_fn(
+                        list(ok_codes),
+                        interval=eff_interval,
+                        window_days=refresh_days,
+                    )
+                if isinstance(report, dict):
+                    refreshed = int(report.get("updated", 0) or 0)
+
+            self._update(
+                message=f"Recovered {refreshed}/{len(ok_codes)} stocks",
+                progress=41.8,
+            )
+        except _AUTO_LEARNER_RECOVERABLE_EXCEPTIONS as e:
+            log.warning("Pre-train data recovery skipped: %s", e)
+            self.progress.add_warning(
+                f"Pre-train data recovery skipped: {type(e).__name__}"
+            )
 
         # === 4. Backup model ===
         self._update(

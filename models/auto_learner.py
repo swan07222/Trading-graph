@@ -118,8 +118,8 @@ class ContinuousLearner:
     # FIX VAL: Minimum holdout predictions for reliable comparison
     _MIN_HOLDOUT_PREDICTIONS = 3
     _MIN_TUNED_TRADES = 3
-    # FIX 1M: Reduced to 240 bars (1 day) - free sources typically provide 1-2 days of 1m data
-    _MIN_1M_LOOKBACK_BARS = 240  # Was 1680 (7 days) - adjusted for free data source limitations
+    # FIX 1M: Use strict latest 2 trading days for 1m training windows.
+    _MIN_1M_LOOKBACK_BARS = 480
     _FULL_RETRAIN_EVERY_CYCLES = 6
     _FORCE_FULL_RETRAIN_CYCLES = 2
     _FORCE_FULL_RETRAIN_AFTER_REJECTIONS = 2
@@ -219,7 +219,7 @@ class ContinuousLearner:
         interval="1m",
         prediction_horizon=30,
         lookback_bars=None,
-        cycle_interval_seconds=900,
+        cycle_interval_seconds=60,
         incremental=True,
         priority_stock_codes: list[str] | None = None,
     ):
@@ -324,7 +324,7 @@ class ContinuousLearner:
         lookback_bars: int | None = None,
         incremental: bool = True,
         continuous: bool = False,
-        cycle_interval_seconds: int = 900,
+        cycle_interval_seconds: int = 60,
     ):
         return _start_targeted_impl(
             self,

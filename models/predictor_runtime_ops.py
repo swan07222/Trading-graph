@@ -339,7 +339,7 @@ def _fetch_data(
         interval = self._normalize_interval_token(interval)
         bpd = float(BARS_PER_DAY.get(interval, 1))
         min_days = (
-            7
+            2
             if interval in {"1m", "2m", "3m", "5m", "15m", "30m", "60m", "1h"}
             else 14
         )
@@ -400,13 +400,13 @@ def _fetch_data(
 
 def _default_lookback_bars(self, interval: str | None) -> int:
     """Default history depth for inference.
-    Intraday intervals use a true 7-day window (e.g. 1m => 1680 bars).
+    Intraday intervals use the latest 2-day window (e.g. 1m => 480 bars).
     """
     iv = self._normalize_interval_token(interval)
     try:
         from data.fetcher import BARS_PER_DAY, INTERVAL_MAX_DAYS
         bpd = float(BARS_PER_DAY.get(iv, 1.0))
-        max_days = int(INTERVAL_MAX_DAYS.get(iv, 7))
+        max_days = int(INTERVAL_MAX_DAYS.get(iv, 2))
     except _PREDICTOR_RECOVERABLE_EXCEPTIONS as e:
         log.debug("Falling back to default lookback constants for interval=%s: %s", iv, e)
         bpd = float({
@@ -420,12 +420,12 @@ def _default_lookback_bars(self, interval: str | None) -> int:
             "1h": 4.0,
             "1d": 1.0,
         }.get(iv, 1.0))
-        max_days = 7 if iv in {"1m", "2m", "3m", "5m", "15m", "30m", "60m", "1h"} else 365
+        max_days = 2 if iv in {"1m", "2m", "3m", "5m", "15m", "30m", "60m", "1h"} else 365
 
     if iv in {"1d", "1wk", "1mo"}:
         return max(60, int(round(min(365, max_days) * max(1.0, bpd))))
 
-    days = max(1, min(7, max_days))
+    days = max(1, min(2, max_days))
     bars = int(round(float(days) * max(1.0, bpd)))
     return max(120, bars)
 
@@ -1353,4 +1353,3 @@ def _clean_code(self, code: str) -> str:
     code = str(code).strip()
     code = "".join(c for c in code if c.isdigit())
     return code.zfill(6) if code else ""
-

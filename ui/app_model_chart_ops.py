@@ -934,6 +934,28 @@ def _render_chart_state(
             current_price=anchor_for_pred,
             target_steps=steps,
         )
+    if (not chart_predicted) and arr:
+        # Keep a visible "hold" projection when forecast payload is missing.
+        # This avoids a disappearing guessed line in live charts.
+        try:
+            fallback_steps = max(1, int(steps))
+        except _UI_RECOVERABLE_EXCEPTIONS:
+            fallback_steps = 1
+        try:
+            anchor_flat = float(anchor_for_pred or arr[-1].get("close", 0.0) or 0.0)
+        except _UI_RECOVERABLE_EXCEPTIONS:
+            anchor_flat = 0.0
+        if anchor_flat > 0 and math.isfinite(anchor_flat):
+            chart_predicted = [float(anchor_flat)] * int(fallback_steps)
+            self._debug_console(
+                f"forecast_flat_fallback:{self._ui_norm(symbol)}:{iv}",
+                (
+                    f"using flat forecast fallback for {self._ui_norm(symbol)} "
+                    f"{iv}: steps={fallback_steps}"
+                ),
+                min_gap_seconds=2.0,
+                level="warning",
+            )
     chart_predicted_low, chart_predicted_high = self._build_chart_prediction_bands(
         symbol=symbol,
         predicted_prices=chart_predicted,

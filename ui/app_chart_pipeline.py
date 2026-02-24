@@ -573,27 +573,32 @@ def _on_price_updated(self: Any, code: str, price: float) -> None:
                 return
             _ = actual_prices  # chart bars are maintained by feed/history path.
 
-            stable_predicted = [
-                float(v)
-                for v in self._safe_list(predicted_prices)
-                if float(v) > 0 and math.isfinite(float(v))
-            ]
+            stable_predicted: list[float] = []
+            for v in self._safe_list(predicted_prices):
+                try:
+                    fv = float(v)
+                except _APP_CHART_RECOVERABLE_EXCEPTIONS:
+                    continue
+                if fv > 0 and math.isfinite(fv):
+                    stable_predicted.append(float(fv))
             if not stable_predicted:
                 if (
                     self.current_prediction
                     and self.current_prediction.stock_code == code
                 ):
-                    stable_predicted = [
-                        float(v)
-                        for v in self._safe_list(
-                            getattr(
-                                self.current_prediction,
-                                "predicted_prices",
-                                [],
-                            )
+                    for v in self._safe_list(
+                        getattr(
+                            self.current_prediction,
+                            "predicted_prices",
+                            [],
                         )
-                        if float(v) > 0 and math.isfinite(float(v))
-                    ]
+                    ):
+                        try:
+                            fv = float(v)
+                        except _APP_CHART_RECOVERABLE_EXCEPTIONS:
+                            continue
+                        if fv > 0 and math.isfinite(fv):
+                            stable_predicted.append(float(fv))
             predicted_prices = stable_predicted
 
             try:

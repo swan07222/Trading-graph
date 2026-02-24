@@ -637,16 +637,18 @@ class StockChart(QWidget):
             is_intraday = default_iv not in {"1d", "1wk", "1mo"}
             if is_intraday:
                 # Render-side guard: keep intraday bars within realistic A-share
-                # movement envelopes to prevent giant block candles.
-                jump_cap = 0.14
-                body_cap = 0.12
-                span_cap = 0.18
+                # movement envelopes to prevent striped wick artifacts.
+                jump_cap = 0.08
+                body_cap = 0.014
+                span_cap = 0.022
+                wick_cap = 0.013
                 scale_lo = 0.35
                 scale_hi = 3.00
             else:
                 jump_cap = 0.45
                 body_cap = 0.55
                 span_cap = 0.80
+                wick_cap = 0.40
                 scale_lo = 0.10
                 scale_hi = 10.00
             recent_closes: list[float] = []
@@ -677,7 +679,10 @@ class StockChart(QWidget):
                     # Fix missing OHLC values — prefer close (doji) over
                     # prev_close to avoid creating artificial directional candles.
                     if o <= 0:
-                        o = c
+                        if prev_close is not None and prev_close > 0:
+                            o = float(prev_close)
+                        else:
+                            o = c
                     if h <= 0:
                         h = max(o, c)
                     if l_val <= 0:
@@ -719,7 +724,16 @@ class StockChart(QWidget):
 
                     body_pct = abs(float(o) - float(c)) / ref_scale
                     span_pct = abs(float(h) - float(l_val)) / ref_scale
-                    if body_pct > body_cap or span_pct > span_cap:
+                    top = max(float(o), float(c))
+                    bot = min(float(o), float(c))
+                    upper_wick = max(0.0, float(h) - top) / ref_scale
+                    lower_wick = max(0.0, bot - float(l_val)) / ref_scale
+                    if (
+                        body_pct > body_cap
+                        or span_pct > span_cap
+                        or upper_wick > wick_cap
+                        or lower_wick > wick_cap
+                    ):
                         diag["drop_shape"] += 1
                         continue
 
@@ -831,9 +845,13 @@ class StockChart(QWidget):
                     x_full = np.concatenate([x_conn, x_pred])
                     y_full = np.concatenate([y_conn, y_pred])
                     self.predicted_line.setData(x_full, y_full)
+                    
+                    # FIX: Ensure uncertainty bands are rendered
                     if (
                         self.predicted_low_line is not None
                         and self.predicted_high_line is not None
+                        and self._predicted_prices_low
+                        and self._predicted_prices_high
                         and len(self._predicted_prices_low) == len(self._predicted_prices)
                         and len(self._predicted_prices_high) == len(self._predicted_prices)
                     ):
@@ -856,10 +874,13 @@ class StockChart(QWidget):
                         self.predicted_low_line.setData(x_full, y_low_full)
                         self.predicted_high_line.setData(x_full, y_high_full)
                     else:
+                        # FIX: Clear bands only if data is truly missing
                         if self.predicted_low_line is not None:
-                            self.predicted_low_line.clear()
+                            if not self._predicted_prices_low or len(self._predicted_prices_low) != len(self._predicted_prices):
+                                self.predicted_low_line.clear()
                         if self.predicted_high_line is not None:
-                            self.predicted_high_line.clear()
+                            if not self._predicted_prices_high or len(self._predicted_prices_high) != len(self._predicted_prices):
+                                self.predicted_high_line.clear()
                     try:
                         p = y_pred
                         if p.size > 0:

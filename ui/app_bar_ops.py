@@ -28,7 +28,7 @@ _APP_SOFT_EXCEPTIONS = (
 
 
 def _seven_day_lookback(self: Any, interval: str) -> int:
-    """Return lookback bars representing ~7 trading days for interval."""
+    """Return lookback bars representing ~2 trading days for interval."""
     iv = self._normalize_interval_token(interval)
     try:
         from data.fetcher import BARS_PER_DAY
@@ -36,15 +36,15 @@ def _seven_day_lookback(self: Any, interval: str) -> int:
     except _APP_SOFT_EXCEPTIONS:
         fallback = {"1m": 240.0, "5m": 48.0, "15m": 16.0, "30m": 8.0, "60m": 4.0, "1h": 4.0, "1d": 1.0}
         bpd = float(fallback.get(iv, 1.0))
-    bars = int(max(7, round(7.0 * bpd)))
-    return max(50, bars) if iv != "1d" else 7
+    bars = int(max(2, round(2.0 * bpd)))
+    return max(50, bars) if iv != "1d" else 2
 
 def _trained_stock_window_bars(
-    self: Any, interval: str, window_days: int = 29
+    self: Any, interval: str, window_days: int = 2
 ) -> int:
     """Return lookback bars representing the trained-stock refresh window."""
     iv = self._normalize_interval_token(interval)
-    wd = max(1, int(window_days or 29))
+    wd = max(1, int(window_days or 2))
     try:
         from data.fetcher import BARS_PER_DAY
         bpd = float(BARS_PER_DAY.get(iv, 1.0))
@@ -217,7 +217,7 @@ def _merge_bars(
     extra: list[dict[str, Any]],
     interval: str,
 ) -> list[dict[str, Any]]:
-    """Merge+deduplicate bars by timestamp and keep a 7-day rolling window."""
+    """Merge+deduplicate bars by timestamp and keep rolling chart window."""
     merged: dict[int, dict[str, Any]] = {}
     iv = self._normalize_interval_token(interval)
 
@@ -1256,5 +1256,3 @@ def _recover_chart_bars_from_close(
             level="warning",
         )
     return out
-
-

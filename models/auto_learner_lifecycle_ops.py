@@ -19,7 +19,7 @@ def start(
     self, mode="full", max_stocks=None, epochs_per_cycle=10,
     min_market_cap=10, include_all_markets=True, continuous=True,
     learning_while_trading=True, interval="1m", prediction_horizon=30,
-    lookback_bars=None, cycle_interval_seconds=900, incremental=True,
+    lookback_bars=None, cycle_interval_seconds=60, incremental=True,
     priority_stock_codes: list[str] | None = None,
 ) -> None:
     requested_interval = str(interval or "1m").strip().lower()
@@ -83,7 +83,7 @@ def start_targeted(
     lookback_bars: int | None = None,
     incremental: bool = True,
     continuous: bool = False,
-    cycle_interval_seconds: int = 900,
+    cycle_interval_seconds: int = 60,
 ) -> None:
     """Train on specific user-selected stocks instead of random rotation."""
     requested_interval = str(interval or "1m").strip().lower()

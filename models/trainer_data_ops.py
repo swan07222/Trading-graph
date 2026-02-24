@@ -19,6 +19,7 @@ _STOP_CHECK_INTERVAL = 10
 _TRAINING_INTERVAL_LOCK = "1m"
 # FIX 1M: Reduced from 10080 to 480 bars - free sources provide 1-2 days of 1m data
 _MIN_1M_LOOKBACK_BARS = 480
+_INTRADAY_INTERVALS = {"1m", "2m", "5m", "15m", "30m", "60m", "1h"}
 _DEFAULT_ENSEMBLE_MODELS = ["lstm", "gru", "tcn", "transformer", "hybrid"]
 _WALK_FORWARD_FOLDS = 3
 _MIN_WALK_FORWARD_SAMPLES = 180
@@ -42,6 +43,31 @@ _TAIL_STRESS_QUANTILE = 0.90
 _MIN_TAIL_STRESS_SAMPLES = 24
 _TAIL_EVENT_SHOCK_MIN_PCT = 1.0
 _TAIL_EVENT_SHOCK_MAX_PCT = 6.0
+
+
+def _two_day_intraday_window_bars(interval: str) -> int:
+    """Return strict latest-2-day bar budget for intraday intervals."""
+    iv = str(interval or "").strip().lower()
+    if iv not in _INTRADAY_INTERVALS:
+        return 0
+    try:
+        from data.fetcher import BARS_PER_DAY
+
+        bpd = float(BARS_PER_DAY.get(iv, 1.0) or 1.0)
+    except Exception:
+        bpd = float(
+            {
+                "1m": 240.0,
+                "2m": 120.0,
+                "5m": 48.0,
+                "15m": 16.0,
+                "30m": 8.0,
+                "60m": 4.0,
+                "1h": 4.0,
+            }.get(iv, 1.0)
+        )
+    return int(max(1, round(2.0 * max(0.01, bpd))))
+
 
 def _assess_raw_data_quality(self, df: pd.DataFrame) -> dict[str, Any]:
     """Validate raw OHLC quality before feature engineering.
@@ -350,11 +376,28 @@ def _fetch_raw_data(
                 log.debug(f"No data for {code}")
                 continue
 
-            df, sanitize_meta = self._sanitize_raw_history(df)
+            df, sanitize_meta = self._sanitize_raw_history(df, interval=interval)
+            two_day_cap = int(_two_day_intraday_window_bars(interval))
+            if two_day_cap > 0 and len(df) > two_day_cap:
+                df = df.tail(two_day_cap).copy()
+                sanitize_meta["trimmed_to_two_day_window"] = True
+                sanitize_meta["window_bars"] = int(two_day_cap)
+            else:
+                sanitize_meta["trimmed_to_two_day_window"] = False
             q_report = self._assess_raw_data_quality(df)
             q_report["duplicates_removed"] = int(
                 sanitize_meta.get("duplicates_removed", 0)
             )
+            q_report["repaired_rows"] = int(
+                sanitize_meta.get("repaired_rows", 0)
+            )
+            q_report["rows_removed"] = int(
+                sanitize_meta.get("rows_removed", 0)
+            )
+            q_report["trimmed_to_two_day_window"] = bool(
+                sanitize_meta.get("trimmed_to_two_day_window", False)
+            )
+            q_report["window_bars"] = int(sanitize_meta.get("window_bars", len(df)))
             quality_reports[str(code)] = q_report
             if not bool(q_report.get("passed", False)):
                 for reason in list(q_report.get("reasons", []) or []):
@@ -896,6 +939,9 @@ def prepare_data(
     )
     if interval == _TRAINING_INTERVAL_LOCK:
         bars = int(max(bars, _MIN_1M_LOOKBACK_BARS))
+    two_day_cap = int(_two_day_intraday_window_bars(interval))
+    if two_day_cap > 0:
+        bars = int(min(bars, two_day_cap))
 
     self.interval = interval
     self.prediction_horizon = horizon

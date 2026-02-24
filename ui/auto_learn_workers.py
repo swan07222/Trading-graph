@@ -94,15 +94,23 @@ class _BaseLearnWorker(QThread):
             try:
                 percent = int(max(0, min(100, getattr(p, "progress", 0))))
                 message = str(getattr(p, "message", "") or getattr(p, "stage", ""))
-                stage = str(getattr(p, "stage", ""))
+                stage = str(getattr(p, "stage", "") or "")
                 if stage == "error":
                     self._error_flag = True
                     self._error_message = message or default_error
+                
+                # FIX: Emit progress and detailed log messages
                 self.progress.emit(percent, message)
-                self.log_message.emit(
-                    f"{stage}: {message}" if stage else message,
-                    "info",
-                )
+                
+                # Emit detailed log with stage prefix
+                log_msg = f"{stage}: {message}" if stage else message
+                if log_msg.strip():
+                    self.log_message.emit(log_msg, "info")
+                
+                # Also emit to console for debugging
+                if stage and stage not in ("waiting", "cycle_start"):
+                    log.info(f"[AutoLearn] {log_msg}")
+                
                 results["discovered"] = int(getattr(p, "stocks_found", 0) or 0)
                 processed_direct = int(getattr(p, "stocks_processed", 0) or 0)
                 processed_alt = int(getattr(p, "processed_count", 0) or 0)
@@ -202,8 +210,8 @@ class AutoLearnWorker(_BaseLearnWorker):
                 "interval": interval,
                 "prediction_horizon": horizon,
                 "cycle_interval_seconds": _safe_int(
-                    self.config.get("cycle_interval_seconds", 900),
-                    default=900,
+                    self.config.get("cycle_interval_seconds", 60),
+                    default=60,
                     minimum=30,
                     maximum=86_400,
                 ),
@@ -285,8 +293,8 @@ class TargetedLearnWorker(_BaseLearnWorker):
                 "incremental": bool(self.config.get("incremental", True)),
                 "continuous": bool(self.config.get("continuous", False)),
                 "cycle_interval_seconds": _safe_int(
-                    self.config.get("cycle_interval_seconds", 900),
-                    default=900,
+                    self.config.get("cycle_interval_seconds", 60),
+                    default=60,
                     minimum=30,
                     maximum=86_400,
                 ),

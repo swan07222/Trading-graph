@@ -67,16 +67,19 @@ class LearningProgress:
     targeted_stocks: list[str] = field(default_factory=list)
 
     # --- bounded message helpers (Issue 11) ---
+    # FIX: Use deque for O(1) append instead of O(n) list slicing
+    _errors_deque: deque = field(default_factory=lambda: deque(maxlen=_MAX_MESSAGES), repr=False)
+    _warnings_deque: deque = field(default_factory=lambda: deque(maxlen=_MAX_MESSAGES), repr=False)
 
     def add_error(self, msg: str) -> None:
-        self.errors.append(msg)
-        if len(self.errors) > _MAX_MESSAGES:
-            self.errors = self.errors[-_MAX_MESSAGES:]
+        """Add error message with automatic bounds (O(1) operation)."""
+        self._errors_deque.append(msg)
+        self.errors = list(self._errors_deque)  # Sync with list for serialization
 
     def add_warning(self, msg: str) -> None:
-        self.warnings.append(msg)
-        if len(self.warnings) > _MAX_MESSAGES:
-            self.warnings = self.warnings[-_MAX_MESSAGES:]
+        """Add warning message with automatic bounds (O(1) operation)."""
+        self._warnings_deque.append(msg)
+        self.warnings = list(self._warnings_deque)  # Sync with list for serialization
 
     def reset(self) -> None:
         self.stage = "idle"
@@ -88,6 +91,8 @@ class LearningProgress:
         self.is_paused = False
         self.errors = []
         self.warnings = []
+        self._errors_deque.clear()
+        self._warnings_deque.clear()
         self.model_was_rejected = False
         self.consecutive_rejections = 0
         self.full_retrain_cycles_remaining = 0

@@ -970,15 +970,15 @@ def _signal_to_direction(self, signal_text: str) -> str:
 _ANALYSIS_THROTTLE_SECONDS = 2.5  # Minimum gap between analysis requests
 _SESSION_CACHE_MIN_GAP_SECONDS = 5.0  # Reduced frequency for session cache writes
 _QUOTE_UPDATE_THROTTLE_MS = 150  # Throttle quote UI updates
-_GUESS_PROFIT_NOTIONAL_VALUE = 10000.0  # CNY notional value per guess
+_GUESS_PROFIT_NOTIONAL_VALUE = 10000.0  # CNY notional value per guess (10,000 CNY)
 
-# Transaction cost parameters for realistic P&L estimation
+# Transaction cost parameters for realistic P&L estimation (China A-share market)
 _TRANSACTION_COSTS = {
-    "commission_rate": 0.0003,  # 0.03% broker commission
+    "commission_rate": 0.00025,  # 0.025% broker commission (typical CN rate)
     "commission_min": 5.0,  # Minimum CNY 5 per trade
-    "stamp_duty": 0.001,  # 0.1% stamp duty on sells (CN market)
+    "stamp_duty": 0.0005,  # 0.05% stamp duty on sells only (reduced in 2023)
     "transfer_fee": 0.00002,  # 0.002% transfer fee
-    "slippage_bps": 2,  # 2 basis points slippage assumption
+    "slippage_bps": 3,  # 3 basis points slippage assumption (conservative)
 }
 
 def _compute_guess_profit(
@@ -999,7 +999,7 @@ def _compute_guess_profit(
     Returns:
         Net P&L after transaction costs (positive = correct guess)
 
-    FIX: Added transaction cost modeling for realistic estimates.
+    FIX: Realistic China A-share transaction cost modeling.
     """
     entry = float(entry_price or 0.0)
     mark = float(mark_price or 0.0)
@@ -1010,10 +1010,10 @@ def _compute_guess_profit(
     # Calculate shares based on notional value if not provided
     if shares is None or shares <= 0:
         lot_size = int(getattr(CONFIG, "LOT_SIZE", 100) or 100)
-        # Calculate shares to match notional value
+        # Calculate shares to match notional value (10,000 CNY)
         raw_shares = _GUESS_PROFIT_NOTIONAL_VALUE / entry
         shares = int(raw_shares / lot_size) * lot_size  # Round to lot size
-        shares = max(lot_size, shares)  # Minimum 1 lot
+        shares = max(lot_size, shares)  # Minimum 1 lot (100 shares)
 
     qty = max(1, shares)
 
@@ -1022,26 +1022,38 @@ def _compute_guess_profit(
         gross_pnl = (mark - entry) * qty
     elif direction == "DOWN":
         gross_pnl = (entry - mark) * qty
-    else:
+    else:  # NONE or invalid
         return 0.0
 
-    # Calculate transaction costs
+    # Calculate transaction costs (China A-share market)
     notional_entry = entry * qty
     notional_exit = mark * qty
-    notional_total = notional_entry + notional_exit
-
-    commission = max(
-        notional_total * _TRANSACTION_COSTS["commission_rate"],
-        _TRANSACTION_COSTS["commission_min"] * 2  # Entry + exit
+    
+    # Commission: charged on both entry and exit (min CNY 5 each)
+    commission_entry = max(
+        notional_entry * _TRANSACTION_COSTS["commission_rate"],
+        _TRANSACTION_COSTS["commission_min"]
     )
+    commission_exit = max(
+        notional_exit * _TRANSACTION_COSTS["commission_rate"],
+        _TRANSACTION_COSTS["commission_min"]
+    )
+    commission = commission_entry + commission_exit
+    
+    # Stamp duty: charged only on sell side (exit)
     stamp_duty = notional_exit * _TRANSACTION_COSTS["stamp_duty"]
-    transfer_fee = notional_total * _TRANSACTION_COSTS["transfer_fee"]
-    slippage = notional_total * (_TRANSACTION_COSTS["slippage_bps"] / 10000)
+    
+    # Transfer fee: charged on both sides
+    transfer_fee = (notional_entry + notional_exit) * _TRANSACTION_COSTS["transfer_fee"]
+    
+    # Slippage: estimated market impact
+    slippage = (notional_entry + notional_exit) * (_TRANSACTION_COSTS["slippage_bps"] / 10000)
 
     total_costs = commission + stamp_duty + transfer_fee + slippage
 
     # Net P&L after costs
     net_pnl = gross_pnl - total_costs
+    
     return net_pnl
 
 def _refresh_guess_rows_for_symbol(self, code: str, price: float) -> None:
@@ -1159,6 +1171,12 @@ def _update_correct_guess_profit_ui(self) -> None:
         net_val = float(stats.get("net_profit", 0.0) or 0.0)
         gross_correct = float(stats.get("correct_profit", 0.0) or 0.0)
         gross_wrong = float(stats.get("wrong_loss", 0.0) or 0.0)
+        total = int(stats.get("total", 0) or 0)
+        correct = int(stats.get("correct", 0) or 0)
+        wrong = int(stats.get("wrong", 0) or 0)
+        hit_rate = float(stats.get("hit_rate", 0.0) or 0.0)
+        
+        # Display net P&L
         label_profit.setText(f"CNY {net_val:+,.2f}")
         color = (
             ModernColors.ACCENT_SUCCESS
@@ -1166,18 +1184,34 @@ def _update_correct_guess_profit_ui(self) -> None:
             else ModernColors.ACCENT_DANGER
         )
         label_profit.setStyleSheet(
-            
-                f"color: {color}; "
-                f"font-size: {ModernFonts.SIZE_XL}px; "
-                f"font-weight: {ModernFonts.WEIGHT_BOLD};"
-            
+            f"color: {color}; "
+            f"font-size: {ModernFonts.SIZE_XL}px; "
+            f"font-weight: {ModernFonts.WEIGHT_BOLD};"
         )
-        label_profit.setToolTip(
-            "Directional guess P&L\n"
-            f"Net: CNY {net_val:+,.2f}\n"
-            f"Gross Correct: CNY {gross_correct:,.2f}\n"
-            f"Gross Wrong: CNY {gross_wrong:,.2f}"
+        
+        # Enhanced tooltip with detailed statistics
+        avg_win = gross_correct / correct if correct > 0 else 0.0
+        avg_loss = gross_wrong / wrong if wrong > 0 else 0.0
+        profit_factor = gross_correct / gross_wrong if gross_wrong > 0 else 999.99
+        
+        tooltip = (
+            f"{'='*40}\n"
+            f"DIRECTIONAL GUESS PERFORMANCE\n"
+            f"{'='*40}\n\n"
+            f"Net P&L:        CNY {net_val:+,.2f}\n"
+            f"Gross Correct:  CNY {gross_correct:,.2f}\n"
+            f"Gross Wrong:    CNY {gross_wrong:,.2f}\n\n"
+            f"{'='*40}\n"
+            f"STATISTICS\n"
+            f"{'='*40}\n\n"
+            f"Total Guesses:  {total}\n"
+            f"Correct:        {correct} ({hit_rate:.1%})\n"
+            f"Wrong:          {wrong} ({1-hit_rate:.1%})\n\n"
+            f"Avg Win:        CNY {avg_win:,.2f}\n"
+            f"Avg Loss:       CNY {avg_loss:,.2f}\n"
+            f"Win/Loss Ratio: {profit_factor:.2f}"
         )
+        label_profit.setToolTip(tooltip)
 
     label_rate = self.auto_trade_labels.get("guess_rate")
     if label_rate:

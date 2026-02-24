@@ -32,10 +32,25 @@ def _get_trained_stock_codes(self) -> list[str]:
     # Check cache with TTL
     now = time.time()
     cache_data = getattr(self, '_trained_stock_cache_data', None)
+    predictor = getattr(self, "predictor", None)
+    predictor_id = id(predictor) if predictor is not None else 0
+    predictor_sig = ""
+    try:
+        predictor_sig = str(
+            getattr(predictor, "_model_artifact_sig", "") or ""
+        )
+    except _UI_RECOVERABLE_EXCEPTIONS:
+        predictor_sig = ""
     if cache_data is not None:
         cache_ts = cache_data.get('ts', 0.0)
         cache_val = cache_data.get('val', [])
-        if (now - cache_ts) < float(_TRAINED_STOCK_CACHE_TTL):
+        cache_pid = int(cache_data.get("predictor_id", 0) or 0)
+        cache_sig = str(cache_data.get("predictor_sig", "") or "")
+        if (
+            (now - cache_ts) < float(_TRAINED_STOCK_CACHE_TTL)
+            and cache_pid == predictor_id
+            and cache_sig == predictor_sig
+        ):
             return cache_val
     
     if self.predictor is None:
@@ -51,7 +66,12 @@ def _get_trained_stock_codes(self) -> list[str]:
                     if str(x).strip()
                 ]
                 # Update cache
-                self._trained_stock_cache_data = {'ts': now, 'val': result}
+                self._trained_stock_cache_data = {
+                    "ts": now,
+                    "val": result,
+                    "predictor_id": predictor_id,
+                    "predictor_sig": predictor_sig,
+                }
                 return result
     except _UI_RECOVERABLE_EXCEPTIONS as exc:
         log.debug("Suppressed exception in ui/app.py", exc_info=exc)
@@ -370,6 +390,8 @@ def _refresh_trained_stock_list(
 
 def _update_trained_stocks_ui(self, codes: list[str] | None = None) -> None:
     """Refresh trained-stock metadata section in AI panel."""
+    # Always clear TTL cache so UI reflects current model artifacts.
+    self._invalidate_trained_stock_cache()
     self._sync_trained_stock_last_train_from_model()
     stocks = list(codes) if isinstance(codes, list) else self._get_trained_stock_codes()
     self._trained_stock_codes_cache = list(stocks)
@@ -391,6 +413,10 @@ def _update_trained_stocks_ui(self, codes: list[str] | None = None) -> None:
     self._refresh_trained_stock_list(stocks, query=query)
 
     if not stocks:
+        # User may remove model artifacts; clear stale metadata immediately.
+        if getattr(self, "_trained_stock_last_train", None):
+            self._trained_stock_last_train = {}
+            self._save_trained_stock_last_train_meta()
         return
 
 def _focus_trained_stocks_tab(self) -> None:
@@ -691,4 +717,3 @@ def _handle_training_drift_alarm(
             self._apply_auto_trade_mode(AutoTradeMode.MANUAL)
     except _UI_RECOVERABLE_EXCEPTIONS as exc:
         self.log(f"Drift alarm escalation failed: {exc}", "warning")
-

@@ -225,9 +225,15 @@ def _clean_dataframe(
     else:
         out["volume"] = 0.0
 
-    # 9) high >= low.
+    # 9) high >= low (FIX: repair instead of dropping to prevent candle damage).
     if "high" in out.columns and "low" in out.columns:
-        out = out[out["high"].fillna(0) >= out["low"].fillna(0)]
+        # FIX: Repair invalid high/low instead of dropping rows
+        invalid_mask = out["high"].fillna(0) < out["low"].fillna(0)
+        if invalid_mask.any():
+            # Repair by setting high = max(high, low) and low = min(high, low)
+            invalid_idx = out.index[invalid_mask]
+            out.loc[invalid_idx, "high"] = out.loc[invalid_idx, ["high", "low"]].max(axis=1)
+            out.loc[invalid_idx, "low"] = out.loc[invalid_idx, ["high", "low"]].min(axis=1)
 
     # 10) Derive amount if missing.
     if (
