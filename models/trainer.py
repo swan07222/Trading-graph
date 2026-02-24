@@ -68,7 +68,8 @@ if torch.cuda.is_available():
 _EPS = 1e-8
 
 _TRAINING_INTERVAL_LOCK = "1m"
-_MIN_1M_LOOKBACK_BARS = 10080
+# FIX 1M: Reduced from 10080 to 480 bars - free sources provide 1-2 days of 1m data
+_MIN_1M_LOOKBACK_BARS = 480
 _DEFAULT_ENSEMBLE_MODELS = ["lstm", "gru", "tcn", "transformer", "hybrid"]
 _WALK_FORWARD_FOLDS = 3
 _MIN_WALK_FORWARD_SAMPLES = 180

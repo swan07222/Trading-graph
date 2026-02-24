@@ -491,15 +491,16 @@ def _run_cycle(
         if len(ok_codes) < min_ok:
             for code in new_batch:
                 self._rotator.mark_processed([code])
-            
+
             # FIX HELP: Add helpful message about 1m data limitations
             interval_name = str(eff_interval).lower()
             if interval_name in ("1m", "2m", "5m"):
                 help_msg = (
                     f"Too few stocks: {len(ok_codes)}/{len(codes)}. "
-                    f"Note: {interval_name} historical data is limited from free sources. "
-                    f"Consider using 1d interval for better data availability, "
-                    f"or run during/after market hours for more intraday bars."
+                    f"Note: {interval_name} historical data is limited from free sources "
+                    f"(typically 1-2 days). Tips: 1) Run during market hours (9:30-15:00 CST) "
+                    f"for live session data, 2) Use 1d interval for more data availability, "
+                    f"3) Retry multiple times to accumulate session cache."
                 )
                 log.warning(help_msg)
                 self._update(

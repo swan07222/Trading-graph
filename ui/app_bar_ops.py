@@ -66,7 +66,7 @@ def _trained_stock_window_bars(
 
 def _recommended_lookback(self: Any, interval: str) -> int:
     """Recommended lookback for analysis/forecast per interval.
-    Startup 1m uses a true 7-day 1m window; higher intervals keep a
+    Startup 1m uses a true 2-day 1m window; higher intervals keep a
     minimum depth for feature generation stability.
     """
     iv = self._normalize_interval_token(interval)
@@ -146,7 +146,7 @@ def _schedule_analysis_recovery(
     QTimer.singleShot(1800, _retry_once)
 
 def _history_window_bars(self: Any, interval: str) -> int:
-    """Rolling chart/session window size (7-day equivalent)."""
+    """Rolling chart/session window size (2-day equivalent)."""
     iv = self._normalize_interval_token(interval)
     bars = int(self._seven_day_lookback(iv))
     if iv == "1d":

@@ -25,7 +25,8 @@ except ImportError:
 
 _STOP_CHECK_INTERVAL = 10
 _TRAINING_INTERVAL_LOCK = "1m"
-_MIN_1M_LOOKBACK_BARS = 10080
+# FIX 1M: Reduced from 10080 to 480 bars - free sources provide 1-2 days of 1m data
+_MIN_1M_LOOKBACK_BARS = 480
 _DEFAULT_ENSEMBLE_MODELS = ["lstm", "gru", "tcn", "transformer", "hybrid"]
 _INCREMENTAL_REGIME_BLOCK_LEVELS = {"high"}
 

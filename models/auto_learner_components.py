@@ -1085,8 +1085,8 @@ class ParallelFetcher:
             except ImportError:
                 bpd = 1.0
 
-            # Keep warm cache aligned to the 7-day intraday training window.
-            min_cache_bars = int(max(7 * bpd, 7))
+            # Keep warm cache aligned to the 2-day intraday training window.
+            min_cache_bars = int(max(2 * bpd, 2))
 
             with semaphore:
                 if self._cancel_token.wait(timeout=max(0.0, float(delay))):

@@ -118,7 +118,8 @@ class ContinuousLearner:
     # FIX VAL: Minimum holdout predictions for reliable comparison
     _MIN_HOLDOUT_PREDICTIONS = 3
     _MIN_TUNED_TRADES = 3
-    _MIN_1M_LOOKBACK_BARS = 1680  # 7 days × 240 bars/day — matches INTERVAL_MAX_DAYS["1m"]=7
+    # FIX 1M: Reduced to 240 bars (1 day) - free sources typically provide 1-2 days of 1m data
+    _MIN_1M_LOOKBACK_BARS = 240  # Was 1680 (7 days) - adjusted for free data source limitations
     _FULL_RETRAIN_EVERY_CYCLES = 6
     _FORCE_FULL_RETRAIN_CYCLES = 2
     _FORCE_FULL_RETRAIN_AFTER_REJECTIONS = 2
@@ -497,14 +498,15 @@ class ContinuousLearner:
             max_avail = max(max_avail, int(self._MIN_1M_LOOKBACK_BARS))
         eff_lookback = min(max(1, int(lookback)), max_avail)
         if eff_interval == "1m":
-            eff_lookback = max(int(eff_lookback), int(self._MIN_1M_LOOKBACK_BARS))
+            # FIX 1M: Use available data up to max_avail, don't force unrealistic lookback
+            eff_lookback = min(int(eff_lookback), int(self._MIN_1M_LOOKBACK_BARS))
 
         if eff_interval in ("1m", "2m", "5m"):
             # FIX 1M DATA: Reduced min_bars for better success rate with limited 1m history
             # Free data sources typically provide only 1-2 days of 1m data
-            min_bars = max(CONFIG.SEQUENCE_LENGTH + 20, 40)  # Was 80
+            min_bars = max(CONFIG.SEQUENCE_LENGTH + 10, 30)  # Was 40, further reduced
         elif eff_interval in ("15m", "30m", "60m", "1h"):
-            min_bars = max(CONFIG.SEQUENCE_LENGTH + 30, 60)  # Was 90
+            min_bars = max(CONFIG.SEQUENCE_LENGTH + 20, 50)  # Was 60
         else:
             min_bars = CONFIG.SEQUENCE_LENGTH + 50
 

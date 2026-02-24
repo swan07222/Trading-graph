@@ -272,7 +272,7 @@ def _load_state(self: Any) -> None:
         if "forecast" in state:
             self.forecast_spin.setValue(state["forecast"])
 
-        # Startup should always begin on 1m with latest 7-day window.
+        # Startup should always begin on 1m with latest 2-day window.
         self.interval_combo.blockSignals(True)
         try:
             self.interval_combo.setCurrentText(self.STARTUP_INTERVAL)

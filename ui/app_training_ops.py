@@ -401,7 +401,7 @@ def _focus_trained_stocks_tab(self) -> None:
         tabs.setCurrentIndex(idx)
 
 def _get_infor_trained_stocks(self) -> None:
-    """Refresh 7-day AKShare history for all trained stocks.
+    """Refresh 2-day AKShare history for all trained stocks.
 
     Fetches incrementally from the last saved timestamp forward.
     If market is closed, replaces saved realtime rows with AKShare rows.
@@ -426,12 +426,12 @@ def _get_infor_trained_stocks(self) -> None:
     self.progress.setRange(0, 0)
     self.progress.show()
     self.status_label.setText(
-        f"Get Infor: syncing {len(codes)} trained stocks (7d)..."
+        f"Get Infor: syncing {len(codes)} trained stocks (2d)..."
     )
     self.log(
         (
             "Get Infor started: AKShare sync for "
-            f"{len(codes)} trained stocks (last 7 days, incremental)."
+            f"{len(codes)} trained stocks (last 2 days, incremental)."
         ),
         "info",
     )
@@ -443,7 +443,7 @@ def _get_infor_trained_stocks(self) -> None:
         return fetcher.refresh_trained_stock_history(
             codes,
             interval="1m",
-            window_days=7,  # Changed from 29 to 7
+            window_days=2,  # Changed from 7 to 2 for faster sync
             allow_online=True,
             sync_session_cache=True,
             replace_realtime_after_close=True,
