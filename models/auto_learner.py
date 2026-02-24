@@ -98,8 +98,8 @@ class ContinuousLearner:
         "60m": 4,
         "1h": 4,
         "1d": 1,
-        "1wk": 1,
-        "1mo": 1,
+        "1wk": 0.2,
+        "1mo": 0.05,
     }
 
     _INTERVAL_MAX_DAYS_FALLBACK: dict[str, int] = {
@@ -118,7 +118,7 @@ class ContinuousLearner:
     # FIX VAL: Minimum holdout predictions for reliable comparison
     _MIN_HOLDOUT_PREDICTIONS = 3
     _MIN_TUNED_TRADES = 3
-    _MIN_1M_LOOKBACK_BARS = 10080
+    _MIN_1M_LOOKBACK_BARS = 1680  # 7 days × 240 bars/day — matches INTERVAL_MAX_DAYS["1m"]=7
     _FULL_RETRAIN_EVERY_CYCLES = 6
     _FORCE_FULL_RETRAIN_CYCLES = 2
     _FORCE_FULL_RETRAIN_AFTER_REJECTIONS = 2
@@ -500,9 +500,11 @@ class ContinuousLearner:
             eff_lookback = max(int(eff_lookback), int(self._MIN_1M_LOOKBACK_BARS))
 
         if eff_interval in ("1m", "2m", "5m"):
-            min_bars = max(CONFIG.SEQUENCE_LENGTH + 20, 80)
+            # FIX 1M DATA: Reduced min_bars for better success rate with limited 1m history
+            # Free data sources typically provide only 1-2 days of 1m data
+            min_bars = max(CONFIG.SEQUENCE_LENGTH + 20, 40)  # Was 80
         elif eff_interval in ("15m", "30m", "60m", "1h"):
-            min_bars = max(CONFIG.SEQUENCE_LENGTH + 30, 90)
+            min_bars = max(CONFIG.SEQUENCE_LENGTH + 30, 60)  # Was 90
         else:
             min_bars = CONFIG.SEQUENCE_LENGTH + 50
 

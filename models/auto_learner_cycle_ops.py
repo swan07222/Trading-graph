@@ -323,8 +323,10 @@ def _run_cycle(
             # New stocks: online + DB update (latest 1m window).
             fetch_groups.append(("new", list(new_batch), True, True))
         if replay_batch:
-            # Replay stocks: use saved/cache data only.
-            fetch_groups.append(("replay", list(replay_batch), False, False))
+            # For short intraday intervals, allow online fetch since intraday DB
+            # goes stale quickly and offline cache will fail min_bars check.
+            _replay_online = eff_interval in ("1m", "2m", "5m")
+            fetch_groups.append(("replay", list(replay_batch), _replay_online, False))
         if not fetch_groups:
             fetch_groups.append(("batch", list(codes), True, True))
 
@@ -489,10 +491,26 @@ def _run_cycle(
         if len(ok_codes) < min_ok:
             for code in new_batch:
                 self._rotator.mark_processed([code])
-            self._update(
-                stage="error",
-                message=f"Too few stocks: {len(ok_codes)}/{len(codes)}",
-            )
+            
+            # FIX HELP: Add helpful message about 1m data limitations
+            interval_name = str(eff_interval).lower()
+            if interval_name in ("1m", "2m", "5m"):
+                help_msg = (
+                    f"Too few stocks: {len(ok_codes)}/{len(codes)}. "
+                    f"Note: {interval_name} historical data is limited from free sources. "
+                    f"Consider using 1d interval for better data availability, "
+                    f"or run during/after market hours for more intraday bars."
+                )
+                log.warning(help_msg)
+                self._update(
+                    stage="error",
+                    message=help_msg,
+                )
+            else:
+                self._update(
+                    stage="error",
+                    message=f"Too few stocks: {len(ok_codes)}/{len(codes)}",
+                )
             return False
 
         # === 6. Backup model ===

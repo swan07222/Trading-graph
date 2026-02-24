@@ -719,14 +719,37 @@ class AkShareSource(DataSource):
 
         if interval in self._AKSHARE_MIN_MAP:
             time.sleep(0.3)
-            df = _run_with_timeout(
-                lambda: self._ak.stock_zh_a_hist_min_em(
-                    symbol=symbol,
-                    period=self._AKSHARE_MIN_MAP[interval],
-                    adjust="qfq",
-                ),
-                timeout_s,
-            )
+            max_intraday_days = INTERVAL_MAX_DAYS.get(interval, 7)
+            fetch_cal_days = min(int(days) + 3, max_intraday_days)
+            start_date_str = (
+                datetime.now() - timedelta(days=fetch_cal_days)
+            ).strftime("%Y-%m-%d %H:%M:%S")
+            end_date_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            period_val = self._AKSHARE_MIN_MAP[interval]
+            sym_cap = symbol
+            start_cap = start_date_str
+            end_cap = end_date_str
+            try:
+                df = _run_with_timeout(
+                    lambda: self._ak.stock_zh_a_hist_min_em(
+                        symbol=sym_cap,
+                        period=period_val,
+                        start_date=start_cap,
+                        end_date=end_cap,
+                        adjust="qfq",
+                    ),
+                    timeout_s,
+                )
+            except TypeError:
+                # Older akshare versions may not support date range params
+                df = _run_with_timeout(
+                    lambda: self._ak.stock_zh_a_hist_min_em(
+                        symbol=sym_cap,
+                        period=period_val,
+                        adjust="qfq",
+                    ),
+                    timeout_s,
+                )
             if not isinstance(df, pd.DataFrame) or df.empty:
                 return pd.DataFrame()
             df = self._normalize_intraday(df)
@@ -735,8 +758,8 @@ class AkShareSource(DataSource):
             latency = (time.time() - start_t) * 1000
             self._record_success(latency)
             log.debug(
-                "AkShare intraday %s (%s): %d bars",
-                symbol, interval, len(df)
+                "AkShare intraday %s (%s): %d bars (days=%d)",
+                symbol, interval, len(df), fetch_cal_days,
             )
             return df
 

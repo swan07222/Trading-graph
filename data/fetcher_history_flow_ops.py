@@ -532,6 +532,7 @@ def _get_history_cn_daily(
     interval: str = "1d",
 ) -> pd.DataFrame:
     """Handle CN equity daily/weekly/monthly intervals via online consensus."""
+    symbol = str(inst.get("symbol", ""))
     iv = self._normalize_interval_token(interval)
     db_limit = (
         int(max(count, fetch_days))
@@ -546,9 +547,18 @@ def _get_history_cn_daily(
         db_df,
         iv,
     )
-
+    
+    # FIX DEBUG: Log database state
+    if db_df is None or db_df.empty:
+        log.debug(f"CN daily: DB empty for {symbol} (limit={db_limit})")
+    else:
+        log.debug(f"CN daily: DB has {len(db_df)} bars for {symbol}")
+    
     if offline:
-        return base_df.tail(count) if not base_df.empty else pd.DataFrame()
+        result = base_df.tail(count) if not base_df.empty else pd.DataFrame()
+        if result.empty:
+            log.debug(f"CN daily offline: returning empty for {symbol}")
+        return result
 
     online_meta: dict[str, object] = {}
     try:
@@ -576,12 +586,23 @@ def _get_history_cn_daily(
         online_df = (
             online_out if isinstance(online_out, pd.DataFrame) else pd.DataFrame()
         )
+    
+    # FIX DEBUG: Log online fetch result
     if online_df is None or online_df.empty:
-        return base_df.tail(count) if not base_df.empty else pd.DataFrame()
+        log.debug(f"CN daily: online fetch empty for {symbol}")
+    else:
+        log.debug(f"CN daily: online fetch has {len(online_df)} bars for {symbol}")
+    
+    if online_df is None or online_df.empty:
+        result = base_df.tail(count) if not base_df.empty else pd.DataFrame()
+        if result.empty:
+            log.debug(f"CN daily: returning DB fallback empty for {symbol}")
+        return result
 
     # Prefer fresh online rows when timestamps overlap with local DB rows.
     merged = self._merge_parts(online_df, base_df, interval=iv)
     if merged.empty:
+        log.debug(f"CN daily: merged empty for {symbol}")
         return pd.DataFrame()
 
     out = self._cache_tail(

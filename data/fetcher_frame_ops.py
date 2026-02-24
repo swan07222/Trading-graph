@@ -86,7 +86,7 @@ def filter_cn_intraday_session(
     idx = out.index
     hhmm = (idx.hour * 100) + idx.minute
     in_morning = (hhmm >= 930) & (hhmm <= 1130)
-    in_afternoon = (hhmm >= 1300) & (hhmm < 1457)
+    in_afternoon = (hhmm >= 1300) & (hhmm <= 1500)
     weekday = idx.dayofweek < 5
     mask = weekday & (in_morning | in_afternoon)
     return out.loc[mask]
