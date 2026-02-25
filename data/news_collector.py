@@ -184,7 +184,12 @@ class NewsCollector:
         return self._detect_network_environment()
 
     def _detect_network_environment(self) -> bool:
-        """Auto-detect network environment by testing connectivity."""
+        """Auto-detect network environment by testing connectivity.
+        
+        FIX 2026-02-25: Replaced bare except Exception with specific
+        requests.RequestException to avoid swallowing KeyboardInterrupt
+        and other critical exceptions.
+        """
         # Test access to Chinese site
         chinese_test = "https://www.baidu.com"
         international_test = "https://www.google.com"
@@ -199,10 +204,15 @@ class NewsCollector:
                     if resp_int.status_code == 200:
                         # Can access both - likely VPN or good international connection
                         return True
-                except Exception:
+                except requests.RequestException:
                     # Can't access international - China direct mode
                     return False
+        except requests.RequestException:
+            # Network error - default to VPN mode
+            pass
         except Exception:
+            # Other unexpected errors - log and default to VPN mode
+            log.warning("Unexpected error during network detection", exc_info=True)
             pass
 
         # Default to VPN mode (international sources)
@@ -1081,6 +1091,24 @@ class NewsCollector:
             data = json.load(f)
 
         return [NewsArticle.from_dict(item) for item in data]
+
+    def close(self) -> None:
+        """Close the HTTP session and release resources.
+        
+        FIX 2026-02-25: Added explicit session cleanup to prevent
+        resource leaks. Call this method when the collector is no longer needed.
+        """
+        try:
+            self._session.close()
+        except Exception as e:
+            log.debug(f"Error closing news collector session: {e}")
+
+    def __del__(self) -> None:
+        """Cleanup on garbage collection."""
+        try:
+            self.close()
+        except Exception:
+            pass
 
 
 # Singleton instance

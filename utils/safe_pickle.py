@@ -366,11 +366,14 @@ def migrate_pickle_to_json(
 
 def load_model_weights(path: Path | str) -> Any:
     """Load ML model weights safely.
-    
+
     Adds common ML framework classes to safe list.
+    
+    SECURITY NOTE: numpy.dtype is intentionally excluded due to potential
+    code execution vulnerabilities. Only numpy.ndarray is allowed.
     """
     extra_classes = {}
-    
+
     # Try to add torch classes
     try:
         import torch
@@ -380,17 +383,19 @@ def load_model_weights(path: Path | str) -> Any:
         })
     except (ImportError, OSError):
         pass
-    
+
     # Try to add numpy classes
+    # SECURITY FIX: numpy.dtype is NOT included due to code execution risk
     try:
         import numpy as np
         extra_classes.update({
             "numpy.ndarray": np.ndarray,
-            "numpy.dtype": np.dtype,
+            # Note: numpy.dtype intentionally excluded for security
+            # If you need dtype support, ensure the pickle source is trusted
         })
     except (ImportError, OSError):
         pass
-    
+
     return pickle_load_safe(
         path,
         extra_classes=extra_classes,

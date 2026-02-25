@@ -30,7 +30,9 @@ _new_listings_cache: dict[str, object] = {
     "codes": [],
 }
 _MIN_REASONABLE_UNIVERSE_SIZE = 1200
-_FALLBACK_PER_CALL_TIMEOUT_S = 8.0
+_TARGET_FULL_UNIVERSE_SIZE = 4500
+_FALLBACK_PER_CALL_TIMEOUT_S = 15.0
+_VPN_TIMEOUT_MULTIPLIER = 3.0  # Longer timeouts for VPN users (AkShare is slow via VPN)
 
 
 def _universe_path() -> Path:
@@ -348,6 +350,10 @@ def _try_akshare_fetch(timeout: int = 20) -> list[str] | None:
 
     FIX Bug 10: Uses ThreadPoolExecutor for timeout instead of
     socket.setdefaulttimeout which is process-global and racy.
+    
+    VPN handling:
+    - Longer timeouts for VPN users (AkShare is slower via VPN)
+    - Multiple fallback endpoints with staggered timeouts
     """
     try:
         import akshare as ak
@@ -357,6 +363,22 @@ def _try_akshare_fetch(timeout: int = 20) -> list[str] | None:
 
     from concurrent.futures import ThreadPoolExecutor
     from concurrent.futures import TimeoutError as FuturesTimeout
+
+    # Detect VPN to adjust timeouts
+    try:
+        from core.network import get_network_env
+        env = get_network_env()
+        is_vpn = bool(getattr(env, "is_vpn_active", False) or getattr(env, "eastmoney_ok", False) is False)
+    except Exception:
+        is_vpn = False
+    
+    timeout_multiplier = _VPN_TIMEOUT_MULTIPLIER if is_vpn else 1.0
+    effective_timeout = float(timeout) * timeout_multiplier
+    
+    log.info(
+        "AkShare fetch: base_timeout=%.1fs, vpn=%s, effective_timeout=%.1fs",
+        float(timeout), is_vpn, effective_timeout
+    )
 
     def _do_spot_fetch():
         log.info("Fetching universe from AkShare (stock_zh_a_spot_em)...")
@@ -379,12 +401,13 @@ def _try_akshare_fetch(timeout: int = 20) -> list[str] | None:
             log.info("Fetching universe from AkShare fallback (%s)...", api_name)
             with ThreadPoolExecutor(max_workers=1) as ex:
                 fut = ex.submit(api_fn)
-                return fut.result(timeout=max(1.0, float(call_timeout)))
+                return fut.result(timeout=max(1.0, float(call_timeout) * timeout_multiplier))
         except FuturesTimeout:
             log.warning(
-                "AkShare fallback %s timed out after %.1fs",
+                "AkShare fallback %s timed out after %.1fs (multiplier=%.1f)",
                 api_name,
                 float(call_timeout),
+                timeout_multiplier,
             )
         except Exception as exc:
             log.warning(
@@ -395,15 +418,15 @@ def _try_akshare_fetch(timeout: int = 20) -> list[str] | None:
             )
         return None
 
-    # Try primary endpoint with timeout
+    # Try primary endpoint with timeout (adjusted for VPN)
     try:
         with ThreadPoolExecutor(max_workers=1) as ex:
             fut = ex.submit(_do_spot_fetch)
-            result = fut.result(timeout=timeout)
+            result = fut.result(timeout=effective_timeout)
             if result:
                 return result
     except FuturesTimeout:
-        log.warning(f"AkShare spot fetch timed out after {timeout}s")
+        log.warning(f"AkShare spot fetch timed out after {effective_timeout:.1f}s")
     except Exception as exc:
         log.warning(f"AkShare spot fetch failed: {type(exc).__name__}: {exc}")
 
@@ -420,7 +443,7 @@ def _try_akshare_fetch(timeout: int = 20) -> list[str] | None:
     ]
 
     merged_codes: list[str] = []
-    deadline = time.monotonic() + float(timeout)
+    deadline = time.monotonic() + effective_timeout
     for api_name, api_fn in fallback_calls:
         merged = _validate_codes(merged_codes)
         if len(merged) >= _MIN_REASONABLE_UNIVERSE_SIZE:
@@ -485,10 +508,26 @@ def get_universe_codes(
             len(cached_codes),
         )
 
-    # Try AkShare regardless of probe result; use shorter timeout when probe
-    # says Eastmoney is likely blocked.
+    # Try AkShare with longer timeouts for VPN users
     can_try_direct = _can_use_akshare()
-    fresh_codes = _try_akshare_fetch(timeout=20 if can_try_direct else 8)
+    
+    # Detect VPN for timeout adjustment
+    try:
+        from core.network import get_network_env
+        env = get_network_env()
+        is_vpn = bool(getattr(env, "is_vpn_active", False) or getattr(env, "eastmoney_ok", False) is False)
+    except Exception:
+        is_vpn = False
+    
+    base_timeout = 25 if can_try_direct else 12  # Increased base timeouts
+    timeout = base_timeout * (_VPN_TIMEOUT_MULTIPLIER if is_vpn else 1.0)
+    
+    log.info(
+        "Universe refresh: can_try_direct=%s, is_vpn=%s, timeout=%.1fs",
+        can_try_direct, is_vpn, timeout
+    )
+    
+    fresh_codes = _try_akshare_fetch(timeout=int(timeout))
 
     if fresh_codes:
         if cached_codes and len(fresh_codes) < _MIN_REASONABLE_UNIVERSE_SIZE:
@@ -534,12 +573,29 @@ def refresh_universe() -> dict:
     """Refresh universe from AkShare.
 
     FIX: Removed network detection check - just try to fetch.
+    VPN handling: Uses longer timeouts for VPN users.
     """
     existing = load_universe()
     existing_codes = existing.get("codes") or []
 
+    # Detect VPN for timeout adjustment
+    try:
+        from core.network import get_network_env
+        env = get_network_env()
+        is_vpn = bool(getattr(env, "is_vpn_active", False) or getattr(env, "eastmoney_ok", False) is False)
+    except Exception:
+        is_vpn = False
+
     can_try_direct = _can_use_akshare()
-    fresh_codes = _try_akshare_fetch(timeout=20 if can_try_direct else 8)
+    base_timeout = 25 if can_try_direct else 12  # Increased base timeouts
+    timeout = base_timeout * (_VPN_TIMEOUT_MULTIPLIER if is_vpn else 1.0)
+    
+    log.info(
+        "Universe refresh: can_try_direct=%s, is_vpn=%s, timeout=%.1fs",
+        can_try_direct, is_vpn, timeout
+    )
+    
+    fresh_codes = _try_akshare_fetch(timeout=int(timeout))
 
     if fresh_codes:
         existing_codes = _validate_codes(existing_codes)

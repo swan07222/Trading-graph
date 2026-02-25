@@ -185,7 +185,9 @@ def calculate_sharpe(
 
     std = np.std(excess, ddof=1)
 
-    if np.isclose(std, 0.0) or np.isnan(std):
+    # FIX #6: Use robust epsilon check instead of np.isclose to prevent
+    # numerical instability with very small standard deviations
+    if std < 1e-10 or np.isnan(std):
         return 0.0
 
     return float(np.mean(excess) / std * np.sqrt(periods_per_year))

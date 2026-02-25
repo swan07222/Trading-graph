@@ -1,35 +1,23 @@
-"""Models Module."""
-try:
-    from .layers import (
-        AttentionPooling,
-        LSTMBlock,
-        MultiHeadAttention,
-        PositionalEncoding,
-        TemporalConvBlock,
-        TransformerBlock,
-    )
-except Exception:
-    MultiHeadAttention = None
-    PositionalEncoding = None
-    LSTMBlock = None
-    TransformerBlock = None
-    TemporalConvBlock = None
-    AttentionPooling = None
+"""Models Module.
 
+Available models:
+    - Informer: Efficient Transformer for long sequences
+    - TemporalFusionTransformer (TFT): Interpretable predictions
+    - NBEATS: Neural basis expansion analysis
+    - TSMixer: All-MLP architecture
+"""
 try:
     from .networks import (
-        GRUModel,
-        HybridModel,
-        LSTMModel,
-        TCNModel,
-        TransformerModel,
+        Informer,
+        NBEATS,
+        TSMixer,
+        TemporalFusionTransformer,
     )
 except Exception:
-    LSTMModel = None
-    TransformerModel = None
-    GRUModel = None
-    TCNModel = None
-    HybridModel = None
+    Informer = None
+    TemporalFusionTransformer = None
+    NBEATS = None
+    TSMixer = None
 
 try:
     from .ensemble import EnsembleModel, EnsemblePrediction
@@ -54,17 +42,10 @@ except Exception:
     LearningProgress = None
 
 __all__ = [
-    'MultiHeadAttention',
-    'PositionalEncoding',
-    'LSTMBlock',
-    'TransformerBlock',
-    'TemporalConvBlock',
-    'AttentionPooling',
-    'LSTMModel',
-    'TransformerModel',
-    'GRUModel',
-    'TCNModel',
-    'HybridModel',
+    'Informer',
+    'TemporalFusionTransformer',
+    'NBEATS',
+    'TSMixer',
     'EnsembleModel',
     'EnsemblePrediction',
     'Trainer',

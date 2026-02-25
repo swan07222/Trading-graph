@@ -155,17 +155,16 @@ class RealtimePredictor:
             return False
 
     def _load_forecaster(self, path: Path) -> None:
-        """Load TCN forecaster model.
+        """Load Informer forecaster model.
 
         The forecaster outputs ``horizon`` regression values (not class
-        probabilities), so ``num_classes`` in the TCN is set to the
-        horizon value from the saved checkpoint.
+        probabilities), so the model outputs a forecast of horizon length.
 
         Secure-by-default:
         - requires checksum sidecar when configured
         - blocks legacy weights_only=False fallback unless explicitly enabled
         """
-        from models.networks import TCNModel
+        from models.networks import Informer
 
         try:
             if not self.processor._verify_artifact_checksum(path):
@@ -217,13 +216,19 @@ class RealtimePredictor:
                 )
                 return
 
-            output_size = int(data["horizon"])
+            pred_len = int(data["horizon"])
+            arch = data["arch"]
 
-            self.forecaster = TCNModel(
+            self.forecaster = Informer(
                 input_size=int(data["input_size"]),
-                hidden_size=int(data["arch"]["hidden_size"]),
-                num_classes=output_size,
-                dropout=float(data["arch"]["dropout"]),
+                pred_len=pred_len,
+                seq_len=getattr(arch, "seq_len", 60),
+                d_model=getattr(arch, "d_model", 128),
+                n_heads=getattr(arch, "n_heads", 8),
+                d_ff=getattr(arch, "d_ff", 512),
+                factor=getattr(arch, "factor", 5),
+                n_layers=getattr(arch, "n_layers", 3),
+                dropout=float(getattr(arch, "dropout", 0.1)),
             )
             self.forecaster.load_state_dict(data["state_dict"])
             self.forecaster.eval()
@@ -233,7 +238,7 @@ class RealtimePredictor:
 
             log.info(
                 f"Forecaster loaded: {path} "
-                f"(output_size={output_size}, device={self._device})"
+                f"(pred_len={pred_len}, device={self._device})"
             )
         except (OSError, RuntimeError, TypeError, ValueError, KeyError) as e:
             log.warning(f"Failed to load forecaster: {e}")
@@ -336,9 +341,9 @@ class RealtimePredictor:
                 self.forecaster.eval()
                 with torch.inference_mode():
                     X_tensor = torch.FloatTensor(X).to(self._device)
-                    forecast, _ = self.forecaster(X_tensor)
+                    output = self.forecaster(X_tensor)
                     result["forecast"] = (
-                        forecast[0].cpu().numpy().tolist()
+                        output["forecast"][0].cpu().numpy().tolist()
                     )
 
             return result

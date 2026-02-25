@@ -28,7 +28,14 @@ from collections.abc import Callable, Coroutine
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum, auto
-from typing import Any, ParamSpec, TypeVar
+from typing import Any
+
+# FIX #5: Python 3.9 compatibility - use typing_extensions for ParamSpec and TypeVar
+try:
+    from typing import ParamSpec, TypeVar
+except ImportError:
+    # Python 3.9 requires typing_extensions for ParamSpec
+    from typing_extensions import ParamSpec, TypeVar
 
 from utils.logger import get_logger
 

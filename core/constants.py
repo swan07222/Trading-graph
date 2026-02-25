@@ -26,19 +26,19 @@ EXCHANGES = {
         "name": "Shanghai Stock Exchange",
         "timezone": "Asia/Shanghai",
         "currency": "CNY",
-        "prefix": ("600", "601", "603", "605", "688"),
+        "prefix": ("600", "601", "602", "603", "604", "605", "606", "607", "608", "609", "688"),
     },
     "SZSE": {
         "name": "Shenzhen Stock Exchange",
         "timezone": "Asia/Shanghai",
         "currency": "CNY",
-        "prefix": ("000", "001", "002", "003", "300", "301"),
+        "prefix": ("000", "001", "002", "003", "004", "005", "006", "007", "008", "009", "300", "301"),
     },
     "BSE": {
         "name": "Beijing Stock Exchange",
         "timezone": "Asia/Shanghai",
         "currency": "CNY",
-        "prefix": ("83", "87", "43"),
+        "prefix": ("43", "82", "83", "87", "88", "920"),
     },
 }
 

@@ -327,13 +327,14 @@ class AutoTradeConfig:
         """
         errors: list[str] = []
 
-        # Validate confidence thresholds are in valid range (0, 1]
-        if not (0.0 < self.min_confidence <= 1.0):
-            errors.append(f"min_confidence must be in (0, 1], got {self.min_confidence}")
-        if not (0.0 < self.min_signal_strength <= 1.0):
-            errors.append(f"min_signal_strength must be in (0, 1], got {self.min_signal_strength}")
-        if not (0.0 < self.min_model_agreement <= 1.0):
-            errors.append(f"min_model_agreement must be in (0, 1], got {self.min_model_agreement}")
+        # FIX #9: Validate confidence thresholds are in practical range [0.5, 1.0]
+        # instead of (0, 1] to prevent functionally useless configurations
+        if not (0.5 <= self.min_confidence <= 1.0):
+            errors.append(f"min_confidence must be in [0.5, 1.0], got {self.min_confidence}")
+        if not (0.5 <= self.min_signal_strength <= 1.0):
+            errors.append(f"min_signal_strength must be in [0.5, 1.0], got {self.min_signal_strength}")
+        if not (0.5 <= self.min_model_agreement <= 1.0):
+            errors.append(f"min_model_agreement must be in [0.5, 1.0], got {self.min_model_agreement}")
 
         # Validate position limits are positive
         if self.max_auto_positions <= 0:
@@ -359,7 +360,7 @@ class AutoTradeConfig:
         if self.trailing_stop_enabled and self.trailing_stop_pct <= 0:
             errors.append(f"trailing_stop_pct must be > 0 when enabled, got {self.trailing_stop_pct}")
         if self.trailing_stop_pct > 50:
-            errors.append(f"trailing_stop_pct should be <= 50%%, got {self.trailing_stop_pct}%%")
+            errors.append(f"trailing_stop_pct should be <= 50%, got {self.trailing_stop_pct}%")
 
         return errors
 
@@ -444,18 +445,17 @@ class Config:
 
         Uses RLock for reentrant safety and explicit memory barriers
         through the lock to prevent instruction reordering issues.
-        
-        FIX C3: Set _initialized to True here in __new__ to prevent
-        race condition where two threads could both pass the check in
-        __init__ and both attempt initialization.
+
+        FIX #1: Proper singleton pattern with _initialized flag set in __init__
+        to prevent race condition where two threads could both pass the check
+        in __init__ and both attempt initialization.
         """
         if cls._instance is None:
             with cls._instance_lock:
+                # Double-checked locking - check again inside lock
                 if cls._instance is None:
                     inst = super().__new__(cls)
-                    # FIX: Set _initialized to True immediately to prevent
-                    # race condition during concurrent initialization
-                    object.__setattr__(inst, '_initialized', True)
+                    # Don't set _initialized here - let __init__ do it
                     object.__setattr__(inst, '_lock', threading.RLock())
                     cls._instance = inst
         return cls._instance
@@ -477,7 +477,7 @@ class Config:
     def __init__(self) -> None:
         """Thread-safe initialization with explicit barrier.
 
-        FIX C3: Acquire lock BEFORE checking _initialized to prevent
+        FIX #1: Acquire lock BEFORE checking _initialized to prevent
         race condition where two threads could both pass the check
         and both attempt initialization simultaneously.
         """
@@ -487,10 +487,9 @@ class Config:
             # Check if already fully initialized (has data attribute)
             if hasattr(self, 'data'):
                 return
-            
-            # Mark as initialized BEFORE setting any attributes
-            # This prevents any other thread from proceeding past the lock
-            object.__setattr__(self, '_initialized', True)
+
+            # Initialize all attributes BEFORE setting _initialized flag
+            # This ensures atomic initialization visible to all threads
             self._config_file = Path(__file__).parent.parent / "config.json"
             self._env_prefix = "TRADING_"
             self._validation_warnings: list[str] = []
@@ -554,6 +553,10 @@ class Config:
 
             self._load()
             self._validate()
+            
+            # Set _initialized flag AFTER all attributes are set
+            # This ensures other threads see a fully initialized object
+            object.__setattr__(self, '_initialized', True)
 
     # ==================== LEGACY COMPATIBILITY ====================
 

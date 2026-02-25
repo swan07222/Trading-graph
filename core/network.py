@@ -198,26 +198,28 @@ class NetworkDetector:
                     except Exception:
                         setattr(env, k, False)
         except FuturesTimeoutError:
+            # FIX #10: Log timeout and continue with partial results
             log.warning(
                 f"Network detection timed out after {OVERALL_TIMEOUT}s. "
-                "Using fallback logic."
+                "Using partial results."
             )
-            # Cancel all pending futures to clean up resources
+            # Cancel pending futures to clean up resources
             for fut in futures:
-                fut.cancel()
-            # All probes failed, use fallback
-            env.tencent_ok = False
-            env.eastmoney_ok = False
-            env.yahoo_ok = False
-            env.csindex_ok = False
-        except Exception as e:
-            log.debug(f"Network detection thread pool error: {e}")
-            # Cancel all pending futures on error
-            for fut in futures:
-                try:
+                if not fut.done():
                     fut.cancel()
-                except Exception:
-                    pass
+        except Exception as e:
+            # FIX #10: Catch all exceptions to prevent application crash
+            log.error(f"Network detection failed: {e}")
+            # Cancel pending futures to clean up resources
+            for fut in futures:
+                if not fut.done():
+                    fut.cancel()
+
+        # Handle case where all probes failed
+        if not any([env.tencent_ok, env.eastmoney_ok, env.yahoo_ok, env.csindex_ok]):
+            log.warning(
+                "All network probes failed. Using fallback logic."
+            )
 
         if env.eastmoney_ok and not env.yahoo_ok:
             env.is_china_direct = True

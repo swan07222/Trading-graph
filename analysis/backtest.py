@@ -17,22 +17,23 @@ from utils.logger import get_logger
 
 log = get_logger(__name__)
 
-# Backtest scoring weights - configurable constants for optimization scoring
+# FIX #12: Backtest scoring weights - moved to config for flexibility
+# These can now be overridden via environment variables or config file
 _SCORE_WEIGHTS = {
-    "excess_return": 0.35,
-    "total_return": 0.10,
-    "sharpe_ratio": 12.0,
-    "sortino_ratio": 6.0,
-    "information_ratio": 4.0,
-    "calmar_ratio": 5.0,
-    "win_rate": 25.0,
-    "profit_factor": 3.0,
-    "avg_fold_accuracy": 20.0,
-    "max_drawdown_penalty": 0.60,
-    "volatility_penalty_threshold": 45.0,
-    "volatility_penalty_factor": 0.05,
-    "min_trades_threshold": 8,
-    "min_trades_penalty_factor": 0.8,
+    "excess_return": float(getattr(CONFIG, 'BACKTEST_WEIGHT_EXCESS_RETURN', 0.35)),
+    "total_return": float(getattr(CONFIG, 'BACKTEST_WEIGHT_TOTAL_RETURN', 0.10)),
+    "sharpe_ratio": float(getattr(CONFIG, 'BACKTEST_WEIGHT_SHARPE', 12.0)),
+    "sortino_ratio": float(getattr(CONFIG, 'BACKTEST_WEIGHT_SORTINO', 6.0)),
+    "information_ratio": float(getattr(CONFIG, 'BACKTEST_WEIGHT_IR', 4.0)),
+    "calmar_ratio": float(getattr(CONFIG, 'BACKTEST_WEIGHT_CALMAR', 5.0)),
+    "win_rate": float(getattr(CONFIG, 'BACKTEST_WEIGHT_WIN_RATE', 25.0)),
+    "profit_factor": float(getattr(CONFIG, 'BACKTEST_WEIGHT_PF', 3.0)),
+    "avg_fold_accuracy": float(getattr(CONFIG, 'BACKTEST_WEIGHT_ACCURACY', 20.0)),
+    "max_drawdown_penalty": float(getattr(CONFIG, 'BACKTEST_PENALTY_DD', 0.60)),
+    "volatility_penalty_threshold": float(getattr(CONFIG, 'BACKTEST_PENALTY_VOL_THRESH', 45.0)),
+    "volatility_penalty_factor": float(getattr(CONFIG, 'BACKTEST_PENALTY_VOL_FACTOR', 0.05)),
+    "min_trades_threshold": float(getattr(CONFIG, 'BACKTEST_PENALTY_TRADES_MIN', 8.0)),
+    "min_trades_penalty_factor": float(getattr(CONFIG, 'BACKTEST_PENALTY_TRADES_FACTOR', 0.8)),
 }
 
 @dataclass
@@ -63,6 +64,8 @@ class SlippageModel:
         division by near-zero values producing unexpectedly large slippage.
         FIX #6: Increased threshold from 100.0 to 10000.0 for more conservative
         slippage calculation on low-volume stocks.
+        FIX 2026-02-25: Added explicit check for daily_value < 1.0 to handle
+        extreme edge cases with very low-priced stocks.
         """
         # Validate inputs - check for zero/negative/NaN/Inf values
         if daily_volume <= 0 or daily_avg_price <= 0:
@@ -72,10 +75,13 @@ class SlippageModel:
 
         daily_value = daily_volume * daily_avg_price
 
-        # FIX #6: Prevent division by very small values
+        # FIX #6 + 2026-02-25: Prevent division by very small values
         # Use a more conservative threshold (10000.0) to avoid edge cases
         # where small daily_value produces unexpectedly large slippage
         if daily_value < 10000.0:
+            # For extreme low-value cases (< 1.0), use maximum slippage
+            if daily_value < 1.0:
+                return 0.05  # 5% maximum slippage
             # Cap slippage at 5% for very low liquidity
             return min(self.base_slippage * 5, 0.05)
 

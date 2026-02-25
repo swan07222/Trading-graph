@@ -208,13 +208,18 @@ class EventBus:
         blocking operations that could deadlock the event bus worker thread.
         Long-running handlers should use async execution or background threads.
 
-        FIX #1: Use class-level lock for error depth tracking instead of
+        FIX #2: Use class-level lock for error depth tracking instead of
         thread-local storage to prevent race conditions and ensure reliable
         recursion prevention across all thread configurations.
+        FIX #2b: Release _sub_lock before calling handlers to prevent deadlock
+        when handlers try to subscribe/unsubscribe during dispatch.
         """
+        # Get handlers under lock, but release lock before calling them
         with self._sub_lock:
             handlers = self._subscribers.get(event.type, []).copy()
 
+        # Call handlers OUTSIDE the lock to prevent deadlock
+        # This allows handlers to safely subscribe/unsubscribe during dispatch
         for handler in handlers:
             try:
                 handler(event)
