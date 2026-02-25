@@ -67,6 +67,25 @@ def test_get_universe_codes_refreshes_when_cached_source_is_fallback(monkeypatch
     assert str(saved.get("source", "")) == "akshare_spot_em"
 
 
+def test_persist_runtime_universe_codes_merges_existing(monkeypatch) -> None:
+    existing = {
+        "codes": ["600001", "600002"],
+        "source": "akshare_spot_em",
+    }
+    saved: dict[str, object] = {}
+    monkeypatch.setattr(universe_mod, "load_universe", lambda: dict(existing))
+    monkeypatch.setattr(universe_mod, "save_universe", lambda data: saved.update(dict(data)))
+
+    out = universe_mod.persist_runtime_universe_codes(
+        ["600002", "000001"],
+        source="ui_universe_refresh",
+    )
+
+    assert sorted(out.get("codes", [])) == ["000001", "600001", "600002"]
+    assert sorted(saved.get("codes", [])) == ["000001", "600001", "600002"]
+    assert str(saved.get("source", "")) == "ui_universe_refresh"
+
+
 @pytest.mark.skipif(not universe_mod._HAS_PANDAS, reason="pandas unavailable")
 def test_get_new_listings_suppresses_datetime_infer_warning(monkeypatch) -> None:
     import pandas as pd

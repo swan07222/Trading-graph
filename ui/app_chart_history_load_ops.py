@@ -164,13 +164,17 @@ def _load_chart_history_bars(
     lookback_bars: int,
     _recursion_depth: int = 0,
 ) -> list[dict[str, Any]]:
-    """Load historical OHLC bars for chart rendering with direct online fetch only."""
+    """Load historical OHLC bars for chart rendering with cache fallback."""
     _ = _recursion_depth
     if not self.predictor:
         return []
     try:
         fetcher = getattr(self.predictor, "fetcher", None)
         if fetcher is None:
+            # Fallback to _bars_by_symbol cache if fetcher unavailable
+            arr = list(self._bars_by_symbol.get(symbol) or [])
+            if arr:
+                return arr[-max(1, int(lookback_bars)):]
             return []
 
         requested_iv = self._normalize_interval_token(interval)
@@ -218,18 +222,55 @@ def _load_chart_history_bars(
                 int((days_back + 2) * max(1.0, bpd)),
             )
 
+        # FIX: Try cache first for faster response and reliability
         df = _fetch_chart_history_frame(
             fetcher,
             symbol,
             source_iv=source_iv,
             bars=source_lookback,
-            use_cache=False,
+            use_cache=True,  # Enable cache for fallback reliability
             update_db=True,
             allow_online=True,
             refresh_intraday_after_close=True,
         )
+        
+        # FIX: If online fetch fails, try multiple fallbacks
         if df is None or df.empty:
-            return []
+            # Fallback 1: Try session cache directly
+            try:
+                from data.session_cache import get_session_bar_cache
+                cache = get_session_bar_cache()
+                session_bars = cache.read_history(
+                    symbol=symbol,
+                    interval=source_iv,
+                    bars=source_lookback,
+                )
+                if session_bars is not None and not session_bars.empty:
+                    df = session_bars
+                    log.debug(
+                        "Chart history fallback to session cache for %s (%s): %d bars",
+                        symbol, source_iv, len(df)
+                    )
+            except _APP_CHART_RECOVERABLE_EXCEPTIONS as exc:
+                log.debug("Session cache fallback failed for %s: %s", symbol, exc)
+            
+            # Fallback 2: Use _bars_by_symbol if available
+            if df is None or df.empty:
+                arr = list(self._bars_by_symbol.get(symbol) or [])
+                if arr:
+                    log.debug(
+                        "Chart history fallback to _bars_by_symbol for %s (%s): %d bars",
+                        symbol, source_iv, len(arr)
+                    )
+                    return arr[-max(1, int(lookback_bars)):]
+            
+            # Fallback 3: Return empty if all sources failed
+            if df is None or df.empty:
+                log.debug(
+                    "Chart history unavailable for %s (%s): all sources failed",
+                    symbol, source_iv
+                )
+                return []
 
         out: list[dict[str, Any]] = []
         _append_normalized_chart_rows(

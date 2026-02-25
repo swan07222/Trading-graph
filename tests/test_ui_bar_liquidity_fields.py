@@ -205,3 +205,109 @@ def test_on_bar_ui_does_not_double_count_same_source_minute_updates() -> None:
     # same-source duplicate minute should contribute max(100,120,110) = 120 once
     assert abs(float(row.get("volume", 0.0)) - 180.0) < 1e-9
     assert abs(float(row.get("amount", 0.0)) - 1818.0) < 1e-9
+
+
+class _DummyScrubApp:
+    _scrub_chart_bars = _app_bar_ops._scrub_chart_bars
+    _ui_norm = MainAppCommonMixin._ui_norm
+
+    @staticmethod
+    def _normalize_interval_token(value: str, fallback: str = "1m") -> str:
+        v = str(value or fallback).strip().lower()
+        return v or str(fallback)
+
+    @staticmethod
+    def _prepare_chart_bars_for_interval(
+        bars: list[dict], _interval: str, *, symbol: str = ""
+    ) -> list[dict]:
+        _ = symbol
+        return list(bars or [])
+
+    @staticmethod
+    def _rescale_chart_bars_to_anchor(
+        bars: list[dict], *, anchor_price=None, interval: str, symbol: str = ""
+    ) -> list[dict]:
+        _ = (anchor_price, interval, symbol)
+        return list(bars or [])
+
+    @staticmethod
+    def _bar_safety_caps(_interval: str) -> tuple[float, float]:
+        return (0.08, 0.006)
+
+    @staticmethod
+    def _recover_chart_bars_from_close(
+        bars: list[dict], *, interval: str, symbol: str = "", anchor_price=None
+    ) -> list[dict]:
+        _ = (bars, interval, symbol, anchor_price)
+        return [
+            {
+                "open": 10.0,
+                "high": 10.1,
+                "low": 9.9,
+                "close": 10.0,
+                "interval": "1m",
+                "timestamp": "2026-02-20T09:31:00+08:00",
+            }
+        ]
+
+    @staticmethod
+    def _debug_console(*_args, **_kwargs) -> None:
+        return
+
+
+def test_scrub_chart_bars_uses_recovery_when_extreme_ratio_high() -> None:
+    app = _DummyScrubApp()
+    bars: list[dict] = []
+    for i in range(30):
+        close = 10.0 + (0.01 * i)
+        if i % 6 == 0:
+            # Inject an extreme malformed bar.
+            bars.append(
+                {
+                    "open": close,
+                    "high": close * 2.0,
+                    "low": close * 0.2,
+                    "close": close,
+                    "interval": "1m",
+                }
+            )
+        else:
+            bars.append(
+                {
+                    "open": close * 0.999,
+                    "high": close * 1.002,
+                    "low": close * 0.998,
+                    "close": close,
+                    "interval": "1m",
+                }
+            )
+
+    out = app._scrub_chart_bars(bars, "1m", symbol="600519", anchor_price=10.0)
+
+    assert len(out) == 1
+    assert abs(float(out[0]["close"]) - 10.0) < 1e-9
+
+
+def test_scrub_chart_bars_recovers_when_prepare_returns_empty() -> None:
+    class _EmptyPrepApp(_DummyScrubApp):
+        @staticmethod
+        def _prepare_chart_bars_for_interval(
+            bars: list[dict], _interval: str, *, symbol: str = ""
+        ) -> list[dict]:
+            _ = (bars, symbol)
+            return []
+
+    app = _EmptyPrepApp()
+    raw = [
+        {
+            "open": 10.0,
+            "high": 10.2,
+            "low": 9.8,
+            "close": 10.1,
+            "interval": "1m",
+        }
+    ]
+    out = app._scrub_chart_bars(raw, "1m", symbol="600519", anchor_price=10.0)
+
+    assert len(out) == 1
+    assert abs(float(out[0]["close"]) - 10.0) < 1e-9

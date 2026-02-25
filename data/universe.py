@@ -74,6 +74,31 @@ def save_universe(data: dict) -> None:
             log.warning(f"Failed to save universe: {exc}")
 
 
+def persist_runtime_universe_codes(
+    codes: list[str] | tuple[str, ...] | set[str],
+    *,
+    source: str = "runtime_refresh",
+) -> dict:
+    """Persist a continuously updated universe snapshot to disk.
+
+    Merges incoming codes with the existing file so transient partial
+    refreshes do not erase previously discovered symbols.
+    """
+    incoming = _validate_codes(list(codes or []))
+    existing = load_universe()
+    existing_codes = _validate_codes(list(existing.get("codes") or []))
+    merged = _validate_codes(existing_codes + incoming)
+    payload = {
+        "codes": merged,
+        "updated_ts": time.time(),
+        "updated_at": datetime.now().isoformat(),
+        "source": str(source or existing.get("source") or "runtime_refresh"),
+    }
+    if merged:
+        save_universe(payload)
+    return payload
+
+
 def _parse_updated_ts(data: dict) -> float:
     raw = data.get("updated_ts")
     if raw is None:

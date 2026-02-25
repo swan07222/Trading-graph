@@ -104,7 +104,11 @@ def _refresh_universe_catalog(self: Any, *, force: bool = False) -> None:
 
     def load_universe() -> dict[str, Any]:
         from data.fetcher import get_spot_cache
-        from data.universe import get_new_listings, get_universe_codes
+        from data.universe import (
+            get_new_listings,
+            get_universe_codes,
+            persist_runtime_universe_codes,
+        )
 
         max_age_h = 0.15 if not force else 0.0
         codes_raw = list(
@@ -151,6 +155,15 @@ def _refresh_universe_catalog(self: Any, *, force: bool = False) -> None:
                     continue
                 seen.add(code)
                 ordered.append(code)
+
+        if ordered:
+            try:
+                persist_runtime_universe_codes(
+                    ordered,
+                    source="ui_universe_refresh",
+                )
+            except _UI_RECOVERABLE_EXCEPTIONS as exc:
+                log.debug("Universe runtime persistence skipped: %s", exc)
 
         try:
             spot_df = get_spot_cache().get(force_refresh=bool(force))

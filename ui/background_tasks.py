@@ -328,7 +328,7 @@ class WorkerThread(QThread):
                 return
             self.result.emit(out)
 
-        except _MONITOR_RECOVERABLE_EXCEPTIONS as e:
+        except Exception as e:
             if not self._cancelled:
                 self.error.emit(str(e))
 
@@ -339,4 +339,3 @@ class WorkerThread(QThread):
             self.requestInterruption()
         except RuntimeError:
             pass
-

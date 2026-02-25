@@ -1013,10 +1013,89 @@ def _scrub_chart_bars(
             interval=iv,
             symbol=symbol,
         )
+        sample = list(arr_out[-min(320, len(arr_out)):])
+        if len(sample) >= 20:
+            jump_cap, range_cap = self._bar_safety_caps(iv)
+            intraday = iv not in ("1d", "1wk", "1mo")
+            body_cap = float(max(range_cap * 3.5, 0.08 if intraday else 0.45))
+            span_cap = float(max(range_cap * 5.0, 0.12 if intraday else 0.65))
+            jump_guard = float(max(jump_cap * 2.8, 0.20 if intraday else 0.55))
+
+            extreme = 0
+            parsed = 0
+            prev_close: float | None = None
+            for row in sample:
+                try:
+                    o = float(row.get("open", 0) or 0)
+                    h = float(row.get("high", 0) or 0)
+                    low = float(row.get("low", 0) or 0)
+                    c = float(row.get("close", 0) or 0)
+                except _APP_SOFT_EXCEPTIONS:
+                    continue
+                if (
+                    c <= 0
+                    or not all(math.isfinite(v) for v in (o, h, low, c))
+                ):
+                    continue
+                parsed += 1
+                ref = float(prev_close if prev_close and prev_close > 0 else c)
+                body = abs(o - c) / max(ref, 1e-8)
+                span = abs(h - low) / max(ref, 1e-8)
+                jump = (
+                    abs(c / max(float(prev_close), 1e-8) - 1.0)
+                    if prev_close and prev_close > 0
+                    else 0.0
+                )
+                if body > body_cap or span > span_cap or jump > jump_guard:
+                    extreme += 1
+                prev_close = float(c)
+
+            extreme_ratio = (
+                float(extreme) / float(max(1, parsed))
+                if parsed > 0
+                else 0.0
+            )
+            if parsed >= 20 and extreme_ratio >= 0.08:
+                recovered = self._recover_chart_bars_from_close(
+                    arr_in,
+                    interval=iv,
+                    symbol=symbol,
+                    anchor_price=anchor_price,
+                )
+                if recovered:
+                    sym = self._ui_norm(symbol)
+                    self._debug_console(
+                        f"chart_scrub_recover:{sym or 'active'}:{iv}",
+                        (
+                            f"switched to close-based recovery for {sym or '--'} {iv}: "
+                            f"extreme={extreme}/{parsed} ratio={extreme_ratio:.1%}"
+                        ),
+                        min_gap_seconds=0.8,
+                        level="warning",
+                    )
+                    arr_out = recovered
     if arr_in and not arr_out:
         log.warning(
             f"Chart scrub rejected all {len(arr_in)} bars for {self._ui_norm(symbol) or '--'} {iv}"
         )
+        recovered = self._recover_chart_bars_from_close(
+            arr_in,
+            interval=iv,
+            symbol=symbol,
+            anchor_price=anchor_price,
+        )
+        if recovered:
+            sym = self._ui_norm(symbol)
+            self._debug_console(
+                f"chart_scrub_recover_empty:{sym or 'active'}:{iv}",
+                (
+                    f"chart scrub empty -> recovered bars: symbol={sym or '--'} "
+                    f"iv={iv} recovered={len(recovered)} raw={len(arr_in)}"
+                ),
+                min_gap_seconds=0.8,
+                level="warning",
+            )
+            return recovered
         sym = self._ui_norm(symbol)
         self._debug_console(
             f"chart_scrub_empty:{sym or 'active'}:{iv}",

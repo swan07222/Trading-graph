@@ -13,13 +13,14 @@ Features:
 """
 
 import hashlib
+import html
 import json
+import re
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote_plus
 
 import requests
 
@@ -106,6 +107,8 @@ class NewsCollector:
         "marketwatch",
         "cnbc",
     ]
+    _MIN_HEALTH_FOR_IMMEDIATE_RETRY = 0.20
+    _MAX_SOURCE_COOLDOWN_SECONDS = 1800.0
 
     # Search keywords for policy/regulatory news
     POLICY_KEYWORDS_ZH = [
@@ -147,6 +150,7 @@ class NewsCollector:
         # Source availability cache
         self._source_health: dict[str, float] = {}  # source -> health score (0-1)
         self._last_health_check: dict[str, float] = {}  # source -> last check timestamp
+        self._source_failures: dict[str, int] = {}  # source -> consecutive failure count
 
     def _setup_proxy(self) -> None:
         """Configure proxy based on VPN status."""
@@ -239,6 +243,8 @@ class NewsCollector:
         for source in active_sources:
             if len(articles) >= limit:
                 break
+            if self._is_source_temporarily_disabled(source):
+                continue
 
             try:
                 source_articles = self._fetch_from_source(
@@ -267,6 +273,122 @@ class NewsCollector:
 
         log.info(f"Collected {len(articles)} unique articles")
         return articles
+
+    def _source_cooldown_seconds(self, source: str) -> float:
+        """Dynamic source cooldown based on consecutive failures."""
+        failures = int(self._source_failures.get(source, 0) or 0)
+        if failures <= 0:
+            return 0.0
+        # 30s, 60s, 120s ... up to 30 minutes.
+        return float(
+            min(
+                self._MAX_SOURCE_COOLDOWN_SECONDS,
+                30.0 * float(2 ** min(6, failures - 1)),
+            )
+        )
+
+    def _is_source_temporarily_disabled(self, source: str) -> bool:
+        """Skip repeatedly failing sources for a short cooldown window."""
+        health = float(self._source_health.get(source, 0.5) or 0.5)
+        if health >= self._MIN_HEALTH_FOR_IMMEDIATE_RETRY:
+            return False
+        last_check = float(self._last_health_check.get(source, 0.0) or 0.0)
+        if last_check <= 0:
+            return False
+        cooldown = self._source_cooldown_seconds(source)
+        if cooldown <= 0:
+            return False
+        age = float(time.time()) - last_check
+        if age >= cooldown:
+            return False
+        log.debug(
+            "Skipping source %s during cooldown (health=%.2f, retry_in=%.0fs)",
+            source,
+            health,
+            max(0.0, cooldown - age),
+        )
+        return True
+
+    @staticmethod
+    def _clean_text(value: object) -> str:
+        """Normalize text payload from mixed HTML/JSON content."""
+        text = str(value or "")
+        if not text:
+            return ""
+        text = re.sub(r"<[^>]+>", " ", text)
+        text = html.unescape(text)
+        text = re.sub(r"\s+", " ", text)
+        return text.strip()
+
+    @staticmethod
+    def _parse_datetime(value: object) -> datetime | None:
+        """Best-effort parser for timestamp-like values."""
+        if value is None:
+            return None
+        if isinstance(value, datetime):
+            return value
+        raw = str(value).strip()
+        if not raw:
+            return None
+        if raw.isdigit():
+            try:
+                iv = int(raw)
+                if iv > 2_000_000_000_000:
+                    return datetime.fromtimestamp(iv / 1000.0)
+                if iv > 0:
+                    return datetime.fromtimestamp(iv)
+            except Exception:
+                pass
+        for fmt in (
+            "%Y-%m-%d %H:%M:%S",
+            "%Y-%m-%d %H:%M",
+            "%Y/%m/%d %H:%M:%S",
+            "%Y/%m/%d %H:%M",
+            "%Y-%m-%d",
+        ):
+            try:
+                return datetime.strptime(raw[:19], fmt)
+            except ValueError:
+                continue
+        try:
+            return datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        except Exception:
+            return None
+
+    @staticmethod
+    def _decode_json_payload(payload: object) -> object | None:
+        """Parse direct JSON and JSONP wrappers into Python objects."""
+        text = str(payload or "").strip().lstrip("\ufeff")
+        if not text:
+            return None
+
+        candidates: list[str] = [text]
+        m_jsonp = re.match(
+            r"^\s*[\w\.$]+\s*\(\s*(?P<body>[\s\S]+)\s*\)\s*;?\s*$",
+            text,
+        )
+        if m_jsonp:
+            body = str(m_jsonp.group("body") or "").strip()
+            if body:
+                candidates.append(body)
+
+        for left, right in (("{", "}"), ("[", "]")):
+            li = text.find(left)
+            ri = text.rfind(right)
+            if li >= 0 and ri > li:
+                candidates.append(text[li : ri + 1])
+
+        seen: set[str] = set()
+        for candidate in candidates:
+            chunk = str(candidate or "").strip()
+            if not chunk or chunk in seen:
+                continue
+            seen.add(chunk)
+            try:
+                return json.loads(chunk)
+            except Exception:
+                continue
+        return None
 
     def _fetch_from_source(
         self,
@@ -357,63 +479,174 @@ class NewsCollector:
         start_time: datetime,
         limit: int,
     ) -> list[NewsArticle]:
-        """Fetch from EastMoney (东方财富网)."""
-        articles = []
-
-        # EastMoney API endpoint
-        search_term = keywords[0] if keywords else "股票"
-        url = "https://search-api-web.eastmoney.com/search/json"
-        params = {
-            "keyword": quote_plus(search_term),
-            "type": "cmsArticle",
-            "page": 1,
-            "pagesize": limit,
-        }
+        """Fetch from EastMoney with JSONP and HTML fallback."""
+        articles: list[NewsArticle] = []
+        seen_titles: set[str] = set()
 
         try:
-            resp = self._session.get(url, params=params, timeout=10)
+            search_term = str((keywords or ["stock"])[0] or "stock")
+            url = "https://search-api-web.eastmoney.com/search/jsonp"
+            params = {
+                "cb": "jQuery",
+                "param": json.dumps(
+                    {
+                        "uid": "",
+                        "keyword": search_term,
+                        "type": ["cmsArticleWebOld", "cmsArticleWeb"],
+                        "client": "web",
+                        "clientType": "web",
+                        "clientVersion": "curr",
+                        "param": {
+                            "cmsArticleWebOld": {
+                                "searchScope": "default",
+                                "sort": "default",
+                                "pageIndex": 1,
+                                "pageSize": int(max(1, limit)),
+                            },
+                            "cmsArticleWeb": {
+                                "searchScope": "default",
+                                "sort": "default",
+                                "pageIndex": 1,
+                                "pageSize": int(max(1, limit)),
+                            },
+                        },
+                    },
+                    ensure_ascii=False,
+                ),
+            }
+
+            resp = self._session.get(
+                url,
+                params=params,
+                timeout=8,
+                headers={"Referer": "https://www.eastmoney.com/"},
+            )
             resp.raise_for_status()
-            data = resp.json()
+            data = self._decode_json_payload(resp.text)
 
-            for item in data.get("Result", [])[:limit]:
-                title = item.get("Title", "")
-                content = item.get("Content", "")
-                url = item.get("Url", "")
-                pub_time = item.get("ShowTime", "")
+            rows: list[dict[str, Any]] = []
+            if isinstance(data, dict):
+                candidates = [
+                    data.get("result", {}).get("cmsArticleWebOld", {}).get("list", []),
+                    data.get("result", {}).get("cmsArticleWeb", {}).get("list", []),
+                    data.get("result", {}).get("news", {}).get("list", []),
+                    data.get("data", {}).get("list", []),
+                    data.get("list", []),
+                ]
+                for candidate in candidates:
+                    if isinstance(candidate, list) and candidate:
+                        rows = [row for row in candidate if isinstance(row, dict)]
+                        if rows:
+                            break
 
+            for item in rows[: int(max(1, limit * 2))]:
+                title = self._clean_text(
+                    item.get("title")
+                    or item.get("Title")
+                    or item.get("name")
+                    or item.get("headline")
+                    or ""
+                )
                 if not title:
                     continue
+                title_key = title.lower()
+                if title_key in seen_titles:
+                    continue
+                seen_titles.add(title_key)
 
-                try:
-                    published_at = datetime.fromisoformat(pub_time.replace("Z", "+00:00"))
-                except Exception:
-                    published_at = datetime.now()
-
+                published_at = (
+                    self._parse_datetime(
+                        item.get("date")
+                        or item.get("publish_time")
+                        or item.get("showTime")
+                        or item.get("ShowTime")
+                        or item.get("ctime")
+                    )
+                    or datetime.now()
+                )
                 if published_at < start_time:
                     continue
 
-                article_id = self._generate_id(f"eastmoney_{title}")
-                articles.append(NewsArticle(
-                    id=article_id,
-                    title=title,
-                    content=content or title,
-                    summary=title[:200],
-                    source="eastmoney",
-                    url=url,
-                    published_at=published_at,
-                    collected_at=datetime.now(),
-                    language="zh",
-                    category="market",
-                    tags=["eastmoney"],
-                ))
+                content = self._clean_text(
+                    item.get("content")
+                    or item.get("Content")
+                    or item.get("summary")
+                    or item.get("mediaName")
+                    or title
+                )
+                article_url = str(
+                    item.get("url")
+                    or item.get("Url")
+                    or item.get("link")
+                    or ""
+                ).strip()
 
-            self._update_source_health("eastmoney", success=True)
+                article_id = self._generate_id(f"eastmoney_{title}")
+                articles.append(
+                    NewsArticle(
+                        id=article_id,
+                        title=title,
+                        content=content or title,
+                        summary=(content or title)[:200],
+                        source="eastmoney",
+                        url=article_url,
+                        published_at=published_at,
+                        collected_at=datetime.now(),
+                        language="zh",
+                        category="market",
+                        tags=["eastmoney"],
+                    )
+                )
+                if len(articles) >= int(limit):
+                    break
+
+            if len(articles) < int(limit):
+                html_resp = self._session.get(
+                    "https://finance.eastmoney.com/",
+                    timeout=8,
+                )
+                html_resp.raise_for_status()
+                for match in re.finditer(
+                    r"<a[^>]+href=[\"'](?P<url>[^\"']+)[\"'][^>]*>(?P<title>.*?)</a>",
+                    str(html_resp.text or ""),
+                    flags=re.IGNORECASE | re.DOTALL,
+                ):
+                    title = self._clean_text(match.group("title"))
+                    if len(title) < 8:
+                        continue
+                    title_key = title.lower()
+                    if title_key in seen_titles:
+                        continue
+                    seen_titles.add(title_key)
+                    article_url = str(match.group("url") or "").strip()
+                    if article_url.startswith("/"):
+                        article_url = f"https://finance.eastmoney.com{article_url}"
+                    article_id = self._generate_id(f"eastmoney_html_{title}")
+                    articles.append(
+                        NewsArticle(
+                            id=article_id,
+                            title=title,
+                            content=title,
+                            summary=title[:200],
+                            source="eastmoney",
+                            url=article_url,
+                            published_at=datetime.now(),
+                            collected_at=datetime.now(),
+                            language="zh",
+                            category="market",
+                            tags=["eastmoney", "html_fallback"],
+                        )
+                    )
+                    if len(articles) >= int(limit):
+                        break
+
+            self._update_source_health("eastmoney", success=bool(articles))
 
         except Exception as e:
-            log.error(f"EastMoney fetch failed: {e}")
+            log.debug("EastMoney fetch degraded: %s", e)
             self._update_source_health("eastmoney", success=False)
 
-        return articles
+        return articles[: int(limit)]
 
     def _fetch_sina_finance(
         self,
@@ -494,58 +727,121 @@ class NewsCollector:
         start_time: datetime,
         limit: int,
     ) -> list[NewsArticle]:
-        """Fetch from Caixin."""
-        articles = []
-        url = "https://api.caixin.com/api/content/list"
-        params = {
-            "columnid": "20",  # Finance
-            "num": limit,
-        }
+        """Fetch from Caixin Global homepage links (API endpoint is unstable)."""
+        articles: list[NewsArticle] = []
+        seen_titles: set[str] = set()
+        keyword_set = [str(k).strip().lower() for k in (keywords or []) if str(k).strip()]
 
         try:
-            resp = self._session.get(url, params=params, timeout=10)
-            resp.raise_for_status()
-            data = resp.json()
+            url = "https://api.caixin.com/api/content/list"
+            params = {
+                "columnid": "20",
+                "num": int(max(1, limit)),
+            }
+            try:
+                resp = self._session.get(url, params=params, timeout=6)
+                if resp.status_code < 400:
+                    payload = self._decode_json_payload(resp.text)
+                else:
+                    payload = None
+            except Exception:
+                payload = None
 
-            for item in data.get("data", {}).get("list", [])[:limit]:
-                title = item.get("title", "")
-                content = item.get("content", "")
-                url = item.get("url", "")
-                pub_time = item.get("time", "")
+            if isinstance(payload, dict):
+                rows = payload.get("data", {}).get("list", [])
+                if isinstance(rows, list):
+                    for item in rows:
+                        if not isinstance(item, dict):
+                            continue
+                        title = self._clean_text(item.get("title", ""))
+                        if not title:
+                            continue
+                        title_key = title.lower()
+                        if title_key in seen_titles:
+                            continue
+                        seen_titles.add(title_key)
+                        published_at = self._parse_datetime(item.get("time")) or datetime.now()
+                        if published_at < start_time:
+                            continue
+                        content = self._clean_text(item.get("content") or title)
+                        article_url = str(item.get("url", "") or "").strip()
+                        articles.append(
+                            NewsArticle(
+                                id=self._generate_id(f"caixin_api_{title}"),
+                                title=title,
+                                content=content,
+                                summary=content[:200],
+                                source="caixin",
+                                url=article_url,
+                                published_at=published_at,
+                                collected_at=datetime.now(),
+                                language="zh",
+                                category="market",
+                                tags=["caixin", "api"],
+                            )
+                        )
+                        if len(articles) >= int(limit):
+                            break
 
-                if not title:
-                    continue
+            if len(articles) < int(limit):
+                home = self._session.get(
+                    "https://www.caixinglobal.com/",
+                    timeout=8,
+                    headers={"Referer": "https://www.caixinglobal.com/"},
+                )
+                home.raise_for_status()
+                text = str(home.text or "")
+                link_pattern = re.compile(
+                    r"<a[^>]+href=[\"'](?P<url>https?://www\.caixinglobal\.com/(?P<date>\d{4}-\d{2}-\d{2})/[^\"']+?\.html)[\"'][^>]*>(?P<title>.*?)</a>",
+                    flags=re.IGNORECASE | re.DOTALL,
+                )
+                for match in link_pattern.finditer(text):
+                    title = self._clean_text(match.group("title"))
+                    if len(title) < 8:
+                        continue
+                    title_key = title.lower()
+                    if title_key in seen_titles:
+                        continue
+                    if keyword_set:
+                        t_low = title.lower()
+                        if not any(k in t_low for k in keyword_set):
+                            continue
+                    seen_titles.add(title_key)
 
-                try:
-                    published_at = datetime.fromisoformat(pub_time)
-                except Exception:
-                    published_at = datetime.now()
+                    raw_date = str(match.group("date") or "")
+                    try:
+                        published_at = datetime.strptime(raw_date, "%Y-%m-%d")
+                    except Exception:
+                        published_at = datetime.now()
+                    if published_at < start_time:
+                        continue
 
-                if published_at < start_time:
-                    continue
+                    article_url = str(match.group("url") or "").strip()
+                    articles.append(
+                        NewsArticle(
+                            id=self._generate_id(f"caixin_home_{title}"),
+                            title=title,
+                            content=title,
+                            summary=title[:200],
+                            source="caixin",
+                            url=article_url,
+                            published_at=published_at,
+                            collected_at=datetime.now(),
+                            language="en",
+                            category="market",
+                            tags=["caixin", "homepage"],
+                        )
+                    )
+                    if len(articles) >= int(limit):
+                        break
 
-                article_id = self._generate_id(f"caixin_{title}")
-                articles.append(NewsArticle(
-                    id=article_id,
-                    title=title,
-                    content=content or title,
-                    summary=title[:200],
-                    source="caixin",
-                    url=url,
-                    published_at=published_at,
-                    collected_at=datetime.now(),
-                    language="zh",
-                    category="market",
-                    tags=["caixin"],
-                ))
-
-            self._update_source_health("caixin", success=True)
+            self._update_source_health("caixin", success=bool(articles))
 
         except Exception as e:
-            log.error(f"Caixin fetch failed: {e}")
+            log.debug("Caixin fetch degraded: %s", e)
             self._update_source_health("caixin", success=False)
 
-        return articles
+        return articles[: int(limit)]
 
     def _fetch_csrc(
         self,
@@ -701,12 +997,14 @@ class NewsCollector:
     def _update_source_health(self, source: str, success: bool) -> None:
         """Update source health score."""
         now = time.time()
-        current_health = self._source_health.get(source, 0.5)
+        current_health = float(self._source_health.get(source, 0.5) or 0.5)
 
         if success:
             new_health = min(1.0, current_health + 0.1)
+            self._source_failures[source] = 0
         else:
             new_health = max(0.0, current_health - 0.2)
+            self._source_failures[source] = int(self._source_failures.get(source, 0) or 0) + 1
 
         self._source_health[source] = new_health
         self._last_health_check[source] = now

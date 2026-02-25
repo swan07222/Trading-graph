@@ -1242,76 +1242,124 @@ class MainApp(MainAppCommonMixin, QMainWindow):
         self.log("Order updates are disabled in this build.", "info")
 
     def _refresh_sentiment(self) -> None:
-        """Refresh sentiment analysis display."""
-        try:
+        """Refresh sentiment analysis display asynchronously."""
+        if not hasattr(self, "sentiment_labels"):
+            return
+        existing = self.workers.get("sentiment_refresh")
+        if existing and existing.isRunning():
+            return
+
+        def _set_na() -> None:
+            self.sentiment_labels["overall"].setText("N/A")
+            self.sentiment_labels["policy"].setText("N/A")
+            self.sentiment_labels["market"].setText("N/A")
+            self.sentiment_labels["confidence"].setText("N/A")
+
+        def _set_zero() -> None:
+            self.sentiment_labels["overall"].setText("0.00")
+            self.sentiment_labels["policy"].setText("0.00")
+            self.sentiment_labels["market"].setText("0.00")
+            self.sentiment_labels["confidence"].setText("0%")
+
+        def _work() -> dict[str, Any]:
             from data.news_collector import get_collector
             from data.sentiment_analyzer import get_analyzer
 
             collector = get_collector()
             analyzer = get_analyzer()
-
-            # Collect recent news
             articles = collector.collect_news(limit=50, hours_back=24)
-
             if not articles:
-                # No articles - show zeros
-                self.sentiment_labels["overall"].setText("0.00")
-                self.sentiment_labels["policy"].setText("0.00")
-                self.sentiment_labels["market"].setText("0.00")
-                self.sentiment_labels["confidence"].setText("0%")
+                return {"empty": True, "entities": []}
+
+            sentiment = analyzer.analyze_articles(articles, hours_back=24)
+            entities = analyzer.extract_entities(articles)
+            top_entities = []
+            for entity in sorted(
+                entities,
+                key=lambda x: getattr(x, "mention_count", 0),
+                reverse=True,
+            )[:10]:
+                top_entities.append(
+                    {
+                        "entity": str(getattr(entity, "entity", "")),
+                        "entity_type": str(getattr(entity, "entity_type", "")),
+                        "sentiment": float(getattr(entity, "sentiment", 0.0) or 0.0),
+                        "mention_count": int(getattr(entity, "mention_count", 0) or 0),
+                    }
+                )
+
+            return {
+                "empty": False,
+                "overall": float(getattr(sentiment, "overall", 0.0) or 0.0),
+                "policy": float(getattr(sentiment, "policy_impact", 0.0) or 0.0),
+                "market": float(getattr(sentiment, "market_sentiment", 0.0) or 0.0),
+                "confidence": float(getattr(sentiment, "confidence", 0.0) or 0.0),
+                "entities": top_entities,
+            }
+
+        worker = WorkerThread(_work, timeout_seconds=45)
+        self._track_worker(worker)
+
+        def _on_done(payload: Any) -> None:
+            self.workers.pop("sentiment_refresh", None)
+            if not isinstance(payload, dict):
+                _set_na()
+                return
+            if bool(payload.get("empty", False)):
+                _set_zero()
+                if hasattr(self, "entities_table") and self.entities_table:
+                    self.entities_table.setRowCount(0)
                 return
 
-            # Analyze sentiment
-            sentiment = analyzer.analyze_articles(articles, hours_back=24)
+            overall = float(payload.get("overall", 0.0) or 0.0)
+            policy = float(payload.get("policy", 0.0) or 0.0)
+            market = float(payload.get("market", 0.0) or 0.0)
+            confidence = float(payload.get("confidence", 0.0) or 0.0)
 
-            # Update labels
-            self.sentiment_labels["overall"].setText(f"{sentiment.overall:+.2f}")
-            self.sentiment_labels["policy"].setText(f"{sentiment.policy_impact:+.2f}")
-            self.sentiment_labels["market"].setText(f"{sentiment.market_sentiment:+.2f}")
-            self.sentiment_labels["confidence"].setText(f"{sentiment.confidence:.0%}")
+            self.sentiment_labels["overall"].setText(f"{overall:+.2f}")
+            self.sentiment_labels["policy"].setText(f"{policy:+.2f}")
+            self.sentiment_labels["market"].setText(f"{market:+.2f}")
+            self.sentiment_labels["confidence"].setText(f"{confidence:.0%}")
 
-            # Color code based on sentiment
-            if sentiment.overall > 0.3:
-                color = ModernColors.ACCENT_SUCCESS  # Green
-            elif sentiment.overall < -0.3:
-                color = ModernColors.ACCENT_DANGER  # Red
+            if overall > 0.3:
+                color = ModernColors.ACCENT_SUCCESS
+            elif overall < -0.3:
+                color = ModernColors.ACCENT_DANGER
             else:
-                color = ModernColors.TEXT_PRIMARY  # Neutral
-
+                color = ModernColors.TEXT_PRIMARY
             self.sentiment_labels["overall"].setStyleSheet(
                 f"color: {color}; "
                 f"font-size: {ModernFonts.SIZE_XXL}px; "
                 f"font-weight: {ModernFonts.WEIGHT_BOLD};"
             )
 
-            # Update entities table
             if hasattr(self, "entities_table") and self.entities_table:
-                entities = analyzer.extract_entities(articles)
                 self.entities_table.setRowCount(0)
-                for entity in sorted(entities, key=lambda x: x.mention_count, reverse=True)[:10]:
+                for entity in list(payload.get("entities", []) or []):
                     row = self.entities_table.rowCount()
                     self.entities_table.insertRow(row)
                     self.entities_table.setItem(
-                        row, 0, self._make_item(entity.entity)
+                        row, 0, self._make_item(str(entity.get("entity", "")))
                     )
                     self.entities_table.setItem(
-                        row, 1, self._make_item(entity.entity_type)
+                        row, 1, self._make_item(str(entity.get("entity_type", "")))
                     )
                     self.entities_table.setItem(
-                        row, 2, self._make_item(f"{entity.sentiment:+.2f}")
+                        row, 2, self._make_item(f"{float(entity.get('sentiment', 0.0) or 0.0):+.2f}")
                     )
                     self.entities_table.setItem(
-                        row, 3, self._make_item(str(entity.mention_count))
+                        row, 3, self._make_item(str(int(entity.get("mention_count", 0) or 0)))
                     )
 
-        except _UI_RECOVERABLE_EXCEPTIONS as exc:
-            log.debug("Sentiment refresh failed", exc_info=exc)
-            # Fallback - show zeros
-            if hasattr(self, "sentiment_labels"):
-                self.sentiment_labels["overall"].setText("N/A")
-                self.sentiment_labels["policy"].setText("N/A")
-                self.sentiment_labels["market"].setText("N/A")
-                self.sentiment_labels["confidence"].setText("N/A")
+        def _on_error(err: str) -> None:
+            self.workers.pop("sentiment_refresh", None)
+            log.debug("Sentiment refresh failed: %s", err)
+            _set_na()
+
+        worker.result.connect(_on_done)
+        worker.error.connect(_on_error)
+        self.workers["sentiment_refresh"] = worker
+        worker.start()
 
     # =========================================================================
     # =========================================================================
