@@ -338,7 +338,9 @@ def _load_chart_history_bars(
                 merged[key] = row
                 continue
 
-            # Same finality: prefer richer bar (volume) then later row.
+            # Same finality: prefer richer bar (volume). On ties, prefer
+            # later row so fresh session-cache corrections can replace stale
+            # DB values for the same timestamp bucket.
             try:
                 e_vol = float(existing.get("volume", 0) or 0)
             except _APP_CHART_RECOVERABLE_EXCEPTIONS:
@@ -347,8 +349,7 @@ def _load_chart_history_bars(
                 r_vol = float(row.get("volume", 0) or 0)
             except _APP_CHART_RECOVERABLE_EXCEPTIONS:
                 r_vol = 0.0
-            # Only replace DB bar when session cache has strictly higher volume.
-            if r_vol > e_vol:
+            if r_vol >= e_vol:
                 merged[key] = row
         out = list(merged.values())
         out.sort(

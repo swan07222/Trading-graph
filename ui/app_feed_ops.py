@@ -232,6 +232,7 @@ def _on_bar_ui(self, symbol: str, bar: dict[str, Any]) -> None:
     o, h, low, c = sanitized
 
     is_final = bool(bar.get("final", True))
+    source_bucket: float | None = None
     if aggregate_to_ui:
         try:
             source_bucket = self._bar_bucket_epoch(ts_epoch, source_interval)
@@ -254,6 +255,9 @@ def _on_bar_ui(self, symbol: str, bar: dict[str, Any]) -> None:
         "final": is_final,
         "interval": interval,
     }
+    if aggregate_to_ui and source_bucket is not None:
+        norm_bar["_src_bucket"] = int(source_bucket)
+        norm_bar["_src_interval"] = source_interval
     try:
         vol_val = float(bar.get("volume", 0) or 0.0)
     except _UI_RECOVERABLE_EXCEPTIONS:
@@ -338,24 +342,70 @@ def _on_bar_ui(self, symbol: str, bar: dict[str, Any]) -> None:
                 merged["final"] = bool(existing_final or is_final)
                 if ("volume" in norm_bar) or ("volume" in existing):
                     try:
-                        e_vol = float(existing.get("volume", 0) or 0.0)
-                    except _UI_RECOVERABLE_EXCEPTIONS:
-                        e_vol = 0.0
-                    try:
                         n_vol = float(norm_bar.get("volume", 0) or 0.0)
                     except _UI_RECOVERABLE_EXCEPTIONS:
                         n_vol = 0.0
-                    merged["volume"] = float(max(0.0, e_vol) + max(0.0, n_vol))
+                    if aggregate_to_ui and source_bucket is not None:
+                        try:
+                            e_vol = float(existing.get("volume", 0) or 0.0)
+                        except _UI_RECOVERABLE_EXCEPTIONS:
+                            e_vol = 0.0
+                        vol_map_raw = existing.get("_src_volume_map", {})
+                        vol_map: dict[str, float] = (
+                            dict(vol_map_raw)
+                            if isinstance(vol_map_raw, dict)
+                            else {}
+                        )
+                        if not vol_map and e_vol > 0:
+                            legacy_src = existing.get("_src_bucket", "legacy")
+                            vol_map[str(legacy_src)] = float(max(0.0, e_vol))
+                        src_key = str(int(source_bucket))
+                        prev_src = float(vol_map.get(src_key, 0.0) or 0.0)
+                        vol_map[src_key] = float(max(max(0.0, prev_src), max(0.0, n_vol)))
+                        merged["_src_volume_map"] = vol_map
+                        merged["volume"] = float(
+                            sum(max(0.0, float(v or 0.0)) for v in vol_map.values())
+                        )
+                    else:
+                        try:
+                            e_vol = float(existing.get("volume", 0) or 0.0)
+                        except _UI_RECOVERABLE_EXCEPTIONS:
+                            e_vol = 0.0
+                        merged["volume"] = float(max(0.0, e_vol) + max(0.0, n_vol))
                 if ("amount" in norm_bar) or ("amount" in existing):
-                    try:
-                        e_amt = float(existing.get("amount", 0) or 0.0)
-                    except _UI_RECOVERABLE_EXCEPTIONS:
-                        e_amt = 0.0
                     try:
                         n_amt = float(norm_bar.get("amount", 0) or 0.0)
                     except _UI_RECOVERABLE_EXCEPTIONS:
                         n_amt = 0.0
-                    merged["amount"] = float(max(0.0, e_amt) + max(0.0, n_amt))
+                    if aggregate_to_ui and source_bucket is not None:
+                        try:
+                            e_amt = float(existing.get("amount", 0) or 0.0)
+                        except _UI_RECOVERABLE_EXCEPTIONS:
+                            e_amt = 0.0
+                        amt_map_raw = existing.get("_src_amount_map", {})
+                        amt_map: dict[str, float] = (
+                            dict(amt_map_raw)
+                            if isinstance(amt_map_raw, dict)
+                            else {}
+                        )
+                        if not amt_map and e_amt > 0:
+                            legacy_src = existing.get("_src_bucket", "legacy")
+                            amt_map[str(legacy_src)] = float(max(0.0, e_amt))
+                        src_key = str(int(source_bucket))
+                        prev_src_amt = float(amt_map.get(src_key, 0.0) or 0.0)
+                        amt_map[src_key] = float(
+                            max(max(0.0, prev_src_amt), max(0.0, n_amt))
+                        )
+                        merged["_src_amount_map"] = amt_map
+                        merged["amount"] = float(
+                            sum(max(0.0, float(v or 0.0)) for v in amt_map.values())
+                        )
+                    else:
+                        try:
+                            e_amt = float(existing.get("amount", 0) or 0.0)
+                        except _UI_RECOVERABLE_EXCEPTIONS:
+                            e_amt = 0.0
+                        merged["amount"] = float(max(0.0, e_amt) + max(0.0, n_amt))
                 arr[i] = merged
             else:
                 arr[i] = norm_bar

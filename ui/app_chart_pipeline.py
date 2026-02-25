@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import math
 import time
-from statistics import median
 from typing import Any
 
 from PyQt6.QtWidgets import QTableWidgetItem
@@ -894,23 +893,12 @@ def _prepare_chart_bars_for_interval(
     keep = self._history_window_bars(iv)
     out = out[-keep:]
 
-    # Final intraday pass: drop malformed rows that can still slip through
-    # bootstrap sanitation (for example open=0 vendor rows around interval switches).
-    if out and iv not in ("1d", "1wk", "1mo"):
-        jump_cap, range_cap = self._bar_safety_caps(iv)
-        # Tighter intraday caps to suppress giant block candles.
-        body_cap = float(max(0.004, min(0.014, (range_cap * 0.92))))
-        span_cap = float(max(0.006, min(0.022, (range_cap * 1.10))))
-        wick_cap = float(max(0.004, min(0.013, (range_cap * 0.82))))
-        ref_jump_cap = float(max(0.012, min(0.035, jump_cap * 0.45)))
-        iv_s = float(max(1, self._interval_seconds(iv)))
-
+    # Final lightweight validation pass. _merge_bars already applies strict
+    # dedupe + sanitation; avoid a second heavy statistical filter here because
+    # it can over-drop valid boundary bars and create chart jumps.
+    if out:
         filtered: list[dict[str, Any]] = []
-        recent_closes: list[float] = []
-        recent_body: list[float] = []
-        recent_span: list[float] = []
         dropped_shape = 0
-        dropped_extreme_body = 0
         prev_close: float | None = None
         prev_epoch: float | None = None
 
@@ -930,19 +918,12 @@ def _prepare_chart_bars_for_interval(
                     iv,
                 )
             )
-            day_boundary = bool(
+            ref_close = prev_close
+            if (
                 prev_epoch is not None
                 and self._is_intraday_day_boundary(prev_epoch, row_epoch, iv)
-            )
-            ref_close = prev_close
-            if day_boundary:
-                # Do not force previous-day close as intraday reference.
-                # Corporate actions/ex-rights can reset price levels at open;
-                # carrying old ref_close over day boundary causes fake spikes/drops.
+            ):
                 ref_close = None
-                recent_closes.clear()
-                recent_body.clear()
-                recent_span.clear()
 
             sanitized = self._sanitize_ohlc(
                 o_raw,
@@ -956,65 +937,6 @@ def _prepare_chart_bars_for_interval(
                 dropped_shape += 1
                 continue
             o, h, low, c = sanitized
-
-            ref_values = [
-                float(v) for v in recent_closes[-32:]
-                if float(v) > 0 and math.isfinite(float(v))
-            ]
-            if ref_values:
-                ref = float(median(ref_values))
-            elif ref_close and float(ref_close) > 0:
-                ref = float(ref_close)
-            else:
-                ref = float(c)
-
-            if not math.isfinite(ref) or ref <= 0:
-                ref = float(c)
-            if not math.isfinite(ref) or ref <= 0:
-                dropped_shape += 1
-                continue
-
-            body = abs(o - c) / ref
-            span = abs(h - low) / ref
-            top = max(o, c)
-            bot = min(o, c)
-            upper_wick = max(0.0, h - top) / ref
-            lower_wick = max(0.0, bot - low) / ref
-            ref_jump = abs(c / ref - 1.0)
-            eff_body_cap = float(body_cap)
-            eff_span_cap = float(span_cap)
-            eff_wick_cap = float(wick_cap)
-            if recent_body:
-                med_body = float(median(recent_body[-48:]))
-                if med_body > 0 and math.isfinite(med_body):
-                    eff_body_cap = min(
-                        eff_body_cap,
-                        float(max(0.006, med_body * 8.0)),
-                    )
-            if recent_span:
-                med_span = float(median(recent_span[-48:]))
-                if med_span > 0 and math.isfinite(med_span):
-                    eff_span_cap = min(
-                        eff_span_cap,
-                        float(max(0.009, med_span * 7.0)),
-                    )
-                    eff_wick_cap = min(
-                        eff_wick_cap,
-                        float(max(0.006, med_span * 5.0)),
-                    )
-
-            shape_outlier = bool(
-                ref_jump > ref_jump_cap
-                or body > eff_body_cap
-                or span > eff_span_cap
-                or upper_wick > eff_wick_cap
-                or lower_wick > eff_wick_cap
-            )
-            if shape_outlier:
-                if body > eff_body_cap:
-                    dropped_extreme_body += 1
-                dropped_shape += 1
-                continue
 
             if (
                 ref_close
@@ -1024,32 +946,15 @@ def _prepare_chart_bars_for_interval(
                 dropped_shape += 1
                 continue
 
-            if prev_epoch is not None:
-                gap = max(0.0, row_epoch - float(prev_epoch))
-                if (not day_boundary) and gap > (iv_s * 3.0):
-                    boundary_body_cap = float(max(0.004, min(eff_body_cap, 0.008)))
-                    boundary_span_cap = float(max(0.006, min(eff_span_cap, 0.012)))
-                    boundary_wick_cap = float(max(0.004, min(eff_wick_cap, 0.008)))
-                    boundary_jump_cap = float(max(0.008, min(ref_jump_cap, 0.018)))
-                    if (
-                        span > boundary_span_cap
-                        or body > boundary_body_cap
-                        or upper_wick > boundary_wick_cap
-                        or lower_wick > boundary_wick_cap
-                        or ref_jump > boundary_jump_cap
-                    ):
-                        dropped_shape += 1
-                        continue
-
             row_out = dict(row)
-            row_out["open"] = o
-            row_out["high"] = h
-            row_out["low"] = low
-            row_out["close"] = c
+            row_out["open"] = float(o)
+            row_out["high"] = float(h)
+            row_out["low"] = float(low)
+            row_out["close"] = float(c)
+            row_out["_ts_epoch"] = float(row_epoch)
+            row_out["timestamp"] = self._epoch_to_iso(row_epoch)
+            row_out["interval"] = iv
             filtered.append(row_out)
-            recent_closes.append(float(c))
-            recent_body.append(float(body))
-            recent_span.append(float(span))
             prev_close = float(c)
             prev_epoch = float(row_epoch)
 
@@ -1057,159 +962,12 @@ def _prepare_chart_bars_for_interval(
             self._debug_console(
                 f"chart_shape_drop:{sym or 'active'}:{iv}",
                 (
-                    f"chart shape filter dropped {dropped_shape} bars: "
+                    f"chart final sanitize dropped {dropped_shape} bars: "
                     f"symbol={sym or '--'} iv={iv} kept={len(filtered)} raw={len(out)}"
                 ),
                 min_gap_seconds=1.0,
             )
-        if dropped_extreme_body > 0:
-            self._debug_console(
-                f"chart_shape_body_drop:{sym or 'active'}:{iv}",
-                (
-                    f"chart body outlier drop symbol={sym or '--'} iv={iv} "
-                    f"count={dropped_extreme_body} caps(body={body_cap:.2%},span={span_cap:.2%},wick={wick_cap:.2%})"
-                ),
-                min_gap_seconds=1.0,
-                level="warning",
-            )
         out = filtered[-keep:]
-
-    if out and iv in ("1d", "1wk", "1mo"):
-        if iv == "1d":
-            daily_jump_cap = 0.22
-            daily_body_cap = 0.22
-            daily_span_cap = 0.28
-            daily_wick_cap = 0.14
-        elif iv == "1wk":
-            daily_jump_cap = 0.26
-            daily_body_cap = 0.20
-            daily_span_cap = 0.34
-            daily_wick_cap = 0.18
-        else:
-            daily_jump_cap = 0.35
-            daily_body_cap = 0.28
-            daily_span_cap = 0.45
-            daily_wick_cap = 0.24
-
-        daily_filtered: list[dict[str, Any]] = []
-        recent_daily: list[float] = []
-        prev_close_daily: float | None = None
-        dropped_daily = 0
-
-        for row in out:
-            try:
-                c_raw = float(row.get("close", 0) or 0)
-                o_raw = float(row.get("open", c_raw) or c_raw)
-                h_raw = float(row.get("high", c_raw) or c_raw)
-                l_raw = float(row.get("low", c_raw) or c_raw)
-            except _APP_CHART_RECOVERABLE_EXCEPTIONS:
-                dropped_daily += 1
-                continue
-
-            ref_close = (
-                float(prev_close_daily)
-                if (prev_close_daily and float(prev_close_daily) > 0)
-                else None
-            )
-            sanitized = self._sanitize_ohlc(
-                o_raw,
-                h_raw,
-                l_raw,
-                c_raw,
-                interval=iv,
-                ref_close=ref_close,
-            )
-            if sanitized is None:
-                dropped_daily += 1
-                continue
-            o, h, low, c = sanitized
-
-            if recent_daily:
-                ref = float(median(recent_daily[-24:]))
-            elif ref_close and float(ref_close) > 0:
-                ref = float(ref_close)
-            else:
-                ref = float(c)
-            if not math.isfinite(ref) or ref <= 0:
-                ref = float(c)
-            if not math.isfinite(ref) or ref <= 0:
-                dropped_daily += 1
-                continue
-
-            if ref_close and float(ref_close) > 0:
-                jump_prev = abs(c / float(ref_close) - 1.0)
-                if jump_prev > daily_jump_cap:
-                    dropped_daily += 1
-                    continue
-
-            top = max(o, c)
-            bot = min(o, c)
-            h = max(h, top)
-            low = min(low, bot)
-            body = abs(o - c) / max(ref, 1e-8)
-            span = abs(h - low) / max(ref, 1e-8)
-            upper_wick = max(0.0, h - top) / max(ref, 1e-8)
-            lower_wick = max(0.0, bot - low) / max(ref, 1e-8)
-            if (
-                body > daily_body_cap
-                or span > daily_span_cap
-                or upper_wick > daily_wick_cap
-                or lower_wick > daily_wick_cap
-            ):
-                dropped_daily += 1
-                continue
-
-            row_out = dict(row)
-            row_out["open"] = float(o)
-            row_out["high"] = float(h)
-            row_out["low"] = float(low)
-            row_out["close"] = float(c)
-            daily_filtered.append(row_out)
-            recent_daily.append(float(c))
-            prev_close_daily = float(c)
-
-        if dropped_daily > 0:
-            self._debug_console(
-                f"chart_daily_filter:{sym or 'active'}:{iv}",
-                (
-                    f"daily filter symbol={sym or '--'} iv={iv} "
-                    f"dropped={dropped_daily} kept={len(daily_filtered)} raw={len(out)}"
-                ),
-                min_gap_seconds=1.0,
-                level="info",
-            )
-        out = daily_filtered[-keep:]
-
-    if out:
-        max_body = 0.0
-        max_range = 0.0
-        for row in out:
-            try:
-                c = float(row.get("close", 0) or 0)
-                if c <= 0:
-                    continue
-                o = float(row.get("open", c) or c)
-                h = float(row.get("high", c) or c)
-                low = float(row.get("low", c) or c)
-                body = abs(o - c) / c
-                span = abs(h - low) / c
-                if body > max_body:
-                    max_body = body
-                if span > max_range:
-                    max_range = span
-            except _APP_CHART_RECOVERABLE_EXCEPTIONS:
-                continue
-        if iv not in ("1d", "1wk", "1mo") and (
-            max_body > 0.08 or max_range > 0.12
-        ):
-            self._debug_console(
-                f"chart_shape_anomaly:{sym or 'active'}:{iv}",
-                (
-                    f"chart shape anomaly symbol={sym or '--'} iv={iv} "
-                    f"bars={len(out)} max_body={max_body:.2%} max_range={max_range:.2%}"
-                ),
-                min_gap_seconds=1.0,
-            )
 
     drop_count = max(0, raw_count - len(out))
     if raw_count > 0 and drop_count >= max(5, int(raw_count * 0.20)):

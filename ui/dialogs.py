@@ -187,6 +187,8 @@ class TrainingDialog(QDialog):
         self._is_training = False
         self._epoch_by_model: dict[str, int] = {}
         self._expected_model_count: int = 1
+        self._planned_epochs_by_model: dict[str, int] = {}
+        self._last_progress_pct: int = 0
         self.training_result: dict | None = None
 
         layout = QVBoxLayout(self)
@@ -403,12 +405,18 @@ class TrainingDialog(QDialog):
         self.status.setText("Training...")
         self.progress.setValue(0)
         self._epoch_by_model = {}
+        self._planned_epochs_by_model = {}
+        self._last_progress_pct = 0
         model_tokens = [
-            x.strip()
+            x.strip().lower()
             for x in str(self.models_label.text() or "").split(",")
             if x.strip()
         ]
-        self._expected_model_count = max(1, len(model_tokens))
+        for token in model_tokens:
+            self._planned_epochs_by_model[str(token)] = int(max(1, epochs))
+        fore_epochs = int(max(10, min(30, max(1, epochs // 2))))
+        self._planned_epochs_by_model["forecaster"] = fore_epochs
+        self._expected_model_count = max(1, len(self._planned_epochs_by_model))
 
         self._is_training = True
         self.start_btn.setEnabled(False)
@@ -452,28 +460,43 @@ class TrainingDialog(QDialog):
             f"[{model_name}] epoch={epoch} val_acc={val_acc:.2%}"
         )
 
-        epochs = int(self.epochs_spin.value())
-        key = str(model_name or "model")
+        key = str(model_name or "model").strip().lower() or "model"
         prev = int(self._epoch_by_model.get(key, 0))
         self._epoch_by_model[key] = max(prev, int(epoch))
+        if key not in self._planned_epochs_by_model:
+            self._planned_epochs_by_model[key] = int(max(1, self.epochs_spin.value()))
         observed_models = max(1, len(self._epoch_by_model))
-        total_models = max(int(self._expected_model_count), int(observed_models))
+        total_models = max(
+            int(self._expected_model_count),
+            int(observed_models),
+            int(len(self._planned_epochs_by_model)),
+        )
         completed_epochs = sum(
-            min(int(epochs), int(v))
-            for v in self._epoch_by_model.values()
+            min(
+                int(self._planned_epochs_by_model.get(model_key, max(1, self.epochs_spin.value()))),
+                int(v),
+            )
+            for model_key, v in self._epoch_by_model.items()
+        )
+        total_planned_epochs = sum(
+            max(1, int(v))
+            for v in self._planned_epochs_by_model.values()
         )
         pct = int(
             min(
                 99,
                 round(
-                    (completed_epochs / max(1.0, float(total_models * max(1, epochs))))
+                    (completed_epochs / max(1.0, float(total_planned_epochs)))
                     * 100.0
                 ),
             )
         )
+        pct = max(int(self._last_progress_pct), int(pct))
+        self._last_progress_pct = int(pct)
         self.progress.setValue(pct)
+        phase = "Forecaster" if key == "forecaster" else "Ensemble"
         self.status.setText(
-            f"Training... {pct}% ({observed_models}/{total_models} models)"
+            f"{phase} training... {pct}% ({observed_models}/{total_models} models)"
         )
 
     def _on_finished(self, results: dict) -> None:
@@ -545,6 +568,8 @@ class TrainingDialog(QDialog):
         self.stocks_list.setEnabled(True)
         self._epoch_by_model = {}
         self._expected_model_count = 1
+        self._planned_epochs_by_model = {}
+        self._last_progress_pct = 0
 
         self.worker = None
 
@@ -588,7 +613,9 @@ class TrainTrainedStocksDialog(QDialog):
         self.worker: TrainWorker | None = None
         self._is_training = False
         self._epoch_by_model: dict[str, int] = {}
-        self._expected_model_count = 5
+        self._expected_model_count = 1
+        self._planned_epochs_by_model: dict[str, int] = {}
+        self._last_progress_pct: int = 0
         self.training_result: dict | None = None
         self._last_run_codes: list[str] = []
 
@@ -759,6 +786,14 @@ class TrainTrainedStocksDialog(QDialog):
         self.status.setText("Training...")
         self.training_result = None
         self._epoch_by_model = {}
+        self._planned_epochs_by_model = {}
+        self._last_progress_pct = 0
+        ensemble_tokens = ["lstm", "gru", "tcn", "transformer", "hybrid"]
+        for token in ensemble_tokens:
+            self._planned_epochs_by_model[str(token)] = int(max(1, epochs))
+        fore_epochs = int(max(10, min(30, max(1, epochs // 2))))
+        self._planned_epochs_by_model["forecaster"] = fore_epochs
+        self._expected_model_count = max(1, len(self._planned_epochs_by_model))
 
         self._is_training = True
         self.start_btn.setEnabled(False)
@@ -791,24 +826,42 @@ class TrainTrainedStocksDialog(QDialog):
 
     def _on_epoch(self, model_name: str, epoch: int, val_acc: float) -> None:
         self.logs.append(f"[{model_name}] epoch={epoch} val_acc={val_acc:.2%}")
-        key = str(model_name or "model")
+        key = str(model_name or "model").strip().lower() or "model"
         prev = int(self._epoch_by_model.get(key, 0))
         self._epoch_by_model[key] = max(prev, int(epoch))
-        epochs = int(self.epochs_spin.value())
+        if key not in self._planned_epochs_by_model:
+            self._planned_epochs_by_model[key] = int(max(1, self.epochs_spin.value()))
         observed_models = max(1, len(self._epoch_by_model))
-        total_models = max(self._expected_model_count, observed_models)
-        completed = sum(min(int(epochs), int(v)) for v in self._epoch_by_model.values())
+        total_models = max(
+            int(self._expected_model_count),
+            int(observed_models),
+            int(len(self._planned_epochs_by_model)),
+        )
+        completed = sum(
+            min(
+                int(self._planned_epochs_by_model.get(model_key, max(1, self.epochs_spin.value()))),
+                int(v),
+            )
+            for model_key, v in self._epoch_by_model.items()
+        )
+        total_planned = sum(
+            max(1, int(v))
+            for v in self._planned_epochs_by_model.values()
+        )
         pct = int(
             min(
                 99,
                 round(
-                    (completed / max(1.0, float(total_models * max(1, epochs)))) * 100.0
+                    (completed / max(1.0, float(total_planned))) * 100.0
                 ),
             )
         )
+        pct = max(int(self._last_progress_pct), int(pct))
+        self._last_progress_pct = int(pct)
         self.progress.setValue(pct)
+        phase = "Forecaster" if key == "forecaster" else "Ensemble"
         self.status.setText(
-            f"Training... {pct}% ({observed_models}/{total_models} models)"
+            f"{phase} training... {pct}% ({observed_models}/{total_models} models)"
         )
 
     def _on_finished(self, results: dict) -> None:
@@ -866,6 +919,10 @@ class TrainTrainedStocksDialog(QDialog):
         self.close_btn.setEnabled(True)
         self.count_spin.setEnabled(True)
         self.epochs_spin.setEnabled(True)
+        self._epoch_by_model = {}
+        self._planned_epochs_by_model = {}
+        self._expected_model_count = 1
+        self._last_progress_pct = 0
         self.worker = None
 
     def closeEvent(self, event) -> None:

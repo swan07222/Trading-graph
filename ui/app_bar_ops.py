@@ -257,7 +257,9 @@ def _merge_bars(
             r_vol = float(row.get("volume", 0) or 0)
         except _APP_SOFT_EXCEPTIONS:
             r_vol = 0.0
-        if r_vol > e_vol:
+        # Prefer later candidate on equal volume so fresh feed/history rows
+        # can replace stale duplicates for the same bucket.
+        if r_vol >= e_vol:
             merged[key] = row
 
     for b in (base or []):

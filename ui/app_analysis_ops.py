@@ -202,7 +202,7 @@ def _analyze_stock(self) -> None:
         self.log("Invalid stock code format", "warning")
         return
 
-    if self.predictor is None or self.predictor.ensemble is None:
+    if not self._predictor_runtime_ready():
         if hasattr(self.signal_panel, "reset"):
             self.signal_panel.reset()
         selected = self._ui_norm(code)
@@ -1396,7 +1396,7 @@ def _update_correct_guess_profit_ui(self) -> None:
 
 def _scan_stocks(self) -> None:
     """Scan all stocks for signals."""
-    if self.predictor is None or self.predictor.ensemble is None:
+    if not self._predictor_runtime_ready():
         self.log("No model loaded", "error")
         return
 

@@ -52,7 +52,8 @@ def merge_parts(
 ) -> pd.DataFrame:
     """Merge and deduplicate non-empty dataframes.
     
-    FIX #7: Deduplicates by timestamp, keeping the most recent data source's values.
+    Keep left-to-right precedence for duplicate timestamps.
+    Callers pass fresher online frames first, fallback DB frames after.
     """
     parts = [p for p in dfs if isinstance(p, pd.DataFrame) and not p.empty]
     if not parts:
@@ -63,10 +64,10 @@ def merge_parts(
     # Concatenate all parts
     merged = pd.concat(parts, axis=0)
     
-    # FIX #7: Deduplicate by index (timestamp), keeping last occurrence
-    # This ensures online data (typically passed first) takes precedence over DB data
+    # Deduplicate by timestamp while preserving first occurrence so
+    # earlier (fresher) frames win when overlaps exist.
     if isinstance(merged.index, pd.DatetimeIndex):
-        merged = merged[~merged.index.duplicated(keep="last")]
+        merged = merged[~merged.index.duplicated(keep="first")]
         merged = merged.sort_index()
     
     return clean_dataframe(merged, interval)

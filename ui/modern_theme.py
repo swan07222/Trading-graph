@@ -401,10 +401,14 @@ def get_progress_bar_style(color: str = "primary") -> str:
     gradient = gradients.get(str(color).lower(), gradients["primary"])
     return f"""
         QProgressBar {{
-            background: #112139;
+            background: qlineargradient(
+                x1:0, y1:0, x2:0, y2:1,
+                stop:0 #0f1e34,
+                stop:1 #0b1628
+            );
             border: 1px solid {ModernColors.BORDER_SUBTLE};
-            border-radius: 8px;
-            min-height: 17px;
+            border-radius: 9px;
+            min-height: 18px;
             color: {ModernColors.TEXT_PRIMARY};
             text-align: center;
             font-size: {ModernFonts.SIZE_XS}px;
@@ -412,7 +416,7 @@ def get_progress_bar_style(color: str = "primary") -> str:
         }}
         QProgressBar::chunk {{
             background: {gradient};
-            border-radius: 7px;
+            border-radius: 8px;
         }}
     """
 
@@ -756,9 +760,34 @@ def get_app_stylesheet() -> str:
             get_tab_widget_style(),
             get_selection_control_style(),
             get_scroll_area_style(),
+            get_progress_bar_style("accent"),
             f"""
-            QWidget#leftPanel, QWidget#centerPanel, QWidget#rightPanel {{
-                background: transparent;
+            QWidget#leftPanel {{
+                background: qlineargradient(
+                    x1:0, y1:0, x2:0, y2:1,
+                    stop:0 #132a49,
+                    stop:1 #0f2038
+                );
+                border: 1px solid {ModernColors.BORDER_SUBTLE};
+                border-radius: 16px;
+            }}
+            QWidget#centerPanel {{
+                background: qlineargradient(
+                    x1:0, y1:0, x2:0, y2:1,
+                    stop:0 #132745,
+                    stop:1 #0e1d34
+                );
+                border: 1px solid {ModernColors.BORDER_SUBTLE};
+                border-radius: 16px;
+            }}
+            QWidget#rightPanel {{
+                background: qlineargradient(
+                    x1:0, y1:0, x2:0, y2:1,
+                    stop:0 #12253f,
+                    stop:1 #0d1a2d
+                );
+                border: 1px solid {ModernColors.BORDER_SUBTLE};
+                border-radius: 16px;
             }}
             QMenuBar {{
                 background: qlineargradient(
@@ -1044,6 +1073,7 @@ def get_dialog_style() -> str:
             get_tab_widget_style(),
             get_selection_control_style(),
             get_scroll_area_style(),
+            get_progress_bar_style("primary"),
             f"""
             QDialog {{
                 background: qradialgradient(

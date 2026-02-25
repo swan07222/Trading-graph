@@ -433,6 +433,7 @@ def train(
             forecast_save_path=(
                 candidate_forecast_path if save_model else None
             ),
+            callback=callback,
         )
     except CancelledException:
         log.info("Training cancelled during forecaster phase")
@@ -648,6 +649,7 @@ def _train_forecaster(
     save_model: bool,
     learning_rate: float,
     forecast_save_path: Path | None = None,
+    callback: Callable | None = None,
 ) -> bool:
     """Train multi-step forecaster. Returns True if successful.
 
@@ -814,6 +816,21 @@ def _train_forecaster(
                 f"train_mse={train_loss:.6f}, val_mse={val_loss:.6f}"
             )
 
+            if callback is not None:
+                try:
+                    val_score = 0.0
+                    if np.isfinite(val_loss):
+                        val_score = float(1.0 / (1.0 + max(0.0, float(val_loss))))
+                    callback("forecaster", int(ep), float(val_score))
+                except CancelledException:
+                    log.info(
+                        "Forecaster cancelled via callback at epoch %s",
+                        int(ep) + 1,
+                    )
+                    raise
+                except (ValueError, TypeError, AttributeError, RuntimeError):
+                    pass
+
             if val_loss < best_val_loss:
                 best_val_loss = val_loss
                 best_state = {
@@ -879,4 +896,3 @@ def _train_forecaster(
             raise
 
     return False
-

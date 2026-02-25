@@ -31,7 +31,7 @@ def _start_monitoring(self: Any) -> None:
     if self.monitor and self.monitor.isRunning():
         self._stop_monitoring()
 
-    if self.predictor is None or self.predictor.ensemble is None:
+    if not self._predictor_runtime_ready():
         self.log("Cannot start monitoring: No model loaded", "error")
         self.monitor_action.setChecked(False)
         return

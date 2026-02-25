@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import importlib
 import json
 import os
 import pickle
@@ -17,13 +18,21 @@ from utils.safe_pickle import safe_pickle_load, safe_pickle_loads
 
 log = get_logger(__name__)
 
-try:
-    import torch
+_TORCH_MODULE: Any | None = None
+_TORCH_MODULE_CHECKED = False
 
-    _HAS_TORCH = True
-except (ImportError, OSError):
-    torch = None
-    _HAS_TORCH = False
+
+def _get_torch_module() -> Any | None:
+    """Lazily import torch to avoid hard dependency at module import time."""
+    global _TORCH_MODULE_CHECKED, _TORCH_MODULE
+    if _TORCH_MODULE_CHECKED:
+        return _TORCH_MODULE
+    _TORCH_MODULE_CHECKED = True
+    try:
+        _TORCH_MODULE = importlib.import_module("torch")
+    except Exception:
+        _TORCH_MODULE = None
+    return _TORCH_MODULE
 
 __all__ = [
     "atomic_write_bytes",
@@ -284,7 +293,8 @@ def atomic_torch_save(
     Raises:
         ImportError: If torch is not installed
     """
-    if not _HAS_TORCH:
+    torch_mod = _get_torch_module()
+    if torch_mod is None:
         raise ImportError(
             "PyTorch is required for atomic_torch_save. "
             "Install with: pip install torch"
@@ -302,7 +312,7 @@ def atomic_torch_save(
     try:
         try:
             with open(tmp, "wb") as f:
-                torch.save(obj, f)
+                torch_mod.save(obj, f)
                 _fsync_file(f)
             _safe_replace(tmp, path)
             saved = True
@@ -562,7 +572,8 @@ def torch_load(
     Raises:
         ImportError: If torch is not installed
     """
-    if not _HAS_TORCH:
+    torch_mod = _get_torch_module()
+    if torch_mod is None:
         raise ImportError(
             "PyTorch is required for torch_load. "
             "Install with: pip install torch"
@@ -577,7 +588,7 @@ def torch_load(
         )
     target = str(Path(path))
     try:
-        return torch.load(
+        return torch_mod.load(
             target,
             map_location=map_location,
             weights_only=weights_only,
@@ -586,7 +597,7 @@ def torch_load(
         # Older torch versions may not support the weights_only argument.
         if not bool(allow_unsafe):
             raise
-        return torch.load(
+        return torch_mod.load(
             target,
             map_location=map_location,
         )

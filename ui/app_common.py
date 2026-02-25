@@ -202,3 +202,52 @@ class MainAppCommonMixin:
                 log.warning(txt)
         except (AttributeError, TypeError, ValueError) as exc:
             log.debug("Suppressed exception in ui/app_common.py", exc_info=exc)
+
+    def _predictor_runtime_ready(self) -> bool:
+        """Whether predictor has sufficient runtime artifacts for inference."""
+        predictor = getattr(self, "predictor", None)
+        if predictor is None:
+            return False
+
+        ready_fn = getattr(predictor, "_models_ready_for_runtime", None)
+        if callable(ready_fn):
+            try:
+                return bool(ready_fn())
+            except (AttributeError, RuntimeError, TypeError, ValueError):
+                pass
+
+        processor = getattr(predictor, "processor", None)
+        scaler_ready = bool(
+            processor is not None and getattr(processor, "is_fitted", True)
+        )
+        ensemble_ready = bool(getattr(predictor, "ensemble", None) is not None)
+        forecaster_ready = bool(getattr(predictor, "forecaster", None) is not None)
+        return bool(scaler_ready and (ensemble_ready or forecaster_ready))
+
+    def _predictor_model_summary(self) -> dict[str, object]:
+        """Best-effort predictor capability summary for UI status text."""
+        predictor = getattr(self, "predictor", None)
+        if predictor is None:
+            return {
+                "runtime_ready": False,
+                "has_ensemble": False,
+                "has_forecaster": False,
+                "ensemble_models": 0,
+            }
+
+        has_ensemble = bool(getattr(predictor, "ensemble", None) is not None)
+        has_forecaster = bool(getattr(predictor, "forecaster", None) is not None)
+        ensemble_models = 0
+        if has_ensemble:
+            try:
+                models_obj = getattr(predictor.ensemble, "models", {})
+                ensemble_models = int(len(models_obj)) if models_obj is not None else 0
+            except (AttributeError, RuntimeError, TypeError, ValueError):
+                ensemble_models = 0
+
+        return {
+            "runtime_ready": bool(self._predictor_runtime_ready()),
+            "has_ensemble": bool(has_ensemble),
+            "has_forecaster": bool(has_forecaster),
+            "ensemble_models": int(max(0, ensemble_models)),
+        }

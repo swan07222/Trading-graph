@@ -1,56 +1,42 @@
-# ui/__init__.py
+"""UI package exports with lazy imports.
 
-try:
-    from .app import MainApp, run_app
-except Exception:
-    MainApp = None
-    run_app = None
+Avoid importing heavy optional dependencies at package import time.
+"""
 
-try:
-    from .charts import StockChart
-except Exception:
-    StockChart = None
+from __future__ import annotations
 
-try:
-    from .auto_learn_dialog import AutoLearnDialog, show_auto_learn_dialog
-except Exception:
-    AutoLearnDialog = None
-    show_auto_learn_dialog = None
+from importlib import import_module
 
-try:
-    from .widgets import LogWidget, PositionTable, SignalPanel
-except Exception:
-    SignalPanel = None
-    PositionTable = None
-    LogWidget = None
+_LAZY_EXPORTS = {
+    "MainApp": (".app", "MainApp"),
+    "run_app": (".app", "run_app"),
+    "StockChart": (".charts", "StockChart"),
+    "AutoLearnDialog": (".auto_learn_dialog", "AutoLearnDialog"),
+    "show_auto_learn_dialog": (".auto_learn_dialog", "show_auto_learn_dialog"),
+    "SignalPanel": (".widgets", "SignalPanel"),
+    "PositionTable": (".widgets", "PositionTable"),
+    "LogWidget": (".widgets", "LogWidget"),
+    "TrainingDialog": (".dialogs", "TrainingDialog"),
+    "BacktestDialog": (".dialogs", "BacktestDialog"),
+    "NewsPanel": (".news_widget", "NewsPanel"),
+    "StrategyMarketplaceDialog": (
+        ".strategy_marketplace_dialog",
+        "StrategyMarketplaceDialog",
+    ),
+}
 
-try:
-    from .dialogs import BacktestDialog, TrainingDialog
-except Exception:
-    TrainingDialog = None
-    BacktestDialog = None
+__all__ = list(_LAZY_EXPORTS.keys())
 
-try:
-    from .news_widget import NewsPanel
-except Exception:
-    NewsPanel = None
 
-try:
-    from .strategy_marketplace_dialog import StrategyMarketplaceDialog
-except Exception:
-    StrategyMarketplaceDialog = None
-
-__all__ = [
-    "MainApp",
-    "run_app",
-    "SignalPanel",
-    "PositionTable",
-    "LogWidget",
-    "StockChart",
-    "TrainingDialog",
-    "BacktestDialog",
-    "AutoLearnDialog",
-    "show_auto_learn_dialog",
-    "NewsPanel",
-    "StrategyMarketplaceDialog",
-]
+def __getattr__(name: str):
+    target = _LAZY_EXPORTS.get(str(name))
+    if target is None:
+        raise AttributeError(f"module 'ui' has no attribute {name!r}")
+    mod_name, attr_name = target
+    try:
+        module = import_module(mod_name, __name__)
+        value = getattr(module, attr_name)
+    except Exception:
+        value = None
+    globals()[name] = value
+    return value

@@ -1,96 +1,77 @@
-# utils/__init__.py
-from .atomic_io import (
-    atomic_pickle_dump,
-    atomic_torch_save,
-    atomic_write_bytes,
-    atomic_write_json,
-    atomic_write_text,
-    ensure_parent_dir,
-    pickle_load,
-    read_bytes,
-    read_json,
-    read_text,
-    safe_remove,
-    torch_load,
-)
-from .cancellation import CancellationToken, CancelledException, cancellable_operation
-from .helpers import (
-    calculate_max_drawdown,
-    calculate_sharpe,
-    format_number,
-    format_pct,
-    format_price,
-    get_trading_dates,
-)
-from .json_io import read_json_safe, read_jsonl, write_json_safe, write_jsonl
-from .lazy_imports import CachedLazyImport, LazyImport, lazy_get, make_lazy_getter
-from .logger import get_logger, log, setup_logging, teardown_logging
-from .serialization import (
-    dataclass_to_dict,
-    safe_dataclass_from_dict,
-    to_serializable,
-)
-from .type_utils import (
-    clamp,
-    safe_attr,
-    safe_float,
-    safe_float_attr,
-    safe_int,
-    safe_int_attr,
-    safe_str,
-    safe_str_attr,
-)
+"""Utility package exports with lazy imports.
 
-__all__ = [
-    "log",
-    "get_logger",
-    "setup_logging",
-    "teardown_logging",
-    "format_number",
-    "format_pct",
-    "format_price",
-    "get_trading_dates",
-    "calculate_sharpe",
-    "calculate_max_drawdown",
-    "CancellationToken",
-    "CancelledException",
-    "cancellable_operation",
-    # Atomic I/O — Writers
-    "atomic_write_bytes",
-    "atomic_write_text",
-    "atomic_write_json",
-    "atomic_pickle_dump",
-    "atomic_torch_save",
-    # Atomic I/O — Readers
-    "read_bytes",
-    "read_text",
-    "read_json",
-    "pickle_load",
-    "torch_load",
-    # Atomic I/O — Utilities
-    "safe_remove",
-    "ensure_parent_dir",
+This keeps package import lightweight and avoids importing optional heavy
+dependencies (for example PyTorch) unless explicitly requested.
+"""
+
+from __future__ import annotations
+
+from importlib import import_module
+
+_LAZY_EXPORTS = {
+    # Logging
+    "log": (".logger", "log"),
+    "get_logger": (".logger", "get_logger"),
+    "setup_logging": (".logger", "setup_logging"),
+    "teardown_logging": (".logger", "teardown_logging"),
+    # Helpers
+    "format_number": (".helpers", "format_number"),
+    "format_pct": (".helpers", "format_pct"),
+    "format_price": (".helpers", "format_price"),
+    "get_trading_dates": (".helpers", "get_trading_dates"),
+    "calculate_sharpe": (".helpers", "calculate_sharpe"),
+    "calculate_max_drawdown": (".helpers", "calculate_max_drawdown"),
+    # Cancellation
+    "CancellationToken": (".cancellation", "CancellationToken"),
+    "CancelledException": (".cancellation", "CancelledException"),
+    "cancellable_operation": (".cancellation", "cancellable_operation"),
+    # Atomic I/O
+    "atomic_write_bytes": (".atomic_io", "atomic_write_bytes"),
+    "atomic_write_text": (".atomic_io", "atomic_write_text"),
+    "atomic_write_json": (".atomic_io", "atomic_write_json"),
+    "atomic_pickle_dump": (".atomic_io", "atomic_pickle_dump"),
+    "atomic_torch_save": (".atomic_io", "atomic_torch_save"),
+    "read_bytes": (".atomic_io", "read_bytes"),
+    "read_text": (".atomic_io", "read_text"),
+    "read_json": (".atomic_io", "read_json"),
+    "pickle_load": (".atomic_io", "pickle_load"),
+    "torch_load": (".atomic_io", "torch_load"),
+    "safe_remove": (".atomic_io", "safe_remove"),
+    "ensure_parent_dir": (".atomic_io", "ensure_parent_dir"),
     # JSON I/O
-    "read_json_safe",
-    "write_json_safe",
-    "read_jsonl",
-    "write_jsonl",
-    # Lazy imports
-    "lazy_get",
-    "LazyImport",
-    "CachedLazyImport",
-    "make_lazy_getter",
+    "read_json_safe": (".json_io", "read_json_safe"),
+    "write_json_safe": (".json_io", "write_json_safe"),
+    "read_jsonl": (".json_io", "read_jsonl"),
+    "write_jsonl": (".json_io", "write_jsonl"),
+    # Lazy imports helpers
+    "lazy_get": (".lazy_imports", "lazy_get"),
+    "LazyImport": (".lazy_imports", "LazyImport"),
+    "CachedLazyImport": (".lazy_imports", "CachedLazyImport"),
+    "make_lazy_getter": (".lazy_imports", "make_lazy_getter"),
     # Serialization
-    "safe_dataclass_from_dict",
-    "dataclass_to_dict",
-    "to_serializable",
-    # Type utilities
-    "safe_float",
-    "safe_int",
-    "safe_str",
-    "safe_attr",
-    "safe_float_attr",
-    "safe_int_attr",
-    "safe_str_attr",
-    "clamp",
-]
+    "safe_dataclass_from_dict": (".serialization", "safe_dataclass_from_dict"),
+    "dataclass_to_dict": (".serialization", "dataclass_to_dict"),
+    "to_serializable": (".serialization", "to_serializable"),
+    # Type utils
+    "safe_float": (".type_utils", "safe_float"),
+    "safe_int": (".type_utils", "safe_int"),
+    "safe_str": (".type_utils", "safe_str"),
+    "safe_attr": (".type_utils", "safe_attr"),
+    "safe_float_attr": (".type_utils", "safe_float_attr"),
+    "safe_int_attr": (".type_utils", "safe_int_attr"),
+    "safe_str_attr": (".type_utils", "safe_str_attr"),
+    "clamp": (".type_utils", "clamp"),
+}
+
+__all__ = list(_LAZY_EXPORTS.keys())
+
+
+def __getattr__(name: str):
+    target = _LAZY_EXPORTS.get(str(name))
+    if target is None:
+        raise AttributeError(f"module 'utils' has no attribute {name!r}")
+    mod_name, attr_name = target
+    module = import_module(mod_name, __name__)
+    value = getattr(module, attr_name)
+    globals()[name] = value
+    return value

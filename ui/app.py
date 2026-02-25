@@ -847,10 +847,19 @@ class MainApp(MainAppCommonMixin, QMainWindow):
                 prediction_horizon=horizon
             )
 
-            if self.predictor.ensemble:
-                num_models = len(self.predictor.ensemble.models)
+            summary = self._predictor_model_summary()
+            if bool(summary.get("runtime_ready", False)):
+                num_models = int(summary.get("ensemble_models", 0) or 0)
+                has_forecaster = bool(summary.get("has_forecaster", False))
+                has_ensemble = bool(summary.get("has_ensemble", False))
+                capability_bits: list[str] = []
+                if has_ensemble:
+                    capability_bits.append(f"ensemble x{max(1, num_models)}")
+                if has_forecaster:
+                    capability_bits.append("forecaster")
+                capability = ", ".join(capability_bits) if capability_bits else "runtime models"
                 self.model_status.setText(
-                    f"Model: Loaded ({num_models} networks)"
+                    f"Model: Loaded ({capability})"
                 )
                 self.model_status.setStyleSheet(
                     
@@ -903,7 +912,7 @@ class MainApp(MainAppCommonMixin, QMainWindow):
         self._init_auto_trader()
 
         # Auto-start live monitor when model is available.
-        if self.predictor is not None and self.predictor.ensemble is not None:
+        if self._predictor_runtime_ready():
             try:
                 self.monitor_action.setChecked(True)
                 self._start_monitoring()
@@ -1009,7 +1018,7 @@ class MainApp(MainAppCommonMixin, QMainWindow):
                         interval=interval,
                         prediction_horizon=horizon
                     )
-                    if self.predictor.ensemble:
+                    if self._predictor_runtime_ready():
                         active_iv, active_h = self._sync_ui_to_loaded_model(
                             interval,
                             horizon,
@@ -1064,8 +1073,7 @@ class MainApp(MainAppCommonMixin, QMainWindow):
         selected = self._ui_norm(self.stock_input.text())
         if (
             selected
-            and self.predictor is not None
-            and self.predictor.ensemble is not None
+            and self._predictor_runtime_ready()
         ):
             self.stock_input.setText(selected)
             self._analyze_stock()

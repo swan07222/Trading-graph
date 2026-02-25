@@ -953,6 +953,7 @@ class Trainer:
         save_model: bool,
         learning_rate: float,
         forecast_save_path: Path | None = None,
+        callback: Callable | None = None,
     ) -> bool:
         return _train_forecaster_impl(
             self,
@@ -966,6 +967,7 @@ class Trainer:
             save_model=save_model,
             learning_rate=learning_rate,
             forecast_save_path=forecast_save_path,
+            callback=callback,
         )
 
     def get_ensemble(self) -> EnsembleModel | None:

@@ -622,7 +622,6 @@ class StockChart(QWidget):
             closes: list[float] = []
             ohlc: list[tuple] = []
             prev_close: float | None = None
-            prev_day_key: str | None = None
 
             default_iv_raw = str(
                 self._bars[-1].get("interval", "1m") if self._bars else "1m"
@@ -680,29 +679,8 @@ class StockChart(QWidget):
                 "rows_total": int(len(render_bars)),
                 "kept": 0,
                 "drop_nonfinite": 0,
-                "drop_interval": 0,
                 "drop_parse": 0,
-                "drop_shape": 0,
-                "drop_scale": 0,
             }
-            is_intraday = default_iv not in {"1d", "1wk", "1mo"}
-            if is_intraday:
-                # Render-side guard: keep intraday bars within realistic A-share
-                # movement envelopes to prevent striped wick artifacts.
-                jump_cap = 0.08
-                body_cap = 0.014
-                span_cap = 0.022
-                wick_cap = 0.013
-                scale_lo = 0.35
-                scale_hi = 3.00
-            else:
-                jump_cap = 0.45
-                body_cap = 0.55
-                span_cap = 0.80
-                wick_cap = 0.40
-                scale_lo = 0.10
-                scale_hi = 10.00
-            recent_closes: list[float] = []
             rendered_bars: list[dict] = []
 
             for b in render_bars:
@@ -723,29 +701,10 @@ class StockChart(QWidget):
                         b.get("interval", default_iv) or default_iv
                     ).lower()
                     bar_iv = interval_aliases.get(bar_iv_raw, bar_iv_raw)
-                    if bar_iv != default_iv:
-                        diag["drop_interval"] += 1
-                        continue
                     ts_text = self._format_bar_timestamp(b)
-                    day_key = str(ts_text[:10]) if len(ts_text) >= 10 else ""
-                    day_boundary = bool(
-                        prev_day_key is not None
-                        and day_key
-                        and day_key != prev_day_key
-                    )
-
-                    # Fix missing OHLC values — prefer close (doji) over
-                    # prev_close to avoid creating artificial directional candles.
+                    # Rendering layer keeps only basic OHLC normalization.
                     if o <= 0:
-                        if (
-                            is_intraday
-                            and (not day_boundary)
-                            and prev_close is not None
-                            and prev_close > 0
-                        ):
-                            o = float(prev_close)
-                        else:
-                            o = c
+                        o = c
                     if h <= 0:
                         h = max(o, c)
                     if l_val <= 0:
@@ -763,51 +722,7 @@ class StockChart(QWidget):
                     o = min(max(o, l_val), h)
                     c = min(max(c, l_val), h)
 
-                    # Last-line defense for rendering: drop extreme-scale bars
-                    # that can still slip through upstream sanitation and would
-                    # otherwise distort chart autoscaling.
-                    if recent_closes:
-                        ref_scale = float(np.median(np.asarray(recent_closes[-120:], dtype=float)))
-                    elif prev_close is not None and prev_close > 0:
-                        ref_scale = float(prev_close)
-                    else:
-                        ref_scale = float(c)
-                    ref_scale = max(ref_scale, 1e-8)
-
-                    scale_ratio = float(c) / ref_scale
-                    if (scale_ratio < scale_lo) or (scale_ratio > scale_hi):
-                        diag["drop_scale"] += 1
-                        continue
-
-                    if (
-                        (not day_boundary)
-                        and prev_close is not None
-                        and prev_close > 0
-                        and len(recent_closes) >= 2
-                    ):
-                        jump = abs(float(c) / max(float(prev_close), 1e-8) - 1.0)
-                        if jump > jump_cap:
-                            diag["drop_shape"] += 1
-                            continue
-
-                    body_pct = abs(float(o) - float(c)) / ref_scale
-                    span_pct = abs(float(h) - float(l_val)) / ref_scale
-                    top = max(float(o), float(c))
-                    bot = min(float(o), float(c))
-                    upper_wick = max(0.0, float(h) - top) / ref_scale
-                    lower_wick = max(0.0, bot - float(l_val)) / ref_scale
-                    shape_body_cap = float(body_cap * (2.6 if day_boundary else 1.0))
-                    shape_span_cap = float(span_cap * (2.8 if day_boundary else 1.0))
-                    shape_wick_cap = float(wick_cap * (2.8 if day_boundary else 1.0))
-                    if (
-                        body_pct > shape_body_cap
-                        or span_pct > shape_span_cap
-                        or upper_wick > shape_wick_cap
-                        or lower_wick > shape_wick_cap
-                    ):
-                        diag["drop_shape"] += 1
-                        continue
-
+                    # Keep numeric payload clean for tooltip/overlay rendering.
                     try:
                         vol = float(b.get("volume", 0) or 0)
                     except Exception:
@@ -856,10 +771,7 @@ class StockChart(QWidget):
                         }
                     )
                     closes.append(c)
-                    recent_closes.append(float(c))
                     prev_close = c
-                    if day_key:
-                        prev_day_key = day_key
                     diag["kept"] += 1
                 except (ValueError, TypeError):
                     diag["drop_parse"] += 1
@@ -872,9 +784,6 @@ class StockChart(QWidget):
                         f"chart render empty iv={default_iv} "
                         f"rows={diag['rows_total']} kept={diag['kept']} "
                         f"drop_nonfinite={diag['drop_nonfinite']} "
-                        f"drop_interval={diag['drop_interval']} "
-                        f"drop_shape={diag['drop_shape']} "
-                        f"drop_scale={diag['drop_scale']} "
                         f"drop_parse={diag['drop_parse']}"
                     ),
                     min_gap_seconds=0.8,
@@ -1132,17 +1041,12 @@ class StockChart(QWidget):
 
             total_drops = int(
                 diag["drop_nonfinite"]
-                + diag["drop_interval"]
-                + diag["drop_shape"]
-                + diag["drop_scale"]
                 + diag["drop_parse"]
             )
             diag_msg = (
                 f"chart render iv={default_iv} rows={diag['rows_total']} "
                 f"kept={diag['kept']} drops={total_drops} "
-                f"(nf={diag['drop_nonfinite']} iv={diag['drop_interval']} "
-                f"shape={diag['drop_shape']} scale={diag['drop_scale']} "
-                f"parse={diag['drop_parse']})"
+                f"(nf={diag['drop_nonfinite']} parse={diag['drop_parse']})"
             )
             self._dbg_log(
                 f"chart_render:{default_iv}",
@@ -1359,7 +1263,7 @@ class StockChart(QWidget):
             lows = []
             vols = []
             # Build highs/lows/vols in lockstep with the closes array so
-            # indices align perfectly — skip any bar that closes <= 0 to
+            # indices align perfectly; skip any bar that closes <= 0 to
             # match the closes-building loop above.
             for b in bars:
                 c = float(b.get("close", 0) or 0)
@@ -1696,3 +1600,4 @@ class MiniChart(QWidget):
 
         except Exception:
             pass
+
