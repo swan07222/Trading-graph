@@ -86,6 +86,27 @@ def test_persist_runtime_universe_codes_merges_existing(monkeypatch) -> None:
     assert str(saved.get("source", "")) == "ui_universe_refresh"
 
 
+def test_stabilize_universe_refresh_merges_exchange_skew() -> None:
+    cached = [str(600000 + i) for i in range(900)] + [str(1 + i).zfill(6) for i in range(700)]
+    fresh = [str(600000 + i) for i in range(1300)]  # SH-only partial view
+
+    stabilized, reason = universe_mod._stabilize_universe_refresh(fresh, cached)
+
+    assert "exchange coverage collapsed" in reason
+    assert len(stabilized) > len(fresh)
+    assert any(code.startswith("0") for code in stabilized)
+
+
+def test_stabilize_universe_refresh_keeps_balanced_full_refresh() -> None:
+    cached = [str(600000 + i) for i in range(700)] + [str(1 + i).zfill(6) for i in range(650)]
+    fresh = [str(600500 + i) for i in range(760)] + [str(200 + i).zfill(6) for i in range(720)]
+
+    stabilized, reason = universe_mod._stabilize_universe_refresh(fresh, cached)
+
+    assert reason == ""
+    assert stabilized == universe_mod._validate_codes(fresh)
+
+
 @pytest.mark.skipif(not universe_mod._HAS_PANDAS, reason="pandas unavailable")
 def test_get_new_listings_suppresses_datetime_infer_warning(monkeypatch) -> None:
     import pandas as pd

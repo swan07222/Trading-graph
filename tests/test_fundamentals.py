@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
+
 import pandas as pd
 
-from data.fundamentals import FundamentalDataService, _safe_float
+from data.fundamentals import FundamentalDataService, FundamentalSnapshot, _safe_float
 
 
 def test_safe_float_parses_percent_and_cn_units() -> None:
@@ -75,3 +77,21 @@ def test_fundamental_service_cache_reuses_snapshot(monkeypatch) -> None:
 
     assert first is second
     assert calls["n"] == 1
+
+
+def test_fundamental_scores_penalize_sparse_stale_snapshots() -> None:
+    svc = FundamentalDataService(cache_ttl_seconds=600.0)
+    snap = FundamentalSnapshot(
+        symbol="600519",
+        source="akshare",
+        as_of=datetime.now(UTC) - timedelta(days=12),
+        pe_ttm=18.0,
+    )
+
+    svc._recompute_scores(snap)
+
+    assert snap.stale is True
+    assert 0.0 <= snap.composite_score <= 1.0
+    assert snap.composite_score < 0.40
+    joined = " ".join(snap.warnings).lower()
+    assert "quality-adjusted" in joined

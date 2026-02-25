@@ -205,9 +205,12 @@ class StockChart(QWidget):
             "sma200": False,
             "ema21": True,
             "ema55": False,
+            "ema89": False,
             "bb_upper": True,
             "bb_lower": True,
             "vwap20": True,
+            "donchian_high": False,
+            "donchian_low": False,
         }
         self._manual_zoom: bool = False
         self._dbg_last_emit: dict[str, float] = {}
@@ -536,6 +539,10 @@ class StockChart(QWidget):
                 pen=pg.mkPen(color="#edcf7c", width=1, style=Qt.PenStyle.DotLine),
                 name="EMA55",
             ),
+            "ema89": self.plot_widget.plot(
+                pen=pg.mkPen(color="#f2a65a", width=1, style=Qt.PenStyle.DotLine),
+                name="EMA89",
+            ),
             "bb_upper": self.plot_widget.plot(
                 pen=pg.mkPen(color="#8ab2ff", width=1, style=Qt.PenStyle.DashLine),
                 name="BB Upper",
@@ -551,6 +558,14 @@ class StockChart(QWidget):
                     style=Qt.PenStyle.DotLine,
                 ),
                 name="VWAP20",
+            ),
+            "donchian_high": self.plot_widget.plot(
+                pen=pg.mkPen(color="#7dd3fc", width=1, style=Qt.PenStyle.DashLine),
+                name="Donchian High",
+            ),
+            "donchian_low": self.plot_widget.plot(
+                pen=pg.mkPen(color="#7dd3fc", width=1, style=Qt.PenStyle.DashLine),
+                name="Donchian Low",
             ),
         }
 
@@ -1347,6 +1362,14 @@ class StockChart(QWidget):
         out[window - 1:] = (c[window:] - c[:-window]) / float(window)
         return out
 
+    def _rolling_sum(self, values: np.ndarray, window: int) -> np.ndarray:
+        if len(values) < window or window <= 1:
+            return np.full(len(values), np.nan)
+        out = np.full(len(values), np.nan)
+        c = np.cumsum(np.insert(values, 0, 0.0))
+        out[window - 1:] = c[window:] - c[:-window]
+        return out
+
     def _ema(self, values: np.ndarray, span: int) -> np.ndarray:
         if len(values) == 0:
             return np.array([])
@@ -1383,11 +1406,17 @@ class StockChart(QWidget):
         self._plot_series("sma200", self._rolling_mean(arr, 200))
         self._plot_series("ema21", self._ema(arr, 21))
         self._plot_series("ema55", self._ema(arr, 55))
+        self._plot_series("ema89", self._ema(arr, 89))
         bb_mid = self._rolling_mean(arr, 20)
-        bb_std = np.full(len(arr), np.nan)
         if len(arr) >= 20:
-            for i in range(19, len(arr)):
-                bb_std[i] = float(np.std(arr[i - 19:i + 1]))
+            bb_std = (
+                pd.Series(arr)
+                .rolling(window=20, min_periods=20)
+                .std(ddof=0)
+                .to_numpy(dtype=float)
+            )
+        else:
+            bb_std = np.full(len(arr), np.nan)
         self._plot_series("bb_upper", bb_mid + (2.0 * bb_std))
         self._plot_series("bb_lower", bb_mid - (2.0 * bb_std))
 
@@ -1409,23 +1438,44 @@ class StockChart(QWidget):
                 lows.append(low if low > 0 else c)
                 vols.append(max(0.0, v))
             # highs/lows/vols now has exactly len(closes) entries; use full length.
-            n = len(highs)
-            if n != len(arr):
-                n = min(len(highs), len(arr))
+            n = min(len(arr), len(highs), len(lows), len(vols))
             if n <= 0:
                 return
-            tp = (np.array(highs[:n]) + np.array(lows[:n]) + arr[:n]) / 3.0
-            v = np.array(vols[:n], dtype=float)
-            vwap = np.full(n, np.nan)
-            if len(tp) >= 20:
-                for i in range(19, len(tp)):
-                    vv = v[i - 19:i + 1]
-                    denom = float(np.sum(vv))
-                    if denom > 0:
-                        vwap[i] = float(np.sum(tp[i - 19:i + 1] * vv) / denom)
-                    else:
-                        vwap[i] = float(np.mean(tp[i - 19:i + 1]))
+            high_arr = np.array(highs[:n], dtype=float)
+            low_arr = np.array(lows[:n], dtype=float)
+            price_arr = arr[:n]
+            vol_arr = np.array(vols[:n], dtype=float)
+            tp = (high_arr + low_arr + price_arr) / 3.0
+
+            roll_tpv = self._rolling_sum(tp * vol_arr, 20)
+            roll_vol = self._rolling_sum(vol_arr, 20)
+            roll_tp = self._rolling_mean(tp, 20)
+            with np.errstate(divide="ignore", invalid="ignore"):
+                vwap = np.where(roll_vol > 0.0, roll_tpv / roll_vol, roll_tp)
             self._plot_series("vwap20", vwap)
+
+            if n >= 20:
+                donchian_high = (
+                    pd.Series(high_arr)
+                    .rolling(window=20, min_periods=20)
+                    .max()
+                    .to_numpy(dtype=float)
+                )
+                donchian_low = (
+                    pd.Series(low_arr)
+                    .rolling(window=20, min_periods=20)
+                    .min()
+                    .to_numpy(dtype=float)
+                )
+            else:
+                donchian_high = np.full(n, np.nan)
+                donchian_low = np.full(n, np.nan)
+            self._plot_series("donchian_high", donchian_high)
+            self._plot_series("donchian_low", donchian_low)
+        else:
+            self._plot_series("vwap20", np.array([], dtype=float))
+            self._plot_series("donchian_high", np.array([], dtype=float))
+            self._plot_series("donchian_low", np.array([], dtype=float))
 
     def _on_context_menu(self, pos) -> None:
         if not HAS_PYQTGRAPH or self.plot_widget is None:
@@ -1454,8 +1504,10 @@ class StockChart(QWidget):
             ("sma200", "SMA200"),
             ("ema21", "EMA21"),
             ("ema55", "EMA55"),
+            ("ema89", "EMA89"),
             ("bb_upper", "Bollinger"),
             ("vwap20", "VWAP20"),
+            ("donchian_high", "Donchian(20)"),
         ):
             act = menu.addAction(f"Overlay: {name}")
             act.setCheckable(True)
@@ -1464,6 +1516,10 @@ class StockChart(QWidget):
                 bb_upper = bool(self.overlay_enabled.get("bb_upper", True))
                 bb_lower = bool(self.overlay_enabled.get("bb_lower", True))
                 checked = bb_upper and bb_lower
+            elif key == "donchian_high":
+                dc_high = bool(self.overlay_enabled.get("donchian_high", False))
+                dc_low = bool(self.overlay_enabled.get("donchian_low", False))
+                checked = dc_high and dc_low
             else:
                 checked = bool(self.overlay_enabled.get(key, True))
             act.setChecked(checked)
@@ -1490,6 +1546,12 @@ class StockChart(QWidget):
             new_state = not (bb_upper and bb_lower)
             self.overlay_enabled["bb_upper"] = new_state
             self.overlay_enabled["bb_lower"] = new_state
+        elif key == "donchian_high":
+            dc_high = bool(self.overlay_enabled.get("donchian_high", False))
+            dc_low = bool(self.overlay_enabled.get("donchian_low", False))
+            new_state = not (dc_high and dc_low)
+            self.overlay_enabled["donchian_high"] = new_state
+            self.overlay_enabled["donchian_low"] = new_state
         else:
             self.overlay_enabled[key] = not self.overlay_enabled.get(key, True)
         # Use the last rendered (filtered) bars so overlay x-indices align
@@ -1648,6 +1710,9 @@ class StockChart(QWidget):
         if key == "bbands":
             self.overlay_enabled["bb_upper"] = bool(enabled)
             self.overlay_enabled["bb_lower"] = bool(enabled)
+        elif key in {"donchian", "donchian20"}:
+            self.overlay_enabled["donchian_high"] = bool(enabled)
+            self.overlay_enabled["donchian_low"] = bool(enabled)
         else:
             self.overlay_enabled[str(key)] = bool(enabled)
         if self._bars:
@@ -1733,4 +1798,3 @@ class MiniChart(QWidget):
 
         except Exception:
             pass
-

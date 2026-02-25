@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import inspect
+import os
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from importlib.util import module_from_spec, spec_from_file_location
@@ -40,11 +41,75 @@ class StrategyScriptEngine:
         base = Path(getattr(CONFIG, "base_dir", Path(".")))
         self._dir = Path(strategies_dir) if strategies_dir else (base / "strategies")
         self._marketplace = StrategyMarketplace(self._dir)
+        self._plugin_dirs = self._resolve_plugin_dirs()
+
+    def _resolve_plugin_dirs(self) -> list[Path]:
+        configured: list[str] = []
+
+        env_raw = str(os.environ.get("TRADING_STRATEGY_PLUGIN_DIRS", "") or "").strip()
+        if env_raw:
+            normalized = env_raw.replace(",", os.pathsep).replace("\n", os.pathsep)
+            configured.extend(x for x in normalized.split(os.pathsep) if str(x).strip())
+
+        cfg_dirs = getattr(CONFIG, "strategy_plugin_dirs", None)
+        if isinstance(cfg_dirs, str) and cfg_dirs.strip():
+            configured.append(cfg_dirs.strip())
+        elif isinstance(cfg_dirs, (list, tuple, set)):
+            for x in cfg_dirs:
+                s = str(x or "").strip()
+                if s:
+                    configured.append(s)
+
+        out: list[Path] = []
+        seen: set[str] = set()
+        for raw in configured:
+            try:
+                path = Path(raw).expanduser().resolve()
+            except Exception:
+                continue
+            if not path.exists() or not path.is_dir():
+                continue
+            key = str(path)
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(path)
+        return out
+
+    @staticmethod
+    def _discover_python_scripts(directory: Path) -> list[Path]:
+        if not directory.exists() or not directory.is_dir():
+            return []
+        return sorted(
+            p.resolve()
+            for p in directory.glob("*.py")
+            if p.is_file() and p.name != "__init__.py" and not p.name.startswith("_")
+        )
+
+    @staticmethod
+    def _dedupe_paths(paths: list[Path]) -> list[Path]:
+        out: list[Path] = []
+        seen: set[str] = set()
+        for p in paths:
+            try:
+                rp = p.resolve()
+            except Exception:
+                rp = p
+            key = str(rp)
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(rp)
+        return out
 
     def list_strategy_files(self) -> list[Path]:
+        plugin_files: list[Path] = []
+        for plugin_dir in self._plugin_dirs:
+            plugin_files.extend(self._discover_python_scripts(plugin_dir))
+
         files = self._marketplace.get_enabled_files()
         if files:
-            return files
+            return self._dedupe_paths(list(files) + plugin_files)
         # If marketplace metadata exists with strategies, respect the enabled list.
         # For empty/fresh manifests (no strategies listed), use legacy fallback.
         if self._marketplace.manifest_path.exists():
@@ -70,18 +135,20 @@ class StrategyScriptEngine:
                                 if file_path.exists() and file_path.is_file():
                                     result.append(file_path)
                         if result:
-                            return result
-                # If manifest exists with strategies but none are enabled, return empty
-                return []
+                            return self._dedupe_paths(result + plugin_files)
+                # If manifest exists with strategies but none are enabled, allow
+                # external plugin directories to provide strategies.
+                return self._dedupe_paths(plugin_files)
             # Empty manifest - fall through to legacy file discovery
         
         if not self._dir.exists():
-            return []
+            return self._dedupe_paths(plugin_files)
         # Fallback for repos without marketplace metadata or with empty manifest.
-        return sorted(
+        fallback = sorted(
             p for p in self._dir.glob("*.py")
-            if p.is_file() and not p.name.startswith("_")
+            if p.is_file() and not p.name.startswith("_") and p.name != "__init__.py"
         )
+        return self._dedupe_paths(fallback + plugin_files)
 
     def evaluate(
         self,

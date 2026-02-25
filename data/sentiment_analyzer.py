@@ -15,6 +15,7 @@ The analyzer uses a hybrid approach:
 """
 
 import json
+import math
 import re
 from collections import defaultdict
 from dataclasses import dataclass, field
@@ -196,10 +197,12 @@ class SentimentAnalyzer:
         total_policy = 0.0
         total_market = 0.0
         total_confidence = 0.0
+        total_weight = 0.0
 
         for article in recent:
             score = self.analyze_article(article)
-            weight = article.relevance_score
+            weight = self._article_weight(article)
+            total_weight += weight
 
             total_sentiment += score.overall * weight
             total_policy += score.policy_impact * weight
@@ -207,14 +210,89 @@ class SentimentAnalyzer:
             total_confidence += score.confidence * weight
 
         count = len(recent)
+        denom = total_weight if total_weight > 0 else float(count)
+        confidence = (total_confidence / denom) if denom > 0 else 0.0
+        if count > 1:
+            # Increase confidence as article sample-size grows.
+            confidence *= (0.75 + min(0.35, math.log1p(float(count)) / 4.0))
         return SentimentScore(
-            overall=total_sentiment / count if count > 0 else 0.0,
-            policy_impact=total_policy / count if count > 0 else 0.0,
-            market_sentiment=total_market / count if count > 0 else 0.0,
-            confidence=total_confidence / count if count > 0 else 0.0,
+            overall=total_sentiment / denom if denom > 0 else 0.0,
+            policy_impact=total_policy / denom if denom > 0 else 0.0,
+            market_sentiment=total_market / denom if denom > 0 else 0.0,
+            confidence=max(0.0, min(1.0, confidence)),
             article_count=count,
             time_range_hours=hours_back,
         )
+
+    @staticmethod
+    def _article_weight(article: NewsArticle) -> float:
+        try:
+            weight = float(getattr(article, "relevance_score", 0.0) or 0.0)
+        except Exception:
+            weight = 0.0
+        if not math.isfinite(weight) or weight <= 0:
+            return 1.0
+        return max(0.1, min(2.0, weight))
+
+    @staticmethod
+    def _normalize_entity_name(raw: object) -> str:
+        text = str(raw or "").strip()
+        if not text:
+            return ""
+        text = re.sub(r"\s+", " ", text)
+        if len(text) > 64:
+            return ""
+        if re.fullmatch(r"\d{1,6}", text):
+            return text.zfill(6)
+        return text
+
+    def _record_entity(
+        self,
+        entity_mentions: dict[str, dict],
+        *,
+        name: str,
+        entity_type: str,
+        sentiment: float,
+        article_id: str,
+    ) -> None:
+        entity = self._normalize_entity_name(name)
+        if not entity:
+            return
+        slot = entity_mentions[entity]
+        if slot["type"] == "unknown":
+            slot["type"] = entity_type
+        elif entity_type == "policy":
+            # Policy labeling wins for policy matches.
+            slot["type"] = entity_type
+        slot["sentiment_sum"] += float(sentiment)
+        slot["count"] += 1
+        slot["articles"].add(str(article_id))
+
+    @staticmethod
+    def _extract_company_like_entities(text: str, is_chinese: bool) -> list[str]:
+        entities: list[str] = []
+        entities.extend(re.findall(r"\b[0-9]{6}\b", text))
+        entities.extend(
+            t.lstrip("$")
+            for t in re.findall(r"\$?[A-Z]{2,5}\b", text)
+            if t.lstrip("$") not in {"USD", "CNY", "GDP", "CPI", "PPI", "FOMC"}
+        )
+
+        if is_chinese:
+            entities.extend(
+                re.findall(
+                    r"([\u4e00-\u9fff]{2,18}(?:股份|集团|银行|科技|能源|证券|医药|汽车|地产))",
+                    text,
+                )
+            )
+        else:
+            entities.extend(
+                re.findall(
+                    r"\b([A-Z][A-Za-z&\-]{1,30}\s(?:Inc|Corp|Corporation|Ltd|Limited|Group|Bank|Energy|Pharma|Technology|Tech))\b",
+                    text,
+                )
+            )
+        return list(dict.fromkeys(entities))
 
     def analyze_for_symbol(
         self,
@@ -240,35 +318,50 @@ class SentimentAnalyzer:
             "type": "unknown",
             "sentiment_sum": 0.0,
             "count": 0,
-            "articles": [],
+            "articles": set(),
         })
 
         for article in articles:
             score = self.analyze_article(article)
 
-            # Extract company names (simplified - would use NER in production)
-            # Look for stock codes and company names
             text = article.title + " " + article.content
+            is_chinese = article.language == "zh" or self._detect_chinese(text)
 
-            # Match Chinese stock codes (6 digits)
-            stock_codes = re.findall(r'\b[0-9]{6}\b', text)
-            for code in stock_codes:
-                entity_mentions[code]["type"] = "company"
-                entity_mentions[code]["sentiment_sum"] += score.overall
-                entity_mentions[code]["count"] += 1
-                entity_mentions[code]["articles"].append(article.id)
+            for raw_entity in list(getattr(article, "entities", []) or []):
+                entity = self._normalize_entity_name(raw_entity)
+                if not entity:
+                    continue
+                inferred_type = "company" if re.fullmatch(r"\d{6}", entity) else "entity"
+                self._record_entity(
+                    entity_mentions,
+                    name=entity,
+                    entity_type=inferred_type,
+                    sentiment=score.overall,
+                    article_id=article.id,
+                )
 
-            # Match policy names (simplified)
-            if article.category == "policy":
-                policy_keywords = self._extract_policy_keywords(text, article.language == "zh")
+            for entity in self._extract_company_like_entities(text, is_chinese):
+                self._record_entity(
+                    entity_mentions,
+                    name=entity,
+                    entity_type="company",
+                    sentiment=score.overall,
+                    article_id=article.id,
+                )
+
+            if article.category == "policy" or ("policy" in text.lower()):
+                policy_keywords = self._extract_policy_keywords(text, is_chinese)
                 for policy in policy_keywords:
-                    entity_mentions[policy]["type"] = "policy"
-                    entity_mentions[policy]["sentiment_sum"] += score.policy_impact
-                    entity_mentions[policy]["count"] += 1
-                    entity_mentions[policy]["articles"].append(article.id)
+                    self._record_entity(
+                        entity_mentions,
+                        name=policy,
+                        entity_type="policy",
+                        sentiment=score.policy_impact,
+                        article_id=article.id,
+                    )
 
         # Convert to EntitySentiment objects
-        result = []
+        result: list[EntitySentiment] = []
         for entity, data in entity_mentions.items():
             if data["count"] > 0:
                 result.append(EntitySentiment(
@@ -276,9 +369,10 @@ class SentimentAnalyzer:
                     entity_type=data["type"],
                     sentiment=data["sentiment_sum"] / data["count"],
                     mention_count=data["count"],
-                    articles=data["articles"],
+                    articles=sorted(data["articles"]),
                 ))
 
+        result.sort(key=lambda x: (x.mention_count, abs(x.sentiment)), reverse=True)
         return result
 
     def get_trading_signal(self, sentiment: SentimentScore) -> str:

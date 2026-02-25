@@ -117,3 +117,65 @@ def test_marketplace_rejects_unsafe_paths_and_dedupes_enabled(tmp_path: Path) ->
     assert m.get_enabled_ids() == ["safe"]
     files = m.get_enabled_files()
     assert files == [safe.resolve()]
+
+
+def test_top_rated_strategies_uses_bayesian_and_performance_signal(tmp_path: Path) -> None:
+    strategies_dir = tmp_path / "strategies"
+    strategies_dir.mkdir(parents=True, exist_ok=True)
+
+    (strategies_dir / "few.py").write_text(
+        "def generate_signal(df, indicators, context): return {'action':'hold','score':0}\n",
+        encoding="utf-8",
+    )
+    (strategies_dir / "many.py").write_text(
+        "def generate_signal(df, indicators, context): return {'action':'hold','score':0}\n",
+        encoding="utf-8",
+    )
+
+    (strategies_dir / "marketplace.json").write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "strategies": [
+                    {"id": "few", "name": "FewVotes", "version": "1.0", "file": "few.py", "last_updated": "2025-01-01T00:00:00"},
+                    {"id": "many", "name": "ManyVotes", "version": "1.0", "file": "many.py", "last_updated": "2026-02-20T00:00:00"},
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (strategies_dir / "ratings.json").write_text(
+        json.dumps(
+            {
+                "ratings": [],
+                "strategy_averages": {
+                    "few": {"average": 5.0, "count": 3},
+                    "many": {"average": 4.8, "count": 50},
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    (strategies_dir / "performance.json").write_text(
+        json.dumps(
+            {
+                "performance": {
+                    "many": {
+                        "strategy_id": "many",
+                        "total_trades": 260,
+                        "win_rate": 0.66,
+                        "total_return": 0.44,
+                        "sharpe_ratio": 1.9,
+                        "max_drawdown": 0.12,
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    m = StrategyMarketplace(strategies_dir=strategies_dir)
+    top = m.get_top_rated_strategies(min_ratings=3, limit=2)
+
+    assert len(top) == 2
+    assert top[0].id == "many"

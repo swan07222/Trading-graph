@@ -387,6 +387,48 @@ class FundamentalDataService:
         snapshot.dividend_yield_pct = _safe_float(values.get(key_dividend_yield))
         return snapshot
 
+    @staticmethod
+    def _completeness_ratio(snapshot: FundamentalSnapshot) -> float:
+        fields = (
+            snapshot.pe_ttm,
+            snapshot.pb,
+            snapshot.roe_pct,
+            snapshot.revenue_yoy_pct,
+            snapshot.net_profit_yoy_pct,
+            snapshot.debt_to_asset_pct,
+            snapshot.market_cap_cny,
+            snapshot.dividend_yield_pct,
+            snapshot.avg_notional_20d_cny,
+            snapshot.annualized_volatility,
+            snapshot.trend_60d,
+        )
+        present = sum(1 for v in fields if v is not None)
+        total = max(1, len(fields))
+        return float(present) / float(total)
+
+    @staticmethod
+    def _freshness_factor(snapshot: FundamentalSnapshot) -> float:
+        as_of = snapshot.as_of
+        try:
+            if as_of.tzinfo is None:
+                as_of = as_of.replace(tzinfo=UTC)
+            now = datetime.now(UTC)
+            age_hours = max(0.0, (now - as_of).total_seconds() / 3600.0)
+        except Exception:
+            age_hours = 0.0
+
+        if age_hours <= 24.0:
+            snapshot.stale = False
+            return 1.0
+        if age_hours <= 72.0:
+            snapshot.stale = False
+            return 0.96
+        if age_hours <= (7.0 * 24.0):
+            snapshot.stale = False
+            return 0.88
+        snapshot.stale = True
+        return 0.74
+
     def _recompute_scores(self, snapshot: FundamentalSnapshot) -> None:
         snapshot.value_score = _score_value(
             snapshot.pe_ttm,
@@ -403,11 +445,31 @@ class FundamentalDataService:
             snapshot.net_profit_yoy_pct,
             snapshot.trend_60d,
         )
-        snapshot.composite_score = _clip01(
+        raw_composite = _clip01(
             (0.35 * snapshot.value_score)
             + (0.35 * snapshot.quality_score)
             + (0.30 * snapshot.growth_score)
         )
+        completeness_ratio = self._completeness_ratio(snapshot)
+        completeness_factor = 0.70 + (0.30 * completeness_ratio)
+        freshness_factor = self._freshness_factor(snapshot)
+
+        source_factor = 1.0
+        if str(snapshot.source).strip().lower() == "proxy":
+            source_factor = 0.95
+
+        quality_factor = _clip01(completeness_factor * freshness_factor * source_factor)
+        snapshot.composite_score = _clip01(raw_composite * quality_factor)
+
+        if completeness_ratio < 0.35:
+            snapshot.warnings.append(
+                "Fundamental coverage is sparse; composite score quality-adjusted"
+            )
+        if freshness_factor < 0.90:
+            snapshot.warnings.append(
+                "Fundamental snapshot is aging; composite score quality-adjusted"
+            )
+        snapshot.warnings = list(dict.fromkeys(snapshot.warnings))
 
 
 def get_fundamental_service() -> FundamentalDataService:

@@ -84,6 +84,46 @@ def test_realtime_batch_uses_non_tencent_batch_fallback_when_tencent_partial(mon
     assert out["000001"].source == "akshare"
 
 
+def test_realtime_batch_prefers_higher_quality_fallback_quote(monkeypatch) -> None:
+    monkeypatch.setenv("TRADING_OFFLINE", "0")
+    fetcher = _make_fetcher_for_realtime()
+
+    class _Tencent:
+        name = "tencent"
+
+        @staticmethod
+        def get_realtime_batch(codes):  # noqa: ARG002
+            q = _mk_quote("600519", 101.0, "tencent")
+            q.is_delayed = True
+            q.latency_ms = 2200.0
+            q.timestamp = datetime.now() - timedelta(seconds=9)
+            return {"600519": q}
+
+    class _Akshare:
+        name = "akshare"
+
+        @staticmethod
+        def get_realtime_batch(codes):  # noqa: ARG002
+            q = _mk_quote("600519", 101.2, "akshare")
+            q.is_delayed = False
+            q.latency_ms = 35.0
+            q.timestamp = datetime.now()
+            return {"600519": q}
+
+    fetcher._get_active_sources = lambda: [_Tencent(), _Akshare()]
+    fetcher._fill_from_spot_cache = lambda missing, result: None
+    fetcher._fill_from_single_source_quotes = lambda missing, result, sources: None
+    fetcher._maybe_force_network_refresh = lambda: False
+    fetcher._fallback_last_good = lambda codes: {}
+    fetcher._fallback_last_close_from_db = lambda codes: {}
+
+    out = fetcher.get_realtime_batch(["600519"])
+
+    assert "600519" in out
+    assert out["600519"].source == "akshare"
+    assert out["600519"].is_delayed is False
+
+
 def test_realtime_batch_uses_non_tencent_single_quote_for_missing(monkeypatch) -> None:
     monkeypatch.setenv("TRADING_OFFLINE", "0")
     fetcher = _make_fetcher_for_realtime()

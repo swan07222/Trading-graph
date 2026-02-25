@@ -33,6 +33,10 @@ _MIN_REASONABLE_UNIVERSE_SIZE = 1200
 _TARGET_FULL_UNIVERSE_SIZE = 4500
 _FALLBACK_PER_CALL_TIMEOUT_S = 15.0
 _VPN_TIMEOUT_MULTIPLIER = 3.0  # Longer timeouts for VPN users (AkShare is slow via VPN)
+_MIN_MIX_BASELINE = 80
+_MIN_EXCHANGE_RETENTION_RATIO = 0.20
+_MIN_TOTAL_RETENTION_RATIO = 0.60
+_MIN_MULTI_EXCHANGE_SIZE = 600
 
 
 def _universe_path() -> Path:
@@ -123,6 +127,76 @@ def _validate_codes(codes: list) -> list[str]:
             continue
         validated.append(code6)
     return sorted(set(validated))
+
+
+def _exchange_counts(codes: list[str]) -> dict[str, int]:
+    counts: dict[str, int] = {"SSE": 0, "SZSE": 0, "BSE": 0}
+    for code in codes:
+        ex = str(get_exchange(code)).upper()
+        if ex in counts:
+            counts[ex] += 1
+    return counts
+
+
+def _should_merge_partial_refresh(
+    fresh_codes: list[str],
+    cached_codes: list[str],
+) -> tuple[bool, str]:
+    fresh = _validate_codes(list(fresh_codes or []))
+    cached = _validate_codes(list(cached_codes or []))
+
+    if not fresh:
+        return True, "fresh universe empty"
+    if not cached:
+        return False, ""
+
+    fresh_n = len(fresh)
+    cached_n = len(cached)
+
+    if fresh_n < _MIN_REASONABLE_UNIVERSE_SIZE:
+        return True, (
+            f"fresh universe too small ({fresh_n} < {_MIN_REASONABLE_UNIVERSE_SIZE})"
+        )
+
+    if cached_n >= _MIN_REASONABLE_UNIVERSE_SIZE:
+        min_keep = int(max(
+            _MIN_REASONABLE_UNIVERSE_SIZE,
+            float(cached_n) * float(_MIN_TOTAL_RETENTION_RATIO),
+        ))
+        if fresh_n < min_keep:
+            return True, (
+                f"fresh universe dropped sharply ({fresh_n} < {min_keep})"
+            )
+
+    fresh_mix = _exchange_counts(fresh)
+    cached_mix = _exchange_counts(cached)
+    if fresh_n >= _MIN_MULTI_EXCHANGE_SIZE and cached_n >= _MIN_MULTI_EXCHANGE_SIZE:
+        for ex, cached_count in cached_mix.items():
+            if cached_count < _MIN_MIX_BASELINE:
+                continue
+            fresh_count = int(fresh_mix.get(ex, 0))
+            min_expected = int(max(10, cached_count * _MIN_EXCHANGE_RETENTION_RATIO))
+            if fresh_count < min_expected:
+                return True, (
+                    f"exchange coverage collapsed for {ex} ({fresh_count} < {min_expected})"
+                )
+
+    return False, ""
+
+
+def _stabilize_universe_refresh(
+    fresh_codes: list[str],
+    cached_codes: list[str],
+) -> tuple[list[str], str]:
+    fresh = _validate_codes(list(fresh_codes or []))
+    cached = _validate_codes(list(cached_codes or []))
+    should_merge, reason = _should_merge_partial_refresh(fresh, cached)
+    if not should_merge:
+        return fresh, ""
+    merged = _validate_codes(cached + fresh)
+    if not merged:
+        return fresh, reason
+    return merged, reason
 
 
 def _fallback_codes() -> list[str]:
@@ -530,16 +604,18 @@ def get_universe_codes(
     fresh_codes = _try_akshare_fetch(timeout=int(timeout))
 
     if fresh_codes:
-        if cached_codes and len(fresh_codes) < _MIN_REASONABLE_UNIVERSE_SIZE:
-            merged = _validate_codes(cached_codes + fresh_codes)
-            if len(merged) > len(fresh_codes):
-                log.warning(
-                    "Universe refresh appears partial (%s codes); merged with cache "
-                    "to %s codes",
-                    len(fresh_codes),
-                    len(merged),
-                )
-                fresh_codes = merged
+        stabilized_codes, reason = _stabilize_universe_refresh(
+            fresh_codes,
+            cached_codes,
+        )
+        if reason:
+            log.warning(
+                "Universe refresh stabilized: %s (fresh=%s, stabilized=%s)",
+                reason,
+                len(_validate_codes(fresh_codes)),
+                len(stabilized_codes),
+            )
+        fresh_codes = stabilized_codes
 
         out = {
             "codes": fresh_codes,
@@ -599,16 +675,18 @@ def refresh_universe() -> dict:
 
     if fresh_codes:
         existing_codes = _validate_codes(existing_codes)
-        if existing_codes and len(fresh_codes) < _MIN_REASONABLE_UNIVERSE_SIZE:
-            merged = _validate_codes(existing_codes + fresh_codes)
-            if len(merged) > len(fresh_codes):
-                log.warning(
-                    "Universe refresh appears partial (%s codes); merged with existing "
-                    "to %s codes",
-                    len(fresh_codes),
-                    len(merged),
-                )
-                fresh_codes = merged
+        stabilized_codes, reason = _stabilize_universe_refresh(
+            fresh_codes,
+            existing_codes,
+        )
+        if reason:
+            log.warning(
+                "Universe refresh stabilized: %s (fresh=%s, stabilized=%s)",
+                reason,
+                len(_validate_codes(fresh_codes)),
+                len(stabilized_codes),
+            )
+        fresh_codes = stabilized_codes
 
         out = {
             "codes": fresh_codes,

@@ -53,7 +53,7 @@ Trading Graph is a desktop AI trading **analysis** system for China A-shares wit
 │ │ NewsCollector│ │      │ │ Predictor    │ │      │ │ Collector    │ │
 │ │ Sources      │ │      │ │ NewsTrainer  │ │      │ │ Sentiment    │ │
 │ │ Cache        │ │      │ │ AutoLearner  │ │      │ │ Analyzer     │ │
-│ │ Database     │ │      │ │ Ensemble     │ │      │ │ Entity Extract││
+│ │ Database     │ │      │ │ Ensemble     │ │      │ │ EntityExtract│ │
 │ └──────────────┘ │      │ └──────────────┘ │      │ └──────────────┘ │
 └──────────────────┘      └──────────────────┘      └──────────────────┘
         │                           │                           │
@@ -64,7 +64,7 @@ Trading Graph is a desktop AI trading **analysis** system for China A-shares wit
 │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐  ┌────────────┐  │
 │  │ Events      │  │ Types       │  │ Constants   │  │ Network    │  │
 │  │ (Event Bus) │  │(Dataclasses)│  │ (Config)    │  │ (China)    │  │
-│  └─────────────┘  └─────────────┘  └────────────┘  └────────────┘  │
+│  └─────────────┘  └─────────────┘  └─────────────┘  └────────────┘  │
 └─────────────────────────────────────────────────────────────────────┘
                                     │
                                     ▼
@@ -73,7 +73,7 @@ Trading Graph is a desktop AI trading **analysis** system for China A-shares wit
 │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐  ┌────────────┐  │
 │  │ SQLite      │  │ File System │  │ Security    │  │ Logging    │  │
 │  │(Persistence)│  │ (Cache)     │  │ (Crypto)    │  │ (Audit)    │  │
-│  └─────────────┘  └─────────────┘  └────────────┘  └────────────┘  │
+│  └─────────────┘  └─────────────┘  └─────────────┘  └────────────┘  │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -159,7 +159,7 @@ Market Data Sources → DataFetcher → Cache → Database → UI/Models
 ┌─────────────────────────────────────────────────────────────┐
 │                    News-Based Training                      │
 │  News Articles → Transformer Encoder ─┐                     │
-│  Sentiment Scores → MLP ──────────────┼→ Fusion → Signal   │
+│  Sentiment Scores → MLP ──────────────┼→ Fusion → Signal    │
 │  Price Data → LSTM ───────────────────┘                     │
 └─────────────────────────────────────────────────────────────┘
 ```

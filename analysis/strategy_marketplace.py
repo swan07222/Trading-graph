@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import zipfile
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -561,10 +562,60 @@ class StrategyMarketplace:
             return averages[strategy_id]
         return {"average": 0.0, "count": 0}
 
+    @staticmethod
+    def _parse_iso_datetime(raw: object) -> datetime | None:
+        text = str(raw or "").strip()
+        if not text:
+            return None
+        try:
+            return datetime.fromisoformat(text)
+        except Exception:
+            return None
+
+    def _strategy_recency_factor(self, entry: StrategyEntry) -> float:
+        ts = self._parse_iso_datetime(entry.last_updated) or self._parse_iso_datetime(entry.created_at)
+        if ts is None:
+            return 0.85
+        age_days = max(0.0, (datetime.now() - ts).total_seconds() / 86400.0)
+        # Smooth exponential decay with ~120-day half-life.
+        return max(0.65, min(1.0, math.exp(-age_days / 173.0)))
+
+    @staticmethod
+    def _performance_rank_component(entry: StrategyEntry) -> float:
+        perf = entry.performance
+        if perf is None or int(perf.total_trades) <= 0:
+            return 0.0
+        trades = max(0.0, float(perf.total_trades))
+        sample_factor = min(1.0, math.log1p(trades) / 4.0)
+        sharpe = max(-1.0, min(3.0, float(perf.sharpe_ratio)))
+        sharpe_norm = (sharpe + 1.0) / 4.0
+        win = max(0.0, min(1.0, float(perf.win_rate)))
+        drawdown = max(0.0, min(1.0, abs(float(perf.max_drawdown))))
+        risk_adj = max(0.0, 1.0 - (drawdown * 0.8))
+        return max(0.0, min(1.0, ((0.55 * sharpe_norm) + (0.45 * win)) * sample_factor * risk_adj))
+
     def get_top_rated_strategies(self, min_ratings: int = 3, limit: int = 10) -> list[StrategyEntry]:
-        """Get top-rated strategies."""
+        """Get top-rated strategies with Bayesian and recency-aware ranking."""
         entries = [e for e in self.list_entries() if e.rating_count >= min_ratings]
-        entries.sort(key=lambda e: e.rating_avg, reverse=True)
+        if not entries:
+            return []
+
+        total_votes = sum(max(0, int(e.rating_count)) for e in entries)
+        weighted_sum = sum(max(0.0, float(e.rating_avg)) * max(0, int(e.rating_count)) for e in entries)
+        global_mean = (weighted_sum / total_votes) if total_votes > 0 else 3.0
+        prior_votes = max(3.0, float(min_ratings))
+
+        def _rank(entry: StrategyEntry) -> float:
+            votes = max(0.0, float(entry.rating_count))
+            avg = max(0.0, min(5.0, float(entry.rating_avg)))
+            bayes = ((avg * votes) + (global_mean * prior_votes)) / (votes + prior_votes)
+            bayes_norm = bayes / 5.0
+            perf_component = self._performance_rank_component(entry)
+            recency = self._strategy_recency_factor(entry)
+            integrity = 1.0 if str(entry.integrity).lower() == "ok" else 0.9
+            return (0.68 * bayes_norm) + (0.24 * perf_component) + (0.08 * recency * integrity)
+
+        entries.sort(key=_rank, reverse=True)
         return entries[:limit]
 
     # ==================== PERFORMANCE TRACKING ====================

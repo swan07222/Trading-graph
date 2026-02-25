@@ -191,3 +191,35 @@ def test_strategy_engine_passes_marketplace_params_and_weight(tmp_path: Path) ->
     # score(0.4) * 15 * combined_weight(2.0) = 12.0
     assert bias >= 11.5
     assert any("param_rule:0.40" in r for r in reasons)
+
+
+def test_strategy_engine_discovers_external_plugin_dirs(monkeypatch, tmp_path: Path) -> None:
+    strategies_dir = tmp_path / "strategies"
+    plugins_dir = tmp_path / "plugins"
+    strategies_dir.mkdir(parents=True, exist_ok=True)
+    plugins_dir.mkdir(parents=True, exist_ok=True)
+
+    plugin = plugins_dir / "ext_rule.py"
+    plugin.write_text(
+        "\n".join(
+            [
+                "def generate_signal(df, indicators, context):",
+                "    return {'action': 'buy', 'score': 0.5, 'reason': 'external plugin'}",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setenv("TRADING_STRATEGY_PLUGIN_DIRS", str(plugins_dir))
+    engine = StrategyScriptEngine(strategies_dir=strategies_dir)
+
+    files = engine.list_strategy_files()
+    assert plugin.resolve() in files
+
+    bias, reasons = engine.evaluate(
+        df=_make_df(),
+        indicators={"rsi_14": 50.0},
+        symbol="600519",
+    )
+    assert bias > 0
+    assert any("external plugin" in r for r in reasons)
