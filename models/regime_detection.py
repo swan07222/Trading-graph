@@ -327,7 +327,7 @@ class RegimeDetector:
     ) -> bool:
         """Detect if regime is changing."""
         with self._lock:
-            if len(self._regime_history) < lookback_changes:
+            if len(self._regime_history) <= lookback_changes:
                 return False
 
             recent_regimes = [

@@ -670,32 +670,49 @@ def _validate_temporal_split_integrity(
         # Check 5: Return-based leakage detection
         # If features contain future returns, correlation will be suspiciously high
         if "label" in train_df.columns and len(train_df) > 100:
-            label_clean = train_df["label"].dropna()
+            label_clean = pd.to_numeric(
+                train_df["label"], errors="coerce"
+            ).dropna()
             if len(label_clean) > 50:
                 severe_leakage_detected = False
                 for col in feature_cols[:3]:  # Sample check
                     if col in train_df.columns:
-                        feature_clean = train_df[col].dropna()
-                        if len(feature_clean) == len(label_clean):
-                            try:
-                                corr = float(
-                                    np.corrcoef(
-                                        feature_clean.values,
-                                        label_clean.values,
-                                    )[0, 1]
+                        feature_series = pd.to_numeric(
+                            train_df[col], errors="coerce"
+                        )
+                        aligned = pd.concat(
+                            [
+                                feature_series,
+                                pd.to_numeric(train_df["label"], errors="coerce"),
+                            ],
+                            axis=1,
+                            keys=["feature", "label"],
+                        ).dropna()
+                        if len(aligned) < 50:
+                            if abs(len(feature_series.dropna()) - len(label_clean)) > 0:
+                                report["warnings"].append(
+                                    f"correlation_overlap_insufficient:{col}:{len(aligned)}"
                                 )
-                                if np.isfinite(corr) and abs(corr) > 0.8:
-                                    report["warnings"].append(
-                                        f"suspicious_high_correlation:{col}:{corr:.3f}"
-                                    )
-                                # FIX LEAK: Block training on extreme correlation (>0.95)
-                                if np.isfinite(corr) and abs(corr) > 0.95:
-                                    severe_leakage_detected = True
-                                    report["errors"].append(
-                                        f"extreme_leakage:{col}:{corr:.3f}"
-                                    )
-                            except (ValueError, FloatingPointError):
-                                pass
+                            continue
+                        try:
+                            corr = float(
+                                np.corrcoef(
+                                    aligned["feature"].to_numpy(dtype=np.float64),
+                                    aligned["label"].to_numpy(dtype=np.float64),
+                                )[0, 1]
+                            )
+                            if np.isfinite(corr) and abs(corr) > 0.8:
+                                report["warnings"].append(
+                                    f"suspicious_high_correlation:{col}:{corr:.3f}"
+                                )
+                            # FIX LEAK: Block training on extreme correlation (>0.95)
+                            if np.isfinite(corr) and abs(corr) > 0.95:
+                                severe_leakage_detected = True
+                                report["errors"].append(
+                                    f"extreme_leakage:{col}:{corr:.3f}"
+                                )
+                        except (ValueError, FloatingPointError):
+                            pass
                 if severe_leakage_detected:
                     report["passed"] = False
                     return report
@@ -983,7 +1000,8 @@ def _fallback_temporal_validation_split(
         )
         return X_train, y_train, r_train, empty_x, empty_y, empty_r
 
-    holdout = max(1, total // 7)
+    min_val = max(2, min(32, total // 10))
+    holdout = max(min_val, total // 7)
     raw_gap = max(
         int(CONFIG.EMBARGO_BARS),
         int(self.prediction_horizon),
@@ -1002,8 +1020,18 @@ def _fallback_temporal_validation_split(
     X_val = X_train[val_start:]
     y_val = y_train[val_start:]
 
+    if len(X_val) < min_val:
+        val_start = max(1, total - min_val)
+        train_end = max(1, val_start - gap)
+        if train_end >= val_start:
+            train_end = max(1, val_start - 1)
+        X_tr = X_train[:train_end]
+        y_tr = y_train[:train_end]
+        X_val = X_train[val_start:]
+        y_val = y_train[val_start:]
+
     if len(X_val) == 0:
-        split = max(1, total - 1)
+        split = max(1, total - 2)
         X_tr = X_train[:split]
         y_tr = y_train[:split]
         X_val = X_train[split:]

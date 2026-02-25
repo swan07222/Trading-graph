@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 
 from core.types import Signal
 
@@ -39,7 +39,7 @@ class Prediction:
 
     stock_code: str
     stock_name: str = ""
-    timestamp: datetime = field(default_factory=datetime.now)
+    timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
     signal: Signal = Signal.HOLD
     signal_strength: float = 0.0
@@ -86,3 +86,7 @@ class Prediction:
     news_sentiment: float = 0.0
     news_confidence: float = 0.0
     news_count: int = 0
+
+    # Regime-aware metadata.
+    regime: str = ""
+    regime_threshold: float = 0.0

@@ -38,6 +38,8 @@ class RealtimePredictor:
         self._loaded = False
         self._loading = False
         self._lock = threading.RLock()
+        self._load_event = threading.Event()
+        self._load_event.set()
         self._device: str = "cpu"
 
         if auto_load:
@@ -53,22 +55,37 @@ class RealtimePredictor:
         if self._loaded:
             return True
 
+        if not hasattr(self, "_load_event") or self._load_event is None:
+            self._load_event = threading.Event()
+            self._load_event.set()
+
+        should_load = False
+        wait_event = None
         with self._lock:
             # Double-check under lock
             if self._loaded:
                 return True
 
             if self._loading:
-                log.debug("load_models() already in progress, waiting...")
-                return self._loaded
+                wait_event = self._load_event
+            else:
+                self._loading = True
+                self._load_event.clear()
+                should_load = True
 
-            self._loading = True
+        if not should_load:
+            log.debug("load_models() already in progress, waiting...")
+            if wait_event is not None:
+                wait_event.wait(timeout=30.0)
+            with self._lock:
+                return bool(self._loaded)
 
         try:
             return self._do_load_models()
         finally:
             with self._lock:
                 self._loading = False
+                self._load_event.set()
 
     def _do_load_models(self) -> bool:
         """Internal model loading implementation."""
@@ -381,6 +398,10 @@ class RealtimePredictor:
             "timestamp": datetime.now(),
             "signal": "HOLD",
             "confidence": 0.0,
+            "probabilities": [1.0 / max(int(CONFIG.NUM_CLASSES), 1)] * max(int(CONFIG.NUM_CLASSES), 1),
+            "predicted_class": 1 if int(CONFIG.NUM_CLASSES) > 1 else 0,
+            "entropy": 1.0,
+            "agreement": 0.0,
         }
 
         if self.ensemble is not None:
@@ -388,6 +409,8 @@ class RealtimePredictor:
             result["probabilities"] = pred.probabilities.tolist()
             result["predicted_class"] = pred.predicted_class
             result["confidence"] = pred.confidence
+            result["entropy"] = float(getattr(pred, "entropy", 0.0))
+            result["agreement"] = float(getattr(pred, "agreement", 0.0))
 
             min_conf = float(CONFIG.MIN_CONFIDENCE)
 

@@ -98,31 +98,66 @@ class MonteCarloDropout:
         except ImportError:
             log.warning("PyTorch not available for MC Dropout")
             return self._fallback_predict(model, X)
-        
+
         with self._lock:
-            # Ensure model is in eval mode but we'll manually control dropout
-            model.eval()
-            
             predictions: list[np.ndarray] = []
-            
-            # Enable training mode only for nn.Dropout layers (MC Dropout)
-            for module in model.modules():
-                if isinstance(module, torch.nn.Dropout):
-                    module.train()
-            
-            # Generate stochastic predictions
-            with torch.no_grad():
-                X_tensor = torch.FloatTensor(X).unsqueeze(0)
-                
-                for _ in range(self.n_samples):
-                    pred = model(X_tensor)
-                    predictions.append(pred.numpy().flatten())
-            
-            # Reset to eval mode
-            model.eval()
-            
+
+            dropout_states: list[tuple[Any, bool]] = []
+            model_training_state = bool(getattr(model, "training", False))
+
+            X_tensor = torch.as_tensor(X, dtype=torch.float32)
+            if X_tensor.ndim == 1:
+                X_tensor = X_tensor.unsqueeze(0)
+
+            try:
+                if training:
+                    model.train()
+                else:
+                    model.eval()
+                    # Enable only dropout layers for MC sampling.
+                    for module in model.modules():
+                        if isinstance(module, torch.nn.Dropout):
+                            dropout_states.append((module, bool(module.training)))
+                            module.train(True)
+
+                with torch.no_grad():
+                    for _ in range(self.n_samples):
+                        raw_pred = model(X_tensor)
+                        pred = (
+                            raw_pred[0]
+                            if isinstance(raw_pred, (tuple, list))
+                            else raw_pred
+                        )
+                        if hasattr(pred, "detach"):
+                            pred_arr = pred.detach().cpu().numpy()
+                        else:
+                            pred_arr = np.asarray(pred)
+                        pred_arr = np.asarray(pred_arr, dtype=np.float64).reshape(-1)
+                        if pred_arr.size == 0:
+                            continue
+                        pred_arr = np.nan_to_num(
+                            pred_arr, nan=0.0, posinf=0.0, neginf=0.0
+                        )
+                        predictions.append(pred_arr)
+            finally:
+                if training:
+                    model.train(model_training_state)
+                else:
+                    for module, was_training in dropout_states:
+                        module.train(was_training)
+                    model.eval()
+
+            if not predictions:
+                return self._fallback_predict(model, X)
+
+            min_len = min(int(p.size) for p in predictions)
+            if min_len <= 0:
+                return self._fallback_predict(model, X)
+            if any(int(p.size) != min_len for p in predictions):
+                predictions = [p[:min_len] for p in predictions]
+
             # Calculate statistics
-            predictions_array = np.array(predictions)
+            predictions_array = np.asarray(predictions, dtype=np.float64)
             mean_pred = np.mean(predictions_array, axis=0)
             std_pred = np.std(predictions_array, axis=0)
             
@@ -199,6 +234,7 @@ class DeepEnsemble:
         self.aggregation = aggregation
         self._models: list[Any] = []
         self._model_weights: list[float] = []
+        self._last_prediction_matrix: np.ndarray | None = None
         self._lock = threading.RLock()
     
     def add_model(
@@ -266,6 +302,7 @@ class DeepEnsemble:
             
             predictions = np.array(individual_predictions)
             weights = np.array(weights)
+            self._last_prediction_matrix = np.array(predictions, copy=True)
             
             # Aggregation
             if self.aggregation == "mean":
@@ -309,19 +346,45 @@ class DeepEnsemble:
         with self._lock:
             if len(self._models) < 2:
                 return 1.0
-            
-            # Calculate pairwise correlations
-            correlations = []
-            for i in range(len(self._models)):
-                for _j in range(i + 1, len(self._models)):
-                    # Placeholder: actual agreement requires stored per-sample predictions.
-                    # Log a warning so callers are aware the metric is not real.
-                    correlations.append(0.9)
 
-            log.debug(
-                "get_model_agreement: returning placeholder 0.9 "
-                "(no per-sample prediction history stored yet)"
-            )
+            pred_matrix = self._last_prediction_matrix
+            if pred_matrix is None or pred_matrix.shape[0] < 2:
+                return 1.0
+
+            correlations: list[float] = []
+            n_models = int(pred_matrix.shape[0])
+            for i in range(n_models):
+                for j in range(i + 1, n_models):
+                    a = np.asarray(pred_matrix[i], dtype=np.float64).reshape(-1)
+                    b = np.asarray(pred_matrix[j], dtype=np.float64).reshape(-1)
+                    n = min(len(a), len(b))
+                    if n <= 0:
+                        continue
+                    a = a[:n]
+                    b = b[:n]
+
+                    if (
+                        n >= 2
+                        and np.std(a) > 1e-12
+                        and np.std(b) > 1e-12
+                    ):
+                        corr = float(np.corrcoef(a, b)[0, 1])
+                        if np.isfinite(corr):
+                            # Map [-1, 1] to [0, 1].
+                            score = 0.5 * (corr + 1.0)
+                        else:
+                            score = 0.0
+                    else:
+                        # For scalar/constant predictions use normalized distance.
+                        scale = max(
+                            float(np.max(np.abs(np.concatenate((a, b))))),
+                            1e-6,
+                        )
+                        mad = float(np.mean(np.abs(a - b)))
+                        score = 1.0 - min(1.0, mad / scale)
+
+                    correlations.append(float(np.clip(score, 0.0, 1.0)))
+
             return float(np.mean(correlations)) if correlations else 1.0
 
 
@@ -526,11 +589,13 @@ class UncertaintyQuantifier:
 
 # Global instance
 _uncertainty_quantifier: UncertaintyQuantifier | None = None
+_uncertainty_quantifier_lock = threading.RLock()
 
 
 def get_uncertainty_quantifier() -> UncertaintyQuantifier:
     """Get global uncertainty quantifier."""
     global _uncertainty_quantifier
-    if _uncertainty_quantifier is None:
-        _uncertainty_quantifier = UncertaintyQuantifier()
-    return _uncertainty_quantifier
+    with _uncertainty_quantifier_lock:
+        if _uncertainty_quantifier is None:
+            _uncertainty_quantifier = UncertaintyQuantifier()
+        return _uncertainty_quantifier

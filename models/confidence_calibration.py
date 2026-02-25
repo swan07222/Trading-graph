@@ -19,6 +19,7 @@ import threading
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
+from statistics import NormalDist
 
 import numpy as np
 
@@ -205,9 +206,8 @@ class ConfidenceCalibrator:
                                 "bucket accounting error for %s (correct=%d, total=%d)",
                                 prediction.symbol, bucket.correct, bucket.total
                             )
-                            # Still increment to maintain consistency
-                            bucket.correct += 1
-                            bucket.total += 1
+                            # Do not auto-promote bucket accuracy to 100% on
+                            # out-of-order updates; caller should re-record.
                     break
             
             # Handle edge case where confidence equals max boundary
@@ -247,34 +247,57 @@ class ConfidenceCalibrator:
         Returns:
             Calibrated confidence (0-1)
         """
+        raw_conf = float(
+            np.clip(np.nan_to_num(raw_confidence, nan=0.5), 0.0, 1.0)
+        )
+
         with self._lock:
-            # Symbol-specific calibration if available (uses separate map)
+            # Symbol-specific reliability adjustment must still preserve
+            # raw-confidence ordering (55% != 95%).
+            conf_input = raw_conf
             if symbol and symbol in self._symbol_calibration_map:
-                return self._symbol_calibration_map[symbol]
-            
+                symbol_acc = float(
+                    np.clip(self._symbol_calibration_map[symbol], 0.01, 0.99)
+                )
+                if conf_input <= 0.0:
+                    conf_input = 0.0
+                elif conf_input >= 1.0:
+                    conf_input = 1.0
+                else:
+                    odds = conf_input / max(1e-8, 1.0 - conf_input)
+                    reliability_odds = symbol_acc / max(1e-8, 1.0 - symbol_acc)
+                    conf_input = float(
+                        np.clip(
+                            (odds * reliability_odds)
+                            / (1.0 + (odds * reliability_odds)),
+                            0.0,
+                            1.0,
+                        )
+                    )
+
             # Find calibration from nearest bucket
             if not self._calibration_map:
-                return raw_confidence  # No calibration data yet
+                return conf_input  # No calibration data yet
 
             # Linear interpolation
             sorted_points = sorted(self._calibration_map.keys())
-            if raw_confidence <= sorted_points[0]:
+            if conf_input <= sorted_points[0]:
                 return self._calibration_map[sorted_points[0]]
-            if raw_confidence >= sorted_points[-1]:
+            if conf_input >= sorted_points[-1]:
                 return self._calibration_map[sorted_points[-1]]
 
             # Find bracketing points
             for i in range(len(sorted_points) - 1):
                 low = sorted_points[i]
                 high = sorted_points[i + 1]
-                if low <= raw_confidence < high:
+                if low <= conf_input < high:
                     # Linear interpolation
-                    t = (raw_confidence - low) / (high - low)
+                    t = (conf_input - low) / (high - low)
                     cal_low = self._calibration_map[low]
                     cal_high = self._calibration_map[high]
                     return cal_low + t * (cal_high - cal_low)
 
-            return raw_confidence
+            return conf_input
 
     def get_calibration_report(self) -> dict:
         """Get calibration quality report."""
@@ -420,7 +443,9 @@ class UncertaintyEstimator:
             uncertainty = np.clip(uncertainty, 0.01, 0.50)  # Cap at 50%
 
             # 5. Calculate prediction interval
-            z_score = 1.645  # 90% confidence
+            conf_level = float(np.clip(self.confidence_level, 0.50, 0.999))
+            tail_quantile = 0.5 + (conf_level * 0.5)
+            z_score = float(NormalDist().inv_cdf(tail_quantile))
             interval_half_width = z_score * uncertainty * current_price
 
             lower_bound = current_price - interval_half_width
@@ -602,9 +627,10 @@ def create_calibrated_prediction(
             symbol, ensemble_predictions, current_price, regime
         )
     else:
-        # Default uncertainty based on confidence
-        uncertainty = 1.0 - calibrated_confidence
-        uncertainty = np.clip(uncertainty, 0.05, 0.30)
+        # Default uncertainty proxy (ATR-like scale), not 1-confidence.
+        uncertainty = float(
+            np.clip(0.01 + ((1.0 - calibrated_confidence) * 0.04), 0.01, 0.05)
+        )
         lower = current_price * (1 - uncertainty)
         upper = current_price * (1 + uncertainty)
 

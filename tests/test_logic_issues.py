@@ -452,24 +452,23 @@ class TestEnsembleAgreement:
     """Tests for ensemble agreement metric."""
 
     def test_ensemble_agreement_not_placeholder(self):
-        """Ensemble agreement should calculate actual correlations, not return placeholder."""
+        """Ensemble agreement should calculate actual similarity, not a placeholder."""
         from models.uncertainty_quantification import DeepEnsemble
 
         ensemble = DeepEnsemble(n_models=3)
 
-        # Add mock models
+        # Add mock models with identical predictions.
         for _ in range(3):
             mock_model = Mock()
             mock_model.predict = Mock(return_value=np.array([0.5]))
             ensemble.add_model(mock_model, validation_accuracy=0.7)
 
-        # Current implementation returns placeholder 0.9
-        # This test documents the issue
+        # Populate prediction matrix for agreement calculation.
+        ensemble.predict_with_uncertainty(np.array([[1.0]]))
         agreement = ensemble.get_model_agreement()
 
-        # Should calculate actual agreement from stored predictions
-        # Current behavior: always returns 0.9
-        assert agreement == 0.9, "Currently returns placeholder - fix needed"
+        # Identical model outputs should yield very high agreement.
+        assert 0.95 <= agreement <= 1.0
 
     def test_ensemble_agreement_with_divergent_models(self):
         """Ensemble agreement should detect when models strongly disagree."""
@@ -490,11 +489,9 @@ class TestEnsembleAgreement:
         X = np.array([[1.0]])
         ensemble.predict_with_uncertainty(X)
 
-        # Agreement should be low for divergent predictions
-        # Current implementation doesn't track per-sample predictions
-        # This test documents the limitation
+        # Agreement should be low for divergent predictions.
         agreement = ensemble.get_model_agreement()
-        assert agreement == 0.9, "Currently returns placeholder regardless of divergence"
+        assert 0.0 <= agreement < 0.7
 
 
 # =============================================================================

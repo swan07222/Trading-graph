@@ -242,10 +242,10 @@ class Trainer:
             
             if not np.isfinite(num):
                 num = 0.0
-            if not np.isfinite(denom) or denom == 0.0:
-                denom = 1.0
+            if not np.isfinite(denom) or abs(denom) <= _EPS:
+                return default
             
-            result = num / max(1.0, denom)
+            result = num / denom
             return float(result) if np.isfinite(result) else default
         except (TypeError, ValueError, ZeroDivisionError):
             return default

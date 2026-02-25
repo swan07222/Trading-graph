@@ -10,7 +10,7 @@ Trading Graph is a desktop AI trading system for China A-shares with multi-sourc
 ┌─────────────────────────────────────────────────────────────────────┐
 │                         UI Layer (PyQt6)                            │
 │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐  ┌────────────┐  │
-│  │ Main Window │  │ Chart Widget│  │ Order Panel │  │  Widgets   │  │
+│  │ Main Window │  │Chart Widget │  │ Order Panel │  │  Widgets   │  │
 │  └─────────────┘  └─────────────┘  └─────────────┘  └────────────┘  │
 └─────────────────────────────────────────────────────────────────────┘
                                     │
@@ -18,8 +18,8 @@ Trading Graph is a desktop AI trading system for China A-shares with multi-sourc
 ┌─────────────────────────────────────────────────────────────────────┐
 │                      Application Layer                              │
 │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐  ┌────────────┐  │
-│  │AppController│  │ Background  │  │  Analysis   │  │  Dialogs   │  │
-│  │             │  │    Tasks    │  │     Ops     │  │            │  │
+│  │     App     │  │ Background  │  │  Analysis   │  │  Dialogs   │  │
+│  │  Controller │  │    Tasks    │  │     Ops     │  │            │  │
 │  └─────────────┘  └─────────────┘  └─────────────┘  └────────────┘  │
 └─────────────────────────────────────────────────────────────────────┘
                                     │

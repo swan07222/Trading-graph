@@ -47,9 +47,14 @@ class FeatureEngine:
     ]
 
     # Features that are bounded in [0, 1] or [-1, 1] — fill NaN with 0.5
-    _BOUNDED_FEATURES = frozenset({
-        "bb_pct", "close_position", "adx",
-        "price_position_20", "price_position_60",
+    _UNIT_INTERVAL_FEATURES = frozenset({
+        "bb_pct",
+        "close_position",
+        "adx",
+    })
+    _ZERO_CENTERED_BOUNDED_FEATURES = frozenset({
+        "price_position_20",
+        "price_position_60",
         "bb_position",
     })
 
@@ -219,8 +224,10 @@ class FeatureEngine:
             if col not in out.columns:
                 out[col] = 0.0
                 log.debug(f"Feature '{col}' was missing — filled with 0.0")
-            elif col in self._BOUNDED_FEATURES:
+            elif col in self._UNIT_INTERVAL_FEATURES:
                 out[col] = out[col].fillna(0.5)
+            elif col in self._ZERO_CENTERED_BOUNDED_FEATURES:
+                out[col] = out[col].fillna(0.0)
             else:
                 out[col] = out[col].fillna(0.0)
 
@@ -384,13 +391,14 @@ class FeatureEngine:
     ) -> None:
         vol_ma20 = volume.rolling(20, min_periods=20).mean()
 
-        # FIX VOLRATIO: Handle zero volume gracefully
-        # When volume and vol_ma20 are both 0, ratio should be 0 (no signal)
-        # Use safe ratio before log to avoid log(0) = -inf
+        # FIX VOLRATIO: Keep halted/zero-volume bars near neutral instead of
+        # emitting extreme finite outliers from log(eps).
         vol_ratio_raw = volume / (vol_ma20 + _EPS)
-        # Clip to positive before log; log(1) = 0 is the neutral value
-        df["volume_ratio"] = np.log(vol_ratio_raw.clip(lower=_EPS))
-        df["volume_ma_ratio"] = vol_ratio_raw
+        vol_ratio_safe = vol_ratio_raw.clip(lower=1e-3, upper=1e3)
+        inactive_mask = (volume <= 0) | (vol_ma20 <= 0)
+        vol_ratio_safe = vol_ratio_safe.where(~inactive_mask, 1.0)
+        df["volume_ratio"] = np.log(vol_ratio_safe)
+        df["volume_ma_ratio"] = vol_ratio_raw.where(np.isfinite(vol_ratio_raw), 0.0)
 
         # FIX OBVSLOPE: OBV slope handles zero OBV gracefully
         sign = np.sign(close.diff())
@@ -405,7 +413,8 @@ class FeatureEngine:
         raw_mf = typical * volume
         delta_tp = typical.diff()
         pos_mf = raw_mf.where(delta_tp > 0, 0.0).rolling(14, min_periods=14).sum()
-        neg_mf = raw_mf.where(delta_tp <= 0, 0.0).rolling(14, min_periods=14).sum()
+        # Unchanged typical price contributes to neither positive nor negative flow.
+        neg_mf = raw_mf.where(delta_tp < 0, 0.0).rolling(14, min_periods=14).sum()
         mfi = 100 - 100 / (1 + pos_mf / (neg_mf + _EPS))
         df["mfi"] = mfi / 100 - 0.5
 

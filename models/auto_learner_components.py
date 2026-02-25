@@ -605,11 +605,13 @@ class ModelGuardian:
             fetcher = get_fetcher()
             correct = 0
             total = 0
+            covered_symbols = 0
             confidences = []
             errors = 0
             samples: list[dict[str, Any]] = []
 
             for code in validation_codes:
+                symbol_samples = 0
                 try:
                     try:
                         df = fetcher.get_history(
@@ -628,62 +630,108 @@ class ModelGuardian:
                     if df is None or len(df) < CONFIG.SEQUENCE_LENGTH + horizon + 10:
                         continue
 
-                    df = feature_engine.create_features(df)
-
-                    missing = set(feature_cols) - set(df.columns)
-                    if missing:
-                        log.debug(f"Validation: {code} missing features: {missing}")
+                    if "close" not in df.columns:
                         continue
 
-                    cutoff = len(df) - horizon
-                    if cutoff < CONFIG.SEQUENCE_LENGTH:
+                    raw_df = df.copy()
+                    raw_df["close"] = pd.to_numeric(raw_df["close"], errors="coerce")
+                    raw_df = raw_df.replace([np.inf, -np.inf], np.nan).dropna(
+                        subset=["close"]
+                    )
+                    if len(raw_df) < CONFIG.SEQUENCE_LENGTH + horizon + 10:
                         continue
 
-                    pred_df = df.iloc[:cutoff].copy()
-                    future_df = df.iloc[cutoff:].copy()
-
-                    if len(future_df) == 0 or 'close' not in future_df.columns:
-                        continue
-
-                    X = processor.prepare_inference_sequence(pred_df, feature_cols)
-                    ensemble_pred = ensemble.predict(X)
-
-                    price_at = float(pred_df['close'].iloc[-1])
-                    price_after = float(future_df['close'].iloc[-1])
-
-                    if price_at <= 0:
-                        continue
-
-                    ret_pct = (price_after / price_at - 1) * 100
-
-                    if ret_pct >= CONFIG.UP_THRESHOLD:
-                        actual = 2
-                    elif ret_pct <= CONFIG.DOWN_THRESHOLD:
-                        actual = 0
-                    else:
-                        actual = 1
-
-                    if ensemble_pred.predicted_class == actual:
-                        correct += 1
-                    total += 1
-                    confidences.append(float(ensemble_pred.confidence))
-                    if collect_samples:
-                        probs = getattr(ensemble_pred, "probabilities", np.array([0.33, 0.34, 0.33]))
-                        prob_down = float(probs[0]) if len(probs) > 0 else 0.33
-                        prob_up = float(probs[2]) if len(probs) > 2 else 0.33
-                        samples.append(
-                            {
-                                "code": str(code),
-                                "actual": int(actual),
-                                "predicted": int(ensemble_pred.predicted_class),
-                                "confidence": float(ensemble_pred.confidence),
-                                "agreement": float(getattr(ensemble_pred, "agreement", 1.0)),
-                                "entropy": float(getattr(ensemble_pred, "entropy", 0.0)),
-                                "prob_up": prob_up,
-                                "prob_down": prob_down,
-                                "future_return": float(ret_pct),
-                            }
+                    max_anchor = int(len(raw_df) - horizon)
+                    min_anchor = int(
+                        max(
+                            getattr(feature_engine, "MIN_ROWS", CONFIG.SEQUENCE_LENGTH),
+                            CONFIG.SEQUENCE_LENGTH,
                         )
+                    )
+                    if max_anchor <= min_anchor:
+                        continue
+
+                    sample_count = int(min(5, max(1, max_anchor - min_anchor)))
+                    anchors = sorted(
+                        {
+                            int(v)
+                            for v in np.linspace(
+                                min_anchor,
+                                max_anchor - 1,
+                                num=sample_count,
+                                dtype=int,
+                            )
+                        }
+                    )
+                    if not anchors:
+                        continue
+
+                    for anchor in anchors:
+                        hist_raw = raw_df.iloc[:anchor].copy()
+                        fut_raw = raw_df.iloc[anchor: anchor + horizon].copy()
+                        if (
+                            len(hist_raw)
+                            < getattr(feature_engine, "MIN_ROWS", CONFIG.SEQUENCE_LENGTH)
+                            or len(fut_raw) < horizon
+                        ):
+                            continue
+
+                        hist_feat = feature_engine.create_features(hist_raw)
+                        missing = set(feature_cols) - set(hist_feat.columns)
+                        if missing:
+                            log.debug(f"Validation: {code} missing features: {missing}")
+                            continue
+
+                        X = processor.prepare_inference_sequence(hist_feat, feature_cols)
+                        ensemble_pred = ensemble.predict(X)
+
+                        price_at = float(pd.to_numeric(hist_raw["close"], errors="coerce").iloc[-1])
+                        price_after = float(pd.to_numeric(fut_raw["close"], errors="coerce").iloc[-1])
+                        if not np.isfinite(price_at) or not np.isfinite(price_after) or price_at <= 0:
+                            continue
+
+                        ret_pct = (price_after / price_at - 1) * 100
+                        if ret_pct >= CONFIG.UP_THRESHOLD:
+                            actual = 2
+                        elif ret_pct <= CONFIG.DOWN_THRESHOLD:
+                            actual = 0
+                        else:
+                            actual = 1
+
+                        if ensemble_pred.predicted_class == actual:
+                            correct += 1
+                        total += 1
+                        symbol_samples += 1
+                        confidences.append(float(ensemble_pred.confidence))
+                        if collect_samples:
+                            probs = getattr(
+                                ensemble_pred,
+                                "probabilities",
+                                np.array([0.33, 0.34, 0.33]),
+                            )
+                            prob_down = float(probs[0]) if len(probs) > 0 else 0.33
+                            prob_up = float(probs[2]) if len(probs) > 2 else 0.33
+                            samples.append(
+                                {
+                                    "code": str(code),
+                                    "anchor": int(anchor),
+                                    "actual": int(actual),
+                                    "predicted": int(ensemble_pred.predicted_class),
+                                    "confidence": float(ensemble_pred.confidence),
+                                    "agreement": float(
+                                        getattr(ensemble_pred, "agreement", 1.0)
+                                    ),
+                                    "entropy": float(
+                                        getattr(ensemble_pred, "entropy", 0.0)
+                                    ),
+                                    "prob_up": prob_up,
+                                    "prob_down": prob_down,
+                                    "future_return": float(ret_pct),
+                                }
+                            )
+
+                    if symbol_samples > 0:
+                        covered_symbols += 1
 
                 except _AUTO_LEARNER_RECOVERABLE_EXCEPTIONS as e:
                     errors += 1
@@ -700,7 +748,7 @@ class ModelGuardian:
                 'accuracy': float(correct / total),
                 'avg_confidence': float(np.mean(confidences)) if confidences else 0.0,
                 'predictions_made': total,
-                'coverage': total / max(len(validation_codes), 1),
+                'coverage': covered_symbols / max(len(validation_codes), 1),
                 'errors': errors,
             }
             if collect_samples:

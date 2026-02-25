@@ -155,10 +155,18 @@ def run_targeted(self, **kwargs):
     """Run targeted training synchronously (blocking)."""
     kwargs.setdefault('continuous', False)
     self.start_targeted(**kwargs)
-    with self._thread_lock:
-        thread = self._thread
-    if thread:
-        thread.join()
+    # Join the currently active targeted thread while tolerating thread
+    # replacement races from concurrent start calls.
+    while True:
+        with self._thread_lock:
+            thread = self._thread
+        if (
+            thread is None
+            or not thread.is_alive()
+            or str(getattr(thread, "name", "")) != "auto_learner_targeted"
+        ):
+            break
+        thread.join(timeout=0.5)
     return self.progress
 
 def _targeted_loop(
@@ -226,6 +234,10 @@ def _targeted_loop(
         import traceback
         traceback.print_exc()
         self.progress.add_error(str(e))
+    except BaseException as e:
+        log.error("Targeted learning fatal error: %s", e)
+        self.progress.add_error(f"fatal:{type(e).__name__}:{e}")
+        raise
     finally:
         self.progress.is_running = False
         self._save_state()

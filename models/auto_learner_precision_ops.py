@@ -97,6 +97,13 @@ def _infer_regime(samples: list[dict[str, float]]) -> str:
     med_edge = _quantile(edges, 0.50)
     med_entropy = _quantile(entropy, 0.50)
 
+    # Normalize return units (decimal vs percent) to avoid regime misclassification.
+    med_abs_ret = _quantile(abs_ret, 0.50)
+    if med_abs_ret < 0.20 and high_vol_ret >= 1.0:
+        q75_abs_ret *= 100.0
+    elif med_abs_ret > 1.0 and 0.0 < high_vol_ret < 0.5:
+        high_vol_ret *= 100.0
+
     if q75_abs_ret >= max(0.1, high_vol_ret):
         return "high_vol"
     if med_edge <= max(0.01, low_signal_edge) or med_entropy >= 0.55:

@@ -177,7 +177,10 @@ class MarketRegimeDetector:
         atr = tr.rolling(self.volatility_period).mean()
         
         # Normalized volatility (ATR / price)
-        vol_ratio = (atr / df["close"]).iloc[-1] * 100
+        close_safe = pd.to_numeric(df["close"], errors="coerce").replace(0.0, np.nan)
+        vol_ratio = float(((atr / (close_safe + 1e-8)).iloc[-1]) * 100.0)
+        if not np.isfinite(vol_ratio):
+            vol_ratio = 0.0
         
         # Calibrated for CN A-shares (10% daily limit)
         if vol_ratio < 1.5:
@@ -194,11 +197,15 @@ class MarketRegimeDetector:
         close = df["close"]
         
         # Directional movement
-        plus_dm = high.diff()
-        minus_dm = -low.diff()
+        plus_dm_raw = high.diff()
+        minus_dm_raw = -low.diff()
         
-        plus_dm = plus_dm.where((plus_dm > minus_dm) & (plus_dm > 0), 0)
-        minus_dm = minus_dm.where((minus_dm > plus_dm) & (minus_dm > 0), 0)
+        plus_dm = plus_dm_raw.where(
+            (plus_dm_raw > minus_dm_raw) & (plus_dm_raw > 0), 0.0
+        )
+        minus_dm = minus_dm_raw.where(
+            (minus_dm_raw > plus_dm_raw) & (minus_dm_raw > 0), 0.0
+        )
         
         # True range
         high_low = high - low
@@ -214,8 +221,11 @@ class MarketRegimeDetector:
         # ADX
         dx = 100 * (plus_di - minus_di).abs() / (plus_di + minus_di + 1e-8)
         adx = dx.rolling(self.adx_period).mean()
-        
-        return float(adx.iloc[-1] / 100)  # Normalize to 0-1
+
+        adx_last = float(adx.iloc[-1]) if len(adx) > 0 else 0.0
+        if not np.isfinite(adx_last):
+            adx_last = 0.0
+        return float(np.clip(adx_last / 100.0, 0.0, 1.0))  # Normalize to 0-1
     
     def _is_ranging_market(
         self,
@@ -232,12 +242,15 @@ class MarketRegimeDetector:
         # Calculate price range
         highest = close.rolling(self.trend_period).max()
         lowest = close.rolling(self.trend_period).min()
-        range_pct = (highest - lowest) / lowest
+        range_pct = (highest - lowest) / (lowest.replace(0.0, np.nan) + 1e-8)
+        range_last = float(range_pct.iloc[-1]) if len(range_pct) > 0 else np.inf
+        if not np.isfinite(range_last):
+            range_last = np.inf
         
         # Ranging if: many crosses + moderate range
         is_ranging = (
             crosses >= self.trend_period * 0.4 and
-            range_pct.iloc[-1] < 0.15
+            range_last < 0.15
         )
         
         return bool(is_ranging)
@@ -297,7 +310,7 @@ class MarketRegimeDetector:
         
         # Choppy regime has lower confidence
         if regime == RegimeType.CHOPPY:
-            base_confidence *= 0.7
+            base_confidence = min(base_confidence * 0.7, 0.60)
         
         return float(np.clip(base_confidence, 0.0, 1.0))
     

@@ -3,7 +3,7 @@ import json
 import re
 import threading
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, TypeAlias
 
@@ -351,7 +351,7 @@ class Predictor:
         prediction_count = len(self._stock_accuracy_history.get(stock_code, []))
         if prediction_count > 20:
             # Reduce learning rate as we have more history
-            alpha_base *= max(0.03, 0.08 * (20.0 / min(prediction_count, 100)))
+            alpha_base *= max(0.03, 0.8 * (20.0 / min(prediction_count, 100)))
         
         # Factor 2: Adjust based on recent accuracy streak
         # Hot/cold streaks suggest regime change - adapt faster
@@ -439,12 +439,6 @@ class Predictor:
         elif historical_acc < 0.45:
             # Poor history: reduce confidence
             confidence = max(0.3, confidence * (1.0 - (0.5 - historical_acc) * 0.3))
-        
-        # Penalize high entropy (uncertainty)
-        if entropy > 0.7:
-            confidence = max(0.3, confidence * 0.8)
-        elif entropy > 0.5:
-            confidence = max(0.3, confidence * 0.9)
         
         return float(np.clip(confidence, 0.3, 0.95))
 
@@ -636,7 +630,8 @@ class Predictor:
         self._last_model_reload_attempt_ts = now_ts
         before_ready = ready
         ok = bool(self._load_models())
-        self._model_artifact_sig = self._model_artifact_signature()
+        with self._cache_lock:
+            self._model_artifact_sig = self._model_artifact_signature()
         after_ready = self._models_ready_for_runtime()
 
         if before_ready != after_ready or sig_changed:
@@ -985,7 +980,7 @@ class Predictor:
 
             pred = Prediction(
                 stock_code=code,
-                timestamp=datetime.now(),
+                timestamp=datetime.now(timezone.utc),
                 interval=interval,
                 horizon=horizon,
             )
@@ -1350,25 +1345,33 @@ class Predictor:
 
             # Store regime info
             pred.regime = regime_result.regime.value
+            starting_conf = float(np.clip(pred.confidence, 0.0, 1.0))
+            adjusted_conf = starting_conf
 
             # Adjust confidence based on regime historical accuracy
             regime_acc = float(getattr(regime_result, "historical_accuracy", 0.5) or 0.5)
             if regime_acc > 0.65:
                 # High accuracy regime: boost confidence
-                pred.confidence = min(0.95, pred.confidence * 1.08)
+                adjusted_conf = min(0.95, adjusted_conf * 1.08)
             elif regime_acc < 0.55:
                 # Low accuracy regime: reduce confidence
-                pred.confidence = max(0.4, pred.confidence * 0.92)
+                adjusted_conf = max(0.4, adjusted_conf * 0.92)
 
             # Adjust for volatility
             vol_level = str(getattr(regime_result, "volatility_level", "") or "")
             if vol_level == "HIGH":
                 # High volatility: be more conservative
-                pred.confidence = max(0.4, pred.confidence * 0.95)
+                adjusted_conf = max(0.4, adjusted_conf * 0.95)
                 pred.warnings.append("High volatility regime: increased uncertainty")
             elif vol_level == "LOW":
                 # Low volatility: can be more confident
-                pred.confidence = min(0.95, pred.confidence * 1.03)
+                adjusted_conf = min(0.95, adjusted_conf * 1.03)
+
+            # Avoid compounding multiple confidence reducers in one pass.
+            confidence_floor = max(0.30, starting_conf * 0.95)
+            pred.confidence = float(
+                np.clip(max(confidence_floor, adjusted_conf), 0.0, 0.97)
+            )
 
             # Keep raw ensemble margin semantics intact for downstream
             # uncertainty math; expose regime threshold on a separate field.
@@ -1508,7 +1511,7 @@ class Predictor:
 
                     pred = Prediction(
                         stock_code=code,
-                        timestamp=datetime.now(),
+                        timestamp=datetime.now(timezone.utc),
                         interval=interval,
                     )
 

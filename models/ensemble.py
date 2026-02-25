@@ -53,11 +53,17 @@ class EnsemblePrediction:
 
     @property
     def prob_up(self) -> float:
-        return float(self.probabilities[2]) if len(self.probabilities) > 2 else 0.0
+        if len(self.probabilities) > 2:
+            return float(self.probabilities[2])
+        if len(self.probabilities) == 2:
+            return float(self.probabilities[1])
+        if len(self.probabilities) == 1:
+            return float(self.probabilities[0])
+        return 0.0
 
     @property
     def prob_neutral(self) -> float:
-        return float(self.probabilities[1]) if len(self.probabilities) > 1 else 0.0
+        return float(self.probabilities[1]) if len(self.probabilities) > 2 else 0.0
 
     @property
     def prob_down(self) -> float:
@@ -842,8 +848,10 @@ class EnsembleModel:
                 # lower when entropy is high or model agreement is weak.
                 rel = max(0.0, min(1.0, 0.65 + 0.35 * agreement))
                 ent_penalty = max(0.0, min(1.0, 1.0 - 0.25 * ent_norm))
-                margin_boost = max(0.8, min(1.1, 0.8 + margin))
-                conf = max(0.0, min(1.0, raw_conf * rel * ent_penalty * margin_boost))
+                base_conf = max(0.0, min(1.0, raw_conf * rel * ent_penalty))
+                # Margin influences confidence without saturating high-end scores.
+                conf = base_conf + ((1.0 - base_conf) * float(np.clip(margin, 0.0, 1.0)) * 0.08)
+                conf = max(0.0, min(0.999, conf))
 
                 target = np.zeros_like(probs)
                 target[pred_cls] = 1.0

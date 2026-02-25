@@ -459,6 +459,7 @@ def _refresh_prediction_uncertainty(self, pred: Prediction) -> None:
     over-confident chart narratives.
     """
     conf = float(np.clip(getattr(pred, "confidence", 0.0), 0.0, 1.0))
+    incoming_conf = conf
     raw_conf = float(np.clip(getattr(pred, "raw_confidence", conf), 0.0, 1.0))
     agreement = float(np.clip(getattr(pred, "model_agreement", 1.0), 0.0, 1.0))
     entropy = float(np.clip(getattr(pred, "entropy", 0.0), 0.0, 1.0))
@@ -512,8 +513,12 @@ def _refresh_prediction_uncertainty(self, pred: Prediction) -> None:
     if margin < 0.04:
         penalty += 0.05
     if penalty > 0.0:
+        # Cap this stage's reduction so confidence is not over-penalized
+        # after upstream calibration/regime adjustments.
+        stage_cap = float(np.clip(incoming_conf * 0.18, 0.04, 0.10))
+        reduction = float(min(penalty, stage_cap))
         old_conf = conf
-        conf = float(np.clip(conf - penalty, 0.0, 1.0))
+        conf = float(np.clip(incoming_conf - reduction, 0.0, 1.0))
         pred.confidence = conf
         if (old_conf - conf) >= 0.08:
             self._append_warning_once(
@@ -719,8 +724,12 @@ def _get_cache_version(self) -> str:
     FIX CACHE INVALIDATION: Version changes when models are reloaded,
     ensuring stale predictions aren't served after model updates.
     """
-    # Use model artifact signature as version
-    return str(getattr(self, "_model_artifact_sig", "v1"))
+    # Use model artifact signature as version.
+    lock = getattr(self, "_cache_lock", None)
+    if lock is None:
+        return str(getattr(self, "_model_artifact_sig", "v1"))
+    with lock:
+        return str(getattr(self, "_model_artifact_sig", "v1"))
 
 def _get_cached_prediction(
     self, cache_key: str, ttl: float | None = None
@@ -732,6 +741,7 @@ def _get_cached_prediction(
     """
     ttl_s = float(self._CACHE_TTL if ttl is None else ttl)
     cache_version = self._get_cache_version()
+    pred_to_copy: Prediction | None = None
     
     with self._cache_lock:
         entry = self._pred_cache.get(cache_key)
@@ -745,12 +755,14 @@ def _get_cached_prediction(
                     return None
                 # Check TTL
                 if (time.time() - ts) < ttl_s:
-                    return copy.deepcopy(pred)
+                    pred_to_copy = pred
             else:
                 # Old format without version - invalidate
                 del self._pred_cache[cache_key]
                 return None
-    return None
+    if pred_to_copy is None:
+        return None
+    return copy.deepcopy(pred_to_copy)
 
 def _set_cached_prediction(self, cache_key: str, pred: Prediction) -> None:
     """Cache a prediction result with bounded size.
@@ -759,12 +771,13 @@ def _set_cached_prediction(self, cache_key: str, pred: Prediction) -> None:
     to enable bulk invalidation on model reload.
     """
     cache_version = self._get_cache_version()
+    pred_copy = copy.deepcopy(pred)
     
     with self._cache_lock:
         # Store version with prediction for invalidation checking
         self._pred_cache[cache_key] = (
             time.time(), 
-            copy.deepcopy(pred),
+            pred_copy,
             cache_version,
         )
 

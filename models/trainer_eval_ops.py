@@ -63,14 +63,11 @@ def _walk_forward_validate(
     This is a post-train diagnostic (not re-training folds) used to
     detect unstable model behavior across recent slices.
     """
-    X_parts: list[np.ndarray] = []
-    y_parts: list[np.ndarray] = []
-    r_parts: list[np.ndarray] = []
-
-    for X_arr, y_arr, r_arr in [
-        (X_val, y_val, r_val),
-        (X_test, y_test, r_test),
-    ]:
+    def _pack_eval_arrays(
+        X_arr: np.ndarray | None,
+        y_arr: np.ndarray | None,
+        r_arr: np.ndarray | None,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray] | None:
         if (
             X_arr is None
             or y_arr is None
@@ -79,23 +76,28 @@ def _walk_forward_validate(
             or len(y_arr) == 0
             or len(r_arr) == 0
         ):
-            continue
+            return None
         n = int(min(len(X_arr), len(y_arr), len(r_arr)))
         if n <= 0:
-            continue
-        X_parts.append(X_arr[:n])
-        y_parts.append(y_arr[:n])
-        r_parts.append(r_arr[:n])
+            return None
+        return X_arr[:n], y_arr[:n], r_arr[:n]
 
-    if not X_parts:
+    # Keep validation and test separated to avoid evaluation bleed.
+    # Use validation for walk-forward diagnostics and only fall back to test
+    # when validation is unavailable.
+    packed = _pack_eval_arrays(X_val, y_val, r_val)
+    eval_source = "val"
+    if packed is None:
+        packed = _pack_eval_arrays(X_test, y_test, r_test)
+        eval_source = "test_fallback"
+
+    if packed is None:
         return {
             "enabled": False,
             "reason": "no_eval_data",
         }
 
-    X_eval = np.concatenate(X_parts, axis=0)
-    y_eval = np.concatenate(y_parts, axis=0)
-    r_eval = np.concatenate(r_parts, axis=0)
+    X_eval, y_eval, r_eval = packed
 
     max_samples = 3000
     if len(X_eval) > max_samples:
@@ -181,6 +183,7 @@ def _walk_forward_validate(
 
     return {
         "enabled": True,
+        "source": eval_source,
         "folds": fold_results,
         "mean_accuracy": acc_mean,
         "std_accuracy": acc_std,

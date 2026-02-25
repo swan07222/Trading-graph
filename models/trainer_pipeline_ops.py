@@ -739,7 +739,10 @@ def _train_forecaster(
         )
 
         best_val_loss = float("inf")
-        best_state = None
+        best_state = {
+            k: v.cpu().clone()
+            for k, v in forecaster.state_dict().items()
+        }
         patience = 0
         max_patience = 10
         fore_epochs = max(10, min(30, epochs // 2))
