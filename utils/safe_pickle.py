@@ -14,7 +14,7 @@ import io
 import json
 import pickle
 from pathlib import Path
-from typing import IO, Any, Set, Type
+from typing import IO, Any
 
 from utils.logger import get_logger
 
@@ -25,7 +25,7 @@ log = get_logger(__name__)
 # - Removed numpy.dtype (can be exploited for code execution)
 # - Removed collections.namedtuple (can be used for RCE)
 # Kept only essential data classes for trading cache operations
-DEFAULT_SAFE_CLASSES: Set[str] = {
+DEFAULT_SAFE_CLASSES: set[str] = {
     # Builtins
     "builtins.list",
     "builtins.dict",
@@ -88,14 +88,14 @@ class RestrictedUnpickler(pickle.Unpickler):
         self,
         file: IO[bytes],
         *,
-        safe_classes: Set[str] | None = None,
-        extra_classes: dict[str, Type] | None = None,
+        safe_classes: set[str] | None = None,
+        extra_classes: dict[str, type] | None = None,
     ) -> None:
         super().__init__(file)
         self._safe_classes = safe_classes or DEFAULT_SAFE_CLASSES
         self._extra_classes = extra_classes or {}
     
-    def find_class(self, module: str, name: str) -> Type:
+    def find_class(self, module: str, name: str) -> type:
         """Override to restrict which classes can be unpickled.
         
         Only allows classes in the safe_classes set or extra_classes dict.
@@ -126,8 +126,8 @@ class RestrictedUnpickler(pickle.Unpickler):
 def safe_pickle_load(
     file: IO[bytes],
     *,
-    safe_classes: Set[str] | None = None,
-    extra_classes: dict[str, Type] | None = None,
+    safe_classes: set[str] | None = None,
+    extra_classes: dict[str, type] | None = None,
     max_bytes: int = -1,
 ) -> Any:
     """Safely load pickle data from a file.
@@ -165,8 +165,8 @@ def safe_pickle_load(
 def safe_pickle_loads(
     data: bytes,
     *,
-    safe_classes: Set[str] | None = None,
-    extra_classes: dict[str, Type] | None = None,
+    safe_classes: set[str] | None = None,
+    extra_classes: dict[str, type] | None = None,
     max_bytes: int = -1,
 ) -> Any:
     """Safely load pickle data from bytes.
@@ -235,8 +235,8 @@ def safe_pickle_dumps(
 def pickle_load_safe(
     path: Path | str,
     *,
-    safe_classes: Set[str] | None = None,
-    extra_classes: dict[str, Type] | None = None,
+    safe_classes: set[str] | None = None,
+    extra_classes: dict[str, type] | None = None,
     max_bytes: int = 100 * 1024 * 1024,  # 100MB default limit
 ) -> Any:
     """Safely load pickle data from a file path.
@@ -297,7 +297,7 @@ def is_pickle_file(path: Path | str) -> bool:
             header[0:1] in (b"(", b"c", b"d", b"g", b"h", b"i", b"j", b"k", b"l", b"m", b"n", b"o", b"r", b"s", b"t", b"u", b"x", b"}") or
             (header[0] == 0x80 and 2 <= header[1] <= 5)  # Protocol 2-5
         )
-    except (OSError, IOError):
+    except OSError:
         return False
 
 

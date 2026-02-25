@@ -14,7 +14,7 @@ This test suite validates fixes for:
 
 import math
 from datetime import datetime, timedelta
-from unittest.mock import MagicMock, Mock, patch
+from unittest.mock import Mock
 
 import numpy as np
 import pandas as pd
@@ -151,6 +151,7 @@ class TestSessionCacheRaceCondition:
         This documents the missing API for concurrent access handling.
         """
         import threading
+
         from data.session_cache import SessionBarCache
 
         cache = SessionBarCache()
@@ -323,7 +324,7 @@ class TestConfidenceCalibration:
 
     def test_calibration_handles_confidence_equals_one(self):
         """Calibration should handle confidence = 1.0 edge case."""
-        from models.confidence_calibration import ConfidenceCalibrator, CalibratedPrediction
+        from models.confidence_calibration import CalibratedPrediction, ConfidenceCalibrator
 
         calibrator = ConfidenceCalibrator(n_buckets=10)
 
@@ -352,7 +353,7 @@ class TestConfidenceCalibration:
         ISSUE #4: When confidence > 1.0 is clamped to 1.0, it may not match
         any bucket if the last bucket's max is < 1.0.
         """
-        from models.confidence_calibration import ConfidenceCalibrator, CalibratedPrediction
+        from models.confidence_calibration import CalibratedPrediction, ConfidenceCalibrator
 
         calibrator = ConfidenceCalibrator(n_buckets=10)
 
@@ -537,7 +538,7 @@ class TestModelWeightConvergence:
             predictor._record_prediction_outcome(stock_code, predicted_up=True, actual_up=True)
 
         # Record initial weights
-        initial_weights = dict(predictor._model_weights)
+        dict(predictor._model_weights)
 
         # Then, simulate performance degradation
         for _ in range(50):
@@ -545,7 +546,7 @@ class TestModelWeightConvergence:
 
         # Weights should adapt (though current implementation is slow to adapt)
         # This test documents expected behavior
-        final_weights = dict(predictor._model_weights)
+        dict(predictor._model_weights)
 
         # At minimum, performance scores should have changed
         for model_name in predictor._last_model_performance:

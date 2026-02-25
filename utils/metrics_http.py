@@ -5,7 +5,7 @@ import logging
 import os
 import threading
 from collections.abc import Callable
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 from urllib.parse import parse_qs, urlparse
@@ -389,7 +389,7 @@ def _api_index_payload() -> dict[str, Any]:
             "/api/v1/learning/status",
             "/api/v1/scanner/status",
         ],
-        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "generated_at": datetime.now(UTC).isoformat(),
     }
 
 
@@ -477,7 +477,7 @@ class MetricsHandler(BaseHTTPRequestHandler):
                 200,
                 {
                     "providers": list_snapshot_providers(),
-                    "generated_at": datetime.now(timezone.utc).isoformat(),
+                    "generated_at": datetime.now(UTC).isoformat(),
                 },
             )
             return
@@ -500,7 +500,7 @@ class MetricsHandler(BaseHTTPRequestHandler):
                     {
                         "provider": name,
                         "snapshot": payload,
-                        "generated_at": datetime.now(timezone.utc).isoformat(),
+                        "generated_at": datetime.now(UTC).isoformat(),
                     },
                 )
             except Exception as exc:
@@ -516,7 +516,7 @@ class MetricsHandler(BaseHTTPRequestHandler):
                 200,
                 {
                     "snapshot": _build_runtime_snapshot(limit=limit),
-                    "generated_at": datetime.now(timezone.utc).isoformat(),
+                    "generated_at": datetime.now(UTC).isoformat(),
                 },
             )
             return
@@ -550,7 +550,7 @@ class MetricsHandler(BaseHTTPRequestHandler):
                         "learning": _build_learning_snapshot(),
                         "scanner": _build_scanner_snapshot(),
                     },
-                    "generated_at": datetime.now(timezone.utc).isoformat(),
+                    "generated_at": datetime.now(UTC).isoformat(),
                 },
             )
             return
@@ -561,7 +561,7 @@ class MetricsHandler(BaseHTTPRequestHandler):
                 200,
                 {
                     "snapshot": _build_alert_snapshot(limit=limit),
-                    "generated_at": datetime.now(timezone.utc).isoformat(),
+                    "generated_at": datetime.now(UTC).isoformat(),
                 },
             )
             return
@@ -571,7 +571,7 @@ class MetricsHandler(BaseHTTPRequestHandler):
                 200,
                 {
                     "snapshot": _build_execution_engine_snapshot(),
-                    "generated_at": datetime.now(timezone.utc).isoformat(),
+                    "generated_at": datetime.now(UTC).isoformat(),
                 },
             )
             return
@@ -581,7 +581,7 @@ class MetricsHandler(BaseHTTPRequestHandler):
                 200,
                 {
                     "snapshot": _build_execution_quality_snapshot(),
-                    "generated_at": datetime.now(timezone.utc).isoformat(),
+                    "generated_at": datetime.now(UTC).isoformat(),
                 },
             )
             return
@@ -591,7 +591,7 @@ class MetricsHandler(BaseHTTPRequestHandler):
                 200,
                 {
                     "snapshot": _build_risk_snapshot(),
-                    "generated_at": datetime.now(timezone.utc).isoformat(),
+                    "generated_at": datetime.now(UTC).isoformat(),
                 },
             )
             return
@@ -601,7 +601,7 @@ class MetricsHandler(BaseHTTPRequestHandler):
                 200,
                 {
                     "snapshot": _build_health_snapshot(),
-                    "generated_at": datetime.now(timezone.utc).isoformat(),
+                    "generated_at": datetime.now(UTC).isoformat(),
                 },
             )
             return
@@ -622,7 +622,7 @@ class MetricsHandler(BaseHTTPRequestHandler):
                         stock_code=sentiment_symbol,
                         hours_lookback=hours,
                     ),
-                    "generated_at": datetime.now(timezone.utc).isoformat(),
+                    "generated_at": datetime.now(UTC).isoformat(),
                 },
             )
             return
@@ -632,7 +632,7 @@ class MetricsHandler(BaseHTTPRequestHandler):
                 200,
                 {
                     "snapshot": _build_cache_snapshot(),
-                    "generated_at": datetime.now(timezone.utc).isoformat(),
+                    "generated_at": datetime.now(UTC).isoformat(),
                 },
             )
             return
@@ -642,7 +642,7 @@ class MetricsHandler(BaseHTTPRequestHandler):
                 200,
                 {
                     "snapshot": _build_feed_snapshot(),
-                    "generated_at": datetime.now(timezone.utc).isoformat(),
+                    "generated_at": datetime.now(UTC).isoformat(),
                 },
             )
             return
@@ -652,7 +652,7 @@ class MetricsHandler(BaseHTTPRequestHandler):
                 200,
                 {
                     "snapshot": _build_learning_snapshot(),
-                    "generated_at": datetime.now(timezone.utc).isoformat(),
+                    "generated_at": datetime.now(UTC).isoformat(),
                 },
             )
             return
@@ -662,7 +662,7 @@ class MetricsHandler(BaseHTTPRequestHandler):
                 200,
                 {
                     "snapshot": _build_scanner_snapshot(),
-                    "generated_at": datetime.now(timezone.utc).isoformat(),
+                    "generated_at": datetime.now(UTC).isoformat(),
                 },
             )
             return
@@ -672,7 +672,7 @@ class MetricsHandler(BaseHTTPRequestHandler):
                 200,
                 {
                     "snapshot": _build_policy_snapshot(),
-                    "generated_at": datetime.now(timezone.utc).isoformat(),
+                    "generated_at": datetime.now(UTC).isoformat(),
                 },
             )
             return
@@ -682,7 +682,7 @@ class MetricsHandler(BaseHTTPRequestHandler):
                 200,
                 {
                     "snapshot": _build_strategy_marketplace_snapshot(),
-                    "generated_at": datetime.now(timezone.utc).isoformat(),
+                    "generated_at": datetime.now(UTC).isoformat(),
                 },
             )
             return

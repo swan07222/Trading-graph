@@ -179,7 +179,7 @@ def load_fallback_stocks_from_cache() -> list[tuple[str, str]] | None:
         return None
     
     try:
-        with open(cache_file, "r", encoding="utf-8") as f:
+        with open(cache_file, encoding="utf-8") as f:
             data = json.load(f)
         
         stocks = data.get("stocks", [])

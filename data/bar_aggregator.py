@@ -4,7 +4,7 @@ from __future__ import annotations
 import threading
 import time
 from collections.abc import Callable
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from enum import Enum
 
 from core.events import EVENT_BUS, BarEvent
@@ -57,7 +57,7 @@ class BarAggregator:
 
             sh_tz = ZoneInfo("Asia/Shanghai")
         except _BAR_SOFT_EXCEPTIONS:
-            sh_tz = timezone.utc
+            sh_tz = UTC
 
         if ts_raw is None:
             return datetime.now(tz=sh_tz).replace(tzinfo=None)

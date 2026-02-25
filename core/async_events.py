@@ -20,17 +20,15 @@ Example:
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import json
-import logging
 import time
 import uuid
-from collections import defaultdict
+from collections import defaultdict, deque
 from collections.abc import Callable, Coroutine
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum, auto
-from typing import Any, Generic, ParamSpec, TypeVar, get_type_hints
+from typing import Any, ParamSpec, TypeVar
 
 from utils.logger import get_logger
 
@@ -410,7 +408,7 @@ class AsyncEventBus:
                         self._queue.get(),
                         timeout=1.0,
                     )
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     continue
 
                 # Process event

@@ -9,7 +9,7 @@ from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FuturesTimeout
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from functools import wraps
 
 import numpy as np
@@ -247,7 +247,7 @@ class Quote:
                 from zoneinfo import ZoneInfo
                 self.timestamp = datetime.now(tz=ZoneInfo("Asia/Shanghai"))
             except Exception:
-                self.timestamp = datetime.now(tz=timezone.utc)
+                self.timestamp = datetime.now(tz=UTC)
 
 
 @dataclass

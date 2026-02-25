@@ -8,7 +8,7 @@ import subprocess
 import sys
 import tarfile
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -87,14 +87,14 @@ def create_snapshot(
     if not files:
         raise RuntimeError("No files found for snapshot")
 
-    stamp = str(tag or datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ"))
+    stamp = str(tag or datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ"))
     snapshot_dir.mkdir(parents=True, exist_ok=True)
     archive_path = snapshot_dir / f"snapshot_{stamp}.tar.gz"
     sidecar_manifest_path = snapshot_dir / f"snapshot_{stamp}.manifest.json"
 
     manifest: dict[str, Any] = {
         "snapshot_id": f"snapshot_{stamp}",
-        "created_at": datetime.now(timezone.utc).isoformat(),
+        "created_at": datetime.now(UTC).isoformat(),
         "root": str(root),
         "archive": str(archive_path),
         "files": [],
@@ -120,7 +120,7 @@ def create_snapshot(
         ).encode("utf-8")
         info = tarfile.TarInfo(name=MANIFEST_MEMBER_NAME)
         info.size = len(manifest_bytes)
-        info.mtime = int(datetime.now(timezone.utc).timestamp())
+        info.mtime = int(datetime.now(UTC).timestamp())
         tf.addfile(info, io.BytesIO(manifest_bytes))
 
     sidecar_manifest_path.write_text(

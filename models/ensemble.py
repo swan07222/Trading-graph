@@ -199,10 +199,10 @@ class EnsembleModel:
         """Get available model classes - only modern architectures."""
         if cls._MODEL_CLASSES is None:
             from .networks import (
-                Informer,
                 NBEATS,
-                TSMixer,
+                Informer,
                 TemporalFusionTransformer,
+                TSMixer,
             )
             cls._MODEL_CLASSES = {
                 "informer": Informer,

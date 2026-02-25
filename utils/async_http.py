@@ -21,7 +21,6 @@ Example:
 from __future__ import annotations
 
 import asyncio
-import logging
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -38,7 +37,7 @@ from tenacity import (
     wait_exponential,
 )
 
-from config.runtime_env import env_text, env_int, env_float
+from config.runtime_env import env_text
 from utils.logger import get_logger
 
 log = get_logger()
@@ -137,7 +136,7 @@ class CircuitBreaker:
             result = await func(*args, **kwargs)
             await self._on_success()
             return result
-        except Exception as e:
+        except Exception:
             await self._on_failure()
             raise
 

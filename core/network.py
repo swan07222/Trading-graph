@@ -134,7 +134,8 @@ class NetworkDetector:
         FIX #12: Added overall timeout for network detection to prevent
         application startup hangs if ThreadPoolExecutor doesn't clean up properly.
         """
-        from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError as FuturesTimeoutError
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        from concurrent.futures import TimeoutError as FuturesTimeoutError
 
         from config.runtime_env import env_flag
 

@@ -48,7 +48,7 @@ def _write_artifact_checksum(path: Path) -> None:
         from utils.atomic_io import atomic_write_text
 
         atomic_write_text(checksum_path, payload)
-    except (ImportError, OSError, IOError):
+    except (ImportError, OSError):
         checksum_path.write_text(payload, encoding="utf-8")
 
 

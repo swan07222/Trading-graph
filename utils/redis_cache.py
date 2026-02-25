@@ -19,19 +19,16 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
-import logging
-import time
-from collections.abc import Callable
+from collections.abc import AsyncGenerator, Callable
 from contextlib import asynccontextmanager
-from dataclasses import dataclass, field
-from datetime import timedelta
+from dataclasses import dataclass
 from typing import Any, TypeVar
 
 import redis.asyncio as redis
 from redis.asyncio.lock import Lock as RedisLock
 from redis.exceptions import LockError, RedisError
 
-from config.runtime_env import env_text, env_int
+from config.runtime_env import env_int, env_text
 from utils.logger import get_logger
 
 log = get_logger()
@@ -394,7 +391,7 @@ class RedisCache:
         try:
             values = await self._client.mget(*keys)
             result = {}
-            for key, value in zip(keys, values):
+            for key, value in zip(keys, values, strict=False):
                 if value is not None:
                     self._stats.hits += 1
                     try:

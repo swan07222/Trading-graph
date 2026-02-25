@@ -15,12 +15,11 @@ Architecture:
 5. Prediction Head: Outputs trading signals and confidence
 """
 
-import json
 import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 import numpy as np
 import torch
@@ -28,10 +27,9 @@ import torch.nn as nn
 from torch.utils.data import DataLoader, Dataset, SequentialSampler
 
 from config.settings import CONFIG
-from utils.logger import get_logger
-
 from data.news_collector import NewsArticle, get_collector
-from data.sentiment_analyzer import SentimentScore, get_analyzer
+from data.sentiment_analyzer import get_analyzer
+from utils.logger import get_logger
 
 log = get_logger(__name__)
 
@@ -128,7 +126,7 @@ class NewsEncoder(nn.Module):
     def forward(
         self,
         token_ids: torch.Tensor,
-        attention_mask: Optional[torch.Tensor] = None,
+        attention_mask: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """Encode news text to embeddings.
 
@@ -280,8 +278,8 @@ class NewsTrainer:
 
     def __init__(
         self,
-        model_dir: Optional[Path] = None,
-        device: Optional[str] = None,
+        model_dir: Path | None = None,
+        device: str | None = None,
     ) -> None:
         self.model_dir = model_dir or CONFIG.model_dir
         self.model_dir.mkdir(parents=True, exist_ok=True)
@@ -295,8 +293,8 @@ class NewsTrainer:
             )
 
         # Model
-        self.model: Optional[NewsPriceFusionModel] = None
-        self.optimizer: Optional[torch.optim.Optimizer] = None
+        self.model: NewsPriceFusionModel | None = None
+        self.optimizer: torch.optim.Optimizer | None = None
         self.criterion = nn.CrossEntropyLoss()
 
         # Data
@@ -316,7 +314,7 @@ class NewsTrainer:
         log.info(f"Preparing training data for {len(symbols)} symbols...")
 
         samples = []
-        cutoff = datetime.now() - timedelta(days=days_back)
+        datetime.now() - timedelta(days=days_back)
 
         for symbol in symbols:
             try:
@@ -742,7 +740,7 @@ class NewsTrainer:
 
 
 # Singleton
-_trainer: Optional[NewsTrainer] = None
+_trainer: NewsTrainer | None = None
 
 
 def get_trainer() -> NewsTrainer:

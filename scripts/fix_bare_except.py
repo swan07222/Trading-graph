@@ -10,7 +10,6 @@ Usage:
 """
 from __future__ import annotations
 
-import ast
 import re
 import sys
 from pathlib import Path
@@ -34,7 +33,7 @@ def find_bare_except_files(root_dir: Path) -> list[Path]:
             continue
         
         try:
-            with open(py_file, 'r', encoding='utf-8') as f:
+            with open(py_file, encoding='utf-8') as f:
                 content = f.read()
             
             # Quick regex check for bare except Exception
@@ -51,11 +50,9 @@ def analyze_file(file_path: Path) -> list[ExceptLocation]:
     locations = []
     
     try:
-        with open(file_path, 'r', encoding='utf-8') as f:
+        with open(file_path, encoding='utf-8') as f:
             lines = f.readlines()
         
-        in_except_block = False
-        except_line = 0
         
         for i, line in enumerate(lines, 1):
             stripped = line.strip()
@@ -100,7 +97,7 @@ def generate_fix_suggestions(locations: list[ExceptLocation]) -> str:
         for loc in file_locations[:10]:  # Show first 10 per file
             output.append(f"  Line {loc.line}:")
             output.append(f"    Context: {loc.context[:100]}...")
-            output.append(f"    Fix: Replace with specific exceptions + logging + re-raise")
+            output.append("    Fix: Replace with specific exceptions + logging + re-raise")
         if len(file_locations) > 10:
             output.append(f"  ... and {len(file_locations) - 10} more")
     
@@ -113,10 +110,9 @@ def fix_file(file_path: Path, dry_run: bool = True) -> int:
     Returns number of fixes applied.
     """
     try:
-        with open(file_path, 'r', encoding='utf-8') as f:
+        with open(file_path, encoding='utf-8') as f:
             content = f.read()
         
-        original = content
         fixes_applied = 0
         
         # Pattern 1: except Exception: pass -> log and continue

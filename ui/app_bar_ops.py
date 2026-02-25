@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import math
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from statistics import median
 from typing import Any
 
@@ -189,7 +189,7 @@ def _ts_to_epoch(self: Any, ts_raw: Any) -> float:
                 from zoneinfo import ZoneInfo
                 dt = dt.replace(tzinfo=ZoneInfo("Asia/Shanghai"))
             except _APP_SOFT_EXCEPTIONS:
-                dt = dt.replace(tzinfo=timezone.utc)
+                dt = dt.replace(tzinfo=UTC)
         return float(dt.timestamp())
     except _APP_SOFT_EXCEPTIONS:
         return float(time.time())
@@ -205,10 +205,10 @@ def _epoch_to_iso(self: Any, epoch: float) -> str:
     except _APP_SOFT_EXCEPTIONS:
         try:
             return datetime.fromtimestamp(
-                float(epoch), tz=timezone.utc
+                float(epoch), tz=UTC
             ).isoformat(timespec="seconds")
         except _APP_SOFT_EXCEPTIONS:
-            return datetime.now(timezone.utc).isoformat(timespec="seconds")
+            return datetime.now(UTC).isoformat(timespec="seconds")
 
 def _now_iso(self: Any) -> str:
     """Consistent sortable timestamp for live bars (Asia/Shanghai)."""
@@ -216,7 +216,7 @@ def _now_iso(self: Any) -> str:
         from zoneinfo import ZoneInfo
         return datetime.now(tz=ZoneInfo("Asia/Shanghai")).isoformat(timespec="seconds")
     except _APP_SOFT_EXCEPTIONS:
-        return datetime.now(timezone.utc).isoformat(timespec="seconds")
+        return datetime.now(UTC).isoformat(timespec="seconds")
 
 def _merge_bars(
     self: Any,

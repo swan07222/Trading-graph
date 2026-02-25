@@ -1,5 +1,5 @@
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import NoReturn
 
@@ -185,7 +185,7 @@ def test_base_news_fetcher_allows_insecure_tls_only_with_env(monkeypatch) -> Non
 def test_sentiment_summary_handles_mixed_timezone_publish_times(monkeypatch) -> None:
     agg = NewsAggregator()
     now_naive = datetime.now()
-    now_aware = datetime.now(timezone.utc)
+    now_aware = datetime.now(UTC)
     sample = [
         NewsItem(
             title="aware source",
@@ -216,7 +216,7 @@ def test_sentiment_summary_handles_mixed_timezone_publish_times(monkeypatch) -> 
 def test_news_features_supports_zero_lookback_and_mixed_timezone(monkeypatch) -> None:
     agg = NewsAggregator()
     now_naive = datetime.now()
-    now_aware = datetime.now(timezone.utc)
+    now_aware = datetime.now(UTC)
     sample = [
         NewsItem(
             title="aware fresh",
@@ -247,7 +247,7 @@ def test_news_features_supports_zero_lookback_and_mixed_timezone(monkeypatch) ->
 def test_market_news_sort_accepts_mixed_timezone_publish_times(monkeypatch) -> None:
     agg = NewsAggregator()
     now_naive = datetime.now()
-    now_aware = datetime.now(timezone.utc)
+    now_aware = datetime.now(UTC)
     mixed = [
         NewsItem(
             title="older naive",

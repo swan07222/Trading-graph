@@ -4,7 +4,7 @@ import argparse
 import json
 import sys
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -17,7 +17,7 @@ from trading.health import HealthStatus, get_health_monitor
 
 
 def _utc_now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def _mode_from_text(raw: str) -> TradingMode:

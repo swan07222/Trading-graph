@@ -10,6 +10,8 @@ from models.trainer import Trainer
 from scripts.profit_quality_benchmark import (
     _make_synthetic_dataset,
     _SyntheticEnsemble,
+)
+from scripts.profit_quality_benchmark import (
     main as benchmark_main,
 )
 

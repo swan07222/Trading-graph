@@ -14,12 +14,11 @@ Features:
 
 import hashlib
 import json
-import re
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 from urllib.parse import quote_plus
 
 import requests
@@ -131,7 +130,7 @@ class NewsCollector:
         "volume", "limit up", "limit down", "bull market", "bear market",
     ]
 
-    def __init__(self, cache_dir: Optional[Path] = None) -> None:
+    def __init__(self, cache_dir: Path | None = None) -> None:
         self.cache_dir = cache_dir or CONFIG.cache_dir / "news"
         self.cache_dir.mkdir(parents=True, exist_ok=True)
 
@@ -169,7 +168,7 @@ class NewsCollector:
 
     def is_vpn_mode(self) -> bool:
         """Detect if VPN mode is active."""
-        from config.runtime_env import env_text, env_flag
+        from config.runtime_env import env_flag
 
         # Explicit configuration
         if env_flag("TRADING_VPN", False):
@@ -214,8 +213,8 @@ class NewsCollector:
 
     def collect_news(
         self,
-        keywords: Optional[list[str]] = None,
-        categories: Optional[list[str]] = None,
+        keywords: list[str] | None = None,
+        categories: list[str] | None = None,
         limit: int = 100,
         hours_back: int = 24,
     ) -> list[NewsArticle]:
@@ -272,7 +271,7 @@ class NewsCollector:
     def _fetch_from_source(
         self,
         source: str,
-        keywords: Optional[list[str]],
+        keywords: list[str] | None,
         start_time: datetime,
         limit: int,
     ) -> list[NewsArticle]:
@@ -300,7 +299,7 @@ class NewsCollector:
 
     def _fetch_jin10(
         self,
-        keywords: Optional[list[str]],
+        keywords: list[str] | None,
         start_time: datetime,
         limit: int,
     ) -> list[NewsArticle]:
@@ -354,7 +353,7 @@ class NewsCollector:
 
     def _fetch_eastmoney(
         self,
-        keywords: Optional[list[str]],
+        keywords: list[str] | None,
         start_time: datetime,
         limit: int,
     ) -> list[NewsArticle]:
@@ -363,7 +362,7 @@ class NewsCollector:
 
         # EastMoney API endpoint
         search_term = keywords[0] if keywords else "股票"
-        url = f"https://search-api-web.eastmoney.com/search/json"
+        url = "https://search-api-web.eastmoney.com/search/json"
         params = {
             "keyword": quote_plus(search_term),
             "type": "cmsArticle",
@@ -418,7 +417,7 @@ class NewsCollector:
 
     def _fetch_sina_finance(
         self,
-        keywords: Optional[list[str]],
+        keywords: list[str] | None,
         start_time: datetime,
         limit: int,
     ) -> list[NewsArticle]:
@@ -478,7 +477,7 @@ class NewsCollector:
 
     def _fetch_xueqiu(
         self,
-        keywords: Optional[list[str]],
+        keywords: list[str] | None,
         start_time: datetime,
         limit: int,
     ) -> list[NewsArticle]:
@@ -491,7 +490,7 @@ class NewsCollector:
 
     def _fetch_caixin(
         self,
-        keywords: Optional[list[str]],
+        keywords: list[str] | None,
         start_time: datetime,
         limit: int,
     ) -> list[NewsArticle]:
@@ -550,13 +549,12 @@ class NewsCollector:
 
     def _fetch_csrc(
         self,
-        keywords: Optional[list[str]],
+        keywords: list[str] | None,
         start_time: datetime,
         limit: int,
     ) -> list[NewsArticle]:
         """Fetch from CSRC (中国证监会)."""
         articles = []
-        url = "http://www.csrc.gov.cn/csrc/web/xxgklist.shtml"
 
         # CSRC website scraping would require more complex handling
         # This is a placeholder
@@ -565,14 +563,14 @@ class NewsCollector:
 
     def _fetch_reuters(
         self,
-        keywords: Optional[list[str]],
+        keywords: list[str] | None,
         start_time: datetime,
         limit: int,
     ) -> list[NewsArticle]:
         """Fetch from Reuters."""
         articles = []
         search_term = keywords[0] if keywords else "China stock"
-        url = f"https://www.reuters.com/api/search"
+        url = "https://www.reuters.com/api/search"
         params = {
             "query": search_term,
             "sort": "newest",
@@ -626,7 +624,7 @@ class NewsCollector:
 
     def _fetch_bloomberg(
         self,
-        keywords: Optional[list[str]],
+        keywords: list[str] | None,
         start_time: datetime,
         limit: int,
     ) -> list[NewsArticle]:
@@ -637,7 +635,7 @@ class NewsCollector:
 
     def _fetch_yahoo_finance(
         self,
-        keywords: Optional[list[str]],
+        keywords: list[str] | None,
         start_time: datetime,
         limit: int,
     ) -> list[NewsArticle]:
@@ -749,7 +747,7 @@ class NewsCollector:
     def _calculate_relevance(
         self,
         article: NewsArticle,
-        keywords: Optional[list[str]],
+        keywords: list[str] | None,
     ) -> None:
         """Calculate relevance score based on keywords and category."""
         score = 0.5  # Base score
@@ -765,7 +763,7 @@ class NewsCollector:
 
         article.relevance_score = min(1.0, score)
 
-    def save_articles(self, articles: list[NewsArticle], filename: Optional[str] = None) -> Path:
+    def save_articles(self, articles: list[NewsArticle], filename: str | None = None) -> Path:
         """Save articles to JSON file."""
         if filename is None:
             filename = f"news_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
@@ -781,14 +779,14 @@ class NewsCollector:
 
     def load_articles(self, filepath: Path) -> list[NewsArticle]:
         """Load articles from JSON file."""
-        with open(filepath, "r", encoding="utf-8") as f:
+        with open(filepath, encoding="utf-8") as f:
             data = json.load(f)
 
         return [NewsArticle.from_dict(item) for item in data]
 
 
 # Singleton instance
-_collector: Optional[NewsCollector] = None
+_collector: NewsCollector | None = None
 
 
 def get_collector() -> NewsCollector:

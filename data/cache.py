@@ -435,7 +435,6 @@ class DiskCache:
         
         path = self._key_to_path(key)
         tmp_path: Path | None = None
-        last_error: Exception | None = None
         
         for attempt in range(max_retries):
             try:
@@ -471,7 +470,6 @@ class DiskCache:
                     return  # Success
 
             except Exception as e:
-                last_error = e
                 if attempt < max_retries - 1:
                     # Exponential backoff: 0.1s, 0.2s, 0.4s
                     backoff = 0.1 * (2 ** attempt)

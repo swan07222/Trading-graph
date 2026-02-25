@@ -3,7 +3,7 @@ import json
 import re
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, TypeAlias
 
@@ -1022,7 +1022,7 @@ class Predictor:
                 log.error("DataProcessor not initialized - cannot make predictions")
                 pred = Prediction(
                     stock_code=self._clean_code(stock_code),
-                    timestamp=datetime.now(timezone.utc),
+                    timestamp=datetime.now(UTC),
                     interval=self._normalize_interval_token(interval),
                     horizon=int(forecast_minutes or self.horizon),
                 )
@@ -1061,7 +1061,7 @@ class Predictor:
 
             pred = Prediction(
                 stock_code=code,
-                timestamp=datetime.now(timezone.utc),
+                timestamp=datetime.now(UTC),
                 interval=interval,
                 horizon=horizon,
             )
@@ -1218,7 +1218,7 @@ class Predictor:
         original_pred: Prediction | None = None
 
         with self._cache_lock:
-            for key, (ts, pred) in self._pred_cache.items():
+            for key, (_ts, pred) in self._pred_cache.items():
                 if key.startswith(cache_key_prefix):
                     pred_ts = pred.timestamp
                     if abs((pred_ts - prediction_timestamp).total_seconds()) < 5:
@@ -1514,7 +1514,6 @@ class Predictor:
         - High volatility: Wider stops/targets, confidence adjustment
         """
         try:
-            from models.regime import MarketRegimeDetector
 
             detector = self._get_regime_detector()
             regime_result = detector.detect(df)
@@ -1694,7 +1693,7 @@ class Predictor:
 
                     pred = Prediction(
                         stock_code=code,
-                        timestamp=datetime.now(timezone.utc),
+                        timestamp=datetime.now(UTC),
                         interval=interval,
                     )
 

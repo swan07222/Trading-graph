@@ -1,6 +1,6 @@
 import math
 from collections.abc import Callable
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from data.fetcher_sources import Quote
@@ -37,7 +37,7 @@ def fill_from_spot_cache(
             # Sanity-check: reject timestamps more than 60s in the future
             # (bogus values would cause quotes to never appear stale)
             if ct <= (_time.time() + 60.0):
-                snapshot_ts = datetime.fromtimestamp(ct, tz=timezone.utc)
+                snapshot_ts = datetime.fromtimestamp(ct, tz=UTC)
         except (OverflowError, OSError, ValueError):
             snapshot_ts = None
 

@@ -20,12 +20,11 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Optional
 
 from config.settings import CONFIG
 from utils.logger import get_logger
 
-from .news_collector import NewsArticle, get_collector
+from .news_collector import NewsArticle
 
 log = get_logger(__name__)
 
@@ -121,7 +120,7 @@ class SentimentAnalyzer:
     BULLISH_EN = ["bull", "long", "buy", "breakout", "new high"]
     BEARISH_EN = ["bear", "short", "sell", "breakdown", "new low"]
 
-    def __init__(self, lexicon_path: Optional[Path] = None) -> None:
+    def __init__(self, lexicon_path: Path | None = None) -> None:
         self.lexicon_path = lexicon_path or CONFIG.cache_dir / "sentiment_lexicon.json"
         self._custom_lexicon: dict[str, float] = {}
         self._load_lexicon()
@@ -130,7 +129,7 @@ class SentimentAnalyzer:
         """Load custom sentiment lexicon if exists."""
         if self.lexicon_path.exists():
             try:
-                with open(self.lexicon_path, "r", encoding="utf-8") as f:
+                with open(self.lexicon_path, encoding="utf-8") as f:
                     self._custom_lexicon = json.load(f)
                 log.info(f"Loaded custom sentiment lexicon: {len(self._custom_lexicon)} entries")
             except Exception as e:
@@ -426,7 +425,7 @@ class SentimentAnalyzer:
 
 
 # Singleton instance
-_analyzer: Optional[SentimentAnalyzer] = None
+_analyzer: SentimentAnalyzer | None = None
 
 
 def get_analyzer() -> SentimentAnalyzer:

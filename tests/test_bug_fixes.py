@@ -11,10 +11,9 @@ Tests cover:
 from __future__ import annotations
 
 import sys
-import time
 from datetime import datetime
 from pathlib import Path
-from unittest.mock import MagicMock, Mock
+from unittest.mock import MagicMock
 
 import numpy as np
 import pandas as pd
@@ -279,7 +278,7 @@ class TestConfidenceCalibration:
     
     def test_record_prediction_validates_confidence(self):
         """Test that record_prediction validates confidence range."""
-        from models.confidence_calibration import ConfidenceCalibrator, CalibratedPrediction
+        from models.confidence_calibration import CalibratedPrediction, ConfidenceCalibrator
         
         calibrator = ConfidenceCalibrator()
         
@@ -308,7 +307,7 @@ class TestConfidenceCalibration:
     
     def test_mark_outcome_requires_record_first(self):
         """Test that mark_outcome handles being called before record_prediction."""
-        from models.confidence_calibration import ConfidenceCalibrator, CalibratedPrediction
+        from models.confidence_calibration import CalibratedPrediction, ConfidenceCalibrator
         
         calibrator = ConfidenceCalibrator()
         
@@ -366,7 +365,7 @@ class TestAdaptiveLearningRate:
         # (change should be smaller than with few predictions)
         predictor._stock_accuracy_history["600519"] = [True] * 5
         
-        perf_before_few = predictor._last_model_performance.copy()
+        predictor._last_model_performance.copy()
         predictor._update_model_weights("600519", was_correct=True)
         
         # Compare changes (should be larger with fewer predictions)

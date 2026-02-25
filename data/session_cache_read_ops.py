@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import math
-from datetime import timezone
+from datetime import UTC
 from typing import Any
 
 import pandas as pd
@@ -21,7 +21,7 @@ def _shanghai_tz():
         from zoneinfo import ZoneInfo
         return ZoneInfo("Asia/Shanghai")
     except Exception:
-        return timezone.utc
+        return UTC
 
 def _interval_safety_caps(interval: str) -> tuple[float, float]:
     """Return (max_jump_pct, max_range_pct) used for cached bar scrubbing."""

@@ -33,10 +33,10 @@ from models.trainer_data_ops import (
 )
 from models.trainer_data_ops import prepare_data as _prepare_data_impl
 from models.trainer_eval_ops import (
-    _build_explainability_samples as _build_explainability_samples_impl,
+    _build_confidence_calibration as _build_confidence_calibration_impl,
 )
 from models.trainer_eval_ops import (
-    _build_confidence_calibration as _build_confidence_calibration_impl,
+    _build_explainability_samples as _build_explainability_samples_impl,
 )
 from models.trainer_eval_ops import _build_quality_gate as _build_quality_gate_impl
 from models.trainer_eval_ops import _build_trading_stress_tests as _build_trading_stress_tests_impl

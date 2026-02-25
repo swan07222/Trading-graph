@@ -400,7 +400,7 @@ def main() -> int:
             
             if articles:
                 sentiment = analyzer.analyze_articles(articles, hours_back=72)
-                print(f"\nSentiment Analysis:")
+                print("\nSentiment Analysis:")
                 print(f"  Overall: {sentiment.overall:.2f}")
                 print(f"  Policy Impact: {sentiment.policy_impact:.2f}")
                 print(f"  Market Sentiment: {sentiment.market_sentiment:.2f}")
@@ -413,13 +413,13 @@ def main() -> int:
                 # Entity analysis
                 entities = analyzer.extract_entities(articles)
                 if entities:
-                    print(f"\nTop entities mentioned:")
+                    print("\nTop entities mentioned:")
                     for entity in sorted(entities, key=lambda x: x.mention_count, reverse=True)[:5]:
                         print(f"  {entity.entity} ({entity.entity_type}): {entity.sentiment:.2f}, {entity.mention_count} mentions")
 
         elif args.train_news:
-            from models.news_trainer import get_trainer
             from data.discovery import discover_stocks
+            from models.news_trainer import get_trainer
             
             print("\nNews-based Model Training")
             print("=" * 50)
@@ -442,7 +442,7 @@ def main() -> int:
             if "error" in result:
                 print(f"Training failed: {result['error']}")
             else:
-                print(f"\nTraining completed!")
+                print("\nTraining completed!")
                 print(f"  Train samples: {result['train_samples']}")
                 print(f"  Validation samples: {result['val_samples']}")
                 print(f"  Best validation accuracy: {result['best_val_acc']:.2%}")

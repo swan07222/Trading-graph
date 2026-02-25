@@ -16,14 +16,11 @@ Example:
 """
 from __future__ import annotations
 
-import asyncio
 import json
-import logging
-import os
 import time
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Any
 
 import uvicorn
@@ -37,15 +34,14 @@ from fastapi import (
     WebSocketDisconnect,
 )
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, JSONResponse
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from fastapi.responses import HTMLResponse
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field
 
-from config.runtime_env import env_text, env_int
-from core.async_events import AsyncEventBus, Event, EventType, get_event_bus
-from utils.async_http import AsyncHttpClient
+from config.runtime_env import env_int, env_text
+from core.async_events import Event, EventType, get_event_bus
 from utils.logger import get_logger
-from utils.redis_cache import RedisCache, get_cache
+from utils.redis_cache import get_cache
 
 log = get_logger()
 
@@ -128,7 +124,7 @@ class BacktestResult(BaseModel):
 # ============================================================================
 
 async def verify_auth(
-    credentials: HTTPAuthorizationCredentials | None = Depends(security),
+    credentials: HTTPAuthorizationCredentials | None = None,
 ) -> str | None:
     """Verify API key authentication."""
     if credentials is None:
@@ -361,7 +357,7 @@ async def subscribe_events(
     """Server-sent events for real-time updates."""
     from asyncio import sleep
 
-    event_bus = get_event_bus()
+    get_event_bus()
 
     while True:
         # In production, would stream actual events

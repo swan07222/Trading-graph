@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from core.types import Signal
 
@@ -39,7 +39,7 @@ class Prediction:
 
     stock_code: str
     stock_name: str = ""
-    timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    timestamp: datetime = field(default_factory=lambda: datetime.now(UTC))
 
     signal: Signal = Signal.HOLD
     signal_strength: float = 0.0

@@ -24,7 +24,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-
 # ============================================================================
 # Informer Model - Efficient Transformer for Long Sequences
 # ============================================================================

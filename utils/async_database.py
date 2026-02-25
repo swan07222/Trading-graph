@@ -18,8 +18,6 @@ Example:
 """
 from __future__ import annotations
 
-import asyncio
-import logging
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from datetime import datetime
@@ -28,13 +26,11 @@ from typing import Any, Protocol
 from sqlalchemy import (
     BigInteger,
     Boolean,
-    Column,
     DateTime,
     Float,
     Integer,
     MetaData,
     String,
-    Text,
     select,
     text,
 )
@@ -44,7 +40,7 @@ from sqlalchemy.ext.asyncio import (
     async_sessionmaker,
     create_async_engine,
 )
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 from config.runtime_env import env_text
 from utils.logger import get_logger
@@ -371,7 +367,7 @@ class AsyncDatabase:
         async with self.session() as session:
             result = await session.execute(text(query), params or {})
             columns = result.keys()
-            return [dict(zip(columns, row)) for row in result.fetchall()]
+            return [dict(zip(columns, row, strict=False)) for row in result.fetchall()]
 
     async def health_check(self) -> dict[str, Any]:
         """Check database health.
@@ -445,7 +441,7 @@ class StockRepository:
     ) -> list[Stock]:
         """List active stocks, optionally filtered by market."""
         async with self._db.session() as session:
-            query = select(Stock).where(Stock.is_active == True)
+            query = select(Stock).where(Stock.is_active)
             if market:
                 query = query.where(Stock.market == market)
             query = query.limit(limit)

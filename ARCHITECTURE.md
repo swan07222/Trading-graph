@@ -298,19 +298,6 @@ audit.log(
 
 See [docs/adr/](docs/adr/) for Architecture Decision Records.
 
-## Removed Components
-
-The following components have been removed from this build:
-
-- ❌ Portfolio management (`trading/portfolio.py`)
-- ❌ Risk management (`trading/risk.py`)
-- ❌ Order Management System (`trading/oms.py`)
-- ❌ Broker integration (`trading/broker*.py`)
-- ❌ Auto trading (`trading/auto_trader.py`)
-- ❌ Execution engine (`trading/executor*.py`)
-
-These components are no longer available. The system focuses on **analysis and prediction** only.
-
 ## Future Enhancements
 
 - [ ] Enhanced NLP for Chinese policy documents

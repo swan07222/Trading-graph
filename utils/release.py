@@ -6,7 +6,7 @@ import json
 import os
 import platform
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 
@@ -30,7 +30,7 @@ def build_release_manifest(artifacts: list[Path], version: str) -> dict:
         )
     return {
         "version": str(version),
-        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "generated_at": datetime.now(UTC).isoformat(),
         "algorithm": "sha256",
         "build": {
             "python": sys.version.split()[0],

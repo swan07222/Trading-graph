@@ -24,6 +24,7 @@ IDENTIFIED CACHE BUGS (2026-02-24):
 """
 
 import pandas as pd
+
 from data.fetcher_history_flow_ops import _synthesize_intraday_from_daily
 
 

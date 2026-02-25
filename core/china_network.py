@@ -445,7 +445,7 @@ class ChinaNetworkOptimizer:
             return endpoint, success, latency
 
         # Test endpoints concurrently with proper error handling
-        from concurrent.futures import ThreadPoolExecutor, as_completed, Future
+        from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 
         max_workers = min(5, max(1, len(endpoints)))
         with ThreadPoolExecutor(max_workers=max_workers) as executor:

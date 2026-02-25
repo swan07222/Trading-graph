@@ -635,7 +635,7 @@ class StockChart(QWidget):
         # FIX: Log bar count for diagnostics
         log.info(f"Chart update: {len(self._bars)} bars received")
         self._dbg_log(
-            f"chart_update:bars_received",
+            "chart_update:bars_received",
             f"Chart update: {len(self._bars)} bars received",
             min_gap_seconds=0.5,
             level="info",
@@ -653,7 +653,7 @@ class StockChart(QWidget):
             
             # [DBG] Initial state diagnostic
             self._dbg_log(
-                f"chart_update:initial_state",
+                "chart_update:initial_state",
                 f"Chart update starting: bars={len(self._bars)}, predicted={len(self._predicted_prices)}, levels={len(self._levels)}",
                 min_gap_seconds=0.3,
                 level="info",
@@ -687,7 +687,7 @@ class StockChart(QWidget):
 
             # [DBG] Interval detection diagnostic
             self._dbg_log(
-                f"chart_update:interval_detected",
+                "chart_update:interval_detected",
                 f"Chart interval detected: default_iv={default_iv}, raw={default_iv_raw}",
                 min_gap_seconds=0.5,
                 level="info",
@@ -729,7 +729,7 @@ class StockChart(QWidget):
             
             # [DBG] Bar sorting diagnostic
             self._dbg_log(
-                f"chart_update:bars_sorted",
+                "chart_update:bars_sorted",
                 f"Chart bars sorted and trimmed: render_bars={len(render_bars)}, max=3000",
                 min_gap_seconds=0.5,
                 level="info",
@@ -855,7 +855,7 @@ class StockChart(QWidget):
 
             # [DBG] Bar processing complete diagnostic
             self._dbg_log(
-                f"chart_update:bars_processed",
+                "chart_update:bars_processed",
                 f"Chart bars processed: total={diag['rows_total']} kept={diag['kept']} drop_nonfinite={diag['drop_nonfinite']} drop_parse={diag['drop_parse']}",
                 min_gap_seconds=0.5,
                 level="info",

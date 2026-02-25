@@ -8,7 +8,7 @@ import threading
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -46,7 +46,7 @@ def _parse_epoch_timestamp(value: float) -> datetime:
     v = float(value)
     if abs(v) >= 1e11:
         v = v / 1000.0
-    return datetime.fromtimestamp(v, tz=timezone.utc)
+    return datetime.fromtimestamp(v, tz=UTC)
 
 
 def _shanghai_tz() -> Any:
@@ -54,7 +54,7 @@ def _shanghai_tz() -> Any:
         from zoneinfo import ZoneInfo
         return ZoneInfo("Asia/Shanghai")
     except Exception:
-        return timezone.utc
+        return UTC
 
 
 def _interval_safety_caps(interval: str) -> tuple[float, float]:
@@ -243,7 +243,7 @@ class SessionBarCache:
 
     def _extract_timestamp(self, bar: dict) -> str:
         if not isinstance(bar, dict):
-            return datetime.now(timezone.utc).isoformat()
+            return datetime.now(UTC).isoformat()
         sh_tz = _shanghai_tz()
         for key in ("timestamp", "datetime", "time", "ts"):
             raw = bar.get(key)
@@ -266,7 +266,7 @@ class SessionBarCache:
                 # Treat naive provider timestamps as China market local time.
                 dt = dt.replace(tzinfo=sh_tz)
             return dt.isoformat()
-        return datetime.now(timezone.utc).isoformat()
+        return datetime.now(UTC).isoformat()
 
     def _load_last_close_hint(self, path: Path) -> float | None:
         """Read last cached close for outlier-write guard."""
