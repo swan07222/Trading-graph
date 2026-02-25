@@ -123,7 +123,8 @@ class EnsembleModel:
         self.trained_stock_codes: list[str] = []
         self.trained_stock_last_train: dict[str, str] = {}
 
-        model_names = model_names or ["lstm", "gru", "tcn", "transformer", "hybrid"]
+        # Use only modern cutting-edge models
+        model_names = model_names or ["informer", "tft", "nbeats", "tsmixer"]
 
         self.models: dict[str, nn.Module] = {}
         self.weights: dict[str, float] = {}
@@ -195,20 +196,19 @@ class EnsembleModel:
 
     @classmethod
     def _get_model_classes(cls) -> dict:
+        """Get available model classes - only modern architectures."""
         if cls._MODEL_CLASSES is None:
             from .networks import (
-                GRUModel,
-                HybridModel,
-                LSTMModel,
-                TCNModel,
-                TransformerModel,
+                Informer,
+                NBEATS,
+                TSMixer,
+                TemporalFusionTransformer,
             )
             cls._MODEL_CLASSES = {
-                "lstm": LSTMModel,
-                "transformer": TransformerModel,
-                "gru": GRUModel,
-                "tcn": TCNModel,
-                "hybrid": HybridModel,
+                "informer": Informer,
+                "tft": TemporalFusionTransformer,
+                "nbeats": NBEATS,
+                "tsmixer": TSMixer,
             }
         return cls._MODEL_CLASSES
 
