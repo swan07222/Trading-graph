@@ -415,6 +415,13 @@ class DataFetcher:
         from core.network import get_network_env
         env = get_network_env()
 
+        # [DBG] Network environment diagnostic
+        log.info(
+            f"[DBG] Fetcher source selection: is_china_direct={env.is_china_direct} "
+            f"is_vpn_active={env.is_vpn_active} eastmoney_ok={env.eastmoney_ok} "
+            f"tencent_ok={env.tencent_ok} yahoo_ok={env.yahoo_ok}"
+        )
+
         net_sig = (
             bool(env.is_china_direct),
             bool(getattr(env, "eastmoney_ok", False)),
@@ -441,8 +448,15 @@ class DataFetcher:
         for s in self._all_sources:
             try:
                 if not s.is_available():
+                    # [DBG] Source unavailable diagnostic
+                    log.info(f"[DBG] Source {s.name}: unavailable")
                     continue
                 if not s.is_suitable_for_network():
+                    # [DBG] Source not suitable diagnostic
+                    log.info(
+                        f"[DBG] Source {s.name}: not suitable for network "
+                        f"(needs_china_direct={s.needs_china_direct} needs_vpn={s.needs_vpn})"
+                    )
                     continue
             except _RECOVERABLE_FETCH_EXCEPTIONS as exc:
                 log.debug(
@@ -452,6 +466,11 @@ class DataFetcher:
                 )
                 continue
             active.append(s)
+        
+        # [DBG] Active sources diagnostic
+        source_names = [s.name for s in active]
+        log.info(f"[DBG] Active sources for current network: {source_names}")
+        
         ranked = sorted(
             active,
             key=lambda s: (-self._source_health_score(s, env), s.priority),

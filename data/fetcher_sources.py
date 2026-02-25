@@ -646,9 +646,20 @@ class AkShareSource(DataSource):
     def is_suitable_for_network(self) -> bool:
         from core.network import get_network_env
         env = get_network_env()
+        # [DBG] AkShare network check
+        log.info(
+            f"[DBG] AkShare network check: is_china_direct={env.is_china_direct} "
+            f"is_vpn_active={env.is_vpn_active} eastmoney_ok={env.eastmoney_ok}"
+        )
+        # FIX: AkShare is essential for Chinese A-share intraday data.
+        # It must be available regardless of VPN status, as long as eastmoney endpoint works.
+        # VPN users can still access AkShare if eastmoney.com is reachable.
         if not bool(getattr(env, "eastmoney_ok", False)):
+            log.info("[DBG] AkShare: eastmoney_ok=False, not suitable")
             return False
-        return bool(env.is_china_direct)
+        # Always allow AkShare if eastmoney is reachable (VPN or not)
+        log.info("[DBG] AkShare: eastmoney_ok=True, suitable regardless of VPN")
+        return True
 
     def _get_spot_cache(self) -> SpotCache:
         if self._spot_cache is None:
@@ -1233,9 +1244,16 @@ class YahooSource(DataSource):
     def is_suitable_for_network(self) -> bool:
         from core.network import get_network_env
         env = get_network_env()
-        return bool(env.is_vpn_active) or (
+        suitable = bool(env.is_vpn_active) or (
             bool(getattr(env, "yahoo_ok", False)) and not env.is_china_direct
         )
+        # [DBG] VPN/Yahoo suitability check
+        log.info(
+            f"[DBG] Yahoo network check: is_vpn_active={env.is_vpn_active} "
+            f"is_china_direct={env.is_china_direct} yahoo_ok={env.yahoo_ok} "
+            f"suitable={suitable}"
+        )
+        return suitable
 
     def _record_error(self, error: str) -> None:
         msg = str(error).lower()
@@ -1259,10 +1277,16 @@ class YahooSource(DataSource):
         if not self._yf or not self.is_available():
             raise DataSourceUnavailableError("Yahoo Finance not available")
 
+        # [DBG] Yahoo fetch start diagnostic
+        log.info(f"[DBG] Yahoo get_history: code={code} days={days}")
+
         start_t = time.time()
         symbol = self._to_yahoo_symbol(code)
         if not symbol:
             raise DataFetchError(f"Cannot map {code} to Yahoo symbol")
+
+        # [DBG] Yahoo symbol mapping diagnostic
+        log.info(f"[DBG] Yahoo symbol: {code} -> {symbol}")
 
         ticker = self._yf.Ticker(symbol)
         end = datetime.now()
@@ -1274,6 +1298,8 @@ class YahooSource(DataSource):
 
         df = self._normalize(df)
         latency = (time.time() - start_t) * 1000
+        # [DBG] Yahoo fetch success diagnostic
+        log.info(f"[DBG] Yahoo get_history SUCCESS: code={code} rows={len(df)} latency={latency:.0f}ms")
         self._record_success(latency)
         return df.tail(days)
 
@@ -1281,6 +1307,14 @@ class YahooSource(DataSource):
         self, inst: dict, days: int, interval: str = "1d"
     ) -> pd.DataFrame:
         if not self._yf or not self.is_available():
+            return pd.DataFrame()
+
+        # [DBG] Yahoo intraday warning
+        if interval in _INTRADAY_INTERVALS:
+            log.warning(
+                f"[DBG] Yahoo Finance does not support intraday ({interval}) data for Chinese stocks. "
+                f"Use AkShare for intraday data."
+            )
             return pd.DataFrame()
 
         start_t = time.time()

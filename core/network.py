@@ -251,10 +251,14 @@ class NetworkDetector:
             env.is_vpn_active = True
             env.is_china_direct = False
             env.detection_method = "env_force_vpn"
+            # [DBG] VPN forced diagnostic
+            log.info("[DBG] VPN mode FORCED via TRADING_VPN environment variable")
         elif force_china_direct is True:
             env.is_china_direct = True
             env.is_vpn_active = False
             env.detection_method = "env_force_china_direct"
+            # [DBG] China direct forced diagnostic
+            log.info("[DBG] China direct mode FORCED via TRADING_CHINA_DIRECT environment variable")
 
         env.latency_ms = (time.time() - start) * 1000
         log.info(
