@@ -420,13 +420,6 @@ class DataFetcher:
         tencent_ok = bool(getattr(env, "tencent_ok", False))
         yahoo_ok = bool(getattr(env, "yahoo_ok", False))
 
-        # [DBG] Network environment diagnostic
-        log.info(
-            f"[DBG] Fetcher source selection: is_china_direct={is_china_direct} "
-            f"is_vpn_active={is_vpn_active} eastmoney_ok={eastmoney_ok} "
-            f"tencent_ok={tencent_ok} yahoo_ok={yahoo_ok}"
-        )
-
         net_sig = (
             bool(is_china_direct),
             bool(eastmoney_ok),
@@ -453,14 +446,13 @@ class DataFetcher:
         for s in self._all_sources:
             try:
                 if not s.is_available():
-                    # [DBG] Source unavailable diagnostic
-                    log.info(f"[DBG] Source {s.name}: unavailable")
+                    log.debug("Source %s: unavailable", s.name)
                     continue
                 if not s.is_suitable_for_network():
-                    # [DBG] Source not suitable diagnostic
-                    log.info(
-                        f"[DBG] Source {s.name}: not suitable for network "
-                        f"(needs_china_direct={s.needs_china_direct} needs_vpn={s.needs_vpn})"
+                    log.debug(
+                        "Source %s: not suitable for network "
+                        "(needs_china_direct=%s needs_vpn=%s)",
+                        s.name, s.needs_china_direct, s.needs_vpn,
                     )
                     continue
             except _RECOVERABLE_FETCH_EXCEPTIONS as exc:
@@ -471,10 +463,6 @@ class DataFetcher:
                 )
                 continue
             active.append(s)
-        
-        # [DBG] Active sources diagnostic
-        source_names = [s.name for s in active]
-        log.info(f"[DBG] Active sources for current network: {source_names}")
         
         ranked = sorted(
             active,

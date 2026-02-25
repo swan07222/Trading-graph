@@ -323,7 +323,7 @@ class EnsembleModel:
             with torch.inference_mode():
                 for name, model in models:
                     model.eval()
-                    logits, _ = model(batch_X)
+                    out = model(batch_X); logits = out["logits"] if isinstance(out, dict) else out
                     w = weights.get(name, 1.0 / max(1, len(models)))
                     if weighted_logits is None:
                         weighted_logits = logits * w
@@ -557,7 +557,7 @@ class EnsembleModel:
 
                     if use_amp:
                         with amp_ctx():
-                            logits, _ = model(batch_X)
+                            out = model(batch_X); logits = out["logits"] if isinstance(out, dict) else out
                             loss = criterion(logits, batch_y)
                         scaler.scale(loss).backward()
                         scaler.unscale_(optimizer)
@@ -565,7 +565,7 @@ class EnsembleModel:
                         scaler.step(optimizer)
                         scaler.update()
                     else:
-                        logits, _ = model(batch_X)
+                        out = model(batch_X); logits = out["logits"] if isinstance(out, dict) else out
                         loss = criterion(logits, batch_y)
                         loss.backward()
                         torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
@@ -595,7 +595,7 @@ class EnsembleModel:
                         batch_y = batch_y.to(self.device, non_blocking=True)
 
                         with amp_ctx():
-                            logits, _ = model(batch_X)
+                            out = model(batch_X); logits = out["logits"] if isinstance(out, dict) else out
                             loss = criterion(logits, batch_y)
 
                         val_losses.append(float(loss))
@@ -820,7 +820,7 @@ class EnsembleModel:
             with torch.inference_mode():
                 for name, model in models:
                     model.eval()
-                    logits, _ = model(X_t)
+                    out = model(X_t); logits = out["logits"] if isinstance(out, dict) else out
                     per_model_probs[name] = F.softmax(logits, dim=-1).cpu().numpy()
 
                     w = weights.get(name, 1.0 / max(1, len(models)))

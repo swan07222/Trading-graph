@@ -1,5 +1,6 @@
 ﻿from __future__ import annotations
 
+import warnings
 from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
@@ -854,7 +855,9 @@ def _train_forecaster(
                 else float("inf")
             )
 
-            scheduler.step(val_loss)
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", UserWarning)
+                scheduler.step(val_loss)
 
             log.info(
                 f"Forecaster epoch {ep + 1}/{fore_epochs}: "

@@ -90,8 +90,8 @@ class NewsCollector:
     """Multi-source news collector with VPN-aware routing."""
 
     # Chinese sources (VPN off)
+    # Note: jin10 requires a paid API subscription and is not publicly accessible
     CHINESE_SOURCES = [
-        "jin10",
         "eastmoney",
         "sina_finance",
         "xueqiu",
@@ -468,7 +468,7 @@ class NewsCollector:
             self._update_source_health("jin10", success=True)
 
         except Exception as e:
-            log.error(f"Jin10 fetch failed: {e}")
+            log.debug(f"Jin10 fetch failed (paid API, may not be accessible): {e}")
             self._update_source_health("jin10", success=False)
 
         return articles

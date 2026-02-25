@@ -25,15 +25,23 @@ def test_universe_skips_akshare_when_probe_is_down_offshore(monkeypatch) -> None
     assert _can_use_akshare() is False
 
 
-def test_akshare_source_requires_eastmoney_probe(monkeypatch) -> None:
+def test_akshare_source_suitable_on_china_direct(monkeypatch) -> None:
+    """AkShare is suitable whenever is_china_direct=True regardless of eastmoney probe."""
     src = AkShareSource()
 
-    env_bad = SimpleNamespace(eastmoney_ok=False, is_china_direct=True)
-    monkeypatch.setattr("core.network.get_network_env", lambda: env_bad)
+    # China direct + eastmoney probe down: still suitable (probe is unreliable)
+    env_cn_probe_down = SimpleNamespace(eastmoney_ok=False, is_china_direct=True)
+    monkeypatch.setattr("core.network.get_network_env", lambda: env_cn_probe_down)
+    assert src.is_suitable_for_network() is True
+
+    # Offshore + eastmoney probe also down: not suitable
+    env_offshore_bad = SimpleNamespace(eastmoney_ok=False, is_china_direct=False)
+    monkeypatch.setattr("core.network.get_network_env", lambda: env_offshore_bad)
     assert src.is_suitable_for_network() is False
 
-    env_good = SimpleNamespace(eastmoney_ok=True, is_china_direct=True)
-    monkeypatch.setattr("core.network.get_network_env", lambda: env_good)
+    # Offshore + eastmoney probe up (e.g. VPN with eastmoney access): suitable
+    env_offshore_good = SimpleNamespace(eastmoney_ok=True, is_china_direct=False)
+    monkeypatch.setattr("core.network.get_network_env", lambda: env_offshore_good)
     assert src.is_suitable_for_network() is True
 
 
