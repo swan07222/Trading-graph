@@ -219,13 +219,22 @@ class EnsembleModel:
         dropout: float | None = None,
         num_classes: int | None = None,
     ) -> None:
+        """Initialize a single model and add it to the ensemble."""
         cls_map = self._get_model_classes()
         try:
+            # New models use different parameter names
+            d_model = hidden_size or CONFIG.model.hidden_size
+            dropout = dropout or CONFIG.model.dropout
+            num_classes = num_classes or CONFIG.model.num_classes
+
+            # Modern models use d_model instead of hidden_size
             model = cls_map[name](
                 input_size=self.input_size,
-                hidden_size=hidden_size or CONFIG.model.hidden_size,
-                num_classes=num_classes or CONFIG.model.num_classes,
-                dropout=dropout or CONFIG.model.dropout,
+                d_model=d_model,
+                num_classes=num_classes,
+                dropout=dropout,
+                pred_len=self.prediction_horizon,
+                seq_len=60,  # Default sequence length
             )
             model.to(self.device)
             self.models[name] = model

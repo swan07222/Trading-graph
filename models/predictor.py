@@ -877,9 +877,9 @@ class Predictor:
         return dict(self._trained_stock_last_train or {})
 
     def _load_forecaster(self) -> None:
-        """Load TCN forecaster for price curve prediction."""
+        """Load Informer forecaster for price curve prediction."""
         try:
-            from models.networks import TCNModel
+            from models.networks import Informer
 
             self.forecaster = None
             self._forecaster_horizon = 0
@@ -959,11 +959,13 @@ class Predictor:
                 log.warning("Forecaster checkpoint has invalid horizon: %s", horizon)
                 return
 
-            self.forecaster = TCNModel(
+            arch = data.get("arch", {})
+            self.forecaster = Informer(
                 input_size=data["input_size"],
-                hidden_size=data["arch"]["hidden_size"],
-                num_classes=horizon,
-                dropout=data["arch"]["dropout"],
+                d_model=arch.get("d_model", 128),
+                pred_len=horizon,
+                seq_len=arch.get("seq_len", 60),
+                num_classes=1,  # Regression for price prediction
             )
             self.forecaster.load_state_dict(data["state_dict"])
             self.forecaster.eval()
@@ -977,7 +979,7 @@ class Predictor:
             )
 
         except ImportError:
-            log.debug("TCNModel not available - forecaster disabled")
+            log.debug("Informer not available - forecaster disabled")
             self.forecaster = None
             self._forecaster_horizon = 0
         except (OSError, RuntimeError, TypeError, ValueError, KeyError) as e:
