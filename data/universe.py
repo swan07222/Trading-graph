@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import threading
 import time
+import warnings
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
@@ -29,6 +30,7 @@ _new_listings_cache: dict[str, object] = {
     "codes": [],
 }
 _MIN_REASONABLE_UNIVERSE_SIZE = 1200
+_FALLBACK_PER_CALL_TIMEOUT_S = 8.0
 
 
 def _universe_path() -> Path:
@@ -299,6 +301,23 @@ def _extract_codes_from_any(payload: object) -> list[str]:
     return []
 
 
+def _to_datetime_coerce(values):
+    """Datetime parsing helper that suppresses noisy infer-format warnings."""
+    if not _HAS_PANDAS:
+        return values
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore",
+            message=r"^Could not infer format, so each element will be parsed individually.*",
+            category=UserWarning,
+        )
+        try:
+            # pandas>=2.0: mixed parser avoids infer-format warning path.
+            return pd.to_datetime(values, errors="coerce", format="mixed")
+        except TypeError:
+            return pd.to_datetime(values, errors="coerce")
+
+
 def _try_akshare_fetch(timeout: int = 20) -> list[str] | None:
     """Try to fetch stock universe from AkShare.
 
@@ -328,40 +347,28 @@ def _try_akshare_fetch(timeout: int = 20) -> list[str] | None:
             log.warning("AkShare spot endpoint returned empty data")
         return None
 
-    def _do_fallback_fetch():
-        fallback_calls = [
-            ("stock_info_a_code_name", getattr(ak, "stock_info_a_code_name", None)),
-            ("stock_zh_a_name_code", getattr(ak, "stock_zh_a_name_code", None)),
-            ("stock_info_sh_name_code", getattr(ak, "stock_info_sh_name_code", None)),
-            ("stock_info_sz_name_code", getattr(ak, "stock_info_sz_name_code", None)),
-            ("stock_info_bj_name_code", getattr(ak, "stock_info_bj_name_code", None)),
-            ("stock_zh_a_spot", getattr(ak, "stock_zh_a_spot", None)),
-        ]
-
-        merged_codes: list[str] = []
-        for api_name, api_fn in fallback_calls:
-            if not callable(api_fn):
-                continue
-            try:
-                log.info(f"Fetching universe from AkShare fallback ({api_name})...")
-                payload = api_fn()
-                codes = _extract_codes_from_any(payload)
-                if codes:
-                    log.info(
-                        "AkShare fallback %s returned %s valid codes",
-                        api_name,
-                        len(codes),
-                    )
-                    merged_codes.extend(codes)
-            except Exception as exc:
-                log.warning(
-                    "AkShare fallback %s failed: %s: %s",
-                    api_name,
-                    type(exc).__name__,
-                    exc,
-                )
-        merged = _validate_codes(merged_codes)
-        return merged or None
+    def _call_with_timeout(api_name: str, api_fn, call_timeout: float):
+        if not callable(api_fn):
+            return None
+        try:
+            log.info("Fetching universe from AkShare fallback (%s)...", api_name)
+            with ThreadPoolExecutor(max_workers=1) as ex:
+                fut = ex.submit(api_fn)
+                return fut.result(timeout=max(1.0, float(call_timeout)))
+        except FuturesTimeout:
+            log.warning(
+                "AkShare fallback %s timed out after %.1fs",
+                api_name,
+                float(call_timeout),
+            )
+        except Exception as exc:
+            log.warning(
+                "AkShare fallback %s failed: %s: %s",
+                api_name,
+                type(exc).__name__,
+                exc,
+            )
+        return None
 
     # Try primary endpoint with timeout
     try:
@@ -375,17 +382,50 @@ def _try_akshare_fetch(timeout: int = 20) -> list[str] | None:
     except Exception as exc:
         log.warning(f"AkShare spot fetch failed: {type(exc).__name__}: {exc}")
 
-    # Try fallback endpoints with timeout
-    try:
-        with ThreadPoolExecutor(max_workers=1) as ex:
-            fut = ex.submit(_do_fallback_fetch)
-            result = fut.result(timeout=timeout)
-            if result:
-                return result
-    except FuturesTimeout:
-        log.warning(f"AkShare fallback fetch timed out after {timeout}s")
-    except Exception as exc:
-        log.warning(f"AkShare fallback fetch failed: {type(exc).__name__}: {exc}")
+    # Try fallback endpoints with per-call timeout and early stop once we
+    # already have a reasonably full market universe.
+    fallback_calls = [
+        ("stock_info_a_code_name", getattr(ak, "stock_info_a_code_name", None)),
+        ("stock_zh_a_name_code", getattr(ak, "stock_zh_a_name_code", None)),
+        ("stock_info_sh_name_code", getattr(ak, "stock_info_sh_name_code", None)),
+        ("stock_info_sz_name_code", getattr(ak, "stock_info_sz_name_code", None)),
+        ("stock_info_bj_name_code", getattr(ak, "stock_info_bj_name_code", None)),
+        # Slow endpoint; keep it last and only try if needed.
+        ("stock_zh_a_spot", getattr(ak, "stock_zh_a_spot", None)),
+    ]
+
+    merged_codes: list[str] = []
+    deadline = time.monotonic() + float(timeout)
+    for api_name, api_fn in fallback_calls:
+        merged = _validate_codes(merged_codes)
+        if len(merged) >= _MIN_REASONABLE_UNIVERSE_SIZE:
+            log.info(
+                "Universe fallback reached %s valid codes; stopping early at %s",
+                len(merged),
+                api_name,
+            )
+            return merged
+
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+
+        call_timeout = min(float(_FALLBACK_PER_CALL_TIMEOUT_S), float(remaining))
+        payload = _call_with_timeout(api_name, api_fn, call_timeout)
+        if payload is None:
+            continue
+        codes = _extract_codes_from_any(payload)
+        if codes:
+            log.info(
+                "AkShare fallback %s returned %s valid codes",
+                api_name,
+                len(codes),
+            )
+            merged_codes.extend(codes)
+
+    merged = _validate_codes(merged_codes)
+    if merged:
+        return merged
 
     log.warning("No valid stock codes from any AkShare universe endpoint")
     return None
@@ -404,11 +444,21 @@ def get_universe_codes(
     now = time.time()
     last_ts = _parse_updated_ts(data)
     cached_codes = _validate_codes(data.get("codes") or [])
+    cached_source = str(data.get("source", "") or "").strip().lower()
     stale = (now - last_ts) > max_age_hours * 3600.0
+    cache_is_thin_fallback = (
+        cached_source == "fallback"
+        and len(cached_codes) < _MIN_REASONABLE_UNIVERSE_SIZE
+    )
 
-    if not force_refresh and cached_codes and not stale:
+    if not force_refresh and cached_codes and not stale and not cache_is_thin_fallback:
         log.debug(f"Using cached universe: {len(cached_codes)} codes")
         return cached_codes
+    if cache_is_thin_fallback and not force_refresh:
+        log.info(
+            "Cached universe is fallback/thin (%s codes); attempting refresh",
+            len(cached_codes),
+        )
 
     # Try AkShare regardless of probe result; use shorter timeout when probe
     # says Eastmoney is likely blocked.
@@ -592,7 +642,7 @@ def get_new_listings(
             if date_col is None and _HAS_PANDAS:
                 for col in list(df.columns)[:10]:
                     try:
-                        parsed = pd.to_datetime(df[col], errors="coerce")
+                        parsed = _to_datetime_coerce(df[col])
                     except Exception:
                         continue
                     valid = int(parsed.notna().sum())
@@ -607,7 +657,7 @@ def get_new_listings(
 
             if date_col and codes:
                 try:
-                    dates = pd.to_datetime(df[date_col], errors="coerce")
+                    dates = _to_datetime_coerce(df[date_col])
                     mask = dates >= pd.Timestamp(cutoff)
                     filtered = _validate_codes(
                         df.loc[mask, code_col]

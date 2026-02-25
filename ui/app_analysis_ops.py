@@ -252,11 +252,31 @@ def _analyze_stock(self) -> None:
             interval_no_model = self._normalize_interval_token(
                 self.interval_combo.currentText()
             )
-            arr = list(self._bars_by_symbol.get(selected) or [])
+            lookback_no_model = int(
+                max(
+                    int(self.lookback_spin.value()),
+                    int(self._recommended_lookback(interval_no_model)),
+                )
+            )
+            arr = list(
+                self._load_chart_history_bars(
+                    selected,
+                    interval_no_model,
+                    lookback_no_model,
+                )
+                or []
+            )
+            if arr:
+                arr = self._filter_bars_to_market_session(arr, interval_no_model)
+            if not arr:
+                arr = list(self._bars_by_symbol.get(selected) or [])
             # [DBG] No model - chart state diagnostic
             self._debug_console(
                 f"analyze_no_model:{selected}",
-                f"No model loaded, rendering chart with {len(arr)} bars for {selected}",
+                (
+                    "No model loaded, rendering chart with "
+                    f"{len(arr)} bars for {selected}"
+                ),
                 min_gap_seconds=0.5,
                 level="warning",
             )
@@ -431,8 +451,9 @@ def _on_analysis_done(self, pred: Any, request_seq: int | None = None) -> None:
         return
 
     self.analyze_action.setEnabled(True)
-    self.progress.hide()
-    self.status_label.setText("Ready")
+    if not bool(getattr(self, "_startup_loading_active", False)):
+        self.progress.hide()
+        self.status_label.setText("Ready")
 
     symbol = self._ui_norm(getattr(pred, "stock_code", ""))
     selected = self._ui_norm(self.stock_input.text())
@@ -582,8 +603,9 @@ def _on_analysis_error(self, error: str, request_seq: int | None = None) -> None
         return
 
     self.analyze_action.setEnabled(True)
-    self.progress.hide()
-    self.status_label.setText("Ready")
+    if not bool(getattr(self, "_startup_loading_active", False)):
+        self.progress.hide()
+        self.status_label.setText("Ready")
 
     self.log(f"Analysis failed: {error}", "error")
     QMessageBox.warning(self, "Error", f"Analysis failed:\n{error}")

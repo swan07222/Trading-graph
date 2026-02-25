@@ -69,3 +69,50 @@ def test_filter_universe_list_applies_limit_for_query(monkeypatch) -> None:
     assert len(lst.items) == 5
     assert status.texts
     assert "showing 5/25" in status.texts[-1]
+
+
+def test_on_universe_catalog_loaded_completes_startup_loading() -> None:
+    completed: list[str] = []
+    status = _LabelStub()
+    filters: list[str] = []
+    stub = SimpleNamespace(
+        workers={"universe_catalog": object()},
+        _universe_catalog=[],
+        _universe_last_refresh_ts=0.0,
+        universe_search_input=SimpleNamespace(text=lambda: ""),
+        universe_status_label=status,
+        _filter_universe_list=lambda query: filters.append(str(query)),
+        _startup_loading_active=True,
+        _complete_startup_loading=lambda msg="Ready": completed.append(str(msg)),
+    )
+
+    payload = {
+        "items": [{"code": "600000", "name": "PF Bank", "is_new": False}],
+        "total": 1,
+        "new_count": 0,
+        "fetched_at": 123.0,
+    }
+    app_universe_ops._on_universe_catalog_loaded(stub, payload)
+
+    assert "universe_catalog" not in stub.workers
+    assert filters == [""]
+    assert completed == ["Ready"]
+
+
+def test_on_universe_catalog_error_completes_startup_loading() -> None:
+    completed: list[str] = []
+    status = _LabelStub()
+    logs: list[tuple[str, str]] = []
+    stub = SimpleNamespace(
+        workers={"universe_catalog": object()},
+        universe_status_label=status,
+        log=lambda msg, level="info": logs.append((str(msg), str(level))),
+        _startup_loading_active=True,
+        _complete_startup_loading=lambda msg="Ready": completed.append(str(msg)),
+    )
+
+    app_universe_ops._on_universe_catalog_error(stub, "boom")
+
+    assert "universe_catalog" not in stub.workers
+    assert completed == ["Ready"]
+    assert logs and "Universe refresh failed: boom" in logs[-1][0]

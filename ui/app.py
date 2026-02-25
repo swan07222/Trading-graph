@@ -204,6 +204,7 @@ class MainApp(MainAppCommonMixin, QMainWindow):
         self._syncing_mode_ui = False
         self._selected_chart_date = datetime.now().date().isoformat()
         self._session_bar_cache = None
+        self._startup_loading_active = False
 
         # Auto-trade state
         self._auto_trade_mode: AutoTradeMode = AutoTradeMode.MANUAL
@@ -212,6 +213,10 @@ class MainApp(MainAppCommonMixin, QMainWindow):
         self._setup_toolbar()
         self._setup_ui()
         self._setup_statusbar()
+        self._set_startup_loading(
+            "Starting system...",
+            value=8,
+        )
         self._setup_timers()
         self._apply_professional_style()
         from PyQt6.QtCore import Qt as _Qt
@@ -228,6 +233,10 @@ class MainApp(MainAppCommonMixin, QMainWindow):
         )
 
         try:
+            self._set_startup_loading(
+                "Restoring workspace...",
+                value=18,
+            )
             self._load_state()
             self._update_watchlist()
         except _UI_RECOVERABLE_EXCEPTIONS:
@@ -235,6 +244,10 @@ class MainApp(MainAppCommonMixin, QMainWindow):
             if self._strict_startup:
                 raise
 
+        self._set_startup_loading(
+            "Initializing components...",
+            value=32,
+        )
         QTimer.singleShot(0, self._init_components)
 
 
@@ -664,6 +677,37 @@ class MainApp(MainAppCommonMixin, QMainWindow):
         self.time_label = QLabel("")
         self._status_bar.addWidget(self.time_label)
 
+    def _set_startup_loading(
+        self,
+        message: str,
+        *,
+        value: int | None = None,
+        indeterminate: bool = False,
+    ) -> None:
+        """Show startup progress in status bar."""
+        self._startup_loading_active = True
+        self.status_label.setText(str(message or "Loading..."))
+        if indeterminate:
+            self.progress.setRange(0, 0)
+        else:
+            self.progress.setRange(0, 100)
+            if value is not None:
+                safe_val = max(0, min(100, int(value)))
+                self.progress.setValue(safe_val)
+        self.progress.show()
+
+    def _complete_startup_loading(self, message: str = "Ready") -> None:
+        """Clear startup progress once initial boot tasks complete."""
+        if not bool(getattr(self, "_startup_loading_active", False)):
+            return
+        self._startup_loading_active = False
+        for worker_name in ("analyze", "scan"):
+            worker = self.workers.get(worker_name)
+            if worker and worker.isRunning():
+                return
+        self.status_label.setText(str(message or "Ready"))
+        self.progress.hide()
+
     def _setup_timers(self) -> None:
         """Setup update timers."""
         self.clock_timer = QTimer()
@@ -711,6 +755,10 @@ class MainApp(MainAppCommonMixin, QMainWindow):
 
     def _init_components(self) -> None:
         """Initialize analysis components."""
+        self._set_startup_loading(
+            "Loading model runtime...",
+            value=52,
+        )
         try:
             Predictor = _lazy_get("models.predictor", "Predictor")
 
@@ -789,6 +837,11 @@ class MainApp(MainAppCommonMixin, QMainWindow):
                 
             )
 
+        self._set_startup_loading(
+            "Preparing live services...",
+            value=72,
+        )
+
         # Auto-start live monitor when model is available.
         if self._predictor_runtime_ready():
             try:
@@ -802,6 +855,20 @@ class MainApp(MainAppCommonMixin, QMainWindow):
                 "Debug console enabled (set TRADING_DEBUG_CONSOLE=0 to disable)",
                 "warning",
             )
+
+        self._set_startup_loading(
+            "Loading market universe...",
+            indeterminate=True,
+        )
+        try:
+            self._refresh_universe_catalog(force=False)
+        except _UI_RECOVERABLE_EXCEPTIONS:
+            self._complete_startup_loading("Ready")
+        else:
+            universe_worker = self.workers.get("universe_catalog")
+            if not (universe_worker and universe_worker.isRunning()):
+                self._complete_startup_loading("Ready")
+
         self.log("System initialized - Ready for analysis", "info")
 
     def _prune_caches(self) -> None:

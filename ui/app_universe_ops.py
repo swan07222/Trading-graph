@@ -208,6 +208,13 @@ def _on_universe_catalog_loaded(self: Any, payload: Any) -> None:
             )
         else:
             self.universe_status_label.setText(f"Universe: {total:,} stocks")
+    if bool(getattr(self, "_startup_loading_active", False)) and hasattr(
+        self, "_complete_startup_loading"
+    ):
+        try:
+            self._complete_startup_loading("Ready")
+        except _UI_RECOVERABLE_EXCEPTIONS:
+            pass
 
 
 def _on_universe_catalog_error(self: Any, error: str) -> None:
@@ -217,6 +224,13 @@ def _on_universe_catalog_error(self: Any, error: str) -> None:
         self.universe_status_label.setText("Universe refresh failed")
     if msg:
         self.log(f"Universe refresh failed: {msg}", "warning")
+    if bool(getattr(self, "_startup_loading_active", False)) and hasattr(
+        self, "_complete_startup_loading"
+    ):
+        try:
+            self._complete_startup_loading("Ready")
+        except _UI_RECOVERABLE_EXCEPTIONS:
+            pass
 
 
 def _filter_universe_list(self: Any, text: str) -> None:
