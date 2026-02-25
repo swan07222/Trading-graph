@@ -14,6 +14,67 @@ log = get_logger(__name__)
 _UI_AI_RECOVERABLE_EXCEPTIONS = COMMON_RECOVERABLE_EXCEPTIONS
 
 
+def _contains_any(text: str, needles: tuple[str, ...]) -> bool:
+    haystack = str(text or "").lower()
+    return any(str(n).lower() in haystack for n in needles)
+
+
+def _extract_interval_token_from_text(text: str) -> str:
+    t = str(text or "").strip().lower()
+    if not t:
+        return ""
+
+    direct = re.search(r"\b(1m|5m|15m|30m|60m|1d)\b", t)
+    if direct:
+        return str(direct.group(1) or "").strip()
+
+    en_min = re.search(r"\b(1|5|15|30|60)\s*(m|min|mins|minute|minutes)\b", t)
+    if en_min:
+        return f"{int(en_min.group(1))}m"
+
+    zh_min = re.search(r"(1|5|15|30|60)\s*分钟", t)
+    if zh_min:
+        return f"{int(zh_min.group(1))}m"
+
+    if _contains_any(t, ("daily", "day", "1 day", "1d", "日线", "天线", "日k")):
+        return "1d"
+    return ""
+
+
+def _extract_symbol_or_current(self: Any, text: str) -> str:
+    m = re.search(r"\b(\d{6})\b", str(text or ""))
+    if m:
+        return self._ui_norm(str(m.group(1) or ""))
+    current = self._ui_norm(self.stock_input.text())
+    pronouns = (
+        "this stock",
+        "this symbol",
+        "current stock",
+        "that stock",
+        "这只股票",
+        "这个股票",
+        "当前股票",
+        "这支票",
+        "它",
+    )
+    if current and _contains_any(str(text or ""), pronouns):
+        return current
+    return ""
+
+
+def _chat_state_summary(self: Any) -> str:
+    symbol = self._ui_norm(self.stock_input.text()) or "--"
+    interval = self._normalize_interval_token(self.interval_combo.currentText())
+    forecast = int(self.forecast_spin.value())
+    lookback = int(self.lookback_spin.value())
+    monitor_on = bool(self.monitor and self.monitor.isRunning())
+    return (
+        f"Current state: symbol={symbol}, interval={interval}, "
+        f"forecast={forecast} bars, lookback={lookback} bars, "
+        f"monitoring={'on' if monitor_on else 'off'}."
+    )
+
+
 def _append_ai_chat_message(
     self: Any,
     sender: str,
@@ -175,9 +236,6 @@ def _execute_ai_chat_command(self: Any, prompt: str) -> tuple[bool, str]:
     p = str(prompt or "").strip()
     low = p.lower()
 
-    def _has_any(haystack: str, needles: tuple[str, ...]) -> bool:
-        return any(str(n).lower() in haystack for n in needles)
-
     if low in {"help", "/help", "commands", "命令", "帮助", "幫助"}:
         return True, (
             "Local AI mode (no API): ask any question and it will use internet/news context. "
@@ -188,37 +246,146 @@ def _execute_ai_chat_command(self: Any, prompt: str) -> tuple[bool, str]:
             "Chinese: 分析 <代码> / 开始监控 / 停止监控 / 刷新情绪 / 周期 5m。"
         )
 
-    if _has_any(low, ("start monitoring", "开启监控", "开始监控", "打开监控", "start monitor")):
-        self.monitor_action.setChecked(True)
-        self._start_monitoring()
-        return True, "Monitoring started."
+    if low in {"hi", "hello", "hey", "你好", "您好", "嗨"}:
+        return True, (
+            "Hi. You can chat naturally and also control the app in plain language. "
+            + _chat_state_summary(self)
+        )
 
-    if _has_any(low, ("stop monitoring", "停止监控", "关闭监控", "stop monitor")):
+    if _contains_any(
+        low,
+        (
+            "what can you do",
+            "capability",
+            "how can you help",
+            "你能做什么",
+            "可以做什么",
+            "怎么控制",
+            "如何控制",
+        ),
+    ):
+        return True, (
+            "I can chat about market/news/policy context and control the app with natural language. "
+            "Examples: 'analyze 600519', 'watch this stock', 'switch to 15 minutes', "
+            "'set forecast to 45', 'refresh sentiment', 'scan market'."
+        )
+
+    if _contains_any(
+        low,
+        (
+            "status",
+            "current state",
+            "what are you monitoring",
+            "what is current setting",
+            "current settings",
+            "当前状态",
+            "现在状态",
+            "你在监控什么",
+            "参数状态",
+        ),
+    ):
+        return True, _chat_state_summary(self)
+
+    code = _extract_symbol_or_current(self, p)
+
+    # Conversational monitor control.
+    if (
+        _contains_any(low, ("monitor", "watch", "track", "监控", "盯盘", "跟踪"))
+        and _contains_any(low, ("stop", "pause", "disable", "关闭", "停止", "先别", "取消"))
+    ) or _contains_any(low, ("stop monitoring", "停止监控", "关闭监控", "stop monitor")):
         self.monitor_action.setChecked(False)
         self._stop_monitoring()
         return True, "Monitoring stopped."
 
-    if _has_any(low, ("scan market", "扫描市场", "扫市场", "全市场扫描")):
+    if (
+        _contains_any(low, ("monitor", "watch", "track", "监控", "盯盘", "跟踪"))
+        and _contains_any(low, ("start", "enable", "open", "begin", "resume", "开启", "开始", "打开", "继续"))
+    ) or _contains_any(low, ("start monitoring", "开启监控", "开始监控", "打开监控", "start monitor")):
+        self.monitor_action.setChecked(True)
+        self._start_monitoring()
+        return True, "Monitoring started."
+
+    if _contains_any(
+        low,
+        (
+            "scan market",
+            "scan for signal",
+            "find opportunity",
+            "search opportunities",
+            "扫描市场",
+            "扫市场",
+            "全市场扫描",
+            "扫描机会",
+            "找机会",
+        ),
+    ):
         self._scan_stocks()
         return True, "Market scan started."
 
-    if _has_any(low, ("refresh sentiment", "refresh news", "刷新情绪", "刷新新闻", "刷新政策")):
+    if _contains_any(
+        low,
+        (
+            "refresh sentiment",
+            "refresh news",
+            "refresh policy",
+            "update sentiment",
+            "update news",
+            "latest policy",
+            "刷新情绪",
+            "刷新新闻",
+            "刷新政策",
+            "更新情绪",
+            "更新新闻",
+            "更新政策",
+        ),
+    ):
         self._refresh_sentiment()
         symbol = self._ui_norm(self.stock_input.text())
         if symbol:
             self._refresh_news_policy_signal(symbol, force=True)
         return True, "Sentiment refresh started."
 
-    interval_match = re.search(r"\b(1m|5m|15m|30m|60m|1d)\b", low)
-    if interval_match and _has_any(low, ("set interval", "interval", "周期", "级别", "时间框架", "切换到", "改成")):
-        token = str(interval_match.group(1) or "").strip()
+    interval_token = _extract_interval_token_from_text(low)
+    if interval_token and _contains_any(
+        low,
+        (
+            "set interval",
+            "interval",
+            "timeframe",
+            "switch to",
+            "change to",
+            "use",
+            "周期",
+            "级别",
+            "时间框架",
+            "切换到",
+            "改成",
+            "换成",
+            "改为",
+            "切到",
+        ),
+    ):
+        token = str(interval_token).strip()
         allowed = {"1m", "5m", "15m", "30m", "60m", "1d"}
         if token not in allowed:
             return True, f"Unsupported interval '{token}'."
         self.interval_combo.setCurrentText(token)
         return True, f"Interval set to {token}."
 
-    if _has_any(low, ("set forecast", "forecast", "预测", "前瞻")):
+    if _contains_any(
+        low,
+        (
+            "set forecast",
+            "forecast",
+            "prediction bars",
+            "predict bars",
+            "horizon",
+            "预测",
+            "前瞻",
+            "预测步数",
+            "未来",
+        ),
+    ):
         m = re.search(r"(\d+)", low)
         if not m:
             return True, "Missing forecast bars value."
@@ -227,7 +394,21 @@ def _execute_ai_chat_command(self: Any, prompt: str) -> tuple[bool, str]:
         self.forecast_spin.setValue(bars)
         return True, f"Forecast set to {bars} bars."
 
-    if _has_any(low, ("set lookback", "lookback", "回看", "历史窗口", "历史长度")):
+    if _contains_any(
+        low,
+        (
+            "set lookback",
+            "lookback",
+            "history window",
+            "history length",
+            "window size",
+            "回看",
+            "回溯",
+            "历史窗口",
+            "历史长度",
+            "回看长度",
+        ),
+    ):
         m = re.search(r"(\d+)", low)
         if not m:
             return True, "Missing lookback bars value."
@@ -236,21 +417,64 @@ def _execute_ai_chat_command(self: Any, prompt: str) -> tuple[bool, str]:
         self.lookback_spin.setValue(bars)
         return True, f"Lookback set to {bars} bars."
 
-    code_match = re.search(r"\b(\d{6})\b", p)
-    code = self._ui_norm(code_match.group(1) if code_match else "")
-
-    if code and _has_any(low, ("analyze", "analysis", "load", "chart", "分析", "加载", "查看", "打开", "切到")):
+    if code and _contains_any(
+        low,
+        (
+            "analyze",
+            "analysis",
+            "load",
+            "chart",
+            "review",
+            "look at",
+            "check",
+            "分析",
+            "加载",
+            "查看",
+            "打开",
+            "切到",
+            "看看",
+            "看下",
+            "看一下",
+        ),
+    ):
         self.stock_input.setText(code)
         self._analyze_stock()
         self._refresh_news_policy_signal(code, force=False)
         return True, f"Analyzing {code}."
 
-    if code and _has_any(low, ("add watchlist", "watchlist add", "加入自选", "添加自选")):
+    if code and _contains_any(
+        low,
+        (
+            "add watchlist",
+            "watchlist add",
+            "add to watchlist",
+            "put on watchlist",
+            "follow",
+            "watch this",
+            "加入自选",
+            "添加自选",
+            "加入观察",
+            "关注",
+        ),
+    ):
         self.stock_input.setText(code)
         self._add_to_watchlist()
         return True, f"Added {code} to watchlist."
 
-    if code and _has_any(low, ("remove watchlist", "delete watchlist", "移除自选", "删除自选")):
+    if code and _contains_any(
+        low,
+        (
+            "remove watchlist",
+            "delete watchlist",
+            "remove from watchlist",
+            "unfollow",
+            "stop watching",
+            "移除自选",
+            "删除自选",
+            "取消关注",
+            "移除观察",
+        ),
+    ):
         row = self._watchlist_row_by_code.get(code)
         if row is not None:
             self.watchlist.selectRow(int(row))
@@ -258,15 +482,36 @@ def _execute_ai_chat_command(self: Any, prompt: str) -> tuple[bool, str]:
             return True, f"Removed {code} from watchlist."
         return True, f"{code} is not in watchlist."
 
-    if _has_any(low, ("auto train llm", "自动训练llm", "自动训练大模型", "auto llm")):
+    if _contains_any(
+        low,
+        (
+            "auto train llm",
+            "auto llm",
+            "train llm automatically",
+            "自动训练llm",
+            "自动训练大模型",
+            "自动训练聊天模型",
+        ),
+    ):
         self._auto_train_llm()
         return True, "Auto LLM training started (Chinese + English internet corpus)."
 
-    if _has_any(low, ("train llm", "训练llm", "训练大模型", "train chat model")):
+    if _contains_any(
+        low,
+        (
+            "train llm",
+            "train chat model",
+            "fine tune llm",
+            "训练llm",
+            "训练大模型",
+            "训练聊天模型",
+            "微调llm",
+        ),
+    ):
         self._start_llm_training()
         return True, "LLM training started."
 
-    if _has_any(low, ("train model", "训练模型", "训练ai")):
+    if _contains_any(low, ("train model", "训练模型", "训练ai", "训练主模型")):
         self._start_training()
         return True, "Model training dialog opened."
 

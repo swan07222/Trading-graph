@@ -202,8 +202,8 @@ def _stabilize_universe_refresh(
 def _fallback_codes() -> list[str]:
     """Build robust offline fallback universe.
 
-    FIX Bug 9: Uses shared fallback_stocks module instead of importing
-    from data.discovery, which would create a circular import.
+    Uses shared fallback_stocks module to avoid circular import
+    with data.discovery.
     """
     base = _validate_codes(getattr(CONFIG, "stock_pool", []))
 
@@ -422,9 +422,8 @@ def _to_datetime_coerce(values):
 def _try_akshare_fetch(timeout: int = 20) -> list[str] | None:
     """Try to fetch stock universe from AkShare.
 
-    FIX Bug 10: Uses ThreadPoolExecutor for timeout instead of
-    socket.setdefaulttimeout which is process-global and racy.
-    
+    Uses ThreadPoolExecutor for timeout-safe concurrent fetching.
+
     VPN handling:
     - Longer timeouts for VPN users (AkShare is slower via VPN)
     - Multiple fallback endpoints with staggered timeouts
@@ -574,7 +573,7 @@ def get_universe_codes(
     )
 
     if not force_refresh and cached_codes and not stale and not cache_is_thin_fallback:
-        log.debug(f"Using cached universe: {len(cached_codes)} codes")
+        log.info("Using cached universe: %d codes", len(cached_codes))
         return cached_codes
     if cache_is_thin_fallback and not force_refresh:
         log.info(
@@ -723,7 +722,7 @@ def get_new_listings(
 ) -> list[str]:
     """Return codes of stocks listed within the last N days.
 
-    FIX Bug 14: Atomic snapshot reads and writes under lock.
+    Uses atomic snapshot reads and writes under lock for thread safety.
     """
     now = time.time()
 
@@ -758,7 +757,7 @@ def get_new_listings(
 
     cutoff = date.today() - timedelta(days=days)
 
-    # FIX Bug 10: Use ThreadPoolExecutor for timeout
+    # Use ThreadPoolExecutor for timeout-safe fetching
     from concurrent.futures import ThreadPoolExecutor
     from concurrent.futures import TimeoutError as FuturesTimeout
 
@@ -843,7 +842,7 @@ def get_new_listings(
     except FuturesTimeout:
         log.warning("New listings fetch timed out")
     except Exception as exc:
-        log.debug(f"get_new_listings failed: {exc}")
+        log.warning("get_new_listings failed: %s", exc)
 
     if result_codes:
         # Atomic cache write

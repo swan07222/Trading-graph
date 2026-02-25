@@ -215,9 +215,8 @@ def _max_close_cluster_size(
     for v in closes:
         try:
             fv = float(v)
-        except Exception as e:
-            # FIX: Log exception for debugging instead of silently swallowing
-            log.debug("Failed to convert close price to float: %s", e)
+        except (ValueError, TypeError) as e:
+            log.warning("Failed to convert close price to float: %s", e)
             continue
         if np.isfinite(fv) and fv > 0:
             vals.append(fv)
@@ -334,9 +333,8 @@ def _daily_consensus_quorum_meta(
                 continue
             try:
                 close_px = float(row.get("close", 0.0) or 0.0)
-            except Exception as e:
-                # FIX: Log exception for debugging
-                log.debug("Failed to parse close price: %s", e)
+            except (ValueError, TypeError) as e:
+                log.warning("Failed to parse close price: %s", e)
                 close_px = 0.0
             if close_px > 0 and np.isfinite(close_px):
                 closes.append(close_px)
@@ -432,15 +430,13 @@ def _merge_daily_by_consensus(
     def _to_float(row: pd.Series, col: str, default: float = 0.0) -> float:
         try:
             val = row.get(col, default)
-        except Exception as e:
-            # FIX: Log exception for debugging
-            log.debug("Failed to get column %s from row: %s", col, e)
+        except (AttributeError, TypeError) as e:
+            log.warning("Failed to get column %s from row: %s", col, e)
             val = default
         try:
             return float(val)
-        except Exception as e:
-            # FIX: Log exception for debugging
-            log.debug("Failed to convert value to float for column %s: %s", col, e)
+        except (ValueError, TypeError) as e:
+            log.warning("Failed to convert value to float for column %s: %s", col, e)
             return float(default)
 
     out_rows: list[dict[str, float]] = []

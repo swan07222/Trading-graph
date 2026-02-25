@@ -400,7 +400,7 @@ def _fill_from_spot_cache(
             result=result,
         )
     except _RECOVERABLE_FETCH_EXCEPTIONS as exc:
-        log.debug("Spot-cache quote fill failed (symbols=%d): %s", len(missing), exc)
+        log.warning("Spot-cache quote fill failed (symbols=%d): %s", len(missing), exc)
         if bool(getattr(self, "_strict_errors", False)):
             raise
 
@@ -567,6 +567,6 @@ def _fallback_last_close_from_db(
                 timestamp=ts,
             )
         except _RECOVERABLE_FETCH_EXCEPTIONS as exc:
-            log.debug("DB last-close fallback failed for %s: %s", code6, exc)
+            log.warning("DB last-close fallback failed for %s: %s", code6, exc)
             continue
     return out

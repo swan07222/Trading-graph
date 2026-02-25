@@ -60,8 +60,7 @@ class CancellationToken:
             try:
                 callback()
             except Exception as e:
-                # FIX: Log exception for debugging instead of silently swallowing
-                log.debug("Cancellation callback failed: %s", e)
+                log.warning("Cancellation callback failed: %s", e)
 
     def on_cancel(self, callback: Callable) -> Callable:
         """Register a callback to run when cancellation is requested.
@@ -82,8 +81,7 @@ class CancellationToken:
             try:
                 callback()
             except Exception as e:
-                # FIX: Log exception for debugging
-                log.debug("Immediate cancellation callback failed: %s", e)
+                log.warning("Immediate cancellation callback failed: %s", e)
 
         return callback
 

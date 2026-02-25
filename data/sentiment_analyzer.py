@@ -412,7 +412,7 @@ class SentimentAnalyzer:
                         if keyword not in entity_mentions:
                             entity_mentions[keyword]["type"] = "keyword"
                 except Exception as e:
-                    log.debug(f"LLM entity extraction failed: {e}")
+                    log.warning("LLM entity extraction failed: %s", e)
 
             # Fallback to rule-based extraction
             for raw_entity in list(getattr(article, "entities", []) or []):

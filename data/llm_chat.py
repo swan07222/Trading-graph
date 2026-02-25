@@ -222,9 +222,15 @@ class LLMChatAssistant:
         system_prompt = (
             "You are an on-device AI copilot for a trading analysis app. "
             "Use the provided internet/news context first. "
-            "Answer clearly and briefly. "
-            "If user asks to control app, append exactly one line: "
-            "ACTION: <command>. If no action, append ACTION: ."
+            "Answer clearly and naturally in normal conversation language. "
+            "Understand natural control requests (not only strict commands), for example "
+            "'please watch this stock', 'switch to 15 minutes', or 'analyze 600519'. "
+            "If user asks to control app, append exactly one line using a canonical command: "
+            "ACTION: analyze <code> | start monitoring | stop monitoring | scan market | "
+            "refresh sentiment | set interval <1m|5m|15m|30m|60m|1d> | "
+            "set forecast <bars> | set lookback <bars> | add watchlist <code> | "
+            "remove watchlist <code> | train model | train llm | auto train llm. "
+            "If no action is needed, append ACTION: ."
         )
         user_prompt = (
             f"[APP STATE]\n{app_state}\n\n"

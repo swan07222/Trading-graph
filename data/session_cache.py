@@ -125,16 +125,15 @@ def _is_session_timestamp(ts_raw: str, interval: str) -> bool:
         dt_sh = dt.astimezone(sh_tz)
         if _is_cn_session_datetime(dt_sh):
             return True
-    except Exception as e:
-        # FIX: Log exception for debugging instead of silently swallowing
-        log.debug("Timezone conversion failed for session check: %s", e)
+    except (ValueError, OSError) as e:
+        log.warning("Timezone conversion failed for session check: %s", e)
 
     # Compatibility fallback: some inputs carry +00:00 while clock time is
     # already market-local. Treat clock fields as local before rejecting.
     try:
         return _is_cn_session_datetime(dt.replace(tzinfo=sh_tz))
-    except Exception as e:
-        log.debug("Session datetime check failed: %s", e)
+    except (ValueError, OSError) as e:
+        log.warning("Session datetime check failed: %s", e)
         return False
 
 
@@ -179,13 +178,11 @@ def _interprocess_file_lock(
                 elif fcntl is not None:
                     fcntl.flock(f.fileno(), fcntl.LOCK_UN)
             except OSError as e:
-                # FIX: Log lock release failure for debugging
-                log.debug("Failed to release file lock: %s", e)
+                log.warning("Failed to release file lock: %s", e)
         try:
             f.close()
-        except Exception as e:
-            # FIX: Log file close failure for debugging
-            log.debug("Failed to close lock file: %s", e)
+        except OSError as e:
+            log.warning("Failed to close lock file: %s", e)
 
 
 class SessionBarCache:

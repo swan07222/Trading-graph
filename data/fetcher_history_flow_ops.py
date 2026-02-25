@@ -285,7 +285,7 @@ def _is_post_close_or_preopen_window() -> bool:
         if not is_trading_day(now.date()):
             return True
     except Exception as exc:
-        log.debug("Trading-day calendar lookup failed: %s", exc)
+        log.warning("Trading-day calendar lookup failed: %s", exc)
 
     t = CONFIG.trading
     cur = now.time()
@@ -638,7 +638,7 @@ def _refresh_intraday_cache_from_db(
         if not db_fresh.empty:
             self._cache.set(cache_key, db_fresh)
     except Exception as cache_exc:
-        log.debug("Cache refresh after DB update skipped: %s", cache_exc)
+        log.warning("Cache refresh after DB update skipped: %s", cache_exc)
 
 
 def _get_history_cn_intraday_common(
@@ -817,16 +817,16 @@ def _get_history_cn_daily(
         iv,
     )
 
-    # FIX DEBUG: Log database state
+    # Log database state for diagnostics
     if db_df is None or db_df.empty:
-        log.debug(f"CN daily: DB empty for {symbol} (limit={db_limit})")
+        log.info("CN daily: DB empty for %s (limit=%s)", symbol, db_limit)
     else:
-        log.debug(f"CN daily: DB has {len(db_df)} bars for {symbol}")
+        log.info("CN daily: DB has %d bars for %s", len(db_df), symbol)
 
     if offline:
         result = base_df.tail(count) if not base_df.empty else pd.DataFrame()
         if result.empty:
-            log.debug(f"CN daily offline: returning empty for {symbol}")
+            log.info("CN daily offline: returning empty for %s", symbol)
         return result
 
     online_meta: dict[str, object] = {}
@@ -856,22 +856,22 @@ def _get_history_cn_daily(
             online_out if isinstance(online_out, pd.DataFrame) else pd.DataFrame()
         )
 
-    # FIX DEBUG: Log online fetch result
+    # Log online fetch result for diagnostics
     if online_df is None or online_df.empty:
-        log.debug(f"CN daily: online fetch empty for {symbol}")
+        log.info("CN daily: online fetch empty for %s", symbol)
     else:
-        log.debug(f"CN daily: online fetch has {len(online_df)} bars for {symbol}")
+        log.info("CN daily: online fetch has %d bars for %s", len(online_df), symbol)
 
     if online_df is None or online_df.empty:
         result = base_df.tail(count) if not base_df.empty else pd.DataFrame()
         if result.empty:
-            log.debug(f"CN daily: returning DB fallback empty for {symbol}")
+            log.info("CN daily: returning DB fallback empty for %s", symbol)
         return result
 
     # Prefer fresh online rows when timestamps overlap with local DB rows.
     merged = self._merge_parts(online_df, base_df, interval=iv)
     if merged.empty:
-        log.debug(f"CN daily: merged empty for {symbol}")
+        log.info("CN daily: merged empty for %s", symbol)
         return pd.DataFrame()
 
     # FIX #10: Wrap cache write in try-except
