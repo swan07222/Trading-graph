@@ -38,7 +38,9 @@ def test_check_dependencies_ml_mode_requires_ml_stack(monkeypatch, capsys) -> No
     assert "torch" in out
 
 
-def test_check_dependencies_live_mode_requires_easytrader(monkeypatch, capsys) -> None:
+def test_check_dependencies_no_longer_requires_live_broker_stack(
+    monkeypatch, capsys
+) -> None:
     def fake_find_spec(name):
         if name in {"psutil", "cryptography"}:
             return types.SimpleNamespace()
@@ -46,10 +48,10 @@ def test_check_dependencies_live_mode_requires_easytrader(monkeypatch, capsys) -
 
     monkeypatch.setattr(main, "find_spec", fake_find_spec)
 
-    ok = main.check_dependencies(require_live=True)
-    assert ok is False
+    ok = main.check_dependencies(require_gui=False, require_ml=False)
+    assert ok is True
     out = capsys.readouterr().out
-    assert "easytrader" in out
+    assert "easytrader" not in out
 
 
 def test_parse_positive_int_csv_rejects_invalid_values() -> None:
@@ -117,7 +119,7 @@ def test_doctor_gate_violations_detect_missing_readiness() -> None:
     assert any(v.startswith("config_warnings=") for v in violations)
 
 
-def test_doctor_gate_violations_detect_live_readiness_failures() -> None:
+def test_doctor_gate_violations_ignores_removed_live_readiness_block() -> None:
     violations = main._doctor_gate_violations(
         {
             "dependencies": {
@@ -142,5 +144,4 @@ def test_doctor_gate_violations_detect_live_readiness_failures() -> None:
             },
         }
     )
-    assert "live_missing_dependencies=easytrader" in violations
-    assert "live_broker_path_missing" in violations
+    assert violations == []

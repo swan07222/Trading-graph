@@ -38,7 +38,6 @@ DEFAULT_TARGETS: tuple[str, ...] = (
     "trading/alerts.py",
     "ui/app.py",
     "ui/app_bar_ops.py",
-    "ui/app_auto_trade_ops.py",
     "ui/app_lifecycle_ops.py",
     "ui/app_monitoring_ops.py",
     "ui/app_panels.py",

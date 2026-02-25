@@ -1,3 +1,9 @@
+import pytest
+
+pytestmark = pytest.mark.skip(
+    reason="OMS subsystem has been removed from this project."
+)
+
 def test_fill_dedup_with_broker_fill_id_allows_same_second_multi_fills(tmp_path) -> None:
     from datetime import datetime
 
