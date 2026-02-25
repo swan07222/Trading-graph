@@ -645,7 +645,6 @@ class AkShareSource(DataSource):
         from core.network import get_network_env
         env = get_network_env()
         is_china_direct = bool(getattr(env, "is_china_direct", False))
-        is_vpn_active = bool(getattr(env, "is_vpn_active", False))
         eastmoney_ok = bool(getattr(env, "eastmoney_ok", False))
         # AkShare works on China direct connections. The eastmoney probe is unreliable
         # (it can fail transiently even on a healthy China direct connection), so we
@@ -1435,5 +1434,4 @@ class YahooSource(DataSource):
             df["low"] = df[["open", "low", "close"]].min(axis=1)
 
         return df
-
 

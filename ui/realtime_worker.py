@@ -17,7 +17,6 @@ Usage:
 """
 from __future__ import annotations
 
-import time
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
@@ -27,7 +26,7 @@ from PyQt6.QtCore import QObject, QThread, QTimer, pyqtSignal, pyqtSlot
 from config.runtime_env import env_int
 from utils.logger import get_logger
 
-from .websocket_client import ConnectionState, WebSocketMessage, get_websocket_client
+from .websocket_client import WebSocketMessage, get_websocket_client
 
 log = get_logger(__name__)
 

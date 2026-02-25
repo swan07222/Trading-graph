@@ -8,10 +8,10 @@ Available models:
 """
 try:
     from .networks import (
-        Informer,
         NBEATS,
-        TSMixer,
+        Informer,
         TemporalFusionTransformer,
+        TSMixer,
     )
 except Exception:
     Informer = None

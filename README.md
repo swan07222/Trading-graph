@@ -4,283 +4,188 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Code style: ruff](https://img.shields.io/badge/code%20style-ruff-000000.svg)](https://github.com/astral-sh/ruff)
 
-**Modernized Edition** - Cutting-edge AI-powered stock analysis system for China A-shares with:
-
-## 🚀 What's New in 2.0
-
-### Performance & Scalability
-- **Async I/O**: 10x concurrency with asyncio
-- **Redis Caching**: Sub-millisecond cache latency
-- **PostgreSQL Support**: Horizontal scaling for production
-- **FastAPI Dashboard**: Real-time web interface
-
-### Machine Learning
-- **Informer**: Efficient Transformer for long sequences (O(L log L))
-- **Temporal Fusion Transformer (TFT)**: Interpretable predictions
-- **N-BEATS**: Trend and seasonality decomposition
-- **TSMixer**: All-MLP architecture, resource-efficient
-
-### Developer Experience
-- **Type Safety**: Full type hints with mypy strict mode
-- **Modern Python**: 3.11+ features (pattern matching, etc.)
-- **Web API**: RESTful API with Swagger documentation
-- **WebSocket**: Real-time event streaming
+AI-powered stock analysis platform for China A-shares. Built for analysts and researchers.
 
 ---
 
-## Key Features
+## What's New in 2.0
 
-### 1. Stock Search & Discovery
-- **Search all stocks**: Discovers all China A-share stocks (SSE, SZSE, BSE)
-- Multiple discovery sources: AkShare, Tencent, CSI index constituents
-- Smart scoring based on market cap, volume, and index membership
-- Supports 600/601/603/605, 688, 000/001/002/003, 300/301, 83/87/43 prefixes
+| Area | Improvements |
+|------|--------------|
+| **Performance** | Async I/O, Redis caching, PostgreSQL support |
+| **ML Models** | Informer, TFT, N-BEATS, TSMixer architectures |
+| **Developer UX** | Full type hints, FastAPI dashboard, WebSocket streaming |
+| **China Support** | 5+ local data providers, proxy support, optimized timeouts |
 
-### 2. News & Policy Data Collection
-- **VPN-aware routing**: Auto-detects network environment
-  - **VPN Off (China Direct)**: Jin10, EastMoney, Sina Finance, Xueqiu, Caixin, CSRC
-  - **VPN On (International)**: Reuters, Bloomberg, Yahoo Finance, MarketWatch, CNBC
-- **Policy keyword detection**: Automatically identifies policy/regulatory news
-- **Multi-language support**: Chinese and English news processing
-- **Real-time collection**: Continuous news monitoring with configurable intervals
+---
 
-### 3. Sentiment Analysis
-- **Multi-factor scoring**: General sentiment, policy impact, market sentiment
-- **Entity extraction**: Identifies companies, policies, and key figures
-- **Trading signals**: Converts sentiment to actionable trading signals
-- **Temporal analysis**: Tracks sentiment trends over time
+## Features
 
-### 4. News-Based Model Training
-- **Multi-modal architecture**: Combines news embeddings, sentiment features, and price data
-- **Transformer encoder**: Processes news text for semantic understanding
-- **LSTM price encoder**: Captures temporal price patterns
-- **Fusion model**: Integrates news and price signals for prediction
-- **Train command**: `python main.py --train-news --epochs 50`
+### 🔍 Stock Discovery
+Search and discover all China A-share stocks (SSE, SZSE, BSE) with smart scoring based on market cap, volume, and index membership.
 
-### 5. Model Training & Explainability
-- **Train on all stocks**: `python main.py --train --epochs 100`
-- **Train on specific stock**: `python main.py --train-stock 600519 --epochs 100`
-- Auto-learning with continuous improvement
-- Ensemble models (LSTM, GRU, TCN, Transformer, Hybrid)
-- **Explainability** for model predictions
-- **Uncertainty estimation** with Monte Carlo Dropout
-- **Conformal Prediction** for valid confidence intervals
+### 📰 News Collection
+VPN-aware routing with automatic source selection:
+- **China Direct**: Jin10, EastMoney, Sina, Xueqiu, Caixin, CSRC
+- **International**: Reuters, Bloomberg, Yahoo Finance, MarketWatch, CNBC
 
-### 6. China Network Support
-- **Fully optimized for mainland China network conditions**
-- ✅ 5+ Chinese financial data providers with auto-failover
-- ✅ Proxy support (HTTP/SOCKS5) for VPN users
-- ✅ China-optimized DNS resolution (114DNS, AliDNS, DNSPod)
-- ✅ Extended timeouts for Great Firewall conditions
-- ✅ Network diagnostics: `python -m utils.china_diagnostics`
+### 🧠 Sentiment Analysis
+Multi-factor scoring with entity extraction, policy detection, and trading signal generation.
 
-### 7. Real-Time Charting
-- **Live candlestick updates** with real-time price feeds
-- **AI prediction overlay** (dashed cyan line)
-- **Uncertainty bands** (dotted yellow lines)
-- Technical indicators (SMA, EMA, Bollinger Bands, VWAP)
-- Interactive hover tooltips with OHLCV data
+### 📊 Model Training
+- Traditional: LSTM, GRU, TCN, Transformer, Hybrid ensemble
+- News-based: Transformer encoder + sentiment fusion + price patterns
+- Explainability with SHAP values and uncertainty estimation
 
-## Scope
+### 📈 Real-Time Charts
+Live candlestick charts with AI predictions, uncertainty bands, and technical indicators (SMA, EMA, Bollinger, VWAP).
 
-This project is desktop-first and single-node. It is suitable for personal and small-team workflows, not full institutional deployment.
-
-**Note**: Trading execution components (portfolio management, risk management, OMS, broker integration, auto-trading) have been removed. This system focuses on **analysis and prediction** only.
-
-Tooling is Python-only (`pyproject.toml` + `pip` requirements); no Node/NPM step is required.
+---
 
 ## Quick Start
 
 ### Installation
 
 ```bash
-# Python 3.11+ required
-python --version  # Should be 3.11 or higher
-
-# Install core dependencies
+# Core dependencies
 pip install -r requirements.txt
 
-# Install with web dashboard (recommended)
+# With web dashboard (recommended)
 pip install -r requirements-web.txt
 
-# Full stack (all features including NLP)
+# Full stack (includes NLP)
 pip install -r requirements-all.txt
 ```
 
-### Run Desktop UI
+### Run
 
 ```bash
+# Desktop UI
 python main.py
-```
 
-### Run Web Dashboard (NEW!)
-
-```bash
-# Start web server
+# Web Dashboard
 python -m ui.web_dashboard
-
-# Access dashboard
-http://localhost:8000           # Dashboard
-http://localhost:8000/docs      # Swagger API docs
-http://localhost:8000/redoc     # ReDoc
+# Access: http://localhost:8000
 ```
 
-### Configure Redis (Optional)
+### Optional: Redis & PostgreSQL
 
 ```bash
-# Start Redis for caching
+# Redis (caching)
 docker run -d -p 6379:6379 redis:latest
 
-# Or install locally
-# macOS: brew install redis
-# Linux: sudo apt-get install redis-server
-```
-
-### Configure PostgreSQL (Optional)
-
-```bash
-# Start PostgreSQL
+# PostgreSQL (production storage)
 docker run -d -p 5432:5432 -e POSTGRES_PASSWORD=postgres postgres:15
-
-# Set environment variable
 export DATABASE_URL="postgresql+asyncpg://postgres:postgres@localhost:5432/trading"
 ```
 
-## Useful Commands
+---
 
-### News Collection
+## Commands
+
+### News & Sentiment
 ```bash
-# Collect news from web sources
-python main.py --collect-news
-
-# Analyze sentiment for a specific stock
-python main.py --analyze-sentiment 600519
+python main.py --collect-news                    # Collect news
+python main.py --analyze-sentiment 600519        # Analyze specific stock
 ```
 
-### Model Training
+### Training
 ```bash
-# Train news-based model
-python main.py --train-news --epochs 50
-
-# Train traditional model
-python main.py --train --epochs 100
-
-# Auto-learn
-python main.py --auto-learn --max-stocks 50
+python main.py --train --epochs 100              # Train all models
+python main.py --train-news --epochs 50          # Train news model
+python main.py --train-stock 600519 --epochs 50  # Train on specific stock
 ```
 
-### Prediction
+### Prediction & Analysis
 ```bash
-# Predict stock movement
-python main.py --predict 600519
-```
-
-### Backtest
-```bash
-# Run backtest
-python main.py --backtest
-
-# Optimize backtest parameters
-python main.py --backtest-optimize
+python main.py --predict 600519                  # Predict movement
+python main.py --backtest                        # Run backtest
+python main.py --auto-learn --max-stocks 50      # Auto-learning
 ```
 
 ### Diagnostics
 ```bash
-# System health
-python main.py --health
-
-# System diagnostics
-python main.py --doctor
+python main.py --health                          # System health
+python main.py --doctor                          # Full diagnostics
+python -m utils.china_diagnostics                # Network diagnostics
 ```
+
+---
 
 ## Network Configuration
 
-### China Direct Mode (VPN Off)
+### China Direct Mode
 ```bash
 export TRADING_CHINA_DIRECT=1
-python main.py --collect-news
 ```
 
-### VPN Mode (International Sources)
+### VPN Mode (International)
 ```bash
 export TRADING_VPN=1
 export TRADING_PROXY_URL=http://127.0.0.1:7890
-python main.py --collect-news
 ```
 
-## Data Sources
+---
 
-### Chinese Sources (VPN Off)
-- Jin10 (财经快讯)
-- EastMoney (东方财富网)
-- Sina Finance
-- Xueqiu (雪球)
-- Caixin (财新)
-- CSRC (中国证监会)
-
-### International Sources (VPN On)
-- Reuters
-- Bloomberg
-- Yahoo Finance
-- MarketWatch
-- CNBC
-
-## Architecture
+## Project Structure
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                    UI Layer (PyQt6)                         │
-│  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────┐  │
-│  │ Main Window │  │Chart Widget │  │ Sentiment Analysis  │  │
-│  └─────────────┘  └─────────────┘  └─────────────────────┘  │
-└─────────────────────────────────────────────────────────────┘
-                            │
-                            ▼
-┌─────────────────────────────────────────────────────────────┐
-│                   Application Layer                         │
-│  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────┐  │
-│  │     App     │  │ Background  │  │  News Collection    │  │
-│  │  Controller │  │    Tasks    │  │  Sentiment Analysis │  │
-│  └─────────────┘  └─────────────┘  └─────────────────────┘  │
-└─────────────────────────────────────────────────────────────┘
-                            │
-        ┌───────────────────┼───────────────────┐
-        ▼                   ▼                   ▼
-┌──────────────────┐ ┌──────────────────┐ ┌──────────────────┐
-│   Data Layer     │ │   Model Layer    │ │   Sentiment      │
-│ ┌──────────────┐ │ │ ┌──────────────┐ │ │ ┌──────────────┐ │
-│ │ DataFetcher  │ │ │ │ Trainer      │ │ │ │ Analyzer     │ │
-│ │ NewsCollector│ │ │ │ Predictor    │ │ │ │ Entity Extract││
-│ │ Cache        │ │ │ │ News Trainer │ │ │ │ Policy Detect│ │
-│ │ Database     │ │ │ │ Ensemble     │ │ │ │ Signal Gen   │ │
-│ └──────────────┘ │ │ └──────────────┘ │ │ └──────────────┘ │
-└──────────────────┘ └──────────────────┘ └──────────────────┘
+trading-graph/
+├── data/          # Data fetching, news collection, sentiment
+├── models/        # ML models, training, prediction
+├── ui/            # PyQt6 desktop & web dashboard
+├── analysis/      # Backtest, replay, strategy engine
+├── config/        # Settings, environment config
+├── core/          # Types, events, constants
+├── utils/         # Utilities, security, metrics
+└── tests/         # Test suite
 ```
 
-## Validation
+---
 
-Run tests:
+## API Endpoints
+
+| Endpoint | Description |
+|----------|-------------|
+| `GET /` | Dashboard home |
+| `GET /api/stocks` | List all stocks |
+| `GET /api/stocks/{symbol}` | Stock details |
+| `POST /api/predict` | Generate prediction |
+| `GET /api/news` | Recent news |
+| `GET /api/sentiment/{symbol}` | Sentiment analysis |
+| `GET /docs` | Swagger API docs |
+
+---
+
+## Testing & Linting
 
 ```bash
+# Run tests
 pytest -q
-```
 
-Lint:
-
-```bash
+# Lint code
 ruff check .
+
+# Type checking
+mypy trading_graph/
 ```
 
-## Main Directories
+---
 
-- `data/`: Data fetch, news collection, sentiment analysis
-- `models/`: Model training/prediction (traditional + news-based)
-- `ui/`: PyQt application and chart rendering
-- `analysis/`: Backtest, replay modules
-- `config/`: Settings, runtime environment
-- `core/`: Core types, events, constants
-- `utils/`: Utilities, security, metrics
+## Scope
 
-## Safety Note
+**Desktop-first, single-node deployment.** Designed for personal and small-team research workflows.
 
-This is a decision-support framework, not a guaranteed-profit system. Use for research and analysis purposes only.
+> ⚠️ **Note**: This is an **analysis and prediction framework only**. Trading execution components (portfolio management, risk management, OMS, broker integration) have been removed.
+
+---
+
+## Safety Notice
+
+This system provides decision support for research purposes only. It is not a guaranteed-profit system. Use at your own risk.
+
+---
+
+## License
+
+MIT License - See LICENSE file for details.

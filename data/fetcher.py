@@ -415,9 +415,7 @@ class DataFetcher:
         from core.network import get_network_env
         env = get_network_env()
         is_china_direct = bool(getattr(env, "is_china_direct", False))
-        is_vpn_active = bool(getattr(env, "is_vpn_active", False))
         eastmoney_ok = bool(getattr(env, "eastmoney_ok", False))
-        tencent_ok = bool(getattr(env, "tencent_ok", False))
         yahoo_ok = bool(getattr(env, "yahoo_ok", False))
 
         net_sig = (

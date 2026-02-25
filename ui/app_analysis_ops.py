@@ -1274,7 +1274,7 @@ def _init_screener_profile_ui(self) -> None:
     if active not in profiles:
         profiles = sorted(dict.fromkeys(profiles + [active]))
 
-    setattr(self, "_syncing_screener_profile_ui", True)
+    self._syncing_screener_profile_ui = True
     try:
         combo.blockSignals(True)
         combo.clear()
@@ -1283,9 +1283,9 @@ def _init_screener_profile_ui(self) -> None:
         combo.setToolTip("Scan profile used by 'Scan Market'")
     finally:
         combo.blockSignals(False)
-        setattr(self, "_syncing_screener_profile_ui", False)
+        self._syncing_screener_profile_ui = False
 
-    setattr(self, "_active_screener_profile", active)
+    self._active_screener_profile = active
 
 def _on_screener_profile_changed(self, profile_name: str) -> None:
     """Handle toolbar profile selector change."""
@@ -1305,7 +1305,7 @@ def _on_screener_profile_changed(self, profile_name: str) -> None:
         ok = bool(set_active_screener_profile(name))
         # Force refresh singleton so subsequent scans use new thresholds.
         build_default_screener(name, force_reload=True)
-        setattr(self, "_active_screener_profile", name)
+        self._active_screener_profile = name
         if ok:
             self.log(f"Screener profile set to {name}", "info")
         else:
@@ -1329,11 +1329,11 @@ def _show_screener_profile_dialog(self) -> None:
                 getattr(dialog, "selected_profile_name", "")
             ).strip().lower()
             if selected and getattr(self, "screener_profile_combo", None) is not None:
-                setattr(self, "_syncing_screener_profile_ui", True)
+                self._syncing_screener_profile_ui = True
                 try:
                     self.screener_profile_combo.setCurrentText(selected)
                 finally:
-                    setattr(self, "_syncing_screener_profile_ui", False)
+                    self._syncing_screener_profile_ui = False
                 self._on_screener_profile_changed(selected)
     except Exception as e:
         QMessageBox.warning(

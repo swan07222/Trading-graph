@@ -18,8 +18,6 @@ Usage:
 from __future__ import annotations
 
 import json
-import ssl
-import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -27,9 +25,6 @@ from enum import Enum, auto
 from typing import Any
 
 from PyQt6.QtCore import (
-    QBuffer,
-    QIODevice,
-    QJsonDocument,
     QObject,
     QUrl,
     pyqtSignal,

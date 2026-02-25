@@ -1,16 +1,11 @@
 ﻿from __future__ import annotations
 
-import warnings
 from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-import numpy as np
 import pandas as pd
-import torch
-import torch.nn as nn
-from torch.utils.data import DataLoader, TensorDataset
 
 from config.settings import CONFIG
 from models.ensemble import EnsembleModel as _DefaultEnsembleModel
@@ -699,6 +694,9 @@ def _train_forecaster(
     TCNModel is no longer supported in this project.
     Returns False to indicate forecaster was not trained.
     """
+    if self._should_stop(stop_flag):
+        raise CancelledException("Operation was cancelled")
+
     log.info("TCN forecaster training skipped - TCNModel is no longer supported")
     return False
 

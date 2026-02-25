@@ -319,15 +319,35 @@ class SentimentAnalyzer:
         entity = self._normalize_entity_name(name)
         if not entity:
             return
+        normalized_type = self._normalize_entity_type(entity_type)
         slot = entity_mentions[entity]
         if slot["type"] == "unknown":
-            slot["type"] = entity_type
-        elif entity_type == "policy":
+            slot["type"] = normalized_type
+        elif normalized_type == "policy":
             # Policy labeling wins for policy matches.
-            slot["type"] = entity_type
+            slot["type"] = normalized_type
+        elif normalized_type == "company" and slot["type"] == "entity":
+            # Upgrade generic labels when we later confirm it is a company.
+            slot["type"] = normalized_type
         slot["sentiment_sum"] += float(sentiment)
         slot["count"] += 1
         slot["articles"].add(str(article_id))
+
+    @staticmethod
+    def _normalize_entity_type(entity_type: object) -> str:
+        """Canonicalize entity type labels from mixed extraction sources."""
+        kind = str(entity_type or "").strip().lower()
+        if kind in {"stock", "stock_code", "ticker", "symbol", "equity", "org", "organization"}:
+            return "company"
+        if kind in {"company", "policy", "person", "sector", "keyword"}:
+            return kind
+        if kind in {"regulation", "law"}:
+            return "policy"
+        if kind in {"people", "executive"}:
+            return "person"
+        if kind in {"industry"}:
+            return "sector"
+        return kind or "entity"
 
     @staticmethod
     def _extract_company_like_entities(text: str, is_chinese: bool) -> list[str]:

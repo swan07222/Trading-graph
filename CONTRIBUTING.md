@@ -1,104 +1,104 @@
-# Contributing to Trading Graph
+# Contributing Guide
 
-Thank you for your interest in contributing to Trading Graph! This document provides guidelines and instructions for contributing.
+Welcome! This guide covers how to contribute to Trading Graph.
 
-## Table of Contents
+---
+
+## Quick Links
 
 - [Code of Conduct](#code-of-conduct)
-- [Getting Started](#getting-started)
-- [Development Setup](#development-setup)
+- [Setup](#development-setup)
 - [Coding Standards](#coding-standards)
-- [Testing Guidelines](#testing-guidelines)
-- [Documentation](#documentation)
-- [Pull Request Process](#pull-request-process)
-- [Architecture Decisions](#architecture-decisions)
+- [Testing](#testing-guidelines)
+- [Pull Requests](#pull-request-process)
+
+---
 
 ## Code of Conduct
 
 - Be respectful and inclusive
-- Focus on constructive feedback
-- Prioritize user security and data privacy
-- Maintain production-grade quality standards
+- Give constructive feedback
+- Prioritize user security and privacy
+- Maintain quality standards
 
-## Getting Started
+---
+
+## Development Setup
 
 ### Prerequisites
 
-- Python 3.10, 3.11, or 3.12
-- pip or uv package manager
-- Git for version control
+- Python 3.11+
+- Git
+- pip or uv
 
-### Quick Start
+### Installation
 
 ```bash
-# Clone the repository
+# Clone repository
 git clone https://github.com/your-org/trading-graph.git
 cd trading-graph
 
 # Create virtual environment
 python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
+source venv/bin/activate  # Windows: venv\Scripts\activate
 
-# Install development dependencies
+# Install dev dependencies
 pip install -r requirements-dev.txt
 
-# Run tests to verify setup
+# Verify setup
 pytest -q
 ```
-
-## Development Setup
 
 ### Environment Configuration
 
 ```bash
-# Copy example environment file
+# Copy environment template
 cp .env.example .env
 
 # Edit with your settings
-# TRADING_MODE=simulation
-# TRADING_CAPITAL=100000
 ```
 
-### IDE Setup
+### IDE Configuration
 
-**VS Code Settings** (`.vscode/settings.json`):
+**VS Code** (`.vscode/settings.json`):
 ```json
 {
   "python.defaultInterpreterPath": "${workspaceFolder}/venv/bin/python",
   "python.linting.enabled": true,
-  "python.linting.ruffEnabled": true,
   "python.testing.pytestEnabled": true,
   "editor.formatOnSave": true,
   "editor.defaultFormatter": "charliermarsh.ruff"
 }
 ```
 
-**PyCharm Settings**:
-- Set project interpreter to venv
-- Enable ruff as linter
-- Configure pytest as test runner
-- Set code style to match project (100 char line length)
+**PyCharm**:
+- Set interpreter to `venv`
+- Enable ruff linter
+- Configure pytest
+- Set line length to 100
+
+---
 
 ## Coding Standards
 
 ### Type Hints
 
-All public functions and methods MUST have type hints:
+All public functions require type hints:
 
 ```python
-# ✅ Good
+# ✅ Correct
 def calculate_pnl(entry: float, exit: float, quantity: int) -> float:
     """Calculate profit and loss."""
     return (exit - entry) * quantity
 
-# ❌ Bad
+# ❌ Incorrect
 def calculate_pnl(entry, exit, quantity):
     return (exit - entry) * quantity
 ```
 
 ### Docstrings
 
-Use Google-style docstrings for all public APIs:
+Use Google-style docstrings:
 
 ```python
 def submit_order(
@@ -114,68 +114,60 @@ def submit_order(
     Args:
         symbol: Stock symbol (e.g., "600519")
         side: Order side (BUY or SELL)
-        quantity: Number of shares (must be multiple of lot size)
+        quantity: Number of shares
         price: Limit price (None for market orders)
 
     Returns:
-        Order object with assigned order ID
+        Order object with assigned ID
 
     Raises:
-        OrderError: If order validation fails
-        RiskError: If order violates risk limits
+        OrderError: If validation fails
+        RiskError: If risk limits violated
 
     Example:
         >>> order = oms.submit_order("600519", OrderSide.BUY, 100, 50.0)
-        >>> print(order.id)
-        'ORD-20260223-001'
     """
 ```
 
-### Code Organization
+### File Organization
 
-**File Size Limits**:
-- Maximum 300 lines per file (excluding tests)
-- Maximum 50 lines per function
-- Maximum 5 parameters per function (use dataclasses for more)
-
-**Module Structure**:
+**Import order:**
 ```python
 # 1. Future imports
 from __future__ import annotations
 
-# 2. Standard library imports
+# 2. Standard library
 import threading
 from datetime import datetime
-from typing import Any
 
-# 3. Third-party imports
+# 3. Third-party
 import numpy as np
 import pandas as pd
 
-# 4. Local imports
+# 4. Local
 from core.types import Order, OrderSide
 from utils.logger import get_logger
-
-# 5. Module constants
-_DEFAULT_TIMEOUT = 30.0
-
-# 6. Classes and functions
 ```
+
+**Limits:**
+- Max 300 lines per file (excluding tests)
+- Max 50 lines per function
+- Max 5 parameters (use dataclasses for more)
 
 ### Error Handling
 
 ```python
-# ✅ Good - Specific exception handling
+# ✅ Correct - Specific exceptions
 try:
     order = self._create_order(symbol, quantity)
 except OrderValidationError as e:
-    log.warning("Order validation failed: %s", e)
+    log.warning("Validation failed: %s", e)
     return None
 except DatabaseError as e:
     log.error("Database error: %s", e)
     raise
 
-# ❌ Bad - Bare except
+# ❌ Incorrect - Bare except
 try:
     order = self._create_order(symbol, quantity)
 except:
@@ -185,93 +177,81 @@ except:
 
 ### Naming Conventions
 
-| Type | Convention | Example |
-|------|------------|---------|
+| Type | Style | Example |
+|------|-------|---------|
 | Variables | snake_case | `order_quantity` |
 | Functions | snake_case | `calculate_pnl()` |
-| Classes | PascalCase | `OrderManagementSystem` |
+| Classes | PascalCase | `OrderManagement` |
 | Constants | UPPER_SNAKE_CASE | `MAX_POSITION_PCT` |
-| Private | Leading underscore | `_internal_method()` |
-| Type aliases | PascalCase | `OrderDict = dict[str, Order]` |
+| Private | `_` prefix | `_internal_method()` |
+
+---
 
 ## Testing Guidelines
 
 ### Test Structure
 
 ```python
-"""Tests for order management system."""
+"""Tests for order management."""
 import pytest
-from unittest.mock import Mock, patch
+from unittest.mock import Mock
 
-from core.types import Order, OrderSide, OrderType
+from core.types import Order, OrderSide
 from trading.oms import OrderManagementSystem
 
-class TestOrderManagementSystem:
+
+class TestOrderManagement:
     """Test suite for OMS."""
 
     @pytest.fixture
     def oms(self) -> OrderManagementSystem:
-        """Create OMS instance for testing."""
+        """Create OMS for testing."""
         return OrderManagementSystem(initial_capital=100000)
 
     def test_submit_order_success(self, oms: OrderManagementSystem) -> None:
         """Test successful order submission."""
-        order = Order(
-            symbol="600519",
-            side=OrderSide.BUY,
-            order_type=OrderType.LIMIT,
-            quantity=100,
-            price=50.0,
-        )
+        order = Order(symbol="600519", side=OrderSide.BUY, quantity=100, price=50.0)
         result = oms.submit_order(order)
+        
         assert result.status == OrderStatus.SUBMITTED
         assert result.id is not None
-
-    def test_submit_order_insufficient_funds(self, oms: OrderManagementSystem) -> None:
-        """Test order rejection due to insufficient funds."""
-        order = Order(
-            symbol="600519",
-            side=OrderSide.BUY,
-            order_type=OrderType.LIMIT,
-            quantity=10000,  # Too large
-            price=50.0,
-        )
-        result = oms.submit_order(order)
-        assert result.status == OrderStatus.REJECTED
-        assert "Insufficient funds" in result.message
 ```
 
 ### Coverage Requirements
 
-- **Overall**: 85% minimum
-- **Critical modules** (oms, risk, security): 95% minimum
-- **UI components**: 70% minimum
+| Module Type | Minimum Coverage |
+|-------------|------------------|
+| Overall | 85% |
+| Critical (OMS, Risk, Security) | 95% |
+| UI Components | 70% |
 
 ### Running Tests
 
 ```bash
-# Run all tests
+# All tests
 pytest
 
-# Run with coverage
+# With coverage
 pytest --cov=trading_graph --cov-report=html
 
-# Run specific test file
+# Specific file
 pytest tests/test_oms.py
 
-# Run specific test function
-pytest tests/test_oms.py::TestOrderManagementSystem::test_submit_order_success
+# Specific function
+pytest tests/test_oms.py::TestOrderManagement::test_submit_order
 
-# Run with verbose output
+# Verbose output
 pytest -v
 ```
+
+---
 
 ## Documentation
 
 ### Code Comments
 
 ```python
-# ✅ Good - Explains WHY, not WHAT
+# ✅ Good - Explains WHY
 # Use WAL mode for concurrent reads without blocking writes
 # See: https://sqlite.org/wal.html
 conn.execute("PRAGMA journal_mode=WAL")
@@ -281,52 +261,31 @@ conn.execute("PRAGMA journal_mode=WAL")
 conn.execute("PRAGMA journal_mode=WAL")
 ```
 
-### README Updates
+### When to Update README
 
-Update README.md when:
 - Adding new features
 - Changing installation requirements
 - Modifying CLI arguments
 - Adding configuration options
 
-### API Documentation
-
-Generate API docs:
-```bash
-# Install sphinx
-pip install sphinx sphinx-autodoc-typehints
-
-# Generate docs
-sphinx-apidoc -o docs/ trading_graph
-make -C docs html
-```
+---
 
 ## Pull Request Process
 
 ### Before Submitting
 
-1. **Run all tests**: `pytest --cov-fail-under=85`
-2. **Run linter**: `ruff check .`
-3. **Run type checker**: `mypy trading_graph/`
-4. **Update documentation**: README, docstrings, etc.
-5. **Add changelog entry**: See below
+```bash
+# 1. Run all tests
+pytest --cov-fail-under=85
 
-### Changelog Format
+# 2. Run linter
+ruff check .
 
-```markdown
-## [Unreleased]
+# 3. Run type checker
+mypy trading_graph/
 
-### Added
-- New feature description (#123)
-
-### Changed
-- Modified behavior description (#456)
-
-### Fixed
-- Bug fix description (#789)
-
-### Removed
-- Deprecated feature removal (#321)
+# 4. Update documentation
+# README, docstrings, etc.
 ```
 
 ### PR Template
@@ -356,50 +315,37 @@ Fixes #123
 - [ ] No new warnings
 ```
 
-## Architecture Decisions
-
-### Decision Record Format
-
-Create `docs/adr/NNNN-decision-name.md`:
+### Changelog Format
 
 ```markdown
-# ADR NNNN: Decision Name
+## [Unreleased]
 
-## Status
-Proposed | Accepted | Deprecated | Superseded
+### Added
+- Feature description (#123)
 
-## Context
-What is the issue that we're seeing?
+### Changed
+- Behavior description (#456)
 
-## Decision
-What is the change that we're proposing?
+### Fixed
+- Bug description (#789)
 
-## Consequences
-What becomes easier or more difficult?
-What are the trade-offs?
+### Removed
+- Deprecated feature (#321)
 ```
 
-### Current Architecture Decisions
-
-| ADR | Title | Status |
-|-----|-------|--------|
-| 0001 | Use SQLite for persistence | Accepted |
-| 0002 | PyQt6 for desktop UI | Accepted |
-| 0003 | PyTorch for ML models | Accepted |
-| 0004 | Event-driven architecture | Accepted |
-| 0005 | Single-node design | Accepted |
+---
 
 ## Performance Guidelines
 
 ### Memory Management
 
 ```python
-# ✅ Good - Use generators for large datasets
+# ✅ Good - Generator for large datasets
 def load_bars(symbol: str) -> Iterator[Bar]:
     for row in database.query(symbol):
         yield Bar.from_row(row)
 
-# ❌ Bad - Load all into memory
+# ❌ Bad - Load all to memory
 def load_bars(symbol: str) -> list[Bar]:
     return [Bar.from_row(row) for row in database.query(symbol)]
 ```
@@ -407,28 +353,30 @@ def load_bars(symbol: str) -> list[Bar]:
 ### Async Operations
 
 ```python
-# ✅ Good - Offload blocking operations
-async def fetch_multiple_symbols(symbols: list[str]) -> dict[str, Data]:
+# ✅ Good - Concurrent async
+async def fetch_multiple(symbols: list[str]) -> dict[str, Data]:
     tasks = [fetch_symbol(s) for s in symbols]
     return await asyncio.gather(*tasks)
 
 # ❌ Bad - Sequential blocking
-def fetch_multiple_symbols(symbols: list[str]) -> dict[str, Data]:
+def fetch_multiple(symbols: list[str]) -> dict[str, Data]:
     return {s: fetch_symbol(s) for s in symbols}
 ```
 
+---
+
 ## Security Guidelines
 
-### Handling Sensitive Data
+### Sensitive Data
 
 ```python
-# ✅ Good - Use secure storage
+# ✅ Good - Secure storage
 from utils.security import get_secure_storage
 
 storage = get_secure_storage()
 storage.set("api_key", secret_key)
 
-# ❌ Bad - Plain text storage
+# ❌ Bad - Plain text
 with open("config.json", "w") as f:
     json.dump({"api_key": secret_key}, f)
 ```
@@ -436,7 +384,7 @@ with open("config.json", "w") as f:
 ### Audit Logging
 
 ```python
-# ✅ Good - Log security-relevant events
+# ✅ Good - Security events logged
 from utils.security import get_audit_log
 
 audit = get_audit_log()
@@ -445,22 +393,55 @@ audit.log(
     user=user_id,
     details={"order_id": order.id, "symbol": symbol},
 )
-
-# ❌ Bad - No audit trail
-log.info("Order submitted")
 ```
+
+---
+
+## Architecture Decisions
+
+Document major decisions in `docs/adr/NNNN-decision-name.md`:
+
+```markdown
+# ADR NNNN: Decision Name
+
+## Status
+Proposed | Accepted | Deprecated | Superseded
+
+## Context
+What problem are we solving?
+
+## Decision
+What change are we making?
+
+## Consequences
+Trade-offs and implications?
+```
+
+### Current Decisions
+
+| ADR | Title | Status |
+|-----|-------|--------|
+| 0001 | SQLite for persistence | Accepted |
+| 0002 | PyQt6 for desktop UI | Accepted |
+| 0003 | PyTorch for ML models | Accepted |
+| 0004 | Event-driven architecture | Accepted |
+| 0005 | Single-node design | Accepted |
+
+---
 
 ## Getting Help
 
-- **Documentation**: See `ARCHITECTURE.md`, `README.md`
+- **Docs**: `README.md`, `ARCHITECTURE.md`
 - **Issues**: Open a GitHub issue
-- **Discussions**: Use GitHub Discussions for questions
+- **Discussions**: GitHub Discussions for questions
+
+---
 
 ## Recognition
 
-Contributors will be recognized in:
+Contributors are recognized in:
 - CHANGELOG.md
 - README.md contributors section
 - Annual release notes
 
-Thank you for contributing to Trading Graph!
+Thank you for contributing!

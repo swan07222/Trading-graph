@@ -45,8 +45,8 @@ from core.types import (
     AutoTradeMode,
     OrderSide,
 )
-from ui import app_analysis_ops as _app_analysis_ops
 from ui import app_ai_ops as _app_ai_ops
+from ui import app_analysis_ops as _app_analysis_ops
 from ui import app_bar_ops as _app_bar_ops
 from ui import app_feed_ops as _app_feed_ops
 from ui import app_model_chart_ops as _app_model_chart_ops
