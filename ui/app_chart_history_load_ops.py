@@ -165,11 +165,32 @@ def _load_chart_history_bars(
     _recursion_depth: int = 0,
 ) -> list[dict[str, Any]]:
     """Load historical OHLC bars for chart rendering."""
+    # [DBG] History load start diagnostic
+    self._debug_console(
+        f"chart_history_load_start:{self._ui_norm(symbol)}:{interval}",
+        f"Loading chart history for {self._ui_norm(symbol)} {interval}: lookback={lookback_bars} depth={_recursion_depth}",
+        min_gap_seconds=1.0,
+        level="info",
+    )
     if not self.predictor:
+        # [DBG] No predictor diagnostic
+        self._debug_console(
+            f"chart_history_no_predictor:{self._ui_norm(symbol)}",
+            f"Chart history load skipped for {self._ui_norm(symbol)}: no predictor",
+            min_gap_seconds=1.0,
+            level="warning",
+        )
         return []
     try:
         fetcher = getattr(self.predictor, "fetcher", None)
         if fetcher is None:
+            # [DBG] No fetcher diagnostic
+            self._debug_console(
+                f"chart_history_no_fetcher:{self._ui_norm(symbol)}",
+                f"Chart history load skipped for {self._ui_norm(symbol)}: no fetcher",
+                min_gap_seconds=1.0,
+                level="warning",
+            )
             return []
         requested_iv = self._normalize_interval_token(interval)
         norm_iv = requested_iv or "1m"
@@ -231,6 +252,14 @@ def _load_chart_history_bars(
             allow_online=bool(allow_online),
             refresh_intraday_after_close=bool(force_refresh),
         )
+        # [DBG] History fetch result diagnostic
+        df_rows = len(df) if df is not None and not df.empty else 0
+        self._debug_console(
+            f"chart_history_fetch_result:{self._ui_norm(symbol)}:{source_iv}",
+            f"Chart history fetch for {self._ui_norm(symbol)} {source_iv}: rows={df_rows} source_lookback={source_lookback}",
+            min_gap_seconds=1.0,
+            level="info",
+        )
         if source_iv == "1d":
             min_required = int(max(5, min(source_lookback, 90)))
         elif source_iv == "1wk":
@@ -246,6 +275,13 @@ def _load_chart_history_bars(
                     int(max(120, float(source_lookback) * float(depth_ratio))),
                 )
         if df is None or df.empty or len(df) < min_required:
+            # [DBG] Online fetch fallback diagnostic
+            self._debug_console(
+                f"chart_history_online_fallback:{self._ui_norm(symbol)}:{source_iv}",
+                f"Chart history falling back to online fetch for {self._ui_norm(symbol)} {source_iv}: rows={df_rows if df else 0} min_required={min_required}",
+                min_gap_seconds=1.0,
+                level="info",
+            )
             df_online = _fetch_chart_history_frame(
                 fetcher,
                 symbol,
@@ -259,6 +295,13 @@ def _load_chart_history_bars(
             )
             if df_online is not None and not df_online.empty:
                 df = df_online
+                # [DBG] Online fetch result diagnostic
+                self._debug_console(
+                    f"chart_history_online_result:{self._ui_norm(symbol)}:{source_iv}",
+                    f"Chart history online fetch result for {self._ui_norm(symbol)} {source_iv}: rows={len(df)}",
+                    min_gap_seconds=1.0,
+                    level="info",
+                )
         if df is None or df.empty:
             # Fallback query path when primary history window is empty.
             df = _fetch_chart_history_frame(
@@ -437,8 +480,22 @@ def _load_chart_history_bars(
                 )
                 self._queue_history_refresh(symbol, norm_iv)
                 if _recursion_depth < 1:
+                    # [DBG] Recursive history load diagnostic
+                    self._debug_console(
+                        f"chart_history_recursive:{self._ui_norm(symbol)}:{norm_iv}",
+                        f"Chart history loading recursively for {self._ui_norm(symbol)} {norm_iv}: depth={_recursion_depth + 1}",
+                        min_gap_seconds=1.0,
+                        level="info",
+                    )
                     return self._load_chart_history_bars(symbol, norm_iv, lookback, _recursion_depth=_recursion_depth + 1)
         return out
     except _APP_CHART_RECOVERABLE_EXCEPTIONS as e:
         log.debug(f"Historical chart load failed for {symbol}: {e}")
+        # [DBG] History load error diagnostic
+        self._debug_console(
+            f"chart_history_error:{self._ui_norm(symbol)}:{interval}",
+            f"Chart history load failed for {self._ui_norm(symbol)} {interval}: {e}",
+            min_gap_seconds=1.0,
+            level="error",
+        )
         return []

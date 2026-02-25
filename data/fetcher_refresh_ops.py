@@ -56,10 +56,15 @@ def refresh_trained_stock_history(
         else get_session_bar_cache_fn
     )
 
+    # [DBG] Get Infor start diagnostic
+    log.info(f"[DBG] Get Infor START: codes={len(codes)} interval={iv} window_days={wd} target_bars={target_bars} market_open={market_open}")
+
     session_cache = None
     if do_sync_cache:
         try:
             session_cache = session_cache_getter()
+            # [DBG] Session cache available diagnostic
+            log.info(f"[DBG] Get Infor: session cache available={session_cache is not None}")
         except Exception as exc:
             log.debug("Session cache unavailable for refresh: %s", exc)
             session_cache = None
@@ -103,6 +108,10 @@ def refresh_trained_stock_history(
         cache_sync_errors: list[str] = []
         pending_key = self._refresh_reconcile_key(code6, iv)
         had_pending = bool(pending_key and pending_key in reconcile_queue)
+        
+        # [DBG] Per-stock processing diagnostic
+        log.info(f"[DBG] Get Infor [{idx}/{len(codes6)}]: processing {code6}")
+        
         try:
             if intraday:
                 db_df = self._clean_dataframe(
@@ -118,6 +127,10 @@ def refresh_trained_stock_history(
                     interval="1d",
                 )
                 db_df = self._resample_daily_to_interval(db_df, iv)
+
+            # [DBG] DB bars loaded diagnostic
+            db_rows = len(db_df) if db_df is not None and not db_df.empty else 0
+            log.info(f"[DBG] Get Infor {code6}: DB loaded {db_rows} bars")
 
             if (
                 not db_df.empty
@@ -200,6 +213,13 @@ def refresh_trained_stock_history(
             else:
                 anchor_ts = pd.Timestamp(window_start)
 
+            # [DBG] Anchor timestamp diagnostic
+            log.info(
+                f"[DBG] Get Infor {code6}: anchor_ts={anchor_ts.isoformat() if anchor_ts else 'None'} "
+                f"replace_realtime={replace_realtime} first_rt_after_ak={first_rt_after_ak_ts} "
+                f"last_ak={last_ak_ts} last_cache={last_cache_ts} db_max={db_recent.index.max() if not db_recent.empty and isinstance(db_recent.index, pd.DatetimeIndex) else 'N/A'}"
+            )
+
             if anchor_ts is not None:
                 try:
                     if anchor_ts.tzinfo is not None:
@@ -242,6 +262,11 @@ def refresh_trained_stock_history(
 
             if bool(allow_online) and (not _is_offline()) and fetched_days > 0:
                 inst = {"market": "CN", "asset": "EQUITY", "symbol": code6}
+                # [DBG] Online fetch diagnostic
+                log.info(
+                    f"[DBG] Get Infor {code6}: fetching online days={fetched_days} interval={iv} "
+                    f"anchor={anchor_ts.isoformat() if anchor_ts else 'window_start'}"
+                )
                 try:
                     fetched_out = self._fetch_from_sources_instrument(
                         inst=inst,
@@ -270,6 +295,10 @@ def refresh_trained_stock_history(
                     fetched = fetched_out[0]
                     if isinstance(fetched_out[1], dict):
                         fetched_meta = dict(fetched_out[1])
+                        # [DBG] Fetch metadata diagnostic
+                        log.info(
+                            f"[DBG] Get Infor {code6}: fetched_meta={fetched_meta}"
+                        )
                 else:
                     fetched = (
                         fetched_out
@@ -279,6 +308,10 @@ def refresh_trained_stock_history(
                 fetched = self._clean_dataframe(fetched, interval=iv)
                 if intraday:
                     fetched = self._filter_cn_intraday_session(fetched, iv)
+
+                # [DBG] Fetched bars diagnostic
+                fetched_rows = len(fetched) if fetched is not None and not fetched.empty else 0
+                log.info(f"[DBG] Get Infor {code6}: fetched {fetched_rows} bars from online")
 
                 if (
                     not fetched.empty
@@ -505,13 +538,18 @@ def refresh_trained_stock_history(
             if not fetched.empty:
                 report_status[code6] = "updated"
                 report["updated"] = int(report.get("updated", 0)) + 1
+                # [DBG] Stock updated diagnostic
+                log.info(f"[DBG] Get Infor {code6}: COMPLETED - status=updated rows={rows}")
             elif quorum_blocked:
                 report_status[code6] = "quorum_blocked"
+                log.info(f"[DBG] Get Infor {code6}: COMPLETED - status=quorum_blocked")
             elif rows > 0:
                 report_status[code6] = "cached"
                 report["cached"] = int(report.get("cached", 0)) + 1
+                log.info(f"[DBG] Get Infor {code6}: COMPLETED - status=cached rows={rows}")
             else:
                 report_status[code6] = "empty"
+                log.info(f"[DBG] Get Infor {code6}: COMPLETED - status=empty")
             report["status"] = report_status
 
         except Exception as exc:
@@ -535,5 +573,11 @@ def refresh_trained_stock_history(
         self._save_refresh_reconcile_queue(reconcile_queue)
     report["pending_reconcile_after"] = int(len(reconcile_queue))
     report["pending_reconcile_codes"] = sorted(list(reconcile_queue.keys()))
+
+    # [DBG] Get Infor completion diagnostic
+    log.info(
+        f"[DBG] Get Infor COMPLETE: total={report['total']} updated={report['updated']} "
+        f"cached={report['cached']} errors={len(report.get('errors', {}))}"
+    )
 
     return report

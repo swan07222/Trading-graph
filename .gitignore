@@ -11,6 +11,10 @@ __pycache__/
 htmlcov/
 *.egg-info/
 
+# Encryption keys and secrets
+secrets/
+*.key
+
 # Virtual environments
 venv/
 .venv/

@@ -545,6 +545,14 @@ def _train_trained_stocks(self) -> None:
     A dialog asks for stock count (N). The model is retrained on the
     N stocks with the oldest last-train timestamps.
     """
+    # [DBG] Train trained stocks start diagnostic
+    self._debug_console(
+        "train_trained_stocks_started",
+        "Train Trained Stocks: starting",
+        min_gap_seconds=1.0,
+        level="info",
+    )
+    
     trained = list(
         dict.fromkeys(
             self._ui_norm(x) for x in self._get_trained_stock_codes()
@@ -552,6 +560,14 @@ def _train_trained_stocks(self) -> None:
         )
     )
     self._sync_trained_stock_last_train_from_model()
+
+    # [DBG] Trained stocks list diagnostic
+    self._debug_console(
+        f"train_trained_stocks_list",
+        f"Train Trained Stocks: {len(trained)} trained stocks found",
+        min_gap_seconds=1.0,
+        level="info",
+    )
 
     pending_codes: set[str] = set()
     try:
@@ -574,6 +590,15 @@ def _train_trained_stocks(self) -> None:
             }
     except _UI_RECOVERABLE_EXCEPTIONS:
         pending_codes = set()
+
+    # [DBG] Pending codes diagnostic
+    if pending_codes:
+        self._debug_console(
+            f"train_trained_stocks_pending",
+            f"Train Trained Stocks: {len(pending_codes)} stocks with pending cache sync",
+            min_gap_seconds=1.0,
+            level="warning",
+        )
 
     if pending_codes:
         before = int(len(trained))
@@ -645,6 +670,13 @@ def _train_trained_stocks(self) -> None:
             trained_at=trained_at,
         )
         self._update_trained_stocks_ui()
+        # [DBG] Training completion diagnostic
+        self._debug_console(
+            f"train_trained_stocks_completed",
+            f"Train Trained Stocks: COMPLETED - {len(trained_codes)} stocks trained at {trained_at}",
+            min_gap_seconds=1.0,
+            level="success",
+        )
         self.log(
             (
                 "Train trained stocks completed: "

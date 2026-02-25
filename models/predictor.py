@@ -53,9 +53,9 @@ class Predictor:
 
     def __init__(
         self,
-        capital: float = None,
+        capital: float | None = None,
         interval: str = "1m",
-        prediction_horizon: int = None,
+        prediction_horizon: int | None = None,
     ) -> None:
         self.capital = float(capital or CONFIG.CAPITAL)
         self.interval = str(interval).lower()
@@ -299,35 +299,75 @@ class Predictor:
 
             return True
 
-        except ImportError as e:
-            log.error(f"Missing dependency for models: {e}")
-            return False
         except _PREDICTOR_RECOVERABLE_EXCEPTIONS as e:
-            log.error(f"Failed to load models: {e}")
+            msg = str(e)
+            # FIX #20: Consolidated exception handling (ImportError already in _PREDICTOR_RECOVERABLE_EXCEPTIONS)
+            if isinstance(e, ImportError):
+                log.error(f"Missing dependency for models: {e}")
+            else:
+                log.error(f"Failed to load models: {msg}")
+                lower_msg = msg.lower()
+                if (
+                    "c10.dll" in lower_msg
+                    or "dll initialization routine failed" in lower_msg
+                ):
+                    log.error(
+                        "PyTorch DLL load failed. On Windows, ensure Visual C++ "
+                        "Redistributable is installed, remove conflicting CUDA/CUDNN "
+                        "PATH entries for CPU builds, and reinstall torch in this venv."
+                    )
             return False
 
     def _initialize_model_weights(self) -> None:
         """Initialize adaptive model weights based on historical performance.
-        
+
         This improves ensemble accuracy by weighting better-performing models higher.
+        FIX #10: Re-sync weights when model ensemble changes (hot-reload).
         """
         if self.ensemble is None or not hasattr(self.ensemble, 'models'):
             return
-            
+
         # Default equal weights
         n_models = len(self.ensemble.models)
         if n_models == 0:
             return
-            
+
         model_names = list(self.ensemble.models.keys())
         
-        # Initialize with equal weights
-        base_weight = 1.0 / n_models
-        for name in model_names:
-            self._model_weights[name] = base_weight
-            self._last_model_performance[name] = 0.5  # Start with neutral performance
+        # FIX #10: Check for key divergence after hot-reload
+        # If the model set changed, we need to re-initialize to avoid KeyError
+        existing_keys = set(self._model_weights.keys())
+        new_keys = set(model_names)
         
-        log.info(f"Initialized model weights for {n_models} models")
+        if existing_keys != new_keys:
+            # Models changed - re-initialize weights
+            # Preserve existing performance data for models that still exist
+            preserved_perf = {
+                k: v for k, v in self._last_model_performance.items()
+                if k in new_keys
+            }
+            self._model_weights.clear()
+            self._last_model_performance.clear()
+            
+            base_weight = 1.0 / n_models
+            for name in model_names:
+                self._model_weights[name] = base_weight
+                # Restore preserved performance or start neutral
+                self._last_model_performance[name] = preserved_perf.get(name, 0.5)
+            
+            log.info(
+                f"Re-initialized model weights for {n_models} models "
+                f"(hot-reload detected: {len(existing_keys - new_keys)} removed, "
+                f"{len(new_keys - existing_keys)} added)"
+            )
+        elif not self._model_weights:
+            # First-time initialization
+            base_weight = 1.0 / n_models
+            for name in model_names:
+                self._model_weights[name] = base_weight
+                self._last_model_performance[name] = 0.5
+            
+            log.info(f"Initialized model weights for {n_models} models")
 
     def _update_model_weights(self, stock_code: str, was_correct: bool) -> None:
         """Update model weights based on prediction accuracy.
@@ -497,6 +537,23 @@ class Predictor:
             self.horizon,
         )
         return None, None
+
+    # FIX #9: Default implementation to avoid fragile monkey-patch ordering dependency
+    # This method is monkey-patched at module load time, but we provide a fallback
+    # in case it's called before the patch runs.
+    @staticmethod
+    def _normalize_interval_token(interval: str | None) -> str:
+        """Normalize interval token to canonical form."""
+        iv = str(interval or "1m").strip().lower()
+        aliases = {
+            "1h":    "60m",
+            "60min": "60m",
+            "daily": "1d",
+            "day":   "1d",
+            "1day":  "1d",
+            "1440m": "1d",
+        }
+        return aliases.get(iv, iv)
 
     @staticmethod
     def _parse_artifact_horizon(token: str) -> int | None:
@@ -957,7 +1014,19 @@ class Predictor:
         """
         with self._predict_lock:
             self._maybe_reload_models(reason="predict")
-            
+
+            # FIX #4: Check if processor is None before accessing scaler
+            if self.processor is None:
+                log.error("DataProcessor not initialized - cannot make predictions")
+                pred = Prediction(
+                    stock_code=self._clean_code(stock_code),
+                    timestamp=datetime.now(timezone.utc),
+                    interval=self._normalize_interval_token(interval),
+                    horizon=int(forecast_minutes or self.horizon),
+                )
+                pred.warnings.append("DataProcessor not initialized")
+                return pred
+
             # FIX #10: Check if scaler was loaded successfully
             if not hasattr(self.processor, 'scaler') or self.processor.scaler is None:
                 log.warning(
@@ -1089,8 +1158,9 @@ class Predictor:
                         recent_prices=df["close"].tail(min(560, len(df))).tolist(),
                         news_bias=news_bias,
                     )
-                except TypeError:
+                except (TypeError, *list(_PREDICTOR_RECOVERABLE_EXCEPTIONS)):
                     # Compatibility for tests/mocks overriding _generate_forecast.
+                    # Also catches other recoverable exceptions like LinAlgError.
                     pred.predicted_prices = self._generate_forecast(
                         X,
                         pred.current_price,
@@ -1117,6 +1187,74 @@ class Predictor:
                 )
 
             return pred
+
+    def record_prediction_outcome(
+        self,
+        stock_code: str,
+        prediction_timestamp: datetime,
+        actual_price_now: float,
+        threshold_pct: float = 1.0,
+    ) -> dict[str, bool]:
+        """Record the outcome of a past prediction for adaptive learning.
+
+        This method should be called when the actual outcome of a prediction
+        becomes known (e.g., after the prediction horizon has elapsed).
+
+        Args:
+            stock_code: The stock code that was predicted
+            prediction_timestamp: When the original prediction was made
+            actual_price_now: The current/closing price at outcome time
+            threshold_pct: Price change threshold to consider "up" (default 1%)
+
+        Returns:
+            Dict with 'was_correct' and 'predicted_up' keys
+        """
+        code = self._clean_code(stock_code)
+
+        # Look up the original prediction from cache if still available
+        cache_key_prefix = f"{code}:"
+        original_pred: Prediction | None = None
+
+        with self._cache_lock:
+            for key, (ts, pred) in self._pred_cache.items():
+                if key.startswith(cache_key_prefix):
+                    pred_ts = pred.timestamp
+                    if abs((pred_ts - prediction_timestamp).total_seconds()) < 5:
+                        original_pred = pred
+                        break
+
+        if original_pred is None:
+            log.debug(
+                f"Original prediction not found for {code} at {prediction_timestamp}"
+            )
+            return {"was_correct": False, "predicted_up": False, "found": False}
+
+        # Determine what the prediction was
+        predicted_up = original_pred.signal in (Signal.BUY, Signal.STRONG_BUY)
+
+        # Determine actual outcome
+        original_price = original_pred.current_price
+        if original_price <= 0:
+            return {"was_correct": False, "predicted_up": predicted_up, "found": True, "error": "invalid_original_price"}
+
+        price_change_pct = ((actual_price_now - original_price) / original_price) * 100
+        actual_up = price_change_pct >= threshold_pct
+
+        # Record the outcome
+        was_correct = (predicted_up == actual_up)
+        self._record_prediction_outcome(code, predicted_up, actual_up)
+
+        log.info(
+            f"Recorded outcome for {code}: predicted={'up' if predicted_up else 'down'}, "
+            f"actual={'up' if actual_up else 'down'}, correct={was_correct}"
+        )
+
+        return {
+            "was_correct": was_correct,
+            "predicted_up": predicted_up,
+            "actual_up": actual_up,
+            "found": True,
+        }
 
     @staticmethod
     def _has_required_rows(df: pd.DataFrame | None, required_rows: int) -> bool:
@@ -1200,6 +1338,8 @@ class Predictor:
     ) -> bool:
         """Produce a lightweight fallback prediction when history is short.
         This avoids HOLD(0%) outputs during startup warm-up windows.
+        
+        FIX #22: Documented magic number constants.
         """
         if df is None or df.empty or "close" not in df.columns:
             return False
@@ -1232,15 +1372,32 @@ class Predictor:
             drift = 0.0
         if not np.isfinite(vol):
             vol = 0.0
+        
+        # FIX #22: Documented magic numbers
+        # Drift scaling: amplifies small daily drift to meaningful score range
+        DRIFT_SCALE = 700.0
+        # Base movement scaling: weights recent price direction
+        BASE_MOVE_SCALE = 6.0
         base_move = float(recent.iloc[-1] / max(float(recent.iloc[0]), 1e-8) - 1.0)
-        score = (drift * 700.0) + (base_move * 6.0)
+        score = (drift * DRIFT_SCALE) + (base_move * BASE_MOVE_SCALE)
         direction = float(np.tanh(score))
+        
+        # Depth ratio: how much of required history we have (0-1)
         depth_ratio = float(min(1.0, len(close) / max(float(required_rows), 1.0)))
+        
+        # Confidence: base 0.36, boosted by data depth and signal strength
+        # Range: 0.36 to 0.78
         pred.confidence = float(
             np.clip(0.36 + (0.24 * depth_ratio) + (0.28 * abs(direction)), 0.36, 0.78)
         )
         pred.raw_confidence = float(pred.confidence)
+        
+        # Model agreement: starts at 0.52, increases with data depth
+        # Range: 0.52 to 0.87
         pred.model_agreement = float(np.clip(0.52 + (0.35 * depth_ratio), 0.0, 1.0))
+        
+        # Entropy: uncertainty measure, reduced by strong signals, increased by volatility
+        # VOL_THRESHOLD: 0.02 - volatility above this increases entropy
         pred.entropy = float(
             np.clip(
                 0.62 - (0.35 * abs(direction)) + (0.25 * max(0.0, vol - 0.02)),
@@ -1248,7 +1405,13 @@ class Predictor:
                 0.95,
             )
         )
+        
+        # Model margin: edge estimate based on signal strength
         pred.model_margin = float(np.clip(abs(direction) * 0.32, 0.01, 0.25))
+        
+        # Probability distribution calculation
+        # Neutral base: 0.45, reduced by strong signals, increased by volatility
+        # VOL_THRESHOLD_NEUTRAL: 0.015 - volatility above this increases neutral
         neutral = float(
             np.clip(
                 0.45 - (0.20 * abs(direction)) + (0.90 * max(0.0, vol - 0.015)),
@@ -1256,6 +1419,7 @@ class Predictor:
                 0.74,
             )
         )
+        # Up probability: derived from neutral and direction
         up = float(np.clip((1.0 - neutral) * (0.5 + 0.5 * direction), 0.02, 0.95))
         down = float(max(0.0, 1.0 - neutral - up))
         total = up + neutral + down
@@ -1350,7 +1514,7 @@ class Predictor:
         try:
             from models.regime import MarketRegimeDetector
 
-            detector = MarketRegimeDetector()
+            detector = self._get_regime_detector()
             regime_result = detector.detect(df)
 
             # Store regime info
@@ -1389,8 +1553,15 @@ class Predictor:
                 getattr(regime_result, "recommended_threshold", 0.0) or 0.0
             )
 
-        except Exception as e:
+        except _PREDICTOR_RECOVERABLE_EXCEPTIONS as e:
             log.debug(f"Regime adjustment failed: {e}")
+
+    def _get_regime_detector(self):
+        """Lazy-loaded, cached MarketRegimeDetector instance."""
+        if not hasattr(self, "_regime_detector_cache") or self._regime_detector_cache is None:
+            from models.regime import MarketRegimeDetector
+            self._regime_detector_cache = MarketRegimeDetector()
+        return self._regime_detector_cache
 
     def _apply_adaptive_signal_threshold(self, pred: Prediction) -> None:
         """Apply adaptive thresholds for signal generation.

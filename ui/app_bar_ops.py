@@ -81,6 +81,9 @@ def _queue_history_refresh(self: Any, symbol: str, interval: str) -> None:
     sym = self._ui_norm(symbol)
     key = (sym if sym else "*", iv)
     self._history_refresh_once.add(key)
+    
+    # [DBG] History refresh queued diagnostic
+    log.info(f"[DBG] History refresh queued: symbol={sym or '*'} interval={iv}")
 
 def _consume_history_refresh(self: Any, symbol: str, interval: str) -> bool:
     """Consume one queued history refresh request for symbol/interval."""
@@ -90,9 +93,13 @@ def _consume_history_refresh(self: Any, symbol: str, interval: str) -> bool:
     wildcard = ("*", iv)
     if direct in self._history_refresh_once:
         self._history_refresh_once.discard(direct)
+        # [DBG] History refresh consumed diagnostic
+        log.info(f"[DBG] History refresh consumed: symbol={sym} interval={iv} (direct)")
         return True
     if wildcard in self._history_refresh_once:
         self._history_refresh_once.discard(wildcard)
+        # [DBG] History refresh consumed diagnostic (wildcard)
+        log.info(f"[DBG] History refresh consumed: symbol={sym} interval={iv} (wildcard)")
         return True
     return False
 

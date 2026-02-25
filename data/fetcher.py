@@ -18,7 +18,7 @@ try:
     _HAS_REQUESTS = True
 except ImportError:
     _HAS_REQUESTS = False
-    requests = None  # type: ignore
+    requests = None
 
 from config.runtime_env import env_flag as _read_env_flag
 from config.runtime_env import env_text as _read_env_text
@@ -321,7 +321,15 @@ class DataFetcher:
     def _detect_live_mode() -> bool:
         mode = getattr(CONFIG, "trading_mode", "")
         raw = str(getattr(mode, "value", mode) or "").strip().lower()
-        return raw == "live"
+        # FIX #19: Explicitly check for valid values, log warning for misconfiguration
+        if raw == "live":
+            return True
+        if raw not in ("", "simulation", "paper", "live"):
+            log.warning(
+                f"Invalid trading_mode value: {raw!r}. "
+                f"Expected 'live' or 'simulation'. Falling back to non-live mode."
+            )
+        return False
 
     @staticmethod
     def _resolve_last_good_max_age() -> float:
@@ -454,6 +462,9 @@ class DataFetcher:
         return _source_health_score_impl(source, env)
 
     def _rate_limit(self, source: str, interval: str = "1d") -> None:
+        # FIX #6: Calculate wait time while holding lock, then sleep outside lock
+        # to avoid blocking all threads in ThreadPoolExecutor
+        wait_time = 0.0
         with self._rate_lock:
             now = time.time()
             last = self._request_times.get(source, 0.0)
@@ -465,9 +476,15 @@ class DataFetcher:
                     if interval in _INTRADAY_INTERVALS
                     else self._min_interval
                 )
-            wait = min_wait - (now - last)
-            if wait > 0:
-                time.sleep(wait)
+            wait_time = min_wait - (now - last)
+            if wait_time < 0:
+                wait_time = 0.0
+        
+        # Sleep outside the lock to allow parallel requests to other sources
+        if wait_time > 0:
+            time.sleep(wait_time)
+        
+        with self._rate_lock:
             self._request_times[source] = time.time()
 
     def _db_is_fresh_enough(
@@ -873,36 +890,43 @@ class DataFetcher:
         )
 
     @staticmethod
-    def _validate_ohlcv_frame(frame: pd.DataFrame, require_positive_volume: bool = True) -> bool:
+    def _validate_ohlcv_frame(
+        frame: pd.DataFrame | None,
+        require_positive_volume: bool = True,
+    ) -> bool:
         """Validate OHLCV DataFrame has valid data for caching.
-        
+
         FIX #7: Ensures data quality before caching.
-        
+        FIX #17: Removed redundant numpy import (already at module level).
+        FIX #18: Fixed type hint to allow None.
+        FIX #8: Improved NaN check to handle scattered NaN values.
+
         Args:
-            frame: DataFrame to validate
+            frame: DataFrame to validate (can be None)
             require_positive_volume: Whether to require positive volume
-            
+
         Returns:
             True if valid, False otherwise
         """
         if frame is None or frame.empty:
             return False
-        
+
         required_cols = {"open", "high", "low", "close"}
         if not required_cols.issubset(frame.columns):
             return False
-        
-        # Check for NaN values in required columns
+
+        # FIX #8: Check for NaN values - reject if ANY row has NaN in required cols
+        # (not just fully-NaN columns). Scattered NaN values should be repaired
+        # before validation passes.
         for col in required_cols:
-            if frame[col].isna().all():
+            if frame[col].isna().any():
                 return False
-        
-        # Check for Inf values
-        import numpy as np
+
+        # Check for Inf values (numpy already imported at module level)
         for col in required_cols:
             if np.isinf(frame[col]).any():
                 return False
-        
+
         # Check OHLC relationships: high >= low, high >= open, high >= close, low <= open, low <= close
         if not (frame["high"] >= frame["low"]).all():
             return False
@@ -914,12 +938,12 @@ class DataFetcher:
             return False
         if not (frame["low"] <= frame["close"]).all():
             return False
-        
+
         # Check for positive prices
         for col in ["open", "high", "low", "close"]:
             if (frame[col] <= 0).any():
                 return False
-        
+
         # Check volume if required
         if require_positive_volume and "volume" in frame.columns:
             if (frame["volume"] < 0).any():

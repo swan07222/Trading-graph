@@ -498,6 +498,13 @@ def _on_price_updated(self: Any, code: str, price: float) -> None:
 
             if current_code == code:
                 try:
+                    # [DBG] Chart render diagnostic
+                    self._debug_console(
+                        f"chart_render:tick_bucket:{code}:{interval}",
+                        f"Rendering chart for {code} {interval}: bars={len(arr)} context=tick_bucket",
+                        min_gap_seconds=0.5,
+                        level="info",
+                    )
                     arr = self._render_chart_state(
                         symbol=code,
                         interval=interval,
@@ -509,8 +516,22 @@ def _on_price_updated(self: Any, code: str, price: float) -> None:
                     # Sync back so persistence uses the canonically scrubbed list.
                     if arr:
                         self._bars_by_symbol[code] = arr
+                        # [DBG] Chart render success diagnostic
+                        self._debug_console(
+                            f"chart_render_success:{code}:{interval}",
+                            f"Chart rendered successfully for {code} {interval}: {len(arr)} bars",
+                            min_gap_seconds=1.0,
+                            level="info",
+                        )
                 except _APP_CHART_RECOVERABLE_EXCEPTIONS as e:
                     log.debug(f"Chart price update failed: {e}")
+                    # [DBG] Chart render failure diagnostic
+                    self._debug_console(
+                        f"chart_render_failed:{code}:{interval}",
+                        f"Chart render failed for {code} {interval}: {e}",
+                        min_gap_seconds=1.0,
+                        level="warning",
+                    )
 
             self._persist_session_bar(
                 code,
@@ -567,6 +588,13 @@ def _on_price_updated(self: Any, code: str, price: float) -> None:
             stale_cleared = False
 
         if stale_cleared:
+            # [DBG] Model not ready - clearing stale prediction diagnostic
+            self._debug_console(
+                f"forecast_model_unavailable_clear:{code}",
+                f"Clearing stale prediction for {code}: model artifacts unavailable",
+                min_gap_seconds=1.0,
+                level="info",
+            )
             arr = self._bars_by_symbol.get(code) or []
             if arr:
                 try:
@@ -672,6 +700,13 @@ def _on_price_updated(self: Any, code: str, price: float) -> None:
         try:
             if self.workers.get("forecast_refresh") is not worker:
                 # Stale worker callback after a newer refresh started.
+                # [DBG] Stale worker diagnostic
+                self._debug_console(
+                    f"forecast_stale_worker:{code}",
+                    f"Forecast worker stale for {code}, discarding result",
+                    min_gap_seconds=1.0,
+                    level="info",
+                )
                 return
             if not res:
                 try:
@@ -684,17 +719,34 @@ def _on_price_updated(self: Any, code: str, price: float) -> None:
                         self.current_prediction.predicted_prices_high = []
                 except _APP_CHART_RECOVERABLE_EXCEPTIONS:
                     pass
+                # [DBG] Empty forecast result diagnostic
                 self._debug_console(
                     f"forecast_empty:{code}:{interval}",
-                    f"forecast worker returned empty for {code} {interval}",
+                    f"Forecast worker returned empty for {code} {interval}",
                     min_gap_seconds=1.0,
+                    level="warning",
                 )
                 return
             actual_prices, predicted_prices = res
             selected = self._ui_norm(self.stock_input.text())
             if selected != code:
+                # [DBG] Stock mismatch diagnostic
+                self._debug_console(
+                    f"forecast_stock_mismatch:{code}",
+                    f"Forecast result stock mismatch: expected={code} selected={selected}",
+                    min_gap_seconds=1.0,
+                    level="info",
+                )
                 return
             _ = actual_prices  # chart bars are maintained by feed/history path.
+
+            # [DBG] Forecast result diagnostic
+            self._debug_console(
+                f"forecast_result:{code}:{interval}",
+                f"Forecast result for {code} {interval}: predicted_count={len(predicted_prices) if predicted_prices else 0}",
+                min_gap_seconds=1.0,
+                level="info",
+            )
 
             stable_predicted: list[float] = []
             for v in self._safe_list(predicted_prices):
@@ -811,6 +863,13 @@ def _on_price_updated(self: Any, code: str, price: float) -> None:
                         )
                 except _APP_CHART_RECOVERABLE_EXCEPTIONS:
                     anchor_px = 0.0
+                # [DBG] Final chart render after forecast diagnostic
+                self._debug_console(
+                    f"chart_render_forecast:{code}:{iv}",
+                    f"Rendering chart with forecast for {code} {iv}: bars={len(arr)} anchor_px={anchor_px:.2f}",
+                    min_gap_seconds=0.5,
+                    level="info",
+                )
                 arr = self._render_chart_state(
                     symbol=code,
                     interval=iv,
@@ -822,6 +881,14 @@ def _on_price_updated(self: Any, code: str, price: float) -> None:
                     target_steps=int(self.forecast_spin.value()),
                     predicted_prepared=True,
                 )
+                # [DBG] Chart render after forecast success diagnostic
+                if arr:
+                    self._debug_console(
+                        f"chart_render_forecast_success:{code}:{iv}",
+                        f"Chart rendered with forecast for {code} {iv}: {len(arr)} bars",
+                        min_gap_seconds=1.0,
+                        level="info",
+                    )
         finally:
             if self.workers.get("forecast_refresh") is worker:
                 self.workers.pop("forecast_refresh", None)

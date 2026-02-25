@@ -36,13 +36,29 @@ if HAS_PYQTGRAPH:
 
         def setData(self, data: list[tuple] | None) -> None:
             """Set candlestick data. Each item: (x, open, close, low, high)."""
+            old_count = len(self.data)
+            new_count = len(data) if data else 0
             self.data = data or []
             self._picture = None
             self.prepareGeometryChange()
             self.update()
+            # [DBG] Candlestick data update diagnostic
+            if HAS_PYQTGRAPH and pg is not None:
+                try:
+                    log.debug(f"[DBG] CandlestickItem.setData: old={old_count} new={new_count}")
+                except Exception:
+                    pass
 
         def _generate_picture(self) -> None:
             """Generate QPicture for all candles."""
+            # [DBG] Picture generation start diagnostic
+            data_count = len(self.data)
+            if HAS_PYQTGRAPH and pg is not None:
+                try:
+                    log.debug(f"[DBG] CandlestickItem._generate_picture: data_count={data_count}")
+                except Exception:
+                    pass
+                    
             pic = pg.QtGui.QPicture()
             p = pg.QtGui.QPainter(pic)
             w = 0.18
@@ -107,6 +123,12 @@ if HAS_PYQTGRAPH:
                     )
                     p.drawRect(rect)
 
+            # [DBG] Candle rendering complete diagnostic
+            candles_rendered = sum(1 for item in self.data if len(item) >= 5)
+            try:
+                log.debug(f"[DBG] CandlestickItem._generate_picture: rendered={candles_rendered}/{data_count}")
+            except Exception:
+                pass
             p.end()
             self._picture = pic
 
@@ -612,6 +634,12 @@ class StockChart(QWidget):
         
         # FIX: Log bar count for diagnostics
         log.info(f"Chart update: {len(self._bars)} bars received")
+        self._dbg_log(
+            f"chart_update:bars_received",
+            f"Chart update: {len(self._bars)} bars received",
+            min_gap_seconds=0.5,
+            level="info",
+        )
 
         try:
             # Parse bar data - extract closes for line, OHLC for candles.
@@ -622,6 +650,14 @@ class StockChart(QWidget):
             closes: list[float] = []
             ohlc: list[tuple] = []
             prev_close: float | None = None
+            
+            # [DBG] Initial state diagnostic
+            self._dbg_log(
+                f"chart_update:initial_state",
+                f"Chart update starting: bars={len(self._bars)}, predicted={len(self._predicted_prices)}, levels={len(self._levels)}",
+                min_gap_seconds=0.3,
+                level="info",
+            )
 
             default_iv_raw = str(
                 self._bars[-1].get("interval", "1m") if self._bars else "1m"
@@ -648,6 +684,14 @@ class StockChart(QWidget):
                     default_iv = str(Counter(iv_tokens).most_common(1)[0][0])
             except Exception:
                 pass
+
+            # [DBG] Interval detection diagnostic
+            self._dbg_log(
+                f"chart_update:interval_detected",
+                f"Chart interval detected: default_iv={default_iv}, raw={default_iv_raw}",
+                min_gap_seconds=0.5,
+                level="info",
+            )
 
             render_bars = list(self._bars)
             try:
@@ -682,6 +726,14 @@ class StockChart(QWidget):
                 "drop_parse": 0,
             }
             rendered_bars: list[dict] = []
+            
+            # [DBG] Bar sorting diagnostic
+            self._dbg_log(
+                f"chart_update:bars_sorted",
+                f"Chart bars sorted and trimmed: render_bars={len(render_bars)}, max=3000",
+                min_gap_seconds=0.5,
+                level="info",
+            )
 
             for b in render_bars:
                 try:
@@ -692,9 +744,25 @@ class StockChart(QWidget):
 
                     if not all(math.isfinite(v) for v in (o, h, l_val, c)):
                         diag["drop_nonfinite"] += 1
+                        # [DBG] Nonfinite bar diagnostic
+                        if diag["drop_nonfinite"] <= 3:  # Log first 3 drops
+                            self._dbg_log(
+                                f"chart_update:drop_nonfinite:{diag['drop_nonfinite']}",
+                                f"Chart bar dropped (nonfinite): o={o} h={h} l={l_val} c={c}",
+                                min_gap_seconds=0.2,
+                                level="warning",
+                            )
                         continue
                     if c <= 0:
                         diag["drop_nonfinite"] += 1
+                        # [DBG] Non-positive close diagnostic
+                        if diag["drop_nonfinite"] <= 3:  # Log first 3 drops
+                            self._dbg_log(
+                                f"chart_update:drop_nonpositive_close:{diag['drop_nonfinite']}",
+                                f"Chart bar dropped (non-positive close): c={c}",
+                                min_gap_seconds=0.2,
+                                level="warning",
+                            )
                         continue
 
                     bar_iv_raw = str(
@@ -775,7 +843,23 @@ class StockChart(QWidget):
                     diag["kept"] += 1
                 except (ValueError, TypeError):
                     diag["drop_parse"] += 1
+                    # [DBG] Parse error diagnostic
+                    if diag["drop_parse"] <= 3:  # Log first 3 drops
+                        self._dbg_log(
+                            f"chart_update:drop_parse_error:{diag['drop_parse']}",
+                            f"Chart bar dropped (parse error): bar_index={len(rendered_bars)}",
+                            min_gap_seconds=0.2,
+                            level="warning",
+                        )
                     continue
+
+            # [DBG] Bar processing complete diagnostic
+            self._dbg_log(
+                f"chart_update:bars_processed",
+                f"Chart bars processed: total={diag['rows_total']} kept={diag['kept']} drop_nonfinite={diag['drop_nonfinite']} drop_parse={diag['drop_parse']}",
+                min_gap_seconds=0.5,
+                level="info",
+            )
 
             if not closes:
                 self._dbg_log(
@@ -833,21 +917,37 @@ class StockChart(QWidget):
 
             if not closes or not ohlc:
                 log.warning(f"Chart render: NO CANDLES after processing! closes={len(closes)} ohlc={len(ohlc)} rendered_bars={len(rendered_bars)}")
-                
+                # [DBG] No candles diagnostic
+                self._dbg_log(
+                    f"chart_update:no_candles:{default_iv}",
+                    f"Chart render: NO CANDLES after processing! closes={len(closes)} ohlc={len(ohlc)} rendered_bars={len(rendered_bars)} default_iv={default_iv}",
+                    min_gap_seconds=0.5,
+                    level="warning",
+                )
+
                 # FIX: Fallback - try to render at least doji candles from rendered_bars
                 if rendered_bars:
                     log.info(f"Chart fallback: attempting to render {len(rendered_bars)} bars as-is")
+                    # [DBG] Fallback attempt diagnostic
+                    self._dbg_log(
+                        f"chart_update:fallback_attempt:{default_iv}",
+                        f"Chart fallback: attempting to render {len(rendered_bars)} bars as doji candles",
+                        min_gap_seconds=0.5,
+                        level="info",
+                    )
                     ohlc = []
                     closes = []
                     self._candle_meta = []
                     prev_close = None
+                    fallback_success = 0
+                    fallback_failed = 0
                     for i, b in enumerate(rendered_bars[:100]):  # Limit to 100 bars
                         try:
                             o = float(b.get("open", 0))
                             c = float(b.get("close", 0))
                             h = float(b.get("high", c))
                             l_val = float(b.get("low", c))
-                            
+
                             # Create doji if OHLC invalid
                             if o <= 0:
                                 o = c
@@ -855,7 +955,7 @@ class StockChart(QWidget):
                                 h = c
                             if l_val <= 0 or l_val > c:
                                 l_val = c
-                            
+
                             if c > 0:
                                 ohlc.append((i, o, c, l_val, h))
                                 closes.append(c)
@@ -872,16 +972,49 @@ class StockChart(QWidget):
                                     "interval": str(b.get("interval", default_iv)),
                                 })
                                 prev_close = c
+                                fallback_success += 1
+                            else:
+                                fallback_failed += 1
                         except Exception as e:
+                            fallback_failed += 1
                             log.debug(f"Fallback bar {i} failed: {e}")
-                    
+                            # [DBG] Fallback bar failure diagnostic
+                            if fallback_failed <= 3:  # Log first 3 failures
+                                self._dbg_log(
+                                    f"chart_update:fallback_bar_failed:{i}",
+                                    f"Chart fallback bar {i} failed: {e}",
+                                    min_gap_seconds=0.2,
+                                    level="warning",
+                                )
+
                     if not closes:
                         log.error("Chart fallback failed: still no candles")
+                        # [DBG] Fallback failure diagnostic
+                        self._dbg_log(
+                            f"chart_update:fallback_failed:{default_iv}",
+                            f"Chart fallback FAILED: still no candles after processing {len(rendered_bars)} bars",
+                            min_gap_seconds=0.5,
+                            level="error",
+                        )
                         self._clear_all()
                         return
                     log.info(f"Chart fallback: {len(ohlc)} candles rendered")
+                    # [DBG] Fallback success diagnostic
+                    self._dbg_log(
+                        f"chart_update:fallback_success:{default_iv}",
+                        f"Chart fallback SUCCESS: {fallback_success} candles rendered, {fallback_failed} failed",
+                        min_gap_seconds=0.5,
+                        level="info",
+                    )
                 else:
                     log.error("Chart render: no rendered_bars for fallback")
+                    # [DBG] No rendered bars diagnostic
+                    self._dbg_log(
+                        f"chart_update:no_rendered_bars:{default_iv}",
+                        f"Chart render: no rendered_bars for fallback! default_iv={default_iv}",
+                        min_gap_seconds=0.5,
+                        level="error",
+                    )
                     self._clear_all()
                     return
             

@@ -7,7 +7,7 @@ import time
 from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import datetime
 from importlib import import_module
-from typing import Any
+from typing import Any, cast
 
 from PyQt6.QtCore import QSize, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QAction, QActionGroup, QFont
@@ -316,8 +316,17 @@ class MainApp(MainAppCommonMixin, QMainWindow):
         self._setup_timers()
         self._apply_professional_style()
         from PyQt6.QtCore import Qt as _Qt
-        self.bar_received.connect(self._on_bar_ui, _Qt.ConnectionType.QueuedConnection)
-        self.quote_received.connect(self._on_price_updated, _Qt.ConnectionType.QueuedConnection)
+
+        # PyQt signal stubs are narrower than runtime support for the
+        # connection-type overload; cast to keep queued cross-thread delivery.
+        cast(Any, self.bar_received).connect(
+            self._on_bar_ui,
+            _Qt.ConnectionType.QueuedConnection,
+        )
+        cast(Any, self.quote_received).connect(
+            self._on_price_updated,
+            _Qt.ConnectionType.QueuedConnection,
+        )
 
         try:
             self._load_state()
@@ -350,6 +359,7 @@ class MainApp(MainAppCommonMixin, QMainWindow):
 
         new_action = QAction("&New Workspace", self)
         new_action.setShortcut("Ctrl+N")
+        new_action.triggered.connect(self._new_workspace)
         file_menu.addAction(new_action)
 
         file_menu.addSeparator()
@@ -490,14 +500,8 @@ class MainApp(MainAppCommonMixin, QMainWindow):
         self.stock_input.returnPressed.connect(self._analyze_stock)
         toolbar.addWidget(self.stock_input)
 
-        # =========================================================================
     # =========================================================================
-
-
-
-
-
-
+    # =========================================================================
 
     def _setup_ui(self) -> None:
         """Setup main UI with professional layout."""
@@ -620,12 +624,16 @@ class MainApp(MainAppCommonMixin, QMainWindow):
             self.signal_panel = QLabel("Signal Panel")
             self.signal_panel.setMinimumHeight(68)
         # Keep signal card compact so chart/details get more vertical room.
-        self.signal_panel.setMinimumHeight(160)
-        self.signal_panel.setMaximumHeight(210)
-        self.signal_panel.setSizePolicy(
-            QSizePolicy.Policy.Preferred,
-            QSizePolicy.Policy.Fixed,
-        )
+        # FIX #23: Add hasattr guards for QLabel fallback
+        if hasattr(self.signal_panel, 'setMinimumHeight'):
+            self.signal_panel.setMinimumHeight(160)
+        if hasattr(self.signal_panel, 'setMaximumHeight'):
+            self.signal_panel.setMaximumHeight(210)
+        if hasattr(self.signal_panel, 'setSizePolicy'):
+            self.signal_panel.setSizePolicy(
+                QSizePolicy.Policy.Preferred,
+                QSizePolicy.Policy.Fixed,
+            )
         layout.addWidget(self.signal_panel, 0)
 
         chart_group = QGroupBox("Price Chart and AI Prediction")
@@ -812,6 +820,7 @@ class MainApp(MainAppCommonMixin, QMainWindow):
         # FIX: Cache pruning to prevent memory leaks
         self.cache_prune_timer = QTimer()
         self.cache_prune_timer.timeout.connect(self._prune_caches)
+        self.cache_prune_timer.timeout.connect(self._prune_session_futures)
         self.cache_prune_timer.start(60000)  # Prune every 60 seconds
 
         self._update_market_status()
@@ -929,58 +938,111 @@ class MainApp(MainAppCommonMixin, QMainWindow):
     def _prune_caches(self) -> None:
         """Prune internal caches to prevent memory leaks.
 
-        FIX: Called periodically to bound cache sizes.
+        FIX #7: Use lock to prevent race condition with background worker threads.
+        Called periodically to bound cache sizes.
         """
-        # Prune _last_bar_feed_ts - keep only recent entries (last 10 minutes)
-        now = time.time()
-        max_age_seconds = 600  # 10 minutes
-        stale_feed_ts = [
-            key for key, ts in self._last_bar_feed_ts.items()
-            if (now - ts) > max_age_seconds
-        ]
-        for key in stale_feed_ts:
-            self._last_bar_feed_ts.pop(key, None)
-        
-        # Also prune by count if still too large
-        if len(self._last_bar_feed_ts) > self._MAX_CACHED_QUOTES:
-            sorted_items = sorted(
-                self._last_bar_feed_ts.items(),
-                key=lambda x: x[1]
-            )
-            cutoff = len(sorted_items) // 4
-            for key, _ in sorted_items[:cutoff]:
+        # FIX #7: Acquire lock to prevent race condition with background workers
+        # that may be modifying these dicts concurrently
+        with self._session_cache_io_lock:
+            # Prune _last_bar_feed_ts - keep only recent entries (last 10 minutes)
+            now = time.time()
+            max_age_seconds = 600  # 10 minutes
+            stale_feed_ts = [
+                key for key, ts in self._last_bar_feed_ts.items()
+                if (now - ts) > max_age_seconds
+            ]
+            for key in stale_feed_ts:
                 self._last_bar_feed_ts.pop(key, None)
 
-        # Prune _bars_by_symbol - keep only watchlist and active chart symbol
-        active_syms = set(self._watchlist_row_by_code.keys())
-        selected = self._ui_norm(self.stock_input.text())
-        if selected:
-            active_syms.add(selected)
+            # Also prune by count if still too large
+            if len(self._last_bar_feed_ts) > self._MAX_CACHED_QUOTES:
+                sorted_items = sorted(
+                    self._last_bar_feed_ts.items(),
+                    key=lambda x: x[1]
+                )
+                cutoff = len(sorted_items) // 4
+                for key, _ in sorted_items[:cutoff]:
+                    self._last_bar_feed_ts.pop(key, None)
+
+            # Prune _bars_by_symbol - keep only watchlist and active chart symbol
+            active_syms = set(self._watchlist_row_by_code.keys())
+            # FIX #13: Add hasattr guard for stock_input
+            if hasattr(self, 'stock_input') and self.stock_input is not None:
+                try:
+                    selected = self._ui_norm(self.stock_input.text())
+                    if selected:
+                        active_syms.add(selected)
+                except _UI_RECOVERABLE_EXCEPTIONS:
+                    pass
+
+            # Keep max 10 inactive symbols as buffer
+            inactive_syms = [
+                k for k in self._bars_by_symbol.keys()
+                if k not in active_syms
+            ]
+            if len(inactive_syms) > 10:
+                for key in inactive_syms[10:]:
+                    self._bars_by_symbol.pop(key, None)
+
+            # Prune stale quote UI emit tracking
+            stale_quotes = [
+                k for k in self._last_quote_ui_emit.keys()
+                if k not in active_syms
+            ]
+            for k in stale_quotes:
+                self._last_quote_ui_emit.pop(k, None)
+
+            # Prune stale watchlist price UI tracking
+            stale_watchlist = [
+                k for k in self._last_watchlist_price_ui.keys()
+                if k not in active_syms
+            ]
+            for k in stale_watchlist:
+                self._last_watchlist_price_ui.pop(k, None)
+
+    def _prune_session_futures(self) -> None:
+        """FIX #14: Prune completed futures from _session_cache_io_futures set.
         
-        # Keep max 10 inactive symbols as buffer
-        inactive_syms = [
-            k for k in self._bars_by_symbol.keys()
-            if k not in active_syms
-        ]
-        if len(inactive_syms) > 10:
-            for key in inactive_syms[10:]:
-                self._bars_by_symbol.pop(key, None)
+        This prevents memory leak for long-running sessions by removing
+        completed futures from the tracking set.
+        """
+        with self._session_cache_io_lock:
+            completed = {f for f in self._session_cache_io_futures if f.done()}
+            self._session_cache_io_futures -= completed
+
+    def _new_workspace(self) -> None:
+        """Create a new workspace (reset current state)."""
+        from PyQt6.QtWidgets import QMessageBox
         
-        # Prune stale quote UI emit tracking
-        stale_quotes = [
-            k for k in self._last_quote_ui_emit.keys()
-            if k not in active_syms
-        ]
-        for k in stale_quotes:
-            self._last_quote_ui_emit.pop(k, None)
+        reply = QMessageBox.question(
+            self,
+            "New Workspace",
+            "This will reset your current workspace. Are you sure?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply == QMessageBox.StandardButton.Yes:
+            self._reset_workspace()
+
+    def _reset_workspace(self) -> None:
+        """Reset the workspace to default state."""
+        # Clear watchlist
+        self.watch_list = []
+        self._update_watchlist()
         
-        # Prune stale watchlist price UI tracking
-        stale_watchlist = [
-            k for k in self._last_watchlist_price_ui.keys()
-            if k not in active_syms
-        ]
-        for k in stale_watchlist:
-            self._last_watchlist_price_ui.pop(k, None)
+        # Clear charts and data
+        self._bars_by_symbol.clear()
+        self._last_bar_feed_ts.clear()
+        
+        # Reset to default stock
+        self.stock_input.setText("")
+        
+        # Clear prediction cache if predictor exists
+        if self.predictor:
+            with self.predictor._cache_lock:
+                self.predictor._pred_cache.clear()
+        
+        self.log("Workspace reset", "info")
 
     def _init_auto_trader(self) -> None:
         _init_auto_trader_impl(self)

@@ -109,6 +109,14 @@ def _on_watchlist_click(
     if not code:
         return
 
+    # [DBG] Stock selection diagnostic
+    self._debug_console(
+        f"stock_selected:{code}",
+        f"Stock selected: {code} (row={row}, col={col})",
+        min_gap_seconds=0.5,
+        level="info",
+    )
+
     self.stock_input.setText(code)
 
     old_worker = self.workers.get("analyze")
@@ -127,6 +135,15 @@ def _on_watchlist_click(
         except _UI_RECOVERABLE_EXCEPTIONS as exc:
             log.debug("Suppressed exception in ui/app.py", exc_info=exc)
 
+    # [DBG] Clear old bars for fresh load
+    existing_bars = list(self._bars_by_symbol.get(code) or [])
+    self._debug_console(
+        f"stock_selection_bars_cleared:{code}",
+        f"Clearing {len(existing_bars)} existing bars for {code} before refresh",
+        min_gap_seconds=0.5,
+        level="info",
+    )
+
     try:
         self._queue_history_refresh(
             code,
@@ -134,6 +151,14 @@ def _on_watchlist_click(
         )
     except _UI_RECOVERABLE_EXCEPTIONS as exc:
         log.debug("Suppressed exception in ui/app.py", exc_info=exc)
+
+    # [DBG] History refresh queued diagnostic
+    self._debug_console(
+        f"stock_selection_history_queued:{code}",
+        f"History refresh queued for {code}, calling _analyze_stock",
+        min_gap_seconds=0.5,
+        level="info",
+    )
 
     self._analyze_stock()
 
@@ -202,6 +227,14 @@ def _analyze_stock(self) -> None:
         self.log("Invalid stock code format", "warning")
         return
 
+    # [DBG] Analyze start diagnostic
+    self._debug_console(
+        f"analyze_start:{normalized}",
+        f"Starting analysis for {normalized}",
+        min_gap_seconds=0.5,
+        level="info",
+    )
+
     if not self._predictor_runtime_ready():
         if hasattr(self.signal_panel, "reset"):
             self.signal_panel.reset()
@@ -221,6 +254,13 @@ def _analyze_stock(self) -> None:
                 self.interval_combo.currentText()
             )
             arr = list(self._bars_by_symbol.get(selected) or [])
+            # [DBG] No model - chart state diagnostic
+            self._debug_console(
+                f"analyze_no_model:{selected}",
+                f"No model loaded, rendering chart with {len(arr)} bars for {selected}",
+                min_gap_seconds=0.5,
+                level="warning",
+            )
             if arr:
                 self._render_chart_state(
                     symbol=selected,
@@ -248,6 +288,15 @@ def _analyze_stock(self) -> None:
         requested_horizon=int(self.forecast_spin.value()),
     )
     is_trained = self._is_trained_stock(normalized)
+    
+    # [DBG] Trained stock check diagnostic
+    self._debug_console(
+        f"analyze_trained_check:{normalized}",
+        f"Stock {normalized} is {'trained' if is_trained else 'NOT trained'}, interval={interval}",
+        min_gap_seconds=0.5,
+        level="info",
+    )
+    
     if is_trained:
         existing = list(self._bars_by_symbol.get(normalized) or [])
         same_interval = [
@@ -258,7 +307,21 @@ def _analyze_stock(self) -> None:
                 fallback=interval,
             ) == interval
         ]
+        # [DBG] Existing bars diagnostic for trained stock
+        self._debug_console(
+            f"analyze_trained_bars:{normalized}",
+            f"Trained stock {normalized}: existing={len(existing)} same_iv={len(same_interval)}",
+            min_gap_seconds=0.5,
+            level="info",
+        )
         if not same_interval:
+            # [DBG] Interval mismatch - queue refresh
+            self._debug_console(
+                f"analyze_trained_interval_mismatch:{normalized}",
+                f"Interval mismatch for {normalized}, queuing history refresh",
+                min_gap_seconds=0.5,
+                level="info",
+            )
             self._queue_history_refresh(normalized, interval)
     if not is_trained:
         # Preserve user-selected interval even for non-trained symbols.
@@ -273,6 +336,13 @@ def _analyze_stock(self) -> None:
                 int(self._seven_day_lookback(interval)),
             )
         self.lookback_spin.setValue(target_lookback)
+        # [DBG] Non-trained stock refresh diagnostic
+        self._debug_console(
+            f"analyze_non_trained_refresh:{normalized}",
+            f"Non-trained stock {normalized}: queuing history refresh, lookback={target_lookback}",
+            min_gap_seconds=0.5,
+            level="info",
+        )
         self._queue_history_refresh(normalized, interval)
         self._debug_console(
             f"non_trained_policy:{normalized}",
