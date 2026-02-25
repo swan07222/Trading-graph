@@ -12,7 +12,8 @@
       "Bash(wc:*)",
       "Bash(cd \"F:/Trading app/Trading-graph\" && python -m pytest tests/test_deployment_snapshot.py tests/test_exception_policy_gate.py tests/test_executor_health_guard.py tests/test_executor_thread_lifecycle.py tests/test_feed_manager_watchdog.py --tb=short -q -v 2>&1)",
       "Bash(grep:*)",
-      "Bash(cd:*)"
+      "Bash(cd:*)",
+      "Bash(python -m pytest:*)"
     ]
   }
 }

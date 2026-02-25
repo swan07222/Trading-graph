@@ -48,10 +48,19 @@ class ProbAttention(nn.Module):
         self.d_head = d_model // n_heads
         self.factor = factor
 
-        self.inner_attention = nn.ScaledDotProductAttention(
-            d_model ** -0.5,
-            attention_dropout,
-        )
+        # FIX: Fallback for PyTorch versions without ScaledDotProductAttention
+        if hasattr(nn, 'ScaledDotProductAttention'):
+            self.inner_attention = nn.ScaledDotProductAttention(
+                d_model ** -0.5,
+                attention_dropout,
+            )
+            self._use_builtin_attention = True
+        else:
+            # Manual implementation of scaled dot-product attention
+            self.scale = d_model ** -0.5
+            self.dropout = nn.Dropout(attention_dropout)
+            self._use_builtin_attention = False
+
         self.query_projection = nn.Linear(d_model, d_model)
         self.key_projection = nn.Linear(d_model, d_model)
         self.value_projection = nn.Linear(d_model, d_model)
@@ -80,12 +89,36 @@ class ProbAttention(nn.Module):
 
         Q_sample = self._sample_q(Q, self.factor)
 
-        out, attn = self.inner_attention(
-            Q_sample, K, V,
-            attn_mask=attn_mask if attn_mask is not None else None,
-        )
+        # FIX: Use manual attention if builtin is not available
+        if self._use_builtin_attention:
+            out, attn = self.inner_attention(
+                Q_sample, K, V,
+                attn_mask=attn_mask if attn_mask is not None else None,
+            )
+        else:
+            # Manual scaled dot-product attention implementation
+            # Q: (B, L_q, H, E), K: (B, L_k, H, E), V: (B, L_k, H, E)
+            # Transpose for attention: (B, H, L, E)
+            Q_t = Q_sample.transpose(1, 2)  # (B, H, L_q, E)
+            K_t = K.transpose(1, 2)  # (B, H, L_k, E)
+            V_t = V.transpose(1, 2)  # (B, H, L_k, E)
+            
+            # Scaled attention scores
+            attn_scores = torch.matmul(Q_t, K_t.transpose(-2, -1)) * self.scale  # (B, H, L_q, L_k)
+            
+            # Apply mask if provided
+            if attn_mask is not None:
+                attn_scores = attn_scores.masked_fill(attn_mask == 0, -1e9)
+            
+            # Softmax and dropout
+            attn_probs = self.dropout(torch.softmax(attn_scores, dim=-1))
+            
+            # Apply attention to values
+            out = torch.matmul(attn_probs, V_t)  # (B, H, L_q, E)
+            out = out.transpose(1, 2).contiguous()  # (B, L_q, H, E)
+            attn = attn_probs  # For visualization/debugging
 
-        out = out.contiguous().view(B, L, -1)
+        out = out.view(B, L, -1)
         return self.out_projection(out), attn
 
 

@@ -152,8 +152,6 @@ def _build_tencent_daily_url(
     param = f"{vendor_symbol},day,,,{int(fetch_count)},qfq"
     if tpl.endswith("param="):
         return f"{tpl}{param}"
-    if "param=" in tpl:
-        return f"{tpl}{param}"
     joiner = "&" if "?" in tpl else "?"
     return f"{tpl}{joiner}param={param}"
 
