@@ -140,10 +140,16 @@ def _has_exact_model_artifacts(self, interval: str, horizon: int) -> bool:
         hz = max(1, int(horizon))
     except _UI_RECOVERABLE_EXCEPTIONS:
         hz = int(self.forecast_spin.value())
-    model_dir = CONFIG.MODEL_DIR
-    ens = model_dir / f"ensemble_{iv}_{hz}.pt"
-    scl = model_dir / f"scaler_{iv}_{hz}.pkl"
-    return bool(ens.exists() and scl.exists())
+    model_dirs = [CONFIG.MODEL_DIR]
+    legacy_dir = CONFIG.BASE_DIR / "models_saved"
+    if legacy_dir not in model_dirs:
+        model_dirs.append(legacy_dir)
+    for model_dir in model_dirs:
+        ens = model_dir / f"ensemble_{iv}_{hz}.pt"
+        scl = model_dir / f"scaler_{iv}_{hz}.pkl"
+        if ens.exists() and scl.exists():
+            return True
+    return False
 
 def _log_model_alignment_debug(
     self,

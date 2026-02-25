@@ -32,18 +32,18 @@ Trading Graph is a desktop AI analysis system for China A-shares with multi-sour
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │                    UI Layer (PyQt6 / Web)                   │
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────────┐  │
-│  │ Main Window  │  │ Chart Widget │  │ Sentiment Panel  │  │
-│  └──────────────┘  └──────────────┘  └──────────────────┘  │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────────┐   │
+│  │ Main Window  │  │ Chart Widget │  │ Sentiment Panel  │   │
+│  └──────────────┘  └──────────────┘  └──────────────────┘   │
 └─────────────────────────────────────────────────────────────┘
                               │
                               ▼
 ┌─────────────────────────────────────────────────────────────┐
 │                   Application Layer                         │
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────────┐  │
-│  │ App Controller│  │ Background   │  │ News/Sentiment   │  │
-│  │              │  │ Tasks        │  │ Analysis         │  │
-│  └──────────────┘  └──────────────┘  └──────────────────┘  │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────────┐   │
+│  │App Controller│  │ Background   │  │ News/Sentiment   │   │
+│  │              │  │ Tasks        │  │ Analysis         │   │
+│  └──────────────┘  └──────────────┘  └──────────────────┘   │
 └─────────────────────────────────────────────────────────────┘
                               │
           ┌───────────────────┼───────────────────┐
@@ -62,19 +62,19 @@ Trading Graph is a desktop AI analysis system for China A-shares with multi-sour
                               ▼
 ┌─────────────────────────────────────────────────────────────┐
 │                      Core Layer                             │
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────────┐  │
-│  │ Events       │  │ Types        │  │ Network (China)  │  │
-│  │ (Event Bus)  │  │ (Dataclasses)│  │ (VPN-aware)      │  │
-│  └──────────────┘  └──────────────┘  └──────────────────┘  │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────────┐   │
+│  │ Events       │  │ Types        │  │ Network (China)  │   │
+│  │ (Event Bus)  │  │ (Dataclasses)│  │ (VPN-aware)      │   │
+│  └──────────────┘  └──────────────┘  └──────────────────┘   │
 └─────────────────────────────────────────────────────────────┘
                               │
                               ▼
 ┌─────────────────────────────────────────────────────────────┐
 │                   Infrastructure                            │
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────────┐  │
-│  │ SQLite       │  │ File System  │  │ Security         │  │
-│  │ (Persistence)│  │ (Cache)      │  │ (Encryption)     │  │
-│  └──────────────┘  └──────────────┘  └──────────────────┘  │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────────┐   │
+│  │ SQLite       │  │ File System  │  │ Security         │   │
+│  │ (Persistence)│  │ (Cache)      │  │ (Encryption)     │   │
+│  └──────────────┘  └──────────────┘  └──────────────────┘   │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -161,7 +161,7 @@ Trading Graph is a desktop AI analysis system for China A-shares with multi-sour
 ┌─────────────────────────────────────────────────────────────┐
 │              Traditional Training Pipeline                  │
 │                                                             │
-│  Historical Data → Feature Engineering → LSTM/GRU/TCN      │
+│  Historical Data → Feature Engineering → LSTM/GRU/TCN       │
 │                                              ↓              │
 │                                      Prediction Output      │
 └─────────────────────────────────────────────────────────────┘
@@ -169,9 +169,9 @@ Trading Graph is a desktop AI analysis system for China A-shares with multi-sour
 ┌─────────────────────────────────────────────────────────────┐
 │              News-Based Training Pipeline                   │
 │                                                             │
-│  News Articles ──→ Transformer Encoder ──┐                 │
-│  Sentiment Scores → MLP Encoder ─────────┼→ Fusion Layer  │
-│  Price Data ─────→ LSTM Encoder ─────────┘     ↓           │
+│  News Articles ──→ Transformer Encoder ──┐                  │
+│  Sentiment Scores → MLP Encoder ─────────┼→ Fusion Layer    │
+│  Price Data ─────→ LSTM Encoder ─────────┘     ↓            │
 │                                      Prediction + Confidence│
 └─────────────────────────────────────────────────────────────┘
 ```

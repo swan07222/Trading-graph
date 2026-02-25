@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import json
 import math
+import os
 import pickle
 import re
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from enum import Enum
@@ -23,6 +26,7 @@ log = get_logger(__name__)
 
 _TRANSFORMERS_AVAILABLE = False
 _SKLEARN_AVAILABLE = False
+_SKLEARN_MLP_AVAILABLE = False
 _SENTENCE_TRANSFORMERS_AVAILABLE = False
 
 try:
@@ -38,6 +42,13 @@ try:
     _SKLEARN_AVAILABLE = True
 except Exception:
     _SKLEARN_AVAILABLE = False
+
+try:
+    from sklearn.neural_network import MLPClassifier
+
+    _SKLEARN_MLP_AVAILABLE = True
+except Exception:
+    _SKLEARN_MLP_AVAILABLE = False
 
 try:
     from sentence_transformers import SentenceTransformer
@@ -130,16 +141,25 @@ class LLM_sentimentAnalyzer:
     ) -> None:
         _ = (device, use_gpu)
         self.model_name = str(model_name or self.DEFAULT_MODEL)
-        self.cache_dir = cache_dir or (CONFIG.cache_dir / "llm")
+        default_dir = getattr(
+            CONFIG,
+            "llm_model_dir",
+            (CONFIG.model_dir.parent / "LLM"),
+        )
+        self.cache_dir = Path(cache_dir or default_dir)
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         self._pipe: Any = None
         self._pipe_name = ""
         self._emb: Any = None
         self._calibrator: Any = None
+        self._hybrid_calibrator: Any = None
         self._calibrator_path = self.cache_dir / "llm_calibrator.pkl"
+        self._hybrid_calibrator_path = self.cache_dir / "llm_hybrid_nn.pkl"
+        self._status_path = self.cache_dir / "llm_training_status.json"
         self._cache: dict[str, tuple[LLMSentimentResult, float]] = {}
         self._cache_ttl = 300.0
         self._load_calibrator()
+        self._load_hybrid_calibrator()
 
     @staticmethod
     def _clip(x: float, lo: float, hi: float) -> float:
@@ -297,6 +317,7 @@ class LLM_sentimentAnalyzer:
         policy = float(feat[2])
         market = float(feat[3])
         overall = self._clip((0.72 * tf_overall) + (0.28 * rule), -1.0, 1.0)
+        hybrid_used = False
         if str(getattr(article, "category", "")).lower() == "policy":
             overall = self._clip((0.55 * overall) + (0.45 * policy), -1.0, 1.0)
 
@@ -309,6 +330,20 @@ class LLM_sentimentAnalyzer:
                 cal = self._clip(p_pos - p_neg, -1.0, 1.0)
                 overall = self._clip((0.75 * overall) + (0.25 * cal), -1.0, 1.0)
                 tf_conf = self._clip((0.8 * tf_conf) + (0.2 * max(float(x) for x in probs)), 0.0, 1.0)
+                hybrid_used = True
+            except Exception:
+                pass
+
+        if self._hybrid_calibrator is not None:
+            try:
+                probs2 = self._hybrid_calibrator.predict_proba(np.asarray([feat], dtype=float))[0]
+                classes2 = list(self._hybrid_calibrator.classes_)
+                p_pos2 = sum(float(probs2[i]) for i, c in enumerate(classes2) if int(c) > 0)
+                p_neg2 = sum(float(probs2[i]) for i, c in enumerate(classes2) if int(c) < 0)
+                nn_score = self._clip(p_pos2 - p_neg2, -1.0, 1.0)
+                overall = self._clip((0.68 * overall) + (0.32 * nn_score), -1.0, 1.0)
+                tf_conf = self._clip((0.82 * tf_conf) + (0.18 * max(float(x) for x in probs2)), 0.0, 1.0)
+                hybrid_used = True
             except Exception:
                 pass
 
@@ -337,7 +372,11 @@ class LLM_sentimentAnalyzer:
             entities=entities,
             keywords=keywords,
             uncertainty=float(1.0 - conf),
-            model_used=model_used,
+            model_used=(
+                f"{model_used} + hybrid_neural_network"
+                if hybrid_used
+                else model_used
+            ),
             processing_time_ms=float((time.time() - started) * 1000.0),
             trader_sentiment=float(overall),
             discussion_topics=["policy"] if ("policy" in text.lower() or "政策" in text) else [],
@@ -371,6 +410,52 @@ class LLM_sentimentAnalyzer:
         except Exception:
             pass
 
+    def _load_hybrid_calibrator(self) -> None:
+        self._hybrid_calibrator = None
+        if not self._hybrid_calibrator_path.exists():
+            return
+        try:
+            with self._hybrid_calibrator_path.open("rb") as f:
+                self._hybrid_calibrator = pickle.load(f)
+        except Exception:
+            self._hybrid_calibrator = None
+
+    def _save_hybrid_calibrator(self) -> None:
+        if self._hybrid_calibrator is None:
+            return
+        try:
+            with self._hybrid_calibrator_path.open("wb") as f:
+                pickle.dump(self._hybrid_calibrator, f)
+        except Exception:
+            pass
+
+    def _write_training_status(self, payload: dict[str, Any]) -> None:
+        report = dict(payload or {})
+        report["saved_at"] = datetime.now().isoformat()
+        report["artifact_dir"] = str(self.cache_dir)
+        try:
+            with self._status_path.open("w", encoding="utf-8") as f:
+                json.dump(report, f, ensure_ascii=False, indent=2)
+        except Exception:
+            pass
+
+    def get_training_status(self) -> dict[str, Any]:
+        if self._status_path.exists():
+            try:
+                with self._status_path.open("r", encoding="utf-8") as f:
+                    data = json.load(f)
+                if isinstance(data, dict):
+                    return data
+            except Exception:
+                pass
+        return {
+            "status": "not_trained",
+            "training_architecture": "hybrid_neural_network",
+            "artifact_dir": str(self.cache_dir),
+            "calibrator_ready": bool(self._calibrator is not None),
+            "hybrid_nn_ready": bool(self._hybrid_calibrator is not None),
+        }
+
     def train(self, articles: list[NewsArticle], *, epochs: int = 3, max_samples: int = 1000, learning_rate: float = 2e-5) -> dict[str, Any]:
         _ = (epochs, learning_rate)
         t0 = time.time()
@@ -379,7 +464,7 @@ class LLM_sentimentAnalyzer:
         zh = 0
         en = 0
         if not rows:
-            return {
+            out = {
                 "status": "skipped",
                 "model_name": self.model_name,
                 "trained_samples": 0,
@@ -389,7 +474,12 @@ class LLM_sentimentAnalyzer:
                 "finished_at": datetime.now().isoformat(),
                 "duration_seconds": float(time.time() - t0),
                 "notes": "No articles provided.",
+                "training_architecture": "hybrid_neural_network",
+                "calibrator_ready": bool(self._calibrator is not None),
+                "hybrid_nn_ready": bool(self._hybrid_calibrator is not None),
             }
+            self._write_training_status(out)
+            return out
 
         x: list[list[float]] = []
         y: list[int] = []
@@ -407,25 +497,65 @@ class LLM_sentimentAnalyzer:
             x.append(self._build_features(a, tf_overall=base, tf_conf=0.4, language=lang))
             y.append(lbl)
 
-        status = "trained"
-        notes = "Calibration updated."
-        if not _SKLEARN_AVAILABLE:
-            status = "partial"
-            notes = "scikit-learn unavailable; using base model only."
-        elif len(set(y)) < 2:
-            status = "partial"
-            notes = "Not enough class diversity for calibration fit."
-        else:
+        notes: list[str] = []
+        class_diverse = len(set(y)) >= 2
+        x_arr = np.asarray(x, dtype=float)
+        y_arr = np.asarray(y, dtype=int)
+
+        logreg_ready = False
+        hybrid_nn_ready = False
+
+        if not class_diverse:
+            notes.append("Not enough class diversity for calibration fit.")
+        elif _SKLEARN_AVAILABLE:
             try:
-                clf = LogisticRegression(max_iter=320, multi_class="auto", class_weight="balanced")
-                clf.fit(np.asarray(x, dtype=float), np.asarray(y, dtype=int))
+                clf = LogisticRegression(
+                    max_iter=320,
+                    multi_class="auto",
+                    class_weight="balanced",
+                )
+                clf.fit(x_arr, y_arr)
                 self._calibrator = clf
                 self._save_calibrator()
+                logreg_ready = True
             except Exception as exc:
-                status = "partial"
-                notes = f"Calibration fit failed: {exc}"
+                notes.append(f"Logistic calibration fit failed: {exc}")
+        else:
+            notes.append("scikit-learn unavailable; logistic calibrator skipped.")
 
-        return {
+        if class_diverse and _SKLEARN_MLP_AVAILABLE and len(rows) >= 30:
+            try:
+                nn = MLPClassifier(
+                    hidden_layer_sizes=(32, 16),
+                    activation="relu",
+                    solver="adam",
+                    alpha=1e-3,
+                    learning_rate_init=3e-3,
+                    batch_size=min(128, max(16, len(rows) // 8)),
+                    max_iter=320,
+                    random_state=42,
+                )
+                nn.fit(x_arr, y_arr)
+                self._hybrid_calibrator = nn
+                self._save_hybrid_calibrator()
+                hybrid_nn_ready = True
+            except Exception as exc:
+                notes.append(f"Hybrid NN fit failed: {exc}")
+        elif not _SKLEARN_MLP_AVAILABLE:
+            notes.append("MLP classifier unavailable; hybrid NN head skipped.")
+        elif len(rows) < 30:
+            notes.append("Insufficient samples for stable hybrid NN fit.")
+
+        if logreg_ready or hybrid_nn_ready:
+            status = "trained"
+        else:
+            status = "partial" if rows else "skipped"
+
+        architecture = "hybrid_neural_network"
+        if not (logreg_ready or hybrid_nn_ready):
+            architecture = "rule_based_fallback"
+
+        out = {
             "status": status,
             "model_name": self.model_name,
             "trained_samples": int(len(rows)),
@@ -434,20 +564,78 @@ class LLM_sentimentAnalyzer:
             "started_at": start,
             "finished_at": datetime.now().isoformat(),
             "duration_seconds": float(time.time() - t0),
-            "notes": notes,
+            "notes": "; ".join(notes) if notes else "Hybrid neural training updated.",
+            "training_architecture": architecture,
+            "calibrator_ready": bool(logreg_ready),
+            "hybrid_nn_ready": bool(hybrid_nn_ready),
+            "artifact_dir": str(self.cache_dir),
         }
+        self._write_training_status(out)
+        return out
 
-    def auto_train_from_internet(self, *, hours_back: int = 96, limit_per_query: int = 180, max_samples: int = 1200) -> dict[str, Any]:
+    def auto_train_from_internet(
+        self,
+        *,
+        hours_back: int = 96,
+        limit_per_query: int = 180,
+        max_samples: int = 1200,
+        stop_flag: Callable[[], bool] | None = None,
+        progress_callback: Callable[[dict[str, Any]], None] | None = None,
+        force_china_direct: bool = False,
+    ) -> dict[str, Any]:
+        if force_china_direct:
+            os.environ["TRADING_CHINA_DIRECT"] = "1"
+            os.environ["TRADING_VPN"] = "0"
+            try:
+                from core.network import invalidate_network_cache
+
+                invalidate_network_cache()
+            except Exception:
+                pass
+
+        def _is_stopped() -> bool:
+            if stop_flag is None:
+                return False
+            try:
+                return bool(stop_flag())
+            except Exception:
+                return False
+
+        def _emit(percent: int, message: str, stage: str) -> None:
+            if callable(progress_callback):
+                try:
+                    progress_callback(
+                        {
+                            "percent": int(max(0, min(100, int(percent)))),
+                            "message": str(message or ""),
+                            "stage": str(stage or ""),
+                        }
+                    )
+                except Exception:
+                    pass
+
         collector = get_collector()
         queries = [
             ["政策", "监管", "A股", "央行"],
             ["上市公司", "业绩", "产业政策"],
+            ["沪深", "板块", "宏观政策", "产业链"],
             ["China stock policy", "regulation", "market"],
             ["Federal Reserve", "SEC", "China ADR"],
         ]
         seen: set[str] = set()
         rows: list[NewsArticle] = []
-        for kw in queries:
+        _emit(2, "Starting internet collection...", "start")
+        for i, kw in enumerate(queries):
+            if _is_stopped():
+                stopped = {
+                    "status": "stopped",
+                    "collected_articles": int(len(rows)),
+                    "hours_back": int(hours_back),
+                    "limit_per_query": int(limit_per_query),
+                    "training_architecture": "hybrid_neural_network",
+                }
+                self._write_training_status(stopped)
+                return stopped
             try:
                 batch = collector.collect_news(
                     keywords=list(kw),
@@ -456,18 +644,47 @@ class LLM_sentimentAnalyzer:
                 )
             except Exception:
                 batch = []
+            _emit(
+                8 + int(((i + 1) / max(1, len(queries))) * 62),
+                f"Collected batch {i + 1}/{len(queries)} ({len(batch)} rows)",
+                "collect",
+            )
             for a in batch:
                 aid = str(getattr(a, "id", "") or "")
                 if not aid or aid in seen:
                     continue
                 seen.add(aid)
                 rows.append(a)
+                if _is_stopped():
+                    stopped = {
+                        "status": "stopped",
+                        "collected_articles": int(len(rows)),
+                        "hours_back": int(hours_back),
+                        "limit_per_query": int(limit_per_query),
+                        "training_architecture": "hybrid_neural_network",
+                    }
+                    self._write_training_status(stopped)
+                    return stopped
         rows.sort(key=lambda a: getattr(a, "published_at", datetime.min), reverse=True)
         rows = rows[: max(80, int(max_samples))]
+        _emit(78, f"Collected {len(rows)} deduplicated rows; starting hybrid training.", "train")
         report = self.train(rows, max_samples=max_samples)
+        if _is_stopped() and str(report.get("status", "")).lower() not in {"error", "failed"}:
+            report["status"] = "stopped"
         report["collected_articles"] = int(len(rows))
         report["hours_back"] = int(hours_back)
         report["limit_per_query"] = int(limit_per_query)
+        report["training_architecture"] = str(
+            report.get("training_architecture") or "hybrid_neural_network"
+        )
+        _emit(
+            100,
+            "Auto internet hybrid training completed."
+            if str(report.get("status", "")).lower() not in {"stopped", "error", "failed"}
+            else f"Auto training status: {report.get('status', 'unknown')}",
+            "complete",
+        )
+        self._write_training_status(report)
         return report
 
     def summarize_articles(self, articles: list[NewsArticle], *, hours_back: int = 48) -> dict[str, float]:

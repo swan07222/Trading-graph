@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import threading
 import traceback
 from collections.abc import Callable
@@ -23,6 +24,19 @@ _SUPPORTED_TRAIN_INTERVALS = frozenset(
     {"1m", "2m", "3m", "5m", "15m", "30m", "60m", "1h", "1d"}
 )
 _LOCKED_TRAIN_INTERVAL = "1m"
+
+
+def _force_china_direct_network_mode() -> None:
+    """Force discovery/training workers to run in China-direct mode."""
+    os.environ["TRADING_CHINA_DIRECT"] = "1"
+    os.environ["TRADING_VPN"] = "0"
+    try:
+        from core.network import invalidate_network_cache
+
+        invalidate_network_cache()
+    except Exception:
+        # Keep worker startup resilient even if network module is unavailable.
+        pass
 
 
 def _get_cancellation_token() -> Any:
@@ -108,10 +122,6 @@ class _BaseLearnWorker(QThread):
                 if log_msg.strip():
                     self.log_message.emit(log_msg, "info")
                 
-                # Also emit to console for debugging
-                if stage and stage not in ("waiting", "cycle_start"):
-                    log.info(f"[AutoLearn] {log_msg}")
-                
                 results["discovered"] = int(getattr(p, "stocks_found", 0) or 0)
                 processed_direct = int(getattr(p, "stocks_processed", 0) or 0)
                 processed_alt = int(getattr(p, "processed_count", 0) or 0)
@@ -179,6 +189,11 @@ class AutoLearnWorker(_BaseLearnWorker):
         }
 
         try:
+            _force_china_direct_network_mode()
+            self.log_message.emit(
+                "China-direct network mode enabled for Auto Train GM discovery.",
+                "info",
+            )
             learner_class = _get_auto_learner()
             if learner_class is None:
                 self.error_occurred.emit(
@@ -272,6 +287,11 @@ class TargetedLearnWorker(_BaseLearnWorker):
         }
 
         try:
+            _force_china_direct_network_mode()
+            self.log_message.emit(
+                "China-direct network mode enabled for targeted GM learning.",
+                "info",
+            )
             learner_class = _get_auto_learner()
             if learner_class is None:
                 self.error_occurred.emit("AutoLearner/ContinuousLearner not found.")

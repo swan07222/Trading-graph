@@ -102,11 +102,18 @@ def _append_ai_chat_message(
     role_color = colors.get(role, colors.get(level, "#dbe4f3"))
     body_color = colors.get(level, "#dbe4f3") if role == "system" else "#dbe4f3"
 
-    widget.append(
-        f'<span style="color:#7b88a5">[{ts}]</span> '
-        f'<span style="color:{role_color};font-weight:600">{safe_sender}:</span> '
-        f'<span style="color:{body_color}">{safe_text}</span>'
+    # User requested AI-only message feed in panel view.
+    show_in_panel = (
+        str(role or "").strip().lower() == "assistant"
+        or str(sender or "").strip().lower() in {"ai", "assistant"}
     )
+
+    if show_in_panel:
+        widget.append(
+            f'<span style="color:#7b88a5">[{ts}]</span> '
+            f'<span style="color:{role_color};font-weight:600">{safe_sender}:</span> '
+            f'<span style="color:{body_color}">{safe_text}</span>'
+        )
 
     hist = getattr(self, "_ai_chat_history", None)
     if not isinstance(hist, list):
@@ -124,12 +131,13 @@ def _append_ai_chat_message(
     if len(hist) > 250:
         del hist[:-250]
 
-    try:
-        sb = widget.verticalScrollBar()
-        if sb is not None:
-            sb.setValue(sb.maximum())
-    except _UI_AI_RECOVERABLE_EXCEPTIONS:
-        pass
+    if show_in_panel:
+        try:
+            sb = widget.verticalScrollBar()
+            if sb is not None:
+                sb.setValue(sb.maximum())
+        except _UI_AI_RECOVERABLE_EXCEPTIONS:
+            pass
 
 
 def _on_ai_chat_send(self: Any) -> None:
@@ -242,7 +250,7 @@ def _execute_ai_chat_command(self: Any, prompt: str) -> tuple[bool, str]:
             "Commands: analyze <code>, load <code>, start monitoring, stop monitoring, "
             "scan market, refresh sentiment, set interval <1m|5m|15m|30m|60m|1d>, "
             "set forecast <bars>, set lookback <bars>, add watchlist <code>, "
-            "remove watchlist <code>, train model, train llm, auto train llm. "
+            "remove watchlist <code>, train gm, auto train gm, train llm, auto train llm. "
             "Chinese: 分析 <代码> / 开始监控 / 停止监控 / 刷新情绪 / 周期 5m。"
         )
 
@@ -485,6 +493,21 @@ def _execute_ai_chat_command(self: Any, prompt: str) -> tuple[bool, str]:
     if _contains_any(
         low,
         (
+            "auto train gm",
+            "continue learning",
+            "auto learn",
+            "自动训练gm",
+            "自动训练主模型",
+            "继续学习",
+        ),
+    ):
+        if hasattr(self, "_show_auto_learn"):
+            self._show_auto_learn(auto_start=True)
+        return True, "Auto Train GM panel opened and training started."
+
+    if _contains_any(
+        low,
+        (
             "auto train llm",
             "auto llm",
             "train llm automatically",
@@ -494,7 +517,7 @@ def _execute_ai_chat_command(self: Any, prompt: str) -> tuple[bool, str]:
         ),
     ):
         self._auto_train_llm()
-        return True, "Auto LLM training started (Chinese + English internet corpus)."
+        return True, "Auto Train LLM panel opened."
 
     if _contains_any(
         low,
@@ -511,9 +534,12 @@ def _execute_ai_chat_command(self: Any, prompt: str) -> tuple[bool, str]:
         self._start_llm_training()
         return True, "LLM training started."
 
-    if _contains_any(low, ("train model", "训练模型", "训练ai", "训练主模型")):
+    if _contains_any(
+        low,
+        ("train gm", "train model", "训练gm", "训练模型", "训练ai", "训练主模型"),
+    ):
         self._start_training()
-        return True, "Model training dialog opened."
+        return True, "Train GM dialog opened."
 
     return False, ""
 
@@ -618,9 +644,18 @@ def _start_llm_training(self: Any) -> None:
     existing = self.workers.get("llm_train")
     if existing and existing.isRunning():
         self._append_ai_chat_message("System", "LLM training is already running.", role="system", level="warning")
+        if hasattr(self, "log"):
+            self.log("LLM training is already running.", "warning")
         return
 
-    self._append_ai_chat_message("System", "Starting manual LLM training from recent news corpus...", role="system", level="info")
+    self._append_ai_chat_message(
+        "System",
+        "Starting separate LLM hybrid training from recent news corpus...",
+        role="system",
+        level="info",
+    )
+    if hasattr(self, "log"):
+        self.log("Starting separate LLM hybrid training from recent news corpus...", "info")
 
     def _work() -> dict[str, Any]:
         from data.llm_sentiment import get_llm_analyzer
@@ -638,17 +673,28 @@ def _start_llm_training(self: Any) -> None:
         self.workers.pop("llm_train", None)
         if not isinstance(payload, dict):
             self._append_ai_chat_message("System", "LLM training failed (invalid payload).", role="system", level="error")
+            if hasattr(self, "_refresh_model_training_statuses"):
+                self._refresh_model_training_statuses()
             return
         msg = (
             f"LLM training complete: status={payload.get('status', 'unknown')}, "
             f"samples={payload.get('trained_samples', 0)}, "
-            f"zh={payload.get('zh_samples', 0)}, en={payload.get('en_samples', 0)}."
+            f"zh={payload.get('zh_samples', 0)}, en={payload.get('en_samples', 0)}, "
+            f"arch={payload.get('training_architecture', 'hybrid_neural_network')}."
         )
         self._append_ai_chat_message("System", msg, role="system", level="success")
+        if hasattr(self, "log"):
+            self.log(msg, "success")
+        if hasattr(self, "_refresh_model_training_statuses"):
+            self._refresh_model_training_statuses()
 
     def _on_error(err: str) -> None:
         self.workers.pop("llm_train", None)
         self._append_ai_chat_message("System", f"LLM training failed: {err}", role="system", level="error")
+        if hasattr(self, "log"):
+            self.log(f"LLM training failed: {err}", "error")
+        if hasattr(self, "_refresh_model_training_statuses"):
+            self._refresh_model_training_statuses()
 
     worker.result.connect(_on_done)
     worker.error.connect(_on_error)
@@ -656,48 +702,110 @@ def _start_llm_training(self: Any) -> None:
     worker.start()
 
 
-def _auto_train_llm(self: Any) -> None:
-    existing = self.workers.get("llm_auto_train")
-    if existing and existing.isRunning():
-        self._append_ai_chat_message("System", "Auto LLM training is already running.", role="system", level="warning")
+def _refresh_model_training_statuses(self: Any) -> None:
+    """Refresh both GM and LLM status labels shown in the left AI panel."""
+    llm_status_widget = getattr(self, "llm_status", None)
+    llm_info_widget = getattr(self, "llm_info", None)
+    if llm_status_widget is None or llm_info_widget is None:
         return
-
-    self._append_ai_chat_message(
-        "System",
-        "Auto LLM training started: collecting Chinese + English internet news/policy data.",
-        role="system",
-        level="info",
-    )
-
-    def _work() -> dict[str, Any]:
+    try:
         from data.llm_sentiment import get_llm_analyzer
 
         analyzer = get_llm_analyzer()
-        return analyzer.auto_train_from_internet(hours_back=120, limit_per_query=220, max_samples=1200)
+        status_payload = analyzer.get_training_status()
+    except Exception as exc:
+        llm_status_widget.setText("LLM Model: Error")
+        llm_info_widget.setText(str(exc))
+        return
 
-    worker = WorkerThread(_work, timeout_seconds=1800)
-    self._track_worker(worker)
+    status = str(status_payload.get("status", "not_trained") or "not_trained").strip().lower()
+    architecture = str(
+        status_payload.get("training_architecture", "hybrid_neural_network")
+        or "hybrid_neural_network"
+    )
+    trained_samples = int(status_payload.get("trained_samples", 0) or 0)
+    finished_at = str(
+        status_payload.get("finished_at", status_payload.get("saved_at", "")) or ""
+    ).strip()
+    finished_short = finished_at[:19].replace("T", " ") if finished_at else ""
 
-    def _on_done(payload: Any) -> None:
-        self.workers.pop("llm_auto_train", None)
-        if not isinstance(payload, dict):
-            self._append_ai_chat_message("System", "Auto LLM training failed (invalid payload).", role="system", level="error")
-            return
-        msg = (
-            f"Auto LLM training complete: status={payload.get('status', 'unknown')}, "
-            f"collected={payload.get('collected_articles', 0)}, trained={payload.get('trained_samples', 0)}, "
-            f"zh={payload.get('zh_samples', 0)}, en={payload.get('en_samples', 0)}."
+    if status in {"trained", "complete", "ok"}:
+        llm_status_widget.setText("LLM Model: Trained")
+        llm_status_widget.setStyleSheet("color: #35b57c; font-weight: 700;")
+    elif status in {"partial"}:
+        llm_status_widget.setText("LLM Model: Partially Trained")
+        llm_status_widget.setStyleSheet("color: #d8a03a; font-weight: 700;")
+    elif status in {"stopped"}:
+        llm_status_widget.setText("LLM Model: Stopped")
+        llm_status_widget.setStyleSheet("color: #d8a03a; font-weight: 700;")
+    elif status in {"error", "failed"}:
+        llm_status_widget.setText("LLM Model: Error")
+        llm_status_widget.setStyleSheet("color: #e5534b; font-weight: 700;")
+    else:
+        llm_status_widget.setText("LLM Model: Not trained")
+        llm_status_widget.setStyleSheet("")
+
+    info_parts = [architecture]
+    if trained_samples > 0:
+        info_parts.append(f"samples={trained_samples}")
+    if finished_short:
+        info_parts.append(f"last={finished_short}")
+    llm_info_widget.setText(" | ".join(info_parts))
+
+
+def _on_llm_training_session_finished(self: Any, payload: dict[str, Any]) -> None:
+    data = dict(payload or {})
+    status = str(data.get("status", "unknown") or "unknown").strip().lower()
+    if status in {"ok", "trained", "complete"}:
+        self.log(
+            (
+                "Auto Train LLM completed: "
+                f"collected={data.get('collected_articles', 0)}, "
+                f"trained={data.get('trained_samples', 0)}, "
+                f"arch={data.get('training_architecture', 'hybrid_neural_network')}"
+            ),
+            "success",
         )
-        self._append_ai_chat_message("System", msg, role="system", level="success")
+    elif status == "stopped":
+        self.log("Auto Train LLM stopped by user.", "warning")
+    elif status in {"error", "failed"}:
+        self.log(f"Auto Train LLM failed: {data.get('error', 'unknown error')}", "error")
+    if hasattr(self, "_refresh_model_training_statuses"):
+        self._refresh_model_training_statuses()
 
-    def _on_error(err: str) -> None:
-        self.workers.pop("llm_auto_train", None)
-        self._append_ai_chat_message("System", f"Auto LLM training failed: {err}", role="system", level="error")
 
-    worker.result.connect(_on_done)
-    worker.error.connect(_on_error)
-    self.workers["llm_auto_train"] = worker
-    worker.start()
+def _show_llm_train_dialog(self: Any, auto_start: bool = False) -> Any | None:
+    try:
+        from .llm_train_dialog import LLMTrainDialog
+    except ImportError as exc:
+        self.log(f"Auto Train LLM dialog not available: {exc}", "error")
+        return None
+
+    dialog = getattr(self, "_llm_train_dialog", None)
+    if dialog is None:
+        dialog = LLMTrainDialog(self)
+        self._llm_train_dialog = dialog
+
+        def _on_destroyed(*_args: object) -> None:
+            self._llm_train_dialog = None
+
+        if hasattr(dialog, "session_finished"):
+            dialog.session_finished.connect(self._on_llm_training_session_finished)
+        dialog.destroyed.connect(_on_destroyed)
+
+    dialog.show()
+    dialog.raise_()
+    dialog.activateWindow()
+    if auto_start and hasattr(dialog, "start_or_resume_auto_train"):
+        dialog.start_or_resume_auto_train()
+    return dialog
+
+
+def _auto_train_llm(self: Any) -> None:
+    """Open Auto Train LLM control panel (non-modal)."""
+    self._show_llm_train_dialog(auto_start=False)
+    if hasattr(self, "log"):
+        self.log("Auto Train LLM panel opened.", "info")
 
 
 def _set_news_policy_signal(self: Any, symbol: str, payload: dict[str, Any]) -> None:

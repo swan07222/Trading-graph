@@ -1,9 +1,12 @@
 # models/predictor.py
 import json
+import os
 import re
+import sys
 import threading
 import time
 from datetime import UTC, datetime
+from importlib.util import find_spec
 from pathlib import Path
 from typing import Any, TypeAlias
 
@@ -25,6 +28,7 @@ FloatArray: TypeAlias = NDArray[np.float64]
 
 # Define exception tuple early for use in class methods
 _PREDICTOR_RECOVERABLE_EXCEPTIONS = JSON_RECOVERABLE_EXCEPTIONS
+_TORCH_DLL_DIR_HANDLES: list[Any] = []
 
 __all__ = [
     "Predictor",
@@ -189,25 +193,148 @@ class Predictor:
     # =========================================================================
     # =========================================================================
 
+    @staticmethod
+    def _is_torch_dll_error(exc: Exception) -> bool:
+        msg = str(exc or "").lower()
+        return any(
+            tok in msg
+            for tok in (
+                "c10.dll",
+                "fbgemm.dll",
+                "dll initialization routine failed",
+                "winerror 1114",
+                "winerror 126",
+                "winerror 127",
+            )
+        )
+
+    @staticmethod
+    def _prepare_windows_torch_runtime() -> None:
+        """Best-effort Windows DLL search-path hardening for PyTorch imports."""
+        if os.name != "nt":
+            return
+
+        candidates: list[Path] = []
+        try:
+            exe_dir = Path(sys.executable).resolve().parent
+            candidates.extend(
+                [
+                    exe_dir,
+                    exe_dir / "DLLs",
+                    exe_dir / "Library" / "bin",
+                    Path(sys.prefix).resolve() / "DLLs",
+                    Path(sys.base_prefix).resolve() / "DLLs",
+                ]
+            )
+        except Exception:
+            pass
+
+        try:
+            spec = find_spec("torch")
+            if spec and spec.origin:
+                torch_pkg = Path(spec.origin).resolve().parent
+                candidates.extend(
+                    [
+                        torch_pkg,
+                        torch_pkg / "lib",
+                    ]
+                )
+        except Exception:
+            pass
+
+        unique_dirs: list[str] = []
+        seen: set[str] = set()
+        for path_obj in candidates:
+            try:
+                p = Path(path_obj).resolve()
+            except Exception:
+                continue
+            if not p.exists():
+                continue
+            p_str = str(p)
+            key = p_str.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            unique_dirs.append(p_str)
+
+        if not unique_dirs:
+            return
+
+        path_entries = str(os.environ.get("PATH", "") or "").split(os.pathsep)
+        lower_path_entries = {str(x).strip().lower() for x in path_entries if str(x).strip()}
+        prepend = [d for d in unique_dirs if d.lower() not in lower_path_entries]
+        if prepend:
+            current = str(os.environ.get("PATH", "") or "")
+            os.environ["PATH"] = os.pathsep.join(prepend + ([current] if current else []))
+
+        add_dll = getattr(os, "add_dll_directory", None)
+        if callable(add_dll):
+            for d in unique_dirs:
+                try:
+                    handle = add_dll(d)
+                    _TORCH_DLL_DIR_HANDLES.append(handle)
+                except (OSError, RuntimeError, ValueError):
+                    continue
+
+    @classmethod
+    def _import_ensemble_model_class(cls) -> Any:
+        try:
+            from models.ensemble import EnsembleModel
+
+            return EnsembleModel
+        except Exception as exc:
+            if not cls._is_torch_dll_error(exc):
+                raise
+
+            cls._prepare_windows_torch_runtime()
+            # Clear partial imports before retry.
+            sys.modules.pop("models.ensemble", None)
+            try:
+                from models.ensemble import EnsembleModel
+
+                return EnsembleModel
+            except Exception:
+                raise exc
+
+    def _candidate_model_dirs(self) -> list[Path]:
+        primary = Path(CONFIG.MODEL_DIR)
+        out = [primary]
+        legacy = Path(CONFIG.BASE_DIR) / "models_saved"
+        if legacy != primary and legacy.exists():
+            out.append(legacy)
+        return out
+
     def _load_models(self) -> bool:
         """Load all required models with robust fallback."""
         try:
             from data.features import FeatureEngine
             from data.fetcher import get_fetcher
             from data.processor import DataProcessor
-            from models.ensemble import EnsembleModel
+            EnsembleModel = self._import_ensemble_model_class()
 
             self.processor = DataProcessor()
             self.feature_engine = FeatureEngine()
             self.fetcher = get_fetcher()
             self._feature_cols = self.feature_engine.get_feature_columns()
 
-            model_dir = CONFIG.MODEL_DIR
-
-            # Pick best ensemble + scaler pair
-            chosen_ens, chosen_scl = self._find_best_model_pair(model_dir)
-            if chosen_scl is None:
-                chosen_scl = self._find_best_scaler_checkpoint(model_dir)
+            model_dir = Path(CONFIG.MODEL_DIR)
+            chosen_ens: Path | None = None
+            chosen_scl: Path | None = None
+            resolved_model_dir = model_dir
+            for candidate_dir in self._candidate_model_dirs():
+                cand_ens, cand_scl = self._find_best_model_pair(candidate_dir)
+                if cand_scl is None:
+                    cand_scl = self._find_best_scaler_checkpoint(candidate_dir)
+                if cand_ens is not None or cand_scl is not None:
+                    chosen_ens, chosen_scl = cand_ens, cand_scl
+                    resolved_model_dir = candidate_dir
+                    break
+            if resolved_model_dir != model_dir:
+                log.info(
+                    "Using legacy model artifact directory fallback: %s",
+                    resolved_model_dir,
+                )
 
             if chosen_scl and chosen_scl.exists():
                 if not self.processor.load_scaler(str(chosen_scl)):
@@ -295,7 +422,7 @@ class Predictor:
                 log.warning("No ensemble model found")
 
             # Load forecaster (optional)
-            self._load_forecaster()
+            self._load_forecaster(model_dir=resolved_model_dir)
 
             return True
 
@@ -876,7 +1003,7 @@ class Predictor:
         """Return per-stock last-train timestamps from loaded model artifacts."""
         return dict(self._trained_stock_last_train or {})
 
-    def _load_forecaster(self) -> None:
+    def _load_forecaster(self, model_dir: Path | None = None) -> None:
         """Load Informer forecaster for price curve prediction."""
         try:
             from models.networks import Informer
@@ -884,7 +1011,7 @@ class Predictor:
             self.forecaster = None
             self._forecaster_horizon = 0
             forecast_path = self._find_best_forecaster_checkpoint(
-                CONFIG.MODEL_DIR
+                model_dir or Path(CONFIG.MODEL_DIR)
             )
 
             if forecast_path is None:

@@ -1,8 +1,9 @@
 # ui/auto_learn_dialog.py
 
+import time
 from datetime import datetime
 
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QFont
 from PyQt6.QtWidgets import (
     QAbstractItemView,
@@ -45,13 +46,15 @@ log = get_logger(__name__)
 
 class AutoLearnDialog(QDialog):
     """Dialog for automatic learning."""
+    session_finished = pyqtSignal(dict)
 
     def __init__(self, parent=None, seed_stock_codes: list[str] | None = None) -> None:
         super().__init__(parent)
-        self.setWindowTitle("Continue Learning")
+        self.setWindowTitle("Auto Train GM")
         self.setMinimumSize(700, 540)
         self.resize(920, 660)
         self.setSizeGripEnabled(True)
+        self.setModal(False)
 
         self.worker: AutoLearnWorker | None = None
         self.targeted_worker: TargetedLearnWorker | None = None
@@ -66,6 +69,11 @@ class AutoLearnDialog(QDialog):
         self._validation_request_id = 0
         self._last_progress_percent = 0
         self._error_dialog_shown = False
+        self._elapsed_seconds = 0
+        self._run_started_monotonic = 0.0
+        self._elapsed_timer = QTimer(self)
+        self._elapsed_timer.setInterval(1000)
+        self._elapsed_timer.timeout.connect(self._on_elapsed_tick)
 
         # Last validated stock (for Add button)
         self._last_validated_code = ""
@@ -84,7 +92,7 @@ class AutoLearnDialog(QDialog):
         root_layout.setSpacing(8)
         root_layout.setContentsMargins(10, 10, 10, 10)
 
-        header = QLabel("Continuous Stock Discovery and Learning")
+        header = QLabel("Auto Train GM (Continuous Discovery + Learning)")
         header.setObjectName("dialogTitle")
         root_layout.addWidget(header)
 
@@ -104,7 +112,7 @@ class AutoLearnDialog(QDialog):
 
         # Tab 1: Auto Learn
         auto_tab = self._create_auto_tab()
-        self.tabs.addTab(auto_tab, "Continue Learning")
+        self.tabs.addTab(auto_tab, "Auto Train GM")
 
         # Keep targeted-search controls instantiated for compatibility but hide
         # the tab so users cannot start specific-stock training from the UI.
@@ -118,6 +126,10 @@ class AutoLearnDialog(QDialog):
         self.status_label = QLabel("Ready to start")
         self.status_label.setObjectName("dialogStatus")
         progress_layout.addWidget(self.status_label)
+
+        self.elapsed_label = QLabel("Elapsed: 00:00:00")
+        self.elapsed_label.setObjectName("dialogHint")
+        progress_layout.addWidget(self.elapsed_label)
 
         self.progress_bar = QProgressBar()
         self.progress_bar.setTextVisible(True)
@@ -163,8 +175,8 @@ class AutoLearnDialog(QDialog):
         layout.setSpacing(10)
 
         desc = QLabel(
-            "Automatically discover stocks from the market, fetch data, "
-            "and train the AI model on new patterns."
+            "Automatically discover stocks from market internet sources in "
+            "China-direct mode, fetch data, and train the GM model."
         )
         desc.setWordWrap(True)
         desc.setObjectName("dialogHint")
@@ -230,11 +242,21 @@ class AutoLearnDialog(QDialog):
 
         btn_layout = QHBoxLayout()
 
-        self.auto_start_btn = QPushButton("Continue Learning")
+        self.auto_start_btn = QPushButton("Start")
         self.auto_start_btn.setMinimumHeight(45)
         self.auto_start_btn.setStyleSheet(self._green_button_style())
-        self.auto_start_btn.clicked.connect(self._start_auto_learning)
+        self.auto_start_btn.clicked.connect(
+            lambda _checked=False: self._start_auto_learning(resume=False)
+        )
         btn_layout.addWidget(self.auto_start_btn)
+
+        self.auto_resume_btn = QPushButton("Resume")
+        self.auto_resume_btn.setMinimumHeight(45)
+        self.auto_resume_btn.setEnabled(False)
+        self.auto_resume_btn.clicked.connect(
+            lambda _checked=False: self._start_auto_learning(resume=True)
+        )
+        btn_layout.addWidget(self.auto_resume_btn)
 
         self.auto_stop_btn = QPushButton("Stop")
         self.auto_stop_btn.setMinimumHeight(45)
@@ -648,8 +670,8 @@ class AutoLearnDialog(QDialog):
     # AUTO LEARN START/STOP
     # =========================================================================
 
-    def _start_auto_learning(self) -> None:
-        """Start auto-learning (random rotation)."""
+    def _start_auto_learning(self, resume: bool = False) -> None:
+        """Start or resume auto-learning (random rotation)."""
         if self._is_running:
             return
 
@@ -690,7 +712,11 @@ class AutoLearnDialog(QDialog):
         except (AttributeError, ImportError, OSError, RuntimeError, TypeError, ValueError):
             log.debug("VPN advisory check skipped", exc_info=True)
 
-        self._log("Starting continuous learning...", "info")
+        is_resume = bool(resume and self._elapsed_seconds > 0)
+        self._log(
+            "Resuming Auto Train GM..." if is_resume else "Starting Auto Train GM...",
+            "info",
+        )
         self._log(
             f"Mode: {config['mode']}, "
             f"Max stocks: {config['max_stocks']}, "
@@ -700,7 +726,12 @@ class AutoLearnDialog(QDialog):
             "info",
         )
 
-        self._set_running(True, mode="auto")
+        self._set_running(True, mode="auto", keep_progress=is_resume)
+        self._start_elapsed_clock(reset=not is_resume)
+        if is_resume:
+            self.status_label.setText("Resuming...")
+        else:
+            self.status_label.setText("Starting...")
 
         self.worker = AutoLearnWorker(config)
         self.worker.progress.connect(self._on_progress)
@@ -709,12 +740,18 @@ class AutoLearnDialog(QDialog):
         self.worker.error_occurred.connect(self._on_error)
         self.worker.start()
 
+    def start_or_resume_auto_learning(self) -> None:
+        """Public entrypoint used by parent to auto-start this panel."""
+        if self._is_running:
+            return
+        self._start_auto_learning(resume=bool(self._elapsed_seconds > 0))
+
     def _stop_auto_learning(self) -> None:
         """Stop auto-learning gracefully."""
         if not self._is_running:
             return
 
-        self._log("Stopping auto-learning...", "warning")
+        self._log("Stopping Auto Train GM...", "warning")
         self.status_label.setText("Stopping...")
         self.auto_stop_btn.setEnabled(False)
 
@@ -728,6 +765,7 @@ class AutoLearnDialog(QDialog):
             # final stopped status through _on_auto_finished.
             return
 
+        self._stop_elapsed_clock()
         self._set_running(False)
 
     # =========================================================================
@@ -740,7 +778,7 @@ class AutoLearnDialog(QDialog):
             self,
             "Disabled",
             "Specific-stock training is disabled.\n\n"
-            "Use Auto Learn to continue training with broad market data.",
+            "Use Auto Train GM to continue training with broad market data.",
         )
         return
 
@@ -762,12 +800,18 @@ class AutoLearnDialog(QDialog):
             # Non-blocking stop: completion is handled by _on_targeted_finished.
             return
 
+        self._stop_elapsed_clock()
         self._set_running(False)
 
     # =========================================================================
     # =========================================================================
 
-    def _set_running(self, running: bool, mode: str = "") -> None:
+    def _set_running(
+        self,
+        running: bool,
+        mode: str = "",
+        keep_progress: bool = False,
+    ) -> None:
         """Set UI running state.
         Disables all interactive controls while training is active.
         """
@@ -775,15 +819,17 @@ class AutoLearnDialog(QDialog):
         self._active_mode = mode if running else ""
 
         if running:
-            self.progress_bar.setValue(0)
-            self.progress_bar.setFormat("0%")
-            self.status_label.setText("Initializing...")
-            self._last_progress_percent = 0
+            if not keep_progress:
+                self.progress_bar.setValue(0)
+                self.progress_bar.setFormat("0%")
+                self.status_label.setText("Initializing...")
+                self._last_progress_percent = 0
             self._error_dialog_shown = False
             self.close_btn.setEnabled(False)
 
             # Disable BOTH tabs' start buttons (only one can run)
             self.auto_start_btn.setEnabled(False)
+            self.auto_resume_btn.setEnabled(False)
             self.target_start_btn.setEnabled(False)
 
             if mode == "auto":
@@ -816,6 +862,9 @@ class AutoLearnDialog(QDialog):
             # Re-enable everything
             self.close_btn.setEnabled(True)
             self.auto_start_btn.setEnabled(True)
+            self.auto_resume_btn.setEnabled(
+                bool(self._elapsed_seconds > 0 and self.progress_bar.value() < 100)
+            )
             self.target_start_btn.setEnabled(True)
             self.auto_stop_btn.setEnabled(False)
             self.target_stop_btn.setEnabled(False)
@@ -842,7 +891,7 @@ class AutoLearnDialog(QDialog):
 
             self.worker = None
             self.targeted_worker = None
-            self._last_progress_percent = 0
+            self._last_progress_percent = int(max(0, self.progress_bar.value()))
 
     # =========================================================================
     # =========================================================================
@@ -865,60 +914,70 @@ class AutoLearnDialog(QDialog):
 
     def _on_auto_finished(self, results: dict) -> None:
         """Handle auto-learning completion."""
+        self._stop_elapsed_clock()
         self._log("=" * 50, "info")
         status = results.get("status", "ok")
         if status == "stopped":
-            self._log("Auto-learning stopped by user", "warning")
+            self._log("Auto Train GM stopped by user", "warning")
             self._set_running(False)
             self.status_label.setText("Stopped")
-            self.progress_bar.setValue(0)
             self.progress_bar.setFormat("Stopped")
+            self.session_finished.emit(dict(results or {"status": "stopped"}))
             return
         if status == "error":
-            err = str(results.get("error") or "Auto-learning failed")
-            self._log(f"Auto-learning failed: {err}", "error")
+            err = str(results.get("error") or "Auto Train GM failed")
+            self._log(f"Auto Train GM failed: {err}", "error")
             self._log_results(results)
             self._set_running(False)
             current = max(0, min(99, self.progress_bar.value()))
             self.progress_bar.setValue(current)
             self.progress_bar.setFormat("Failed")
-            self.status_label.setText("Auto-learning failed")
+            self.status_label.setText("Auto Train GM failed")
             if not self._error_dialog_shown:
                 self._error_dialog_shown = True
                 QMessageBox.critical(
                     self,
                     "Learning Failed",
-                    f"Auto-learning failed:\n\n{err}",
+                    f"Auto Train GM failed:\n\n{err}",
                 )
+            payload = dict(results or {})
+            payload["status"] = "error"
+            payload["error"] = err
+            self.session_finished.emit(payload)
             return
 
-        self._log("Auto-learning completed", "success")
+        self._log("Auto Train GM completed", "success")
         self._log_results(results)
 
         self._set_running(False)
-        self.status_label.setText("Auto-learning completed")
+        self.status_label.setText("Auto Train GM completed")
         self.progress_bar.setValue(100)
         self.progress_bar.setFormat("Complete")
+        self.auto_resume_btn.setEnabled(False)
 
         QMessageBox.information(
             self,
             "Learning Complete",
-            f"Auto-learning completed!\n\n"
+            f"Auto Train GM completed!\n\n"
             f"Stocks discovered: {results.get('discovered', 0)}\n"
             f"Stocks processed: {results.get('processed', 0)}\n"
             f"Accuracy: {results.get('accuracy', 0):.1%}",
         )
+        done_payload = dict(results or {})
+        done_payload["status"] = str(done_payload.get("status", "ok") or "ok")
+        self.session_finished.emit(done_payload)
 
     def _on_targeted_finished(self, results: dict) -> None:
         """Handle targeted training completion."""
+        self._stop_elapsed_clock()
         self._log("=" * 50, "info")
         status = results.get("status", "ok")
         if status == "stopped":
             self._log("Targeted training stopped by user", "warning")
             self._set_running(False)
             self.status_label.setText("Stopped")
-            self.progress_bar.setValue(0)
             self.progress_bar.setFormat("Stopped")
+            self.session_finished.emit(dict(results or {"status": "stopped"}))
             return
         if status == "error":
             err = str(results.get("error") or "Targeted training failed")
@@ -936,6 +995,10 @@ class AutoLearnDialog(QDialog):
                     "Training Failed",
                     f"Targeted training failed:\n\n{err}",
                 )
+            payload = dict(results or {})
+            payload["status"] = "error"
+            payload["error"] = err
+            self.session_finished.emit(payload)
             return
 
         self._log("Targeted training completed", "success")
@@ -961,9 +1024,13 @@ class AutoLearnDialog(QDialog):
             f"Stocks processed: {results.get('processed', 0)}\n"
             f"Accuracy: {results.get('accuracy', 0):.1%}",
         )
+        done_payload = dict(results or {})
+        done_payload["status"] = str(done_payload.get("status", "ok") or "ok")
+        self.session_finished.emit(done_payload)
 
     def _on_error(self, error: str) -> None:
         """Handle error from either worker."""
+        self._stop_elapsed_clock()
         error = str(error or "Unknown error")
         display_error = error[:300] if len(error) > 300 else error
         self._log(f"Error: {display_error}", "error")
@@ -981,6 +1048,7 @@ class AutoLearnDialog(QDialog):
                 "Error",
                 f"An error occurred during learning:\n\n{error[:500]}",
             )
+        self.session_finished.emit({"status": "error", "error": error})
 
     def _log_results(self, results: dict) -> None:
         """Log training results to the activity log."""
@@ -994,6 +1062,32 @@ class AutoLearnDialog(QDialog):
             self._log(f"Stocks processed: {processed}", "info")
         if accuracy > 0:
             self._log(f"Model accuracy: {accuracy:.1%}", "success")
+
+    def _start_elapsed_clock(self, *, reset: bool) -> None:
+        if reset:
+            self._elapsed_seconds = 0
+        self._run_started_monotonic = float(time.monotonic()) - float(self._elapsed_seconds)
+        self._on_elapsed_tick()
+        self._elapsed_timer.start()
+
+    def _stop_elapsed_clock(self) -> None:
+        self._elapsed_timer.stop()
+        self._on_elapsed_tick()
+
+    def _on_elapsed_tick(self) -> None:
+        if self._is_running and self._run_started_monotonic > 0.0:
+            self._elapsed_seconds = int(
+                max(0.0, float(time.monotonic()) - self._run_started_monotonic)
+            )
+        self.elapsed_label.setText(f"Elapsed: {self._format_elapsed(self._elapsed_seconds)}")
+
+    @staticmethod
+    def _format_elapsed(seconds: int) -> str:
+        safe = max(0, int(seconds))
+        h = safe // 3600
+        m = (safe % 3600) // 60
+        s = safe % 60
+        return f"{h:02d}:{m:02d}:{s:02d}"
 
     # =========================================================================
     # =========================================================================
@@ -1169,6 +1263,7 @@ class AutoLearnDialog(QDialog):
                 if self._validator:
                     self._validator.wait(2000)
                     self._validator = None
+                self._stop_elapsed_clock()
                 event.accept()
             else:
                 event.ignore()
@@ -1177,12 +1272,15 @@ class AutoLearnDialog(QDialog):
             if self._validator:
                 self._validator.wait(2000)
                 self._validator = None
+            self._stop_elapsed_clock()
             event.accept()
 
         super().closeEvent(event)
 
 def show_auto_learn_dialog(parent=None, seed_stock_codes: list[str] | None = None):
-    """Show the auto-learn dialog - convenience function."""
+    """Show the auto-learn dialog in non-modal mode."""
     dialog = AutoLearnDialog(parent, seed_stock_codes=seed_stock_codes)
-    dialog.exec()
+    dialog.show()
+    dialog.raise_()
+    dialog.activateWindow()
     return dialog

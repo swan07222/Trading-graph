@@ -21,7 +21,7 @@ def _start_training(self: Any) -> None:
 
     reply = QMessageBox.question(
         self,
-        "Train AI Model",
+        "Train GM",
         f"Start training with the following settings?\n\n"
         f"Interval: {interval}\n"
         f"Horizon: {horizon} bars\n\n"
@@ -44,7 +44,7 @@ def _start_training(self: Any) -> None:
         result = getattr(dialog, "training_result", None)
         if isinstance(result, dict):
             if str(result.get("status", "")).strip().lower() == "complete":
-                self.log("Training completed successfully.", "success")
+                self.log("GM training completed successfully.", "success")
     except Exception as exc:
         self.log(f"Training dialog failed: {exc}", "error")
         return
@@ -52,16 +52,41 @@ def _start_training(self: Any) -> None:
     self._init_components()
 
 
-def _show_auto_learn(self: Any) -> None:
-    """Show auto-learning dialog."""
+def _show_auto_learn(self: Any, auto_start: bool = False) -> Any | None:
+    """Show non-modal auto-learning (Auto Train GM) dialog."""
     try:
-        from .auto_learn_dialog import show_auto_learn_dialog
+        from .auto_learn_dialog import AutoLearnDialog
     except ImportError:
         self.log("Auto-learn dialog not available", "error")
-        return
+        return None
 
-    show_auto_learn_dialog(self, seed_stock_codes=[])
-    self._init_components()
+    dialog = getattr(self, "_auto_learn_dialog", None)
+    if dialog is None:
+        dialog = AutoLearnDialog(self, seed_stock_codes=[])
+        self._auto_learn_dialog = dialog
+
+        def _on_session_finished(results: dict[str, Any]) -> None:
+            status = str((results or {}).get("status", "")).strip().lower()
+            if status in {"ok", "complete", "trained"}:
+                self._init_components()
+            elif hasattr(self, "_refresh_model_training_statuses"):
+                self._refresh_model_training_statuses()
+
+        def _on_destroyed(*_args: object) -> None:
+            self._auto_learn_dialog = None
+
+        if hasattr(dialog, "session_finished"):
+            dialog.session_finished.connect(_on_session_finished)
+        dialog.destroyed.connect(_on_destroyed)
+
+    dialog.setModal(False)
+    dialog.show()
+    dialog.raise_()
+    dialog.activateWindow()
+
+    if auto_start and hasattr(dialog, "start_or_resume_auto_learning"):
+        dialog.start_or_resume_auto_learning()
+    return dialog
 
 
 def _show_strategy_marketplace(self: Any) -> None:

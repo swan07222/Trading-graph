@@ -159,18 +159,25 @@ def _create_left_panel(self: Any) -> QWidget:
     ai_group = QGroupBox("AI Model")
     ai_layout = QVBoxLayout()
 
-    self.model_status = QLabel("Model: Loading...")
+    self.model_status = QLabel("GM Model: Loading...")
     ai_layout.addWidget(self.model_status)
 
     self.model_info = QLabel("")
     self.model_info.setObjectName("metaLabel")
     ai_layout.addWidget(self.model_info)
 
-    self.train_btn = QPushButton("Train Model")
+    self.llm_status = QLabel("LLM Model: Not trained")
+    ai_layout.addWidget(self.llm_status)
+
+    self.llm_info = QLabel("")
+    self.llm_info.setObjectName("metaLabel")
+    ai_layout.addWidget(self.llm_info)
+
+    self.train_btn = QPushButton("Train GM")
     self.train_btn.clicked.connect(self._start_training)
     ai_layout.addWidget(self.train_btn)
 
-    self.auto_learn_btn = QPushButton("Continue Learning")
+    self.auto_learn_btn = QPushButton("Auto Train GM")
     self.auto_learn_btn.clicked.connect(self._show_auto_learn)
     ai_layout.addWidget(self.auto_learn_btn)
 
@@ -285,7 +292,7 @@ def _create_right_panel(self: Any) -> QWidget:
 
     layout.addWidget(tabs, 3)
 
-    # AI Chat Group (replaces system log)
+    # AI message feed (read-only): keep AI visibility without interactive debug console.
     chat_group = QGroupBox("AI Chat")
     chat_group.setObjectName("aiChatGroup")
     chat_layout = QVBoxLayout()
@@ -294,33 +301,22 @@ def _create_right_panel(self: Any) -> QWidget:
     self.ai_chat_view = QTextEdit()
     self.ai_chat_view.setReadOnly(True)
     if hasattr(self.ai_chat_view, "setMinimumHeight"):
-        self.ai_chat_view.setMinimumHeight(280)
+        self.ai_chat_view.setMinimumHeight(180)
     if hasattr(self.ai_chat_view, "setMaximumHeight"):
         self.ai_chat_view.setMaximumHeight(16777215)
     chat_layout.addWidget(self.ai_chat_view)
 
-    input_row = QHBoxLayout()
-    input_row.setSpacing(6)
-    self.ai_chat_input = QLineEdit()
-    self.ai_chat_input.setPlaceholderText(
-        "Ask AI or control app (e.g., 'analyze 600519', 'start monitoring', 'help')"
-    )
-    self.ai_chat_input.returnPressed.connect(self._on_ai_chat_send)
-    input_row.addWidget(self.ai_chat_input, 1)
-
-    send_btn = QPushButton("Send")
-    send_btn.setObjectName("smallGhostButton")
-    send_btn.clicked.connect(self._on_ai_chat_send)
-    input_row.addWidget(send_btn)
-    chat_layout.addLayout(input_row)
+    chat_hint = QLabel("Showing AI-only messages.")
+    chat_hint.setObjectName("metaLabel")
+    chat_layout.addWidget(chat_hint)
 
     chat_group.setLayout(chat_layout)
-    layout.addWidget(chat_group, 3)
+    layout.addWidget(chat_group, 2)
     if hasattr(self, "_append_ai_chat_message"):
         try:
             self._append_ai_chat_message(
                 "AI",
-                "Local AI chat ready (no API). Ask questions or type 'help' for app control commands.",
+                "AI message feed ready.",
                 role="assistant",
             )
         except _APP_PANELS_RECOVERABLE_EXCEPTIONS:

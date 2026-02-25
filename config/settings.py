@@ -711,9 +711,20 @@ class Config:
             if override:
                 self._model_dir_cached = Path(override)
             else:
-                self._model_dir_cached = self._base_dir / "models_saved"
+                self._model_dir_cached = self._base_dir / "models_saved" / "GM"
             self._model_dir_cached_override = override
         return self._model_dir_cached  # type: ignore[return-value]
+
+    @property
+    def gm_model_dir(self) -> Path:
+        return self.model_dir
+
+    @property
+    def llm_model_dir(self) -> Path:
+        gm_dir = self.model_dir
+        if str(gm_dir.name).strip().upper() == "GM":
+            return gm_dir.parent / "LLM"
+        return gm_dir / "LLM"
 
     @property
     def log_dir(self) -> Path:
@@ -738,6 +749,7 @@ class Config:
         for d in (
             self.data_dir,
             self.model_dir,
+            self.llm_model_dir,
             self.log_dir,
             self.cache_dir,
             self.audit_dir,

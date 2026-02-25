@@ -180,7 +180,7 @@ class TrainingDialog(QDialog):
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
-        self.setWindowTitle("Train AI Model")
+        self.setWindowTitle("Train GM")
         self.setMinimumSize(720, 520)
         _apply_dialog_theme(self)
 
@@ -197,7 +197,7 @@ class TrainingDialog(QDialog):
         layout.setContentsMargins(18, 16, 18, 16)
         _add_dialog_header(
             layout,
-            "Train AI Model",
+            "Train GM",
             "Train a fresh ensemble from selected stocks. Use Stop for graceful cancellation.",
         )
 

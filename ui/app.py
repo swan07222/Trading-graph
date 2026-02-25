@@ -201,7 +201,7 @@ class MainApp(MainAppCommonMixin, QMainWindow):
         self._chart_symbol: str = ""
         self._history_refresh_once: set[tuple[str, str]] = set()
         self._strict_startup = env_flag("TRADING_STRICT_STARTUP", "0")
-        self._debug_console_enabled = env_flag("TRADING_DEBUG_CONSOLE", "1")
+        self._debug_console_enabled = env_flag("TRADING_DEBUG_CONSOLE", "0")
         self._debug_console_last_emit: dict[str, float] = {}
         self._syncing_mode_ui = False
         self._selected_chart_date = datetime.now().date().isoformat()
@@ -287,12 +287,12 @@ class MainApp(MainAppCommonMixin, QMainWindow):
 
         ai_menu = menubar.addMenu("&AI Model")
 
-        train_action = QAction("&Train Model", self)
+        train_action = QAction("&Train GM", self)
         train_action.setShortcut("Ctrl+T")
         train_action.triggered.connect(self._start_training)
         ai_menu.addAction(train_action)
 
-        auto_learn_action = QAction("&Continue Learning", self)
+        auto_learn_action = QAction("&Auto Train GM", self)
         auto_learn_action.triggered.connect(self._show_auto_learn)
         ai_menu.addAction(auto_learn_action)
 
@@ -808,7 +808,7 @@ class MainApp(MainAppCommonMixin, QMainWindow):
                     capability_bits.append("forecaster")
                 capability = ", ".join(capability_bits) if capability_bits else "runtime models"
                 self.model_status.setText(
-                    f"Model: Loaded ({capability})"
+                    f"GM Model: Loaded ({capability})"
                 )
                 self.model_status.setStyleSheet(
                     
@@ -826,9 +826,9 @@ class MainApp(MainAppCommonMixin, QMainWindow):
                     requested_interval=interval,
                     requested_horizon=horizon,
                 )
-                self.log("AI model loaded successfully", "success")
+                self.log("GM model loaded successfully", "success")
             else:
-                self.model_status.setText("Model: Not trained")
+                self.model_status.setText("GM Model: Not trained")
                 self.model_status.setStyleSheet(
                     
                         f"color: {ModernColors.ACCENT_WARNING}; "
@@ -836,23 +836,28 @@ class MainApp(MainAppCommonMixin, QMainWindow):
                     
                 )
                 self.model_info.setText(
-                    "Train a model to enable predictions"
+                    "Train GM to enable predictions"
                 )
                 self.log(
-                    "No trained model found. Please train a model.", "warning"
+                    "No trained GM model found. Please train GM.", "warning"
                 )
 
         except _UI_RECOVERABLE_EXCEPTIONS as e:
             log.error(f"Failed to load model: {e}")
             self.log(f"Failed to load model: {e}", "error")
             self.predictor = None
-            self.model_status.setText("Model: Error")
+            self.model_status.setText("GM Model: Error")
             self.model_status.setStyleSheet(
                 
                     f"color: {ModernColors.ACCENT_DANGER}; "
                     f"font-weight: {ModernFonts.WEIGHT_BOLD};"
                 
             )
+            lower_msg = str(e).lower()
+            if "c10.dll" in lower_msg or "dll initialization routine failed" in lower_msg:
+                self.model_info.setText(
+                    "PyTorch DLL load failed. Install VC++ Redistributable and use a matching torch build."
+                )
 
         self._set_startup_loading(
             "Preparing live services...",
@@ -867,11 +872,11 @@ class MainApp(MainAppCommonMixin, QMainWindow):
             except _UI_RECOVERABLE_EXCEPTIONS as e:
                 log.debug(f"Auto-start monitoring failed: {e}")
 
-        if self._debug_console_enabled:
-            self.log(
-                "Debug console enabled (set TRADING_DEBUG_CONSOLE=0 to disable)",
-                "warning",
-            )
+        if hasattr(self, "_refresh_model_training_statuses"):
+            try:
+                self._refresh_model_training_statuses()
+            except _UI_RECOVERABLE_EXCEPTIONS as exc:
+                log.debug("Suppressed exception in ui/app.py", exc_info=exc)
 
         self._set_startup_loading(
             "Loading market universe...",
@@ -1400,8 +1405,8 @@ class MainApp(MainAppCommonMixin, QMainWindow):
     def _start_training(self) -> None:
         _start_training_impl(self)
 
-    def _show_auto_learn(self) -> None:
-        _show_auto_learn_impl(self)
+    def _show_auto_learn(self, auto_start: bool = False) -> Any | None:
+        return _show_auto_learn_impl(self, auto_start=auto_start)
 
     def _show_strategy_marketplace(self) -> None:
         _show_strategy_marketplace_impl(self)
@@ -1596,6 +1601,9 @@ def _bind_mainapp_extracted_ops() -> None:
         "_generate_ai_chat_reply": _app_ai_ops._generate_ai_chat_reply,
         "_start_llm_training": _app_ai_ops._start_llm_training,
         "_auto_train_llm": _app_ai_ops._auto_train_llm,
+        "_show_llm_train_dialog": _app_ai_ops._show_llm_train_dialog,
+        "_on_llm_training_session_finished": _app_ai_ops._on_llm_training_session_finished,
+        "_refresh_model_training_statuses": _app_ai_ops._refresh_model_training_statuses,
         "_set_news_policy_signal": _app_ai_ops._set_news_policy_signal,
         "_news_policy_signal_for": _app_ai_ops._news_policy_signal_for,
         "_refresh_news_policy_signal": _app_ai_ops._refresh_news_policy_signal,
