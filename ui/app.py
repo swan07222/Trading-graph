@@ -9,12 +9,13 @@ from datetime import datetime
 from importlib import import_module
 from typing import Any, cast
 
-from PyQt6.QtCore import QSize, Qt, QTimer, pyqtSignal
+from PyQt6.QtCore import QDate, QSize, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QAction, QActionGroup, QFont
 from PyQt6.QtWidgets import (
     QApplication,
     QCheckBox,
     QComboBox,
+    QDateEdit,
     QFrame,
     QGridLayout,
     QGroupBox,
@@ -48,48 +49,6 @@ from ui import app_bar_ops as _app_bar_ops
 from ui import app_feed_ops as _app_feed_ops
 from ui import app_model_chart_ops as _app_model_chart_ops
 from ui import app_training_ops as _app_training_ops
-from ui.app_auto_trade_ops import (
-    _apply_auto_trade_mode as _apply_auto_trade_mode_impl,
-)
-from ui.app_auto_trade_ops import (
-    _approve_all_pending as _approve_all_pending_impl,
-)
-from ui.app_auto_trade_ops import (
-    _init_auto_trader as _init_auto_trader_impl,
-)
-from ui.app_auto_trade_ops import (
-    _on_auto_trade_action as _on_auto_trade_action_impl,
-)
-from ui.app_auto_trade_ops import (
-    _on_auto_trade_action_safe as _on_auto_trade_action_safe_impl,
-)
-from ui.app_auto_trade_ops import (
-    _on_pending_approval as _on_pending_approval_impl,
-)
-from ui.app_auto_trade_ops import (
-    _on_pending_approval_safe as _on_pending_approval_safe_impl,
-)
-from ui.app_auto_trade_ops import (
-    _on_trade_mode_changed as _on_trade_mode_changed_impl,
-)
-from ui.app_auto_trade_ops import (
-    _refresh_auto_trade_ui as _refresh_auto_trade_ui_impl,
-)
-from ui.app_auto_trade_ops import (
-    _refresh_pending_table as _refresh_pending_table_impl,
-)
-from ui.app_auto_trade_ops import (
-    _reject_all_pending as _reject_all_pending_impl,
-)
-from ui.app_auto_trade_ops import (
-    _show_auto_trade_settings as _show_auto_trade_settings_impl,
-)
-from ui.app_auto_trade_ops import (
-    _toggle_auto_pause as _toggle_auto_pause_impl,
-)
-from ui.app_auto_trade_ops import (
-    _update_auto_trade_status_label as _update_auto_trade_status_label_impl,
-)
 from ui.app_chart_pipeline import (
     _load_chart_history_bars as _load_chart_history_bars_impl,
 )
@@ -151,48 +110,6 @@ from ui.app_panels import (
 from ui.app_panels import (
     _create_right_panel as _create_right_panel_impl,
 )
-from ui.app_trading_ops import (
-    _connect_trading as _connect_trading_impl,
-)
-from ui.app_trading_ops import (
-    _disconnect_trading as _disconnect_trading_impl,
-)
-from ui.app_trading_ops import (
-    _execute_buy as _execute_buy_impl,
-)
-from ui.app_trading_ops import (
-    _execute_sell as _execute_sell_impl,
-)
-from ui.app_trading_ops import (
-    _on_chart_trade_requested as _on_chart_trade_requested_impl,
-)
-from ui.app_trading_ops import (
-    _on_mode_combo_changed as _on_mode_combo_changed_impl,
-)
-from ui.app_trading_ops import (
-    _on_order_filled as _on_order_filled_impl,
-)
-from ui.app_trading_ops import (
-    _on_order_rejected as _on_order_rejected_impl,
-)
-from ui.app_trading_ops import (
-    _refresh_all as _refresh_all_impl,
-)
-from ui.app_trading_ops import (
-    _refresh_portfolio as _refresh_portfolio_impl,
-)
-from ui.app_trading_ops import (
-    _set_trading_mode as _set_trading_mode_impl,
-)
-from ui.app_trading_ops import (
-    _show_chart_trade_dialog as _show_chart_trade_dialog_impl,
-)
-from ui.app_trading_ops import (
-    _submit_chart_order as _submit_chart_order_impl,
-)
-from ui.app_trading_ops import (
-    _toggle_trading as _toggle_trading_impl,
-)
 from ui.background_tasks import (
     RealTimeMonitor,
     WorkerThread,
@@ -224,8 +141,6 @@ class MainApp(MainAppCommonMixin, QMainWindow):
     - Real-time signal monitoring with multiple intervals
     - Custom AI model with ensemble neural networks
     - Professional modern theme
-    - Live/Paper trading support
-    - Comprehensive risk management
     - AI-generated price forecast curves
     """
     MAX_WATCHLIST_SIZE = 50
@@ -260,10 +175,7 @@ class MainApp(MainAppCommonMixin, QMainWindow):
         self._price_series_lock = threading.Lock()
         self._session_cache_write_lock = threading.Lock()
         self._last_session_cache_write_ts: dict[str, float] = {}
-        self._session_cache_io_pool = ThreadPoolExecutor(
-            max_workers=1,
-            thread_name_prefix="session-cache-io",
-        )
+        self._session_cache_io_pool = None
         self._session_cache_io_lock = threading.Lock()
         self._session_cache_io_futures: set[Future[object]] = set()
         self._last_analyze_request: dict[str, Any] = {}
@@ -289,15 +201,8 @@ class MainApp(MainAppCommonMixin, QMainWindow):
         self._debug_console_enabled = env_flag("TRADING_DEBUG_CONSOLE", "1")
         self._debug_console_last_emit: dict[str, float] = {}
         self._syncing_mode_ui = False
+        self._selected_chart_date = datetime.now().date().isoformat()
         self._session_bar_cache = None
-        try:
-            from data.session_cache import get_session_bar_cache
-            self._session_bar_cache = get_session_bar_cache()
-        except _UI_RECOVERABLE_EXCEPTIONS as exc:
-            log.warning("Session cache unavailable at startup: %s", exc)
-            self._session_bar_cache = None
-            if self._strict_startup:
-                raise
         self._load_trained_stock_last_train_meta()
 
         # Auto-trade state
@@ -306,12 +211,6 @@ class MainApp(MainAppCommonMixin, QMainWindow):
         self._setup_menubar()
         self._setup_toolbar()
         self._setup_ui()
-        init_mode = (
-            TradingMode.LIVE
-            if getattr(CONFIG.trading_mode, "value", "simulation") == "live"
-            else TradingMode.SIMULATION
-        )
-        self._set_trading_mode(init_mode, prompt_reconnect=False)
         self._setup_statusbar()
         self._setup_timers()
         self._apply_professional_style()
@@ -369,33 +268,6 @@ class MainApp(MainAppCommonMixin, QMainWindow):
         exit_action.triggered.connect(self.close)
         file_menu.addAction(exit_action)
 
-        trading_menu = menubar.addMenu("&Trading")
-
-        connect_action = QAction("&Connect Broker", self)
-        connect_action.triggered.connect(self._toggle_trading)
-        trading_menu.addAction(connect_action)
-
-        trading_menu.addSeparator()
-
-        self.paper_action = QAction("&Paper Trading Mode", self)
-        self.paper_action.setCheckable(True)
-        self.live_action = QAction("&Live Trading Mode", self)
-        self.live_action.setCheckable(True)
-
-        mode_group = QActionGroup(self)
-        mode_group.setExclusive(True)
-        mode_group.addAction(self.paper_action)
-        mode_group.addAction(self.live_action)
-
-        self.paper_action.triggered.connect(
-            lambda checked: self._set_trading_mode(TradingMode.SIMULATION) if checked else None
-        )
-        self.live_action.triggered.connect(
-            lambda checked: self._set_trading_mode(TradingMode.LIVE) if checked else None
-        )
-        trading_menu.addAction(self.paper_action)
-        trading_menu.addAction(self.live_action)
-
         ai_menu = menubar.addMenu("&AI Model")
 
         train_action = QAction("&Train Model", self)
@@ -431,7 +303,7 @@ class MainApp(MainAppCommonMixin, QMainWindow):
         help_menu.addAction(about_action)
 
     def _setup_toolbar(self) -> None:
-        """Setup professional toolbar with auto-trade controls."""
+        """Setup professional toolbar."""
         toolbar = QToolBar("Main Toolbar")
         toolbar.setIconSize(QSize(24, 24))
         toolbar.setMovable(False)
@@ -457,36 +329,6 @@ class MainApp(MainAppCommonMixin, QMainWindow):
 
         toolbar.addSeparator()
 
-        # === AUTO-TRADE CONTROLS ===
-        toolbar.addWidget(QLabel("  Mode: "))
-        self.trade_mode_combo = QComboBox()
-        self.trade_mode_combo.addItems(["Manual", "Auto", "Semi-Auto"])
-        self.trade_mode_combo.setCurrentIndex(0)
-        self.trade_mode_combo.setFixedWidth(110)
-        self.trade_mode_combo.setToolTip(
-            "Manual: Click to trade\n"
-            "Auto: AI trades automatically\n"
-            "Semi-Auto: AI suggests, you approve"
-        )
-        self.trade_mode_combo.currentIndexChanged.connect(
-            self._on_trade_mode_changed
-        )
-        toolbar.addWidget(self.trade_mode_combo)
-
-        # Auto-trade status indicator
-        self.auto_trade_status_label = QLabel("  MANUAL  ")
-        self.auto_trade_status_label.setStyleSheet(
-            get_status_badge_style("manual")
-        )
-        toolbar.addWidget(self.auto_trade_status_label)
-
-        # Auto-trade settings button
-        auto_settings_action = QAction("Auto Settings", self)
-        auto_settings_action.triggered.connect(self._show_auto_trade_settings)
-        toolbar.addAction(auto_settings_action)
-
-        toolbar.addSeparator()
-
         spacer = QWidget()
         spacer.setSizePolicy(
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred
@@ -499,6 +341,17 @@ class MainApp(MainAppCommonMixin, QMainWindow):
         self.stock_input.setFixedWidth(150)
         self.stock_input.returnPressed.connect(self._analyze_stock)
         toolbar.addWidget(self.stock_input)
+
+        toolbar.addWidget(QLabel("  Date: "))
+        self.chart_date_edit = QDateEdit()
+        self.chart_date_edit.setCalendarPopup(True)
+        self.chart_date_edit.setDisplayFormat("yyyy-MM-dd")
+        today = QDate.currentDate()
+        self.chart_date_edit.setDate(today)
+        self.chart_date_edit.setMaximumDate(today)
+        self._selected_chart_date = str(today.toString("yyyy-MM-dd"))
+        self.chart_date_edit.dateChanged.connect(self._on_chart_date_changed)
+        toolbar.addWidget(self.chart_date_edit)
 
     # =========================================================================
     # =========================================================================
@@ -646,8 +499,6 @@ class MainApp(MainAppCommonMixin, QMainWindow):
             from .charts import StockChart
             self.chart = StockChart()
             self.chart.setMinimumHeight(360)
-            if hasattr(self.chart, "trade_requested"):
-                self.chart.trade_requested.connect(self._on_chart_trade_requested)
         except ImportError:
             self.chart = QLabel("Chart (charts module not found)")
             self.chart.setMinimumHeight(360)
@@ -807,11 +658,6 @@ class MainApp(MainAppCommonMixin, QMainWindow):
         self.watchlist_timer.timeout.connect(self._update_watchlist)
         self.watchlist_timer.start(30000)
 
-        # Auto-trade UI refresh
-        self.auto_trade_timer = QTimer()
-        self.auto_trade_timer.timeout.connect(self._refresh_auto_trade_ui)
-        self.auto_trade_timer.start(2000)
-
         # Live chart refresh: keep real + guessed lines moving.
         self.chart_live_timer = QTimer()
         self.chart_live_timer.timeout.connect(self._refresh_live_chart_forecast)
@@ -835,7 +681,7 @@ class MainApp(MainAppCommonMixin, QMainWindow):
     # =========================================================================
 
     def _init_components(self) -> None:
-        """Initialize trading components."""
+        """Initialize analysis components."""
         try:
             Predictor = _lazy_get("models.predictor", "Predictor")
 
@@ -886,7 +732,6 @@ class MainApp(MainAppCommonMixin, QMainWindow):
                     requested_interval=interval,
                     requested_horizon=horizon,
                 )
-                self._update_trained_stocks_ui()
                 self.log("AI model loaded successfully", "success")
             else:
                 self.model_status.setText("Model: Not trained")
@@ -899,7 +744,6 @@ class MainApp(MainAppCommonMixin, QMainWindow):
                 self.model_info.setText(
                     "Train a model to enable predictions"
                 )
-                self._update_trained_stocks_ui([])
                 self.log(
                     "No trained model found. Please train a model.", "warning"
                 )
@@ -915,10 +759,6 @@ class MainApp(MainAppCommonMixin, QMainWindow):
                     f"font-weight: {ModernFonts.WEIGHT_BOLD};"
                 
             )
-            self._update_trained_stocks_ui([])
-
-        # Initialize auto-trader on executor if available
-        self._init_auto_trader()
 
         # Auto-start live monitor when model is available.
         if self._predictor_runtime_ready():
@@ -933,7 +773,7 @@ class MainApp(MainAppCommonMixin, QMainWindow):
                 "Debug console enabled (set TRADING_DEBUG_CONSOLE=0 to disable)",
                 "warning",
             )
-        self.log("System initialized - Ready for trading", "info")
+        self.log("System initialized - Ready for analysis", "info")
 
     def _prune_caches(self) -> None:
         """Prune internal caches to prevent memory leaks.
@@ -1045,14 +885,13 @@ class MainApp(MainAppCommonMixin, QMainWindow):
         self.log("Workspace reset", "info")
 
     def _init_auto_trader(self) -> None:
-        _init_auto_trader_impl(self)
+        return
 
     def _on_interval_changed(self, interval: str) -> None:
         """Handle interval change - reload model and restart monitor."""
         interval = self._normalize_interval_token(interval)
         horizon = self.forecast_spin.value()
         self.model_info.setText(f"Interval: {interval}, Horizon: {horizon}")
-        self._update_trained_stocks_ui([])
 
         self.lookback_spin.setValue(self._recommended_lookback(interval))
         self._bars_by_symbol.clear()
@@ -1090,7 +929,6 @@ class MainApp(MainAppCommonMixin, QMainWindow):
                             f"Model reloaded for {active_iv} interval, horizon {active_h}",
                             "info",
                         )
-                        self._update_trained_stocks_ui()
                         self._log_model_alignment_debug(
                             context="interval_reload",
                             requested_interval=interval,
@@ -1112,7 +950,6 @@ class MainApp(MainAppCommonMixin, QMainWindow):
                         ),
                         "warning",
                     )
-                    self._update_trained_stocks_ui()
                     self._log_model_alignment_debug(
                         context="interval_keep_loaded",
                         requested_interval=interval,
@@ -1124,14 +961,6 @@ class MainApp(MainAppCommonMixin, QMainWindow):
         if was_monitoring:
             self._start_monitoring()
 
-        # Update auto-trader predictor
-        if (
-            self.executor
-            and self.executor.auto_trader
-            and self.predictor
-        ):
-            self.executor.auto_trader.update_predictor(self.predictor)
-
         selected = self._ui_norm(self.stock_input.text())
         if (
             selected
@@ -1139,6 +968,17 @@ class MainApp(MainAppCommonMixin, QMainWindow):
         ):
             self.stock_input.setText(selected)
             self._analyze_stock()
+
+    def _on_chart_date_changed(self, qdate: QDate) -> None:
+        """Refresh chart data for selected trading date."""
+        selected_date = str(qdate.toString("yyyy-MM-dd"))
+        self._selected_chart_date = selected_date
+        symbol = self._ui_norm(self.stock_input.text())
+        if not symbol:
+            return
+        interval = self._normalize_interval_token(self.interval_combo.currentText())
+        self._queue_history_refresh(symbol, interval)
+        self._analyze_stock()
 
         # =========================================================================
         # REAL-TIME MONITORING
@@ -1210,36 +1050,42 @@ class MainApp(MainAppCommonMixin, QMainWindow):
 
 
     def _refresh_all(self) -> None:
-        _refresh_all_impl(self)
+        self._update_watchlist()
+        self._refresh_portfolio()
+        self.log("Refreshed all data", "info")
 
     # =========================================================================
     # =========================================================================
 
     def _toggle_trading(self) -> None:
-        _toggle_trading_impl(self)
+        self.log("Broker connection is disabled in this build.", "info")
 
     def _on_mode_combo_changed(self, index: int) -> None:
-        _on_mode_combo_changed_impl(self, index)
+        _ = index
 
     def _set_trading_mode(
         self,
         mode: TradingMode,
         prompt_reconnect: bool = False,
     ) -> None:
-        _set_trading_mode_impl(
-            self,
-            mode,
-            prompt_reconnect=prompt_reconnect,
-        )
+        _ = prompt_reconnect
+        mode = TradingMode.SIMULATION if mode != TradingMode.LIVE else TradingMode.LIVE
+        try:
+            CONFIG.trading_mode = TradingMode.SIMULATION
+        except _UI_RECOVERABLE_EXCEPTIONS:
+            pass
+        if mode == TradingMode.LIVE:
+            self.log("Live broker mode is disabled. Using simulation mode.", "warning")
 
     def _connect_trading(self) -> None:
-        _connect_trading_impl(self)
+        self.log("Broker connection is disabled in this build.", "info")
 
     def _disconnect_trading(self) -> None:
-        _disconnect_trading_impl(self)
+        self.log("Broker connection is disabled in this build.", "info")
 
     def _on_chart_trade_requested(self, side: str, price: float) -> None:
-        _on_chart_trade_requested_impl(self, side, price)
+        _ = (side, price)
+        self.log("Order execution is disabled in this build.", "info")
 
     def _show_chart_trade_dialog(
         self,
@@ -1248,13 +1094,8 @@ class MainApp(MainAppCommonMixin, QMainWindow):
         clicked_price: float,
         lot: int,
     ) -> dict[str, float | int | str | bool] | None:
-        return _show_chart_trade_dialog_impl(
-            self,
-            symbol,
-            side,
-            clicked_price,
-            lot,
-        )
+        _ = (symbol, side, clicked_price, lot)
+        return None
 
     def _submit_chart_order(
         self,
@@ -1272,37 +1113,52 @@ class MainApp(MainAppCommonMixin, QMainWindow):
         take_profit: float = 0.0,
         bracket: bool = False,
     ) -> None:
-        _submit_chart_order_impl(
-            self,
+        _ = (
             symbol,
             side,
             qty,
             price,
-            order_type=order_type,
-            time_in_force=time_in_force,
-            trigger_price=trigger_price,
-            trailing_stop_pct=trailing_stop_pct,
-            trail_limit_offset_pct=trail_limit_offset_pct,
-            strict_time_in_force=strict_time_in_force,
-            stop_loss=stop_loss,
-            take_profit=take_profit,
-            bracket=bracket,
+            order_type,
+            time_in_force,
+            trigger_price,
+            trailing_stop_pct,
+            trail_limit_offset_pct,
+            strict_time_in_force,
+            stop_loss,
+            take_profit,
+            bracket,
         )
+        self.log("Order execution is disabled in this build.", "info")
 
     def _execute_buy(self) -> None:
-        _execute_buy_impl(self)
+        self.log("Buy action is disabled in this build.", "info")
 
     def _execute_sell(self) -> None:
-        _execute_sell_impl(self)
+        self.log("Sell action is disabled in this build.", "info")
 
     def _on_order_filled(self, order: Any, fill: Any) -> None:
-        _on_order_filled_impl(self, order, fill)
+        _ = (order, fill)
+        self.log("Order updates are disabled in this build.", "info")
 
     def _on_order_rejected(self, order: Any, reason: Any) -> None:
-        _on_order_rejected_impl(self, order, reason)
+        _ = (order, reason)
+        self.log("Order updates are disabled in this build.", "info")
 
     def _refresh_portfolio(self) -> None:
-        _refresh_portfolio_impl(self)
+        try:
+            self.account_labels["equity"].setText("CNY 0.00")
+            self.account_labels["cash"].setText("CNY 0.00")
+            self.account_labels["positions"].setText("CNY 0.00")
+            self.account_labels["pnl"].setText("CNY 0.00")
+            self.account_labels["pnl"].setStyleSheet(
+                f"color: {ModernColors.TEXT_SECONDARY}; "
+                f"font-size: {ModernFonts.SIZE_XL}px; "
+                f"font-weight: {ModernFonts.WEIGHT_BOLD};"
+            )
+            if hasattr(self.positions_table, "setRowCount"):
+                self.positions_table.setRowCount(0)
+        except _UI_RECOVERABLE_EXCEPTIONS as exc:
+            log.debug("Portfolio refresh fallback failed", exc_info=exc)
 
     # =========================================================================
     # =========================================================================
@@ -1327,43 +1183,43 @@ class MainApp(MainAppCommonMixin, QMainWindow):
     # =========================================================================
 
     def _on_trade_mode_changed(self, index: int) -> None:
-        _on_trade_mode_changed_impl(self, index)
+        _ = index
 
     def _apply_auto_trade_mode(self, mode: AutoTradeMode) -> None:
-        _apply_auto_trade_mode_impl(self, mode)
+        self._auto_trade_mode = AutoTradeMode.MANUAL
 
     def _update_auto_trade_status_label(self, mode: AutoTradeMode) -> None:
-        _update_auto_trade_status_label_impl(self, mode)
+        _ = mode
 
     def _toggle_auto_pause(self) -> None:
-        _toggle_auto_pause_impl(self)
+        return
 
     def _approve_all_pending(self) -> None:
-        _approve_all_pending_impl(self)
+        return
 
     def _reject_all_pending(self) -> None:
-        _reject_all_pending_impl(self)
+        return
 
     def _show_auto_trade_settings(self) -> None:
-        _show_auto_trade_settings_impl(self)
+        self.log("Auto-trade settings are disabled in this build.", "info")
 
     def _on_auto_trade_action_safe(self, action: AutoTradeAction) -> None:
-        _on_auto_trade_action_safe_impl(self, action)
+        _ = action
 
     def _on_auto_trade_action(self, action: AutoTradeAction) -> None:
-        _on_auto_trade_action_impl(self, action)
+        _ = action
 
     def _on_pending_approval_safe(self, action: AutoTradeAction) -> None:
-        _on_pending_approval_safe_impl(self, action)
+        _ = action
 
     def _on_pending_approval(self, action: AutoTradeAction) -> None:
-        _on_pending_approval_impl(self, action)
+        _ = action
 
     def _refresh_pending_table(self) -> None:
-        _refresh_pending_table_impl(self)
+        return
 
     def _refresh_auto_trade_ui(self) -> None:
-        _refresh_auto_trade_ui_impl(self)
+        return
 
     # =========================================================================
     # =========================================================================
@@ -1528,7 +1384,7 @@ def run_app() -> None:
     app = QApplication(sys.argv)
     app.setStyle('Fusion')
 
-    app.setApplicationName("AI Stock Trading System")
+    app.setApplicationName("AI Stock Analysis System")
     app.setApplicationVersion("2.0")
     app.setOrganizationName("AI Trading")
 

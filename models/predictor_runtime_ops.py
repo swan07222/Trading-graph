@@ -409,7 +409,7 @@ def _fetch_data(
                 code,
                 interval=interval,
                 bars=bars,
-                use_cache=True,
+                use_cache=False,
                 update_db=True,
                 allow_online=bool(history_allow_online),
             )
@@ -418,7 +418,7 @@ def _fetch_data(
                 code,
                 interval=interval,
                 bars=bars,
-                use_cache=True,
+                use_cache=False,
                 update_db=True,
             )
         

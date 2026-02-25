@@ -30,10 +30,10 @@ class LazyImport(Generic[T]):
     """Lazy import descriptor for module-level attributes.
 
     Usage:
-        _oms = LazyImport("trading.oms", "get_oms")
+        _load_cfg = LazyImport("config.settings", "CONFIG")
 
         def some_function():
-            oms = _oms()  # Import happens on first call
+            cfg = _load_cfg()  # Import happens on first call
     """
 
     def __init__(self, module: str, name: str) -> None:
@@ -60,10 +60,10 @@ class CachedLazyImport(Generic[T]):
     """Lazy import with TTL-based caching for expensive lookups.
 
     Usage:
-        _get_oms = CachedLazyImport("trading.oms", "get_oms", ttl=5.0)
+        _get_fetcher = CachedLazyImport("data.fetcher", "get_fetcher", ttl=5.0)
 
         def some_function():
-            oms = _get_oms()  # Cached for TTL seconds
+            fetcher = _get_fetcher()  # Cached for TTL seconds
     """
 
     def __init__(self, module: str, name: str, ttl: float = 5.0) -> None:

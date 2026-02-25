@@ -323,10 +323,7 @@ def _run_cycle(
             # New stocks: online + DB update (latest 1m window).
             fetch_groups.append(("new", list(new_batch), True, True))
         if replay_batch:
-            # For short intraday intervals, allow online fetch since intraday DB
-            # goes stale quickly and offline cache will fail min_bars check.
-            _replay_online = eff_interval in ("1m", "2m", "5m")
-            fetch_groups.append(("replay", list(replay_batch), _replay_online, False))
+            fetch_groups.append(("replay", list(replay_batch), True, True))
         if not fetch_groups:
             fetch_groups.append(("batch", list(codes), True, True))
 
@@ -413,8 +410,8 @@ def _run_cycle(
                 retry_groups.append((
                     "replay",
                     replay_failed[: min(len(replay_failed), replay_left)],
-                    False,
-                    False,
+                    True,
+                    True,
                 ))
             if not retry_groups:
                 retry_groups.append((
@@ -549,7 +546,7 @@ def _run_cycle(
                     f"Note: {interval_name} historical data is limited from free sources "
                     f"(typically 1-2 days). Tips: 1) Run during market hours (9:30-15:00 CST) "
                     f"for live session data, 2) Use 1d interval for more data availability, "
-                    f"3) Retry multiple times to accumulate session cache."
+                    f"3) Retry later for fresh online data."
                 )
                 log.warning(help_msg)
                 self._update(
@@ -563,56 +560,16 @@ def _run_cycle(
                 )
             return False
 
-        # === 6. Recover fetched history before training ===
+        # === 6. Verify fetched history before training ===
         self._update(
-            stage="recovering",
+            stage="validating_data",
             progress=41.0,
-            message=f"Recovering {eff_interval} data integrity...",
+            message=f"Using latest online {eff_interval} history...",
         )
-        try:
-            from data.fetcher import get_fetcher
-
-            fetcher = get_fetcher()
-            reconcile_fn = getattr(fetcher, "reconcile_pending_cache_sync", None)
-            if callable(reconcile_fn):
-                try:
-                    reconcile_fn(codes=list(ok_codes), interval=eff_interval)
-                except TypeError:
-                    reconcile_fn()
-
-            refresh_fn = getattr(fetcher, "refresh_trained_stock_history", None)
-            refreshed = 0
-            if callable(refresh_fn):
-                refresh_days = 2 if eff_interval in (
-                    "1m", "2m", "5m", "15m", "30m", "60m", "1h"
-                ) else 30
-                try:
-                    report = refresh_fn(
-                        list(ok_codes),
-                        interval=eff_interval,
-                        window_days=refresh_days,
-                        allow_online=True,
-                        sync_session_cache=True,
-                        replace_realtime_after_close=True,
-                    )
-                except TypeError:
-                    report = refresh_fn(
-                        list(ok_codes),
-                        interval=eff_interval,
-                        window_days=refresh_days,
-                    )
-                if isinstance(report, dict):
-                    refreshed = int(report.get("updated", 0) or 0)
-
-            self._update(
-                message=f"Recovered {refreshed}/{len(ok_codes)} stocks",
-                progress=41.8,
-            )
-        except _AUTO_LEARNER_RECOVERABLE_EXCEPTIONS as e:
-            log.warning("Pre-train data recovery skipped: %s", e)
-            self.progress.add_warning(
-                f"Pre-train data recovery skipped: {type(e).__name__}"
-            )
+        self._update(
+            message=f"Prepared {len(ok_codes)} stocks for training",
+            progress=41.8,
+        )
 
         # === 6. Backup model ===
         self._update(stage="backup", progress=42.0, message="Backing up current model...")
@@ -769,7 +726,7 @@ def _run_targeted_cycle(
         if targeted_new:
             fetch_groups.append(("new", list(targeted_new), True, True))
         if targeted_replay:
-            fetch_groups.append(("replay", list(targeted_replay), False, False))
+            fetch_groups.append(("replay", list(targeted_replay), True, True))
         if not fetch_groups:
             fetch_groups.append(("batch", list(train_codes), True, True))
 
@@ -847,8 +804,8 @@ def _run_targeted_cycle(
                 retry_groups.append((
                     "replay",
                     replay_failed[: min(len(replay_failed), replay_left)],
-                    False,
-                    False,
+                    True,
+                    True,
                 ))
             if not retry_groups:
                 retry_groups.append((
@@ -945,56 +902,16 @@ def _run_targeted_cycle(
             )
             return False
 
-        # === 4. Recover fetched history before training ===
+        # === 4. Verify fetched history before training ===
         self._update(
-            stage="recovering",
+            stage="validating_data",
             progress=41.0,
-            message=f"Recovering {eff_interval} data integrity...",
+            message=f"Using latest online {eff_interval} history...",
         )
-        try:
-            from data.fetcher import get_fetcher
-
-            fetcher = get_fetcher()
-            reconcile_fn = getattr(fetcher, "reconcile_pending_cache_sync", None)
-            if callable(reconcile_fn):
-                try:
-                    reconcile_fn(codes=list(ok_codes), interval=eff_interval)
-                except TypeError:
-                    reconcile_fn()
-
-            refresh_fn = getattr(fetcher, "refresh_trained_stock_history", None)
-            refreshed = 0
-            if callable(refresh_fn):
-                refresh_days = 2 if eff_interval in (
-                    "1m", "2m", "5m", "15m", "30m", "60m", "1h"
-                ) else 30
-                try:
-                    report = refresh_fn(
-                        list(ok_codes),
-                        interval=eff_interval,
-                        window_days=refresh_days,
-                        allow_online=True,
-                        sync_session_cache=True,
-                        replace_realtime_after_close=True,
-                    )
-                except TypeError:
-                    report = refresh_fn(
-                        list(ok_codes),
-                        interval=eff_interval,
-                        window_days=refresh_days,
-                    )
-                if isinstance(report, dict):
-                    refreshed = int(report.get("updated", 0) or 0)
-
-            self._update(
-                message=f"Recovered {refreshed}/{len(ok_codes)} stocks",
-                progress=41.8,
-            )
-        except _AUTO_LEARNER_RECOVERABLE_EXCEPTIONS as e:
-            log.warning("Pre-train data recovery skipped: %s", e)
-            self.progress.add_warning(
-                f"Pre-train data recovery skipped: {type(e).__name__}"
-            )
+        self._update(
+            message=f"Prepared {len(ok_codes)} stocks for training",
+            progress=41.8,
+        )
 
         # === 4. Backup model ===
         self._update(

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import math
 import time
-from statistics import median
+from datetime import date, datetime
 from typing import Any
 
 from config.settings import CONFIG
@@ -164,68 +164,26 @@ def _load_chart_history_bars(
     lookback_bars: int,
     _recursion_depth: int = 0,
 ) -> list[dict[str, Any]]:
-    """Load historical OHLC bars for chart rendering."""
-    # [DBG] History load start diagnostic
-    self._debug_console(
-        f"chart_history_load_start:{self._ui_norm(symbol)}:{interval}",
-        f"Loading chart history for {self._ui_norm(symbol)} {interval}: lookback={lookback_bars} depth={_recursion_depth}",
-        min_gap_seconds=1.0,
-        level="info",
-    )
+    """Load historical OHLC bars for chart rendering with direct online fetch only."""
+    _ = _recursion_depth
     if not self.predictor:
-        # [DBG] No predictor diagnostic
-        self._debug_console(
-            f"chart_history_no_predictor:{self._ui_norm(symbol)}",
-            f"Chart history load skipped for {self._ui_norm(symbol)}: no predictor",
-            min_gap_seconds=1.0,
-            level="warning",
-        )
         return []
     try:
         fetcher = getattr(self.predictor, "fetcher", None)
         if fetcher is None:
-            # [DBG] No fetcher diagnostic
-            self._debug_console(
-                f"chart_history_no_fetcher:{self._ui_norm(symbol)}",
-                f"Chart history load skipped for {self._ui_norm(symbol)}: no fetcher",
-                min_gap_seconds=1.0,
-                level="warning",
-            )
             return []
+
         requested_iv = self._normalize_interval_token(interval)
         norm_iv = requested_iv or "1m"
-        # Intraday charts are sourced from canonical 1m and resampled in UI.
-        # Daily/weekly/monthly charts should fetch native intervals directly
-        # to avoid 1m lookback/API-cap truncation.
         source_iv = "1m" if norm_iv not in {"1d", "1wk", "1mo"} else norm_iv
-        is_trained = self._is_trained_stock(symbol)
-        if is_trained:
-            target_floor = int(self._trained_stock_window_bars(norm_iv))
-            if norm_iv in {"1d", "1wk", "1mo"}:
-                lookback = max(target_floor, int(lookback_bars))
-            else:
-                # Strictly keep trained intraday charts on the latest 2-day window.
-                lookback = int(target_floor)
-        else:
-            if norm_iv in {"1d", "1wk", "1mo"}:
-                lookback = max(7, int(min(max(lookback_bars, 7), 120)))
-            else:
-                lookback = max(120, int(self._seven_day_lookback(norm_iv)))
-        refresh_requested = bool(
-            self._consume_history_refresh(symbol, norm_iv)
+        lookback = max(
+            int(max(1, lookback_bars)),
+            int(self._recommended_lookback(norm_iv)),
         )
-        force_refresh = bool(refresh_requested)
-        use_cache = not force_refresh
-        update_db = bool(force_refresh)
-        allow_online = bool(force_refresh)
-        fallback_allow_online = bool(force_refresh)
 
         if source_iv == norm_iv:
             source_lookback = int(
-                max(
-                    int(lookback),
-                    int(self._recommended_lookback(source_iv)),
-                )
+                max(int(lookback), int(self._recommended_lookback(source_iv)))
             )
         else:
             source_lookback = int(
@@ -238,264 +196,88 @@ def _load_chart_history_bars(
                     ),
                 )
             )
-        source_min_floor = int(self._recommended_lookback(source_iv))
-        is_intraday = norm_iv not in ("1d", "1wk", "1mo")
-        market_open = bool(CONFIG.is_market_open())
-        now_bucket = self._bar_bucket_epoch(time.time(), source_iv)
+
+        selected_date_text = str(getattr(self, "_selected_chart_date", "") or "").strip()
+        selected_date: date | None = None
+        if selected_date_text:
+            try:
+                selected_date = date.fromisoformat(selected_date_text)
+            except ValueError:
+                selected_date = None
+        if selected_date is not None:
+            try:
+                from data.fetcher import BARS_PER_DAY
+
+                bpd = float(BARS_PER_DAY.get(source_iv, 1.0) or 1.0)
+            except _APP_CHART_RECOVERABLE_EXCEPTIONS:
+                step = float(max(1, self._interval_seconds(source_iv)))
+                bpd = float(max(1.0, round(86400.0 / step)))
+            days_back = max(0, (datetime.now().date() - selected_date).days)
+            source_lookback = max(
+                source_lookback,
+                int((days_back + 2) * max(1.0, bpd)),
+            )
+
         df = _fetch_chart_history_frame(
             fetcher,
             symbol,
             source_iv=source_iv,
             bars=source_lookback,
-            use_cache=bool(use_cache),
-            update_db=bool(update_db),
-            allow_online=bool(allow_online),
-            refresh_intraday_after_close=bool(force_refresh),
+            use_cache=False,
+            update_db=True,
+            allow_online=True,
+            refresh_intraday_after_close=True,
         )
-        # [DBG] History fetch result diagnostic
-        df_rows = len(df) if df is not None and not df.empty else 0
-        self._debug_console(
-            f"chart_history_fetch_result:{self._ui_norm(symbol)}:{source_iv}",
-            f"Chart history fetch for {self._ui_norm(symbol)} {source_iv}: rows={df_rows} source_lookback={source_lookback}",
-            min_gap_seconds=1.0,
-            level="info",
-        )
-        if source_iv == "1d":
-            min_required = int(max(5, min(source_lookback, 90)))
-        elif source_iv == "1wk":
-            min_required = int(max(4, min(source_lookback, 52)))
-        elif source_iv == "1mo":
-            min_required = int(max(3, min(source_lookback, 24)))
-        else:
-            min_required = int(max(20, source_min_floor if is_trained else 20))
-            if source_lookback >= 200:
-                depth_ratio = 0.55 if is_trained else 0.40
-                min_required = max(
-                    min_required,
-                    int(max(120, float(source_lookback) * float(depth_ratio))),
-                )
-        if df is None or df.empty or len(df) < min_required:
-            # [DBG] Online fetch fallback diagnostic
-            self._debug_console(
-                f"chart_history_online_fallback:{self._ui_norm(symbol)}:{source_iv}",
-                f"Chart history falling back to online fetch for {self._ui_norm(symbol)} {source_iv}: rows={df_rows if df else 0} min_required={min_required}",
-                min_gap_seconds=1.0,
-                level="info",
-            )
-            df_online = _fetch_chart_history_frame(
-                fetcher,
-                symbol,
-                source_iv=source_iv,
-                bars=source_lookback,
-                # Bypass in-memory short windows when depth is too thin.
-                use_cache=False,
-                update_db=True,
-                allow_online=True,
-                refresh_intraday_after_close=bool(force_refresh),
-            )
-            if df_online is not None and not df_online.empty:
-                df = df_online
-                # [DBG] Online fetch result diagnostic
-                self._debug_console(
-                    f"chart_history_online_result:{self._ui_norm(symbol)}:{source_iv}",
-                    f"Chart history online fetch result for {self._ui_norm(symbol)} {source_iv}: rows={len(df)}",
-                    min_gap_seconds=1.0,
-                    level="info",
-                )
         if df is None or df.empty:
-            # Fallback query path when primary history window is empty.
-            df = _fetch_chart_history_frame(
-                fetcher,
-                symbol,
-                source_iv=source_iv,
-                bars=source_lookback,
-                use_cache=True,
-                update_db=False,
-                allow_online=bool(fallback_allow_online),
-                refresh_intraday_after_close=bool(force_refresh),
-            )
+            return []
+
         out: list[dict[str, Any]] = []
-        prev_close: float | None = None
-        prev_epoch: float | None = None
-
-        if df is not None and not df.empty:
-            prev_close, prev_epoch = _append_normalized_chart_rows(
-                self,
-                frame=df,
-                source_iv=source_iv,
-                source_lookback=source_lookback,
-                out=out,
-                prev_close=prev_close,
-                prev_epoch=prev_epoch,
-                is_intraday=is_intraday,
-                market_open=market_open,
-                now_bucket=now_bucket,
-                default_final=True,
-                ts_field="datetime",
-                final_field=None,
-            )
-
-        # Include session-persisted bars so refresh/restart keeps data continuity.
-        if self._session_bar_cache is not None and not force_refresh and market_open:
-            sdf = self._session_bar_cache.read_history(
-                symbol, source_iv, bars=source_lookback, final_only=False
-            )
-            if sdf is not None and not sdf.empty:
-                prev_close, prev_epoch = _append_normalized_chart_rows(
-                    self,
-                    frame=sdf,
-                    source_iv=source_iv,
-                    source_lookback=source_lookback,
-                    out=out,
-                    prev_close=prev_close,
-                    prev_epoch=prev_epoch,
-                    is_intraday=is_intraday,
-                    market_open=market_open,
-                    now_bucket=now_bucket,
-                    default_final=True,
-                    ts_field=None,
-                    final_field="is_final",
-                )
+        _append_normalized_chart_rows(
+            self,
+            frame=df,
+            source_iv=source_iv,
+            source_lookback=source_lookback,
+            out=out,
+            prev_close=None,
+            prev_epoch=None,
+            is_intraday=norm_iv not in {"1d", "1wk", "1mo"},
+            market_open=bool(CONFIG.is_market_open()),
+            now_bucket=self._bar_bucket_epoch(time.time(), source_iv),
+            default_final=True,
+            ts_field="datetime",
+            final_field=None,
+        )
 
         out = self._filter_bars_to_market_session(out, source_iv)
-
-        # Deduplicate by normalized epoch and keep latest.
-        merged: dict[int, dict[str, Any]] = {}
-        for b in out:
-            epoch = self._bar_bucket_epoch(
-                b.get("_ts_epoch", b.get("timestamp", "")),
-                source_iv,
-            )
-            row = dict(b)
-            row["_ts_epoch"] = float(epoch)
-            row["timestamp"] = self._epoch_to_iso(epoch)
-            key = int(epoch)
-            existing = merged.get(key)
-            if existing is None:
-                merged[key] = row
-                continue
-
-            existing_final = bool(existing.get("final", True))
-            row_final = bool(row.get("final", True))
-            if existing_final and not row_final:
-                continue
-            if row_final and not existing_final:
-                merged[key] = row
-                continue
-
-            # Same finality: prefer richer bar (volume). On ties, prefer
-            # later row so fresh session-cache corrections can replace stale
-            # DB values for the same timestamp bucket.
-            try:
-                e_vol = float(existing.get("volume", 0) or 0)
-            except _APP_CHART_RECOVERABLE_EXCEPTIONS:
-                e_vol = 0.0
-            try:
-                r_vol = float(row.get("volume", 0) or 0)
-            except _APP_CHART_RECOVERABLE_EXCEPTIONS:
-                r_vol = 0.0
-            if r_vol >= e_vol:
-                merged[key] = row
-        out = list(merged.values())
-        out.sort(
-            key=lambda x: float(
-                x.get("_ts_epoch", self._ts_to_epoch(x.get("timestamp", "")))
-            )
-        )
-        # One more unified scrub pass to drop residual malformed bars.
         out = self._merge_bars([], out, source_iv)
-        out = out[-source_lookback:]
-
-        # Chart intervals are display-only; source stream remains 1m.
         if norm_iv != source_iv:
             out = self._resample_chart_bars(
                 out,
                 source_interval=source_iv,
                 target_interval=norm_iv,
             )
-        out = out[-lookback:]
 
-        if out and is_intraday and not force_refresh:
-            sample = out[-min(520, len(out)):]
-            total_q = 0
-            degenerate_q = 0
-            epochs: list[float] = []
-            for row in sample:
+        if selected_date is not None:
+            selected_out: list[dict[str, Any]] = []
+            for row in out:
+                ts_raw = row.get("_ts_epoch", row.get("timestamp"))
                 try:
-                    c_q = float(row.get("close", 0) or 0)
-                    o_q = float(row.get("open", c_q) or c_q)
-                    h_q = float(row.get("high", c_q) or c_q)
-                    l_q = float(row.get("low", c_q) or c_q)
+                    epoch = float(self._ts_to_epoch(ts_raw))
                 except _APP_CHART_RECOVERABLE_EXCEPTIONS:
                     continue
-                if c_q <= 0 or (not all(math.isfinite(v) for v in (o_q, h_q, l_q, c_q))):
-                    continue
-                ref_q = max(c_q, 1e-8)
-                body_q = abs(o_q - c_q) / ref_q
-                span_q = abs(h_q - l_q) / ref_q
-                if body_q <= 0.00012 and span_q <= 0.00120:
-                    degenerate_q += 1
-                total_q += 1
                 try:
-                    ep_q = float(
-                        self._bar_bucket_epoch(
-                            row.get("_ts_epoch", row.get("timestamp")),
-                            norm_iv,
-                        )
-                    )
-                    if math.isfinite(ep_q):
-                        epochs.append(ep_q)
-                except _APP_CHART_RECOVERABLE_EXCEPTIONS as exc:
-                    log.debug("Suppressed exception in app_chart_history_load_ops", exc_info=exc)
+                    from zoneinfo import ZoneInfo
 
-            deg_ratio = (
-                float(degenerate_q) / float(max(1, total_q))
-                if total_q > 0
-                else 0.0
-            )
-            med_step = 0.0
-            if len(epochs) >= 3:
-                epochs = sorted(epochs)
-                diffs = [
-                    float(epochs[i] - epochs[i - 1])
-                    for i in range(1, len(epochs))
-                    if float(epochs[i] - epochs[i - 1]) > 0
-                ]
-                if diffs:
-                    med_step = float(median(diffs))
+                    row_date = datetime.fromtimestamp(
+                        epoch, tz=ZoneInfo("Asia/Shanghai")
+                    ).date()
+                except _APP_CHART_RECOVERABLE_EXCEPTIONS:
+                    row_date = datetime.fromtimestamp(epoch).date()
+                if row_date == selected_date:
+                    selected_out.append(row)
+            out = selected_out
 
-            expected_step = float(max(1, self._interval_seconds(norm_iv)))
-            bad_degenerate = total_q >= 180 and deg_ratio >= 0.50
-            bad_cadence = med_step > (expected_step * 3.5)
-            if bad_degenerate or bad_cadence:
-                self._debug_console(
-                    f"chart_history_refresh:{self._ui_norm(symbol)}:{norm_iv}",
-                    (
-                        f"forcing one-shot online history refresh for {self._ui_norm(symbol)} {norm_iv}: "
-                        f"degenerate={deg_ratio:.1%} cadence={med_step:.0f}s expected={expected_step:.0f}s "
-                        f"bars={len(out)}"
-                    ),
-                    min_gap_seconds=1.0,
-                    level="warning",
-                )
-                self._queue_history_refresh(symbol, norm_iv)
-                if _recursion_depth < 1:
-                    # [DBG] Recursive history load diagnostic
-                    self._debug_console(
-                        f"chart_history_recursive:{self._ui_norm(symbol)}:{norm_iv}",
-                        f"Chart history loading recursively for {self._ui_norm(symbol)} {norm_iv}: depth={_recursion_depth + 1}",
-                        min_gap_seconds=1.0,
-                        level="info",
-                    )
-                    return self._load_chart_history_bars(symbol, norm_iv, lookback, _recursion_depth=_recursion_depth + 1)
-        return out
+        return out[-lookback:]
     except _APP_CHART_RECOVERABLE_EXCEPTIONS as e:
-        log.debug(f"Historical chart load failed for {symbol}: {e}")
-        # [DBG] History load error diagnostic
-        self._debug_console(
-            f"chart_history_error:{self._ui_norm(symbol)}:{interval}",
-            f"Chart history load failed for {self._ui_norm(symbol)} {interval}: {e}",
-            min_gap_seconds=1.0,
-            level="error",
-        )
+        log.debug("Historical chart load failed for %s: %s", symbol, e)
         return []

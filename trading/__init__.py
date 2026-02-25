@@ -11,12 +11,6 @@ def __getattr__(name: str):
     _BROKER = {
         'BrokerInterface', 'SimulatorBroker', 'THSBroker', 'MultiVenueBroker', 'create_broker',
     }
-    _OMS = {
-        'Order', 'Fill', 'Position', 'Account',
-        'OrderManagementSystem', 'get_oms',
-    }
-    _RISK = {'RiskManager', 'get_risk_manager'}
-    _KILL = {'KillSwitch', 'CircuitBreakerType', 'get_kill_switch'}
     _HEALTH = {'HealthMonitor', 'HealthStatus', 'get_health_monitor'}
     _ALERTS = {
         'AlertManager', 'Alert', 'AlertPriority', 'AlertCategory',
@@ -29,18 +23,6 @@ def __getattr__(name: str):
     if name in _BROKER:
         from . import broker as _broker
         return getattr(_broker, name)
-
-    if name in _OMS:
-        from . import oms as _oms
-        return getattr(_oms, name)
-
-    if name in _RISK:
-        from . import risk as _risk
-        return getattr(_risk, name)
-
-    if name in _KILL:
-        from . import kill_switch as _kill_switch
-        return getattr(_kill_switch, name)
 
     if name in _HEALTH:
         from . import health as _health
@@ -70,17 +52,6 @@ __all__ = [
     'THSBroker',
     'MultiVenueBroker',
     'create_broker',
-    'Order',
-    'Fill',
-    'Position',
-    'Account',
-    'OrderManagementSystem',
-    'get_oms',
-    'RiskManager',
-    'get_risk_manager',
-    'KillSwitch',
-    'CircuitBreakerType',
-    'get_kill_switch',
     'HealthMonitor',
     'HealthStatus',
     'get_health_monitor',

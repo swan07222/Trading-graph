@@ -321,14 +321,14 @@ def validate_stock_code(
                 code,
                 interval=interval,
                 bars=bars_for_interval,
-                use_cache=True,
+                use_cache=False,
                 update_db=True,
                 allow_online=True,
                 refresh_intraday_after_close=True,
             )
         except TypeError:
             df = fetcher.get_history(
-                code, interval=interval, bars=bars_for_interval, use_cache=True
+                code, interval=interval, bars=bars_for_interval, use_cache=False
             )
 
         if df is None or df.empty:

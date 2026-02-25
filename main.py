@@ -17,7 +17,6 @@ def check_dependencies(
     require_gui: bool = False,
     require_ml: bool = False,
     require_security: bool = True,
-    require_live: bool = False,
 ) -> bool:
     """Check required dependencies.
 
@@ -35,9 +34,6 @@ def check_dependencies(
             ("pandas", "pandas"),
             ("sklearn", "scikit-learn"),
         ])
-    if require_live:
-        required.append(("easytrader", "easytrader"))
-
     optional = []
     if require_gui:
         required.append(("PyQt6", "PyQt6"))
@@ -260,20 +256,6 @@ def _doctor_gate_violations(report: dict[str, Any]) -> list[str]:
     else:
         violations.append("institutional_readiness_missing")
 
-    live_readiness = report.get("live_readiness")
-    if isinstance(live_readiness, dict):
-        enforced = bool(live_readiness.get("enforced", False))
-        if enforced and not bool(live_readiness.get("pass", False)):
-            missing = live_readiness.get("missing_dependencies", [])
-            if isinstance(missing, list) and missing:
-                violations.append(
-                    f"live_missing_dependencies={','.join(str(x) for x in missing)}"
-                )
-            if live_readiness.get("broker_path_exists") is False:
-                violations.append("live_broker_path_missing")
-    elif report.get("doctor_live_enforced") is True:
-        violations.append("live_readiness_missing")
-
     return violations
 
 
@@ -286,7 +268,7 @@ def _ensure_doctor_gate(report: dict[str, Any]) -> None:
 
 def main() -> int:
     """Main entry point."""
-    parser = argparse.ArgumentParser(description='AI Stock Trading System')
+    parser = argparse.ArgumentParser(description='AI Stock Analysis System')
 
     parser.add_argument('--train', action='store_true', help='Train model')
     parser.add_argument('--train-stock', type=str, help='Train model on a specific stock (e.g., 600519)')
@@ -302,10 +284,8 @@ def main() -> int:
     parser.add_argument('--max-stocks', type=int, default=200, help='Max stocks for training')
     parser.add_argument('--continuous', action='store_true', help='Continuous learning mode')
     parser.add_argument('--cli', action='store_true', help='CLI mode')
-    parser.add_argument('--recovery-drill', action='store_true', help='Run crash recovery drill')
     parser.add_argument('--doctor', action='store_true', help='Run system diagnostics')
     parser.add_argument('--doctor-strict', action='store_true', help='Fail when doctor readiness gate is not met (use with --doctor)')
-    parser.add_argument('--doctor-live', action='store_true', help='Enforce live-trading dependency/path checks (use with --doctor)')
     parser.add_argument('--opt-train-months', type=str, default='6,9,12,18', help='Backtest optimization train months list')
     parser.add_argument('--opt-test-months', type=str, default='1,2,3', help='Backtest optimization test months list')
     parser.add_argument('--opt-min-confidence', type=str, default='0.55,0.60,0.65,0.70', help='Backtest optimization confidence list')
@@ -321,12 +301,9 @@ def main() -> int:
         parser.error("--health-strict requires --health")
     if args.doctor_strict and not args.doctor:
         parser.error("--doctor-strict requires --doctor")
-    if args.doctor_live and not args.doctor:
-        parser.error("--doctor-live requires --doctor")
-
     require_gui = not any([
         args.train, args.auto_learn, args.predict, args.backtest, args.backtest_optimize, args.replay_file,
-        args.health, args.cli, args.recovery_drill, args.doctor,
+        args.health, args.cli, args.doctor,
     ])
     require_ml = any([
         args.train, args.auto_learn, args.predict, args.backtest, args.backtest_optimize, args.replay_file,
@@ -334,14 +311,10 @@ def main() -> int:
 
     from config.settings import CONFIG
 
-    config_live_mode = str(getattr(getattr(CONFIG, "trading_mode", None), "value", "")).lower() == "live"
-    require_live = bool((require_gui and config_live_mode) or args.doctor_live)
-
     if not check_dependencies(
         require_gui=require_gui,
         require_ml=require_ml,
         require_security=True,
-        require_live=require_live,
     ):
         return 1
 
@@ -349,7 +322,7 @@ def main() -> int:
     log = get_logger()
 
     log.info("=" * 60)
-    log.info("AI STOCK TRADING SYSTEM - Production Grade")
+    log.info("AI STOCK ANALYSIS SYSTEM - Production Grade")
     log.info("=" * 60)
 
     from core.events import EVENT_BUS
@@ -376,9 +349,6 @@ def main() -> int:
         except Exception as e:
             log.warning(f"Metrics server failed: {e}")
 
-    from trading.kill_switch import get_kill_switch
-    _ = get_kill_switch()
-
     exit_code = 0
     try:
         if args.health:
@@ -390,7 +360,7 @@ def main() -> int:
                 _ensure_health_gate_from_json(health_json)
 
         elif args.doctor:
-            report = run_system_doctor(check_live=bool(args.doctor_live or config_live_mode))
+            report = run_system_doctor()
             if args.doctor_strict:
                 _ensure_doctor_gate(report)
 
@@ -431,9 +401,6 @@ def main() -> int:
                 epochs_per_cycle=args.epochs,
                 continuous=args.continuous,
             )
-
-        elif args.recovery_drill:
-            run_recovery_drill()
 
         elif args.predict:
             from models.predictor import Predictor
@@ -539,53 +506,7 @@ def main() -> int:
         get_audit_log().close()
     return exit_code
 
-def run_recovery_drill() -> None:
-    """Recovery drill:
-    1) Create isolated OMS DB in temp folder
-    2) Submit an order, process a fill
-    3) Simulate crash: drop OMS instance
-    4) Re-open OMS from same DB and verify fills are not duplicated.
-    """
-    import tempfile
-    from pathlib import Path
-
-    from core.types import Fill, Order, OrderSide, OrderType
-    from trading.oms import get_oms, reset_oms
-
-    tmpdir = Path(tempfile.mkdtemp(prefix="recovery_drill_"))
-    db_path = tmpdir / "orders_drill.db"
-
-    print(f"[DRILL] Using temp OMS db: {db_path}")
-
-    reset_oms()
-    oms = get_oms(initial_capital=100000, db_path=db_path)
-
-    order = Order(symbol="600519", side=OrderSide.BUY, order_type=OrderType.LIMIT, quantity=100, price=100.0)
-    oms.submit_order(order)
-
-    fill = Fill(order_id=order.id, symbol=order.symbol, side=OrderSide.BUY, quantity=100, price=100.0, commission=5.0)
-    oms.process_fill(order, fill)
-
-    fills_before = oms.get_fills(order.id)
-    print(f"[DRILL] fills before restart: {len(fills_before)}")
-
-    # simulate crash/restart
-    reset_oms()
-    oms2 = get_oms(initial_capital=100000, db_path=db_path)
-
-    fills_after = oms2.get_fills(order.id)
-    print(f"[DRILL] fills after restart: {len(fills_after)}")
-
-    # Use explicit exception instead of assert (which can be optimized away)
-    if len(fills_after) != len(fills_before):
-        raise RuntimeError(
-            f"Fill count changed after restart: before={len(fills_before)}, "
-            f"after={len(fills_after)} (dedup broken)"
-        )
-    print("[DRILL] PASS: fill dedup + recovery OK")
-
-
-def run_system_doctor(*, check_live: bool = False) -> dict[str, Any]:
+def run_system_doctor() -> dict[str, Any]:
     """One-shot system diagnostics for setup and runtime readiness."""
     import os
     from datetime import datetime
@@ -605,7 +526,6 @@ def run_system_doctor(*, check_live: bool = False) -> dict[str, Any]:
         "websocket",
         "requests",
         "cryptography",
-        "easytrader",
     ]
     deps = {m: bool(_module_exists(m)) for m in modules}
 
@@ -627,28 +547,10 @@ def run_system_doctor(*, check_live: bool = False) -> dict[str, Any]:
 
     model_dir = CONFIG.model_dir
 
-    broker_path = str(getattr(CONFIG, "broker_path", "") or "").strip()
-    trading_mode = str(getattr(getattr(CONFIG, "trading_mode", None), "value", "")).lower()
-    doctor_live_enforced = bool(check_live or trading_mode == "live")
-    live_missing_deps = [
-        name for name in ("easytrader", "cryptography") if not bool(deps.get(name, False))
-    ]
-    broker_path_exists = bool(broker_path and Path(broker_path).exists())
-    live_readiness = {
-        "enforced": doctor_live_enforced,
-        "trading_mode": trading_mode or "unknown",
-        "missing_dependencies": live_missing_deps,
-        "broker_path": broker_path,
-        "broker_path_exists": broker_path_exists,
-        "pass": (len(live_missing_deps) == 0 and broker_path_exists),
-    }
-
     report: dict[str, Any] = {
         "timestamp": datetime.now().isoformat(),
-        "doctor_live_enforced": doctor_live_enforced,
         "dependencies": deps,
         "paths": path_report,
-        "live_readiness": live_readiness,
         "models": {
             "ensembles": len(list(model_dir.glob("ensemble_*.pt"))),
             "forecasters": len(list(model_dir.glob("forecast_*.pt"))),

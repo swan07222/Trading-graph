@@ -18,41 +18,11 @@ from utils.recoverable import COMMON_RECOVERABLE_EXCEPTIONS
 log = get_logger(__name__)
 _UI_RECOVERABLE_EXCEPTIONS = COMMON_RECOVERABLE_EXCEPTIONS
 
-# FIX: Performance constants for caching
-_TRAINED_STOCK_CACHE_TTL = 300.0  # 5 minutes TTL for trained stock cache
-
 def _lazy_get(module: str, name: str) -> Any:
     return getattr(import_module(module), name)
 
 def _get_trained_stock_codes(self) -> list[str]:
-    """Read trained stock list from loaded predictor metadata.
-
-    FIX: Added TTL-based caching to avoid repeated predictor calls.
-    """
-    # Check cache with TTL
-    now = time.time()
-    cache_data = getattr(self, '_trained_stock_cache_data', None)
-    predictor = getattr(self, "predictor", None)
-    predictor_id = id(predictor) if predictor is not None else 0
-    predictor_sig = ""
-    try:
-        predictor_sig = str(
-            getattr(predictor, "_model_artifact_sig", "") or ""
-        )
-    except _UI_RECOVERABLE_EXCEPTIONS:
-        predictor_sig = ""
-    if cache_data is not None:
-        cache_ts = cache_data.get('ts', 0.0)
-        cache_val = cache_data.get('val', [])
-        cache_pid = int(cache_data.get("predictor_id", 0) or 0)
-        cache_sig = str(cache_data.get("predictor_sig", "") or "")
-        if (
-            (now - cache_ts) < float(_TRAINED_STOCK_CACHE_TTL)
-            and cache_pid == predictor_id
-            and cache_sig == predictor_sig
-        ):
-            return cache_val
-    
+    """Read trained stock list from loaded predictor metadata."""
     if self.predictor is None:
         return []
     try:
@@ -60,30 +30,18 @@ def _get_trained_stock_codes(self) -> list[str]:
         if callable(fn):
             out = fn()
             if isinstance(out, list):
-                result = [
+                return [
                     str(x).strip()
                     for x in out
                     if str(x).strip()
                 ]
-                # Update cache
-                self._trained_stock_cache_data = {
-                    "ts": now,
-                    "val": result,
-                    "predictor_id": predictor_id,
-                    "predictor_sig": predictor_sig,
-                }
-                return result
     except _UI_RECOVERABLE_EXCEPTIONS as exc:
         log.debug("Suppressed exception in ui/app.py", exc_info=exc)
     return []
 
 def _invalidate_trained_stock_cache(self) -> None:
-    """Invalidate trained stock cache.
-
-    FIX: Call this when models are retrained or reloaded.
-    """
-    if hasattr(self, '_trained_stock_cache_data'):
-        delattr(self, '_trained_stock_cache_data')
+    """Compatibility no-op: trained stock cache has been removed."""
+    return
 
 def _sync_trained_stock_last_train_from_model(self) -> None:
     """Use loaded model artifacts as source-of-truth for last-train metadata."""
@@ -113,12 +71,8 @@ def _sync_trained_stock_last_train_from_model(self) -> None:
     self._save_trained_stock_last_train_meta()
 
 def _get_trained_stock_set(self) -> set[str]:
-    """Normalized trained stock set from metadata cache/predictor."""
-    raw = list(getattr(self, "_trained_stock_codes_cache", []) or [])
-    if not raw and self.predictor is not None:
-        raw = self._get_trained_stock_codes()
-        if raw:
-            self._trained_stock_codes_cache = list(raw)
+    """Normalized trained stock set from predictor metadata."""
+    raw = self._get_trained_stock_codes()
     out: set[str] = set()
     for item in raw:
         code = self._ui_norm(item)
@@ -127,11 +81,9 @@ def _get_trained_stock_set(self) -> set[str]:
     return out
 
 def _is_trained_stock(self, symbol: str) -> bool:
-    """Whether symbol is part of the currently loaded trained stock set."""
+    """Treat any valid symbol as eligible for model inference."""
     code = self._ui_norm(symbol)
-    if not code:
-        return False
-    return code in self._get_trained_stock_set()
+    return bool(code)
 
 def _persist_session_bar(
     self,
@@ -142,40 +94,20 @@ def _persist_session_bar(
     channel: str = "tick",
     min_gap_seconds: float = 0.9,
 ) -> None:
-    """Persist latest live bar snapshot to session cache."""
+    """Persist latest live 1m bar snapshot when a session cache is present."""
+    _ = (channel, min_gap_seconds)
     if self._session_bar_cache is None or not isinstance(bar, dict):
         return
+    iv = self._normalize_interval_token(interval)
+    if iv != "1m":
+        return
+    payload = dict(bar)
+    payload["interval"] = iv
+    payload["source"] = str(payload.get("source", "") or "tencent_rt")
     try:
-        iv = self._normalize_interval_token(interval)
-        # Persist session bars only in canonical 1m stream.
-        # Coarser intervals are display-only and must be derived from 1m.
-        if iv != "1m":
-            return
-        now_ts = time.time()
-        key = f"{symbol}:{iv}:{channel}"
-        min_gap = float(max(0.0, min_gap_seconds))
-        lock = getattr(self, "_session_cache_write_lock", None)
-        if lock is None:
-            prev_ts = float(self._last_session_cache_write_ts.get(key, 0.0))
-            if (now_ts - prev_ts) < min_gap:
-                return
-            self._last_session_cache_write_ts[key] = now_ts
-        else:
-            with lock:
-                prev_ts = float(self._last_session_cache_write_ts.get(key, 0.0))
-                if (now_ts - prev_ts) < min_gap:
-                    return
-                self._last_session_cache_write_ts[key] = now_ts
-        payload = dict(bar)
-        payload["interval"] = iv
-        payload["source"] = str(payload.get("source", "") or "tencent_rt")
-        submit = getattr(self, "_submit_session_cache_write", None)
-        if callable(submit):
-            submit(symbol, iv, payload)
-        else:
-            self._session_bar_cache.append_bar(symbol, iv, payload)
-    except _UI_RECOVERABLE_EXCEPTIONS as e:
-        log.debug(f"Session cache persist failed for {symbol}: {e}")
+        self._session_bar_cache.append_bar(symbol, iv, payload)
+    except _UI_RECOVERABLE_EXCEPTIONS as exc:
+        log.debug("Session cache persist failed for %s: %s", symbol, exc)
 
 def _submit_session_cache_write(
     self,
@@ -183,74 +115,15 @@ def _submit_session_cache_write(
     interval: str,
     payload: dict[str, Any],
 ) -> None:
-    cache = self._session_bar_cache
-    pool = getattr(self, "_session_cache_io_pool", None)
-    if cache is None:
-        return
-    if pool is None:
-        try:
-            cache.append_bar(symbol, interval, dict(payload))
-        except _UI_RECOVERABLE_EXCEPTIONS as exc:
-            log.debug("Session cache write failed for %s: %s", symbol, exc)
-        return
-    lock = getattr(self, "_session_cache_io_lock", None)
-    futures = getattr(self, "_session_cache_io_futures", None)
-    if lock is None or futures is None:
-        try:
-            pool.submit(cache.append_bar, symbol, interval, dict(payload))
-        except _UI_RECOVERABLE_EXCEPTIONS as exc:
-            log.debug("Failed to enqueue session cache write for %s: %s", symbol, exc)
-        return
-    with lock:
-        if len(futures) >= 256:
-            log.debug(
-                "Session cache write queue full; dropping %s (%s)",
-                symbol,
-                interval,
-            )
-            return
-    try:
-        future = pool.submit(cache.append_bar, symbol, interval, dict(payload))
-    except _UI_RECOVERABLE_EXCEPTIONS as exc:
-        log.debug("Failed to enqueue session cache write for %s: %s", symbol, exc)
-        return
-    with lock:
-        futures.add(future)
-    future.add_done_callback(self._on_session_cache_write_done)
+    _ = (self, symbol, interval, payload)
+    return
 
 def _on_session_cache_write_done(self, future: Future[object]) -> None:
-    lock = getattr(self, "_session_cache_io_lock", None)
-    futures = getattr(self, "_session_cache_io_futures", None)
-    if lock is not None and futures is not None:
-        with lock:
-            futures.discard(future)
-    try:
-        future.result()
-    except _UI_RECOVERABLE_EXCEPTIONS as exc:
-        log.debug("Async session cache write failed: %s", exc)
+    _ = (self, future)
+    return
 
 def _shutdown_session_cache_writer(self) -> None:
-    pool = getattr(self, "_session_cache_io_pool", None)
-    if pool is None:
-        return
-    lock = getattr(self, "_session_cache_io_lock", None)
-    futures = getattr(self, "_session_cache_io_futures", None)
-    if lock is not None and futures is not None:
-        with lock:
-            pending = list(futures)
-    else:
-        pending = []
-    for fut in pending:
-        try:
-            fut.result(timeout=0.3)
-        except FuturesTimeout:
-            break
-        except _UI_RECOVERABLE_EXCEPTIONS as exc:
-            log.debug("Session cache writer flush failed: %s", exc)
-    try:
-        pool.shutdown(wait=False, cancel_futures=True)
-    except _UI_RECOVERABLE_EXCEPTIONS as exc:
-        log.debug("Session cache writer shutdown failed: %s", exc)
+    self._session_cache_io_futures = set()
     self._session_cache_io_pool = None
 
 def _filter_trained_stocks_ui(self, text: str) -> None:
@@ -427,265 +300,12 @@ def _focus_trained_stocks_tab(self) -> None:
         tabs.setCurrentIndex(idx)
 
 def _get_infor_trained_stocks(self) -> None:
-    """Refresh 2-day AKShare history for all trained stocks.
-
-    Fetches incrementally from the last saved timestamp forward.
-    If market is closed, replaces saved realtime rows with AKShare rows.
-    """
-    raw_codes = self._get_trained_stock_codes()
-    codes = list(
-        dict.fromkeys(
-            self._ui_norm(x) for x in list(raw_codes or []) if self._ui_norm(x)
-        )
-    )
-    if not codes:
-        self.log("No trained stocks found. Load/train a model first.", "warning")
-        return
-
-    old_worker = self.workers.get("get_infor")
-    if old_worker and old_worker.isRunning():
-        self.log("Get Infor is already running.", "info")
-        return
-
-    if hasattr(self, "get_infor_btn"):
-        self.get_infor_btn.setEnabled(False)
-    self.progress.setRange(0, 0)
-    self.progress.show()
-    self.status_label.setText(
-        f"Get Infor: syncing {len(codes)} trained stocks (2d)..."
-    )
-    self.log(
-        (
-            "Get Infor started: AKShare sync for "
-            f"{len(codes)} trained stocks (last 2 days, incremental)."
-        ),
-        "info",
-    )
-
-    def _task() -> Any:
-        from data.fetcher import get_fetcher
-
-        fetcher = get_fetcher()
-        return fetcher.refresh_trained_stock_history(
-            codes,
-            interval="1m",
-            window_days=2,  # Changed from 7 to 2 for faster sync
-            allow_online=True,
-            sync_session_cache=True,
-            replace_realtime_after_close=True,
-        )
-
-    worker = WorkerThread(
-        _task,
-        timeout_seconds=float(max(180, int(len(codes)) * 18)),
-    )
-    self._track_worker(worker)
-    self.workers["get_infor"] = worker
-
-    def _finalize() -> None:
-        self.progress.hide()
-        if hasattr(self, "get_infor_btn"):
-            self.get_infor_btn.setEnabled(True)
-        self.workers.pop("get_infor", None)
-
-    def _on_done(res: object) -> None:
-        _finalize()
-        report = dict(res or {})
-        total = int(report.get("total", 0) or 0)
-        updated = int(report.get("updated", 0) or 0)
-        cached = int(report.get("cached", 0) or 0)
-        purged_map = dict(report.get("purged_realtime_rows", {}) or {})
-        purged = int(
-            sum(int(v or 0) for v in purged_map.values())
-        )
-        errors = dict(report.get("errors", {}) or {})
-        if errors:
-            self.log(
-                (
-                    "Get Infor completed with warnings: "
-                    f"updated={updated}, cached={cached}, purged_rt={purged}, "
-                    f"errors={len(errors)}, total={total}."
-                ),
-                "warning",
-            )
-            bad_codes = ", ".join(list(errors.keys())[:8])
-            if bad_codes:
-                self.log(f"Get Infor error codes: {bad_codes}", "warning")
-        else:
-            self.log(
-                (
-                    "Get Infor completed: "
-                    f"updated={updated}, cached={cached}, purged_rt={purged}, "
-                    f"total={total}."
-                ),
-                "success",
-            )
-        self.status_label.setText("Get Infor completed")
-
-        try:
-            sym = self._ui_norm(self.stock_input.text())
-            iv = self._normalize_interval_token(self.interval_combo.currentText())
-            if sym:
-                self._queue_history_refresh(sym, iv)
-        except _UI_RECOVERABLE_EXCEPTIONS as exc:
-            log.debug("Suppressed exception in ui/app.py", exc_info=exc)
-
-    def _on_error(err: str) -> None:
-        _finalize()
-        self.status_label.setText("Get Infor failed")
-        self.log(f"Get Infor failed: {err}", "error")
-
-    worker.result.connect(_on_done)
-    worker.error.connect(_on_error)
-    worker.start()
+    self.log("Get Infor is disabled in this build.", "info")
+    return
 
 def _train_trained_stocks(self) -> None:
-    """Train only already-trained stocks using latest cached data.
-
-    A dialog asks for stock count (N). The model is retrained on the
-    N stocks with the oldest last-train timestamps.
-    """
-    # [DBG] Train trained stocks start diagnostic
-    self._debug_console(
-        "train_trained_stocks_started",
-        "Train Trained Stocks: starting",
-        min_gap_seconds=1.0,
-        level="info",
-    )
-    
-    trained = list(
-        dict.fromkeys(
-            self._ui_norm(x) for x in self._get_trained_stock_codes()
-            if self._ui_norm(x)
-        )
-    )
-    self._sync_trained_stock_last_train_from_model()
-
-    # [DBG] Trained stocks list diagnostic
-    self._debug_console(
-        f"train_trained_stocks_list",
-        f"Train Trained Stocks: {len(trained)} trained stocks found",
-        min_gap_seconds=1.0,
-        level="info",
-    )
-
-    pending_codes: set[str] = set()
-    try:
-        fetcher = getattr(self.predictor, "fetcher", None)
-        if fetcher is None:
-            from data.fetcher import get_fetcher
-            fetcher = get_fetcher()
-        reconcile_fn = getattr(fetcher, "reconcile_pending_cache_sync", None)
-        if callable(reconcile_fn):
-            try:
-                reconcile_fn(codes=list(trained), interval="1m")
-            except TypeError:
-                reconcile_fn()
-        pending_fn = getattr(fetcher, "get_pending_reconcile_codes", None)
-        if callable(pending_fn):
-            pending_codes = {
-                self._ui_norm(x)
-                for x in list(pending_fn(interval="1m") or [])
-                if self._ui_norm(x)
-            }
-    except _UI_RECOVERABLE_EXCEPTIONS:
-        pending_codes = set()
-
-    # [DBG] Pending codes diagnostic
-    if pending_codes:
-        self._debug_console(
-            f"train_trained_stocks_pending",
-            f"Train Trained Stocks: {len(pending_codes)} stocks with pending cache sync",
-            min_gap_seconds=1.0,
-            level="warning",
-        )
-
-    if pending_codes:
-        before = int(len(trained))
-        trained = [c for c in trained if c not in pending_codes]
-        removed = int(max(0, before - len(trained)))
-        if removed > 0:
-            self.log(
-                (
-                    f"Skipped {removed} stock(s) with pending cache reconcile. "
-                    "Press Get Infor to finish sync before training."
-                ),
-                "warning",
-            )
-
-    if not trained:
-        if pending_codes:
-            self.log(
-                "All trained stocks are waiting for cache reconcile. Run Get Infor first.",
-                "warning",
-            )
-        else:
-            self.log("No trained stocks found. Load/train a model first.", "warning")
-        return
-
-    try:
-        from .dialogs import TrainTrainedStocksDialog
-    except _UI_RECOVERABLE_EXCEPTIONS as exc:
-        self.log(f"Train trained stocks dialog unavailable: {exc}", "error")
-        return
-
-    dialog = TrainTrainedStocksDialog(
-        trained_codes=trained,
-        last_train_map=dict(self._trained_stock_last_train or {}),
-        parent=self,
-    )
-    dialog.exec()
-
-    result = getattr(dialog, "training_result", None)
-    if not isinstance(result, dict):
-        return
-
-    if str(result.get("status", "")).strip().lower() != "complete":
-        status = str(result.get("status", "cancelled")).strip().lower()
-        if status == "cancelled":
-            self.log("Train trained stocks cancelled.", "info")
-        return
-    self._handle_training_drift_alarm(
-        result,
-        context="train_trained_stocks",
-    )
-
-    trained_codes = list(
-        dict.fromkeys(
-            self._ui_norm(x)
-            for x in list(
-                result.get("trained_stock_codes")
-                or result.get("selected_codes")
-                or []
-            )
-            if self._ui_norm(x)
-        )
-    )
-    if trained_codes:
-        trained_at = str(
-            result.get("trained_at") or datetime.now().isoformat(timespec="seconds")
-        )
-        self._record_trained_stock_last_train(
-            trained_codes,
-            trained_at=trained_at,
-        )
-        self._update_trained_stocks_ui()
-        # [DBG] Training completion diagnostic
-        self._debug_console(
-            f"train_trained_stocks_completed",
-            f"Train Trained Stocks: COMPLETED - {len(trained_codes)} stocks trained at {trained_at}",
-            min_gap_seconds=1.0,
-            level="success",
-        )
-        self.log(
-            (
-                "Train trained stocks completed: "
-                f"{len(trained_codes)} stock(s)."
-            ),
-            "success",
-        )
-
-    self._init_components()
+    self.log("Train trained stocks is disabled in this build.", "info")
+    return
 
 def _handle_training_drift_alarm(
     self,

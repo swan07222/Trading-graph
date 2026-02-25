@@ -45,10 +45,7 @@ from utils.logger import get_logger
 log = get_logger(__name__)
 
 class AutoLearnDialog(QDialog):
-    """Dialog for automatic learning with two tabs:
-    - Auto Learn: random stock rotation (existing)
-    - Train by Search: user-selected stocks (new).
-    """
+    """Dialog for automatic learning."""
 
     def __init__(self, parent=None, seed_stock_codes: list[str] | None = None) -> None:
         super().__init__(parent)
@@ -110,9 +107,9 @@ class AutoLearnDialog(QDialog):
         auto_tab = self._create_auto_tab()
         self.tabs.addTab(auto_tab, "Auto Learn")
 
-        # Tab 2: Train by Search
-        search_tab = self._create_search_tab()
-        self.tabs.addTab(search_tab, "Train by Search")
+        # Keep targeted-search controls instantiated for compatibility but hide
+        # the tab so users cannot start specific-stock training from the UI.
+        self._hidden_targeted_tab = self._create_search_tab()
 
         layout.addWidget(self.tabs)
 
@@ -183,7 +180,6 @@ class AutoLearnDialog(QDialog):
         self.mode_combo.addItems([
             "Full (Discover + Fetch + Train)",
             "Discovery + Fetch Only",
-            "Training Only (use cached data)",
         ])
         self.mode_combo.setMinimumWidth(250)
         settings_layout.addWidget(self.mode_combo, 0, 1)
@@ -224,18 +220,9 @@ class AutoLearnDialog(QDialog):
         self.incremental_check = QCheckBox(
             "Incremental training (keep existing weights)"
         )
-        self.incremental_check.setChecked(False)
+        self.incremental_check.setChecked(True)
+        self.incremental_check.setEnabled(False)
         settings_layout.addWidget(self.incremental_check, 6, 0, 1, 2)
-
-        self.use_session_cache_check = QCheckBox(
-            "Include stocks captured from real-time UI session"
-        )
-        self.use_session_cache_check.setChecked(True)
-        settings_layout.addWidget(self.use_session_cache_check, 7, 0, 1, 2)
-
-        self.session_seed_label = QLabel("")
-        self.session_seed_label.setObjectName("dialogHint")
-        settings_layout.addWidget(self.session_seed_label, 8, 0, 1, 2)
 
         settings_group.setLayout(settings_layout)
         layout.addWidget(settings_group)
@@ -650,63 +637,12 @@ class AutoLearnDialog(QDialog):
             )
 
     def _load_seed_stocks(self) -> None:
-        """Preload targeted list from session-captured symbols."""
-        if not self._seed_stock_codes:
-            self.session_seed_label.setText("Session seed stocks: 0")
-            return
-
-        added = 0
-        for code in self._seed_stock_codes:
-            if code in self._targeted_stock_codes:
-                continue
-            self._targeted_stock_codes.append(code)
-            self._add_stock_to_list_widget(code, "Session cache", 0)
-            added += 1
-
-        self._update_stock_count()
-        self.session_seed_label.setText(
-            f"Session seed stocks: {len(self._seed_stock_codes)} (added {added})"
-        )
+        """Session-seeded training is disabled."""
+        return
 
     def _collect_priority_codes(self, mode: str = "auto") -> list[str]:
-        codes = list(self._seed_stock_codes)
-        try:
-            from data.session_cache import get_session_bar_cache
-            cache = get_session_bar_cache()
-            interval = "1m"
-            if str(mode).strip().lower() == "targeted":
-                interval = normalize_training_interval(
-                    self.target_interval_combo.currentText()
-                )
-            else:
-                interval = normalize_training_interval(
-                    self.auto_interval_combo.currentText()
-                )
-            interval_s = {
-                "1m": 60,
-                "2m": 120,
-                "3m": 180,
-                "5m": 300,
-                "15m": 900,
-                "30m": 1800,
-                "60m": 3600,
-                "1h": 3600,
-            }.get(interval, 60)
-            min_rows = max(2, int((3600 // max(1, interval_s)) + 1))
-            live_codes = cache.get_recent_symbols(interval=interval, min_rows=min_rows)
-            codes.extend(live_codes)
-        except (AttributeError, ImportError, OSError, RuntimeError, TypeError, ValueError):
-            log.debug("Session cache priority-code collection skipped", exc_info=True)
-
-        dedup = []
-        seen = set()
-        for code in codes:
-            c = str(code).strip()
-            if not c or c in seen:
-                continue
-            seen.add(c)
-            dedup.append(c)
-        return dedup
+        _ = mode
+        return []
 
     # =========================================================================
     # AUTO LEARN START/STOP
@@ -727,7 +663,7 @@ class AutoLearnDialog(QDialog):
             )
             return
 
-        mode_map = {0: "full", 1: "discovery", 2: "training"}
+        mode_map = {0: "full", 1: "discovery"}
 
         config = {
             "mode": mode_map.get(self.mode_combo.currentIndex(), "full"),
@@ -738,17 +674,8 @@ class AutoLearnDialog(QDialog):
                 self.auto_interval_combo.currentText()
             ),
             "horizon": int(self.auto_horizon_spin.value()),
-            "incremental": self.incremental_check.isChecked(),
+            "incremental": True,
         }
-
-        if self.use_session_cache_check.isChecked():
-            priority_codes = self._collect_priority_codes(mode="auto")
-            if priority_codes:
-                config["priority_stock_codes"] = priority_codes
-                self._log(
-                    f"Session cache boost: {len(priority_codes)} priority stocks",
-                    "info",
-                )
 
         # VPN mode may be slower for very large discovery batches.
         try:
@@ -811,76 +738,13 @@ class AutoLearnDialog(QDialog):
 
     def _start_targeted_learning(self) -> None:
         """Start training on user-selected stocks."""
-        if self._is_running:
-            return
-
-        if not self._targeted_stock_codes:
-            QMessageBox.warning(
-                self,
-                "No Stocks Selected",
-                "Please add at least one stock to the training list.\n\n"
-                "Use the search bar or quick-add buttons above.",
-            )
-            return
-
-        LearnerClass = _get_auto_learner()
-        if LearnerClass is None:
-            QMessageBox.critical(
-                self,
-                "Module Not Found",
-                "AutoLearner module not found.\n\n"
-                "Ensure models/auto_learner.py exists.",
-            )
-            return
-
-        # Verify start_targeted exists
-        if not hasattr(LearnerClass, "start_targeted"):
-            QMessageBox.critical(
-                self,
-                "Feature Not Available",
-                "The current AutoLearner does not support targeted training.\n\n"
-                "Please update models/auto_learner.py with the latest version.",
-            )
-            return
-
-        config = {
-            "stock_codes": list(self._targeted_stock_codes),
-            "epochs": self.target_epochs_spin.value(),
-            "interval": normalize_training_interval(
-                self.target_interval_combo.currentText()
-            ),
-            "horizon": self.target_horizon_spin.value(),
-            "incremental": self.target_incremental_check.isChecked(),
-            "continuous": False,
-        }
-
-        stock_display = ", ".join(self._targeted_stock_codes[:5])
-        if len(self._targeted_stock_codes) > 5:
-            stock_display += (
-                f"... (+{len(self._targeted_stock_codes) - 5} more)"
-            )
-
-        self._log(
-            f"Starting targeted training on: {stock_display}", "info"
+        QMessageBox.information(
+            self,
+            "Disabled",
+            "Specific-stock training is disabled.\n\n"
+            "Use Auto Learn to continue training with broad market data.",
         )
-        self._log(
-            f"Epochs: {config['epochs']}, "
-            f"Interval: {config['interval']}, "
-            f"Horizon: {config['horizon']}, "
-            f"Incremental: {config['incremental']}",
-            "info",
-        )
-
-        self._set_running(True, mode="targeted")
-
-        self.targeted_worker = TargetedLearnWorker(config)
-        self.targeted_worker.progress.connect(self._on_progress)
-        self.targeted_worker.log_message.connect(self._log)
-        self.targeted_worker.finished_result.connect(
-            self._on_targeted_finished
-        )
-        self.targeted_worker.error_occurred.connect(self._on_error)
-        self.targeted_worker.start()
+        return
 
     def _stop_targeted_learning(self) -> None:
         """Stop targeted training gracefully."""
@@ -934,7 +798,8 @@ class AutoLearnDialog(QDialog):
                 self.auto_horizon_spin.setEnabled(False)
                 self.discover_check.setEnabled(False)
                 self.incremental_check.setEnabled(False)
-                self.use_session_cache_check.setEnabled(False)
+                if hasattr(self, "use_session_cache_check"):
+                    self.use_session_cache_check.setEnabled(False)
 
             elif mode == "targeted":
                 self.auto_stop_btn.setEnabled(False)
@@ -964,7 +829,8 @@ class AutoLearnDialog(QDialog):
             self.auto_horizon_spin.setEnabled(True)
             self.discover_check.setEnabled(True)
             self.incremental_check.setEnabled(True)
-            self.use_session_cache_check.setEnabled(True)
+            if hasattr(self, "use_session_cache_check"):
+                self.use_session_cache_check.setEnabled(True)
 
             self.search_input.setEnabled(True)
             self.search_btn.setEnabled(True)

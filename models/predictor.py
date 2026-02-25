@@ -1303,17 +1303,17 @@ class Predictor:
                 code,
                 interval=fallback_iv,
                 bars=1,
-                use_cache=True,
-                update_db=False,
-                allow_online=False,
+                use_cache=False,
+                update_db=True,
+                allow_online=True,
             )
         except TypeError:
             df = fetcher.get_history(
                 code,
                 interval=fallback_iv,
                 bars=1,
-                use_cache=True,
-                update_db=False,
+                use_cache=False,
+                update_db=True,
             )
         except _PREDICTOR_RECOVERABLE_EXCEPTIONS as e:
             log.debug("Fallback history fetch failed for %s: %s", code, e)

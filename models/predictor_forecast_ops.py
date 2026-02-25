@@ -89,8 +89,8 @@ def get_realtime_forecast_curve(
                     code,
                     interval=interval,
                     bars=window,
-                    use_cache=True,
-                    update_db=False,
+                    use_cache=False,
+                    update_db=True,
                     allow_online=bool(history_allow_online),
                 )
             except TypeError:
@@ -98,8 +98,8 @@ def get_realtime_forecast_curve(
                     code,
                     interval=interval,
                     bars=window,
-                    use_cache=True,
-                    update_db=False,
+                    use_cache=False,
+                    update_db=True,
                 )
 
             # Merge latest session bars (including partial intraday bars)

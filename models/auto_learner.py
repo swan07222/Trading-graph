@@ -557,14 +557,14 @@ class ContinuousLearner:
                         code,
                         interval=interval,
                         bars=lookback,
-                        use_cache=True,
+                        use_cache=False,
                         update_db=True,
                         allow_online=True,
                         refresh_intraday_after_close=True,
                     )
                 except TypeError:
                     df = fetcher.get_history(
-                        code, interval=interval, bars=lookback, use_cache=True,
+                        code, interval=interval, bars=lookback, use_cache=False,
                     )
                 if df is not None and len(df) >= min_bars:
                     new_holdout.append(code)
@@ -943,14 +943,14 @@ class ContinuousLearner:
                             code,
                             interval=interval,
                             bars=lookback,
-                            use_cache=True,
+                            use_cache=False,
                             update_db=True,
                             allow_online=True,
                             refresh_intraday_after_close=True,
                         )
                     except TypeError:
                         df = fetcher.get_history(
-                            code, interval=interval, bars=lookback, use_cache=True,
+                            code, interval=interval, bars=lookback, use_cache=False,
                         )
                     if df is None or len(df) < CONFIG.SEQUENCE_LENGTH + 20:
                         continue

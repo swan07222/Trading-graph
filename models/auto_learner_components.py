@@ -618,14 +618,14 @@ class ModelGuardian:
                             code,
                             interval=interval,
                             bars=lookback_bars,
-                            use_cache=True,
+                            use_cache=False,
                             update_db=True,
                             allow_online=True,
                             refresh_intraday_after_close=True,
                         )
                     except TypeError:
                         df = fetcher.get_history(
-                            code, interval=interval, bars=lookback_bars, use_cache=True,
+                            code, interval=interval, bars=lookback_bars, use_cache=False,
                         )
                     if df is None or len(df) < CONFIG.SEQUENCE_LENGTH + horizon + 10:
                         continue
@@ -1167,7 +1167,7 @@ class ParallelFetcher:
                             code,
                             interval=interval,
                             bars=max(int(lookback), int(min_cache_bars)),
-                            use_cache=True,
+                            use_cache=False,
                             update_db=bool(update_db),
                             allow_online=bool(allow_online),
                             refresh_intraday_after_close=bool(
@@ -1179,7 +1179,7 @@ class ParallelFetcher:
                             code,
                             interval=interval,
                             bars=max(int(lookback), int(min_cache_bars)),
-                            use_cache=True,
+                            use_cache=False,
                             update_db=bool(update_db),
                         )
                     if df is not None and not df.empty and len(df) >= min_bars:

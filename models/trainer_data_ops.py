@@ -396,7 +396,7 @@ def _fetch_raw_data(
                     code,
                     bars=bars,
                     interval=interval,
-                    use_cache=True,
+                    use_cache=False,
                     update_db=True,
                     allow_online=True,
                     refresh_intraday_after_close=True,
@@ -406,7 +406,7 @@ def _fetch_raw_data(
                     code,
                     bars=bars,
                     interval=interval,
-                    use_cache=True,
+                    use_cache=False,
                     update_db=True,
                 )
             if df is None or df.empty:

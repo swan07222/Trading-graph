@@ -646,15 +646,18 @@ class AkShareSource(DataSource):
     def is_suitable_for_network(self) -> bool:
         from core.network import get_network_env
         env = get_network_env()
+        is_china_direct = bool(getattr(env, "is_china_direct", False))
+        is_vpn_active = bool(getattr(env, "is_vpn_active", False))
+        eastmoney_ok = bool(getattr(env, "eastmoney_ok", False))
         # [DBG] AkShare network check
         log.info(
-            f"[DBG] AkShare network check: is_china_direct={env.is_china_direct} "
-            f"is_vpn_active={env.is_vpn_active} eastmoney_ok={env.eastmoney_ok}"
+            f"[DBG] AkShare network check: is_china_direct={is_china_direct} "
+            f"is_vpn_active={is_vpn_active} eastmoney_ok={eastmoney_ok}"
         )
         # FIX: AkShare is essential for Chinese A-share intraday data.
         # It must be available regardless of VPN status, as long as eastmoney endpoint works.
         # VPN users can still access AkShare if eastmoney.com is reachable.
-        if not bool(getattr(env, "eastmoney_ok", False)):
+        if not eastmoney_ok:
             log.info("[DBG] AkShare: eastmoney_ok=False, not suitable")
             return False
         # Always allow AkShare if eastmoney is reachable (VPN or not)
@@ -1309,14 +1312,6 @@ class YahooSource(DataSource):
         if not self._yf or not self.is_available():
             return pd.DataFrame()
 
-        # [DBG] Yahoo intraday warning
-        if interval in _INTRADAY_INTERVALS:
-            log.warning(
-                f"[DBG] Yahoo Finance does not support intraday ({interval}) data for Chinese stocks. "
-                f"Use AkShare for intraday data."
-            )
-            return pd.DataFrame()
-
         start_t = time.time()
         try:
             yahoo_symbol = self._resolve_symbol(inst)
@@ -1447,6 +1442,5 @@ class YahooSource(DataSource):
             df["low"] = df[["open", "low", "close"]].min(axis=1)
 
         return df
-
 
 

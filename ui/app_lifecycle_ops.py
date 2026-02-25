@@ -76,18 +76,7 @@ def _show_auto_learn(self: Any) -> None:
         self.log("Auto-learn dialog not available", "error")
         return
 
-    seed_codes: list[str] = []
-    try:
-        if self._session_bar_cache is not None:
-            interval = self._normalize_interval_token(self.interval_combo.currentText())
-            seed_codes = self._session_bar_cache.get_recent_symbols(
-                interval=interval,
-                min_rows=10,
-            )
-    except Exception:
-        seed_codes = []
-
-    show_auto_learn_dialog(self, seed_stock_codes=seed_codes)
+    show_auto_learn_dialog(self, seed_stock_codes=[])
     self._init_components()
 
 
@@ -124,15 +113,14 @@ def _show_about(self: Any) -> None:
         self,
         "About AI Stock Trading System",
         "<h2>AI Stock Trading System v2.0</h2>"
-        "<p>Professional AI-powered stock trading application</p>"
+        "<p>Professional AI-powered stock analysis application</p>"
         "<h3>Features:</h3>"
         "<ul>"
         "<li>Custom AI model with ensemble neural networks</li>"
         "<li>Real-time signal monitoring (1m, 5m, 1d intervals)</li>"
         "<li>Automatic stock discovery from internet</li>"
         "<li>AI-generated price forecast curves</li>"
-        "<li>Paper and live trading support</li>"
-        "<li>Comprehensive risk management</li>"
+        "<li>Stock analysis dashboard and watchlist</li>"
         "</ul>"
         "<p><b>Risk Warning:</b></p>"
         "<p>Stock trading involves risk. Past performance does not "
@@ -242,6 +230,9 @@ def _save_state(self: Any) -> None:
             "lookback": self.lookback_spin.value(),
             "capital": self.capital_spin.value(),
             "last_stock": self.stock_input.text(),
+            "chart_date": str(
+                getattr(self, "_selected_chart_date", "") or ""
+            ),
             "auto_trade_mode": self._auto_trade_mode.value,
         }
 
@@ -286,6 +277,19 @@ def _load_state(self: Any) -> None:
             self.capital_spin.setValue(state["capital"])
         if "last_stock" in state:
             self.stock_input.setText(state["last_stock"])
+        chart_date = str(state.get("chart_date", "") or "").strip()
+        if chart_date and hasattr(self, "chart_date_edit"):
+            try:
+                from PyQt6.QtCore import QDate
+
+                parsed = QDate.fromString(chart_date, "yyyy-MM-dd")
+                if parsed.isValid():
+                    self.chart_date_edit.setDate(parsed)
+                    self._selected_chart_date = str(
+                        parsed.toString("yyyy-MM-dd")
+                    )
+            except Exception:
+                pass
         if "auto_trade_mode" in state:
             try:
                 self._auto_trade_mode = AutoTradeMode(state["auto_trade_mode"])

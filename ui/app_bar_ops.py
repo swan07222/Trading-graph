@@ -1018,27 +1018,6 @@ def _scrub_chart_bars(
             f"Chart scrub rejected all {len(arr_in)} bars for {self._ui_norm(symbol) or '--'} {iv}"
         )
         sym = self._ui_norm(symbol)
-        existing_all = list(self._bars_by_symbol.get(sym) or [])
-        existing = [
-            b
-            for b in existing_all
-            if self._normalize_interval_token(
-                b.get("interval", iv),
-                fallback=iv,
-            ) == iv
-        ]
-        if existing:
-            keep = int(self._history_window_bars(iv))
-            self._debug_console(
-                f"chart_scrub_keep_prev:{sym or 'active'}:{iv}",
-                (
-                    f"chart scrub kept previous bars: symbol={sym or '--'} "
-                    f"iv={iv} prev={len(existing)} raw={len(arr_in)}"
-                ),
-                min_gap_seconds=1.0,
-                level="warning",
-            )
-            return existing[-keep:]
         self._debug_console(
             f"chart_scrub_empty:{sym or 'active'}:{iv}",
             (

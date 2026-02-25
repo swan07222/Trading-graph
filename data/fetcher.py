@@ -414,18 +414,23 @@ class DataFetcher:
         """Get sources prioritized by current network environment."""
         from core.network import get_network_env
         env = get_network_env()
+        is_china_direct = bool(getattr(env, "is_china_direct", False))
+        is_vpn_active = bool(getattr(env, "is_vpn_active", False))
+        eastmoney_ok = bool(getattr(env, "eastmoney_ok", False))
+        tencent_ok = bool(getattr(env, "tencent_ok", False))
+        yahoo_ok = bool(getattr(env, "yahoo_ok", False))
 
         # [DBG] Network environment diagnostic
         log.info(
-            f"[DBG] Fetcher source selection: is_china_direct={env.is_china_direct} "
-            f"is_vpn_active={env.is_vpn_active} eastmoney_ok={env.eastmoney_ok} "
-            f"tencent_ok={env.tencent_ok} yahoo_ok={env.yahoo_ok}"
+            f"[DBG] Fetcher source selection: is_china_direct={is_china_direct} "
+            f"is_vpn_active={is_vpn_active} eastmoney_ok={eastmoney_ok} "
+            f"tencent_ok={tencent_ok} yahoo_ok={yahoo_ok}"
         )
 
         net_sig = (
-            bool(env.is_china_direct),
-            bool(getattr(env, "eastmoney_ok", False)),
-            bool(getattr(env, "yahoo_ok", False)),
+            bool(is_china_direct),
+            bool(eastmoney_ok),
+            bool(yahoo_ok),
         )
         if self._last_network_mode is None:
             self._last_network_mode = net_sig
@@ -441,7 +446,7 @@ class DataFetcher:
             log.info(
                 "Network mode changed -> cooldowns reset "
                 "(%s)",
-                "CHINA_DIRECT" if env.is_china_direct else "VPN_FOREIGN",
+                "CHINA_DIRECT" if is_china_direct else "VPN_FOREIGN",
             )
 
         active: list[DataSource] = []

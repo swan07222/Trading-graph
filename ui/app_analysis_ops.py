@@ -10,7 +10,6 @@ from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import QMessageBox, QTableWidgetItem
 
 from config.settings import CONFIG
-from core.types import AutoTradeMode
 from ui.background_tasks import WorkerThread
 from ui.background_tasks import sanitize_watch_list as _sanitize_watch_list
 from ui.background_tasks import validate_stock_code as _validate_stock_code
@@ -287,72 +286,14 @@ def _analyze_stock(self) -> None:
         requested_interval=interval,
         requested_horizon=int(self.forecast_spin.value()),
     )
-    is_trained = self._is_trained_stock(normalized)
-    
-    # [DBG] Trained stock check diagnostic
-    self._debug_console(
-        f"analyze_trained_check:{normalized}",
-        f"Stock {normalized} is {'trained' if is_trained else 'NOT trained'}, interval={interval}",
-        min_gap_seconds=0.5,
-        level="info",
+    target_lookback = int(
+        max(
+            int(self.lookback_spin.value()),
+            int(self._recommended_lookback(interval)),
+        )
     )
-    
-    if is_trained:
-        existing = list(self._bars_by_symbol.get(normalized) or [])
-        same_interval = [
-            b
-            for b in existing
-            if self._normalize_interval_token(
-                b.get("interval", interval),
-                fallback=interval,
-            ) == interval
-        ]
-        # [DBG] Existing bars diagnostic for trained stock
-        self._debug_console(
-            f"analyze_trained_bars:{normalized}",
-            f"Trained stock {normalized}: existing={len(existing)} same_iv={len(same_interval)}",
-            min_gap_seconds=0.5,
-            level="info",
-        )
-        if not same_interval:
-            # [DBG] Interval mismatch - queue refresh
-            self._debug_console(
-                f"analyze_trained_interval_mismatch:{normalized}",
-                f"Interval mismatch for {normalized}, queuing history refresh",
-                min_gap_seconds=0.5,
-                level="info",
-            )
-            self._queue_history_refresh(normalized, interval)
-    if not is_trained:
-        # Preserve user-selected interval even for non-trained symbols.
-        if interval in {"1d", "1wk", "1mo"}:
-            target_lookback = max(
-                60,
-                int(self._recommended_lookback(interval)),
-            )
-        else:
-            target_lookback = max(
-                120,
-                int(self._seven_day_lookback(interval)),
-            )
-        self.lookback_spin.setValue(target_lookback)
-        # [DBG] Non-trained stock refresh diagnostic
-        self._debug_console(
-            f"analyze_non_trained_refresh:{normalized}",
-            f"Non-trained stock {normalized}: queuing history refresh, lookback={target_lookback}",
-            min_gap_seconds=0.5,
-            level="info",
-        )
-        self._queue_history_refresh(normalized, interval)
-        self._debug_console(
-            f"non_trained_policy:{normalized}",
-            (
-                f"non-trained symbol policy (preserve interval): "
-                f"symbol={normalized} iv={interval} lookback={target_lookback}"
-            ),
-            min_gap_seconds=1.0,
-            level="info",
-        )
+    self.lookback_spin.setValue(target_lookback)
+    self._queue_history_refresh(normalized, interval)
     forecast_bars = int(self.forecast_spin.value())
     ui_lookback = max(
         int(self.lookback_spin.value()),
@@ -527,174 +468,7 @@ def _on_analysis_done(self, pred: Any, request_seq: int | None = None) -> None:
 
     if symbol:
         arr = self._load_chart_history_bars(symbol, interval, lookback)
-        existing = self._bars_by_symbol.get(symbol) or []
-        if existing:
-            existing_same_interval = [
-                b for b in existing
-                if self._normalize_interval_token(
-                    b.get("interval", interval),
-                    fallback=interval,
-                ) == interval
-            ]
-            # Avoid re-injecting stale malformed bars from in-memory cache.
-            # Only merge the current live partial bucket while market is open.
-            if existing_same_interval and CONFIG.is_market_open():
-                now_bucket = self._bar_bucket_epoch(time.time(), interval)
-                live_partial: list[dict[str, Any]] = []
-                for b in existing_same_interval:
-                    if bool(b.get("final", True)):
-                        continue
-                    b_bucket = self._bar_bucket_epoch(
-                        b.get("_ts_epoch", b.get("timestamp")),
-                        interval,
-                    )
-                    if int(b_bucket) == int(now_bucket):
-                        live_partial.append(b)
-                if live_partial:
-                    arr = self._merge_bars(arr, live_partial, interval)
-
-            # If newly loaded chart depth is far smaller than the existing
-            # cached window, keep the deeper existing history to prevent
-            # oscillation between full chart and tiny placeholder blocks.
-            if existing_same_interval:
-                old_len = len(existing_same_interval)
-                new_len = len(arr or [])
-                if new_len <= 0:
-                    arr = list(existing_same_interval)
-                elif old_len >= 12 and new_len < max(6, int(old_len * 0.45)):
-                    merged_depth = self._merge_bars(
-                        existing_same_interval,
-                        arr,
-                        interval,
-                    )
-                    if len(merged_depth) >= max(new_len, int(old_len * 0.62)):
-                        arr = merged_depth
-                    else:
-                        arr = list(existing_same_interval)
-                    self._debug_console(
-                        f"chart_depth_preserve:{symbol}:{interval}",
-                        (
-                            f"preserved deeper chart window for {symbol} {interval}: "
-                            f"new={new_len} old={old_len} final={len(arr)}"
-                        ),
-                        min_gap_seconds=1.0,
-                        level="info",
-                    )
         arr = self._filter_bars_to_market_session(arr, interval)
-
-        if not arr and current_price > 0:
-            arr = [{
-                "open": current_price,
-                "high": current_price,
-                "low": current_price,
-                "close": current_price,
-                "timestamp": self._now_iso(),
-                "final": False,
-                "interval": interval,
-                "_ts_epoch": time.time(),
-            }]
-
-        if arr and current_price > 0:
-            iv_norm = self._normalize_interval_token(interval)
-            is_wide_interval = iv_norm in {"1d", "1wk", "1mo"}
-            update_last = True
-            prev_ref: float | None = None
-            try:
-                last_epoch = self._bar_bucket_epoch(
-                    arr[-1].get("_ts_epoch", arr[-1].get("timestamp")),
-                    interval,
-                )
-            except _UI_RECOVERABLE_EXCEPTIONS:
-                last_epoch = self._bar_bucket_epoch(time.time(), interval)
-
-            # Daily/weekly/monthly charts must never overwrite a finalized
-            # historical bar with a realtime quote from a later period.
-            if is_wide_interval:
-                now_bucket = self._bar_bucket_epoch(time.time(), interval)
-                same_period = int(last_epoch) == int(now_bucket)
-                if not same_period:
-                    # Seed the new wide-interval bar from current price itself.
-                    # Using previous close as open here creates an artificial
-                    # giant body at period start (daily/weekly/monthly).
-                    s = self._sanitize_ohlc(
-                        current_price,
-                        current_price,
-                        current_price,
-                        current_price,
-                        interval=interval,
-                        ref_close=None,
-                    )
-                    if s is not None:
-                        o, h, low, c = s
-                        arr.append(
-                            {
-                                "open": o,
-                                "high": h,
-                                "low": low,
-                                "close": c,
-                                "timestamp": self._epoch_to_iso(now_bucket),
-                                "_ts_epoch": float(now_bucket),
-                                "final": False,
-                                "interval": interval,
-                            }
-                        )
-                    update_last = False
-
-            if update_last and len(arr) >= 2:
-                try:
-                    prev_epoch = self._bar_bucket_epoch(
-                        arr[-2].get("_ts_epoch", arr[-2].get("timestamp")),
-                        interval,
-                    )
-                    if not self._is_intraday_day_boundary(
-                        prev_epoch,
-                        last_epoch,
-                        interval,
-                    ):
-                        prev_ref = float(
-                            arr[-2].get("close", current_price) or current_price
-                        )
-                    if (
-                        prev_ref
-                        and prev_ref > 0
-                        and self._is_outlier_tick(
-                            prev_ref,
-                            current_price,
-                            interval=interval,
-                        )
-                    ):
-                        update_last = False
-                except _UI_RECOVERABLE_EXCEPTIONS:
-                    update_last = True
-
-            if update_last:
-                s = self._sanitize_ohlc(
-                    float(arr[-1].get("open", current_price) or current_price),
-                    max(
-                        float(arr[-1].get("high", current_price) or current_price),
-                        current_price,
-                    ),
-                    min(
-                        float(arr[-1].get("low", current_price) or current_price),
-                        current_price,
-                    ),
-                    current_price,
-                    interval=interval,
-                    ref_close=prev_ref if (prev_ref and prev_ref > 0) else None,
-                )
-                if s is not None:
-                    o, h, low, c = s
-                    arr[-1]["open"] = o
-                    arr[-1]["high"] = h
-                    arr[-1]["low"] = low
-                    arr[-1]["close"] = c
-                arr[-1]["final"] = False
-                if "_ts_epoch" not in arr[-1]:
-                    arr[-1]["_ts_epoch"] = self._bar_bucket_epoch(
-                        arr[-1].get("timestamp"),
-                        interval,
-                    )
-                arr[-1]["timestamp"] = self._epoch_to_iso(arr[-1]["_ts_epoch"])
 
         if arr:
             try:
@@ -741,23 +515,6 @@ def _on_analysis_done(self, pred: Any, request_seq: int | None = None) -> None:
         except _UI_RECOVERABLE_EXCEPTIONS as exc:
             log.debug("Suppressed exception in ui/app.py", exc_info=exc)
 
-    # FIX: Enable trading buttons based on mode and stock selection
-    # In MANUAL mode, always enable buttons when a valid stock is selected
-    # In AUTO mode, disable buttons (AI handles trading)
-    # In SEMI-AUTO mode, enable buttons for manual override
-    is_manual = (self._auto_trade_mode == AutoTradeMode.MANUAL)
-    is_semi_auto = (self._auto_trade_mode == AutoTradeMode.SEMI_AUTO)
-    has_valid_stock = bool(self._ui_norm(self.stock_input.text()))
-    is_connected = bool(self.executor is not None)
-
-    # Enable buttons when: manual/semi-auto mode + valid stock + connected
-    buttons_enabled = is_connected and has_valid_stock and (is_manual or is_semi_auto)
-    
-    if hasattr(self, "buy_btn"):
-        self.buy_btn.setEnabled(buttons_enabled)
-    if hasattr(self, "sell_btn"):
-        self.sell_btn.setEnabled(buttons_enabled)
-
     signal_text = (
         pred.signal.value
         if hasattr(pred.signal, 'value')
@@ -792,11 +549,6 @@ def _on_analysis_done(self, pred: Any, request_seq: int | None = None) -> None:
                 f"Analysis partial: {pred.stock_code} - "
                 f"{signal_text} ({conf:.0%}) | data not ready",
                 "warning",
-            )
-            self._schedule_analysis_recovery(
-                symbol=pred.stock_code,
-                interval=pred_interval,
-                warnings=warnings,
             )
         else:
             self.log(

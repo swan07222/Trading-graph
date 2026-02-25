@@ -1,7 +1,7 @@
 [project]
 name = "trading-graph"
 version = "0.1.0"
-description = "AI-assisted stock trading workstation with backtest, OMS, risk, and UI"
+description = "AI-assisted stock analysis workstation with backtest and UI"
 requires-python = ">=3.10"
 dependencies = [
   # FIX #33: Pin numpy to <2.0.0 to avoid breaking changes

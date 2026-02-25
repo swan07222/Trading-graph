@@ -12,8 +12,6 @@ from PyQt6.QtWidgets import (
     QGroupBox,
     QHBoxLayout,
     QLabel,
-    QLineEdit,
-    QListWidget,
     QProgressBar,
     QPushButton,
     QSpinBox,
@@ -28,8 +26,6 @@ from ui.modern_theme import (
     ModernColors,
     ModernFonts,
     get_app_stylesheet,
-    get_connection_button_style,
-    get_connection_status_style,
     get_primary_font_family,
 )
 from utils.logger import get_logger
@@ -81,27 +77,22 @@ def _create_left_panel(self: Any) -> QWidget:
     watchlist_group.setLayout(watchlist_layout)
     layout.addWidget(watchlist_group)
 
-    settings_group = QGroupBox("Trading Settings")
+    settings_group = QGroupBox("Analysis Settings")
     settings_layout = QGridLayout()
     settings_layout.setHorizontalSpacing(10)
     settings_layout.setVerticalSpacing(9)
-
-    self.mode_combo = QComboBox()
-    self.mode_combo.addItems(["Paper Trading", "Live Trading"])
-    self.mode_combo.currentIndexChanged.connect(self._on_mode_combo_changed)
-    self._add_labeled(settings_layout, 0, "Mode:", self.mode_combo)
 
     self.capital_spin = QDoubleSpinBox()
     self.capital_spin.setRange(10000, 100000000)
     self.capital_spin.setValue(CONFIG.CAPITAL)
     self.capital_spin.setPrefix("CNY ")
-    self._add_labeled(settings_layout, 1, "Capital:", self.capital_spin)
+    self._add_labeled(settings_layout, 0, "Capital:", self.capital_spin)
 
     self.risk_spin = QDoubleSpinBox()
     self.risk_spin.setRange(0.5, 5.0)
     self.risk_spin.setValue(CONFIG.RISK_PER_TRADE)
     self.risk_spin.setSuffix(" %")
-    self._add_labeled(settings_layout, 2, "Risk/Trade:", self.risk_spin)
+    self._add_labeled(settings_layout, 1, "Risk/Trade:", self.risk_spin)
 
     self.interval_combo = QComboBox()
     self.interval_combo.addItems(["1m", "5m", "15m", "30m", "60m", "1d"])
@@ -109,46 +100,24 @@ def _create_left_panel(self: Any) -> QWidget:
     self.interval_combo.currentTextChanged.connect(
         self._on_interval_changed
     )
-    self._add_labeled(settings_layout, 3, "Interval:", self.interval_combo)
+    self._add_labeled(settings_layout, 2, "Interval:", self.interval_combo)
 
     self.forecast_spin = QSpinBox()
     self.forecast_spin.setRange(5, 120)
     self.forecast_spin.setValue(self.GUESS_FORECAST_BARS)
     self.forecast_spin.setSuffix(" bars")
     self.forecast_spin.setToolTip("Number of bars to forecast ahead (actual time depends on interval)")
-    self._add_labeled(settings_layout, 4, "Forecast:", self.forecast_spin)
+    self._add_labeled(settings_layout, 3, "Forecast:", self.forecast_spin)
 
     self.lookback_spin = QSpinBox()
     self.lookback_spin.setRange(7, 5000)
     self.lookback_spin.setValue(self._recommended_lookback("1m"))
     self.lookback_spin.setSuffix(" bars")
     self.lookback_spin.setToolTip("Historical bars to use for analysis")
-    self._add_labeled(settings_layout, 5, "Lookback:", self.lookback_spin)
+    self._add_labeled(settings_layout, 4, "Lookback:", self.lookback_spin)
 
     settings_group.setLayout(settings_layout)
     layout.addWidget(settings_group)
-
-    connection_group = QGroupBox("Connection")
-    connection_layout = QVBoxLayout()
-    connection_layout.setSpacing(10)
-
-    self.connection_status = QLabel("Disconnected")
-    self.connection_status.setObjectName("connectionStatus")
-    self.connection_status.setStyleSheet(
-        get_connection_status_style(False)
-    )
-    connection_layout.addWidget(self.connection_status)
-
-    self.connect_btn = QPushButton("Connect to Broker")
-    self.connect_btn.setObjectName("connectButton")
-    self.connect_btn.clicked.connect(self._toggle_trading)
-    self.connect_btn.setStyleSheet(
-        get_connection_button_style(False)
-    )
-    connection_layout.addWidget(self.connect_btn)
-
-    connection_group.setLayout(connection_layout)
-    layout.addWidget(connection_group)
 
     ai_group = QGroupBox("AI Model")
     ai_layout = QVBoxLayout()
@@ -160,44 +129,9 @@ def _create_left_panel(self: Any) -> QWidget:
     self.model_info.setObjectName("metaLabel")
     ai_layout.addWidget(self.model_info)
 
-    self.trained_stocks_label = QLabel("Trained Stocks: --")
-    self.trained_stocks_label.setObjectName("metaLabel")
-    ai_layout.addWidget(self.trained_stocks_label)
-
-    self.trained_stocks_hint = QLabel(
-        "Full trained stock list is in the right panel tab:\n"
-        "Trained Stocks"
-    )
-    self.trained_stocks_hint.setObjectName("metaLabel")
-    ai_layout.addWidget(self.trained_stocks_hint)
-
-    self.open_trained_tab_btn = QPushButton("Open Trained Stocks")
-    self.open_trained_tab_btn.setObjectName("smallGhostButton")
-    self.open_trained_tab_btn.clicked.connect(
-        self._focus_trained_stocks_tab
-    )
-    ai_layout.addWidget(self.open_trained_tab_btn)
-
-    self.get_infor_btn = QPushButton("Get Infor (2d)")
-    self.get_infor_btn.setObjectName("smallGhostButton")
-    self.get_infor_btn.setToolTip(
-        "Fetch 2-day history for all trained stocks from AKShare.\n"
-        "Fetches incrementally from the last saved timestamp.\n"
-        "If market is closed, replaces saved realtime rows with AKShare rows."
-    )
-    self.get_infor_btn.clicked.connect(self._get_infor_trained_stocks)
-    ai_layout.addWidget(self.get_infor_btn)
-
     self.train_btn = QPushButton("Train Model")
     self.train_btn.clicked.connect(self._start_training)
     ai_layout.addWidget(self.train_btn)
-
-    self.train_trained_btn = QPushButton("Train Trained Stocks")
-    self.train_trained_btn.setToolTip(
-        "Train only already-trained stocks using newly synced cache data."
-    )
-    self.train_trained_btn.clicked.connect(self._train_trained_stocks)
-    ai_layout.addWidget(self.train_trained_btn)
 
     self.auto_learn_btn = QPushButton("Auto Learn")
     self.auto_learn_btn.clicked.connect(self._show_auto_learn)
@@ -216,7 +150,7 @@ def _create_left_panel(self: Any) -> QWidget:
 
 
 def _create_right_panel(self: Any) -> QWidget:
-    """Create right panel with portfolio, news, orders, and auto-trade."""
+    """Create right panel with portfolio, news, and logs."""
     panel = QWidget()
     panel.setObjectName("rightPanel")
     layout = QVBoxLayout(panel)
@@ -293,117 +227,6 @@ def _create_right_panel(self: Any) -> QWidget:
     history_layout.addWidget(self.history_table)
     tabs.addTab(history_tab, "History")
 
-    trained_tab = QWidget()
-    trained_layout = QVBoxLayout(trained_tab)
-    trained_layout.setContentsMargins(8, 8, 8, 8)
-
-    trained_top = QHBoxLayout()
-    self.trained_stock_count_label = QLabel("Trained: --")
-    self.trained_stock_count_label.setObjectName("metaLabel")
-    trained_top.addWidget(self.trained_stock_count_label)
-    trained_top.addStretch(1)
-    trained_layout.addLayout(trained_top)
-
-    self.trained_stock_search = QLineEdit()
-    self.trained_stock_search.setPlaceholderText(
-        "Search trained stock code..."
-    )
-    self.trained_stock_search.textChanged.connect(
-        self._filter_trained_stocks_ui
-    )
-    trained_layout.addWidget(self.trained_stock_search)
-
-    self.trained_stock_list = QListWidget()
-    self.trained_stock_list.itemClicked.connect(
-        self._on_trained_stock_activated
-    )
-    self.trained_stock_list.itemDoubleClicked.connect(
-        self._on_trained_stock_activated
-    )
-    self.trained_stock_list.setToolTip(
-        "Click a stock to load and analyze it"
-    )
-    trained_layout.addWidget(self.trained_stock_list, 1)
-    self._trained_tab_index = tabs.addTab(trained_tab, "Trained Stocks")
-
-    # ==================== AUTO-TRADE TAB ====================
-    auto_trade_tab = QWidget()
-    auto_trade_layout = QVBoxLayout(auto_trade_tab)
-    auto_trade_layout.setSpacing(10)
-    auto_trade_layout.setContentsMargins(8, 8, 8, 8)
-
-    # Auto-trade status frame
-    self.auto_trade_labels = {}
-    auto_labels = [
-        ('mode', 'Mode', 0, 0),
-        ('trades', 'Trades Today', 0, 1),
-        ('pnl', 'Auto P&L', 1, 0),
-        ('status', 'Status', 1, 1),
-        ('guess_profit', 'Correct Guess P&L', 2, 0),
-        ('guess_rate', 'Guess Hit Rate', 2, 1),
-    ]
-    auto_status_frame, self.auto_trade_labels = self._build_stat_frame(
-        auto_labels,
-        (
-            f"color: {ModernColors.ACCENT_INFO}; "
-            f"font-size: {ModernFonts.SIZE_XL}px; "
-            f"font-weight: {ModernFonts.WEIGHT_BOLD};"
-        ),
-        10,
-    )
-
-    auto_trade_layout.addWidget(auto_status_frame)
-
-    # Pending approvals section (for semi-auto)
-    pending_group = QGroupBox("Pending Approvals")
-    pending_layout = QVBoxLayout()
-    self.pending_table = self._make_table([
-        "Time", "Code", "Signal", "Confidence", "Price", "Action"
-    ], max_height=150)
-    pending_layout.addWidget(self.pending_table)
-    pending_group.setLayout(pending_layout)
-    auto_trade_layout.addWidget(pending_group)
-
-    # Auto-trade action history
-    actions_group = QGroupBox("Auto-Trade Actions")
-    actions_layout = QVBoxLayout()
-    self.auto_actions_table = self._make_table([
-        "Time", "Code", "Signal", "Confidence",
-        "Decision", "Qty", "Reason"
-    ])
-    actions_layout.addWidget(self.auto_actions_table)
-    actions_group.setLayout(actions_layout)
-    auto_trade_layout.addWidget(actions_group)
-
-    # Auto-trade control buttons
-    auto_btn_frame = QFrame()
-    auto_btn_frame.setObjectName("actionStrip")
-    auto_btn_layout = QHBoxLayout(auto_btn_frame)
-    auto_btn_layout.setContentsMargins(8, 8, 8, 8)
-    auto_btn_layout.setSpacing(10)
-
-    self.auto_pause_btn = QPushButton("Pause Auto")
-    self.auto_pause_btn.setObjectName("smallGhostButton")
-    self.auto_pause_btn.clicked.connect(self._toggle_auto_pause)
-    self.auto_pause_btn.setEnabled(False)
-    auto_btn_layout.addWidget(self.auto_pause_btn)
-
-    self.auto_approve_all_btn = QPushButton("Approve All")
-    self.auto_approve_all_btn.setObjectName("smallGhostButton")
-    self.auto_approve_all_btn.clicked.connect(self._approve_all_pending)
-    self.auto_approve_all_btn.setEnabled(False)
-    auto_btn_layout.addWidget(self.auto_approve_all_btn)
-
-    self.auto_reject_all_btn = QPushButton("Reject All")
-    self.auto_reject_all_btn.setObjectName("smallGhostButton")
-    self.auto_reject_all_btn.clicked.connect(self._reject_all_pending)
-    self.auto_reject_all_btn.setEnabled(False)
-    auto_btn_layout.addWidget(self.auto_reject_all_btn)
-
-    auto_trade_layout.addWidget(auto_btn_frame)
-
-    tabs.addTab(auto_trade_tab, "Auto-Trade")
-
     layout.addWidget(tabs, 4)
 
     log_group = QGroupBox("System Log")
@@ -424,26 +247,6 @@ def _create_right_panel(self: Any) -> QWidget:
     log_layout.addWidget(self.log_widget)
     log_group.setLayout(log_layout)
     layout.addWidget(log_group, 2)
-
-    action_frame = QFrame()
-    action_frame.setObjectName("actionStrip")
-    action_layout = QHBoxLayout(action_frame)
-    action_layout.setContentsMargins(10, 10, 10, 10)
-    action_layout.setSpacing(16)
-
-    self.buy_btn = QPushButton("BUY")
-    self.buy_btn.setObjectName("buyButton")
-    self.buy_btn.clicked.connect(self._execute_buy)
-    self.buy_btn.setEnabled(False)
-
-    self.sell_btn = QPushButton("SELL")
-    self.sell_btn.setObjectName("sellButton")
-    self.sell_btn.clicked.connect(self._execute_sell)
-    self.sell_btn.setEnabled(False)
-
-    action_layout.addWidget(self.buy_btn)
-    action_layout.addWidget(self.sell_btn)
-    layout.addWidget(action_frame)
 
     return panel
 
