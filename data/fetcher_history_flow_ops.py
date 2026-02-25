@@ -212,10 +212,20 @@ def get_history(
         )
 
     # Non-CN instrument
-    if offline:
-        return (
-            stale_cached_df.tail(count) if not stale_cached_df.empty else pd.DataFrame()
+    fallback_df = pd.DataFrame()
+    if not stale_cached_df.empty:
+        fallback_df = stale_cached_df
+    if not session_df.empty:
+        fallback_df = (
+            self._merge_parts(session_df, fallback_df, interval=interval)
+            if not fallback_df.empty
+            else session_df
         )
+
+    if offline:
+        if not fallback_df.empty:
+            return fallback_df.tail(count)
+        return pd.DataFrame()
     df = self._fetch_history_with_depth_retry(
         inst=inst,
         interval=interval,
@@ -223,9 +233,18 @@ def get_history(
         base_fetch_days=fetch_days,
     )
     if df.empty:
+        if cache_is_stale_or_partial and not fallback_df.empty:
+            log.info(
+                "Online history fetch empty for %s (%s); using partial cached/session data",
+                key,
+                interval,
+            )
+            return fallback_df.tail(count)
         return pd.DataFrame()
-    merged = self._merge_parts(df, session_df, interval=interval)
+    merged = self._merge_parts(df, fallback_df, interval=interval)
     if merged.empty:
+        if not fallback_df.empty:
+            return fallback_df.tail(count)
         return pd.DataFrame()
     return self._cache_tail(
         cache_key,

@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+import pandas as pd
 
 from config.settings import CONFIG
 from data.fetcher import get_fetcher

@@ -271,7 +271,6 @@ def main() -> int:
     parser = argparse.ArgumentParser(description='AI Stock Analysis System')
 
     parser.add_argument('--train', action='store_true', help='Train model')
-    parser.add_argument('--train-stock', type=str, help='Train model on a specific stock (e.g., 600519)')
     parser.add_argument('--auto-learn', action='store_true', help='Auto-discover and train')
     parser.add_argument('--predict', type=str, help='Predict stock')
     parser.add_argument('--backtest', action='store_true', help='Run backtest')
@@ -308,8 +307,6 @@ def main() -> int:
     require_ml = any([
         args.train, args.auto_learn, args.predict, args.backtest, args.backtest_optimize, args.replay_file,
     ])
-
-    from config.settings import CONFIG
 
     if not check_dependencies(
         require_gui=require_gui,
@@ -368,30 +365,6 @@ def main() -> int:
             from models.trainer import Trainer
             trainer = Trainer()
             trainer.train(epochs=args.epochs)
-
-        elif args.train_stock:
-            from data.fetcher import DataFetcher
-            from models.trainer import Trainer
-
-            # Validate stock code
-            stock_code = DataFetcher.clean_code(args.train_stock)
-            if not stock_code:
-                print(f"Error: Invalid stock code '{args.train_stock}'")
-                return 1
-            
-            is_valid, error = DataFetcher.validate_stock_code(stock_code)
-            if not is_valid:
-                print(f"Error: {error}")
-                return 1
-            
-            print(f"Training on specific stock: {stock_code}")
-            trainer = Trainer()
-            trainer.train(
-                stock_codes=[stock_code],
-                epochs=args.epochs,
-                interval="1m",
-            )
-            print(f"Training completed for {stock_code}")
 
         elif args.auto_learn:
             from models.auto_learner import AutoLearner

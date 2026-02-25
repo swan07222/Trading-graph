@@ -88,33 +88,27 @@ def _create_left_panel(self: Any) -> QWidget:
     self.capital_spin.setPrefix("CNY ")
     self._add_labeled(settings_layout, 0, "Capital:", self.capital_spin)
 
-    self.risk_spin = QDoubleSpinBox()
-    self.risk_spin.setRange(0.5, 5.0)
-    self.risk_spin.setValue(CONFIG.RISK_PER_TRADE)
-    self.risk_spin.setSuffix(" %")
-    self._add_labeled(settings_layout, 1, "Risk/Trade:", self.risk_spin)
-
     self.interval_combo = QComboBox()
     self.interval_combo.addItems(["1m", "5m", "15m", "30m", "60m", "1d"])
     self.interval_combo.setCurrentText("1m")
     self.interval_combo.currentTextChanged.connect(
         self._on_interval_changed
     )
-    self._add_labeled(settings_layout, 2, "Interval:", self.interval_combo)
+    self._add_labeled(settings_layout, 1, "Interval:", self.interval_combo)
 
     self.forecast_spin = QSpinBox()
     self.forecast_spin.setRange(5, 120)
     self.forecast_spin.setValue(self.GUESS_FORECAST_BARS)
     self.forecast_spin.setSuffix(" bars")
     self.forecast_spin.setToolTip("Number of bars to forecast ahead (actual time depends on interval)")
-    self._add_labeled(settings_layout, 3, "Forecast:", self.forecast_spin)
+    self._add_labeled(settings_layout, 2, "Forecast:", self.forecast_spin)
 
     self.lookback_spin = QSpinBox()
     self.lookback_spin.setRange(7, 5000)
     self.lookback_spin.setValue(self._recommended_lookback("1m"))
     self.lookback_spin.setSuffix(" bars")
     self.lookback_spin.setToolTip("Historical bars to use for analysis")
-    self._add_labeled(settings_layout, 4, "Lookback:", self.lookback_spin)
+    self._add_labeled(settings_layout, 3, "Lookback:", self.lookback_spin)
 
     settings_group.setLayout(settings_layout)
     layout.addWidget(settings_group)

@@ -522,10 +522,6 @@ def _on_analysis_done(self, pred: Any, request_seq: int | None = None) -> None:
     )
     conf = getattr(pred, 'confidence', 0)
     warnings = list(getattr(pred, "warnings", []) or [])
-    pred_interval = self._normalize_interval_token(
-        getattr(pred, "interval", interval),
-        fallback=interval,
-    )
     insufficient_data = (
         current_price <= 0
         or any(
@@ -936,7 +932,8 @@ def _add_to_history(self, pred: Any) -> None:
             "entry_price": entry_price,
             "direction": self._signal_to_direction(signal_text),
             "mark_price": entry_price,
-            "shares": self._guess_profit_notional_shares,
+            # 0 means auto-size by notional value in _compute_guess_profit.
+            "shares": 0,
         },
     )
     self.history_table.setItem(row, 5, result_item)
@@ -996,47 +993,50 @@ def _compute_guess_profit(
     if entry <= 0 or mark <= 0:
         return 0.0
 
-    # Calculate shares based on notional value if not provided
-    if shares is None or shares <= 0:
+    # Calculate shares based on notional value if not provided.
+    if shares is None or int(shares) <= 0:
         lot_size = int(getattr(CONFIG, "LOT_SIZE", 100) or 100)
         # Calculate shares to match notional value (10,000 CNY)
         raw_shares = _GUESS_PROFIT_NOTIONAL_VALUE / entry
         shares = int(raw_shares / lot_size) * lot_size  # Round to lot size
         shares = max(lot_size, shares)  # Minimum 1 lot (100 shares)
 
-    qty = max(1, shares)
+    qty = max(1, int(shares))
 
     # Calculate gross P&L
     if direction == "UP":
         gross_pnl = (mark - entry) * qty
+        notional_buy = entry * qty
+        notional_sell = mark * qty
     elif direction == "DOWN":
         gross_pnl = (entry - mark) * qty
+        # Synthetic short guess: sell at entry, buy back at mark.
+        notional_sell = entry * qty
+        notional_buy = mark * qty
     else:  # NONE or invalid
         return 0.0
 
     # Calculate transaction costs (China A-share market)
-    notional_entry = entry * qty
-    notional_exit = mark * qty
-    
     # Commission: charged on both entry and exit (min CNY 5 each)
     commission_entry = max(
-        notional_entry * _TRANSACTION_COSTS["commission_rate"],
+        notional_buy * _TRANSACTION_COSTS["commission_rate"],
         _TRANSACTION_COSTS["commission_min"]
     )
     commission_exit = max(
-        notional_exit * _TRANSACTION_COSTS["commission_rate"],
+        notional_sell * _TRANSACTION_COSTS["commission_rate"],
         _TRANSACTION_COSTS["commission_min"]
     )
     commission = commission_entry + commission_exit
-    
-    # Stamp duty: charged only on sell side (exit)
-    stamp_duty = notional_exit * _TRANSACTION_COSTS["stamp_duty"]
-    
+
+    # Stamp duty: charged on sell side only.
+    stamp_duty = notional_sell * _TRANSACTION_COSTS["stamp_duty"]
+
     # Transfer fee: charged on both sides
-    transfer_fee = (notional_entry + notional_exit) * _TRANSACTION_COSTS["transfer_fee"]
-    
+    turnover = notional_buy + notional_sell
+    transfer_fee = turnover * _TRANSACTION_COSTS["transfer_fee"]
+
     # Slippage: estimated market impact
-    slippage = (notional_entry + notional_exit) * (_TRANSACTION_COSTS["slippage_bps"] / 10000)
+    slippage = turnover * (_TRANSACTION_COSTS["slippage_bps"] / 10000)
 
     total_costs = commission + stamp_duty + transfer_fee + slippage
 
@@ -1124,9 +1124,13 @@ def _calculate_realtime_correct_guess_profit(self) -> dict[str, float]:
 
         entry = float(meta.get("entry_price", 0.0) or 0.0)
         mark = float(meta.get("mark_price", 0.0) or 0.0)
-        shares = int(
-            meta.get("shares", self._guess_profit_notional_shares) or 1
-        )
+        shares_raw = meta.get("shares", None)
+        try:
+            shares = int(shares_raw) if shares_raw is not None else None
+        except (TypeError, ValueError):
+            shares = None
+        if shares is not None and shares <= 0:
+            shares = None
         pnl = self._compute_guess_profit(direction, entry, mark, shares)
 
         total += 1

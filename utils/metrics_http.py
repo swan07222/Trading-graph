@@ -78,37 +78,25 @@ def _parse_int_query(
 
 
 def _build_runtime_snapshot(limit: int = 20) -> dict[str, Any]:
-    """Best-effort runtime snapshot from OMS for lightweight dashboards."""
-    try:
-        from trading.oms import get_oms
+    """Best-effort runtime snapshot for analysis-only dashboards."""
+    _ = limit
+    execution = _build_execution_engine_snapshot()
+    if execution.get("status") != "ok":
+        return {
+            "status": "unavailable",
+            "reason": "runtime_provider_not_available",
+        }
 
-        oms = get_oms()
-        account = oms.get_account()
-        positions = oms.get_positions()
-        orders = oms.get_orders()
-        fills = oms.get_fills()
-    except Exception as exc:
-        return {"status": "unavailable", "reason": str(exc)}
-
-    trimmed_limit = max(1, min(int(limit), 200))
-    latest_orders = sorted(
-        orders,
-        key=lambda o: o.updated_at or o.created_at,
-        reverse=True,
-    )[:trimmed_limit]
-    latest_fills = sorted(
-        fills,
-        key=lambda f: f.timestamp,
-        reverse=True,
-    )[:trimmed_limit]
+    snapshot = execution.get("snapshot")
+    if not isinstance(snapshot, dict):
+        return {
+            "status": "unavailable",
+            "reason": "invalid_runtime_snapshot",
+        }
 
     return {
         "status": "ok",
-        "account": _normalize_json(account),
-        "positions": _normalize_json(list(positions.values())),
-        "active_orders": _normalize_json(latest_orders),
-        "recent_fills": _normalize_json(latest_fills),
-        "limits": {"records": trimmed_limit},
+        "runtime": _normalize_json(snapshot),
     }
 
 
@@ -207,16 +195,11 @@ def _build_execution_quality_snapshot() -> dict[str, Any]:
 
 
 def _build_risk_snapshot() -> dict[str, Any]:
-    """Best-effort live risk metrics."""
-    try:
-        from trading.risk import get_risk_manager
-
-        mgr = get_risk_manager()
-        metrics = mgr.get_metrics()
-        payload = getattr(metrics, "__dict__", metrics)
-        return {"status": "ok", "snapshot": _normalize_json(payload)}
-    except Exception as exc:
-        return {"status": "unavailable", "reason": str(exc)}
+    """Risk manager endpoint is retained for compatibility only."""
+    return {
+        "status": "unavailable",
+        "reason": "risk_management_removed",
+    }
 
 
 def _build_health_snapshot() -> dict[str, Any]:

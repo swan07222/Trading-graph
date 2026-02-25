@@ -441,6 +441,45 @@ def train(
 
     # --- Phase 6: Evaluate on test set ---
     test_metrics = {}
+    calibration_report: dict[str, Any] = {
+        "enabled": False,
+        "source": "validation",
+        "reason": "unavailable",
+        "sample_count": 0,
+        "x_points": [],
+        "y_points": [],
+    }
+    if X_val is not None and y_val is not None and len(X_val) > 0 and len(y_val) > 0:
+        cal_n = int(min(2000, len(X_val), len(y_val)))
+        try:
+            calibration_report = self._build_confidence_calibration(
+                X_val[-cal_n:],
+                y_val[-cal_n:],
+            )
+        except Exception as exc:
+            calibration_report = {
+                "enabled": False,
+                "source": "validation",
+                "reason": f"calibration_failed:{exc}",
+                "sample_count": 0,
+                "x_points": [],
+                "y_points": [],
+            }
+            log.warning("Confidence calibration failed; using raw confidence: %s", exc)
+
+    if bool(calibration_report.get("enabled", False)):
+        log.info(
+            "Confidence calibration ready: samples=%s, ece %.4f -> %.4f",
+            int(calibration_report.get("sample_count", 0)),
+            float(calibration_report.get("ece_before", 0.0)),
+            float(calibration_report.get("ece_after", 0.0)),
+        )
+    else:
+        log.info(
+            "Confidence calibration skipped: %s",
+            str(calibration_report.get("reason", "unknown")),
+        )
+
     if (
         X_test is not None
         and y_test is not None
@@ -455,6 +494,7 @@ def train(
             y_test[:eval_n],
             r_test[:eval_n],
             regime_profile=regime_profile,
+            calibration_map=calibration_report,
         )
         log.info(
             f"Test accuracy: {test_metrics.get('accuracy', 0):.2%}"
@@ -469,6 +509,7 @@ def train(
         y_test,
         r_test,
         regime_profile=regime_profile,
+        calibration_map=calibration_report,
     )
     risk_adjusted_score = self._risk_adjusted_score(test_metrics)
     drift_guard = self._run_drift_guard(
@@ -607,6 +648,7 @@ def train(
         "overfit_report": overfit_report,
         "regime_profile": regime_profile,
         "drift_guard": drift_guard,
+        "calibration_report": calibration_report,
         "data_quality": data_quality_summary,
         "consistency_guard": dict(self._last_consistency_guard or {}),
         "incremental_guard": incremental_guard,

@@ -5,6 +5,10 @@ import threading
 from collections.abc import Callable
 from contextlib import contextmanager
 
+from utils.logger import get_logger
+
+log = get_logger(__name__)
+
 
 class CancelledException(Exception):
     """Raised when a cancellable operation is cancelled."""
@@ -42,7 +46,7 @@ class CancellationToken:
     def cancel(self) -> None:
         """Request cancellation and invoke registered callbacks.
 
-        Thread-safe. Idempotent — safe to call multiple times.
+        Thread-safe. Idempotent - safe to call multiple times.
         """
         if self._cancelled.is_set():
             return

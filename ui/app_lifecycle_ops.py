@@ -44,23 +44,7 @@ def _start_training(self: Any) -> None:
         result = getattr(dialog, "training_result", None)
         if isinstance(result, dict):
             if str(result.get("status", "")).strip().lower() == "complete":
-                self._handle_training_drift_alarm(
-                    result,
-                    context="training_dialog",
-                )
-                trained_codes = list(
-                    dict.fromkeys(
-                        self._ui_norm(x)
-                        for x in list(result.get("trained_stock_codes", []) or [])
-                        if self._ui_norm(x)
-                    )
-                )
-                if trained_codes:
-                    self._record_trained_stock_last_train(
-                        trained_codes,
-                        trained_at=datetime.now().isoformat(timespec="seconds"),
-                    )
-                    self._update_trained_stocks_ui()
+                self.log("Training completed successfully.", "success")
     except Exception as exc:
         self.log(f"Training dialog failed: {exc}", "error")
         return
@@ -111,8 +95,8 @@ def _show_about(self: Any) -> None:
     """Show about dialog."""
     QMessageBox.about(
         self,
-        "About AI Stock Trading System",
-        "<h2>AI Stock Trading System v2.0</h2>"
+        "About AI Stock Analysis System",
+        "<h2>AI Stock Analysis System v2.0</h2>"
         "<p>Professional AI-powered stock analysis application</p>"
         "<h3>Features:</h3>"
         "<ul>"
@@ -122,10 +106,8 @@ def _show_about(self: Any) -> None:
         "<li>AI-generated price forecast curves</li>"
         "<li>Stock analysis dashboard and watchlist</li>"
         "</ul>"
-        "<p><b>Risk Warning:</b></p>"
-        "<p>Stock trading involves risk. Past performance does not "
-        "guarantee future results. Only trade with money you can "
-        "afford to lose.</p>",
+        "<p><b>Notice:</b></p>"
+        "<p>This build focuses on analysis and model learning workflows.</p>",
     )
 
 

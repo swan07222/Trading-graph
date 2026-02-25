@@ -47,6 +47,367 @@ _QUALITY_GATE_MIN_RISK_SCORE = 0.52
 _QUALITY_GATE_MIN_PROFIT_FACTOR = 1.05
 _QUALITY_GATE_MAX_DRAWDOWN = 0.25
 _QUALITY_GATE_MIN_WALK_STABILITY = 0.35
+_CALIBRATION_BINS = 12
+_CALIBRATION_MIN_SAMPLES = 120
+_CALIBRATION_MIN_BIN_SAMPLES = 8
+
+
+def _clip_confidences(values: np.ndarray | list[float] | tuple[float, ...]) -> np.ndarray:
+    arr = np.asarray(values, dtype=np.float64).reshape(-1)
+    arr = np.nan_to_num(arr, nan=0.5, posinf=1.0, neginf=0.0)
+    return np.clip(arr, 0.0, 1.0)
+
+
+def _expected_calibration_error(
+    confidences: np.ndarray,
+    outcomes: np.ndarray,
+    bins: int = 10,
+) -> float:
+    conf = _clip_confidences(confidences)
+    y = np.asarray(outcomes, dtype=np.float64).reshape(-1)
+    n = int(min(len(conf), len(y)))
+    if n <= 0:
+        return 0.0
+
+    conf = conf[:n]
+    y = np.clip(np.nan_to_num(y[:n], nan=0.0), 0.0, 1.0)
+    edges = np.linspace(0.0, 1.0, int(max(2, bins)) + 1)
+    ece = 0.0
+
+    for idx in range(len(edges) - 1):
+        lo = float(edges[idx])
+        hi = float(edges[idx + 1])
+        if idx == len(edges) - 2:
+            mask = (conf >= lo) & (conf <= hi)
+        else:
+            mask = (conf >= lo) & (conf < hi)
+        count = int(np.sum(mask))
+        if count <= 0:
+            continue
+        bucket_conf = float(np.mean(conf[mask]))
+        bucket_acc = float(np.mean(y[mask]))
+        ece += (float(count) / float(n)) * abs(bucket_acc - bucket_conf)
+
+    return float(ece)
+
+
+def _apply_calibration_map(
+    confidences: np.ndarray,
+    calibration_map: dict[str, Any] | None,
+) -> tuple[np.ndarray, bool, str]:
+    conf = _clip_confidences(confidences)
+    if not isinstance(calibration_map, dict):
+        return conf, False, "missing_map"
+    if not bool(calibration_map.get("enabled", False)):
+        return conf, False, str(calibration_map.get("reason", "disabled"))
+
+    x_raw = np.asarray(calibration_map.get("x_points", []), dtype=np.float64).reshape(-1)
+    y_raw = np.asarray(calibration_map.get("y_points", []), dtype=np.float64).reshape(-1)
+    n_pts = int(min(len(x_raw), len(y_raw)))
+    if n_pts < 2:
+        return conf, False, "insufficient_map_points"
+
+    x = np.clip(np.nan_to_num(x_raw[:n_pts], nan=0.0), 0.0, 1.0)
+    y = np.clip(np.nan_to_num(y_raw[:n_pts], nan=0.5), 0.0, 1.0)
+    order = np.argsort(x)
+    x = x[order]
+    y = y[order]
+
+    uniq_x: list[float] = []
+    uniq_y: list[float] = []
+    for xi, yi in zip(x.tolist(), y.tolist(), strict=False):
+        if uniq_x and abs(xi - uniq_x[-1]) <= 1e-8:
+            uniq_y[-1] = float(max(uniq_y[-1], yi))
+        else:
+            uniq_x.append(float(xi))
+            uniq_y.append(float(yi))
+
+    if len(uniq_x) < 2:
+        return conf, False, "degenerate_map"
+
+    if uniq_x[0] > 0.0:
+        uniq_x.insert(0, 0.0)
+        uniq_y.insert(0, float(uniq_y[0]))
+    if uniq_x[-1] < 1.0:
+        uniq_x.append(1.0)
+        uniq_y.append(float(uniq_y[-1]))
+
+    calibrated = np.interp(
+        conf,
+        np.asarray(uniq_x, dtype=np.float64),
+        np.asarray(uniq_y, dtype=np.float64),
+    )
+    calibrated = _clip_confidences(calibrated)
+    return calibrated, True, "ok"
+
+
+def _build_confidence_calibration(
+    self,
+    X_cal: np.ndarray | None,
+    y_cal: np.ndarray | None,
+) -> dict[str, Any]:
+    """Fit a monotonic confidence map so score ~= empirical correctness."""
+    report: dict[str, Any] = {
+        "enabled": False,
+        "source": "validation",
+        "reason": "not_built",
+        "sample_count": 0,
+        "bin_count": int(_CALIBRATION_BINS),
+        "min_bin_samples": int(_CALIBRATION_MIN_BIN_SAMPLES),
+        "used_bins": 0,
+        "x_points": [],
+        "y_points": [],
+        "mapping_points": [],
+        "ece_before": 0.0,
+        "ece_after": 0.0,
+        "brier_before": 0.0,
+        "brier_after": 0.0,
+        "ece_improvement": 0.0,
+        "brier_improvement": 0.0,
+    }
+
+    if (
+        self.ensemble is None
+        or X_cal is None
+        or y_cal is None
+        or len(X_cal) == 0
+        or len(y_cal) == 0
+    ):
+        report["reason"] = "missing_validation_inputs"
+        return report
+
+    n_raw = int(min(len(X_cal), len(y_cal)))
+    if n_raw < int(_CALIBRATION_MIN_SAMPLES):
+        report["reason"] = (
+            f"insufficient_samples (need>={_CALIBRATION_MIN_SAMPLES}, got={n_raw})"
+        )
+        return report
+
+    sample_cap = 2500
+    n = int(min(n_raw, sample_cap))
+    X_eval = X_cal[-n:]
+    y_eval = np.asarray(y_cal[-n:], dtype=np.int64).reshape(-1)
+
+    predictions = self.ensemble.predict_batch(X_eval)
+    if not predictions:
+        report["reason"] = "no_predictions"
+        return report
+
+    pred_classes = np.asarray(
+        [int(getattr(p, "predicted_class", 1)) for p in predictions],
+        dtype=np.int64,
+    )
+    raw_conf = _clip_confidences(
+        [float(getattr(p, "confidence", 0.5)) for p in predictions]
+    )
+    min_len = int(min(len(pred_classes), len(raw_conf), len(y_eval)))
+    if min_len < int(_CALIBRATION_MIN_SAMPLES):
+        report["reason"] = (
+            f"insufficient_predictions (need>={_CALIBRATION_MIN_SAMPLES}, got={min_len})"
+        )
+        return report
+
+    pred_classes = pred_classes[:min_len]
+    raw_conf = raw_conf[:min_len]
+    y_eval = y_eval[:min_len]
+    correct = (pred_classes == y_eval).astype(np.float64)
+    report["sample_count"] = int(min_len)
+
+    conf_std = float(np.std(raw_conf))
+    if conf_std <= 1e-6:
+        mean_acc = float(np.clip(np.mean(correct), 0.0, 1.0))
+        calibrated = np.full_like(raw_conf, fill_value=mean_acc, dtype=np.float64)
+        ece_before = _expected_calibration_error(raw_conf, correct)
+        ece_after = _expected_calibration_error(calibrated, correct)
+        brier_before = float(np.mean(np.square(raw_conf - correct)))
+        brier_after = float(np.mean(np.square(calibrated - correct)))
+        report.update(
+            {
+                "enabled": True,
+                "reason": "constant_confidence_fallback",
+                "used_bins": 1,
+                "x_points": [0.0, 1.0],
+                "y_points": [float(mean_acc), float(mean_acc)],
+                "mapping_points": [
+                    {
+                        "raw_confidence": 0.0,
+                        "calibrated_confidence": float(mean_acc),
+                        "samples": int(min_len),
+                    },
+                    {
+                        "raw_confidence": 1.0,
+                        "calibrated_confidence": float(mean_acc),
+                        "samples": 0,
+                    },
+                ],
+                "ece_before": float(ece_before),
+                "ece_after": float(ece_after),
+                "brier_before": float(brier_before),
+                "brier_after": float(brier_after),
+                "ece_improvement": float(ece_before - ece_after),
+                "brier_improvement": float(brier_before - brier_after),
+            }
+        )
+        return report
+
+    edges = np.linspace(0.0, 1.0, int(_CALIBRATION_BINS) + 1)
+    min_bin_samples = int(
+        max(
+            _CALIBRATION_MIN_BIN_SAMPLES,
+            min_len // max(3, int(_CALIBRATION_BINS * 4)),
+        )
+    )
+    report["min_bin_samples"] = int(min_bin_samples)
+
+    bins: list[dict[str, Any]] = []
+    for idx in range(len(edges) - 1):
+        lo = float(edges[idx])
+        hi = float(edges[idx + 1])
+        if idx == len(edges) - 2:
+            mask = (raw_conf >= lo) & (raw_conf <= hi)
+        else:
+            mask = (raw_conf >= lo) & (raw_conf < hi)
+        count = int(np.sum(mask))
+        if count <= 0:
+            continue
+        bins.append(
+            {
+                "lo": lo,
+                "hi": hi,
+                "count": int(count),
+                "mean_confidence": float(np.mean(raw_conf[mask])),
+                "empirical_accuracy": float(np.mean(correct[mask])),
+            }
+        )
+
+    if not bins:
+        report["reason"] = "empty_bins"
+        return report
+
+    usable_bins = [b for b in bins if int(b["count"]) >= min_bin_samples]
+    if len(usable_bins) < 2:
+        quantile_edges = np.unique(
+            np.quantile(raw_conf, [0.0, 0.25, 0.5, 0.75, 1.0]).astype(np.float64)
+        )
+        if len(quantile_edges) >= 3:
+            q_bins: list[dict[str, Any]] = []
+            for idx in range(len(quantile_edges) - 1):
+                lo = float(quantile_edges[idx])
+                hi = float(quantile_edges[idx + 1])
+                if idx == len(quantile_edges) - 2:
+                    mask = (raw_conf >= lo) & (raw_conf <= hi)
+                else:
+                    mask = (raw_conf >= lo) & (raw_conf < hi)
+                count = int(np.sum(mask))
+                if count <= 0:
+                    continue
+                q_bins.append(
+                    {
+                        "lo": lo,
+                        "hi": hi,
+                        "count": int(count),
+                        "mean_confidence": float(np.mean(raw_conf[mask])),
+                        "empirical_accuracy": float(np.mean(correct[mask])),
+                    }
+                )
+            if len(q_bins) >= 2:
+                usable_bins = q_bins
+            else:
+                # Keep two densest bins when quantiles collapse.
+                usable_bins = sorted(
+                    bins,
+                    key=lambda x: int(x["count"]),
+                    reverse=True,
+                )[:2]
+        else:
+            usable_bins = sorted(
+                bins,
+                key=lambda x: int(x["count"]),
+                reverse=True,
+            )[:2]
+    if len(usable_bins) < 2:
+        report["reason"] = "insufficient_bin_support"
+        return report
+
+    usable_bins = sorted(usable_bins, key=lambda x: float(x["mean_confidence"]))
+    x = np.asarray(
+        [float(b["mean_confidence"]) for b in usable_bins],
+        dtype=np.float64,
+    )
+    y = np.asarray(
+        [float(b["empirical_accuracy"]) for b in usable_bins],
+        dtype=np.float64,
+    )
+    counts = np.asarray([int(b["count"]) for b in usable_bins], dtype=np.int64)
+
+    # Keep calibration map monotonic to preserve ranking semantics.
+    y = np.maximum.accumulate(y)
+
+    x_pts: list[float] = x.tolist()
+    y_pts: list[float] = y.tolist()
+    if x_pts[0] > 0.0:
+        x_pts.insert(0, 0.0)
+        y_pts.insert(0, float(y_pts[0]))
+    if x_pts[-1] < 1.0:
+        x_pts.append(1.0)
+        y_pts.append(float(y_pts[-1]))
+
+    uniq_x: list[float] = []
+    uniq_y: list[float] = []
+    for xi, yi in zip(x_pts, y_pts, strict=False):
+        if uniq_x and abs(xi - uniq_x[-1]) <= 1e-8:
+            uniq_y[-1] = float(max(uniq_y[-1], yi))
+        else:
+            uniq_x.append(float(xi))
+            uniq_y.append(float(np.clip(yi, 0.0, 1.0)))
+
+    if len(uniq_x) < 2:
+        report["reason"] = "degenerate_map"
+        return report
+
+    calibrated = np.interp(
+        raw_conf,
+        np.asarray(uniq_x, dtype=np.float64),
+        np.asarray(uniq_y, dtype=np.float64),
+    )
+    calibrated = _clip_confidences(calibrated)
+
+    ece_before = _expected_calibration_error(raw_conf, correct)
+    ece_after = _expected_calibration_error(calibrated, correct)
+    brier_before = float(np.mean(np.square(raw_conf - correct)))
+    brier_after = float(np.mean(np.square(calibrated - correct)))
+
+    count_lookup = {
+        round(float(conf), 6): int(cnt)
+        for conf, cnt in zip(x.tolist(), counts.tolist(), strict=False)
+    }
+    mapping_points = []
+    for xi, yi in zip(uniq_x, uniq_y, strict=False):
+        mapping_points.append(
+            {
+                "raw_confidence": float(xi),
+                "calibrated_confidence": float(yi),
+                "samples": int(count_lookup.get(round(float(xi), 6), 0)),
+            }
+        )
+
+    report.update(
+        {
+            "enabled": True,
+            "reason": "ok",
+            "used_bins": int(len(usable_bins)),
+            "x_points": [float(v) for v in uniq_x],
+            "y_points": [float(v) for v in uniq_y],
+            "mapping_points": mapping_points,
+            "ece_before": float(ece_before),
+            "ece_after": float(ece_after),
+            "brier_before": float(brier_before),
+            "brier_after": float(brier_after),
+            "ece_improvement": float(ece_before - ece_after),
+            "brier_improvement": float(brier_before - brier_after),
+        }
+    )
+    return report
 
 def _walk_forward_validate(
     self,
@@ -57,6 +418,7 @@ def _walk_forward_validate(
     y_test: np.ndarray | None,
     r_test: np.ndarray | None,
     regime_profile: dict[str, Any] | None = None,
+    calibration_map: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Evaluate stability on contiguous forward windows.
 
@@ -138,7 +500,34 @@ def _walk_forward_validate(
             y_eval[start:end],
             r_eval[start:end],
             regime_profile=regime_profile,
+            calibration_map=calibration_map,
         )
+        trading = metrics.get("trading", {}) or {}
+        sharpe = float(trading.get("sharpe_ratio", 0.0))
+        profit_factor = float(trading.get("profit_factor", 0.0))
+        max_drawdown = float(trading.get("max_drawdown", 1.0))
+        trades = int(trading.get("trades", 0))
+
+        sharpe_score = 0.5 + (0.5 * float(np.tanh(sharpe / 2.0)))
+        pf_score = 0.5 + (
+            0.5 * float(np.tanh(max(-1.0, profit_factor - 1.0)))
+        )
+        drawdown_score = 1.0 - float(np.clip(max_drawdown, 0.0, 1.0))
+        trade_support = float(
+            np.clip(trades / float(max(1, _MIN_BASELINE_TRADES)), 0.0, 1.0)
+        )
+        fold_quality = float(
+            (
+                0.42 * float(metrics.get("risk_adjusted_score", 0.0))
+                + 0.18 * sharpe_score
+                + 0.16 * pf_score
+                + 0.16 * drawdown_score
+                + 0.08 * float(metrics.get("accuracy", 0.0))
+            )
+            * (0.70 + (0.30 * trade_support))
+        )
+        fold_quality = float(np.clip(fold_quality, 0.0, 1.0))
+
         fold_results.append(
             {
                 "fold": int(fold + 1),
@@ -153,6 +542,10 @@ def _walk_forward_validate(
                         "sharpe_ratio", 0.0
                     )
                 ),
+                "profit_factor": float(profit_factor),
+                "max_drawdown": float(max_drawdown),
+                "trades": int(trades),
+                "selection_score": float(fold_quality),
             }
         )
 
@@ -169,26 +562,58 @@ def _walk_forward_validate(
         [x["risk_adjusted_score"] for x in fold_results],
         dtype=np.float64,
     )
+    fold_quality_scores = np.array(
+        [x["selection_score"] for x in fold_results],
+        dtype=np.float64,
+    )
 
     acc_mean = float(np.mean(accs))
     acc_std = float(np.std(accs))
     score_mean = float(np.mean(scores))
     score_std = float(np.std(scores))
+    fold_quality_mean = float(np.mean(fold_quality_scores))
+    fold_quality_std = float(np.std(fold_quality_scores))
+
+    recency_weights = np.arange(
+        1.0, float(len(fold_quality_scores)) + 1.0, dtype=np.float64
+    )
+    recency_weights = recency_weights / np.sum(recency_weights)
+    selection_score = float(
+        np.sum(fold_quality_scores * recency_weights)
+    )
+    recency_weighted_risk = float(np.sum(scores * recency_weights))
+
+    downside = np.maximum(0.0, fold_quality_mean - fold_quality_scores)
+    downside_rms = float(np.sqrt(np.mean(np.square(downside))))
+    downside_stability = 1.0 - (
+        downside_rms / max(0.25, fold_quality_mean + 0.15)
+    )
+    downside_stability = float(np.clip(downside_stability, 0.0, 1.0))
 
     stability = 1.0 - (
-        0.6 * (acc_std / (acc_mean + _EPS))
-        + 0.4 * (score_std / (abs(score_mean) + 0.1))
+        0.50 * (acc_std / (acc_mean + _EPS))
+        + 0.30 * (score_std / (abs(score_mean) + 0.1))
+        + 0.20 * fold_quality_std
     )
     stability = float(np.clip(stability, 0.0, 1.0))
 
     return {
         "enabled": True,
         "source": eval_source,
+        "calibration_applied": bool(
+            isinstance(calibration_map, dict)
+            and bool(calibration_map.get("enabled", False))
+        ),
         "folds": fold_results,
         "mean_accuracy": acc_mean,
         "std_accuracy": acc_std,
         "mean_risk_adjusted_score": score_mean,
         "std_risk_adjusted_score": score_std,
+        "selection_score": float(np.clip(selection_score, 0.0, 1.0)),
+        "downside_stability": float(downside_stability),
+        "mean_selection_score": float(fold_quality_mean),
+        "std_selection_score": float(fold_quality_std),
+        "recency_weighted_risk_adjusted_score": float(recency_weighted_risk),
         "stability_score": stability,
     }
 
@@ -744,6 +1169,7 @@ def _evaluate(
     y: np.ndarray,
     r: np.ndarray,
     regime_profile: dict[str, Any] | None = None,
+    calibration_map: dict[str, Any] | None = None,
 ) -> dict:
     """Evaluate model on test data."""
     try:
@@ -817,6 +1243,18 @@ def _evaluate(
                 np.asarray(s_list, dtype=np.int64),
             )
 
+    empty_calibration = {
+        "applied": False,
+        "reason": "disabled",
+        "sample_count": 0,
+        "ece_before": 0.0,
+        "ece_after": 0.0,
+        "brier_before": 0.0,
+        "brier_after": 0.0,
+        "ece_improvement": 0.0,
+        "brier_improvement": 0.0,
+    }
+
     empty_result = {
         "accuracy": 0.0,
         "trading": {},
@@ -826,15 +1264,24 @@ def _evaluate(
         "up_recall": 0.0,
         "up_f1": 0.0,
         "risk_adjusted_score": 0.0,
+        "mean_confidence": 0.0,
+        "mean_effective_confidence": 0.0,
+        "confidence_mode": "raw",
+        "calibration": dict(empty_calibration),
         "regime_profile": regime_profile or {},
         "explainability": {
             "samples": [],
             "filters": {},
         },
+        "metrics_backend": metrics_backend,
     }
 
     if len(X) == 0 or len(y) == 0:
         return empty_result
+    if self.ensemble is None:
+        out = dict(empty_result)
+        out["calibration"] = {**empty_calibration, "reason": "ensemble_unavailable"}
+        return out
 
     predictions = self.ensemble.predict_batch(X)
     pred_classes = np.array(
@@ -871,9 +1318,17 @@ def _evaluate(
         up_recall = 0.0
         up_f1 = 0.0
 
-    confidences = np.array(
-        [p.confidence for p in predictions[:min_len]]
+    confidences = _clip_confidences(
+        [float(getattr(p, "confidence", 0.5)) for p in predictions[:min_len]]
     )
+    calibrated_confidences, calibration_applied, calibration_reason = _apply_calibration_map(
+        confidences,
+        calibration_map,
+    )
+    effective_confidences = (
+        calibrated_confidences if calibration_applied else confidences
+    )
+
     agreements = np.array(
         [float(getattr(p, "agreement", 0.0)) for p in predictions[:min_len]]
     )
@@ -892,6 +1347,32 @@ def _evaluate(
     edges = np.abs(prob_up - prob_down)
 
     accuracy = float(np.mean(pred_classes == y_eval))
+    correctness = (pred_classes == y_eval).astype(np.float64)
+    ece_before = _expected_calibration_error(confidences, correctness)
+    ece_after = _expected_calibration_error(effective_confidences, correctness)
+    brier_before = float(np.mean(np.square(confidences - correctness)))
+    brier_after = float(np.mean(np.square(effective_confidences - correctness)))
+    calibration_summary: dict[str, Any] = {
+        "applied": bool(calibration_applied),
+        "reason": str(calibration_reason),
+        "sample_count": int(len(correctness)),
+        "ece_before": float(ece_before),
+        "ece_after": float(ece_after),
+        "brier_before": float(brier_before),
+        "brier_after": float(brier_after),
+        "ece_improvement": float(ece_before - ece_after),
+        "brier_improvement": float(brier_before - brier_after),
+    }
+    if isinstance(calibration_map, dict):
+        calibration_summary["fit_sample_count"] = int(
+            calibration_map.get("sample_count", 0)
+        )
+        calibration_summary["fit_ece_before"] = float(
+            calibration_map.get("ece_before", 0.0)
+        )
+        calibration_summary["fit_ece_after"] = float(
+            calibration_map.get("ece_after", 0.0)
+        )
 
     class_acc = {}
     for c in range(CONFIG.NUM_CLASSES):
@@ -905,7 +1386,7 @@ def _evaluate(
     thresholds = self._trade_quality_thresholds(confidence_floor)
     masks = self._trade_masks(
         pred_classes,
-        confidences,
+        effective_confidences,
         agreements,
         entropies,
         margins,
@@ -914,7 +1395,7 @@ def _evaluate(
     )
     trading_metrics = self._simulate_trading(
         pred_classes,
-        confidences,
+        effective_confidences,
         r_eval,
         agreements=agreements,
         entropies=entropies,
@@ -925,7 +1406,7 @@ def _evaluate(
     )
     stress_tests = self._build_trading_stress_tests(
         preds=pred_classes,
-        confs=confidences,
+        confs=effective_confidences,
         returns=r_eval,
         agreements=agreements,
         entropies=entropies,
@@ -958,6 +1439,15 @@ def _evaluate(
             if len(confidences) > 0
             else 0.0
         ),
+        "mean_effective_confidence": (
+            float(np.mean(effective_confidences))
+            if len(effective_confidences) > 0
+            else 0.0
+        ),
+        "confidence_mode": (
+            "calibrated" if bool(calibration_applied) else "raw"
+        ),
+        "calibration": calibration_summary,
         "trading": trading_metrics,
         "stress_tests": stress_tests,
         "confusion_matrix": cm.tolist(),

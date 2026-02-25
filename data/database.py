@@ -72,17 +72,32 @@ class MarketDatabase:
                 log.debug(f"Background connection cleanup error: {e}")
 
     def close_all(self) -> None:
-        """FIX #4: Close all connections and stop background cleanup."""
+        """Close all tracked connections and stop background cleanup."""
         self._cleanup_stop_event.set()
-        if self._cleanup_thread:
-            self._cleanup_thread.join(timeout=5)
+        cleanup_thread = self._cleanup_thread
+        if (
+            cleanup_thread is not None
+            and cleanup_thread.is_alive()
+            and cleanup_thread is not threading.current_thread()
+        ):
+            cleanup_thread.join(timeout=5)
+        self._cleanup_thread = None
         with self._connections_lock:
-            for tid, conn in list(self._connections.items()):
+            for _tid, conn in list(self._connections.items()):
                 try:
                     conn.close()
                 except (sqlite3.Error, OSError):
                     pass
             self._connections.clear()
+        if (
+            hasattr(self._local, "conn")
+            and self._local.conn is not None
+        ):
+            try:
+                self._local.conn.close()
+            except (sqlite3.Error, OSError):
+                pass
+            self._local.conn = None
 
     # ------------------------------------------------------------------
     # Connection management
@@ -1403,26 +1418,6 @@ class MarketDatabase:
                 pass
             with self._connections_lock:
                 self._connections.pop(tid, None)
-            self._local.conn = None
-
-    def close_all(self) -> None:
-        """Close all tracked connections (call on shutdown)."""
-        with self._connections_lock:
-            for _tid, conn in list(self._connections.items()):
-                try:
-                    conn.close()
-                except (sqlite3.Error, OSError):
-                    pass
-            self._connections.clear()
-        # Also close this thread's connection
-        if (
-            hasattr(self._local, "conn")
-            and self._local.conn is not None
-        ):
-            try:
-                self._local.conn.close()
-            except (sqlite3.Error, OSError):
-                pass
             self._local.conn = None
 
 # Global database instance (thread-safe)

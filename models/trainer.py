@@ -28,10 +28,15 @@ from models.trainer_data_ops import (
 from models.trainer_data_ops import _fetch_raw_data as _fetch_raw_data_impl
 from models.trainer_data_ops import _rebalance_train_samples as _rebalance_train_samples_impl
 from models.trainer_data_ops import _split_single_stock as _split_single_stock_impl
-from models.trainer_data_ops import _validate_temporal_split_integrity as _validate_temporal_split_integrity_impl
+from models.trainer_data_ops import (
+    _validate_temporal_split_integrity as _validate_temporal_split_integrity_impl,
+)
 from models.trainer_data_ops import prepare_data as _prepare_data_impl
 from models.trainer_eval_ops import (
     _build_explainability_samples as _build_explainability_samples_impl,
+)
+from models.trainer_eval_ops import (
+    _build_confidence_calibration as _build_confidence_calibration_impl,
 )
 from models.trainer_eval_ops import _build_quality_gate as _build_quality_gate_impl
 from models.trainer_eval_ops import _build_trading_stress_tests as _build_trading_stress_tests_impl
@@ -44,6 +49,7 @@ from models.trainer_eval_ops import _walk_forward_validate as _walk_forward_vali
 from models.trainer_pipeline_ops import _train_forecaster as _train_forecaster_impl
 from models.trainer_pipeline_ops import train as _train_impl
 from utils.logger import get_logger
+from utils.method_binding import bind_methods
 
 log = get_logger(__name__)
 
@@ -1011,21 +1017,29 @@ class Trainer:
 
         log.info(f"Training report saved to {path}")
 
-Trainer._assess_raw_data_quality = _assess_raw_data_quality_impl
-Trainer._split_single_stock = _split_single_stock_impl
-Trainer._fetch_raw_data = _fetch_raw_data_impl
-Trainer._validate_temporal_split_integrity = _validate_temporal_split_integrity_impl
-Trainer._create_sequences_from_splits = _create_sequences_from_splits_impl
-Trainer._rebalance_train_samples = _rebalance_train_samples_impl
-Trainer._effective_confidence_floor = _effective_confidence_floor_impl
-Trainer._fallback_temporal_validation_split = _fallback_temporal_validation_split_impl
-Trainer._walk_forward_validate = _walk_forward_validate_impl
-Trainer._build_quality_gate = _build_quality_gate_impl
-Trainer._run_drift_guard = _run_drift_guard_impl
-Trainer._trade_quality_thresholds = _trade_quality_thresholds_impl
-Trainer._trade_masks = staticmethod(_trade_masks_impl)
-Trainer._build_explainability_samples = _build_explainability_samples_impl
-Trainer.prepare_data = _prepare_data_impl
-Trainer._build_trading_stress_tests = _build_trading_stress_tests_impl
-Trainer._evaluate = _evaluate_impl
-Trainer._simulate_trading = _simulate_trading_impl
+bind_methods(
+    Trainer,
+    {
+        "_assess_raw_data_quality": _assess_raw_data_quality_impl,
+        "_split_single_stock": _split_single_stock_impl,
+        "_fetch_raw_data": _fetch_raw_data_impl,
+        "_validate_temporal_split_integrity": _validate_temporal_split_integrity_impl,
+        "_create_sequences_from_splits": _create_sequences_from_splits_impl,
+        "_rebalance_train_samples": _rebalance_train_samples_impl,
+        "_effective_confidence_floor": _effective_confidence_floor_impl,
+        "_fallback_temporal_validation_split": _fallback_temporal_validation_split_impl,
+        "_walk_forward_validate": _walk_forward_validate_impl,
+        "_build_confidence_calibration": _build_confidence_calibration_impl,
+        "_build_quality_gate": _build_quality_gate_impl,
+        "_run_drift_guard": _run_drift_guard_impl,
+        "_trade_quality_thresholds": _trade_quality_thresholds_impl,
+        "_trade_masks": _trade_masks_impl,
+        "_build_explainability_samples": _build_explainability_samples_impl,
+        "prepare_data": _prepare_data_impl,
+        "_build_trading_stress_tests": _build_trading_stress_tests_impl,
+        "_evaluate": _evaluate_impl,
+        "_simulate_trading": _simulate_trading_impl,
+    },
+    static_methods={"_trade_masks"},
+    context="models.trainer",
+)

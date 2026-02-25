@@ -629,7 +629,7 @@ class ContinuousLearner:
         *,
         context: str = "",
     ) -> bool:
-        """Escalate trainer drift-guard failures to runtime auto-trade controls."""
+        """Record trainer drift-guard failures for analysis-only runtime."""
         payload = result if isinstance(result, dict) else {}
         drift_guard = payload.get("drift_guard", {})
         quality_gate = payload.get("quality_gate", {})
@@ -669,28 +669,6 @@ class ContinuousLearner:
         )
         self.progress.add_warning(reason)
         log.warning("Trainer drift alarm: %s", reason)
-
-        try:
-            from trading.executor import ExecutionEngine
-
-            handled = int(
-                ExecutionEngine.trigger_model_drift_alarm(
-                    reason=reason,
-                    severity="critical",
-                    metadata={
-                        "context": str(ctx),
-                        "action": str(action),
-                        "score_drop": float(score_drop),
-                        "accuracy_drop": float(accuracy_drop),
-                    },
-                )
-            )
-            if handled <= 0:
-                log.warning(
-                    "Model drift alarm raised but no active execution engine handled it"
-                )
-        except _AUTO_LEARNER_RECOVERABLE_EXCEPTIONS as e:
-            log.warning("Failed to raise model drift runtime alarm: %s", e)
         return True
 
     def _train(

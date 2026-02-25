@@ -4,17 +4,16 @@ import signal
 import sys
 import threading
 import time
-from concurrent.futures import Future, ThreadPoolExecutor
+from concurrent.futures import Future
 from datetime import datetime
 from importlib import import_module
 from typing import Any, cast
 
 from PyQt6.QtCore import QDate, QSize, Qt, QTimer, pyqtSignal
-from PyQt6.QtGui import QAction, QActionGroup, QFont
+from PyQt6.QtGui import QAction, QFont
 from PyQt6.QtWidgets import (
     QApplication,
     QCheckBox,
-    QComboBox,
     QDateEdit,
     QFrame,
     QGridLayout,
@@ -122,9 +121,9 @@ from ui.modern_theme import (
     ModernFonts,
     get_monospace_font_family,
     get_primary_font_family,
-    get_status_badge_style,
 )
 from utils.logger import get_logger
+from utils.method_binding import bind_methods
 from utils.recoverable import COMMON_RECOVERABLE_EXCEPTIONS
 
 log = get_logger(__name__)
@@ -135,7 +134,7 @@ def _lazy_get(module: str, name: str) -> Any:
     return getattr(import_module(module), name)
 
 class MainApp(MainAppCommonMixin, QMainWindow):
-    """Professional AI Stock Trading Application.
+    """Professional AI Stock Analysis Application.
 
     Features:
     - Real-time signal monitoring with multiple intervals
@@ -153,7 +152,7 @@ class MainApp(MainAppCommonMixin, QMainWindow):
     def __init__(self) -> None:
         super().__init__()
 
-        self.setWindowTitle("Trading Graph Pro")
+        self.setWindowTitle("Trading Graph Analysis")
         self.setMinimumSize(980, 640)
         self._set_initial_window_geometry()
 
@@ -192,8 +191,6 @@ class MainApp(MainAppCommonMixin, QMainWindow):
         self._MAX_CACHED_BARS = 500  # Max symbols with cached bars
         self._MAX_CACHED_QUOTES = 1000  # Max symbols with cached quotes
         self._bars_by_symbol: dict[str, list[dict[str, Any]]] = {}
-        self._trained_stock_codes_cache: list[str] = []
-        self._trained_stock_last_train: dict[str, str] = {}
         self._last_bar_feed_ts: dict[str, float] = {}
         self._chart_symbol: str = ""
         self._history_refresh_once: set[tuple[str, str]] = set()
@@ -203,7 +200,6 @@ class MainApp(MainAppCommonMixin, QMainWindow):
         self._syncing_mode_ui = False
         self._selected_chart_date = datetime.now().date().isoformat()
         self._session_bar_cache = None
-        self._load_trained_stock_last_train_meta()
 
         # Auto-trade state
         self._auto_trade_mode: AutoTradeMode = AutoTradeMode.MANUAL
@@ -1371,8 +1367,11 @@ def _bind_mainapp_extracted_ops() -> None:
         "_scan_stocks": _app_analysis_ops._scan_stocks,
         "_on_scan_done": _app_analysis_ops._on_scan_done,
     }
-    for name, fn in bindings.items():
-        setattr(MainApp, name, fn)
+    bind_methods(
+        MainApp,
+        bindings,
+        context="ui.app.MainApp",
+    )
 
 
 _bind_mainapp_extracted_ops()

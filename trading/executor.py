@@ -54,6 +54,7 @@ from trading.health import HealthStatus, SystemHealth
 from trading.runtime_lease import RuntimeLeaseClient, create_runtime_lease_client
 from utils.atomic_io import atomic_write_json, read_json
 from utils.logger import get_logger
+from utils.method_binding import bind_methods
 from utils.metrics import inc_counter, set_gauge
 from utils.security import get_access_control, get_audit_log  # noqa: F401
 
@@ -1141,20 +1142,26 @@ class ExecutionEngine:
 
     def get_orders(self) -> Any:
         return self.broker.get_orders()
-ExecutionEngine.start = _start_impl
-ExecutionEngine.stop = _stop_impl
-ExecutionEngine._build_execution_snapshot = _build_execution_snapshot_impl
-ExecutionEngine._get_execution_quality_snapshot = _get_execution_quality_snapshot_impl
-ExecutionEngine._watchdog_loop = _watchdog_loop_impl
-ExecutionEngine.submit = _submit_impl
-ExecutionEngine._execute = _execute_impl
-ExecutionEngine._startup_sync = _startup_sync_impl
-ExecutionEngine._process_pending_fills = _process_pending_fills_impl
-ExecutionEngine._cancel_oco_siblings = _cancel_oco_siblings_impl
-ExecutionEngine._record_execution_quality = _record_execution_quality_impl
-ExecutionEngine._maybe_register_synthetic_exit = _maybe_register_synthetic_exit_impl
-ExecutionEngine._evaluate_synthetic_exits = _evaluate_synthetic_exits_impl
-ExecutionEngine._submit_synthetic_exit = _submit_synthetic_exit_impl
-ExecutionEngine._status_sync_loop = _status_sync_loop_impl
-ExecutionEngine._reconciliation_loop = _reconciliation_loop_impl
-ExecutionEngine._submit_with_retry = _submit_with_retry_impl
+bind_methods(
+    ExecutionEngine,
+    {
+        "start": _start_impl,
+        "stop": _stop_impl,
+        "_build_execution_snapshot": _build_execution_snapshot_impl,
+        "_get_execution_quality_snapshot": _get_execution_quality_snapshot_impl,
+        "_watchdog_loop": _watchdog_loop_impl,
+        "submit": _submit_impl,
+        "_execute": _execute_impl,
+        "_startup_sync": _startup_sync_impl,
+        "_process_pending_fills": _process_pending_fills_impl,
+        "_cancel_oco_siblings": _cancel_oco_siblings_impl,
+        "_record_execution_quality": _record_execution_quality_impl,
+        "_maybe_register_synthetic_exit": _maybe_register_synthetic_exit_impl,
+        "_evaluate_synthetic_exits": _evaluate_synthetic_exits_impl,
+        "_submit_synthetic_exit": _submit_synthetic_exit_impl,
+        "_status_sync_loop": _status_sync_loop_impl,
+        "_reconciliation_loop": _reconciliation_loop_impl,
+        "_submit_with_retry": _submit_with_retry_impl,
+    },
+    context="trading.executor",
+)
