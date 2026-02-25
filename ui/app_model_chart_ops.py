@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import time
 from statistics import median
 from typing import Any
 
@@ -538,6 +539,72 @@ def _chart_prediction_caps(self, interval: str) -> tuple[float, float]:
         return 0.220, 0.040
     return 0.070, 0.022
 
+def _apply_news_policy_bias_to_forecast(
+    self,
+    *,
+    symbol: str,
+    chart_interval: str,
+    anchor: float,
+    predicted_prices: list[float],
+) -> list[float]:
+    """Blend cached news/policy signal into chart forecast (display-only).
+
+    The adjustment is intentionally bounded so it nudges regime direction
+    without introducing visual spikes.
+    """
+    vals = [float(v) for v in self._safe_list(predicted_prices) if float(v) > 0]
+    if not vals:
+        return []
+    if anchor <= 0 or not math.isfinite(anchor):
+        return vals
+
+    signal = {}
+    if hasattr(self, "_news_policy_signal_for"):
+        try:
+            signal = dict(self._news_policy_signal_for(symbol) or {})
+        except _UI_RECOVERABLE_EXCEPTIONS:
+            signal = {}
+    if not signal:
+        return vals
+
+    try:
+        age_s = float(time.time() - float(signal.get("ts", 0.0) or 0.0))
+    except _UI_RECOVERABLE_EXCEPTIONS:
+        age_s = float("inf")
+    if age_s > 900.0:
+        return vals
+
+    overall = float(signal.get("overall", 0.0) or 0.0)
+    policy = float(signal.get("policy", 0.0) or 0.0)
+    market = float(signal.get("market", 0.0) or 0.0)
+    confidence = float(signal.get("confidence", 0.0) or 0.0)
+
+    directional_bias = float(
+        np.clip(
+            (0.48 * overall) + (0.34 * policy) + (0.18 * market),
+            -1.0,
+            1.0,
+        )
+    )
+    if abs(directional_bias) < 0.02:
+        return vals
+
+    iv = self._normalize_interval_token(chart_interval)
+    max_total_move, _max_step_move = self._chart_prediction_caps(iv)
+    bias_cap = float(np.clip(max_total_move * 0.30, 0.004, 0.03))
+    bias_total = float(np.clip(directional_bias * (0.25 + (0.55 * confidence)), -bias_cap, bias_cap))
+    if abs(bias_total) < 1e-6:
+        return vals
+
+    out: list[float] = []
+    n = max(1, len(vals))
+    for i, px in enumerate(vals, start=1):
+        frac = float(i) / float(n)
+        drift = float(bias_total * frac)
+        adj = float(px) * (1.0 + drift)
+        out.append(float(max(0.01, adj)))
+    return out
+
 def _prepare_chart_predicted_prices(
     self,
     *,
@@ -580,6 +647,15 @@ def _prepare_chart_predicted_prices(
     if not math.isfinite(anchor) or anchor <= 0:
         anchor = float(cleaned[0])
     if not math.isfinite(anchor) or anchor <= 0:
+        return []
+
+    cleaned = self._apply_news_policy_bias_to_forecast(
+        symbol=symbol,
+        chart_interval=iv_chart,
+        anchor=anchor,
+        predicted_prices=cleaned,
+    )
+    if not cleaned:
         return []
 
     max_total_move, max_step_move = self._chart_prediction_caps(iv_chart)

@@ -739,6 +739,7 @@ class StockChart(QWidget):
                 "kept": 0,
                 "drop_nonfinite": 0,
                 "drop_parse": 0,
+                "drop_anomaly": 0,
             }
             rendered_bars: list[dict] = []
             
@@ -804,6 +805,20 @@ class StockChart(QWidget):
                         h, l_val = l_val, h
                     o = min(max(o, l_val), h)
                     c = min(max(c, l_val), h)
+
+                    # Final defensive render guard against malformed vendor bars.
+                    sanitized = self._sanitize_render_ohlc(
+                        o=float(o),
+                        h=float(h),
+                        low=float(l_val),
+                        c=float(c),
+                        interval=str(bar_iv),
+                        prev_close=prev_close,
+                    )
+                    if sanitized is None:
+                        diag["drop_anomaly"] += 1
+                        continue
+                    o, h, l_val, c = sanitized
 
                     # Keep numeric payload clean for tooltip/overlay rendering.
                     try:
@@ -871,7 +886,11 @@ class StockChart(QWidget):
             # [DBG] Bar processing complete diagnostic
             self._dbg_log(
                 "chart_update:bars_processed",
-                f"Chart bars processed: total={diag['rows_total']} kept={diag['kept']} drop_nonfinite={diag['drop_nonfinite']} drop_parse={diag['drop_parse']}",
+                (
+                    f"Chart bars processed: total={diag['rows_total']} kept={diag['kept']} "
+                    f"drop_nonfinite={diag['drop_nonfinite']} drop_parse={diag['drop_parse']} "
+                    f"drop_anomaly={diag['drop_anomaly']}"
+                ),
                 min_gap_seconds=0.5,
                 level="info",
             )
@@ -971,7 +990,17 @@ class StockChart(QWidget):
                             if l_val <= 0 or l_val > c:
                                 l_val = c
 
-                            if c > 0:
+                            sanitized = self._sanitize_render_ohlc(
+                                o=float(o),
+                                h=float(h),
+                                low=float(l_val),
+                                c=float(c),
+                                interval=str(b.get("interval", default_iv)),
+                                prev_close=prev_close,
+                            )
+
+                            if sanitized is not None:
+                                o, h, l_val, c = sanitized
                                 ohlc.append((i, o, c, l_val, h))
                                 closes.append(c)
                                 self._candle_meta.append({
@@ -1190,11 +1219,12 @@ class StockChart(QWidget):
             total_drops = int(
                 diag["drop_nonfinite"]
                 + diag["drop_parse"]
+                + diag["drop_anomaly"]
             )
             diag_msg = (
                 f"chart render iv={default_iv} rows={diag['rows_total']} "
                 f"kept={diag['kept']} drops={total_drops} "
-                f"(nf={diag['drop_nonfinite']} parse={diag['drop_parse']})"
+                f"(nf={diag['drop_nonfinite']} parse={diag['drop_parse']} anomaly={diag['drop_anomaly']})"
             )
             self._dbg_log(
                 f"chart_render:{default_iv}",
@@ -1379,6 +1409,90 @@ class StockChart(QWidget):
         for i in range(1, len(values)):
             out[i] = alpha * values[i] + (1.0 - alpha) * out[i - 1]
         return out
+
+    @staticmethod
+    def _interval_safety_caps(interval: str) -> tuple[float, float]:
+        """Return (max_jump_pct, max_range_pct) for final render guards."""
+        iv = str(interval or "").strip().lower()
+        if iv == "1m":
+            return 0.08, 0.006
+        if iv == "5m":
+            return 0.10, 0.012
+        if iv in ("15m", "30m"):
+            return 0.14, 0.020
+        if iv in ("60m", "1h"):
+            return 0.18, 0.040
+        if iv == "1d":
+            return 0.24, 0.24
+        if iv in ("1wk", "1mo"):
+            return 0.35, 0.40
+        return 0.20, 0.15
+
+    def _sanitize_render_ohlc(
+        self,
+        *,
+        o: float,
+        h: float,
+        low: float,
+        c: float,
+        interval: str,
+        prev_close: float | None,
+    ) -> tuple[float, float, float, float] | None:
+        """Final defensive OHLC sanitizer to suppress chart spikes."""
+        if not all(math.isfinite(v) for v in (o, h, low, c)):
+            return None
+        if c <= 0:
+            return None
+
+        if o <= 0:
+            o = c
+        if h <= 0:
+            h = max(o, c)
+        if low <= 0:
+            low = min(o, c)
+
+        if h < low:
+            h, low = low, h
+
+        top = max(o, c)
+        bot = min(o, c)
+        if h < top:
+            h = top
+        if low > bot:
+            low = bot
+
+        jump_cap, range_cap = self._interval_safety_caps(interval)
+        ref = float(prev_close) if (prev_close is not None and prev_close > 0) else 0.0
+        anchor = ref if ref > 0 else c
+        if anchor <= 0:
+            return None
+
+        if ref > 0:
+            jump = abs(c / max(ref, 1e-8) - 1.0)
+            if jump > float(jump_cap):
+                return None
+
+        span = abs(h - low) / max(anchor, 1e-8)
+        if span > float(range_cap):
+            body = max(0.0, top - bot)
+            max_range = float(anchor) * float(range_cap)
+            if body > max_range:
+                # Corrupt open/close pair; downgrade to doji-like bar.
+                o = c
+                top = c
+                bot = c
+                body = 0.0
+            wick_allow = max(0.0, max_range - body)
+            h = min(h, top + (wick_allow * 0.5))
+            low = max(low, bot - (wick_allow * 0.5))
+            if h < low:
+                h, low = low, h
+
+        o = min(max(o, low), h)
+        c = min(max(c, low), h)
+        if abs(h - low) / max(anchor, 1e-8) > float(range_cap) * 1.05:
+            return None
+        return float(o), float(h), float(low), float(c)
 
     def _plot_series(self, key: str, y: np.ndarray) -> None:
         line = self.overlay_lines.get(key)

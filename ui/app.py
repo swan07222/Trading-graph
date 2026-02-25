@@ -31,6 +31,7 @@ from PyQt6.QtWidgets import (
     QSplitter,
     QStatusBar,
     QTableWidget,
+    QTableWidgetItem,
     QTextEdit,
     QToolBar,
     QVBoxLayout,
@@ -45,6 +46,7 @@ from core.types import (
     OrderSide,
 )
 from ui import app_analysis_ops as _app_analysis_ops
+from ui import app_ai_ops as _app_ai_ops
 from ui import app_bar_ops as _app_bar_ops
 from ui import app_feed_ops as _app_feed_ops
 from ui import app_model_chart_ops as _app_model_chart_ops
@@ -205,6 +207,8 @@ class MainApp(MainAppCommonMixin, QMainWindow):
         self._selected_chart_date = datetime.now().date().isoformat()
         self._session_bar_cache = None
         self._startup_loading_active = False
+        self._ai_chat_history: list[dict[str, str]] = []
+        self._news_policy_signal_cache: dict[str, dict[str, Any]] = {}
 
         # Auto-trade state
         self._auto_trade_mode: AutoTradeMode = AutoTradeMode.MANUAL
@@ -291,6 +295,14 @@ class MainApp(MainAppCommonMixin, QMainWindow):
         auto_learn_action = QAction("&Continue Learning", self)
         auto_learn_action.triggered.connect(self._show_auto_learn)
         ai_menu.addAction(auto_learn_action)
+
+        train_llm_action = QAction("Train &LLM", self)
+        train_llm_action.triggered.connect(self._start_llm_training)
+        ai_menu.addAction(train_llm_action)
+
+        auto_train_llm_action = QAction("&Auto Train LLM", self)
+        auto_train_llm_action.triggered.connect(self._auto_train_llm)
+        ai_menu.addAction(auto_train_llm_action)
 
         strategy_market_action = QAction("&Strategy Marketplace", self)
         strategy_market_action.triggered.connect(self._show_strategy_marketplace)
@@ -456,6 +468,18 @@ class MainApp(MainAppCommonMixin, QMainWindow):
             table.setMaximumHeight(int(max_height))
         return table
 
+    def _make_item(self, text: str) -> QTableWidgetItem:
+        """Create a non-editable table item with consistent alignment."""
+        item = QTableWidgetItem(str(text or ""))
+        item.setFlags(
+            item.flags() & ~Qt.ItemFlag.ItemIsEditable
+        )
+        item.setTextAlignment(
+            Qt.AlignmentFlag.AlignCenter
+            | Qt.AlignmentFlag.AlignVCenter
+        )
+        return item
+
     def _add_labeled(
         self,
         layout: QGridLayout,
@@ -597,12 +621,8 @@ class MainApp(MainAppCommonMixin, QMainWindow):
         chart_group.setLayout(chart_layout)
         layout.addWidget(chart_group, 5)
 
-        details_group = QGroupBox("Analysis Details")
-        details_group.setObjectName("analysisDetailsGroup")
-        details_layout = QVBoxLayout()
-        details_layout.setContentsMargins(8, 8, 8, 8)
-        details_layout.setSpacing(6)
-
+        # Analysis details panel intentionally hidden from layout; details HTML
+        # is still maintained for internal/debug usage.
         self.details_text = QTextEdit()
         self.details_text.setReadOnly(True)
         self.details_text.setFont(
@@ -610,10 +630,7 @@ class MainApp(MainAppCommonMixin, QMainWindow):
         )
         self.details_text.setMinimumHeight(240)
         self.details_text.setMaximumHeight(16777215)
-        details_layout.addWidget(self.details_text)
-
-        details_group.setLayout(details_layout)
-        layout.addWidget(details_group, 3)
+        self.details_text.hide()
 
         return panel
 
@@ -1315,6 +1332,22 @@ class MainApp(MainAppCommonMixin, QMainWindow):
             policy = float(payload.get("policy", 0.0) or 0.0)
             market = float(payload.get("market", 0.0) or 0.0)
             confidence = float(payload.get("confidence", 0.0) or 0.0)
+            if hasattr(self, "_set_news_policy_signal"):
+                try:
+                    self._set_news_policy_signal(
+                        "__market__",
+                        {
+                            "symbol": "__market__",
+                            "overall": overall,
+                            "policy": policy,
+                            "market": market,
+                            "confidence": confidence,
+                            "news_count": int(len(list(payload.get("entities", []) or []))),
+                            "ts": float(time.time()),
+                        },
+                    )
+                except _UI_RECOVERABLE_EXCEPTIONS:
+                    pass
 
             self.sentiment_labels["overall"].setText(f"{overall:+.2f}")
             self.sentiment_labels["policy"].setText(f"{policy:+.2f}")
@@ -1525,6 +1558,7 @@ def _bind_mainapp_extracted_ops() -> None:
         "_debug_candle_quality": _app_model_chart_ops._debug_candle_quality,
         "_debug_forecast_quality": _app_model_chart_ops._debug_forecast_quality,
         "_chart_prediction_caps": _app_model_chart_ops._chart_prediction_caps,
+        "_apply_news_policy_bias_to_forecast": _app_model_chart_ops._apply_news_policy_bias_to_forecast,
         "_prepare_chart_predicted_prices": _app_model_chart_ops._prepare_chart_predicted_prices,
         "_chart_prediction_uncertainty_profile": _app_model_chart_ops._chart_prediction_uncertainty_profile,
         "_build_chart_prediction_bands": _app_model_chart_ops._build_chart_prediction_bands,
@@ -1554,6 +1588,17 @@ def _bind_mainapp_extracted_ops() -> None:
         "_get_infor_trained_stocks": _app_training_ops._get_infor_trained_stocks,
         "_train_trained_stocks": _app_training_ops._train_trained_stocks,
         "_handle_training_drift_alarm": _app_training_ops._handle_training_drift_alarm,
+        "_append_ai_chat_message": _app_ai_ops._append_ai_chat_message,
+        "_on_ai_chat_send": _app_ai_ops._on_ai_chat_send,
+        "_handle_ai_chat_prompt": _app_ai_ops._handle_ai_chat_prompt,
+        "_execute_ai_chat_command": _app_ai_ops._execute_ai_chat_command,
+        "_build_ai_chat_response": _app_ai_ops._build_ai_chat_response,
+        "_generate_ai_chat_reply": _app_ai_ops._generate_ai_chat_reply,
+        "_start_llm_training": _app_ai_ops._start_llm_training,
+        "_auto_train_llm": _app_ai_ops._auto_train_llm,
+        "_set_news_policy_signal": _app_ai_ops._set_news_policy_signal,
+        "_news_policy_signal_for": _app_ai_ops._news_policy_signal_for,
+        "_refresh_news_policy_signal": _app_ai_ops._refresh_news_policy_signal,
         "_quick_trade": _app_analysis_ops._quick_trade,
         "_update_watchlist": _app_analysis_ops._update_watchlist,
         "_on_watchlist_click": _app_analysis_ops._on_watchlist_click,

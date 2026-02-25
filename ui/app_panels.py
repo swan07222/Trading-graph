@@ -174,6 +174,14 @@ def _create_left_panel(self: Any) -> QWidget:
     self.auto_learn_btn.clicked.connect(self._show_auto_learn)
     ai_layout.addWidget(self.auto_learn_btn)
 
+    self.train_llm_btn = QPushButton("Train LLM")
+    self.train_llm_btn.clicked.connect(self._start_llm_training)
+    ai_layout.addWidget(self.train_llm_btn)
+
+    self.auto_train_llm_btn = QPushButton("Auto Train LLM")
+    self.auto_train_llm_btn.clicked.connect(self._auto_train_llm)
+    ai_layout.addWidget(self.auto_train_llm_btn)
+
     self.train_progress = QProgressBar()
     self.train_progress.setVisible(False)
     ai_layout.addWidget(self.train_progress)
@@ -277,26 +285,46 @@ def _create_right_panel(self: Any) -> QWidget:
 
     layout.addWidget(tabs, 3)
 
-    # Log Group
-    log_group = QGroupBox("System Log")
-    log_group.setObjectName("systemLogGroup")
-    log_layout = QVBoxLayout()
-    try:
-        from .widgets import LogWidget
-        self.log_widget = LogWidget()
-    except ImportError:
-        self.log_widget = QTextEdit()
-        self.log_widget.setReadOnly(True)
-        self.log_widget.setMinimumHeight(220)
-        self.log_widget.setMaximumHeight(380)
-    if hasattr(self.log_widget, "setMinimumHeight"):
-        self.log_widget.setMinimumHeight(280)
-    if hasattr(self.log_widget, "setMaximumHeight"):
-        # Let system log grow with the panel instead of capping early.
-        self.log_widget.setMaximumHeight(16777215)
-    log_layout.addWidget(self.log_widget)
-    log_group.setLayout(log_layout)
-    layout.addWidget(log_group, 3)
+    # AI Chat Group (replaces system log)
+    chat_group = QGroupBox("AI Chat")
+    chat_group.setObjectName("aiChatGroup")
+    chat_layout = QVBoxLayout()
+    chat_layout.setSpacing(8)
+
+    self.ai_chat_view = QTextEdit()
+    self.ai_chat_view.setReadOnly(True)
+    if hasattr(self.ai_chat_view, "setMinimumHeight"):
+        self.ai_chat_view.setMinimumHeight(280)
+    if hasattr(self.ai_chat_view, "setMaximumHeight"):
+        self.ai_chat_view.setMaximumHeight(16777215)
+    chat_layout.addWidget(self.ai_chat_view)
+
+    input_row = QHBoxLayout()
+    input_row.setSpacing(6)
+    self.ai_chat_input = QLineEdit()
+    self.ai_chat_input.setPlaceholderText(
+        "Ask AI or control app (e.g., 'analyze 600519', 'start monitoring', 'help')"
+    )
+    self.ai_chat_input.returnPressed.connect(self._on_ai_chat_send)
+    input_row.addWidget(self.ai_chat_input, 1)
+
+    send_btn = QPushButton("Send")
+    send_btn.setObjectName("smallGhostButton")
+    send_btn.clicked.connect(self._on_ai_chat_send)
+    input_row.addWidget(send_btn)
+    chat_layout.addLayout(input_row)
+
+    chat_group.setLayout(chat_layout)
+    layout.addWidget(chat_group, 3)
+    if hasattr(self, "_append_ai_chat_message"):
+        try:
+            self._append_ai_chat_message(
+                "AI",
+                "Local AI chat ready (no API). Ask questions or type 'help' for app control commands.",
+                role="assistant",
+            )
+        except _APP_PANELS_RECOVERABLE_EXCEPTIONS:
+            pass
 
     return panel
 

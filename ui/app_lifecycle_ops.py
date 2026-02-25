@@ -127,10 +127,19 @@ def _log(self: Any, message: str, level: str = "info") -> None:
         f'<span style="color: {color};">{message}</span>'
     )
 
-    if hasattr(self.log_widget, "log"):
-        self.log_widget.log(message, level)
-    elif hasattr(self.log_widget, "append"):
-        self.log_widget.append(formatted)
+    if hasattr(self, "_append_ai_chat_message"):
+        self._append_ai_chat_message(
+            "System",
+            str(message),
+            role="system",
+            level=level,
+        )
+    else:
+        widget = getattr(self, "log_widget", None)
+        if widget is not None and hasattr(widget, "log"):
+            widget.log(message, level)
+        elif widget is not None and hasattr(widget, "append"):
+            widget.append(formatted)
 
     _LOGGER.info(message)
 

@@ -513,6 +513,11 @@ def _on_analysis_done(self, pred: Any, request_seq: int | None = None) -> None:
 
     # Update details (with news sentiment)
     self._update_details(pred)
+    if symbol and hasattr(self, "_refresh_news_policy_signal"):
+        try:
+            self._refresh_news_policy_signal(symbol, force=False)
+        except _UI_RECOVERABLE_EXCEPTIONS:
+            pass
 
     if (
         hasattr(self, 'news_panel')

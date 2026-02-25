@@ -8,15 +8,17 @@ This module provides sentiment analysis specifically tuned for:
 - Chinese and English language support
 
 The analyzer uses a hybrid approach:
-1. Rule-based sentiment scoring (financial lexicons)
-2. Keyword-based policy impact detection
+1. LLM-based sentiment scoring (transformer models)
+2. Deep learning policy impact detection
 3. Entity extraction for company-specific news
 4. Temporal sentiment tracking
+5. Uncertainty estimation with Monte Carlo dropout
 """
 
 import json
 import math
 import re
+import time
 from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
@@ -25,6 +27,7 @@ from pathlib import Path
 from config.settings import CONFIG
 from utils.logger import get_logger
 
+from .llm_sentiment import LLM_sentimentAnalyzer, get_llm_analyzer
 from .news_collector import NewsArticle
 
 log = get_logger(__name__)
@@ -62,7 +65,7 @@ class EntitySentiment:
 
 
 class SentimentAnalyzer:
-    """Multi-factor sentiment analyzer for financial news."""
+    """Multi-factor sentiment analyzer for financial news with LLM support."""
 
     # Chinese positive sentiment words (financial context)
     POSITIVE_ZH = [
@@ -121,10 +124,28 @@ class SentimentAnalyzer:
     BULLISH_EN = ["bull", "long", "buy", "breakout", "new high"]
     BEARISH_EN = ["bear", "short", "sell", "breakdown", "new low"]
 
-    def __init__(self, lexicon_path: Path | None = None) -> None:
+    def __init__(
+        self,
+        lexicon_path: Path | None = None,
+        use_llm: bool = True,
+        llm_confidence_threshold: float = 0.6,
+    ) -> None:
         self.lexicon_path = lexicon_path or CONFIG.cache_dir / "sentiment_lexicon.json"
         self._custom_lexicon: dict[str, float] = {}
         self._load_lexicon()
+
+        # LLM-based analysis
+        self.use_llm = use_llm
+        self.llm_confidence_threshold = llm_confidence_threshold
+        self._llm_analyzer: LLM_sentimentAnalyzer | None = None
+
+        if use_llm:
+            try:
+                self._llm_analyzer = get_llm_analyzer()
+                log.info("LLM sentiment analyzer initialized")
+            except Exception as e:
+                log.warning(f"Failed to initialize LLM analyzer: {e}. Using fallback.")
+                self.use_llm = False
 
     def _load_lexicon(self) -> None:
         """Load custom sentiment lexicon if exists."""
@@ -145,7 +166,40 @@ class SentimentAnalyzer:
             log.warning(f"Failed to save lexicon: {e}")
 
     def analyze_article(self, article: NewsArticle) -> SentimentScore:
-        """Analyze sentiment of a single article."""
+        """Analyze sentiment of a single article using LLM + hybrid approach."""
+        start_time = time.time()
+
+        # Try LLM-based analysis first
+        if self.use_llm and self._llm_analyzer is not None:
+            try:
+                llm_result = self._llm_analyzer.analyze(article)
+
+                # Use LLM result if confidence is high enough
+                if llm_result.confidence >= self.llm_confidence_threshold:
+                    processing_time = (time.time() - start_time) * 1000
+                    log.debug(
+                        f"LLM analysis for {article.id}: "
+                        f"overall={llm_result.overall:.3f}, "
+                        f"confidence={llm_result.confidence:.3f}, "
+                        f"time={processing_time:.1f}ms"
+                    )
+
+                    return SentimentScore(
+                        overall=llm_result.overall,
+                        policy_impact=llm_result.policy_impact,
+                        market_sentiment=llm_result.market_sentiment,
+                        confidence=llm_result.confidence,
+                        article_count=1,
+                    )
+                else:
+                    log.debug(
+                        f"LLM confidence too low ({llm_result.confidence:.3f}), "
+                        f"using fallback"
+                    )
+            except Exception as e:
+                log.warning(f"LLM analysis failed for {article.id}: {e}. Using fallback.")
+
+        # Fallback to rule-based analysis
         text = article.title + " " + article.content
 
         # Determine language
@@ -167,6 +221,13 @@ class SentimentAnalyzer:
 
         # Calculate confidence based on text length and keyword matches
         confidence = min(1.0, len(text) / 500.0)
+
+        processing_time = (time.time() - start_time) * 1000
+        log.debug(
+            f"Fallback analysis for {article.id}: "
+            f"overall={overall:.3f}, confidence={confidence:.3f}, "
+            f"time={processing_time:.1f}ms"
+        )
 
         return SentimentScore(
             overall=overall,
@@ -313,7 +374,7 @@ class SentimentAnalyzer:
         return self.analyze_articles(symbol_articles, hours_back)
 
     def extract_entities(self, articles: list[NewsArticle]) -> list[EntitySentiment]:
-        """Extract entities and their sentiment from articles."""
+        """Extract entities and their sentiment from articles using LLM NER."""
         entity_mentions: dict[str, dict] = defaultdict(lambda: {
             "type": "unknown",
             "sentiment_sum": 0.0,
@@ -327,6 +388,33 @@ class SentimentAnalyzer:
             text = article.title + " " + article.content
             is_chinese = article.language == "zh" or self._detect_chinese(text)
 
+            # Use LLM-based entity extraction if available
+            if self.use_llm and self._llm_analyzer is not None:
+                try:
+                    llm_result = self._llm_analyzer.analyze(article)
+                    
+                    # Use LLM-extracted entities
+                    for entity_data in llm_result.entities:
+                        entity = self._normalize_entity_name(entity_data.get("text", ""))
+                        if not entity:
+                            continue
+                        entity_type = entity_data.get("type", "entity")
+                        self._record_entity(
+                            entity_mentions,
+                            name=entity,
+                            entity_type=entity_type,
+                            sentiment=score.overall,
+                            article_id=article.id,
+                        )
+                    
+                    # Also use keywords from LLM
+                    for keyword in llm_result.keywords:
+                        if keyword not in entity_mentions:
+                            entity_mentions[keyword]["type"] = "keyword"
+                except Exception as e:
+                    log.debug(f"LLM entity extraction failed: {e}")
+
+            # Fallback to rule-based extraction
             for raw_entity in list(getattr(article, "entities", []) or []):
                 entity = self._normalize_entity_name(raw_entity)
                 if not entity:
