@@ -1,5 +1,19 @@
+import pytest
+
 from core.types import OrderStatus
-from trading.broker import parse_broker_status
+
+try:
+    from trading.broker import parse_broker_status
+
+    _EXECUTION_STACK_AVAILABLE = True
+except ImportError:
+    _EXECUTION_STACK_AVAILABLE = False
+    parse_broker_status = None  # type: ignore[assignment]
+
+pytestmark = pytest.mark.skipif(
+    not _EXECUTION_STACK_AVAILABLE,
+    reason="Execution stack modules are removed in analysis-only build.",
+)
 
 
 def test_parse_broker_status_handles_chinese_terms() -> None:

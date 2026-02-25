@@ -32,7 +32,6 @@ from ui.auto_learn_workers import (
     StockValidatorWorker,
     TargetedLearnWorker,
     _get_auto_learner,
-    normalize_training_interval,
 )
 from ui.modern_theme import (
     ModernColors,
@@ -49,7 +48,7 @@ class AutoLearnDialog(QDialog):
 
     def __init__(self, parent=None, seed_stock_codes: list[str] | None = None) -> None:
         super().__init__(parent)
-        self.setWindowTitle("Auto Learning")
+        self.setWindowTitle("Continue Learning")
         self.setMinimumSize(700, 540)
         self.resize(920, 660)
         self.setSizeGripEnabled(True)
@@ -85,7 +84,7 @@ class AutoLearnDialog(QDialog):
         root_layout.setSpacing(8)
         root_layout.setContentsMargins(10, 10, 10, 10)
 
-        header = QLabel("Automatic Stock Discovery and Learning")
+        header = QLabel("Continuous Stock Discovery and Learning")
         header.setObjectName("dialogTitle")
         root_layout.addWidget(header)
 
@@ -105,7 +104,7 @@ class AutoLearnDialog(QDialog):
 
         # Tab 1: Auto Learn
         auto_tab = self._create_auto_tab()
-        self.tabs.addTab(auto_tab, "Auto Learn")
+        self.tabs.addTab(auto_tab, "Continue Learning")
 
         # Keep targeted-search controls instantiated for compatibility but hide
         # the tab so users cannot start specific-stock training from the UI.
@@ -200,10 +199,12 @@ class AutoLearnDialog(QDialog):
 
         settings_layout.addWidget(QLabel("Interval:"), 3, 0)
         self.auto_interval_combo = QComboBox()
-        self.auto_interval_combo.addItems(
-            ["1m", "2m", "5m", "15m", "30m", "60m", "1h", "1d"]
-        )
+        self.auto_interval_combo.addItems(["1m"])
         self.auto_interval_combo.setCurrentText("1m")
+        self.auto_interval_combo.setEnabled(False)
+        self.auto_interval_combo.setToolTip(
+            "Learning interval is locked to 1m for real-time training."
+        )
         settings_layout.addWidget(self.auto_interval_combo, 3, 1)
 
         settings_layout.addWidget(QLabel("Horizon:"), 4, 0)
@@ -229,7 +230,7 @@ class AutoLearnDialog(QDialog):
 
         btn_layout = QHBoxLayout()
 
-        self.auto_start_btn = QPushButton("Start Auto Learning")
+        self.auto_start_btn = QPushButton("Continue Learning")
         self.auto_start_btn.setMinimumHeight(45)
         self.auto_start_btn.setStyleSheet(self._green_button_style())
         self.auto_start_btn.clicked.connect(self._start_auto_learning)
@@ -374,10 +375,9 @@ class AutoLearnDialog(QDialog):
 
         ts_layout.addWidget(QLabel("Interval:"), 0, 2)
         self.target_interval_combo = QComboBox()
-        self.target_interval_combo.addItems(
-            ["1m", "2m", "5m", "15m", "30m", "60m", "1h", "1d"]
-        )
+        self.target_interval_combo.addItems(["1m"])
         self.target_interval_combo.setCurrentText("1m")
+        self.target_interval_combo.setEnabled(False)
         ts_layout.addWidget(self.target_interval_combo, 0, 3)
 
         ts_layout.addWidget(QLabel("Horizon:"), 1, 0)
@@ -670,9 +670,7 @@ class AutoLearnDialog(QDialog):
             "discover_new": self.discover_check.isChecked(),
             "max_stocks": self.max_stocks_spin.value(),
             "epochs": self.epochs_spin.value(),
-            "interval": normalize_training_interval(
-                self.auto_interval_combo.currentText()
-            ),
+            "interval": "1m",
             "horizon": int(self.auto_horizon_spin.value()),
             "incremental": True,
         }
@@ -692,7 +690,7 @@ class AutoLearnDialog(QDialog):
         except (AttributeError, ImportError, OSError, RuntimeError, TypeError, ValueError):
             log.debug("VPN advisory check skipped", exc_info=True)
 
-        self._log("Starting auto-learning...", "info")
+        self._log("Starting continuous learning...", "info")
         self._log(
             f"Mode: {config['mode']}, "
             f"Max stocks: {config['max_stocks']}, "
@@ -825,7 +823,7 @@ class AutoLearnDialog(QDialog):
             self.mode_combo.setEnabled(True)
             self.max_stocks_spin.setEnabled(True)
             self.epochs_spin.setEnabled(True)
-            self.auto_interval_combo.setEnabled(True)
+            self.auto_interval_combo.setEnabled(False)
             self.auto_horizon_spin.setEnabled(True)
             self.discover_check.setEnabled(True)
             self.incremental_check.setEnabled(True)
@@ -838,7 +836,7 @@ class AutoLearnDialog(QDialog):
             self.remove_btn.setEnabled(True)
             self.clear_list_btn.setEnabled(True)
             self.target_epochs_spin.setEnabled(True)
-            self.target_interval_combo.setEnabled(True)
+            self.target_interval_combo.setEnabled(False)
             self.target_horizon_spin.setEnabled(True)
             self.target_incremental_check.setEnabled(True)
 

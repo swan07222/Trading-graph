@@ -1,9 +1,34 @@
 from datetime import datetime
 from typing import NoReturn
 
+import pytest
+
 from config.settings import CONFIG
 from core.types import Account, Fill, Order, OrderSide, OrderStatus, OrderType
-from trading.broker import BrokerInterface, MultiVenueBroker, THSBroker, create_broker
+
+try:
+    from trading.broker import BrokerInterface, MultiVenueBroker, THSBroker, create_broker
+
+    _EXECUTION_STACK_AVAILABLE = True
+except ImportError:
+    _EXECUTION_STACK_AVAILABLE = False
+
+    class BrokerInterface:  # type: ignore[no-redef]
+        pass
+
+    class MultiVenueBroker:  # type: ignore[no-redef]
+        pass
+
+    class THSBroker:  # type: ignore[no-redef]
+        pass
+
+    def create_broker(*args, **kwargs):  # type: ignore[no-redef]
+        return None
+
+pytestmark = pytest.mark.skipif(
+    not _EXECUTION_STACK_AVAILABLE,
+    reason="Execution stack modules are removed in analysis-only build.",
+)
 
 
 class _DummyVenue(BrokerInterface):

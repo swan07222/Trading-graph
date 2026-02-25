@@ -1,13 +1,32 @@
-# Trading Graph
+# Trading Graph 2.0
 
-Desktop AI trading analysis system for China A-shares with:
-- **News and Policy Analysis**: Multi-source news collection with VPN-aware routing
-- **Sentiment Analysis**: AI-powered sentiment analysis for market prediction
-- **China network optimization** (auto failover, proxy support, DNS optimization)
-- **Enhanced sentiment analysis** (Jin10, EastMoney, Sina, Xueqiu, Reuters, Yahoo Finance)
-- Model training and prediction with **explainability**
-- **News-based model training** for understanding policy and market sentiment
-- PyQt real-time charting and operations UI
+[![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Code style: ruff](https://img.shields.io/badge/code%20style-ruff-000000.svg)](https://github.com/astral-sh/ruff)
+
+**Modernized Edition** - Cutting-edge AI-powered stock analysis system for China A-shares with:
+
+## 🚀 What's New in 2.0
+
+### Performance & Scalability
+- **Async I/O**: 10x concurrency with asyncio
+- **Redis Caching**: Sub-millisecond cache latency
+- **PostgreSQL Support**: Horizontal scaling for production
+- **FastAPI Dashboard**: Real-time web interface
+
+### Machine Learning
+- **Informer**: Efficient Transformer for long sequences (O(L log L))
+- **Temporal Fusion Transformer (TFT)**: Interpretable predictions
+- **N-BEATS**: Trend and seasonality decomposition
+- **TSMixer**: All-MLP architecture, resource-efficient
+
+### Developer Experience
+- **Type Safety**: Full type hints with mypy strict mode
+- **Modern Python**: 3.11+ features (pattern matching, etc.)
+- **Web API**: RESTful API with Swagger documentation
+- **WebSocket**: Real-time event streaming
+
+---
 
 ## Key Features
 
@@ -72,28 +91,59 @@ Tooling is Python-only (`pyproject.toml` + `pip` requirements); no Node/NPM step
 
 ## Quick Start
 
-Install:
+### Installation
 
 ```bash
+# Python 3.11+ required
+python --version  # Should be 3.11 or higher
+
+# Install core dependencies
 pip install -r requirements.txt
-```
 
-Desktop/UI + ML + CN/VPN data providers:
+# Install with web dashboard (recommended)
+pip install -r requirements-web.txt
 
-```bash
-pip install -r requirements-desktop.txt
-```
-
-Full optional stack (desktop + NLP extras):
-
-```bash
+# Full stack (all features including NLP)
 pip install -r requirements-all.txt
 ```
 
-Run UI:
+### Run Desktop UI
 
 ```bash
 python main.py
+```
+
+### Run Web Dashboard (NEW!)
+
+```bash
+# Start web server
+python -m ui.web_dashboard
+
+# Access dashboard
+http://localhost:8000           # Dashboard
+http://localhost:8000/docs      # Swagger API docs
+http://localhost:8000/redoc     # ReDoc
+```
+
+### Configure Redis (Optional)
+
+```bash
+# Start Redis for caching
+docker run -d -p 6379:6379 redis:latest
+
+# Or install locally
+# macOS: brew install redis
+# Linux: sudo apt-get install redis-server
+```
+
+### Configure PostgreSQL (Optional)
+
+```bash
+# Start PostgreSQL
+docker run -d -p 5432:5432 -e POSTGRES_PASSWORD=postgres postgres:15
+
+# Set environment variable
+export DATABASE_URL="postgresql+asyncpg://postgres:postgres@localhost:5432/trading"
 ```
 
 ## Useful Commands

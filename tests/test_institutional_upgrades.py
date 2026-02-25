@@ -2,10 +2,24 @@ import time
 from datetime import datetime, timedelta
 from types import SimpleNamespace
 
+import pytest
+
 from config.settings import CONFIG
 from core.types import AutoTradeMode
 from data.news import NewsAggregator, NewsItem
-from trading.executor import AutoTrader
+
+try:
+    from trading.executor import AutoTrader
+
+    _EXECUTION_STACK_AVAILABLE = True
+except ImportError:
+    _EXECUTION_STACK_AVAILABLE = False
+    AutoTrader = None  # type: ignore[assignment]
+
+pytestmark = pytest.mark.skipif(
+    not _EXECUTION_STACK_AVAILABLE,
+    reason="Execution stack modules are removed in analysis-only build.",
+)
 
 
 class _DummyEngine:

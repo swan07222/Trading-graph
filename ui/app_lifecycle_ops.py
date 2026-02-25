@@ -176,6 +176,8 @@ def _close_event(self: Any, event: Any) -> None:
         "watchlist_timer",
         "auto_trade_timer",
         "chart_live_timer",
+        "universe_refresh_timer",
+        "cache_prune_timer",
     ):
         timer = getattr(self, timer_name, None)
         try:

@@ -1,7 +1,21 @@
 import threading
 
-from trading.executor import AutoTrader, ExecutionEngine
-from trading.executor_core_ops import _start_engine_thread
+import pytest
+
+try:
+    from trading.executor import AutoTrader, ExecutionEngine
+    from trading.executor_core_ops import _start_engine_thread
+
+    _EXECUTION_STACK_AVAILABLE = True
+except ImportError:
+    _EXECUTION_STACK_AVAILABLE = False
+    AutoTrader = ExecutionEngine = None  # type: ignore[assignment]
+    _start_engine_thread = None  # type: ignore[assignment]
+
+pytestmark = pytest.mark.skipif(
+    not _EXECUTION_STACK_AVAILABLE,
+    reason="Execution stack modules are removed in analysis-only build.",
+)
 
 
 class _DummyBroker:

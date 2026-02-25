@@ -4,9 +4,22 @@ import random
 from types import SimpleNamespace
 
 import pandas as pd
+import pytest
 
 from core.types import Order, OrderSide, OrderStatus, OrderType, Position
-from trading.broker import SimulatorBroker
+
+try:
+    from trading.broker import SimulatorBroker
+
+    _EXECUTION_STACK_AVAILABLE = True
+except ImportError:
+    _EXECUTION_STACK_AVAILABLE = False
+    SimulatorBroker = None  # type: ignore[assignment]
+
+pytestmark = pytest.mark.skipif(
+    not _EXECUTION_STACK_AVAILABLE,
+    reason="Execution stack modules are removed in analysis-only build.",
+)
 
 
 def test_simulator_quote_falls_back_to_recent_cache(monkeypatch) -> None:

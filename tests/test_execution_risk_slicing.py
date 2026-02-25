@@ -1,5 +1,19 @@
+import pytest
+
 from core.types import Order, OrderSide, OrderType
-from trading.execution_risk import SmartOrderRouter
+
+try:
+    from trading.execution_risk import SmartOrderRouter
+
+    _EXECUTION_STACK_AVAILABLE = True
+except ImportError:
+    _EXECUTION_STACK_AVAILABLE = False
+    SmartOrderRouter = None  # type: ignore[assignment]
+
+pytestmark = pytest.mark.skipif(
+    not _EXECUTION_STACK_AVAILABLE,
+    reason="Execution stack modules are removed in analysis-only build.",
+)
 
 
 def test_slice_order_sets_parent_id_on_child_orders() -> None:

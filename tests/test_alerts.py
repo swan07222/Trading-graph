@@ -1,4 +1,17 @@
-from trading.alerts import Alert, AlertCategory, AlertManager, AlertPriority
+import pytest
+
+try:
+    from trading.alerts import Alert, AlertCategory, AlertManager, AlertPriority
+
+    _EXECUTION_STACK_AVAILABLE = True
+except ImportError:
+    _EXECUTION_STACK_AVAILABLE = False
+    Alert = AlertCategory = AlertManager = AlertPriority = object  # type: ignore[assignment]
+
+pytestmark = pytest.mark.skipif(
+    not _EXECUTION_STACK_AVAILABLE,
+    reason="Execution stack modules are removed in analysis-only build.",
+)
 
 
 def test_alert_repeat_escalation() -> None:

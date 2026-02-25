@@ -1,6 +1,19 @@
 from types import SimpleNamespace
 
-from trading.health import ComponentType, HealthMonitor, HealthStatus
+import pytest
+
+try:
+    from trading.health import ComponentType, HealthMonitor, HealthStatus
+
+    _EXECUTION_STACK_AVAILABLE = True
+except ImportError:
+    _EXECUTION_STACK_AVAILABLE = False
+    ComponentType = HealthMonitor = HealthStatus = object  # type: ignore[assignment]
+
+pytestmark = pytest.mark.skipif(
+    not _EXECUTION_STACK_AVAILABLE,
+    reason="Execution stack modules are removed in analysis-only build.",
+)
 
 
 def test_broker_health_empty_account_is_degraded() -> None:

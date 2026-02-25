@@ -183,7 +183,7 @@ def _prioritize_codes_by_news(
     now = datetime.now()
 
     try:
-        market_news = agg.get_market_news(count=80, force_refresh=False)
+        market_news = agg.get_market_news(count=80, force_refresh=True)
     except Exception as e:
         log.debug("Market-news fetch failed during prioritization: %s", e)
         market_news = []
@@ -203,7 +203,36 @@ def _prioritize_codes_by_news(
         recency = 1.0 / (1.0 + (age_h / 10.0))
         sentiment_mag = abs(float(getattr(item, "sentiment_score", 0.0) or 0.0))
         importance = float(getattr(item, "importance", 0.5) or 0.5)
-        weight = recency * max(0.2, min(1.6, importance)) * (0.40 + sentiment_mag)
+        category = str(getattr(item, "category", "") or "").strip().lower()
+        title_text = str(getattr(item, "title", "") or "").strip().lower()
+        policy_boost = 1.0
+        if category in {"policy", "regulatory"}:
+            policy_boost = 1.45
+        elif any(tok in category for tok in ("policy", "regulat", "rule")):
+            policy_boost = 1.35
+        elif any(
+            tok in title_text
+            for tok in (
+                "policy",
+                "regulation",
+                "regulatory",
+                "rule",
+                "rules",
+                "csrc",
+                "sec",
+                "fed",
+                "interest rate",
+                "stamp duty",
+            )
+        ):
+            policy_boost = 1.25
+
+        weight = (
+            recency
+            * max(0.2, min(1.6, importance))
+            * (0.40 + sentiment_mag)
+            * policy_boost
+        )
         for code in linked:
             scores[code] = float(scores.get(code, 0.0) + weight)
 

@@ -7,11 +7,12 @@ from PyQt6.QtGui import QFont
 from PyQt6.QtWidgets import (
     QComboBox,
     QDoubleSpinBox,
-    QFrame,
     QGridLayout,
     QGroupBox,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
+    QListWidget,
     QProgressBar,
     QPushButton,
     QSpinBox,
@@ -77,6 +78,46 @@ def _create_left_panel(self: Any) -> QWidget:
     watchlist_group.setLayout(watchlist_layout)
     layout.addWidget(watchlist_group)
 
+    universe_group = QGroupBox("Market Universe")
+    universe_layout = QVBoxLayout()
+    universe_layout.setSpacing(8)
+
+    universe_controls = QHBoxLayout()
+    universe_controls.setSpacing(8)
+
+    self.universe_search_input = QLineEdit()
+    self.universe_search_input.setPlaceholderText("Search all stocks by code or name...")
+    self.universe_search_input.textChanged.connect(self._filter_universe_list)
+    universe_controls.addWidget(self.universe_search_input, 1)
+
+    universe_refresh_btn = QPushButton("Refresh")
+    universe_refresh_btn.setObjectName("smallGhostButton")
+    universe_refresh_btn.clicked.connect(
+        lambda _checked=False: self._refresh_universe_catalog(force=True)
+    )
+    universe_controls.addWidget(universe_refresh_btn)
+    universe_layout.addLayout(universe_controls)
+
+    self.universe_status_label = QLabel("Universe: loading...")
+    self.universe_status_label.setObjectName("metaLabel")
+    universe_layout.addWidget(self.universe_status_label)
+
+    self.universe_list = QListWidget()
+    self.universe_list.setMinimumHeight(210)
+    self.universe_list.itemClicked.connect(self._on_universe_item_activated)
+    self.universe_list.itemActivated.connect(self._on_universe_item_activated)
+    universe_layout.addWidget(self.universe_list)
+
+    universe_hint = QLabel(
+        "Click a stock to load chart data and AI guess for the selected date."
+    )
+    universe_hint.setObjectName("metaLabel")
+    universe_hint.setWordWrap(True)
+    universe_layout.addWidget(universe_hint)
+
+    universe_group.setLayout(universe_layout)
+    layout.addWidget(universe_group)
+
     settings_group = QGroupBox("Analysis Settings")
     settings_layout = QGridLayout()
     settings_layout.setHorizontalSpacing(10)
@@ -127,7 +168,7 @@ def _create_left_panel(self: Any) -> QWidget:
     self.train_btn.clicked.connect(self._start_training)
     ai_layout.addWidget(self.train_btn)
 
-    self.auto_learn_btn = QPushButton("Auto Learn")
+    self.auto_learn_btn = QPushButton("Continue Learning")
     self.auto_learn_btn.clicked.connect(self._show_auto_learn)
     ai_layout.addWidget(self.auto_learn_btn)
 

@@ -2,36 +2,58 @@
 
 ## Overview
 
-Trading Graph is a desktop AI trading system for China A-shares with multi-source market data, model training, and auto-trade execution.
+Trading Graph is a desktop AI trading **analysis** system for China A-shares with multi-source market data, news/policy collection, sentiment analysis, and model training.
+
+**Note**: Trading execution components (portfolio management, risk management, OMS, broker integration, auto-trading) have been removed. This system focuses on **analysis and prediction** only.
+
+## Code Statistics
+
+- **Total Python Files**: 246
+- **Total Lines of Code**: ~100,000
+
+### Breakdown by Module
+| Module | Files | Lines | Description |
+|--------|-------|-------|-------------|
+| `data/` | 30 | ~25,000 | Data fetching, news collection, sentiment analysis |
+| `models/` | 22 | ~20,000 | ML models, training, prediction, news-based training |
+| `ui/` | 18 | ~15,000 | PyQt6 application and widgets |
+| `tests/` | 80+ | ~25,000 | Test suite |
+| `analysis/` | 8 | ~6,000 | Backtest, replay, strategy engine |
+| `utils/` | 20 | ~8,000 | Utilities, security, metrics |
+| `core/` | 9 | ~4,000 | Core types, events, constants |
+| `config/` | 4 | ~1,800 | Settings, runtime environment |
+| `strategies/` | 15 | ~3,000 | Trading strategies |
+| `scripts/` | 15 | ~3,000 | Utility scripts |
 
 ## System Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
 │                         UI Layer (PyQt6)                            │
-│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐  ┌────────────┐  │
-│  │ Main Window │  │Chart Widget │  │ Order Panel │  │  Widgets   │  │
-│  └─────────────┘  └─────────────┘  └─────────────┘  └────────────┘  │
+│  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────────────┐  │
+│  │ Main Window │  │Chart Widget │  │ Sentiment Analysis Panel    │  │
+│  └─────────────┘  └─────────────┘  └─────────────────────────────┘  │
 └─────────────────────────────────────────────────────────────────────┘
                                     │
                                     ▼
 ┌─────────────────────────────────────────────────────────────────────┐
 │                      Application Layer                              │
-│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐  ┌────────────┐  │
-│  │     App     │  │ Background  │  │  Analysis   │  │  Dialogs   │  │
-│  │  Controller │  │    Tasks    │  │     Ops     │  │            │  │
-│  └─────────────┘  └─────────────┘  └─────────────┘  └────────────┘  │
+│  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────────────┐  │
+│  │     App     │  │ Background  │  │  News/Sentiment Analysis    │  │
+│  │  Controller │  │    Tasks    │  │                             │  │
+│  └─────────────┘  └─────────────┘  └─────────────────────────────┘  │
 └─────────────────────────────────────────────────────────────────────┘
                                     │
         ┌───────────────────────────┼───────────────────────────┐
         ▼                           ▼                           ▼
 ┌──────────────────┐      ┌──────────────────┐      ┌──────────────────┐
-│   Data Layer     │      │   Model Layer    │      │  Trading Layer   │
+│   Data Layer     │      │   Model Layer    │      │  Sentiment Layer │
 │ ┌──────────────┐ │      │ ┌──────────────┐ │      │ ┌──────────────┐ │
-│ │ DataFetcher  │ │      │ │ Trainer      │ │      │ │ OMS          │ │
-│ │ Sources      │ │      │ │ Predictor    │ │      │ │ Risk Manager │ │
-│ │ Cache        │ │      │ │ AutoLearner  │ │      │ │ Portfolio    │ │
-│ │ Database     │ │      │ │ Ensemble     │ │      │ │ Broker       │ │
+│ │ DataFetcher  │ │      │ │ Trainer      │ │      │ │ News         │ │
+│ │ NewsCollector│ │      │ │ Predictor    │ │      │ │ Collector    │ │
+│ │ Sources      │ │      │ │ NewsTrainer  │ │      │ │ Sentiment    │ │
+│ │ Cache        │ │      │ │ AutoLearner  │ │      │ │ Analyzer     │ │
+│ │ Database     │ │      │ │ Ensemble     │ │      │ │ Entity Extract││
 │ └──────────────┘ │      │ └──────────────┘ │      │ └──────────────┘ │
 └──────────────────┘      └──────────────────┘      └──────────────────┘
         │                           │                           │
@@ -42,7 +64,7 @@ Trading Graph is a desktop AI trading system for China A-shares with multi-sourc
 │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐  ┌────────────┐  │
 │  │ Events      │  │ Types       │  │ Constants   │  │ Network    │  │
 │  │ (Event Bus) │  │(Dataclasses)│  │ (Config)    │  │ (China)    │  │
-│  └─────────────┘  └─────────────┘  └─────────────┘  └────────────┘  │
+│  └─────────────┘  └─────────────┘  └────────────┘  └────────────┘  │
 └─────────────────────────────────────────────────────────────────────┘
                                     │
                                     ▼
@@ -51,7 +73,7 @@ Trading Graph is a desktop AI trading system for China A-shares with multi-sourc
 │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐  ┌────────────┐  │
 │  │ SQLite      │  │ File System │  │ Security    │  │ Logging    │  │
 │  │(Persistence)│  │ (Cache)     │  │ (Crypto)    │  │ (Audit)    │  │
-│  └─────────────┘  └─────────────┘  └─────────────┘  └────────────┘  │
+│  └─────────────┘  └─────────────┘  └────────────┘  └────────────┘  │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -59,13 +81,13 @@ Trading Graph is a desktop AI trading system for China A-shares with multi-sourc
 
 ```
 trading-graph/
-├── analysis/          # Backtest, replay, sentiment, strategy engine
+├── analysis/          # Backtest, replay, strategy engine
 ├── config/            # Settings, runtime environment
 ├── core/              # Core types, events, constants, network
-├── data/              # Data fetching, caching, processing
-├── models/            # ML models, training, prediction
+├── data/              # Data fetching, news collection, sentiment analysis
+├── models/            # ML models, training, prediction (including news-based)
 ├── strategies/        # Trading strategies
-├── trading/           # OMS, risk, portfolio, broker integration
+├── trading/           # Sentiment analysis module only (execution removed)
 ├── ui/                # PyQt6 application and widgets
 ├── utils/             # Utilities, security, metrics
 ├── tests/             # Test suite
@@ -89,23 +111,57 @@ Market Data Sources → DataFetcher → Cache → Database → UI/Models
                 [Failover Logic]
 ```
 
+### News Collection Pipeline
+
+```
+                    ┌─────────────────┐
+                    │  VPN Detection  │
+                    └────────┬────────┘
+                             │
+            ┌────────────────┼────────────────┐
+            │                │                │
+            ▼                ▼                ▼
+    ┌──────────────┐  ┌──────────────┐  ┌──────────────┐
+    │ China Sources│  │International │  │   Fallback   │
+    │   (VPN Off)  │  │Sources (VPN) │  │   Sources    │
+    │  - Jin10     │  │  - Reuters   │  │  - Cache     │
+    │  - EastMoney │  │  - Bloomberg │  │  - Local DB  │
+    │  - Sina      │  │  - Yahoo     │  │              │
+    └──────┬───────┘  └──────┬───────┘  └──────────────┘
+           │                 │
+           └────────┬────────┘
+                    ▼
+           ┌────────────────┐
+           │  Normalization │
+           │  Deduplication │
+           │   Scoring      │
+           └────────┬───────┘
+                    ▼
+           ┌────────────────┐
+           │ Sentiment      │
+           │ Analysis       │
+           └────────┬───────┘
+                    ▼
+           ┌────────────────┐
+           │ Trading Signal │
+           │ Generation     │
+           └────────────────┘
+```
+
 ### Model Training Pipeline
 
 ```
-Historical Data → Feature Engineering → Model Training → Model Persistence
-     │                  │                    │                │
-     ▼                  ▼                    ▼                ▼
-[Database]      [Technical Indicators] [LSTM/GRU/TCN]   [.pt files]
-                [Statistical Features] [Ensemble]       [.pkl scalers]
-```
+┌─────────────────────────────────────────────────────────────┐
+│                    Traditional Training                     │
+│  Historical Data → Features → LSTM/GRU/TCN → Prediction     │
+└─────────────────────────────────────────────────────────────┘
 
-### Trade Execution Flow
-
-```
-Signal Generation → Risk Check → Order Submission → Broker → Fill Report
-     │                  │              │             │          │
-     ▼                  ▼              ▼             ▼          ▼
-[Model/Strategy]  [Risk Manager]  [OMS]        [Broker API] [Database]
+┌─────────────────────────────────────────────────────────────┐
+│                    News-Based Training                      │
+│  News Articles → Transformer Encoder ─┐                     │
+│  Sentiment Scores → MLP ──────────────┼→ Fusion → Signal   │
+│  Price Data → LSTM ───────────────────┘                     │
+└─────────────────────────────────────────────────────────────┘
 ```
 
 ## Key Components
@@ -117,45 +173,47 @@ Multi-source data fetcher with automatic failover:
 - **Secondary**: AkShare/EastMoney (intraday history)
 - **Tertiary**: Sina, Yahoo (fallbacks)
 
-### OrderManagementSystem (`trading/oms.py`)
+### NewsCollector (`data/news_collector.py`)
 
-Order management with SQLite persistence:
-- Order lifecycle tracking
-- Fill reconciliation
-- Position management
-- P&L calculation
+VPN-aware news collection system:
+- **Chinese Sources** (VPN Off): Jin10, EastMoney, Sina Finance, Xueqiu, Caixin, CSRC
+- **International Sources** (VPN On): Reuters, Bloomberg, Yahoo Finance, MarketWatch, CNBC
+- Auto-detect network environment
+- Multi-source aggregation with health scoring
+- Content parsing and normalization
 
-### RiskManager (`trading/risk.py`)
+### SentimentAnalyzer (`data/sentiment_analyzer.py`)
 
-Real-time risk monitoring:
-- Position limits
-- Daily loss limits
-- Drawdown controls
-- Circuit breaker
+Multi-factor sentiment analysis:
+- General sentiment scoring (-1.0 to 1.0)
+- Policy impact assessment
+- Market sentiment detection
+- Entity extraction (companies, policies, people)
+- Trading signal generation
 
-### AutoTrader (`trading/auto_trader.py`)
+### NewsTrainer (`models/news_trainer.py`)
 
-Automated trading execution:
-- Signal processing
-- Confidence thresholds
-- Cooldown management
-- Approval workflows (SEMI_AUTO mode)
+News-based model training:
+- **NewsEncoder**: Transformer-based text encoder
+- **Sentiment Fusion**: Combines sentiment scores with encoded text
+- **Price Encoder**: LSTM for historical price patterns
+- **Fusion Layer**: Integrates news and price features
+- **Prediction Head**: Outputs trading signals and confidence
 
 ## Event System
 
 Event-driven architecture using `core/events.py`:
 
 ```python
-# Event types
-EVENT_ORDER_SUBMITTED = "order_submitted"
-EVENT_ORDER_FILLED = "order_filled"
+# Event types (analysis-focused)
 EVENT_SIGNAL_GENERATED = "signal_generated"
-EVENT_RISK_WARNING = "risk_warning"
-EVENT_CIRCUIT_BREAKER = "circuit_breaker"
+EVENT_NEWS_COLLECTED = "news_collected"
+EVENT_SENTIMENT_UPDATED = "sentiment_updated"
+EVENT_MODEL_TRAINED = "model_trained"
 
 # Usage
-EVENT_BUS.emit(EVENT_ORDER_SUBMITTED, order=order)
-EVENT_BUS.on(EVENT_ORDER_FILLED, handler=on_fill)
+EVENT_BUS.emit(EVENT_SIGNAL_GENERATED, signal=signal)
+EVENT_BUS.on(EVENT_SENTIMENT_UPDATED, handler=on_sentiment_change)
 ```
 
 ## Configuration
@@ -163,20 +221,22 @@ EVENT_BUS.on(EVENT_ORDER_FILLED, handler=on_fill)
 Environment-based configuration via `config/settings.py`:
 
 ```bash
-# Trading mode
-TRADING_MODE=simulation  # simulation | live
-
-# Risk limits
-TRADING_MAX_POSITION_PCT=15
-TRADING_MAX_DAILY_LOSS_PCT=3
-
 # Network (China optimization)
 TRADING_VPN=1
 TRADING_PROXY_URL=http://127.0.0.1:7890
+TRADING_CHINA_DIRECT=1
 
-# Auto-trade
-TRADING_AUTO_TRADE_MODE=manual  # manual | semi_auto | auto
-TRADING_MIN_CONFIDENCE=0.70
+# News collection
+TRADING_NEWS_LIMIT=100
+TRADING_NEWS_HOURS_BACK=24
+
+# Sentiment analysis
+TRADING_SENTIMENT_CONFIDENCE_THRESHOLD=0.3
+TRADING_SENTIMENT_REFRESH_INTERVAL=30
+
+# Model training
+TRADING_TRAINING_EPOCHS=100
+TRADING_BATCH_SIZE=32
 ```
 
 ## Security
@@ -193,9 +253,9 @@ Encrypted credential storage using `cryptography.fernet`:
 Comprehensive audit trail:
 ```python
 audit.log(
-    event="ORDER_SUBMIT",
-    user="trader_001",
-    details={"order_id": "ORD-123", "symbol": "600519"},
+    event="MODEL_TRAIN",
+    user="analyst_001",
+    details={"model": "news_model", "epochs": 50},
 )
 ```
 
@@ -204,8 +264,9 @@ audit.log(
 ### Caching Strategy
 
 - **Session cache**: In-memory LRU cache for real-time data
-- **Disk cache**: SQLite for historical data
+- **News cache**: SQLite for collected articles
 - **Model cache**: Pre-loaded models in memory
+- **Sentiment cache**: Cached sentiment scores with TTL
 
 ### Database Optimization
 
@@ -215,17 +276,17 @@ audit.log(
 
 ## Extension Points
 
-### Adding New Data Sources
+### Adding New News Sources
 
-1. Create source class in `data/fetcher_sources.py`
-2. Implement `fetch_quote()` and `fetch_history()`
-3. Add to source rotation in `DataFetcher`
+1. Create source class in `data/news_collector.py`
+2. Implement `fetch_news()` method
+3. Add to source rotation based on VPN mode
 
-### Adding New Strategies
+### Adding New Sentiment Features
 
-1. Create strategy class in `strategies/`
-2. Implement `generate_signal()` method
-3. Register in strategy marketplace
+1. Add lexicon entries to `SentimentAnalyzer`
+2. Implement new scoring method
+3. Update fusion weights in analysis
 
 ### Adding New Models
 
@@ -237,11 +298,25 @@ audit.log(
 
 See [docs/adr/](docs/adr/) for Architecture Decision Records.
 
+## Removed Components
+
+The following components have been removed from this build:
+
+- ❌ Portfolio management (`trading/portfolio.py`)
+- ❌ Risk management (`trading/risk.py`)
+- ❌ Order Management System (`trading/oms.py`)
+- ❌ Broker integration (`trading/broker*.py`)
+- ❌ Auto trading (`trading/auto_trader.py`)
+- ❌ Execution engine (`trading/executor*.py`)
+
+These components are no longer available. The system focuses on **analysis and prediction** only.
+
 ## Future Enhancements
 
-- [ ] Multi-asset support (futures, options)
+- [ ] Enhanced NLP for Chinese policy documents
+- [ ] Real-time news streaming
+- [ ] Multi-modal sentiment (text + social media)
 - [ ] Cloud backup integration
 - [ ] Distributed deployment support
 - [ ] Model explainability (SHAP/LIME)
 - [ ] 2FA authentication
-- [ ] FIX protocol integration

@@ -1,0 +1,27 @@
+# Trading Graph - Web Dashboard Requirements
+# FastAPI-based web interface with real-time updates
+
+# Web framework
+fastapi>=0.105.0,<1.0.0
+uvicorn[standard]>=0.25.0,<1.0.0
+websockets>=12.0,<13.0
+
+# Interactive charts
+plotly>=5.18.0,<6.0.0
+dash>=2.14.0,<3.0.0
+
+# API documentation
+# (FastAPI includes Swagger/OpenAPI by default)
+
+# Authentication (optional)
+python-jose[cryptography]>=3.3.0,<4.0.0
+passlib[bcrypt]>=1.7.4,<2.0.0
+
+# Rate limiting
+slowapi>=0.1.9,<1.0.0
+
+# CORS support
+# (FastAPI includes this by default)
+
+# Core requirements (base)
+-r requirements.txt

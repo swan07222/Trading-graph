@@ -48,6 +48,7 @@ from ui import app_bar_ops as _app_bar_ops
 from ui import app_feed_ops as _app_feed_ops
 from ui import app_model_chart_ops as _app_model_chart_ops
 from ui import app_training_ops as _app_training_ops
+from ui import app_universe_ops as _app_universe_ops
 from ui.app_chart_pipeline import (
     _load_chart_history_bars as _load_chart_history_bars_impl,
 )
@@ -166,6 +167,8 @@ class MainApp(MainAppCommonMixin, QMainWindow):
             list(getattr(CONFIG, "STOCK_POOL", [])[:10]),
             max_size=self.MAX_WATCHLIST_SIZE,
         )
+        self._universe_catalog: list[dict[str, Any]] = []
+        self._universe_last_refresh_ts: float = 0.0
 
         # Real-time state with thread safety
         self._last_forecast_refresh_ts: float = 0.0
@@ -271,7 +274,7 @@ class MainApp(MainAppCommonMixin, QMainWindow):
         train_action.triggered.connect(self._start_training)
         ai_menu.addAction(train_action)
 
-        auto_learn_action = QAction("&Auto Learn", self)
+        auto_learn_action = QAction("&Continue Learning", self)
         auto_learn_action.triggered.connect(self._show_auto_learn)
         ai_menu.addAction(auto_learn_action)
 
@@ -654,6 +657,10 @@ class MainApp(MainAppCommonMixin, QMainWindow):
         self.watchlist_timer.timeout.connect(self._update_watchlist)
         self.watchlist_timer.start(30000)
 
+        self.universe_refresh_timer = QTimer()
+        self.universe_refresh_timer.timeout.connect(self._refresh_universe_catalog)
+        self.universe_refresh_timer.start(15000)
+
         # Live chart refresh: keep real + guessed lines moving.
         self.chart_live_timer = QTimer()
         self.chart_live_timer.timeout.connect(self._refresh_live_chart_forecast)
@@ -665,6 +672,7 @@ class MainApp(MainAppCommonMixin, QMainWindow):
         self.cache_prune_timer.timeout.connect(self._prune_session_futures)
         self.cache_prune_timer.start(60000)  # Prune every 60 seconds
 
+        QTimer.singleShot(120, self._refresh_universe_catalog)
         self._update_market_status()
 
         # =========================================================================
@@ -1048,6 +1056,7 @@ class MainApp(MainAppCommonMixin, QMainWindow):
     def _refresh_all(self) -> None:
         self._update_watchlist()
         self._refresh_sentiment()
+        self._refresh_universe_catalog(force=True)
         self.log("Refreshed all data", "info")
 
     # =========================================================================
@@ -1422,6 +1431,11 @@ def _bind_mainapp_extracted_ops() -> None:
         "_update_correct_guess_profit_ui": _app_analysis_ops._update_correct_guess_profit_ui,
         "_scan_stocks": _app_analysis_ops._scan_stocks,
         "_on_scan_done": _app_analysis_ops._on_scan_done,
+        "_refresh_universe_catalog": _app_universe_ops._refresh_universe_catalog,
+        "_on_universe_catalog_loaded": _app_universe_ops._on_universe_catalog_loaded,
+        "_on_universe_catalog_error": _app_universe_ops._on_universe_catalog_error,
+        "_filter_universe_list": _app_universe_ops._filter_universe_list,
+        "_on_universe_item_activated": _app_universe_ops._on_universe_item_activated,
     }
     bind_methods(
         MainApp,

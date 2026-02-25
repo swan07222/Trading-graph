@@ -22,6 +22,7 @@ _WORKER_RECOVERABLE_EXCEPTIONS = (
 _SUPPORTED_TRAIN_INTERVALS = frozenset(
     {"1m", "2m", "3m", "5m", "15m", "30m", "60m", "1h", "1d"}
 )
+_LOCKED_TRAIN_INTERVAL = "1m"
 
 
 def _get_cancellation_token() -> Any:
@@ -190,7 +191,15 @@ class AutoLearnWorker(_BaseLearnWorker):
             self._attach_progress_callback(results, default_error="Auto-learning failed")
 
             mode = str(self.config.get("mode", "full"))
-            interval = normalize_training_interval(self.config.get("interval", "1m"))
+            requested_interval = normalize_training_interval(
+                self.config.get("interval", _LOCKED_TRAIN_INTERVAL)
+            )
+            interval = _LOCKED_TRAIN_INTERVAL
+            if requested_interval != interval:
+                self.log_message.emit(
+                    f"Interval {requested_interval} overridden to {interval}",
+                    "warning",
+                )
             horizon = _safe_int(self.config.get("horizon", 30), default=30, minimum=1, maximum=500)
             lookback_raw = self.config.get("lookback_bars")
             lookback_bars = (
@@ -276,7 +285,15 @@ class TargetedLearnWorker(_BaseLearnWorker):
             self._learner = learner_class()
             self._attach_progress_callback(results, default_error="Targeted training failed")
 
-            interval = normalize_training_interval(self.config.get("interval", "1m"))
+            requested_interval = normalize_training_interval(
+                self.config.get("interval", _LOCKED_TRAIN_INTERVAL)
+            )
+            interval = _LOCKED_TRAIN_INTERVAL
+            if requested_interval != interval:
+                self.log_message.emit(
+                    f"Interval {requested_interval} overridden to {interval}",
+                    "warning",
+                )
             horizon = _safe_int(self.config.get("horizon", 30), default=30, minimum=1, maximum=500)
             lookback_raw = self.config.get("lookback_bars")
             lookback_bars = (

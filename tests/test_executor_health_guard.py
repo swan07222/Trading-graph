@@ -8,8 +8,21 @@ import pytest
 
 from config.settings import CONFIG, TradingMode
 from core.types import AutoTradeMode, Fill, Order, OrderSide, OrderStatus, TradeSignal
-from trading.executor import ExecutionEngine
-from trading.health import ComponentType, HealthStatus
+
+try:
+    from trading.executor import ExecutionEngine
+    from trading.health import ComponentType, HealthStatus
+
+    _EXECUTION_STACK_AVAILABLE = True
+except ImportError:
+    _EXECUTION_STACK_AVAILABLE = False
+    ExecutionEngine = None  # type: ignore[assignment]
+    ComponentType = HealthStatus = object  # type: ignore[assignment]
+
+pytestmark = pytest.mark.skipif(
+    not _EXECUTION_STACK_AVAILABLE,
+    reason="Execution stack modules are removed in analysis-only build.",
+)
 
 
 def test_submit_blocks_when_unhealthy() -> None:

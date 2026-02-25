@@ -67,7 +67,7 @@ def test_targeted_worker_passes_requested_interval(monkeypatch) -> None:
     worker.finished_result.connect(lambda payload: results.append(payload))
     worker.run()
 
-    assert captured["interval"] == "15m"
+    assert captured["interval"] == "1m"
     assert int(captured["prediction_horizon"]) == 40
     assert results and results[-1]["status"] == "ok"
 
@@ -119,6 +119,6 @@ def test_auto_worker_passes_requested_interval(monkeypatch) -> None:
     worker.finished_result.connect(lambda payload: results.append(payload))
     worker.run()
 
-    assert captured["interval"] == "30m"
+    assert captured["interval"] == "1m"
     assert int(captured["prediction_horizon"]) == 25
     assert results and results[-1]["status"] == "ok"

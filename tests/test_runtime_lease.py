@@ -3,8 +3,21 @@ import threading
 import time
 from types import SimpleNamespace
 
-from trading.executor import ExecutionEngine
-from trading.runtime_lease import FileRuntimeLeaseClient, create_runtime_lease_client
+import pytest
+
+try:
+    from trading.executor import ExecutionEngine
+    from trading.runtime_lease import FileRuntimeLeaseClient, create_runtime_lease_client
+
+    _EXECUTION_STACK_AVAILABLE = True
+except ImportError:
+    _EXECUTION_STACK_AVAILABLE = False
+    ExecutionEngine = FileRuntimeLeaseClient = create_runtime_lease_client = None  # type: ignore[assignment]
+
+pytestmark = pytest.mark.skipif(
+    not _EXECUTION_STACK_AVAILABLE,
+    reason="Execution stack modules are removed in analysis-only build.",
+)
 
 
 def _mk_engine(tmp_path, lease_id: str) -> ExecutionEngine:
