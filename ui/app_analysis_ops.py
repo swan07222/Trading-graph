@@ -1220,13 +1220,119 @@ def _update_correct_guess_profit_ui(self) -> None:
             
         )
 
+def _init_screener_profile_ui(self) -> None:
+    """Initialize screener profile selector in toolbar."""
+    combo = getattr(self, "screener_profile_combo", None)
+    if combo is None:
+        return
+
+    profiles: list[str] = ["balanced"]
+    active = "balanced"
+    try:
+        from analysis.screener import (
+            get_active_screener_profile_name,
+            list_screener_profiles,
+        )
+
+        names = [str(x).strip().lower() for x in list_screener_profiles()]
+        names = [x for x in names if x]
+        if names:
+            profiles = sorted(dict.fromkeys(names))
+        active_raw = str(get_active_screener_profile_name()).strip().lower()
+        if active_raw:
+            active = active_raw
+    except Exception as e:
+        log.debug("Screener profile list unavailable: %s", e)
+
+    if active not in profiles:
+        profiles = sorted(dict.fromkeys(profiles + [active]))
+
+    setattr(self, "_syncing_screener_profile_ui", True)
+    try:
+        combo.blockSignals(True)
+        combo.clear()
+        combo.addItems(profiles)
+        combo.setCurrentText(active)
+        combo.setToolTip("Scan profile used by 'Scan Market'")
+    finally:
+        combo.blockSignals(False)
+        setattr(self, "_syncing_screener_profile_ui", False)
+
+    setattr(self, "_active_screener_profile", active)
+
+def _on_screener_profile_changed(self, profile_name: str) -> None:
+    """Handle toolbar profile selector change."""
+    if bool(getattr(self, "_syncing_screener_profile_ui", False)):
+        return
+
+    name = str(profile_name or "").strip().lower()
+    if not name:
+        return
+
+    try:
+        from analysis.screener import (
+            build_default_screener,
+            set_active_screener_profile,
+        )
+
+        ok = bool(set_active_screener_profile(name))
+        # Force refresh singleton so subsequent scans use new thresholds.
+        build_default_screener(name, force_reload=True)
+        setattr(self, "_active_screener_profile", name)
+        if ok:
+            self.log(f"Screener profile set to {name}", "info")
+        else:
+            self.log(f"Failed to persist screener profile {name}", "warning")
+    except Exception as e:
+        self.log(f"Failed to switch screener profile: {e}", "warning")
+        log.debug("Screener profile change failed: %s", e)
+
+def _show_screener_profile_dialog(self) -> None:
+    """Open screener profile editor dialog."""
+    try:
+        ScreenerProfileDialog = _lazy_get(
+            "ui.dialogs",
+            "ScreenerProfileDialog",
+        )
+        dialog = ScreenerProfileDialog(self)
+        accepted = int(dialog.exec())
+        if accepted:
+            self._init_screener_profile_ui()
+            selected = str(
+                getattr(dialog, "selected_profile_name", "")
+            ).strip().lower()
+            if selected and getattr(self, "screener_profile_combo", None) is not None:
+                setattr(self, "_syncing_screener_profile_ui", True)
+                try:
+                    self.screener_profile_combo.setCurrentText(selected)
+                finally:
+                    setattr(self, "_syncing_screener_profile_ui", False)
+                self._on_screener_profile_changed(selected)
+    except Exception as e:
+        QMessageBox.warning(
+            self,
+            "Profile Manager",
+            f"Failed to open screener profile manager:\n{e}",
+        )
+
 def _scan_stocks(self) -> None:
     """Scan all stocks for signals."""
     if not self._predictor_runtime_ready():
         self.log("No model loaded", "error")
         return
 
-    self.log("Scanning stocks for trading signals...", "info")
+    profile_name = "balanced"
+    try:
+        from analysis.screener import get_active_screener_profile_name
+
+        profile_name = str(get_active_screener_profile_name() or profile_name)
+    except Exception:
+        profile_name = "balanced"
+
+    self.log(
+        f"Scanning stocks for trading signals (profile: {profile_name})...",
+        "info",
+    )
     self.progress.setRange(0, 0)
     self.progress.show()
 
@@ -1266,10 +1372,13 @@ def _on_scan_done(self, picks: list[Any]) -> None:
             else str(pred.signal)
         )
         conf = getattr(pred, 'confidence', 0)
+        rank_score = float(getattr(pred, "rank_score", conf) or conf)
+        fscore = float(getattr(pred, "fundamental_score", 0.5) or 0.5)
         name = getattr(pred, 'stock_name', '')
         self.log(
             f"  {pred.stock_code} {name}: "
-            f"{signal_text} (confidence: {conf:.0%})",
+            f"{signal_text} (confidence: {conf:.0%}, "
+            f"rank: {rank_score:.0%}, fundamentals: {fscore:.0%})",
             "info"
         )
 

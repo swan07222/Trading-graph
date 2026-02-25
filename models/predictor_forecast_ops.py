@@ -319,9 +319,29 @@ def get_top_picks(
                 and p.confidence >= CONFIG.MIN_CONFIDENCE
             ]
 
-        filtered.sort(key=lambda x: x.confidence, reverse=True)
+        if not filtered:
+            return []
 
-        return filtered[:n]
+        # Candidate cap keeps screener overlays fast on large universes.
+        candidate_cap = max(int(n) * 3, int(n), 10)
+        filtered.sort(key=lambda x: x.confidence, reverse=True)
+        candidates = filtered[:candidate_cap]
+
+        try:
+            from analysis.screener import build_default_screener
+
+            screener = build_default_screener()
+            ranked = screener.rank_predictions(
+                candidates,
+                top_n=max(1, int(n)),
+                include_fundamentals=True,
+            )
+            if ranked:
+                return ranked[:n]
+        except Exception as e:
+            log.debug("Screener overlay unavailable; confidence ranking fallback: %s", e)
+
+        return candidates[:n]
 
 def _apply_ensemble_prediction(self, X: FloatArray, pred: Prediction) -> None:
     """Apply ensemble prediction with bounds checking."""

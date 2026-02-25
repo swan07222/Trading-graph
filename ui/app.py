@@ -14,6 +14,7 @@ from PyQt6.QtGui import QAction, QFont
 from PyQt6.QtWidgets import (
     QApplication,
     QCheckBox,
+    QComboBox,
     QDateEdit,
     QFrame,
     QGridLayout,
@@ -326,6 +327,21 @@ class MainApp(MainAppCommonMixin, QMainWindow):
         scan_action.triggered.connect(self._scan_stocks)
         toolbar.addAction(scan_action)
 
+        toolbar.addWidget(QLabel("  Profile: "))
+        self.screener_profile_combo = QComboBox()
+        self.screener_profile_combo.setObjectName("scanProfileCombo")
+        self.screener_profile_combo.setFixedWidth(130)
+        self.screener_profile_combo.currentTextChanged.connect(
+            self._on_screener_profile_changed
+        )
+        toolbar.addWidget(self.screener_profile_combo)
+
+        self.screener_profiles_action = QAction("Profiles...", self)
+        self.screener_profiles_action.triggered.connect(
+            self._show_screener_profile_dialog
+        )
+        toolbar.addAction(self.screener_profiles_action)
+
         toolbar.addSeparator()
 
         spacer = QWidget()
@@ -348,9 +364,18 @@ class MainApp(MainAppCommonMixin, QMainWindow):
         today = QDate.currentDate()
         self.chart_date_edit.setDate(today)
         self.chart_date_edit.setMaximumDate(today)
+        self.chart_date_edit.setFixedWidth(126)
         self._selected_chart_date = str(today.toString("yyyy-MM-dd"))
         self.chart_date_edit.dateChanged.connect(self._on_chart_date_changed)
+        try:
+            cal = self.chart_date_edit.calendarWidget()
+            if cal is not None:
+                cal.setMinimumSize(320, 240)
+        except _UI_RECOVERABLE_EXCEPTIONS as exc:
+            log.debug("Suppressed exception in ui/app.py", exc_info=exc)
         toolbar.addWidget(self.chart_date_edit)
+
+        self._init_screener_profile_ui()
 
     # =========================================================================
     # =========================================================================
@@ -570,12 +595,12 @@ class MainApp(MainAppCommonMixin, QMainWindow):
         self.details_text.setFont(
             QFont(get_monospace_font_family(), ModernFonts.SIZE_SM)
         )
-        self.details_text.setMinimumHeight(180)
-        self.details_text.setMaximumHeight(280)
+        self.details_text.setMinimumHeight(240)
+        self.details_text.setMaximumHeight(16777215)
         details_layout.addWidget(self.details_text)
 
         details_group.setLayout(details_layout)
-        layout.addWidget(details_group, 2)
+        layout.addWidget(details_group, 3)
 
         return panel
 
@@ -1431,6 +1456,9 @@ def _bind_mainapp_extracted_ops() -> None:
         "_update_correct_guess_profit_ui": _app_analysis_ops._update_correct_guess_profit_ui,
         "_scan_stocks": _app_analysis_ops._scan_stocks,
         "_on_scan_done": _app_analysis_ops._on_scan_done,
+        "_init_screener_profile_ui": _app_analysis_ops._init_screener_profile_ui,
+        "_on_screener_profile_changed": _app_analysis_ops._on_screener_profile_changed,
+        "_show_screener_profile_dialog": _app_analysis_ops._show_screener_profile_dialog,
         "_refresh_universe_catalog": _app_universe_ops._refresh_universe_catalog,
         "_on_universe_catalog_loaded": _app_universe_ops._on_universe_catalog_loaded,
         "_on_universe_catalog_error": _app_universe_ops._on_universe_catalog_error,

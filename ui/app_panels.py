@@ -123,11 +123,13 @@ def _create_left_panel(self: Any) -> QWidget:
     settings_layout.setHorizontalSpacing(10)
     settings_layout.setVerticalSpacing(9)
 
+    # Capital is fixed to global config; keep hidden widget for compatibility
+    # with existing state/load paths without exposing it in UI.
     self.capital_spin = QDoubleSpinBox()
     self.capital_spin.setRange(10000, 100000000)
     self.capital_spin.setValue(CONFIG.CAPITAL)
     self.capital_spin.setPrefix("CNY ")
-    self._add_labeled(settings_layout, 0, "Capital:", self.capital_spin)
+    self.capital_spin.setVisible(False)
 
     self.interval_combo = QComboBox()
     self.interval_combo.addItems(["1m", "5m", "15m", "30m", "60m", "1d"])
@@ -135,21 +137,21 @@ def _create_left_panel(self: Any) -> QWidget:
     self.interval_combo.currentTextChanged.connect(
         self._on_interval_changed
     )
-    self._add_labeled(settings_layout, 1, "Interval:", self.interval_combo)
+    self._add_labeled(settings_layout, 0, "Interval:", self.interval_combo)
 
     self.forecast_spin = QSpinBox()
     self.forecast_spin.setRange(5, 120)
     self.forecast_spin.setValue(self.GUESS_FORECAST_BARS)
     self.forecast_spin.setSuffix(" bars")
     self.forecast_spin.setToolTip("Number of bars to forecast ahead (actual time depends on interval)")
-    self._add_labeled(settings_layout, 2, "Forecast:", self.forecast_spin)
+    self._add_labeled(settings_layout, 1, "Forecast:", self.forecast_spin)
 
     self.lookback_spin = QSpinBox()
     self.lookback_spin.setRange(7, 5000)
     self.lookback_spin.setValue(self._recommended_lookback("1m"))
     self.lookback_spin.setSuffix(" bars")
     self.lookback_spin.setToolTip("Historical bars to use for analysis")
-    self._add_labeled(settings_layout, 3, "Lookback:", self.lookback_spin)
+    self._add_labeled(settings_layout, 2, "Lookback:", self.lookback_spin)
 
     settings_group.setLayout(settings_layout)
     layout.addWidget(settings_group)
@@ -273,7 +275,7 @@ def _create_right_panel(self: Any) -> QWidget:
     history_layout.addWidget(self.history_table)
     tabs.addTab(history_tab, "History")
 
-    layout.addWidget(tabs, 4)
+    layout.addWidget(tabs, 3)
 
     # Log Group
     log_group = QGroupBox("System Log")
@@ -288,12 +290,13 @@ def _create_right_panel(self: Any) -> QWidget:
         self.log_widget.setMinimumHeight(220)
         self.log_widget.setMaximumHeight(380)
     if hasattr(self.log_widget, "setMinimumHeight"):
-        self.log_widget.setMinimumHeight(220)
+        self.log_widget.setMinimumHeight(280)
     if hasattr(self.log_widget, "setMaximumHeight"):
-        self.log_widget.setMaximumHeight(380)
+        # Let system log grow with the panel instead of capping early.
+        self.log_widget.setMaximumHeight(16777215)
     log_layout.addWidget(self.log_widget)
     log_group.setLayout(log_layout)
-    layout.addWidget(log_group, 2)
+    layout.addWidget(log_group, 3)
 
     return panel
 

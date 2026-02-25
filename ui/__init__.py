@@ -18,6 +18,7 @@ _LAZY_EXPORTS = {
     "LogWidget": (".widgets", "LogWidget"),
     "TrainingDialog": (".dialogs", "TrainingDialog"),
     "BacktestDialog": (".dialogs", "BacktestDialog"),
+    "ScreenerProfileDialog": (".dialogs", "ScreenerProfileDialog"),
     "NewsPanel": (".news_widget", "NewsPanel"),
     "StrategyMarketplaceDialog": (
         ".strategy_marketplace_dialog",

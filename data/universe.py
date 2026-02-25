@@ -28,6 +28,7 @@ _new_listings_cache: dict[str, object] = {
     "days": 0,
     "codes": [],
 }
+_MIN_REASONABLE_UNIVERSE_SIZE = 1200
 
 
 def _universe_path() -> Path:
@@ -265,6 +266,39 @@ def _extract_codes_from_df(df) -> list[str]:
     return _validate_codes(raw_codes)
 
 
+def _extract_codes_from_any(payload: object) -> list[str]:
+    """Extract valid codes from DataFrame/list/dict style payloads."""
+    if payload is None:
+        return []
+
+    # DataFrame-like
+    if hasattr(payload, "columns") and hasattr(payload, "empty"):
+        return _extract_codes_from_df(payload)
+
+    # List/Tuple/Set of rows or strings.
+    if isinstance(payload, (list, tuple, set)):
+        raw_codes: list[str] = []
+        for row in payload:
+            if isinstance(row, dict):
+                for key in ("code", "symbol", "stock_code", "ticker", "secid"):
+                    if key in row:
+                        raw_codes.append(str(row.get(key)))
+            else:
+                raw_codes.append(str(row))
+        return _validate_codes(raw_codes)
+
+    # Dict payload with common list fields.
+    if isinstance(payload, dict):
+        for key in ("codes", "data", "items", "list"):
+            if key in payload:
+                nested = _extract_codes_from_any(payload.get(key))
+                if nested:
+                    return nested
+        return []
+
+    return []
+
+
 def _try_akshare_fetch(timeout: int = 20) -> list[str] | None:
     """Try to fetch stock universe from AkShare.
 
@@ -298,21 +332,27 @@ def _try_akshare_fetch(timeout: int = 20) -> list[str] | None:
         fallback_calls = [
             ("stock_info_a_code_name", getattr(ak, "stock_info_a_code_name", None)),
             ("stock_zh_a_name_code", getattr(ak, "stock_zh_a_name_code", None)),
+            ("stock_info_sh_name_code", getattr(ak, "stock_info_sh_name_code", None)),
+            ("stock_info_sz_name_code", getattr(ak, "stock_info_sz_name_code", None)),
+            ("stock_info_bj_name_code", getattr(ak, "stock_info_bj_name_code", None)),
+            ("stock_zh_a_spot", getattr(ak, "stock_zh_a_spot", None)),
         ]
+
+        merged_codes: list[str] = []
         for api_name, api_fn in fallback_calls:
             if not callable(api_fn):
                 continue
             try:
                 log.info(f"Fetching universe from AkShare fallback ({api_name})...")
-                df_codes = api_fn()
-                codes = _extract_codes_from_df(df_codes)
+                payload = api_fn()
+                codes = _extract_codes_from_any(payload)
                 if codes:
                     log.info(
                         "AkShare fallback %s returned %s valid codes",
                         api_name,
                         len(codes),
                     )
-                    return codes
+                    merged_codes.extend(codes)
             except Exception as exc:
                 log.warning(
                     "AkShare fallback %s failed: %s: %s",
@@ -320,7 +360,8 @@ def _try_akshare_fetch(timeout: int = 20) -> list[str] | None:
                     type(exc).__name__,
                     exc,
                 )
-        return None
+        merged = _validate_codes(merged_codes)
+        return merged or None
 
     # Try primary endpoint with timeout
     try:
@@ -375,6 +416,17 @@ def get_universe_codes(
     fresh_codes = _try_akshare_fetch(timeout=20 if can_try_direct else 8)
 
     if fresh_codes:
+        if cached_codes and len(fresh_codes) < _MIN_REASONABLE_UNIVERSE_SIZE:
+            merged = _validate_codes(cached_codes + fresh_codes)
+            if len(merged) > len(fresh_codes):
+                log.warning(
+                    "Universe refresh appears partial (%s codes); merged with cache "
+                    "to %s codes",
+                    len(fresh_codes),
+                    len(merged),
+                )
+                fresh_codes = merged
+
         out = {
             "codes": fresh_codes,
             "updated_ts": time.time(),
@@ -415,6 +467,18 @@ def refresh_universe() -> dict:
     fresh_codes = _try_akshare_fetch(timeout=20 if can_try_direct else 8)
 
     if fresh_codes:
+        existing_codes = _validate_codes(existing_codes)
+        if existing_codes and len(fresh_codes) < _MIN_REASONABLE_UNIVERSE_SIZE:
+            merged = _validate_codes(existing_codes + fresh_codes)
+            if len(merged) > len(fresh_codes):
+                log.warning(
+                    "Universe refresh appears partial (%s codes); merged with existing "
+                    "to %s codes",
+                    len(fresh_codes),
+                    len(merged),
+                )
+                fresh_codes = merged
+
         out = {
             "codes": fresh_codes,
             "updated_ts": time.time(),

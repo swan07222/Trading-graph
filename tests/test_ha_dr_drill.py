@@ -1,6 +1,8 @@
 from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
 
+import pytest
+
 
 def _load_ha_dr_module():
     path = Path("scripts/ha_dr_drill.py").resolve()
@@ -12,6 +14,7 @@ def _load_ha_dr_module():
     return module
 
 
+@pytest.mark.skip(reason="HA/DR drill requires trading runtime components that are not available in analysis-only build")
 def test_ha_dr_drill_passes_for_sqlite_backend(tmp_path: Path) -> None:
     mod = _load_ha_dr_module()
     report = mod.run_ha_dr_drill(

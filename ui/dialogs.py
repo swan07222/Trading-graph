@@ -6,6 +6,7 @@ from datetime import datetime
 from PyQt6.QtCore import QThread, pyqtSignal
 from PyQt6.QtGui import QFont
 from PyQt6.QtWidgets import (
+    QCheckBox,
     QComboBox,
     QDialog,
     QDialogButtonBox,
@@ -1284,4 +1285,261 @@ class RiskSettingsDialog(QDialog):
             self, "Saved",
             "Risk settings updated (in-memory)."
         )
+        self.accept()
+
+
+class ScreenerProfileDialog(QDialog):
+    """Create/update scanner profile thresholds and set active profile."""
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Screener Profiles")
+        self.setMinimumWidth(560)
+        _apply_dialog_theme(self)
+
+        from analysis.screener import ScreenerProfileStore
+
+        self._store = ScreenerProfileStore()
+        self._profiles: dict[str, object] = {}
+        self._syncing = False
+        self.selected_profile_name = str(
+            self._store.resolve_profile_name()
+        ).strip().lower() or "balanced"
+
+        layout = QVBoxLayout(self)
+        layout.setSpacing(12)
+        layout.setContentsMargins(18, 16, 18, 16)
+        _add_dialog_header(
+            layout,
+            "Screener Profile Manager",
+            "Adjust scan filters and save custom presets used by Scan Market.",
+        )
+
+        selector_group = QGroupBox("Profile Selection")
+        selector_form = QFormLayout(selector_group)
+
+        self.profile_combo = QComboBox()
+        self.profile_combo.currentTextChanged.connect(
+            self._on_profile_selected
+        )
+        selector_form.addRow("Load profile:", self.profile_combo)
+
+        self.profile_name_edit = QLineEdit()
+        self.profile_name_edit.setPlaceholderText("custom_profile_name")
+        selector_form.addRow("Save as:", self.profile_name_edit)
+
+        layout.addWidget(selector_group)
+
+        gate_group = QGroupBox("Hard Gates")
+        gate_form = QFormLayout(gate_group)
+
+        self.min_conf_spin = QDoubleSpinBox()
+        self.min_conf_spin.setRange(0.30, 0.99)
+        self.min_conf_spin.setDecimals(2)
+        self.min_conf_spin.setSingleStep(0.01)
+        gate_form.addRow("Min confidence:", self.min_conf_spin)
+
+        self.min_strength_spin = QDoubleSpinBox()
+        self.min_strength_spin.setRange(0.10, 0.99)
+        self.min_strength_spin.setDecimals(2)
+        self.min_strength_spin.setSingleStep(0.01)
+        gate_form.addRow("Min signal strength:", self.min_strength_spin)
+
+        self.min_fund_spin = QDoubleSpinBox()
+        self.min_fund_spin.setRange(0.00, 0.99)
+        self.min_fund_spin.setDecimals(2)
+        self.min_fund_spin.setSingleStep(0.01)
+        gate_form.addRow("Min fundamental score:", self.min_fund_spin)
+
+        self.min_notional_spin = QDoubleSpinBox()
+        self.min_notional_spin.setRange(0.0, 5000.0)
+        self.min_notional_spin.setDecimals(1)
+        self.min_notional_spin.setSingleStep(5.0)
+        self.min_notional_spin.setSuffix(" M CNY")
+        gate_form.addRow("Min avg notional 20d:", self.min_notional_spin)
+
+        self.max_vol_spin = QDoubleSpinBox()
+        self.max_vol_spin.setRange(0.10, 3.00)
+        self.max_vol_spin.setDecimals(2)
+        self.max_vol_spin.setSingleStep(0.05)
+        gate_form.addRow("Max annualized volatility:", self.max_vol_spin)
+
+        self.require_trend_check = QCheckBox("Require positive 60d trend")
+        gate_form.addRow("", self.require_trend_check)
+        self.allow_missing_check = QCheckBox("Allow missing fundamentals")
+        gate_form.addRow("", self.allow_missing_check)
+
+        layout.addWidget(gate_group)
+
+        weight_group = QGroupBox("Ranking Weights")
+        weight_form = QFormLayout(weight_group)
+
+        self.w_conf_spin = QDoubleSpinBox()
+        self.w_conf_spin.setRange(0.0, 1.0)
+        self.w_conf_spin.setDecimals(2)
+        self.w_conf_spin.setSingleStep(0.05)
+        weight_form.addRow("Confidence weight:", self.w_conf_spin)
+
+        self.w_strength_spin = QDoubleSpinBox()
+        self.w_strength_spin.setRange(0.0, 1.0)
+        self.w_strength_spin.setDecimals(2)
+        self.w_strength_spin.setSingleStep(0.05)
+        weight_form.addRow("Signal weight:", self.w_strength_spin)
+
+        self.w_fund_spin = QDoubleSpinBox()
+        self.w_fund_spin.setRange(0.0, 1.0)
+        self.w_fund_spin.setDecimals(2)
+        self.w_fund_spin.setSingleStep(0.05)
+        weight_form.addRow("Fundamental weight:", self.w_fund_spin)
+
+        layout.addWidget(weight_group)
+
+        action_row = QHBoxLayout()
+        self.reload_btn = QPushButton("Reload")
+        self.reload_btn.setObjectName("secondaryActionButton")
+        self.reload_btn.clicked.connect(self._reload_profiles)
+        action_row.addWidget(self.reload_btn)
+
+        self.save_btn = QPushButton("Save / Update Profile")
+        self.save_btn.setObjectName("primaryActionButton")
+        self.save_btn.clicked.connect(self._save_profile)
+        action_row.addWidget(self.save_btn)
+
+        self.activate_btn = QPushButton("Set Active and Close")
+        self.activate_btn.setObjectName("primaryActionButton")
+        self.activate_btn.clicked.connect(self._set_active_and_close)
+        action_row.addWidget(self.activate_btn)
+        layout.addLayout(action_row)
+
+        close_btns = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        close_btn = close_btns.button(QDialogButtonBox.StandardButton.Close)
+        if close_btn:
+            close_btn.setObjectName("secondaryActionButton")
+        close_btns.rejected.connect(self.reject)
+        close_btns.accepted.connect(self.accept)
+        layout.addWidget(close_btns)
+
+        self._reload_profiles()
+
+    def _reload_profiles(self) -> None:
+        self._profiles = self._store.available_profiles()
+        names = sorted(self._profiles.keys())
+        selected = self.selected_profile_name
+        if selected not in names and names:
+            selected = names[0]
+
+        self._syncing = True
+        try:
+            self.profile_combo.blockSignals(True)
+            self.profile_combo.clear()
+            self.profile_combo.addItems(names)
+            if selected:
+                self.profile_combo.setCurrentText(selected)
+        finally:
+            self.profile_combo.blockSignals(False)
+            self._syncing = False
+
+        if selected:
+            self._on_profile_selected(selected)
+
+    def _on_profile_selected(self, profile_name: str) -> None:
+        if self._syncing:
+            return
+        name = str(profile_name or "").strip().lower()
+        if not name:
+            return
+        profile = self._profiles.get(name)
+        if profile is None:
+            return
+
+        self.selected_profile_name = name
+        self.profile_name_edit.setText(name)
+        self.min_conf_spin.setValue(float(getattr(profile, "min_confidence", 0.70)))
+        self.min_strength_spin.setValue(
+            float(getattr(profile, "min_signal_strength", 0.52))
+        )
+        self.min_fund_spin.setValue(
+            float(getattr(profile, "min_fundamental_score", 0.35))
+        )
+        notional_m = (
+            float(getattr(profile, "min_avg_notional_cny", 2.5e7)) / 1e6
+        )
+        self.min_notional_spin.setValue(max(0.0, notional_m))
+        self.max_vol_spin.setValue(
+            float(getattr(profile, "max_annualized_volatility", 1.05))
+        )
+        self.require_trend_check.setChecked(
+            bool(getattr(profile, "require_positive_trend_60d", False))
+        )
+        self.allow_missing_check.setChecked(
+            bool(getattr(profile, "allow_missing_fundamentals", True))
+        )
+
+        weights = getattr(profile, "weights", None)
+        self.w_conf_spin.setValue(float(getattr(weights, "confidence", 0.72)))
+        self.w_strength_spin.setValue(
+            float(getattr(weights, "signal_strength", 0.08))
+        )
+        self.w_fund_spin.setValue(float(getattr(weights, "fundamentals", 0.20)))
+
+    def _build_profile_from_form(self):
+        from analysis.screener import ScreenerProfile, ScreenerWeights
+
+        name = str(self.profile_name_edit.text() or "").strip().lower()
+        if not name:
+            name = str(self.profile_combo.currentText() or "").strip().lower()
+        if not name:
+            name = "custom"
+
+        return ScreenerProfile(
+            name=name,
+            min_confidence=float(self.min_conf_spin.value()),
+            min_signal_strength=float(self.min_strength_spin.value()),
+            min_fundamental_score=float(self.min_fund_spin.value()),
+            min_avg_notional_cny=float(self.min_notional_spin.value()) * 1e6,
+            max_annualized_volatility=float(self.max_vol_spin.value()),
+            require_positive_trend_60d=bool(self.require_trend_check.isChecked()),
+            allow_missing_fundamentals=bool(self.allow_missing_check.isChecked()),
+            weights=ScreenerWeights(
+                confidence=float(self.w_conf_spin.value()),
+                signal_strength=float(self.w_strength_spin.value()),
+                fundamentals=float(self.w_fund_spin.value()),
+            ),
+        ).normalized()
+
+    def _save_profile(self) -> None:
+        profile = self._build_profile_from_form()
+        ok = bool(self._store.save_profile(profile, set_active=False))
+        if not ok:
+            QMessageBox.warning(
+                self,
+                "Save Failed",
+                "Failed to save screener profile.",
+            )
+            return
+        self.selected_profile_name = str(profile.name)
+        self._reload_profiles()
+        QMessageBox.information(
+            self,
+            "Saved",
+            f"Profile '{profile.name}' saved.",
+        )
+
+    def _set_active_and_close(self) -> None:
+        profile = self._build_profile_from_form()
+        ok = bool(self._store.save_profile(profile, set_active=True))
+        if not ok:
+            QMessageBox.warning(
+                self,
+                "Activation Failed",
+                "Failed to save active screener profile.",
+            )
+            return
+        try:
+            from analysis.screener import set_active_screener_profile
+
+            set_active_screener_profile(profile.name)
+        except Exception as e:
+            log.debug("Failed to refresh screener singletons after activation: %s", e)
+        self.selected_profile_name = str(profile.name)
         self.accept()

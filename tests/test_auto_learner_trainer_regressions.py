@@ -437,11 +437,11 @@ def test_trainer_prepare_data_forces_1m_and_minimum_lookback(monkeypatch) -> Non
 
 
 def test_trainer_normalize_model_names_uses_all_five_defaults() -> None:
-    expected = ["lstm", "gru", "tcn", "transformer", "hybrid"]
+    expected = ["informer", "tft", "nbeats", "tsmixer"]
     assert Trainer._normalize_model_names(None) == expected
-    assert Trainer._normalize_model_names(["LSTM", "gru", "lstm", "  "]) == [
-        "lstm",
-        "gru",
+    assert Trainer._normalize_model_names(["Informer", "tft", "informer", "  "]) == [
+        "informer",
+        "tft",
     ]
 
 
@@ -516,8 +516,8 @@ def test_trainer_incremental_adds_missing_default_models(monkeypatch, tmp_path) 
     class _DummyEnsemble:
         def __init__(self, input_size, model_names=None) -> None:  # noqa: ARG002
             self.input_size = int(input_size)
-            self.models = {"lstm": object()}
-            self.weights = {"lstm": 1.0}
+            self.models = {"informer": object()}
+            self.weights = {"informer": 1.0}
             self.interval = "1m"
             self.prediction_horizon = horizon
             self.trained_stock_codes = []
@@ -567,11 +567,10 @@ def test_trainer_incremental_adds_missing_default_models(monkeypatch, tmp_path) 
     assert out["status"] == "complete"
     assert trainer.ensemble is not None
     assert set(trainer.ensemble.models.keys()) >= {
-        "lstm",
-        "gru",
-        "tcn",
-        "transformer",
-        "hybrid",
+        "informer",
+        "tft",
+        "nbeats",
+        "tsmixer",
     }
     assert trainer.ensemble.normalized is True
 

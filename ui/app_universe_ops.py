@@ -15,7 +15,8 @@ from utils.recoverable import COMMON_RECOVERABLE_EXCEPTIONS
 
 log = get_logger(__name__)
 _UI_RECOVERABLE_EXCEPTIONS = COMMON_RECOVERABLE_EXCEPTIONS
-_UNIVERSE_RENDER_LIMIT = 900
+# Show full market list by default; only cap large filtered searches.
+_UNIVERSE_RENDER_LIMIT = 8000
 _UNIVERSE_MIN_REFRESH_GAP_S = 8.0
 
 
@@ -235,7 +236,10 @@ def _filter_universe_list(self: Any, text: str) -> None:
     else:
         matched = catalog
 
-    display = matched[:_UNIVERSE_RENDER_LIMIT]
+    if query:
+        display = matched[:_UNIVERSE_RENDER_LIMIT]
+    else:
+        display = matched
 
     self.universe_list.blockSignals(True)
     self.universe_list.clear()
