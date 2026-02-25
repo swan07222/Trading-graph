@@ -48,29 +48,12 @@ class ProbAttention(nn.Module):
         self.d_head = d_model // n_heads
         self.factor = factor
 
-        # FIX: Fallback for PyTorch versions without ScaledDotProductAttention
-        if hasattr(nn, 'ScaledDotProductAttention'):
-            self.inner_attention = nn.ScaledDotProductAttention(
-                d_model ** -0.5,
-                attention_dropout,
-            )
-            self._use_builtin_attention = True
-        else:
-            # Manual implementation of scaled dot-product attention
-            self.scale = d_model ** -0.5
-            self.dropout = nn.Dropout(attention_dropout)
-            self._use_builtin_attention = False
+        self.dropout = nn.Dropout(attention_dropout)
 
         self.query_projection = nn.Linear(d_model, d_model)
         self.key_projection = nn.Linear(d_model, d_model)
         self.value_projection = nn.Linear(d_model, d_model)
         self.out_projection = nn.Linear(d_model, d_model)
-
-    def _sample_q(self, Q: torch.Tensor, factor: int) -> torch.Tensor:
-        """Sample queries based on sparsity measure."""
-        B, L, H, E = Q.shape
-        index = torch.randint(0, L, (factor * math.log(max(L, 2)),), device=Q.device)
-        return Q[:, index, :, :]
 
     def forward(
         self,
@@ -87,39 +70,23 @@ class ProbAttention(nn.Module):
         K = self.key_projection(keys).view(B, S, H, -1)
         V = self.value_projection(values).view(B, S, H, -1)
 
-        Q_sample = self._sample_q(Q, self.factor)
+        # Transpose for attention: (B, H, L, E)
+        Q_t = Q.transpose(1, 2)
+        K_t = K.transpose(1, 2)
+        V_t = V.transpose(1, 2)
 
-        # FIX: Use manual attention if builtin is not available
-        if self._use_builtin_attention:
-            out, attn = self.inner_attention(
-                Q_sample, K, V,
-                attn_mask=attn_mask if attn_mask is not None else None,
-            )
-        else:
-            # Manual scaled dot-product attention implementation
-            # Q: (B, L_q, H, E), K: (B, L_k, H, E), V: (B, L_k, H, E)
-            # Transpose for attention: (B, H, L, E)
-            Q_t = Q_sample.transpose(1, 2)  # (B, H, L_q, E)
-            K_t = K.transpose(1, 2)  # (B, H, L_k, E)
-            V_t = V.transpose(1, 2)  # (B, H, L_k, E)
-            
-            # Scaled attention scores
-            attn_scores = torch.matmul(Q_t, K_t.transpose(-2, -1)) * self.scale  # (B, H, L_q, L_k)
-            
-            # Apply mask if provided
-            if attn_mask is not None:
-                attn_scores = attn_scores.masked_fill(attn_mask == 0, -1e9)
-            
-            # Softmax and dropout
-            attn_probs = self.dropout(torch.softmax(attn_scores, dim=-1))
-            
-            # Apply attention to values
-            out = torch.matmul(attn_probs, V_t)  # (B, H, L_q, E)
-            out = out.transpose(1, 2).contiguous()  # (B, L_q, H, E)
-            attn = attn_probs  # For visualization/debugging
+        # Scaled dot-product attention
+        scale = float(Q.shape[-1]) ** -0.5
+        attn_scores = torch.matmul(Q_t, K_t.transpose(-2, -1)) * scale
 
-        out = out.view(B, L, -1)
-        return self.out_projection(out), attn
+        if attn_mask is not None:
+            attn_scores = attn_scores.masked_fill(attn_mask == 0, -1e9)
+
+        attn_probs = self.dropout(torch.softmax(attn_scores, dim=-1))
+        out = torch.matmul(attn_probs, V_t)        # (B, H, L, E)
+        out = out.transpose(1, 2).contiguous()      # (B, L, H, E)
+        out = out.view(B, L, -1)                    # (B, L, d_model)
+        return self.out_projection(out), attn_probs
 
 
 class InformerEncoderLayer(nn.Module):
@@ -296,36 +263,48 @@ class VariableSelectionNetwork(nn.Module):
         self,
         d_model: int,
         num_vars: int,
+        input_dim: int | None = None,
         dropout: float = 0.1,
     ) -> None:
         super().__init__()
         self.num_vars = num_vars
+        self.d_model = d_model
+        in_dim = input_dim if input_dim is not None else d_model
 
+        # Project each variable from input_dim to d_model
+        self.input_projections = nn.ModuleList([
+            nn.Linear(in_dim, d_model) for _ in range(num_vars)
+        ])
         self.joint_grn = GatedResidualNetwork(d_model, dropout)
         self.var_grns = nn.ModuleList([
             GatedResidualNetwork(d_model, dropout)
             for _ in range(num_vars)
         ])
+        self.weight_linear = nn.Linear(d_model * num_vars, num_vars)
         self.softmax = nn.Softmax(dim=-1)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # x: (B, L, V, D_in)
         B, L, V, D = x.shape
 
-        x_flat = x.reshape(B * L * V, D)
-        weights = torch.stack([
-            self.joint_grn(x_flat[:, i * D:(i + 1) * D])
+        # Project each variable to d_model
+        proj_vars = torch.stack([
+            self.input_projections[i](x[:, :, i, :])  # (B, L, d_model)
             for i in range(V)
-        ], dim=1)
-        weights = self.softmax(weights)
+        ], dim=2)  # (B, L, V, d_model)
 
-        vars_processed = torch.stack([
-            grn(x[:, :, i, :])
-            for i, grn in enumerate(self.var_grns)
-        ], dim=2)
-
+        # Variable selection weights from concatenated projections
+        flat = proj_vars.reshape(B * L, V * self.d_model)
+        weights = self.softmax(self.weight_linear(flat))  # (B*L, V)
         weights = weights.view(B, L, V, 1)
-        output = (vars_processed * weights).sum(dim=2)
 
+        # Apply per-variable GRNs
+        vars_processed = torch.stack([
+            grn(proj_vars[:, :, i, :])   # (B, L, d_model)
+            for i, grn in enumerate(self.var_grns)
+        ], dim=2)  # (B, L, V, d_model)
+
+        output = (vars_processed * weights).sum(dim=2)  # (B, L, d_model)
         return output
 
 
@@ -361,7 +340,10 @@ class TemporalFusionTransformer(nn.Module):
         self.static_encoder = nn.Linear(num_static_vars, d_model)
         self.static_grn = GatedResidualNetwork(d_model, dropout)
 
-        self.known_var_selector = VariableSelectionNetwork(d_model, num_known_vars)
+        # VSN treats all input features as a single variable; input_dim=input_size
+        self.known_var_selector = VariableSelectionNetwork(
+            d_model, num_vars=1, input_dim=input_size, dropout=dropout
+        )
 
         self.lstm = nn.LSTM(
             d_model, d_model,
@@ -369,11 +351,12 @@ class TemporalFusionTransformer(nn.Module):
         )
         self.glu = nn.GLU()
 
-        self.forecast_head = nn.Linear(d_model, len(self.quantiles) * pred_len)
+        glu_out_dim = d_model // 2  # GLU halves the last dimension
+        self.forecast_head = nn.Linear(glu_out_dim, len(self.quantiles) * pred_len)
         self.classification_head = nn.Sequential(
-            nn.Linear(d_model, d_model // 2),
+            nn.Linear(glu_out_dim, glu_out_dim // 2),
             nn.GELU(),
-            nn.Linear(d_model // 2, num_classes),
+            nn.Linear(glu_out_dim // 2, num_classes),
         )
 
     def forward(
@@ -449,6 +432,7 @@ class NBEATSBlock(nn.Module):
             self.basis = nn.Linear(num_basis, output_size)
 
         self.theta = nn.Linear(layer_size, num_basis)
+        self.backcast_linear = nn.Linear(layer_size, output_size)
 
     def _trend_basis(self, size: int, num_basis: int) -> torch.Tensor:
         time = torch.linspace(-1, 1, size)
@@ -473,7 +457,7 @@ class NBEATSBlock(nn.Module):
         else:
             forecast = self.basis(coeffs)
 
-        backcast = nn.Linear(features.shape[1], self.output_size)(features)
+        backcast = self.backcast_linear(features)
 
         return forecast, backcast
 
@@ -500,6 +484,7 @@ class NBEATS(nn.Module):
         super().__init__()
         self.seq_len = seq_len
         self.pred_len = pred_len
+        self.input_size = input_size
         total_len = seq_len + pred_len
 
         self.trend_stack = self._make_stack("trend", num_blocks=3, total_len=total_len)
@@ -515,7 +500,7 @@ class NBEATS(nn.Module):
     def _make_stack(self, block_type: str, num_blocks: int, total_len: int) -> nn.ModuleList:
         return nn.ModuleList([
             NBEATSBlock(
-                input_size=self.seq_len * 58 if i == 0 else total_len,
+                input_size=self.seq_len * self.input_size if i == 0 else total_len,
                 output_size=total_len,
                 block_type=block_type,
             )
@@ -524,32 +509,29 @@ class NBEATS(nn.Module):
 
     def forward(self, x: torch.Tensor) -> dict[str, torch.Tensor]:
         B, L, D = x.shape
-        x_flat = x.reshape(B, -1)
+        flat_size = L * D  # = seq_len * input_size
+        x_flat = x.reshape(B, flat_size)
 
-        trend_forecast = torch.zeros(B, self.pred_len, device=x.device)
-        trend_backcast = x_flat
-        for block in self.trend_stack:
-            forecast, backcast = block(trend_backcast)
-            trend_forecast = trend_forecast + forecast[:, -self.pred_len:]
-            trend_backcast = trend_backcast - backcast[:, :self.seq_len]
+        # Each stack: first block gets full flat input, subsequent blocks get total_len residual
+        def _run_stack(stack: nn.ModuleList, initial: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+            forecast_acc = torch.zeros(B, self.pred_len, device=x.device)
+            # First block: input is flat (B, flat_size), backcast is (B, total_len)
+            f, bc = stack[0](initial)
+            forecast_acc = forecast_acc + f[:, -self.pred_len:]
+            # Residual in total_len space: take first seq_len elements of backcast
+            residual = bc[:, :self.seq_len + self.pred_len]  # (B, total_len)
+            for block in list(stack)[1:]:
+                f, bc = block(residual)
+                forecast_acc = forecast_acc + f[:, -self.pred_len:]
+                residual = residual - bc
+            return forecast_acc, residual
 
-        seasonality_forecast = torch.zeros(B, self.pred_len, device=x.device)
-        seasonality_backcast = trend_backcast
-        for block in self.seasonality_stack:
-            forecast, backcast = block(seasonality_backcast)
-            seasonality_forecast = seasonality_forecast + forecast[:, -self.pred_len:]
-            seasonality_backcast = seasonality_backcast - backcast[:, :self.seq_len]
-
-        generic_forecast = torch.zeros(B, self.pred_len, device=x.device)
-        generic_backcast = seasonality_backcast
-        for block in self.generic_stack:
-            forecast, backcast = block(generic_backcast)
-            generic_forecast = generic_forecast + forecast[:, -self.pred_len:]
+        trend_forecast, trend_residual = _run_stack(self.trend_stack, x_flat)
+        seasonality_forecast, seasonality_residual = _run_stack(self.seasonality_stack, x_flat)
+        generic_forecast, _ = _run_stack(self.generic_stack, x_flat)
 
         total_forecast = trend_forecast + seasonality_forecast + generic_forecast
-
-        pooled = x.reshape(B, -1)
-        logits = self.classifier(pooled)
+        logits = self.classifier(x_flat)
 
         return {
             "forecast": total_forecast,

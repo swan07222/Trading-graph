@@ -228,14 +228,19 @@ class EnsembleModel:
             num_classes = num_classes or CONFIG.model.num_classes
 
             # Modern models use d_model instead of hidden_size
-            model = cls_map[name](
+            import inspect
+            sig = inspect.signature(cls_map[name].__init__)
+            params = sig.parameters
+            kwargs: dict = dict(
                 input_size=self.input_size,
                 d_model=d_model,
                 num_classes=num_classes,
-                dropout=dropout,
                 pred_len=self.prediction_horizon,
-                seq_len=60,  # Default sequence length
+                seq_len=60,
             )
+            if "dropout" in params:
+                kwargs["dropout"] = dropout
+            model = cls_map[name](**kwargs)
             model.to(self.device)
             self.models[name] = model
             self.weights[name] = 1.0
