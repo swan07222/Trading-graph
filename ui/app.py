@@ -646,9 +646,9 @@ class MainApp(MainAppCommonMixin, QMainWindow):
         self.market_timer.timeout.connect(self._update_market_status)
         self.market_timer.start(60000)
 
-        self.portfolio_timer = QTimer()
-        self.portfolio_timer.timeout.connect(self._refresh_portfolio)
-        self.portfolio_timer.start(5000)
+        self.sentiment_timer = QTimer()
+        self.sentiment_timer.timeout.connect(self._refresh_sentiment)
+        self.sentiment_timer.start(30000)  # Refresh sentiment every 30 seconds
 
         self.watchlist_timer = QTimer()
         self.watchlist_timer.timeout.connect(self._update_watchlist)
@@ -1047,7 +1047,7 @@ class MainApp(MainAppCommonMixin, QMainWindow):
 
     def _refresh_all(self) -> None:
         self._update_watchlist()
-        self._refresh_portfolio()
+        self._refresh_sentiment()
         self.log("Refreshed all data", "info")
 
     # =========================================================================
@@ -1140,21 +1140,77 @@ class MainApp(MainAppCommonMixin, QMainWindow):
         _ = (order, reason)
         self.log("Order updates are disabled in this build.", "info")
 
-    def _refresh_portfolio(self) -> None:
+    def _refresh_sentiment(self) -> None:
+        """Refresh sentiment analysis display."""
         try:
-            self.account_labels["equity"].setText("CNY 0.00")
-            self.account_labels["cash"].setText("CNY 0.00")
-            self.account_labels["positions"].setText("CNY 0.00")
-            self.account_labels["pnl"].setText("CNY 0.00")
-            self.account_labels["pnl"].setStyleSheet(
-                f"color: {ModernColors.TEXT_SECONDARY}; "
-                f"font-size: {ModernFonts.SIZE_XL}px; "
+            from data.news_collector import get_collector
+            from data.sentiment_analyzer import get_analyzer
+
+            collector = get_collector()
+            analyzer = get_analyzer()
+
+            # Collect recent news
+            articles = collector.collect_news(limit=50, hours_back=24)
+
+            if not articles:
+                # No articles - show zeros
+                self.sentiment_labels["overall"].setText("0.00")
+                self.sentiment_labels["policy"].setText("0.00")
+                self.sentiment_labels["market"].setText("0.00")
+                self.sentiment_labels["confidence"].setText("0%")
+                return
+
+            # Analyze sentiment
+            sentiment = analyzer.analyze_articles(articles, hours_back=24)
+
+            # Update labels
+            self.sentiment_labels["overall"].setText(f"{sentiment.overall:+.2f}")
+            self.sentiment_labels["policy"].setText(f"{sentiment.policy_impact:+.2f}")
+            self.sentiment_labels["market"].setText(f"{sentiment.market_sentiment:+.2f}")
+            self.sentiment_labels["confidence"].setText(f"{sentiment.confidence:.0%}")
+
+            # Color code based on sentiment
+            if sentiment.overall > 0.3:
+                color = ModernColors.ACCENT_SUCCESS  # Green
+            elif sentiment.overall < -0.3:
+                color = ModernColors.ACCENT_DANGER  # Red
+            else:
+                color = ModernColors.TEXT_PRIMARY  # Neutral
+
+            self.sentiment_labels["overall"].setStyleSheet(
+                f"color: {color}; "
+                f"font-size: {ModernFonts.SIZE_XXL}px; "
                 f"font-weight: {ModernFonts.WEIGHT_BOLD};"
             )
-            if hasattr(self.positions_table, "setRowCount"):
-                self.positions_table.setRowCount(0)
+
+            # Update entities table
+            if hasattr(self, "entities_table") and self.entities_table:
+                entities = analyzer.extract_entities(articles)
+                self.entities_table.setRowCount(0)
+                for entity in sorted(entities, key=lambda x: x.mention_count, reverse=True)[:10]:
+                    row = self.entities_table.rowCount()
+                    self.entities_table.insertRow(row)
+                    self.entities_table.setItem(
+                        row, 0, self._make_item(entity.entity)
+                    )
+                    self.entities_table.setItem(
+                        row, 1, self._make_item(entity.entity_type)
+                    )
+                    self.entities_table.setItem(
+                        row, 2, self._make_item(f"{entity.sentiment:+.2f}")
+                    )
+                    self.entities_table.setItem(
+                        row, 3, self._make_item(str(entity.mention_count))
+                    )
+
         except _UI_RECOVERABLE_EXCEPTIONS as exc:
-            log.debug("Portfolio refresh fallback failed", exc_info=exc)
+            log.debug("Sentiment refresh failed", exc_info=exc)
+            # Fallback - show zeros
+            if hasattr(self, "sentiment_labels"):
+                self.sentiment_labels["overall"].setText("N/A")
+                self.sentiment_labels["policy"].setText("N/A")
+                self.sentiment_labels["market"].setText("N/A")
+                self.sentiment_labels["confidence"].setText("N/A")
 
     # =========================================================================
     # =========================================================================

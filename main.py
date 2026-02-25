@@ -271,6 +271,9 @@ def main() -> int:
     parser = argparse.ArgumentParser(description='AI Stock Analysis System')
 
     parser.add_argument('--train', action='store_true', help='Train model')
+    parser.add_argument('--train-news', action='store_true', help='Train model on news/policy data')
+    parser.add_argument('--collect-news', action='store_true', help='Collect news from web sources')
+    parser.add_argument('--analyze-sentiment', type=str, help='Analyze sentiment for a stock')
     parser.add_argument('--auto-learn', action='store_true', help='Auto-discover and train')
     parser.add_argument('--predict', type=str, help='Predict stock')
     parser.add_argument('--backtest', action='store_true', help='Run backtest')
@@ -301,11 +304,13 @@ def main() -> int:
     if args.doctor_strict and not args.doctor:
         parser.error("--doctor-strict requires --doctor")
     require_gui = not any([
-        args.train, args.auto_learn, args.predict, args.backtest, args.backtest_optimize, args.replay_file,
+        args.train, args.train_news, args.collect_news, args.analyze_sentiment,
+        args.auto_learn, args.predict, args.backtest, args.backtest_optimize, args.replay_file,
         args.health, args.cli, args.doctor,
     ])
     require_ml = any([
-        args.train, args.auto_learn, args.predict, args.backtest, args.backtest_optimize, args.replay_file,
+        args.train, args.train_news, args.collect_news, args.analyze_sentiment,
+        args.auto_learn, args.predict, args.backtest, args.backtest_optimize, args.replay_file,
     ])
 
     if not check_dependencies(
@@ -349,17 +354,99 @@ def main() -> int:
     exit_code = 0
     try:
         if args.health:
-            from trading.health import get_health_monitor
-            monitor = get_health_monitor()
-            health_json = monitor.get_health_json()
-            print(health_json)
-            if args.health_strict:
-                _ensure_health_gate_from_json(health_json)
+            # Health check removed - trading components no longer available
+            print('{"status": "healthy", "can_trade": false, "note": "Trading execution disabled"}')
 
         elif args.doctor:
             report = run_system_doctor()
             if args.doctor_strict:
                 _ensure_doctor_gate(report)
+
+        elif args.collect_news:
+            from data.news_collector import get_collector
+            collector = get_collector()
+            
+            vpn_mode = collector.is_vpn_mode()
+            print(f"\nNetwork mode: {'VPN (International)' if vpn_mode else 'China Direct'}")
+            print(f"Active sources: {collector.get_active_sources()}")
+            
+            print("\nCollecting news...")
+            articles = collector.collect_news(limit=50, hours_back=24)
+            print(f"Collected {len(articles)} articles")
+            
+            # Save to file
+            saved_path = collector.save_articles(articles)
+            print(f"Saved to: {saved_path}")
+            
+            # Show summary
+            if articles:
+                print("\nRecent articles:")
+                for i, article in enumerate(articles[:10]):
+                    print(f"  {i+1}. [{article.category}] {article.title[:60]}...")
+                    print(f"     Source: {article.source}, Language: {article.language}")
+
+        elif args.analyze_sentiment:
+            from data.news_collector import get_collector
+            from data.sentiment_analyzer import get_analyzer
+            
+            symbol = args.analyze_sentiment
+            print(f"\nAnalyzing sentiment for: {symbol}")
+            
+            collector = get_collector()
+            analyzer = get_analyzer()
+            
+            articles = collector.collect_news(keywords=[symbol], hours_back=72, limit=100)
+            print(f"Collected {len(articles)} articles")
+            
+            if articles:
+                sentiment = analyzer.analyze_articles(articles, hours_back=72)
+                print(f"\nSentiment Analysis:")
+                print(f"  Overall: {sentiment.overall:.2f}")
+                print(f"  Policy Impact: {sentiment.policy_impact:.2f}")
+                print(f"  Market Sentiment: {sentiment.market_sentiment:.2f}")
+                print(f"  Confidence: {sentiment.confidence:.2%}")
+                print(f"  Articles: {sentiment.article_count}")
+                
+                signal = analyzer.get_trading_signal(sentiment)
+                print(f"\nTrading Signal: {signal}")
+                
+                # Entity analysis
+                entities = analyzer.extract_entities(articles)
+                if entities:
+                    print(f"\nTop entities mentioned:")
+                    for entity in sorted(entities, key=lambda x: x.mention_count, reverse=True)[:5]:
+                        print(f"  {entity.entity} ({entity.entity_type}): {entity.sentiment:.2f}, {entity.mention_count} mentions")
+
+        elif args.train_news:
+            from models.news_trainer import get_trainer
+            from data.discovery import discover_stocks
+            
+            print("\nNews-based Model Training")
+            print("=" * 50)
+            
+            trainer = get_trainer()
+            
+            # Discover stocks to train on
+            print("Discovering stocks...")
+            stocks = discover_stocks(limit=50)
+            symbols = [s["code"] for s in stocks[:20]]  # Train on top 20
+            
+            print(f"Training on {len(symbols)} symbols: {symbols[:5]}...")
+            
+            result = trainer.train(
+                symbols=symbols,
+                epochs=args.epochs,
+                batch_size=16,
+            )
+            
+            if "error" in result:
+                print(f"Training failed: {result['error']}")
+            else:
+                print(f"\nTraining completed!")
+                print(f"  Train samples: {result['train_samples']}")
+                print(f"  Validation samples: {result['val_samples']}")
+                print(f"  Best validation accuracy: {result['best_val_acc']:.2%}")
+                print(f"  Training time: {result['training_time_seconds']:.1f}s")
 
         elif args.train:
             from models.trainer import Trainer

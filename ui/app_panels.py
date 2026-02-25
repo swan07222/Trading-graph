@@ -144,7 +144,7 @@ def _create_left_panel(self: Any) -> QWidget:
 
 
 def _create_right_panel(self: Any) -> QWidget:
-    """Create right panel with portfolio, news, and logs."""
+    """Create right panel with sentiment, news, and logs."""
     panel = QWidget()
     panel.setObjectName("rightPanel")
     layout = QVBoxLayout(panel)
@@ -155,19 +155,21 @@ def _create_right_panel(self: Any) -> QWidget:
     self.right_tabs.setDocumentMode(True)
     tabs = self.right_tabs
 
-    portfolio_tab = QWidget()
-    portfolio_layout = QVBoxLayout(portfolio_tab)
-    portfolio_layout.setSpacing(10)
-    portfolio_layout.setContentsMargins(8, 8, 8, 8)
+    # Sentiment Analysis Tab (replaces Portfolio)
+    sentiment_tab = QWidget()
+    sentiment_layout = QVBoxLayout(sentiment_tab)
+    sentiment_layout.setSpacing(10)
+    sentiment_layout.setContentsMargins(8, 8, 8, 8)
 
-    self.account_labels = {}
+    # Sentiment summary labels
+    self.sentiment_labels = {}
     labels = [
-        ('equity', 'Total Equity', 0, 0),
-        ('cash', 'Available Cash', 0, 1),
-        ('positions', 'Positions Value', 1, 0),
-        ('pnl', 'Total P&L', 1, 1),
+        ('overall', 'Overall Sentiment', 0, 0),
+        ('policy', 'Policy Impact', 0, 1),
+        ('market', 'Market Sentiment', 1, 0),
+        ('confidence', 'Confidence', 1, 1),
     ]
-    account_frame, self.account_labels = self._build_stat_frame(
+    sentiment_frame, self.sentiment_labels = self._build_stat_frame(
         labels,
         (
             f"color: {ModernColors.ACCENT_INFO}; "
@@ -176,20 +178,27 @@ def _create_right_panel(self: Any) -> QWidget:
         ),
         15,
     )
+    sentiment_layout.addWidget(sentiment_frame)
 
-    portfolio_layout.addWidget(account_frame)
+    # Sentiment chart placeholder
+    self.sentiment_chart_label = QLabel("Sentiment Trend (Last 7 Days)")
+    self.sentiment_chart_label.setObjectName("metaLabel")
+    sentiment_layout.addWidget(self.sentiment_chart_label)
 
-    try:
-        from .widgets import PositionTable
-        self.positions_table = PositionTable()
-    except ImportError:
-        self.positions_table = self._make_table(
-            ["Code", "Qty", "Price", "Value", "P&L"]
-        )
-    portfolio_layout.addWidget(self.positions_table)
+    # Entity mentions table
+    self.entities_table = self._make_table(
+        ["Entity", "Type", "Sentiment", "Mentions"]
+    )
+    sentiment_layout.addWidget(self.entities_table)
 
-    tabs.addTab(portfolio_tab, "Portfolio")
+    # Refresh button
+    refresh_btn = QPushButton("Refresh Sentiment")
+    refresh_btn.clicked.connect(self._refresh_sentiment)
+    sentiment_layout.addWidget(refresh_btn)
 
+    tabs.addTab(sentiment_tab, "Sentiment Analysis")
+
+    # News and Policy Tab
     news_tab = QWidget()
     news_layout = QVBoxLayout(news_tab)
     news_layout.setContentsMargins(8, 8, 8, 8)
@@ -203,6 +212,7 @@ def _create_right_panel(self: Any) -> QWidget:
         news_layout.addWidget(self.news_panel)
     tabs.addTab(news_tab, "News and Policy")
 
+    # Live Signals Tab
     signals_tab = QWidget()
     signals_layout = QVBoxLayout(signals_tab)
     signals_layout.setContentsMargins(8, 8, 8, 8)
@@ -212,6 +222,7 @@ def _create_right_panel(self: Any) -> QWidget:
     signals_layout.addWidget(self.signals_table)
     tabs.addTab(signals_tab, "Live Signals")
 
+    # History Tab
     history_tab = QWidget()
     history_layout = QVBoxLayout(history_tab)
     history_layout.setContentsMargins(8, 8, 8, 8)
@@ -223,6 +234,7 @@ def _create_right_panel(self: Any) -> QWidget:
 
     layout.addWidget(tabs, 4)
 
+    # Log Group
     log_group = QGroupBox("System Log")
     log_group.setObjectName("systemLogGroup")
     log_layout = QVBoxLayout()

@@ -172,7 +172,7 @@ def _close_event(self: Any, event: Any) -> None:
     for timer_name in (
         "clock_timer",
         "market_timer",
-        "portfolio_timer",
+        "sentiment_timer",
         "watchlist_timer",
         "auto_trade_timer",
         "chart_live_timer",

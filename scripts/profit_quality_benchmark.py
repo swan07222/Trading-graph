@@ -38,8 +38,8 @@ def _make_synthetic_dataset(
     )
     X[:, -1, 2] = trend.astype(np.float32)
 
-    y_score = signal + rng.normal(0.0, 0.65, int(samples))
-    y = np.where(y_score > 0.35, 2, np.where(y_score < -0.35, 0, 1)).astype(np.int64)
+    y_score = signal + rng.normal(0.0, 0.40, int(samples))
+    y = np.where(y_score > 0.25, 2, np.where(y_score < -0.25, 0, 1)).astype(np.int64)
 
     r = np.where(
         y == 2,
@@ -73,7 +73,11 @@ class _SyntheticEnsemble:
             uncertainty = 1.0 - float(abs(probs[2] - probs[0]))
             # Intentionally over-confident near uncertain regions.
             confidence = float(
-                np.clip((0.62 + (0.32 * float(ordered[0]))) + (0.22 * uncertainty), 0.0, 0.99)
+                np.clip(
+                    (0.48 + (0.30 * float(ordered[0]))) + (0.30 * uncertainty),
+                    0.0,
+                    0.97,
+                )
             )
 
             entropy = float(

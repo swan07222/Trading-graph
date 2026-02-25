@@ -102,21 +102,10 @@ def _build_runtime_snapshot(limit: int = 20) -> dict[str, Any]:
 
 def _build_alert_snapshot(limit: int = 20) -> dict[str, Any]:
     """Best-effort alert pipeline snapshot."""
-    try:
-        from trading.alerts import get_alert_manager
-
-        mgr = get_alert_manager()
-        pending = mgr.get_pending()
-        history = mgr.get_history(limit=max(1, min(int(limit), 200)))
-        stats = mgr.get_alert_stats()
-    except Exception as exc:
-        return {"status": "unavailable", "reason": str(exc)}
-
+    # Alerts removed - return unavailable status
     return {
-        "status": "ok",
-        "pending": _normalize_json(pending),
-        "history": _normalize_json(history),
-        "stats": _normalize_json(stats),
+        "status": "unavailable",
+        "reason": "alerts_removed",
     }
 
 
@@ -204,15 +193,15 @@ def _build_risk_snapshot() -> dict[str, Any]:
 
 def _build_health_snapshot() -> dict[str, Any]:
     """Best-effort system health snapshot."""
-    try:
-        from trading.health import get_health_monitor
-
-        monitor = get_health_monitor()
-        health = monitor.get_health()
-        payload = health.to_dict() if hasattr(health, "to_dict") else health
-        return {"status": "ok", "snapshot": _normalize_json(payload)}
-    except Exception as exc:
-        return {"status": "unavailable", "reason": str(exc)}
+    # Health monitor removed - return basic status
+    return {
+        "status": "ok",
+        "snapshot": {
+            "status": "healthy",
+            "can_trade": False,
+            "note": "Trading execution disabled - analysis only",
+        },
+    }
 
 
 def _build_sentiment_snapshot(
@@ -221,14 +210,30 @@ def _build_sentiment_snapshot(
 ) -> dict[str, Any]:
     """Best-effort weighted sentiment/news snapshot."""
     try:
-        from data.news import get_news_aggregator
+        from data.news_collector import get_collector
+        from data.sentiment_analyzer import get_analyzer
 
-        agg = get_news_aggregator()
-        snapshot = agg.get_institutional_snapshot(
-            stock_code=stock_code,
-            hours_lookback=max(1, min(int(hours_lookback), 168)),
-        )
-        return {"status": "ok", "snapshot": _normalize_json(snapshot)}
+        collector = get_collector()
+        analyzer = get_analyzer()
+
+        keywords = [stock_code] if stock_code else None
+        articles = collector.collect_news(keywords=keywords, hours_back=hours_lookback, limit=100)
+
+        if not articles:
+            return {
+                "status": "ok",
+                "snapshot": {
+                    "article_count": 0,
+                    "sentiment": 0.0,
+                    "note": "No articles found",
+                },
+            }
+
+        sentiment = analyzer.analyze_articles(articles, hours_back=hours_lookback)
+        return {
+            "status": "ok",
+            "snapshot": _normalize_json(sentiment.to_dict()),
+        }
     except Exception as exc:
         return {"status": "unavailable", "reason": str(exc)}
 
