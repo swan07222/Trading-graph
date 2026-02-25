@@ -20,9 +20,10 @@ log = get_logger(__name__)
 # This prevents tampering with the state file
 def _compute_state_hmac(state_json: str) -> str:
     """Compute HMAC-SHA256 for state integrity verification.
-    
+
     FIX #34: Use SHA-256 digest of key material for proper 32-byte key
     instead of using hex string directly which reduces entropy.
+    FIX #2026-02-24: Use HKDF for key derivation for stronger security.
     """
     # Use a derived key from the secure storage key for HMAC
     try:
@@ -35,10 +36,25 @@ def _compute_state_hmac(state_json: str) -> str:
             import secrets
             key_material = secrets.token_hex(32)
             storage.set("_hmac_key", key_material)
+
+        # FIX #2026-02-24: Use HKDF for stronger key derivation
+        try:
+            from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+            from cryptography.hazmat.primitives import hashes
+            
+            hkdf = HKDF(
+                algorithm=hashes.SHA256(),
+                length=32,
+                salt=None,
+                info=b"kill_switch_hmac_key_derivation"
+            )
+            key = hkdf.derive(key_material.encode('utf-8'))
+        except ImportError:
+            # Fallback to SHA-256 if cryptography not available
+            # FIX #34: Derive proper 32-byte key from key material using SHA-256
+            # This ensures full entropy and correct key length for HMAC-SHA256
+            key = hashlib.sha256(key_material.encode('utf-8')).digest()
         
-        # FIX #34: Derive proper 32-byte key from key material using SHA-256
-        # This ensures full entropy and correct key length for HMAC-SHA256
-        key = hashlib.sha256(key_material.encode('utf-8')).digest()
         return hmac.new(key, state_json.encode('utf-8'), hashlib.sha256).hexdigest()
     except Exception as e:
         # Fallback: use a simple hash (less secure but better than nothing)

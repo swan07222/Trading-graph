@@ -191,8 +191,10 @@ def atomic_write_bytes(
 
     lock = _get_dir_lock(path) if use_lock else None
 
+    lock_acquired = False
     if lock:
         lock.acquire()
+        lock_acquired = True
     try:
         try:
             with open(tmp, "wb") as f:
@@ -203,7 +205,7 @@ def atomic_write_bytes(
             _cleanup_tmp(tmp)
             raise
     finally:
-        if lock:
+        if lock_acquired:
             lock.release()
 
 def atomic_write_text(
@@ -307,8 +309,10 @@ def atomic_torch_save(
     lock = _get_dir_lock(path) if use_lock else None
 
     saved = False
+    lock_acquired = False
     if lock:
         lock.acquire()
+        lock_acquired = True
     try:
         try:
             with open(tmp, "wb") as f:
@@ -320,7 +324,7 @@ def atomic_torch_save(
             _cleanup_tmp(tmp)
             raise
     finally:
-        if lock:
+        if lock_acquired:
             lock.release()
 
     # Write checksum after releasing the directory lock. Otherwise this path

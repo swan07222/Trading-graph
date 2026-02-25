@@ -695,7 +695,9 @@ class SinaNewsFetcher(_BaseNewsFetcher):
                 return []
 
             items: list[NewsItem] = []
-            for article in data.get("result", {}).get("data", []):
+            # FIX: Handle case where result is None instead of {}
+            result = data.get("result") or {}
+            for article in result.get("data", []):
                 if not isinstance(article, dict):
                     continue
 

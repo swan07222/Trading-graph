@@ -492,7 +492,9 @@ class MultiSourceValidator:
             # Collect recent prices from other sources
             cutoff = datetime.now() - timedelta(seconds=60)
             other_prices = []
-            for src, (ts, p) in sources.items():
+            # FIX: Create snapshot to prevent "dictionary changed size during iteration"
+            sources_snapshot = dict(sources)
+            for src, (ts, p) in sources_snapshot.items():
                 if src != source and ts > cutoff and p > 0:
                     other_prices.append((src, p))
 

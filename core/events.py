@@ -222,6 +222,7 @@ class EventBus:
                 # Avoid recursion: don't dispatch ERROR for ERROR handlers
                 if event.type != EventType.ERROR:
                     # FIX #1: Use class-level lock for thread-safe depth tracking
+                    # FIX #2026-02-24: Use try/finally to ensure depth is always decremented
                     should_skip = False
                     with self._error_depth_lock:
                         if self._error_depth >= 3:

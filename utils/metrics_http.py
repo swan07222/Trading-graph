@@ -425,7 +425,9 @@ class MetricsHandler(BaseHTTPRequestHandler):
         if from_header and from_header == expected:
             return True
 
-        from_query = (query.get("api_key", [""])[0] or "").strip()
+        # FIX: Handle case where query.get returns empty list
+        api_key_list = query.get("api_key", [""])
+        from_query = (api_key_list[0] if api_key_list else "" or "").strip()
         return bool(from_query and from_query == expected)
 
     def _send_text(
@@ -534,7 +536,9 @@ class MetricsHandler(BaseHTTPRequestHandler):
         if path == "/api/v1/dashboard/full":
             limit = _parse_int_query(query, key="limit", default=20, minimum=1, maximum=200)
             hours = _parse_int_query(query, key="hours", default=24, minimum=1, maximum=168)
-            dashboard_symbol: str | None = (query.get("symbol", [""])[0] or "").strip()
+            # FIX: Handle case where query.get returns empty list
+            symbol_list = query.get("symbol", [""])
+            dashboard_symbol: str | None = (symbol_list[0] if symbol_list else "" or "").strip()
             if not dashboard_symbol:
                 dashboard_symbol = None
             self._send_json(
@@ -616,7 +620,9 @@ class MetricsHandler(BaseHTTPRequestHandler):
 
         if path == "/api/v1/sentiment":
             hours = _parse_int_query(query, key="hours", default=24, minimum=1, maximum=168)
-            sentiment_symbol: str | None = (query.get("symbol", [""])[0] or "").strip()
+            # FIX: Handle case where query.get returns empty list
+            symbol_list = query.get("symbol", [""])
+            sentiment_symbol: str | None = (symbol_list[0] if symbol_list else "" or "").strip()
             if not sentiment_symbol:
                 sentiment_symbol = None
             self._send_json(

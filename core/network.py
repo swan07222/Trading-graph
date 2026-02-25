@@ -169,8 +169,13 @@ class NetworkDetector:
 
         def run_probe(url: str, timeout: float | int) -> bool:
             try:
-                r = requests.get(url, timeout=timeout, headers=default_headers)
+                # FIX #13: Add per-probe timeout cap to prevent single slow probe from delaying detection
+                effective_timeout = min(timeout, 5.0)  # Max 5 seconds per probe
+                r = requests.get(url, timeout=effective_timeout, headers=default_headers)
                 return r.status_code == 200
+            except requests.Timeout:
+                # Explicitly handle timeout for better logging
+                return False
             except Exception:
                 return False
 

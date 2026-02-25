@@ -61,6 +61,11 @@ def safe_dataclass_from_dict(dc_instance: Any, data: dict[str, Any]) -> list[str
     dc_fields = {f.name: f for f in fields(dc_instance)}
 
     for key, value in data.items():
+        # FIX: Block unsafe attribute names to prevent attribute injection
+        if key.startswith('_') or key in ('__class__', '__dict__', '__weakref__', '__init__', '__new__'):
+            warnings_list.append(f"Blocked unsafe attribute: {key}")
+            continue
+        
         if key not in dc_fields:
             warnings_list.append(f"Unknown field '{key}' - ignored")
             continue

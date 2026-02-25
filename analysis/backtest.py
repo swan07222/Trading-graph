@@ -876,8 +876,16 @@ class Backtester:
 
         train_start = min_date
 
-        while True:
+        # FIX: Use proper iterator pattern with explicit bounds check
+        max_iterations = 1000  # Prevent infinite loop
+        iterations = 0
+        
+        while train_start < max_date and iterations < max_iterations:
             train_end = train_start + pd.DateOffset(months=train_months)
+            
+            if train_end >= max_date:
+                break
+                
             test_start = train_end + pd.Timedelta(days=embargo_days)
             test_end = test_start + pd.DateOffset(months=test_months)
 
@@ -886,6 +894,14 @@ class Backtester:
 
             folds.append((train_start, train_end, test_start, test_end))
             train_start = train_start + pd.DateOffset(months=test_months)
+            iterations += 1
+
+        if iterations >= max_iterations:
+            log.warning(
+                "Fold generation hit max iterations (%d). "
+                "This may indicate invalid train/test month parameters.",
+                max_iterations
+            )
 
         return folds
 

@@ -105,7 +105,7 @@ _oms_module = None
 _kill_switch_module = None
 _constants_module = None
 _feeds_module = None
-_oms_lock = threading.Lock()
+_oms_lock = threading.RLock()  # FIX: Use RLock for proper memory barriers
 _oms_cache_ts: float = 0.0
 _oms_cache_val = None
 _oms_cache_ttl: float = 5.0  # 5 second cache for OMS
@@ -115,18 +115,17 @@ def _get_oms():
 
     FIX #6: Use lock to prevent race condition where two threads
     could both see _oms_cache_val is None and both import.
+    FIX #2026-02-24: Always acquire lock for thread-safe access with
+    proper memory barriers to prevent seeing stale values.
     """
     global _oms_module, _oms_cache_ts, _oms_cache_val
     import time
 
-    # Fast path: check without lock (with memory barrier via lock acquisition)
-    now = time.time()
-    if _oms_cache_val is not None and (now - _oms_cache_ts) < _oms_cache_ttl:
-        return _oms_cache_val
-
-    # Slow path: acquire lock and re-check
+    # FIX: Always acquire lock to ensure proper memory barriers
+    # This prevents seeing _oms_cache_val as non-None before _oms_cache_ts is updated
     with _oms_lock:
-        # Double-check after acquiring lock
+        now = time.time()
+        # Single check inside lock - ensures atomic read of both values
         if _oms_cache_val is not None and (now - _oms_cache_ts) < _oms_cache_ttl:
             return _oms_cache_val
 

@@ -8,11 +8,20 @@ from __future__ import annotations
 import math
 from typing import Any
 
+# FIX: Import numpy for proper NaN/Inf handling
+try:
+    import numpy as np
+    _HAS_NUMPY = True
+except ImportError:
+    _HAS_NUMPY = False
+    np = None  # type: ignore
+
 
 def safe_float(value: Any, default: float = 0.0) -> float:
     """Safely convert a value to float with fallback.
 
     Handles None, NaN, Inf, and conversion errors gracefully.
+    FIX: Now properly handles numpy types (numpy.float64, etc.)
 
     Args:
         value: Value to convert.
@@ -25,8 +34,13 @@ def safe_float(value: Any, default: float = 0.0) -> float:
         if value is None:
             return float(default)
         result = float(value)
-        if math.isnan(result) or math.isinf(result):
-            return float(default)
+        # FIX: Use numpy isnan/isinf if available for proper numpy type handling
+        if _HAS_NUMPY:
+            if np.isnan(result) or np.isinf(result):
+                return float(default)
+        else:
+            if math.isnan(result) or math.isinf(result):
+                return float(default)
         return result
     except (TypeError, ValueError, OverflowError):
         return float(default)
