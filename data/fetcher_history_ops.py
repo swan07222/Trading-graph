@@ -89,13 +89,13 @@ def _fetch_from_sources_instrument(
         [s.name for s in sources],
     )
 
-    with self._rate_limiter:
-        errors: list[str] = []
-        iv_norm = self._normalize_interval_token(interval)
-        is_intraday = iv_norm not in {"1d", "1wk", "1mo"}
-        collected: list[dict[str, Any]] = []
+    errors: list[str] = []
+    iv_norm = self._normalize_interval_token(interval)
+    is_intraday = iv_norm not in {"1d", "1wk", "1mo"}
+    collected: list[dict[str, Any]] = []
 
-        for src_rank, source in enumerate(sources):
+    for src_rank, source in enumerate(sources):
+        with self._rate_limiter:
             try:
                 self._rate_limit(source.name, interval)
                 df = self._try_source_instrument(

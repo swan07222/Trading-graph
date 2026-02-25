@@ -7,6 +7,20 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+
+def _warmup_torch_import() -> None:
+    """Import torch once at startup to stabilize DLL load order on Windows."""
+    try:
+        import torch
+
+        _ = torch.__version__
+    except Exception:
+        # Tests that require torch will fail with explicit errors later.
+        return
+
+
+_warmup_torch_import()
+
 @pytest.fixture(autouse=True)
 def reset_cache(tmp_path):
     """Reset cache before each test."""

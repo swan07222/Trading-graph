@@ -132,10 +132,10 @@ def get_realtime_batch(self, codes: list[str]) -> dict[str, Quote]:
             s for s in retry_active if not self._is_tencent_source(s)
         ]
 
-        self._fill_from_batch_sources(cleaned, result, retry_tencent)
+        self._fill_from_batch_sources(missing, result, retry_tencent)
         missing = [c for c in cleaned if c not in result]
         if missing:
-            self._fill_from_batch_sources(cleaned, result, retry_fallback)
+            self._fill_from_batch_sources(missing, result, retry_fallback)
         missing = [c for c in cleaned if c not in result]
         if missing:
             self._fill_from_single_source_quotes(
@@ -317,6 +317,9 @@ def _fallback_last_close_from_db(
             if df is None or df.empty:
                 continue
             row = df.iloc[-1]
+            if "close" not in df.columns:
+                log.warning("DB last-close fallback: missing 'close' column for %s (columns=%s)", code6, list(df.columns))
+                continue
             px = float(row.get("close", 0.0) or 0.0)
             if px <= 0:
                 continue

@@ -4,6 +4,7 @@ import math
 import os
 import threading
 import time
+from collections import deque
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FuturesTimeout
@@ -162,14 +163,13 @@ def _run_with_timeout(
     timeout_s: float,
 ) -> object | None:
     """Run a callable with a timeout without mutating process-global socket defaults."""
-    executor = ThreadPoolExecutor(max_workers=1)
-    future = executor.submit(task)
-    try:
-        return future.result(timeout=max(0.1, float(timeout_s)))
-    except FuturesTimeout:
-        return None
-    finally:
-        executor.shutdown(wait=False, cancel_futures=True)
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(task)
+        try:
+            return future.result(timeout=max(0.1, float(timeout_s)))
+        except FuturesTimeout:
+            future.cancel()
+            return None
 
 
 def _is_offline() -> bool:
@@ -196,21 +196,24 @@ def retry(max_attempts: int = 3, delay: float = 1.0, backoff: float = 2.0):
     def decorator(func: Callable) -> Callable:
         @wraps(func)
         def wrapper(*args, **kwargs):
+            effective_attempts = max(1, int(max_attempts))
             last_error: Exception | None = None
             current_delay = delay
-            for attempt in range(max_attempts):
+            for attempt in range(effective_attempts):
                 try:
                     return func(*args, **kwargs)
                 except Exception as exc:
                     last_error = exc
-                    if attempt < max_attempts - 1:
+                    if attempt < effective_attempts - 1:
                         log.debug(
-                            f"Retry {attempt + 1}/{max_attempts} for "
+                            f"Retry {attempt + 1}/{effective_attempts} for "
                             f"{func.__name__}: {exc}"
                         )
                         time.sleep(current_delay)
                         current_delay *= backoff
-            raise last_error  # type: ignore[misc]
+            if last_error is not None:
+                raise last_error
+            raise RuntimeError(f"{func.__name__} failed with no recorded error")
         return wrapper
     return decorator
 
@@ -288,7 +291,7 @@ class DataSource:
                 "Chrome/120.0.0.0 Safari/537.36"
             )
         })
-        self._latencies: list[float] = []
+        self._latencies: deque[float] = deque(maxlen=100)
         self._lock = threading.Lock()
         self._next_half_open_probe_ts: float = 0.0
         self._last_disable_warn_ts: float = 0.0
@@ -333,9 +336,8 @@ class DataSource:
             self._next_half_open_probe_ts = 0.0
             if latency_ms > 0:
                 self._latencies.append(latency_ms)
-                if len(self._latencies) > 100:
-                    self._latencies.pop(0)
-                self.status.avg_latency_ms = float(np.mean(self._latencies))
+                if self._latencies:
+                    self.status.avg_latency_ms = float(np.mean(list(self._latencies)))
 
     def _record_error(self, error: str) -> None:
         with self._lock:
@@ -539,22 +541,30 @@ class SpotCache:
             log.debug("SpotCache lookup error for %s: %s", symbol, exc)
             return None
 
+        def _safe_float(field: str, default: float = 0.0) -> float:
+            val = to_float(self._get_field(r, field))
+            return float(val) if val is not None else default
+
+        def _safe_int(field: str, default: int = 0) -> int:
+            val = to_int(self._get_field(r, field))
+            return int(val) if val is not None else default
+
         try:
-            price = to_float(self._get_field(r, "price"))
-            if price is None or price <= 0:
+            price = _safe_float("price", 0.0)
+            if price <= 0:
                 return None
             return {
                 "code":       symbol,
                 "name":       str(self._get_field(r, "name") or ""),
                 "price":      price,
-                "open":       to_float(self._get_field(r, "open") or 0),
-                "high":       to_float(self._get_field(r, "high") or 0),
-                "low":        to_float(self._get_field(r, "low") or 0),
-                "close":      to_float(self._get_field(r, "close") or 0),
-                "volume":     to_int(self._get_field(r, "volume") or 0),
-                "amount":     to_float(self._get_field(r, "amount") or 0),
-                "change":     to_float(self._get_field(r, "change") or 0),
-                "change_pct": to_float(self._get_field(r, "change_pct") or 0),
+                "open":       _safe_float("open", 0.0),
+                "high":       _safe_float("high", 0.0),
+                "low":        _safe_float("low", 0.0),
+                "close":      _safe_float("close", 0.0),
+                "volume":     _safe_int("volume", 0),
+                "amount":     _safe_float("amount", 0.0),
+                "change":     _safe_float("change", 0.0),
+                "change_pct": _safe_float("change_pct", 0.0),
             }
         except Exception as exc:
             log.debug("SpotCache field extraction error for %s: %s", symbol, exc)
@@ -1135,7 +1145,7 @@ class SinaHistorySource(DataSource):
         if not out_rows:
             return pd.DataFrame()
         df = pd.DataFrame(out_rows).set_index("date").sort_index()
-        return df[~df.index.duplicated(keep="last")]
+        return df[~df.index.duplicated(keep="first")]
 
     @staticmethod
     def _resample_to_2m(df: pd.DataFrame) -> pd.DataFrame:
@@ -1306,6 +1316,7 @@ class YahooSource(DataSource):
                     "Yahoo returned empty for %s (%s)",
                     yahoo_symbol, interval
                 )
+                self._record_error(f"empty response for {yahoo_symbol} ({interval})")
                 return pd.DataFrame()
 
             df = self._normalize(df)
@@ -1336,7 +1347,9 @@ class YahooSource(DataSource):
             if not symbol:
                 return None
             ticker = self._yf.Ticker(symbol)
-            info = ticker.info
+            info = _run_with_timeout(lambda: ticker.info, 10.0)
+            if not isinstance(info, dict):
+                return None
             if not info or "regularMarketPrice" not in info:
                 return None
             price = float(info.get("regularMarketPrice") or 0)

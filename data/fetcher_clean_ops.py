@@ -19,7 +19,7 @@ def _to_shanghai_naive_ts(cls: Any, value: object) -> pd.Timestamp:
     try:
         if isinstance(value, (int, float, np.integer, np.floating)):
             v = float(value)
-            if not np.isfinite(v) or abs(v) < 1e9:
+            if not np.isfinite(v) or abs(v) < 8e8:  # allow timestamps from ~1995 onwards
                 return pd.NaT
             if abs(v) >= 1e11:
                 v /= 1000.0
@@ -30,7 +30,7 @@ def _to_shanghai_naive_ts(cls: Any, value: object) -> pd.Timestamp:
                 return pd.NaT
             if text.isdigit():
                 num = float(text)
-                if abs(num) < 1e9:
+                if abs(num) < 8e8:  # allow timestamps from ~1995 onwards
                     return pd.NaT
                 if abs(num) >= 1e11:
                     num /= 1000.0
@@ -85,6 +85,11 @@ def _normalize_datetime_index(
     dt = pd.DatetimeIndex(parsed)
     valid_ratio = float(dt.notna().sum()) / float(max(1, len(dt)))
     if valid_ratio < 0.80:
+        log.debug(
+            "_normalize_datetime_index: only %.1f%% of %d values parsed as datetime; returning None",
+            valid_ratio * 100,
+            len(dt),
+        )
         return None
     return dt
 
@@ -216,8 +221,14 @@ def _clean_dataframe(
         [out["low"], out["open"], out["close"]], axis=1
     ).min(axis=1)
 
-    # 7) Aggressive intraday mutation is disabled to preserve raw source truth.
-    _ = aggressive_repairs
+    # 7) Aggressive intraday repair: when enabled, forward-fill NaN OHLCV values
+    #    and clamp extreme intraday jumps to preserve candle integrity.
+    if aggressive_repairs and is_intraday:
+        for col in ("open", "high", "low", "close"):
+            if col in out.columns:
+                out[col] = out[col].ffill().bfill()
+        if "volume" in out.columns:
+            out["volume"] = out["volume"].fillna(0.0)
 
     # 8) Volume >= 0.
     if "volume" in out.columns:

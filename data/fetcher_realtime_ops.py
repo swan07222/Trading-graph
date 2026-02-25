@@ -32,10 +32,12 @@ def fill_from_spot_cache(
     cache_time = getattr(cache, "_cache_time", None)
     if isinstance(cache_time, (int, float)) and float(cache_time) > 0.0:
         try:
-            snapshot_ts = datetime.fromtimestamp(
-                float(cache_time),
-                tz=timezone.utc,
-            )
+            import time as _time
+            ct = float(cache_time)
+            # Sanity-check: reject timestamps more than 60s in the future
+            # (bogus values would cause quotes to never appear stale)
+            if ct <= (_time.time() + 60.0):
+                snapshot_ts = datetime.fromtimestamp(ct, tz=timezone.utc)
         except (OverflowError, OSError, ValueError):
             snapshot_ts = None
 
@@ -89,15 +91,33 @@ def drop_stale_quotes(
 
     kept: dict[str, Quote] = {}
     dropped: list[str] = []
+    missing_ts: list[str] = []
     for code, quote in quotes.items():
         age_s = quote_age_seconds(quote)
-        if math.isfinite(age_s) and age_s <= float(max_age_s):
+        if not math.isfinite(age_s):
+            # Infinite age means timestamp is None or unparseable
+            if getattr(quote, "timestamp", None) is None:
+                missing_ts.append(str(code))
+            if allow_stale:
+                kept[code] = mark_quote_as_delayed(quote)
+                continue
+            dropped.append(str(code))
+            continue
+        if age_s <= float(max_age_s):
             kept[code] = quote
             continue
         if allow_stale:
             kept[code] = mark_quote_as_delayed(quote)
             continue
         dropped.append(str(code))
+
+    if missing_ts:
+        logger.debug(
+            "drop_stale_quotes [%s]: %d quote(s) have no timestamp: %s",
+            context,
+            len(missing_ts),
+            ",".join(missing_ts[:8]),
+        )
 
     if dropped:
         logger.debug(

@@ -59,9 +59,10 @@ def create_local_database_source(db_ref: Any) -> DataSource:
         def get_history_instrument(
             self, inst: dict, days: int, interval: str = "1d"
         ) -> pd.DataFrame:
-            sym = str(inst.get("symbol") or "").zfill(6)
-            if not sym:
+            raw_sym = str(inst.get("symbol") or "").strip()
+            if not raw_sym:
                 return pd.DataFrame()
+            sym = raw_sym.zfill(6)
             if interval == "1d":
                 return self._db.get_bars(sym, limit=int(days))
             return self._db.get_intraday_bars(
@@ -124,7 +125,17 @@ def source_health_score(
 
     score -= min(20.0, float(st.consecutive_errors) * 1.5)
     now_dt = now or datetime.now()
-    if st.disabled_until and now_dt < st.disabled_until:
-        score -= 50.0
+    if st.disabled_until:
+        try:
+            # Ensure both sides are naive or both are aware before comparing
+            du = st.disabled_until
+            if getattr(du, "tzinfo", None) is not None and getattr(now_dt, "tzinfo", None) is None:
+                now_dt = now_dt.replace(tzinfo=du.tzinfo)
+            elif getattr(du, "tzinfo", None) is None and getattr(now_dt, "tzinfo", None) is not None:
+                du = du.replace(tzinfo=now_dt.tzinfo)
+            if now_dt < du:
+                score -= 50.0
+        except (TypeError, ValueError):
+            score -= 50.0
 
     return score

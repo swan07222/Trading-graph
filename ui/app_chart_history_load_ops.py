@@ -13,6 +13,150 @@ log = get_logger(__name__)
 
 _APP_CHART_RECOVERABLE_EXCEPTIONS = COMMON_RECOVERABLE_EXCEPTIONS
 
+
+def _fetch_chart_history_frame(
+    fetcher: Any,
+    symbol: str,
+    *,
+    source_iv: str,
+    bars: int,
+    use_cache: bool,
+    update_db: bool,
+    allow_online: bool,
+    refresh_intraday_after_close: bool,
+) -> Any:
+    """Fetch chart history while remaining backward-compatible with older signatures."""
+    try:
+        return fetcher.get_history(
+            symbol,
+            interval=source_iv,
+            bars=bars,
+            use_cache=bool(use_cache),
+            update_db=bool(update_db),
+            allow_online=bool(allow_online),
+            refresh_intraday_after_close=bool(refresh_intraday_after_close),
+        )
+    except TypeError:
+        return fetcher.get_history(
+            symbol,
+            interval=source_iv,
+            bars=bars,
+            use_cache=bool(use_cache),
+            update_db=bool(update_db),
+        )
+
+
+def _append_normalized_chart_rows(
+    self: Any,
+    *,
+    frame: Any,
+    source_iv: str,
+    source_lookback: int,
+    out: list[dict[str, Any]],
+    prev_close: float | None,
+    prev_epoch: float | None,
+    is_intraday: bool,
+    market_open: bool,
+    now_bucket: float,
+    default_final: bool,
+    ts_field: str | None = "datetime",
+    final_field: str | None = None,
+) -> tuple[float | None, float | None]:
+    """Normalize history rows into chart bars and append to output list."""
+    if frame is None or frame.empty:
+        return prev_close, prev_epoch
+    for idx, row in frame.tail(source_lookback).iterrows():
+        try:
+            c = float(row.get("close", 0) or 0)
+        except _APP_CHART_RECOVERABLE_EXCEPTIONS:
+            continue
+        if c <= 0 or not math.isfinite(c):
+            continue
+
+        ts_obj = idx if ts_field is None else row.get(ts_field, idx)
+        epoch = self._bar_bucket_epoch(ts_obj, source_iv)
+        ref_close = prev_close
+        if (
+            prev_epoch is not None
+            and self._is_intraday_day_boundary(prev_epoch, epoch, source_iv)
+        ):
+            ref_close = None
+
+        o_raw = row.get("open", None)
+        try:
+            o = float(o_raw or 0)
+        except _APP_CHART_RECOVERABLE_EXCEPTIONS:
+            o = 0.0
+        if o <= 0:
+            if source_iv in {"1d", "1wk", "1mo"}:
+                o = float(c)
+            else:
+                o = float(ref_close if ref_close and ref_close > 0 else c)
+
+        try:
+            h = float(row.get("high", max(o, c)) or max(o, c))
+            low = float(row.get("low", min(o, c)) or min(o, c))
+        except _APP_CHART_RECOVERABLE_EXCEPTIONS:
+            h = float(max(o, c))
+            low = float(min(o, c))
+
+        sanitized = self._sanitize_ohlc(
+            o,
+            h,
+            low,
+            c,
+            interval=source_iv,
+            ref_close=ref_close,
+        )
+        if sanitized is None:
+            continue
+        o, h, low, c = sanitized
+
+        try:
+            vol = float(row.get("volume", 0) or 0.0)
+        except _APP_CHART_RECOVERABLE_EXCEPTIONS:
+            vol = 0.0
+        if not math.isfinite(vol) or vol < 0:
+            vol = 0.0
+
+        try:
+            amount = float(row.get("amount", 0) or 0.0)
+        except _APP_CHART_RECOVERABLE_EXCEPTIONS:
+            amount = 0.0
+        if not math.isfinite(amount):
+            amount = 0.0
+        if amount <= 0 and vol > 0 and c > 0:
+            amount = float(c) * float(vol)
+
+        is_final = bool(default_final)
+        if final_field is not None:
+            is_final = bool(row.get(final_field, default_final))
+        if (
+            is_intraday
+            and not is_final
+            and ((not market_open) or int(epoch) != int(now_bucket))
+        ):
+            continue
+
+        out.append(
+            {
+                "open": o,
+                "high": h,
+                "low": low,
+                "close": c,
+                "volume": float(vol),
+                "amount": float(max(0.0, amount)),
+                "timestamp": self._epoch_to_iso(epoch),
+                "_ts_epoch": float(epoch),
+                "final": is_final,
+                "interval": source_iv,
+            }
+        )
+        prev_close = float(c)
+        prev_epoch = float(epoch)
+    return prev_close, prev_epoch
+
+
 def _load_chart_history_bars(
     self: Any,
     symbol: str,
@@ -41,27 +185,19 @@ def _load_chart_history_bars(
             else:
                 # Strictly keep trained intraday charts on the latest 2-day window.
                 lookback = int(target_floor)
-            refresh_requested = bool(
-                self._consume_history_refresh(symbol, norm_iv)
-            )
-            force_refresh = bool(refresh_requested)
-            use_cache = not force_refresh
-            update_db = bool(force_refresh)
-            allow_online = bool(force_refresh)
-            fallback_allow_online = bool(force_refresh)
         else:
             if norm_iv in {"1d", "1wk", "1mo"}:
                 lookback = max(7, int(min(max(lookback_bars, 7), 120)))
             else:
                 lookback = max(120, int(self._seven_day_lookback(norm_iv)))
-            refresh_requested = bool(
-                self._consume_history_refresh(symbol, norm_iv)
-            )
-            force_refresh = bool(refresh_requested)
-            use_cache = not force_refresh
-            update_db = bool(force_refresh)
-            allow_online = bool(force_refresh)
-            fallback_allow_online = bool(force_refresh)
+        refresh_requested = bool(
+            self._consume_history_refresh(symbol, norm_iv)
+        )
+        force_refresh = bool(refresh_requested)
+        use_cache = not force_refresh
+        update_db = bool(force_refresh)
+        allow_online = bool(force_refresh)
+        fallback_allow_online = bool(force_refresh)
 
         if source_iv == norm_iv:
             source_lookback = int(
@@ -85,24 +221,16 @@ def _load_chart_history_bars(
         is_intraday = norm_iv not in ("1d", "1wk", "1mo")
         market_open = bool(CONFIG.is_market_open())
         now_bucket = self._bar_bucket_epoch(time.time(), source_iv)
-        try:
-            df = fetcher.get_history(
-                symbol,
-                interval=source_iv,
-                bars=source_lookback,
-                use_cache=bool(use_cache),
-                update_db=bool(update_db),
-                allow_online=bool(allow_online),
-                refresh_intraday_after_close=bool(force_refresh),
-            )
-        except TypeError:
-            df = fetcher.get_history(
-                symbol,
-                interval=source_iv,
-                bars=source_lookback,
-                use_cache=bool(use_cache),
-                update_db=bool(update_db),
-            )
+        df = _fetch_chart_history_frame(
+            fetcher,
+            symbol,
+            source_iv=source_iv,
+            bars=source_lookback,
+            use_cache=bool(use_cache),
+            update_db=bool(update_db),
+            allow_online=bool(allow_online),
+            refresh_intraday_after_close=bool(force_refresh),
+        )
         if source_iv == "1d":
             min_required = int(max(5, min(source_lookback, 90)))
         elif source_iv == "1wk":
@@ -118,117 +246,51 @@ def _load_chart_history_bars(
                     int(max(120, float(source_lookback) * float(depth_ratio))),
                 )
         if df is None or df.empty or len(df) < min_required:
-            try:
-                df_online = fetcher.get_history(
-                    symbol,
-                    interval=source_iv,
-                    bars=source_lookback,
-                    # Bypass in-memory short windows when depth is too thin.
-                    use_cache=False,
-                    update_db=True,
-                    allow_online=True,
-                    refresh_intraday_after_close=bool(force_refresh),
-                )
-            except TypeError:
-                df_online = fetcher.get_history(
-                    symbol,
-                    interval=source_iv,
-                    bars=source_lookback,
-                    use_cache=False,
-                    update_db=True,
-                )
+            df_online = _fetch_chart_history_frame(
+                fetcher,
+                symbol,
+                source_iv=source_iv,
+                bars=source_lookback,
+                # Bypass in-memory short windows when depth is too thin.
+                use_cache=False,
+                update_db=True,
+                allow_online=True,
+                refresh_intraday_after_close=bool(force_refresh),
+            )
             if df_online is not None and not df_online.empty:
                 df = df_online
         if df is None or df.empty:
             # Fallback query path when primary history window is empty.
-            try:
-                df = fetcher.get_history(
-                    symbol,
-                    interval=source_iv,
-                    bars=source_lookback,
-                    use_cache=True,
-                    update_db=False,
-                    allow_online=bool(allow_online),
-                    refresh_intraday_after_close=bool(force_refresh),
-                )
-            except TypeError:
-                df = fetcher.get_history(
-                    symbol,
-                    interval=source_iv,
-                    bars=source_lookback,
-                    use_cache=True,
-                    update_db=False,
-                )
+            df = _fetch_chart_history_frame(
+                fetcher,
+                symbol,
+                source_iv=source_iv,
+                bars=source_lookback,
+                use_cache=True,
+                update_db=False,
+                allow_online=bool(fallback_allow_online),
+                refresh_intraday_after_close=bool(force_refresh),
+            )
         out: list[dict[str, Any]] = []
         prev_close: float | None = None
         prev_epoch: float | None = None
 
         if df is not None and not df.empty:
-            for idx, row in df.tail(source_lookback).iterrows():
-                c = float(row.get("close", 0) or 0)
-                if c <= 0:
-                    continue
-                ts_obj = row.get("datetime", idx)
-                epoch = self._bar_bucket_epoch(ts_obj, source_iv)
-                ref_close = prev_close
-                if (
-                    prev_epoch is not None
-                    and self._is_intraday_day_boundary(prev_epoch, epoch, source_iv)
-                ):
-                    ref_close = None
-                o_raw = row.get("open", None)
-                try:
-                    o = float(o_raw or 0)
-                except _APP_CHART_RECOVERABLE_EXCEPTIONS:
-                    o = 0.0
-                if o <= 0:
-                    if source_iv in {"1d", "1wk", "1mo"}:
-                        o = float(c)
-                    else:
-                        o = float(ref_close if ref_close and ref_close > 0 else c)
-                h = float(row.get("high", max(o, c)) or max(o, c))
-                low = float(row.get("low", min(o, c)) or min(o, c))
-                sanitized = self._sanitize_ohlc(
-                    o,
-                    h,
-                    low,
-                    c,
-                    interval=source_iv,
-                    ref_close=ref_close,
-                )
-                if sanitized is None:
-                    continue
-                o, h, low, c = sanitized
-                try:
-                    vol = float(row.get("volume", 0) or 0.0)
-                except _APP_CHART_RECOVERABLE_EXCEPTIONS:
-                    vol = 0.0
-                if (not math.isfinite(vol)) or vol < 0:
-                    vol = 0.0
-                try:
-                    amount = float(row.get("amount", 0) or 0.0)
-                except _APP_CHART_RECOVERABLE_EXCEPTIONS:
-                    amount = 0.0
-                if not math.isfinite(amount):
-                    amount = 0.0
-                if amount <= 0 and vol > 0 and c > 0:
-                    amount = float(c) * float(vol)
-                out.append(
-                    {
-                        "open": o,
-                        "high": h,
-                        "low": low,
-                        "close": c,
-                        "volume": float(vol),
-                        "amount": float(max(0.0, amount)),
-                        "timestamp": self._epoch_to_iso(epoch),
-                        "_ts_epoch": float(epoch),
-                        "final": True,
-                        "interval": source_iv,
-                    }
-                )
-                prev_close = c
-                prev_epoch = float(epoch)
+            prev_close, prev_epoch = _append_normalized_chart_rows(
+                self,
+                frame=df,
+                source_iv=source_iv,
+                source_lookback=source_lookback,
+                out=out,
+                prev_close=prev_close,
+                prev_epoch=prev_epoch,
+                is_intraday=is_intraday,
+                market_open=market_open,
+                now_bucket=now_bucket,
+                default_final=True,
+                ts_field="datetime",
+                final_field=None,
+            )
 
         # Include session-persisted bars so refresh/restart keeps data continuity.
         if self._session_bar_cache is not None and not force_refresh and market_open:
@@ -236,81 +298,21 @@ def _load_chart_history_bars(
                 symbol, source_iv, bars=source_lookback, final_only=False
             )
             if sdf is not None and not sdf.empty:
-                for idx, row in sdf.tail(source_lookback).iterrows():
-                    c = float(row.get("close", 0) or 0)
-                    if c <= 0:
-                        continue
-                    epoch = self._bar_bucket_epoch(idx, source_iv)
-                    ref_close = prev_close
-                    if (
-                        prev_epoch is not None
-                        and self._is_intraday_day_boundary(prev_epoch, epoch, source_iv)
-                    ):
-                        ref_close = None
-                    o_raw = row.get("open", None)
-                    try:
-                        o = float(o_raw or 0)
-                    except _APP_CHART_RECOVERABLE_EXCEPTIONS:
-                        o = 0.0
-                    if o <= 0:
-                        if source_iv in {"1d", "1wk", "1mo"}:
-                            o = float(c)
-                        else:
-                            o = float(ref_close if ref_close and ref_close > 0 else c)
-                    h = float(row.get("high", max(o, c)) or max(o, c))
-                    low = float(row.get("low", min(o, c)) or min(o, c))
-                    sanitized = self._sanitize_ohlc(
-                        o,
-                        h,
-                        low,
-                        c,
-                        interval=source_iv,
-                        ref_close=ref_close,
-                    )
-                    if sanitized is None:
-                        continue
-                    o, h, low, c = sanitized
-                    try:
-                        vol = float(row.get("volume", 0) or 0.0)
-                    except _APP_CHART_RECOVERABLE_EXCEPTIONS:
-                        vol = 0.0
-                    if (not math.isfinite(vol)) or vol < 0:
-                        vol = 0.0
-                    try:
-                        amount = float(row.get("amount", 0) or 0.0)
-                    except _APP_CHART_RECOVERABLE_EXCEPTIONS:
-                        amount = 0.0
-                    if not math.isfinite(amount):
-                        amount = 0.0
-                    if amount <= 0 and vol > 0 and c > 0:
-                        amount = float(c) * float(vol)
-                    is_final = bool(row.get("is_final", True))
-                    if (
-                        is_intraday
-                        and not is_final
-                        and (
-                            (not market_open)
-                            or int(epoch) != int(now_bucket)
-                        )
-                    ):
-                        # Keep only the current bucket partial bar while market is open.
-                        continue
-                    out.append(
-                        {
-                            "open": o,
-                            "high": h,
-                            "low": low,
-                            "close": c,
-                            "volume": float(vol),
-                            "amount": float(max(0.0, amount)),
-                            "timestamp": self._epoch_to_iso(epoch),
-                            "_ts_epoch": float(epoch),
-                            "final": is_final,
-                            "interval": source_iv,
-                        }
-                    )
-                    prev_close = c
-                    prev_epoch = float(epoch)
+                prev_close, prev_epoch = _append_normalized_chart_rows(
+                    self,
+                    frame=sdf,
+                    source_iv=source_iv,
+                    source_lookback=source_lookback,
+                    out=out,
+                    prev_close=prev_close,
+                    prev_epoch=prev_epoch,
+                    is_intraday=is_intraday,
+                    market_open=market_open,
+                    now_bucket=now_bucket,
+                    default_final=True,
+                    ts_field=None,
+                    final_field="is_final",
+                )
 
         out = self._filter_bars_to_market_session(out, source_iv)
 

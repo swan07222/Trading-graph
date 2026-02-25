@@ -203,9 +203,9 @@ def refresh_trained_stock_history(
             if anchor_ts is not None:
                 try:
                     if anchor_ts.tzinfo is not None:
-                        anchor_ts = anchor_ts.tz_localize(None)
+                        anchor_ts = anchor_ts.tz_convert("Asia/Shanghai").tz_localize(None)
                 except Exception as exc:
-                    log.debug("Suppressed exception in data/fetcher.py", exc_info=exc)
+                    log.debug("Suppressed exception in data/fetcher_refresh_ops.py", exc_info=exc)
 
             if (
                 anchor_ts is not None
@@ -250,7 +250,12 @@ def refresh_trained_stock_history(
                         include_localdb=False,
                         return_meta=True,
                     )
-                except TypeError:
+                except TypeError as _te:
+                    # Only fall back if return_meta is an unexpected keyword arg
+                    # (old signature); re-raise if the error came from internal logic.
+                    if "return_meta" not in str(_te) and "unexpected keyword" not in str(_te):
+                        raise
+                    log.debug("_fetch_from_sources_instrument does not support return_meta, retrying without: %s", _te)
                     fetched_out = self._fetch_from_sources_instrument(
                         inst=inst,
                         days=fetched_days,
@@ -369,7 +374,7 @@ def refresh_trained_stock_history(
                             try:
                                 fetched_min_ts = pd.Timestamp(cache_sync_frame.index.min())
                                 if fetched_min_ts.tzinfo is not None:
-                                    fetched_min_ts = fetched_min_ts.tz_localize(None)
+                                    fetched_min_ts = fetched_min_ts.tz_convert("Asia/Shanghai").tz_localize(None)
                                 if fetched_min_ts > purge_anchor:
                                     log.warning(
                                         (
@@ -384,7 +389,7 @@ def refresh_trained_stock_history(
                                     )
                                     purge_anchor = fetched_min_ts
                             except Exception as exc:
-                                log.debug("Suppressed exception in data/fetcher.py", exc_info=exc)
+                                log.debug("Suppressed exception in data/fetcher_refresh_ops.py", exc_info=exc)
 
                         report_anchor = dict(report.get("replacement_anchor_used") or {})
                         report_anchor[code6] = str(purge_anchor.isoformat())

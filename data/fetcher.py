@@ -274,7 +274,14 @@ class DataFetcher:
         self._realtime_quote_max_age_s = self._resolve_realtime_quote_max_age()
         self._last_good_max_age_s = self._resolve_last_good_max_age()
         self._source_order = self._resolve_source_order()
-        self._rate_limiter = threading.Semaphore(CONFIG.data.parallel_downloads)
+        _parallel_downloads = int(getattr(CONFIG.data, "parallel_downloads", 4))
+        if _parallel_downloads < 1:
+            log.warning(
+                "CONFIG.data.parallel_downloads=%d is invalid; defaulting to 4",
+                _parallel_downloads,
+            )
+            _parallel_downloads = 4
+        self._rate_limiter = threading.Semaphore(_parallel_downloads)
         self._request_times: dict[str, float] = {}
         self._min_interval: float = 0.5
         self._intraday_interval: float = 1.2
@@ -311,7 +318,8 @@ class DataFetcher:
         risk_cfg = getattr(CONFIG, "risk", None)
         raw = getattr(risk_cfg, "quote_staleness_seconds", default_age)
         try:
-            return max(1.0, min(default_age, float(raw)))
+            # Allow up to 120s so operator-configured staleness windows are respected
+            return max(1.0, min(120.0, float(raw)))
         except (TypeError, ValueError):
             return default_age
 
@@ -1151,10 +1159,11 @@ class DataFetcher:
             log.debug("Cache write skipped: empty DataFrame for %s", cache_key)
             return pd.DataFrame()
         
-        # FIX #7: Validate OHLCV data quality before caching
+        # Validate OHLCV data quality before caching; return empty so callers
+        # do not silently receive invalid data.
         if not self._validate_ohlcv_frame(df):
             log.warning("Cache write skipped: invalid OHLCV data for %s", cache_key)
-            return df.tail(count).copy() if len(df) >= count else df.copy()
+            return pd.DataFrame()
         
         out = df.tail(count).copy()
         keep_rows = min(
@@ -1331,7 +1340,8 @@ class DataFetcher:
                         not df.empty
                         and len(df) >= min_required_rows
                     ):
-                        results[code] = df
+                        with lock:
+                            results[code] = df
                 except _RECOVERABLE_FETCH_EXCEPTIONS as exc:
                     log.warning("Failed to fetch %s: %s", code, exc)
                 with lock:
