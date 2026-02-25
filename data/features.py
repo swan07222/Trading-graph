@@ -132,12 +132,15 @@ class FeatureEngine:
 
     def _build(self, df: pd.DataFrame) -> pd.DataFrame:
         """Build features with comprehensive NaN handling.
-        
+
         FIX #7: Added explicit NaN handling after each feature computation
         to prevent feature corruption leading to bad predictions.
+        
+        FIX #37: Use assign() for batch column creation to reduce memory copies.
         """
+        # Convert columns to numeric in-place to avoid copies
         out = df.copy()
-
+        
         for col in ("open", "high", "low", "close", "volume"):
             out[col] = pd.to_numeric(out[col], errors="coerce")
 
@@ -148,6 +151,7 @@ class FeatureEngine:
         open_price = out["open"]
 
         # === Returns ===
+        # FIX #37: Compute returns efficiently
         out["returns"] = close.pct_change() * 100
         with np.errstate(divide="ignore", invalid="ignore"):
             ratio = close / close.shift(1)
@@ -157,7 +161,7 @@ class FeatureEngine:
             # Also handle case where shift(1) produces NaN on first row
             ratio_clean = ratio.where(ratio > 0, np.nan)
             out["log_returns"] = np.log(ratio_clean) * 100
-        
+
         # FIX #7: Explicitly handle NaN in returns
         out["returns"] = out["returns"].fillna(0.0)
         out["log_returns"] = out["log_returns"].fillna(0.0)

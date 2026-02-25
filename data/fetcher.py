@@ -11,6 +11,15 @@ from typing import Any, cast
 import numpy as np
 import pandas as pd
 
+# FIX #10: Import requests to handle its exceptions
+try:
+    import requests
+    import requests.exceptions
+    _HAS_REQUESTS = True
+except ImportError:
+    _HAS_REQUESTS = False
+    requests = None  # type: ignore
+
 from config.runtime_env import env_flag as _read_env_flag
 from config.runtime_env import env_text as _read_env_text
 from config.settings import CONFIG
@@ -240,6 +249,8 @@ _RECOVERABLE_FETCH_EXCEPTIONS = (
     ConnectionResetError,
     ConnectionAbortedError,
     ConnectionRefusedError,
+    # FIX #10: Add requests exceptions if available
+    *(() if not _HAS_REQUESTS else (requests.exceptions.RequestException,)),
 )
 _SOURCE_CLASSES: dict[str, type[DataSource]] = {
     "tencent": TencentQuoteSource,

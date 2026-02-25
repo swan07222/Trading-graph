@@ -105,6 +105,7 @@ _oms_module = None
 _kill_switch_module = None
 _constants_module = None
 _feeds_module = None
+_oms_lock = threading.Lock()
 _oms_cache_ts: float = 0.0
 _oms_cache_val = None
 _oms_cache_ttl: float = 5.0  # 5 second cache for OMS
@@ -112,22 +113,30 @@ _oms_cache_ttl: float = 5.0  # 5 second cache for OMS
 def _get_oms():
     """Cached deferred import for OMS with TTL.
 
-    FIX: Adds TTL-based caching to avoid repeated calls.
+    FIX #6: Use lock to prevent race condition where two threads
+    could both see _oms_cache_val is None and both import.
     """
     global _oms_module, _oms_cache_ts, _oms_cache_val
     import time
 
+    # Fast path: check without lock (with memory barrier via lock acquisition)
     now = time.time()
     if _oms_cache_val is not None and (now - _oms_cache_ts) < _oms_cache_ttl:
         return _oms_cache_val
 
-    if _oms_module is None:
-        from trading import oms as _m
-        _oms_module = _m
+    # Slow path: acquire lock and re-check
+    with _oms_lock:
+        # Double-check after acquiring lock
+        if _oms_cache_val is not None and (now - _oms_cache_ts) < _oms_cache_ttl:
+            return _oms_cache_val
 
-    _oms_cache_val = _m.get_oms()
-    _oms_cache_ts = now
-    return _oms_cache_val
+        if _oms_module is None:
+            from trading import oms as _m
+            _oms_module = _m
+
+        _oms_cache_val = _m.get_oms()
+        _oms_cache_ts = now
+        return _oms_cache_val
 
 def _get_kill_switch():
     """Cached deferred import for kill switch."""

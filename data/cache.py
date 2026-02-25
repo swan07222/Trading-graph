@@ -497,7 +497,6 @@ class DiskCache:
                         tmp_path.unlink(missing_ok=True)
                     except OSError:
                         pass
-                        tmp_path = None
 
     def delete(self, key: str) -> bool:
         if not _cache_delete_allowed():

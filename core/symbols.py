@@ -143,7 +143,7 @@ def normalize_stock_code(code: str) -> str:
     return clean_code(code)
 
 
-def validate_stock_code(code: str) -> tuple[bool, str]:
+def validate_stock_code(code: str, strict: bool = True) -> tuple[bool, str]:
     """Validate a stock code format.
 
     Checks:
@@ -151,9 +151,12 @@ def validate_stock_code(code: str) -> tuple[bool, str]:
     - Numeric only (for CN stocks)
     - Exactly 6 digits (for CN stocks)
     - Valid CN stock code ranges
+    - No SQL injection or path traversal characters
 
     Args:
         code: Stock code to validate.
+        strict: If True (default), rejects unknown prefixes.
+                If False, allows unknown but well-formed codes.
 
     Returns:
         (is_valid, error_message) tuple.
@@ -161,7 +164,27 @@ def validate_stock_code(code: str) -> tuple[bool, str]:
     """
     if code is None:
         return False, "Invalid stock code: None"
+
+    # FIX #36: Security - reject codes with suspicious characters
+    # that could be used for SQL injection or path traversal
+    if not isinstance(code, str):
+        return False, f"Invalid stock code type: {type(code).__name__}"
     
+    # Reject codes with non-alphanumeric characters (except . - _)
+    if not re.match(r'^[\w.\-_\s]+$', code):
+        return False, f"Invalid stock code characters: '{code}'"
+    
+    # Reject codes that look like path traversal or SQL injection
+    suspicious_patterns = [
+        '..', '--', ';', '--', '/*', '*/', 'xp_', '0x',
+        'DROP', 'SELECT', 'INSERT', 'DELETE', 'UPDATE',
+        'UNION', 'OR ', 'AND ', '= ', '<', '>', '"', "'",
+    ]
+    code_upper = code.upper()
+    for pattern in suspicious_patterns:
+        if pattern.upper() in code_upper:
+            return False, f"Invalid stock code pattern: '{code}'"
+
     cleaned = clean_code(code)
     if not cleaned:
         return False, f"Invalid stock code format: '{code}' (empty after cleaning)"
@@ -186,7 +209,11 @@ def validate_stock_code(code: str) -> tuple[bool, str]:
 
     # Unknown but valid format - allow with warning (don't reject)
     # This prevents false negatives for new/unknown stock prefixes
-    return True, ""
+    if not strict:
+        return True, ""
+    
+    # In strict mode, reject unknown prefixes
+    return False, f"Unknown stock code prefix: '{cleaned}'"
 
 
 def is_st_stock(name: str) -> bool:

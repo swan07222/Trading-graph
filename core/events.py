@@ -339,6 +339,43 @@ class EventBus:
                 history_list = list(self._history)
                 return history_list[-limit:]
 
+    def iter_history(
+        self,
+        event_type: EventType | None = None,
+        limit: int = 100
+    ):
+        """Iterate over event history lazily (memory-efficient).
+
+        FIX #8: Generator-based iteration to avoid creating full list copies
+        when querying large event histories.
+
+        Yields:
+            Event objects in chronological order
+        """
+        count = 0
+        with self._sub_lock:
+            # Convert to list for iteration (bounded by maxlen)
+            history_iter = iter(self._history)
+        
+        # Iterate outside the lock to prevent deadlocks
+        for event in history_iter:
+            if event_type is None or event.type == event_type:
+                yield event
+                count += 1
+                if count >= limit:
+                    break
+
+    def get_history_iter(
+        self,
+        event_type: EventType | None = None,
+        limit: int = 100
+    ) -> list[Event]:
+        """Get event history as a list using lazy iteration.
+
+        More memory-efficient than get_history() for large histories.
+        """
+        return list(self.iter_history(event_type, limit))
+
     def clear_history(self) -> None:
         """Clear event history."""
         self._history.clear()

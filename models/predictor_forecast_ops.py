@@ -916,7 +916,8 @@ def _apply_news_influence(
     pred.prob_neutral = float(np.clip(pred.prob_neutral, 0.0, 1.0))
     pred.prob_up = float(np.clip(pred.prob_up, 0.0, 1.0))
     p_sum = float(pred.prob_down + pred.prob_neutral + pred.prob_up)
-    if p_sum <= 0:
+    # FIX: Use epsilon threshold to avoid division by very small numbers
+    if p_sum <= 1e-10:
         pred.prob_down, pred.prob_neutral, pred.prob_up = 0.33, 0.34, 0.33
     else:
         pred.prob_down /= p_sum

@@ -339,8 +339,16 @@ def _sanitize_history_df(
 
     out = pd.DataFrame(cleaned_rows)
     if has_dt_index:
-        out.index = pd.DatetimeIndex(cleaned_idx)
-        out = out[~out.index.duplicated(keep="last")].sort_index()
+        try:
+            out.index = pd.DatetimeIndex(cleaned_idx)
+            # FIX: Handle potential duplicate index errors gracefully
+            if not out.index.is_unique:
+                out = out[~out.index.duplicated(keep="last")]
+            out = out.sort_index()
+        except (TypeError, ValueError) as e:
+            log.debug("Index reconstruction failed: %s", e)
+            # Fallback to simple integer index
+            out.index = pd.RangeIndex(len(out))
     else:
         out.index = pd.Index(cleaned_idx)
     return out

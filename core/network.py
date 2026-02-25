@@ -176,12 +176,14 @@ class NetworkDetector:
 
         # FIX #12: Add overall timeout for network detection
         OVERALL_TIMEOUT = 20  # seconds
+        futures = []
         try:
             with ThreadPoolExecutor(max_workers=4) as ex:
                 fut_map = {
                     ex.submit(run_probe, url, to): k
                     for k, (url, to) in probes.items()
                 }
+                futures = list(fut_map.keys())
                 # FIX #12: Use overall timeout to prevent hangs
                 for fut in as_completed(fut_map, timeout=OVERALL_TIMEOUT):
                     k = fut_map[fut]
@@ -194,6 +196,9 @@ class NetworkDetector:
                 f"Network detection timed out after {OVERALL_TIMEOUT}s. "
                 "Using fallback logic."
             )
+            # Cancel all pending futures to clean up resources
+            for fut in futures:
+                fut.cancel()
             # All probes failed, use fallback
             env.tencent_ok = False
             env.eastmoney_ok = False
@@ -201,6 +206,12 @@ class NetworkDetector:
             env.csindex_ok = False
         except Exception as e:
             log.debug(f"Network detection thread pool error: {e}")
+            # Cancel all pending futures on error
+            for fut in futures:
+                try:
+                    fut.cancel()
+                except Exception:
+                    pass
 
         if env.eastmoney_ok and not env.yahoo_ok:
             env.is_china_direct = True

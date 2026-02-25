@@ -224,8 +224,8 @@ class SecureStorage:
             if tmp_path is not None and tmp_path.exists():
                 try:
                     tmp_path.unlink()
-                except OSError:
-                    pass
+                except OSError as e:
+                    log.debug("Failed to cleanup temp file %s: %s", tmp_path, e)
 
     def set(self, key: str, value: str) -> None:
         """Store encrypted value."""

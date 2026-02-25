@@ -333,6 +333,10 @@ class HealthMonitor:
             if legacy_model.exists() and legacy_scaler.exists():
                 matched_pairs.add("legacy")
 
+            # FIX #15: Validate model/scaler compatibility, not just file existence
+            expected_features: int | None = None
+            feature_validation_errors: list[str] = []
+            
             for ens in has_new_model:
                 stem = str(ens.stem)
                 if not stem.startswith("ensemble_"):
@@ -342,13 +346,37 @@ class HealthMonitor:
                     continue
                 sc = model_dir / f"scaler_{suffix}.pkl"
                 if sc.exists():
-                    matched_pairs.add(suffix)
+                    # Validate scaler compatibility
+                    try:
+                        import joblib
+                        scaler = joblib.load(sc)
+                        # Check if scaler has feature information
+                        if hasattr(scaler, 'n_features_in_'):
+                            if expected_features is None:
+                                expected_features = scaler.n_features_in_
+                            elif scaler.n_features_in_ != expected_features:
+                                feature_validation_errors.append(
+                                    f"Scaler {suffix} has {scaler.n_features_in_} features, "
+                                    f"expected {expected_features}"
+                                )
+                                continue
+                        
+                        # If validation passes, add to matched pairs
+                        matched_pairs.add(suffix)
+                    except Exception as e:
+                        log.debug(f"Failed to validate scaler {suffix}: {e}")
+                        # Still add to matched pairs but log warning
+                        matched_pairs.add(suffix)
 
             if matched_pairs:
                 comp.status = HealthStatus.HEALTHY
                 comp.last_success = datetime.now()
                 comp.last_error = ""
                 comp.details["matched_model_scaler_pairs"] = sorted(matched_pairs)
+                if expected_features is not None:
+                    comp.details["expected_features"] = expected_features
+                if feature_validation_errors:
+                    comp.details["feature_validation_warnings"] = feature_validation_errors
             else:
                 comp.status = HealthStatus.DEGRADED
                 comp.details["matched_model_scaler_pairs"] = []

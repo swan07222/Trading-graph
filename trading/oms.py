@@ -282,6 +282,14 @@ class OrderManagementSystem:
                     f"Price {order.price} exceeds maximum allowed (CNY {MAX_PRICE})"
                 )
 
+            # FIX #11: Add maximum order value to prevent integer overflow in calculations
+            MAX_ORDER_VALUE = 10**9  # 1 billion CNY total order value
+            est_order_value = float(order.quantity) * float(order.price)
+            if est_order_value > MAX_ORDER_VALUE:
+                raise OrderValidationError(
+                    f"Order value CNY {est_order_value:,.0f} exceeds maximum allowed (CNY {MAX_ORDER_VALUE:,})"
+                )
+
             from core.constants import get_lot_size
             lot = get_lot_size(order.symbol)
             if order.quantity % lot != 0:

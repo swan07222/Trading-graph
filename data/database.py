@@ -91,9 +91,11 @@ class MarketDatabase:
     @property
     def _conn(self) -> sqlite3.Connection:
         """Thread-local connection with automatic registration.
-        
+
         FIX #3: Track connections by thread ID with proper cleanup.
         FIX #8: Add maximum connection limit to prevent resource exhaustion.
+        FIX #4: Restore old connection if new connection fails to prevent
+        connection count drift.
         """
         if (
             not hasattr(self._local, "conn")
@@ -101,7 +103,9 @@ class MarketDatabase:
         ):
             # FIX #8: Check if we've hit max connections before creating new one
             MAX_CONNECTIONS = 50  # Reasonable limit for SQLite
-            
+            old_conn: sqlite3.Connection | None = None
+            oldest_tid: int | None = None
+
             with self._connections_lock:
                 self._cleanup_dead_threads()
                 # Check total connection count
@@ -114,24 +118,36 @@ class MarketDatabase:
                     if self._connections:
                         oldest_tid = next(iter(self._connections))
                         old_conn = self._connections.pop(oldest_tid)
-                        try:
-                            old_conn.close()
-                        except (sqlite3.Error, OSError):
-                            pass
-            
-            conn = sqlite3.connect(
-                str(self._db_path),
-                check_same_thread=False,
-                timeout=30,
-            )
-            conn.row_factory = sqlite3.Row
-            conn.execute("PRAGMA journal_mode=WAL")
-            conn.execute("PRAGMA synchronous=NORMAL")
-            conn.execute("PRAGMA foreign_keys=ON")
-            self._local.conn = conn
-            tid = threading.get_ident()
-            with self._connections_lock:
-                self._connections[tid] = conn
+
+            # Close old connection outside the lock to prevent deadlock
+            if old_conn is not None:
+                try:
+                    old_conn.close()
+                except (sqlite3.Error, OSError):
+                    pass
+
+            # Create new connection with error handling
+            try:
+                conn = sqlite3.connect(
+                    str(self._db_path),
+                    check_same_thread=False,
+                    timeout=30,
+                )
+                conn.row_factory = sqlite3.Row
+                conn.execute("PRAGMA journal_mode=WAL")
+                conn.execute("PRAGMA synchronous=NORMAL")
+                conn.execute("PRAGMA foreign_keys=ON")
+                self._local.conn = conn
+                tid = threading.get_ident()
+                with self._connections_lock:
+                    self._connections[tid] = conn
+            except Exception as e:
+                # FIX #4: Restore old connection if new one fails
+                if old_conn is not None and oldest_tid is not None:
+                    with self._connections_lock:
+                        self._connections[oldest_tid] = old_conn
+                log.error(f"Failed to create database connection: {e}")
+                raise
         else:
             # FIX #3 & #8: Periodic cleanup every 50 accesses with overflow protection
             # to prevent connection accumulation and counter overflow.

@@ -286,19 +286,37 @@ class AutoTradeConfig:
     # FIX #16: Add __post_init__ to automatically validate on instantiation
     def __post_init__(self) -> None:
         """Automatically validate configuration on instantiation.
-        
-        FIX #16: Ensures invalid auto-trade settings are caught early
-        rather than causing unexpected behavior at runtime.
+
+        FIX #7: Raises ValueError for critical validation failures to prevent
+        invalid auto-trade settings from causing unexpected behavior at runtime.
         """
         errors = self.validate()
         if errors:
-            # Log warnings but don't raise — allows partial configs to load
+            # Separate critical errors from warnings
+            critical_errors = []
+            warnings = []
+            
+            for error in errors:
+                # Critical: thresholds out of range, negative values
+                if any(x in error.lower() for x in ['must be in', 'must be positive', 'must be >']):
+                    critical_errors.append(error)
+                else:
+                    warnings.append(error)
+            
+            # Log warnings
             from utils.logger import get_logger
             log = get_logger(__name__)
-            for error in errors:
-                log.warning(f"AutoTradeConfig validation warning: {error}")
+            for warning in warnings:
+                log.warning(f"AutoTradeConfig validation warning: {warning}")
+            
             # Store validation errors for later inspection
             object.__setattr__(self, '_validation_errors', errors)
+            
+            # Raise for critical errors
+            if critical_errors:
+                raise ValueError(
+                    f"Invalid AutoTradeConfig: {'; '.join(critical_errors)}"
+                )
 
     # FIX #16: Add validation method for configuration consistency
     def validate(self) -> list[str]:
@@ -319,11 +337,11 @@ class AutoTradeConfig:
 
         # Validate position limits are positive
         if self.max_auto_positions <= 0:
-            errors.append(f"max_auto_positions must be positive, got {self.max_auto_positions}")
+            errors.append(f"max_auto_positions must be > 0, got {self.max_auto_positions}")
         if self.max_auto_position_pct <= 0:
-            errors.append(f"max_auto_position_pct must be positive, got {self.max_auto_position_pct}")
+            errors.append(f"max_auto_position_pct must be > 0, got {self.max_auto_position_pct}")
         if self.max_auto_order_value <= 0:
-            errors.append(f"max_auto_order_value must be positive, got {self.max_auto_order_value}")
+            errors.append(f"max_auto_order_value must be > 0, got {self.max_auto_order_value}")
 
         # Validate timing constraints
         if self.scan_interval_seconds < 10:
@@ -331,15 +349,17 @@ class AutoTradeConfig:
         if self.cooldown_after_trade_seconds < 60:
             errors.append(f"cooldown_after_trade_seconds must be >= 60, got {self.cooldown_after_trade_seconds}")
         if self.max_trades_per_day <= 0:
-            errors.append(f"max_trades_per_day must be positive, got {self.max_trades_per_day}")
+            errors.append(f"max_trades_per_day must be > 0, got {self.max_trades_per_day}")
 
         # Validate volatility threshold
         if self.volatility_pause_threshold <= 0:
-            errors.append(f"volatility_pause_threshold must be positive, got {self.volatility_pause_threshold}")
+            errors.append(f"volatility_pause_threshold must be > 0, got {self.volatility_pause_threshold}")
 
         # Validate trailing stop
         if self.trailing_stop_enabled and self.trailing_stop_pct <= 0:
-            errors.append(f"trailing_stop_pct must be positive when enabled, got {self.trailing_stop_pct}")
+            errors.append(f"trailing_stop_pct must be > 0 when enabled, got {self.trailing_stop_pct}")
+        if self.trailing_stop_pct > 50:
+            errors.append(f"trailing_stop_pct should be <= 50%%, got {self.trailing_stop_pct}%%")
 
         return errors
 
@@ -457,29 +477,19 @@ class Config:
     def __init__(self) -> None:
         """Thread-safe initialization with explicit barrier.
 
-        FIX C3: Now uses object.__getattribute__ to safely check
-        _initialized flag, preventing race condition where two threads
-        could both pass the check and both attempt initialization.
+        FIX C3: Acquire lock BEFORE checking _initialized to prevent
+        race condition where two threads could both pass the check
+        and both attempt initialization simultaneously.
         """
-        # Early exit if already initialized - use object.__getattribute__
-        # to avoid triggering __getattr__ during partial initialization
-        try:
-            initialized = object.__getattribute__(self, '_initialized')
-            if initialized and hasattr(self, '_lock'):
-                # Check if fully initialized by checking for data attribute
-                if hasattr(self, 'data'):
-                    return
-        except AttributeError:
-            # _initialized not set yet, proceed with initialization
-            pass
-
-        # Acquire lock for initialization
+        # CRITICAL: Acquire lock FIRST before any checks to prevent race condition
+        # Two threads could both pass the early check and both initialize
         with self._lock:
-            # Double-check after acquiring lock
+            # Check if already fully initialized (has data attribute)
             if hasattr(self, 'data'):
                 return
-
-            # Mark as initialized
+            
+            # Mark as initialized BEFORE setting any attributes
+            # This prevents any other thread from proceeding past the lock
             object.__setattr__(self, '_initialized', True)
             self._config_file = Path(__file__).parent.parent / "config.json"
             self._env_prefix = "TRADING_"

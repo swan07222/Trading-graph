@@ -331,28 +331,31 @@ class Predictor:
 
     def _update_model_weights(self, stock_code: str, was_correct: bool) -> None:
         """Update model weights based on prediction accuracy.
-        
+
         FIX ADAPTIVE LR: Uses adaptive learning rate based on:
         1. Prediction frequency (more predictions = slower adaptation)
         2. Market volatility (high vol = slower adaptation to avoid noise)
         3. Recent performance streak (hot/cold streaks adjust learning)
-        
+
         This improves adaptation to regime changes while avoiding over-reaction
         to recent noise.
         """
         if self.ensemble is None or not hasattr(self.ensemble, 'models'):
             return
 
+        if not self._model_weights:
+            return
+
         # Base learning rate
         alpha_base = 0.10
-        
+
         # Factor 1: Adjust based on prediction count for this stock
         # More predictions = more stable estimate = slower adaptation
         prediction_count = len(self._stock_accuracy_history.get(stock_code, []))
         if prediction_count > 20:
             # Reduce learning rate as we have more history
             alpha_base *= max(0.03, 0.8 * (20.0 / min(prediction_count, 100)))
-        
+
         # Factor 2: Adjust based on recent accuracy streak
         # Hot/cold streaks suggest regime change - adapt faster
         recent_history = self._stock_accuracy_history.get(stock_code, [])
@@ -365,7 +368,7 @@ class Predictor:
             elif streak in [2, 3]:
                 # Mixed results - be conservative
                 alpha_base *= 0.7
-        
+
         # Factor 3: Clamp learning rate to reasonable bounds
         alpha = float(np.clip(alpha_base, 0.02, 0.25))
 
@@ -376,11 +379,18 @@ class Predictor:
             new_perf = (1 - alpha) * current_perf + alpha * reward
             self._last_model_performance[model_name] = new_perf
 
-        # Normalize weights
+        # Normalize weights - FIX: Handle edge case where total_perf is 0 or very small
         total_perf = sum(self._last_model_performance.values())
-        if total_perf > 0:
+        if total_perf > 1e-10:
             for name in self._model_weights:
                 self._model_weights[name] = self._last_model_performance[name] / total_perf
+        else:
+            # Fallback to uniform weights if all performances are zero
+            n_models = len(self._model_weights)
+            if n_models > 0:
+                uniform_weight = 1.0 / n_models
+                for name in self._model_weights:
+                    self._model_weights[name] = uniform_weight
 
     def _record_prediction_outcome(self, stock_code: str, predicted_up: bool, actual_up: bool) -> None:
         """Record prediction outcome for historical accuracy tracking."""
