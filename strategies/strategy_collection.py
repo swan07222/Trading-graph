@@ -6,6 +6,8 @@ from __future__ import annotations
 
 from typing import Any
 
+import numpy as np
+
 from core.types import OrderSide
 from strategies import BaseStrategy, Signal, SignalStrength, register_strategy
 
@@ -38,13 +40,15 @@ class DualMovingAverageStrategy(BaseStrategy):
         if len(bars) < self.params["slow_period"] + 5:
             return None
         
-        closes = [b["close"] for b in bars]
-        
+        closes = np.array([b["close"] for b in bars])
+
         # Calculate moving averages
-        fast_ma = sum(closes[-self.params["fast_period"]:]) / self.params["fast_period"]
-        slow_ma = sum(closes[-self.params["slow_period"]:]) / self.params["slow_period"]
-        prev_fast = sum(closes[-self.params["fast_period"]-1:-1]) / self.params["fast_period"]
-        prev_slow = sum(closes[-self.params["slow_period"]-1:-1]) / self.params["slow_period"]
+        fast = self.params["fast_period"]
+        slow = self.params["slow_period"]
+        fast_ma = np.mean(closes[-fast:])
+        slow_ma = np.mean(closes[-slow:])
+        prev_fast = np.mean(closes[-fast-1:-1])
+        prev_slow = np.mean(closes[-slow-1:-1])
         
         # Check for crossover
         current_price = closes[-1]
@@ -107,11 +111,11 @@ class TripleMovingAverageStrategy(BaseStrategy):
         if len(bars) < self.params["long_period"] + 5:
             return None
         
-        closes = [b["close"] for b in bars]
-        
-        short_ma = sum(closes[-self.params["short_period"]:]) / self.params["short_period"]
-        medium_ma = sum(closes[-self.params["medium_period"]:]) / self.params["medium_period"]
-        long_ma = sum(closes[-self.params["long_period"]:]) / self.params["long_period"]
+        closes = np.array([b["close"] for b in bars])
+
+        short_ma = np.mean(closes[-self.params["short_period"]:])
+        medium_ma = np.mean(closes[-self.params["medium_period"]:])
+        long_ma = np.mean(closes[-self.params["long_period"]:])
         
         current_price = closes[-1]
         
@@ -231,11 +235,11 @@ class ZScoreMeanReversionStrategy(BaseStrategy):
         if len(bars) < self.params["lookback_period"] + 5:
             return None
         
-        closes = [b["close"] for b in bars[-self.params["lookback_period"]:]]
+        closes = np.array([b["close"] for b in bars[-self.params["lookback_period"]:]])
         current_price = closes[-1]
-        
-        mean = sum(closes) / len(closes)
-        std = (sum((x - mean) ** 2 for x in closes) / len(closes)) ** 0.5
+
+        mean = np.mean(closes)
+        std = np.std(closes)
         
         if std == 0:
             return None
@@ -533,7 +537,7 @@ class DonchianBreakoutStrategy(BaseStrategy):
         lowest = min(b["low"] for b in lookback)
         current_close = current["close"]
         current_volume = current["volume"]
-        avg_volume = sum(b["volume"] for b in lookback) / len(lookback)
+        avg_volume = np.mean([b["volume"] for b in lookback])
         
         # Breakout above with volume confirmation
         if current_close > highest and current_volume > avg_volume * 1.3:
