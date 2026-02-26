@@ -20,7 +20,7 @@ Trading Graph is a desktop AI analysis system for China A-shares with multi-sour
 | `models/` | ~25 | ~18,000 | GM ensemble (Informer, TFT, N-BEATS, TSMixer), LLM trainer |
 | `ui/` | ~20 | ~15,000 | PyQt6 application |
 | `tests/` | ~20 | ~10,000 | Test suite |
-| `utils/` | ~25 | ~8,000 | Utilities, security, metrics, recovery |
+| `utils/` | ~25 | ~8,000 | Utilities, security, metrics |
 | `analysis/` | ~10 | ~6,000 | Backtest, replay, strategy |
 | `core/` | ~10 | ~4,000 | Types, events, constants, symbols |
 | `config/` | ~4 | ~2,000 | Settings, environment |
@@ -405,15 +405,6 @@ audit.log(
 ---
 
 ## Monitoring
-
-### Recovery Metrics (`utils/recovery_metrics.py`)
-
-- Recovery operation metrics collection
-- Success/failure tracking per operation type
-- Performance monitoring with trend analysis
-- Health status dashboard
-- Alerting support
-- Disk persistence for metrics
 
 ### Prometheus Metrics (`utils/metrics.py`)
 

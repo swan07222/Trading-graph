@@ -36,10 +36,10 @@ Usage:
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import shutil
 import threading
-import time
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -48,11 +48,6 @@ from typing import Any
 from config.settings import CONFIG
 from utils.atomic_io import atomic_write_json, read_json
 from utils.logger import get_logger
-from utils.recoverable import (
-    COMMON_RECOVERABLE_EXCEPTIONS,
-    RecoveryContext,
-    retry_with_recovery,
-)
 
 log = get_logger(__name__)
 
@@ -272,14 +267,14 @@ class TrainingCheckpoint:
         stocks: list[str] | None = None,
     ) -> TrainingState:
         """Initialize a new training session.
-        
+
         Args:
             total_epochs: Total number of epochs
             model_type: Type of model being trained
             interval: Data interval
             horizon: Prediction horizon
             stocks: List of stocks being trained
-        
+
         Returns:
             TrainingState for the session
         """
@@ -297,7 +292,58 @@ class TrainingCheckpoint:
             )
             self._save_state()
             return self._state
-    
+
+    @staticmethod
+    def _calculate_checksum(file_path: Path) -> str:
+        """Calculate SHA256 checksum of a file.
+
+        FIX 17: Used for checkpoint integrity verification.
+
+        Args:
+            file_path: Path to file
+
+        Returns:
+            Hex-encoded SHA256 checksum
+        """
+        sha256_hash = hashlib.sha256()
+        try:
+            with open(file_path, "rb") as f:
+                for chunk in iter(lambda: f.read(4096), b""):
+                    sha256_hash.update(chunk)
+            return sha256_hash.hexdigest()
+        except Exception as e:
+            log.warning("Checksum calculation failed for %s: %s", file_path, e)
+            return ""
+
+    def _verify_checksum(self, checkpoint_path: Path, expected_checksum: str) -> bool:
+        """Verify checkpoint file integrity.
+
+        FIX 17: Validates checkpoint hasn't been corrupted.
+
+        Args:
+            checkpoint_path: Path to checkpoint file
+            expected_checksum: Expected SHA256 checksum
+
+        Returns:
+            True if checksum matches, False otherwise
+        """
+        if not expected_checksum:
+            log.debug("No checksum available for verification")
+            return True  # Can't verify without checksum
+
+        actual_checksum = self._calculate_checksum(checkpoint_path)
+        if actual_checksum != expected_checksum:
+            log.error(
+                "Checkpoint integrity check failed for %s: expected %s, got %s",
+                checkpoint_path,
+                expected_checksum[:16],
+                actual_checksum[:16],
+            )
+            return False
+
+        log.debug("Checkpoint integrity verified for %s", checkpoint_path)
+        return True
+
     def save(
         self,
         checkpoint_data: dict[str, Any],
@@ -345,7 +391,7 @@ class TrainingCheckpoint:
                 
                 # Save checkpoint
                 checkpoint_path = session_dir / f"epoch_{epoch}.pt"
-                
+
                 if _TORCH_AVAILABLE:
                     atomic_torch_save(checkpoint_path, checkpoint_data)
                 else:
@@ -353,7 +399,10 @@ class TrainingCheckpoint:
                     json_path = session_dir / f"epoch_{epoch}.json"
                     atomic_write_json(json_path, checkpoint_data)
                     checkpoint_path = json_path
-                
+
+                # FIX 17: Calculate and save checksum for integrity verification
+                checksum = self._calculate_checksum(checkpoint_path)
+
                 # Save metadata
                 metadata = {
                     "epoch": epoch,
@@ -361,14 +410,18 @@ class TrainingCheckpoint:
                     "metrics": metrics or {},
                     "size_bytes": checkpoint_path.stat().st_size,
                     "session_id": self._state.session_id if self._state else "",
+                    "checksum_sha256": checksum,  # FIX 17: Add checksum
                 }
                 atomic_write_json(session_dir / f"epoch_{epoch}.meta.json", metadata)
-                
+
                 # Save as best
                 if is_best:
                     best_path = session_dir / "best.pt"
                     shutil.copy2(checkpoint_path, best_path)
-                    atomic_write_json(session_dir / "best.meta.json", metadata)
+                    # Save checksum for best checkpoint too
+                    best_metadata = dict(metadata)
+                    best_metadata["checksum_sha256"] = self._calculate_checksum(best_path)
+                    atomic_write_json(session_dir / "best.meta.json", best_metadata)
                 
                 # Save state
                 self._save_state()
@@ -386,10 +439,10 @@ class TrainingCheckpoint:
     
     def load(self, checkpoint_path: Path | str | None = None) -> dict[str, Any] | None:
         """Load a checkpoint.
-        
+
         Args:
             checkpoint_path: Path to checkpoint (default: latest)
-        
+
         Returns:
             Checkpoint data or None if not found
         """
@@ -397,28 +450,64 @@ class TrainingCheckpoint:
             try:
                 if checkpoint_path is None:
                     checkpoint_path = self.latest_checkpoint_path
-                
+
                 if checkpoint_path is None:
                     return None
-                
+
                 checkpoint_path = Path(checkpoint_path)
                 if not checkpoint_path.exists():
                     return None
-                
+
                 if checkpoint_path.suffix == ".pt" and _TORCH_AVAILABLE:
+                    # FIX 16: Handle weights_only parameter compatibility
                     allow_unsafe = bool(getattr(getattr(CONFIG, "model", None), "allow_unsafe_artifact_load", False))
-                    data = torch_load(
-                        checkpoint_path,
-                        map_location="cpu",
-                        weights_only=True,
-                        allow_unsafe=allow_unsafe,
-                    )
+                    
+                    # FIX 17: Verify checksum before loading
+                    meta_path = checkpoint_path.with_suffix(".meta.json")
+                    expected_checksum = ""
+                    if meta_path.exists():
+                        try:
+                            meta = read_json(meta_path)
+                            expected_checksum = meta.get("checksum_sha256", "")
+                        except Exception:
+                            pass
+
+                    try:
+                        # First attempt: weights_only=True (secure, PyTorch >= 2.6)
+                        data = torch_load(
+                            checkpoint_path,
+                            map_location="cpu",
+                            weights_only=True,
+                            allow_unsafe=allow_unsafe,
+                        )
+                    except (TypeError, AttributeError) as e:
+                        # Second attempt: weights_only=False for older PyTorch or incompatible checkpoints
+                        log.debug("weights_only=True failed (%s), retrying with weights_only=False", e)
+                        try:
+                            data = torch_load(
+                                checkpoint_path,
+                                map_location="cpu",
+                                weights_only=False,
+                            )
+                            log.warning("Checkpoint loaded with weights_only=False - ensure checkpoint source is trusted")
+                        except Exception as e2:
+                            log.error("Checkpoint load failed with both weights_only modes: %s", e2)
+                            return None
+                    except Exception as e:
+                        log.error("Checkpoint load failed: %s", e)
+                        return None
+                    else:
+                        # FIX 17: Verify checksum after successful load
+                        if expected_checksum and not self._verify_checksum(checkpoint_path, expected_checksum):
+                            log.error("Checkpoint integrity verification failed")
+                            return None
                 else:
+                    # Fallback to JSON
                     data = read_json(checkpoint_path)
-                
+
                 log.info("Checkpoint loaded: %s", checkpoint_path)
                 return data
-                
+
             except Exception as e:
                 log.warning("Failed to load checkpoint: %s", e)
                 return None

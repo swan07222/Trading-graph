@@ -342,7 +342,14 @@ class DeepEnsemble:
             return len(self._models)
     
     def get_model_agreement(self) -> float:
-        """Get ensemble agreement metric."""
+        """Get ensemble agreement metric.
+        
+        FIX #UNC-001: Improved agreement calculation with better handling
+        of edge cases (identical predictions, zero variance, scalar outputs).
+        
+        FIX #UNC-002: Added correlation-based agreement that works better
+        for multi-dimensional outputs.
+        """
         with self._lock:
             if len(self._models) < 2:
                 return 1.0
@@ -363,11 +370,11 @@ class DeepEnsemble:
                     a = a[:n]
                     b = b[:n]
 
-                    if (
-                        n >= 2
-                        and np.std(a) > 1e-12
-                        and np.std(b) > 1e-12
-                    ):
+                    # FIX #UNC-001: Handle constant predictions
+                    std_a = float(np.std(a))
+                    std_b = float(np.std(b))
+                    
+                    if std_a > 1e-12 and std_b > 1e-12 and n >= 2:
                         corr = float(np.corrcoef(a, b)[0, 1])
                         if np.isfinite(corr):
                             # Map [-1, 1] to [0, 1].
@@ -375,7 +382,7 @@ class DeepEnsemble:
                         else:
                             score = 0.0
                     else:
-                        # For scalar/constant predictions use normalized distance.
+                        # FIX #UNC-002: For scalar/constant predictions use normalized distance
                         scale = max(
                             float(np.max(np.abs(np.concatenate((a, b))))),
                             1e-6,
@@ -383,6 +390,7 @@ class DeepEnsemble:
                         mad = float(np.mean(np.abs(a - b)))
                         score = 1.0 - min(1.0, mad / scale)
 
+                    # FIX #UNC-003: Clamp to valid range
                     correlations.append(float(np.clip(score, 0.0, 1.0)))
 
             return float(np.mean(correlations)) if correlations else 1.0

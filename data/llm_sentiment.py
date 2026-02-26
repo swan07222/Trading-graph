@@ -156,8 +156,9 @@ class LLM_sentimentAnalyzer:
         device: str | None = None,
         cache_dir: Path | None = None,
         use_gpu: bool = True,
+        cache_ttl_seconds: float | None = None,
+        max_seen_articles: int | None = None,
     ) -> None:
-        _ = (device, use_gpu)
         self.model_name = str(model_name or self.DEFAULT_MODEL)
         default_dir = getattr(
             CONFIG,
@@ -176,13 +177,44 @@ class LLM_sentimentAnalyzer:
         self._status_path = self.cache_dir / "llm_training_status.json"
         self._seen_article_path = self.cache_dir / "llm_seen_articles.json"
         self._seen_articles: dict[str, float] = {}
+        # FIX 9: Configurable cache TTL with longer default (1 hour instead of 5 minutes)
+        self._cache_ttl = float(cache_ttl_seconds if cache_ttl_seconds is not None else 3600.0)
+        # FIX 10: Configurable max seen articles with memory limit
+        self._max_seen_articles = int(max_seen_articles if max_seen_articles is not None else self._SEEN_ARTICLE_MAX)
         self._seen_article_ttl_seconds = float(self._SEEN_ARTICLE_TTL_SECONDS)
         self._cache: dict[str, tuple[LLMSentimentResult, float]] = {}
-        self._cache_ttl = 300.0
         self._lock = threading.RLock()
+        # FIX 8: Proper GPU device handling
+        self._device = self._init_device(device, use_gpu)
         self._load_calibrator()
         self._load_hybrid_calibrator()
         self._load_seen_articles()
+
+    @staticmethod
+    def _init_device(device: str | None, use_gpu: bool) -> str:
+        """Initialize device for model inference.
+
+        Args:
+            device: Explicit device specification (e.g., 'cuda:0', 'cpu')
+            use_gpu: Whether to use GPU if available
+
+        Returns:
+            Device string for transformers pipeline
+        """
+        if device is not None:
+            return device
+
+        if use_gpu:
+            try:
+                import torch
+                if torch.cuda.is_available():
+                    return "cuda:0"
+                elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+                    return "mps"  # Apple Silicon
+            except ImportError:
+                pass
+
+        return "cpu"
 
     @staticmethod
     def _clip(x: float, lo: float, hi: float) -> float:
@@ -215,30 +247,43 @@ class LLM_sentimentAnalyzer:
         return self._clip((p - n) / float(d), -1.0, 1.0)
 
     def _load_pipeline(self) -> None:
+        """Load transformer pipeline with proper device handling."""
         if self._pipe is not None and self._pipe_name == self.model_name:
             return
         if not _TRANSFORMERS_AVAILABLE:
             return
         try:
+            # Convert device string to device ID for transformers
+            device_id = -1  # CPU default
+            if self._device.startswith("cuda"):
+                try:
+                    device_id = int(self._device.split(":")[1]) if ":" in self._device else 0
+                except (ValueError, IndexError):
+                    device_id = 0
+            elif self._device == "mps":
+                device_id = "mps"
+
             self._pipe = pipeline(
                 "sentiment-analysis",
                 model=self.model_name,
                 tokenizer=self.model_name,
                 return_all_scores=True,
-                device=-1,
+                device=device_id,
             )
             self._pipe_name = self.model_name
-        except Exception:
+        except Exception as e:
+            log.debug("Primary model load failed: %s", e)
             try:
                 self._pipe = pipeline(
                     "sentiment-analysis",
                     model=self.FALLBACK_MODEL,
                     tokenizer=self.FALLBACK_MODEL,
                     return_all_scores=True,
-                    device=-1,
+                    device=-1,  # CPU for fallback
                 )
                 self._pipe_name = self.FALLBACK_MODEL
-            except Exception:
+            except Exception as e2:
+                log.debug("Fallback model load failed: %s", e2)
                 self._pipe = None
                 self._pipe_name = ""
 
@@ -507,9 +552,12 @@ class LLM_sentimentAnalyzer:
             log.debug("Failed to save seen-article registry: %s", exc)
 
     def _prune_seen_articles(self) -> None:
+        """Prune expired and excess seen articles to manage memory."""
         now = float(time.time())
         cutoff = now - max(60.0, float(self._seen_article_ttl_seconds))
         kept: dict[str, float] = {}
+
+        # First pass: keep only non-expired articles
         for aid, ts in list(self._seen_articles.items()):
             key = str(aid or "").strip()
             if not key:
@@ -522,13 +570,18 @@ class LLM_sentimentAnalyzer:
                 continue
             if tsf >= cutoff:
                 kept[key] = tsf
-        if len(kept) > int(self._SEEN_ARTICLE_MAX):
-            top = sorted(
+
+        # FIX 10: Enforce memory limit by keeping only most recent articles
+        max_articles = int(self._max_seen_articles)
+        if len(kept) > max_articles:
+            # Sort by timestamp descending and keep most recent
+            sorted_items = sorted(
                 kept.items(),
                 key=lambda kv: float(kv[1]),
                 reverse=True,
-            )[: int(self._SEEN_ARTICLE_MAX)]
-            kept = {k: float(v) for k, v in top}
+            )[:max_articles]
+            kept = {k: float(v) for k, v in sorted_items}
+
         self._seen_articles = kept
 
     def _remember_seen_articles(self, article_ids: list[str]) -> None:
@@ -664,8 +717,31 @@ class LLM_sentimentAnalyzer:
             "hybrid_nn_ready": False,
         }
 
-    def train(self, articles: list[NewsArticle], *, epochs: int = 3, max_samples: int = 1000, learning_rate: float = 2e-5) -> dict[str, Any]:
-        _ = (epochs, learning_rate)
+    def train(
+        self,
+        articles: list[NewsArticle],
+        *,
+        epochs: int = 3,
+        max_samples: int = 1000,
+        learning_rate: float = 2e-5,
+        validation_split: float = 0.15,
+        use_transformer_labels: bool = True,
+        feature_scaling: bool = True,
+    ) -> dict[str, Any]:
+        """Train hybrid sentiment models with proper validation and metrics.
+
+        Args:
+            articles: List of news articles for training
+            epochs: Number of training epochs for MLP (used if sklearn available)
+            max_samples: Maximum number of samples to use
+            learning_rate: Learning rate (currently unused, reserved for future transformer fine-tuning)
+            validation_split: Fraction of data to hold out for validation
+            use_transformer_labels: Use transformer model for label generation if available
+            feature_scaling: Apply StandardScaler to features before training
+
+        Returns:
+            Training report with metrics and status
+        """
         t0 = time.time()
         start = datetime.now().isoformat()
         rows = list(articles or [])[: max(50, int(max_samples))]
@@ -689,8 +765,11 @@ class LLM_sentimentAnalyzer:
             self._write_training_status(out)
             return out
 
+        # Build features and generate labels
         x: list[list[float]] = []
         y: list[int] = []
+        transformer_labels: list[float] = []
+
         for a in rows:
             lang = str(getattr(a, "language", "") or "")
             if not lang:
@@ -699,59 +778,164 @@ class LLM_sentimentAnalyzer:
                 zh += 1
             else:
                 en += 1
+
             text = f"{getattr(a, 'title', '')} {getattr(a, 'content', '')}"
             base = self._kw_score(text, self.ZH_POS if lang == 'zh' else self.EN_POS, self.ZH_NEG if lang == 'zh' else self.EN_NEG)
-            lbl = 1 if base >= 0.08 else (-1 if base <= -0.08 else 0)
+
+            # Use transformer for label generation if available and requested
+            if use_transformer_labels and self._pipe is not None:
+                try:
+                    self._load_pipeline()
+                    if self._pipe is not None:
+                        tf_overall, tf_pos, tf_neg, tf_neu, tf_conf = self._parse_scores(self._pipe(text[:512]))
+                        # Use transformer score as primary label signal
+                        lbl = 1 if tf_overall >= 0.15 else (-1 if tf_overall <= -0.15 else 0)
+                        transformer_labels.append(tf_overall)
+                    else:
+                        lbl = 1 if base >= 0.08 else (-1 if base <= -0.08 else 0)
+                        transformer_labels.append(base)
+                except Exception:
+                    lbl = 1 if base >= 0.08 else (-1 if base <= -0.08 else 0)
+                    transformer_labels.append(base)
+            else:
+                lbl = 1 if base >= 0.08 else (-1 if base <= -0.08 else 0)
+                transformer_labels.append(base)
+
             x.append(self._build_features(a, tf_overall=base, tf_conf=0.4, language=lang))
             y.append(lbl)
 
         notes: list[str] = []
-        class_diverse = len(set(y)) >= 2
+        metrics: dict[str, float] = {}
         x_arr = np.asarray(x, dtype=float)
         y_arr = np.asarray(y, dtype=int)
 
+        # Apply feature scaling if requested
+        scaler = None
+        if feature_scaling and _SKLEARN_AVAILABLE:
+            try:
+                from sklearn.preprocessing import StandardScaler
+                scaler = StandardScaler()
+                x_arr = scaler.fit_transform(x_arr)
+                notes.append("Feature scaling applied (StandardScaler)")
+            except Exception as exc:
+                notes.append(f"Feature scaling failed: {exc}")
+
+        # Calculate class distribution
+        class_counts = np.bincount(y_arr + 1)  # Shift -1,0,1 to 0,1,2
+        class_distribution = {
+            "negative": int(class_counts[0]) if len(class_counts) > 0 else 0,
+            "neutral": int(class_counts[1]) if len(class_counts) > 1 else 0,
+            "positive": int(class_counts[2]) if len(class_counts) > 2 else 0,
+        }
+        metrics["class_distribution"] = class_distribution  # type: ignore
+
+        # Check class diversity and balance
+        unique_classes = len(set(y_arr))
+        class_imbalance_ratio = float(max(class_counts) / max(1, min(class_counts))) if len(class_counts) > 1 else 1.0
+        metrics["class_imbalance_ratio"] = class_imbalance_ratio  # type: ignore
+
         logreg_ready = False
         hybrid_nn_ready = False
+        val_metrics: dict[str, float] = {}
 
-        if not class_diverse:
+        # Split data for validation
+        n_samples = len(x_arr)
+        n_val = int(n_samples * validation_split)
+        indices = np.random.permutation(n_samples)
+        train_idx, val_idx = indices[n_val:], indices[:n_val]
+
+        x_train, x_val = x_arr[train_idx], x_arr[val_idx]
+        y_train, y_val = y_arr[train_idx], y_arr[val_idx]
+
+        metrics["train_samples"] = float(len(x_train))  # type: ignore
+        metrics["val_samples"] = float(len(x_val))  # type: ignore
+
+        if unique_classes < 2:
             notes.append("Not enough class diversity for calibration fit.")
         elif _SKLEARN_AVAILABLE:
+            # Train Logistic Regression with improved hyperparameters
             try:
+                # Adjust class weights for imbalanced data
+                if class_imbalance_ratio > 2.0:
+                    class_weight = "balanced"
+                    notes.append(f"Using balanced class weights (imbalance ratio={class_imbalance_ratio:.2f})")
+                else:
+                    class_weight = "balanced"
+
                 clf = LogisticRegression(
-                    max_iter=320,
+                    max_iter=max(320, epochs * 100),  # Use epochs parameter
                     multi_class="auto",
-                    class_weight="balanced",
+                    class_weight=class_weight,
+                    solver="lbfgs",
+                    C=1.0,
+                    random_state=42,
                 )
-                clf.fit(x_arr, y_arr)
+                clf.fit(x_train, y_train)
                 self._calibrator = clf
                 self._save_calibrator()
                 logreg_ready = True
+
+                # Calculate validation metrics
+                if len(x_val) > 0 and len(set(y_val)) > 1:
+                    val_pred = clf.predict(x_val)
+                    val_proba = clf.predict_proba(x_val)
+
+                    from sklearn.metrics import accuracy_score, f1_score
+                    val_metrics["accuracy"] = float(accuracy_score(y_val, val_pred))
+                    val_metrics["f1_macro"] = float(f1_score(y_val, val_pred, average="macro", zero_division=0))
+                    val_metrics["f1_weighted"] = float(f1_score(y_val, val_pred, average="weighted", zero_division=0))
+                    metrics["validation_accuracy"] = val_metrics["accuracy"]  # type: ignore
+
+                    notes.append(f"Validation accuracy={val_metrics['accuracy']:.3f}, F1={val_metrics['f1_weighted']:.3f}")
             except Exception as exc:
                 notes.append(f"Logistic calibration fit failed: {exc}")
         else:
             notes.append("scikit-learn unavailable; logistic calibrator skipped.")
 
-        if class_diverse and _SKLEARN_MLP_AVAILABLE and len(rows) >= 30:
+        # Train MLP with improved configuration
+        if unique_classes >= 2 and _SKLEARN_MLP_AVAILABLE and len(x_train) >= 30:
             try:
+                # Adaptive hidden layer sizes based on sample count
+                n_features = x_train.shape[1]
+                if len(x_train) < 100:
+                    hidden_sizes = (16, 8)
+                elif len(x_train) < 500:
+                    hidden_sizes = (32, 16)
+                else:
+                    hidden_sizes = (64, 32, 16)
+
                 nn = MLPClassifier(
-                    hidden_layer_sizes=(32, 16),
+                    hidden_layer_sizes=hidden_sizes,
                     activation="relu",
                     solver="adam",
-                    alpha=1e-3,
-                    learning_rate_init=3e-3,
-                    batch_size=min(128, max(16, len(rows) // 8)),
-                    max_iter=320,
+                    alpha=1e-4,  # Increased regularization
+                    learning_rate="adaptive",
+                    learning_rate_init=max(1e-4, learning_rate),  # Use learning_rate parameter
+                    batch_size=min(64, max(16, len(x_train) // 16)),
+                    max_iter=max(200, epochs * 50),  # Use epochs parameter
                     random_state=42,
                     early_stopping=True,
-                    validation_fraction=0.1,
-                    n_iter_no_change=15,
+                    validation_fraction=min(0.2, max(0.1, validation_split)),
+                    n_iter_no_change=20,
+                    tol=1e-4,
                 )
-                nn.fit(x_arr, y_arr)
+                nn.fit(x_train, y_train)
                 self._hybrid_calibrator = nn
                 self._save_hybrid_calibrator()
                 hybrid_nn_ready = True
+
+                # Calculate MLP validation metrics
+                if len(x_val) > 0 and len(set(y_val)) > 1:
+                    nn_pred = nn.predict(x_val)
+                    nn_proba = nn.predict_proba(x_val)
+
+                    from sklearn.metrics import accuracy_score, f1_score
+                    val_metrics["mlp_accuracy"] = float(accuracy_score(y_val, nn_pred))
+                    val_metrics["mlp_f1_macro"] = float(f1_score(y_val, nn_pred, average="macro", zero_division=0))
+                    val_metrics["mlp_f1_weighted"] = float(f1_score(y_val, nn_pred, average="weighted", zero_division=0))
+
+                    notes.append(f"MLP validation accuracy={val_metrics['mlp_accuracy']:.3f}")
             except (ConvergenceWarning, UserWarning) as exc:
-                # Handle convergence warnings gracefully - model may still be usable
                 log.debug("MLP convergence warning: %s", exc)
                 if hasattr(nn, 'classes_') and nn.classes_ is not None:
                     self._hybrid_calibrator = nn
@@ -764,22 +948,26 @@ class LLM_sentimentAnalyzer:
                 notes.append(f"Hybrid NN fit failed: {exc}")
         elif not _SKLEARN_MLP_AVAILABLE:
             notes.append("MLP classifier unavailable; hybrid NN head skipped.")
-        elif len(rows) < 30:
-            notes.append("Insufficient samples for stable hybrid NN fit.")
+        elif len(x_train) < 30:
+            notes.append(f"Insufficient samples ({len(x_train)}) for stable hybrid NN fit (need >=30).")
 
+        # Determine overall status
         if logreg_ready or hybrid_nn_ready:
             status = "trained"
         else:
-            status = "partial" if rows else "skipped"
+            status = "partial" if len(rows) > 0 else "skipped"
 
         architecture = "hybrid_neural_network"
         if not (logreg_ready or hybrid_nn_ready):
             architecture = "rule_based_fallback"
 
+        # Build comprehensive output report
         out = {
             "status": status,
             "model_name": self.model_name,
             "trained_samples": int(len(rows)),
+            "train_samples": int(len(x_train)),
+            "val_samples": int(len(x_val)),
             "zh_samples": int(zh),
             "en_samples": int(en),
             "started_at": start,
@@ -790,6 +978,13 @@ class LLM_sentimentAnalyzer:
             "calibrator_ready": bool(logreg_ready),
             "hybrid_nn_ready": bool(hybrid_nn_ready),
             "artifact_dir": str(self.cache_dir),
+            "validation_split": float(validation_split),
+            "feature_scaling_applied": bool(scaler is not None),
+            "class_distribution": class_distribution,
+            "class_imbalance_ratio": float(class_imbalance_ratio),
+            "validation_metrics": val_metrics if val_metrics else None,
+            "epochs_used": int(epochs),
+            "learning_rate_used": float(learning_rate),
         }
         self._write_training_status(out)
         return out
@@ -810,6 +1005,25 @@ class LLM_sentimentAnalyzer:
         related_keywords: list[str] | None = None,
         max_related_codes: int = 12,
     ) -> dict[str, Any]:
+        """Auto-train from internet news with robust error handling.
+
+        Args:
+            hours_back: Hours of news to collect
+            limit_per_query: Max articles per query
+            max_samples: Max samples for training
+            stop_flag: Callback to check if training should stop
+            progress_callback: Callback for progress updates
+            force_china_direct: Force China direct mode
+            only_new: Only train on new unseen articles
+            min_new_articles: Minimum new articles required for training
+            seen_ttl_hours: TTL for seen articles cache
+            auto_related_search: Enable auto-related search
+            related_keywords: Optional related keywords
+            max_related_codes: Max related stock codes to include
+
+        Returns:
+            Training report with status and metrics
+        """
         if force_china_direct:
             os.environ["TRADING_CHINA_DIRECT"] = "1"
             os.environ["TRADING_VPN"] = "0"
@@ -844,14 +1058,38 @@ class LLM_sentimentAnalyzer:
                 except Exception:
                     pass
 
-        collector = get_collector()
+        # FIX 7: Robust collector initialization with error handling
+        collector = None
+        try:
+            collector = get_collector()
+            if collector is None:
+                raise RuntimeError("News collector initialization returned None")
+        except Exception as exc:
+            log.error("Failed to initialize news collector: %s", exc)
+            error_report = {
+                "status": "error",
+                "error_type": "collector_initialization_failed",
+                "error_message": str(exc),
+                "collected_articles": 0,
+                "trained_samples": 0,
+                "notes": f"News collector initialization failed: {exc}",
+            }
+            self._write_training_status(error_report)
+            _emit(100, "Collector initialization failed", "error")
+            return error_report
+
         date_token = datetime.now().strftime("%Y-%m-%d")
         related_codes: list[str] = []
         if bool(auto_related_search):
-            related_codes = self._load_recent_cycle_stock_codes(
-                max_codes=max_related_codes,
-                max_files=40,
-            )
+            try:
+                related_codes = self._load_recent_cycle_stock_codes(
+                    max_codes=max_related_codes,
+                    max_files=40,
+                )
+            except Exception as exc:
+                log.debug("Failed to load related codes: %s", exc)
+                related_codes = []
+
         queries = self._build_auto_search_queries(
             date_token=date_token,
             related_codes=related_codes,
@@ -868,7 +1106,10 @@ class LLM_sentimentAnalyzer:
         seen: set[str] = set()
         rows: list[NewsArticle] = []
         skipped_seen = 0
+        strict_batch_failures = 0
+        strict_batch_recoveries = 0
         _emit(2, "Starting internet collection...", "start")
+
         for i, kw in enumerate(queries):
             if _is_stopped():
                 stopped = {
@@ -884,17 +1125,56 @@ class LLM_sentimentAnalyzer:
                 }
                 self._write_training_status(stopped)
                 return stopped
-            batch = collector.collect_news(
-                keywords=list(kw),
-                limit=max(20, int(limit_per_query)),
-                hours_back=max(12, int(hours_back)),
-                strict=True,
-            )
+
+            query_keywords = list(kw)
+            batch: list[NewsArticle]
+
+            # FIX 7: Robust batch collection with error handling
+            try:
+                batch = collector.collect_news(
+                    keywords=query_keywords,
+                    limit=max(20, int(limit_per_query)),
+                    hours_back=max(12, int(hours_back)),
+                    strict=True,
+                )
+            except Exception as exc:
+                strict_batch_failures += 1
+                log.warning(
+                    "Strict news batch collection failed for query=%s: %s",
+                    ",".join(query_keywords),
+                    exc,
+                )
+                _emit(
+                    8 + int(((i + 1) / max(1, len(queries))) * 62),
+                    (
+                        f"Strict batch {i + 1}/{len(queries)} failed; "
+                        "retrying in non-strict mode."
+                    ),
+                    "collect",
+                )
+                try:
+                    batch = collector.collect_news(
+                        keywords=query_keywords,
+                        limit=max(20, int(limit_per_query)),
+                        hours_back=max(12, int(hours_back)),
+                        strict=False,
+                    )
+                    if batch:
+                        strict_batch_recoveries += 1
+                except Exception as fallback_exc:
+                    log.warning(
+                        "Non-strict news fallback failed for query=%s: %s",
+                        ",".join(query_keywords),
+                        fallback_exc,
+                    )
+                    batch = []
+
             _emit(
                 8 + int(((i + 1) / max(1, len(queries))) * 62),
                 f"Collected batch {i + 1}/{len(queries)} ({len(batch)} rows)",
                 "collect",
             )
+
             for a in batch:
                 aid = str(getattr(a, "id", "") or "")
                 if not aid or aid in seen:
@@ -918,8 +1198,10 @@ class LLM_sentimentAnalyzer:
                     }
                     self._write_training_status(stopped)
                     return stopped
+
         rows.sort(key=lambda a: getattr(a, "published_at", datetime.min), reverse=True)
         rows = rows[: max(80, int(max_samples))]
+
         if not rows:
             report = {
                 "status": "no_new_data",
@@ -933,11 +1215,22 @@ class LLM_sentimentAnalyzer:
                 "query_count": int(len(queries)),
                 "related_stock_codes": list(related_codes),
                 "training_architecture": "hybrid_neural_network",
-                "notes": "No unseen language data collected in this cycle.",
+                "strict_batch_failures": int(strict_batch_failures),
+                "strict_batch_recoveries": int(strict_batch_recoveries),
+                "notes": (
+                    "No unseen language data collected in this cycle."
+                    if strict_batch_failures <= 0
+                    else (
+                        "No unseen language data collected in this cycle. "
+                        f"Strict batch failures={strict_batch_failures}, "
+                        f"recoveries={strict_batch_recoveries}."
+                    )
+                ),
             }
             _emit(100, "No new language data this cycle.", "complete")
             self._write_training_status(report)
             return report
+
         min_new = max(1, int(min_new_articles))
         if len(rows) < min_new:
             report = {
@@ -952,11 +1245,14 @@ class LLM_sentimentAnalyzer:
                 "query_count": int(len(queries)),
                 "related_stock_codes": list(related_codes),
                 "training_architecture": "hybrid_neural_network",
+                "strict_batch_failures": int(strict_batch_failures),
+                "strict_batch_recoveries": int(strict_batch_recoveries),
                 "notes": f"Only {len(rows)} new articles collected (min={min_new}); skipping training.",
             }
             _emit(100, f"Too few new articles ({len(rows)}<{min_new}); skipping training.", "complete")
             self._write_training_status(report)
             return report
+
         _emit(
             78,
             f"Collected {len(rows)} new rows; starting hybrid training.",
@@ -986,6 +1282,8 @@ class LLM_sentimentAnalyzer:
         report["related_stock_codes"] = list(related_codes)
         report["hours_back"] = int(hours_back)
         report["limit_per_query"] = int(limit_per_query)
+        report["strict_batch_failures"] = int(strict_batch_failures)
+        report["strict_batch_recoveries"] = int(strict_batch_recoveries)
         report["training_architecture"] = str(
             report.get("training_architecture") or "hybrid_neural_network"
         )

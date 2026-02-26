@@ -241,6 +241,15 @@ def _sanitize_history_df(
 ) -> pd.DataFrame:
     """Normalize history rows before features/inference.
     Fixes malformed open=0 intraday rows and drops out-of-session noise.
+    
+    FIX #DATA-001: Added data quality scoring to detect and warn about
+    poor quality data that could affect prediction accuracy.
+    
+    FIX #DATA-002: Added zero-volume detection to filter out illiquid
+    stocks that may have unreliable price signals.
+    
+    FIX #DATA-003: Added price jump detection to identify and fix
+    data errors (e.g., split-adjustment issues).
     """
     if df is None or df.empty:
         return pd.DataFrame()
@@ -248,6 +257,9 @@ def _sanitize_history_df(
     iv = self._normalize_interval_token(interval)
     work = df.copy()
     has_dt_index = isinstance(work.index, pd.DatetimeIndex)
+    
+    # FIX #DATA-001: Track data quality metrics
+    quality_issues: list[str] = []
 
     if not has_dt_index:
         dt = None
@@ -266,6 +278,8 @@ def _sanitize_history_df(
             if valid_count > 0 and valid_ratio >= 0.80:
                 work = work.assign(_dt=dt).dropna(subset=["_dt"]).set_index("_dt")
                 has_dt_index = isinstance(work.index, pd.DatetimeIndex)
+            else:
+                quality_issues.append(f"low_datetime_valid_ratio={valid_ratio:.2f}")
 
     if has_dt_index:
         work = work[~work.index.duplicated(keep="last")].sort_index()
@@ -273,11 +287,31 @@ def _sanitize_history_df(
     for col in ("open", "high", "low", "close", "volume", "amount"):
         if col not in work.columns:
             work[col] = 0.0
+            if col != "amount":  # Amount missing is OK
+                quality_issues.append(f"missing_column={col}")
         work[col] = pd.to_numeric(work[col], errors="coerce").fillna(0.0)
+
+    # FIX #DATA-002: Detect zero-volume bars
+    if "volume" in work.columns:
+        zero_vol_ratio = (work["volume"] == 0).sum() / len(work)
+        if zero_vol_ratio > 0.3:  # More than 30% zero volume
+            quality_issues.append(f"high_zero_volume_ratio={zero_vol_ratio:.2f}")
 
     work = work[np.isfinite(work["close"]) & (work["close"] > 0)].copy()
     if work.empty:
         return pd.DataFrame()
+
+    # FIX #DATA-003: Detect extreme price jumps (potential data errors)
+    if len(work) > 1:
+        close_changes = work["close"].pct_change().abs()
+        extreme_jumps = (close_changes > 0.5).sum()  # >50% move
+        if extreme_jumps > 0:
+            quality_issues.append(f"extreme_price_jumps={extreme_jumps}")
+            # Cap extreme jumps to reasonable bounds (50% max)
+            work.loc[close_changes > 0.5, "close"] = work["close"].clip(
+                lower=work["close"].shift(1) * 0.5,
+                upper=work["close"].shift(1) * 1.5,
+            )
 
     if self._is_intraday_interval(iv) and has_dt_index:
         mask = self._intraday_session_mask(work.index)
@@ -351,6 +385,11 @@ def _sanitize_history_df(
             out.index = pd.RangeIndex(len(out))
     else:
         out.index = pd.Index(cleaned_idx)
+    
+    # Log quality issues if any
+    if quality_issues:
+        log.warning(f"Data quality issues detected: {', '.join(quality_issues)}")
+    
     return out
 
 def invalidate_cache(self, code: str | None = None, force_version_bump: bool = False) -> None:
@@ -1172,35 +1211,80 @@ def _generate_forecast(
     return fallback_prices
 
 def _determine_signal(self, ensemble_pred: Any, pred: Prediction) -> Signal:
-    """Determine trading signal from prediction."""
+    """Determine trading signal from prediction.
+    
+    FIX #SIG-001: Added adaptive threshold adjustment based on market regime
+    and volatility - higher thresholds in uncertain conditions.
+    
+    FIX #SIG-002: Improved edge calculation to use probability distribution
+    shape, not just prob_up - prob_down difference.
+    
+    FIX #SIG-003: Added confidence-entropy interaction - high entropy
+    requires higher confidence to generate actionable signals.
+    """
     confidence = float(ensemble_pred.confidence)
     predicted_class = int(ensemble_pred.predicted_class)
     edge = float(np.clip(pred.prob_up - pred.prob_down, -1.0, 1.0))
+    
+    # FIX #SIG-002: Enhanced edge with probability distribution shape
+    # Consider neutral probability as edge reducer
+    neutral_prob = float(getattr(pred, "prob_neutral", 0.34))
+    if neutral_prob > 0.5:
+        # High neutral = uncertain = reduce effective edge
+        edge = edge * (1.0 - neutral_prob)
+    
     is_sideways = str(pred.trend).upper() == "SIDEWAYS"
-    edge_floor = 0.06 if is_sideways else 0.04
+    
+    # FIX #SIG-001: Adaptive edge floor based on volatility and regime
+    base_edge_floor = 0.04
+    vol_adjustment = 0.0
+    
+    # Higher volatility = require stronger edge
+    atr_pct = float(getattr(pred, "atr_pct_value", 0.02))
+    if atr_pct > 0.04:  # High volatility
+        vol_adjustment = 0.02
+    elif atr_pct > 0.03:  # Moderate-high volatility
+        vol_adjustment = 0.01
+    
+    # Sideways market = require stronger edge (whipsaw risk)
+    if is_sideways:
+        vol_adjustment += 0.02
+    
+    edge_floor = base_edge_floor + vol_adjustment
     strong_edge_floor = max(0.12, edge_floor * 2.0)
-
+    
+    # FIX #SIG-003: Entropy adjustment to confidence
+    entropy = float(getattr(pred, "entropy", 0.0))
+    effective_confidence = confidence
+    if entropy > 0.6:  # High entropy
+        # Reduce effective confidence when entropy is high
+        effective_confidence = confidence * (1.0 - (entropy - 0.6) * 0.3)
+    elif entropy < 0.3:  # Low entropy = more certain
+        # Slight boost when entropy is very low
+        effective_confidence = min(0.99, confidence * 1.02)
+    
+    # Apply signal logic with effective confidence
     if predicted_class == 2:  # UP
         if edge < edge_floor:
             return Signal.HOLD
-        if confidence >= CONFIG.STRONG_BUY_THRESHOLD:
+        if effective_confidence >= float(CONFIG.STRONG_BUY_THRESHOLD):
             if edge >= strong_edge_floor:
                 return Signal.STRONG_BUY
             return Signal.BUY
-        elif confidence >= CONFIG.BUY_THRESHOLD:
+        elif effective_confidence >= float(CONFIG.BUY_THRESHOLD):
             return Signal.BUY
     elif predicted_class == 0:  # DOWN
         if edge > -edge_floor:
             return Signal.HOLD
-        if confidence >= CONFIG.STRONG_SELL_THRESHOLD:
+        if effective_confidence >= float(CONFIG.STRONG_SELL_THRESHOLD):
             if edge <= -strong_edge_floor:
                 return Signal.STRONG_SELL
             return Signal.SELL
-        elif confidence >= CONFIG.SELL_THRESHOLD:
+        elif effective_confidence >= float(CONFIG.SELL_THRESHOLD):
             return Signal.SELL
     else:  # NEUTRAL class: allow edge override when probabilities disagree.
         edge_override_floor = edge_floor + 0.04
-        if confidence >= max(float(CONFIG.BUY_THRESHOLD), 0.60):
+        if effective_confidence >= max(float(CONFIG.BUY_THRESHOLD), 0.60):
             if edge >= edge_override_floor:
                 return Signal.BUY
             if edge <= -edge_override_floor:

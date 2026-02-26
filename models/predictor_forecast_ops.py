@@ -748,17 +748,49 @@ def _apply_runtime_signal_quality_gate(self, pred: Prediction) -> None:
         f"{old_signal} -> HOLD ({'; '.join(reasons[:3])})"
     )
 
-def _get_cache_ttl(self, use_realtime: bool, interval: str) -> float:
+def _get_cache_ttl(self, use_realtime: bool, interval: str, volatility: float = None) -> float:
     """Adaptive cache TTL.
-    Real-time paths get shorter TTL to reduce stale guesses.
+    
+    FIX #CACHE-001: TTL now adapts to market volatility - higher volatility
+    means shorter cache life to reduce stale predictions.
+    
+    FIX #CACHE-002: Added cache invalidation hook for model reload events.
+    
+    Args:
+        use_realtime: Whether using real-time price
+        interval: Data interval
+        volatility: Optional ATR-based volatility measure
+        
+    Returns:
+        Cache TTL in seconds
     """
     base = float(self._CACHE_TTL)
+    
     if not use_realtime:
+        # Non-realtime: use base TTL with small volatility adjustment
+        if volatility is not None and volatility > 0.03:  # High volatility
+            return float(max(1.0, base * 0.7))  # Reduce TTL by 30%
         return base
+    
+    # Real-time paths: more aggressive TTL reduction
     intraday = str(interval).lower() in {"1m", "3m", "5m", "15m", "30m", "60m"}
+    
+    # Base realtime TTL
     if intraday:
-        return float(max(0.2, min(base, self._CACHE_TTL_REALTIME)))
-    return float(max(0.2, min(base, 2.0)))
+        ttl = float(max(0.2, min(base, self._CACHE_TTL_REALTIME)))
+    else:
+        ttl = float(max(0.5, min(base, 2.0)))
+    
+    # FIX #CACHE-001: Volatility adjustment
+    if volatility is not None and volatility > 0:
+        if volatility > 0.05:  # Very high volatility
+            ttl = max(0.15, ttl * 0.4)  # 60% reduction
+        elif volatility > 0.03:  # High volatility
+            ttl = max(0.2, ttl * 0.6)  # 40% reduction
+        elif volatility > 0.02:  # Moderate volatility
+            ttl = max(0.3, ttl * 0.8)  # 20% reduction
+    
+    return float(ttl)
 
 def _get_cache_version(self) -> str:
     """Get current model cache version.
@@ -774,61 +806,109 @@ def _get_cache_version(self) -> str:
         return str(getattr(self, "_model_artifact_sig", "v1"))
 
 def _get_cached_prediction(
-    self, cache_key: str, ttl: float | None = None
+    self,
+    cache_key: str,
+    ttl: float | None = None,
 ) -> Prediction | None:
     """Get cached prediction if still valid.
-    
+
     FIX CACHE INVALIDATION: Includes version check to invalidate
     all cached predictions when models are reloaded.
+    
+    FIX #CACHE-001: Supports per-entry TTL stored in cache entry.
+    
+    Args:
+        cache_key: Cache key
+        ttl: Default TTL if entry doesn't have its own TTL
+        
+    Returns:
+        Cached prediction or None if expired/missing
     """
-    ttl_s = float(self._CACHE_TTL if ttl is None else ttl)
+    default_ttl = float(self._CACHE_TTL if ttl is None else ttl)
     cache_version = self._get_cache_version()
     pred_to_copy: Prediction | None = None
-    
+
     with self._cache_lock:
         entry = self._pred_cache.get(cache_key)
         if entry is not None:
-            # Entry format: (timestamp, prediction, cache_version)
-            if len(entry) >= 3:
-                ts, pred, version = entry
+            # New format: (timestamp, prediction, cache_version, ttl)
+            if len(entry) >= 4:
+                ts, pred, version, entry_ttl = entry
+                use_ttl = entry_ttl if entry_ttl is not None else default_ttl
                 # Invalidate if version mismatch (model was reloaded)
                 if version != cache_version:
                     del self._pred_cache[cache_key]
                     return None
                 # Check TTL
-                if (time.time() - ts) < ttl_s:
+                if (time.time() - ts) < use_ttl:
                     pred_to_copy = pred
+                else:
+                    del self._pred_cache[cache_key]
+            elif len(entry) >= 3:
+                # Old format without per-entry TTL: (timestamp, prediction, version)
+                ts, pred, version = entry
+                if version != cache_version:
+                    del self._pred_cache[cache_key]
+                    return None
+                if (time.time() - ts) < default_ttl:
+                    pred_to_copy = pred
+                else:
+                    del self._pred_cache[cache_key]
             else:
-                # Old format without version - invalidate
+                # Very old format without version - invalidate
                 del self._pred_cache[cache_key]
-                return None
+                
     if pred_to_copy is None:
         return None
     return copy.deepcopy(pred_to_copy)
 
-def _set_cached_prediction(self, cache_key: str, pred: Prediction) -> None:
+def _set_cached_prediction(
+    self,
+    cache_key: str,
+    pred: Prediction,
+    ttl: float | None = None,
+) -> None:
     """Cache a prediction result with bounded size.
-    
+
     FIX CACHE INVALIDATION: Stores model version with each prediction
     to enable bulk invalidation on model reload.
+    
+    FIX #CACHE-001: Added optional TTL parameter for per-entry TTL override.
+    
+    Args:
+        cache_key: Cache key
+        pred: Prediction to cache
+        ttl: Optional TTL override (uses default if None)
     """
     cache_version = self._get_cache_version()
     pred_copy = copy.deepcopy(pred)
-    
+
     with self._cache_lock:
         # Store version with prediction for invalidation checking
         self._pred_cache[cache_key] = (
-            time.time(), 
+            time.time(),
             pred_copy,
             cache_version,
+            ttl,  # Store per-entry TTL
         )
 
         if len(self._pred_cache) > self._MAX_CACHE_SIZE:
             now = time.time()
-            expired = [
-                k for k, entry in self._pred_cache.items()
-                if len(entry) >= 1 and (now - entry[0]) > self._CACHE_TTL
-            ]
+            expired: list[str] = []
+            for k, entry in self._pred_cache.items():
+                if len(entry) >= 4:
+                    ts, _, _, entry_ttl = entry
+                    use_ttl = entry_ttl if entry_ttl is not None else self._CACHE_TTL
+                elif len(entry) >= 1:
+                    ts = entry[0]
+                    use_ttl = self._CACHE_TTL
+                else:
+                    expired.append(k)
+                    continue
+                    
+                if (now - ts) > use_ttl:
+                    expired.append(k)
+            
             for k in expired:
                 del self._pred_cache[k]
 

@@ -15,12 +15,8 @@ dependencies = [
   "httpx>=0.25.0,<1.0.0",
   "anyio>=4.0.0,<5.0.0",
   "asyncio>=3.4.3,<4.0.0",
-  # Database layer - modernized
+  # Database layer
   "aiosqlite>=0.19.0,<1.0.0",
-  "asyncpg>=0.29.0,<1.0.0",
-  "sqlalchemy>=2.0.0,<3.0.0",
-  # Caching - Redis support
-  "redis>=5.0.0,<6.0.0",
   # ML stack - updated
   "torch>=2.1.0,<3.0.0",
   "torchvision>=0.16.0,<1.0.0",
@@ -48,9 +44,7 @@ include = [
   "data*",
   "models*",
   "scripts*",
-  "strategies*",
   "tests*",
-  "trading*",
   "ui*",
   "utils*",
 ]
@@ -70,24 +64,10 @@ ml = [
   "torchvision>=0.16.0,<1.0.0",
   "lightning>=2.1.0,<3.0.0",
 ]
-# NEW: Distributed training support
-distributed = [
-  "ray>=2.8.0,<3.0.0",
-  "deepspeed>=0.12.0,<1.0.0",
-  "accelerate>=0.25.0,<1.0.0",
-]
-# NEW: Modern backtesting
+# Modern backtesting
 backtest = [
   "vectorbt>=0.26.0,<1.0.0",
   "backtesting>=0.3.3,<1.0.0",
-]
-# NEW: Web dashboard
-web = [
-  "fastapi>=0.105.0,<1.0.0",
-  "uvicorn>=0.25.0,<1.0.0",
-  "websockets>=12.0,<13.0",
-  "plotly>=5.18.0,<6.0.0",
-  "dash>=2.14.0,<3.0.0",
 ]
 china = [
   "akshare>=1.11.0",
@@ -97,40 +77,17 @@ vpn = [
 ]
 nlp = [
   "beautifulsoup4>=4.12.0,<5.0.0",
-  # NEW: Modern NLP for sentiment
   "sentence-transformers>=2.2.0,<3.0.0",
   "transformers>=4.36.0,<5.0.0",
 ]
 gui = [
   "PyQt6>=6.6.0,<7.0.0",
   "pyqtgraph>=0.13.0,<1.0.0",
-  # NEW: Modern charting
   "plotly>=5.18.0,<6.0.0",
-  "bokeh>=3.3.0,<4.0.0",
 ]
-security = []
-live = []
 explainability = [
   "shap>=0.44.0",
   "lime>=0.2.0",
-  # NEW: Modern interpretability
-  "captum>=0.6.0,<1.0.0",
-  "interpret>=0.3.0,<1.0.0",
-]
-backup = [
-  "boto3>=1.34.0",
-  "azure-storage-blob>=3.19.0",
-  "google-cloud-storage>=2.13.0",
-]
-two_factor_auth = [
-  "qrcode[pil]>=7.4.0",
-  "pyotp>=2.9.0",
-]
-# NEW: Performance profiling
-profiling = [
-  "py-spy>=0.3.14",
-  "memray>=1.11.0",
-  "perfetto>=0.1.0",
 ]
 dev = [
   "pytest>=8.0.0",

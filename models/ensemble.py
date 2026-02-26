@@ -21,6 +21,9 @@ from utils.logger import get_logger
 
 log = get_logger(__name__)
 
+# Epsilon for numerical stability
+_EPS = 1e-8
+
 try:
     from utils.cancellation import CancelledException
 except ImportError:
@@ -254,17 +257,56 @@ class EnsembleModel:
                 ) from e
 
     def _normalize_weights(self) -> None:
-        # FIX NORM: Handle empty weights dict gracefully
+        """Normalize ensemble weights with comprehensive validation.
+        
+        FIX NORM: Handle empty weights dict, zero weights, and NaN/Inf
+        to prevent crashes and ensure stable ensemble predictions.
+        """
         if not self.weights:
+            log.debug("No weights to normalize")
             return
-        total = sum(self.weights.values())
-        if total > 0:
-            self.weights = {k: v / total for k, v in self.weights.items()}
-        else:
-            # All weights are zero - set uniform
+        
+        # FIX: Filter out NaN/Inf values
+        clean_weights = {}
+        for k, v in self.weights.items():
+            try:
+                val = float(v)
+                if np.isfinite(val) and val >= 0:
+                    clean_weights[k] = val
+                else:
+                    log.debug("Filtering invalid weight for %s: %s", k, v)
+            except (TypeError, ValueError):
+                log.debug("Filtering non-numeric weight for %s", k)
+        
+        if not clean_weights:
+            # All weights were invalid - reset to uniform
             n = len(self.weights)
             if n > 0:
                 self.weights = {k: 1.0 / n for k in self.weights}
+                log.info("Reset all weights to uniform (1/%d)", n)
+            return
+        
+        total = sum(clean_weights.values())
+        
+        # FIX: Handle zero or near-zero total
+        if total <= _EPS:
+            n = len(clean_weights)
+            if n > 0:
+                self.weights = {k: 1.0 / n for k in clean_weights}
+                log.info("Reset weights to uniform (total was ~0)")
+            return
+        
+        # Normalize
+        self.weights = {k: v / total for k, v in clean_weights.items()}
+        
+        # FIX: Verify normalization
+        total_after = sum(self.weights.values())
+        if abs(total_after - 1.0) > 1e-6:
+            log.warning("Weight normalization error: total=%s", total_after)
+            # Re-normalize with higher precision
+            total = sum(self.weights.values())
+            if total > 0:
+                self.weights = {k: v / total for k, v in self.weights.items()}
 
     # ------------------------------------------------------------------
     # ------------------------------------------------------------------
@@ -344,10 +386,12 @@ class EnsembleModel:
         best_temp = 1.0
         best_nll = float("inf")
 
-        # FIX CALIB: Finer temperature grid with more granularity
+        # FIX #CAL-001: Finer temperature grid with more granularity
+        # Extended range and finer steps for better calibration precision
         temp_grid = [
-            0.1, 0.15, 0.2, 0.25, 0.3, 0.4, 0.5, 0.6, 0.7, 0.75,
-            0.8, 0.9, 1.0, 1.1, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0, 4.0, 5.0,
+            0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.35, 0.4, 0.45, 0.5,
+            0.55, 0.6, 0.65, 0.7, 0.75, 0.8, 0.85, 0.9, 0.95, 1.0,
+            1.1, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0, 4.0, 5.0, 7.5, 10.0,
         ]
 
         for temp in temp_grid:
@@ -663,6 +707,14 @@ class EnsembleModel:
         models are reweighted while untrained models retain their prior mass.
         This avoids artificially boosting untrained models with placeholder
         scores.
+        
+        FIX #ENS-001: Added better handling for edge cases:
+        - All accuracies are zero or NaN
+        - Single model in ensemble
+        - Numerical instability in softmax
+        
+        FIX #ENS-002: Added minimum weight floor to prevent model starvation
+        (models can recover if they improve later).
         """
         if not val_accuracies:
             return
@@ -678,22 +730,53 @@ class EnsembleModel:
         if not trained_names:
             return
 
+        # FIX #ENS-001: Handle NaN/Inf accuracies
         accs = np.array(
             [float(val_accuracies[n]) for n in trained_names],
             dtype=np.float64,
         )
         if accs.size == 0:
             return
-        accs = np.nan_to_num(accs, nan=0.0, posinf=1.0, neginf=0.0)
+        
+        # Replace NaN/Inf with neutral value
+        accs = np.nan_to_num(accs, nan=0.5, posinf=1.0, neginf=0.0)
+        
+        # FIX #ENS-001: Handle single model case
+        if len(accs) == 1:
+            # Single model gets weight 1.0 (or retains some mass for untrained)
+            if len(trained_names) == len(names_all):
+                self.weights = {trained_names[0]: 1.0}
+            else:
+                # Keep some mass for untrained models
+                untrained_names = [n for n in names_all if n not in trained_names]
+                trained_weight = 0.9
+                untrained_weight = 0.1 / len(untrained_names) if untrained_names else 0.0
+                new_weights = {trained_names[0]: trained_weight}
+                for n in untrained_names:
+                    new_weights[n] = untrained_weight
+                self.weights = new_weights
+            log.info(f"Ensemble weight update: single trained model {trained_names[0]}")
+            return
 
+        # Temperature-scaled softmax weighting
         temperature = 0.5
         shifted = (accs - np.max(accs)) / temperature
-        exp_w = np.exp(shifted)
+        
+        # FIX #ENS-001: Check for numerical instability
+        exp_w = np.exp(np.clip(shifted, -700, 700))  # Prevent overflow
         exp_sum = float(exp_w.sum())
+        
         if not np.isfinite(exp_sum) or exp_sum <= 0.0:
+            # Fallback to uniform weights
             trained_dist = np.full(accs.size, 1.0 / float(accs.size))
         else:
             trained_dist = exp_w / exp_sum
+
+        # FIX #ENS-002: Apply minimum weight floor (models can recover)
+        min_weight = 0.05  # No model gets less than 5% weight
+        trained_dist = np.clip(trained_dist, min_weight, 1.0)
+        # Renormalize after clipping
+        trained_dist = trained_dist / trained_dist.sum()
 
         if len(trained_names) == len(names_all):
             new_weights = {
@@ -701,7 +784,8 @@ class EnsembleModel:
                 for n, w in zip(trained_names, trained_dist, strict=False)
             }
         else:
-            untrained_names = [n for n in names_all if n not in trained_names]
+            trained_names_set = set(trained_names)
+            untrained_names = [n for n in names_all if n not in trained_names_set]
             untrained_raw = np.array(
                 [max(0.0, current.get(n, 0.0)) for n in untrained_names],
                 dtype=np.float64,

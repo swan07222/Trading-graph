@@ -318,8 +318,21 @@ class NewsTrainer:
         symbols: list[str],
         days_back: int = 90,
         min_articles_per_day: int = 5,
+        lookback: int = 5,
+        horizon: int = 3,
     ) -> list[NewsTrainingSample]:
-        """Prepare training data from news and price history."""
+        """Prepare training data from news and price history.
+
+        Args:
+            symbols: List of stock symbols
+            days_back: Days of historical data to use
+            min_articles_per_day: Minimum articles required per day
+            lookback: Days of price history for features (default 5)
+            horizon: Prediction horizon in days (default 3)
+
+        Returns:
+            List of training samples
+        """
         log.info(f"Preparing training data for {len(symbols)} symbols...")
 
         samples = []
@@ -362,11 +375,13 @@ class NewsTrainer:
                     log.error(f"Failed to get price data for {symbol}: {e}")
                     continue
 
-                # Create samples
+                # Create samples with configurable lookback and horizon
                 symbol_samples = self._create_samples(
                     symbol=symbol,
                     articles=articles,
                     prices=prices,
+                    lookback=lookback,
+                    horizon=horizon,
                 )
                 samples.extend(symbol_samples)
 
@@ -384,11 +399,22 @@ class NewsTrainer:
         symbol: str,
         articles: list[NewsArticle],
         prices: Any,  # DataFrame
+        lookback: int = 5,
+        horizon: int = 3,
     ) -> list[NewsTrainingSample]:
-        """Create training samples from news and prices."""
+        """Create training samples from news and prices.
+
+        Args:
+            symbol: Stock symbol
+            articles: List of news articles
+            prices: Price DataFrame
+            lookback: Days of price history to use (configurable, default 5)
+            horizon: Prediction horizon in days (configurable, default 3)
+
+        Returns:
+            List of training samples
+        """
         samples = []
-        lookback = 5  # Days of price history
-        horizon = 3  # Prediction horizon (days)
 
         # Group articles by date
         articles_by_date: dict[str, list[NewsArticle]] = {}
@@ -458,11 +484,9 @@ class NewsTrainer:
                 else:
                     label = 1  # Hold
 
-                # News embeddings (simplified - use sentiment as proxy)
-                # In production, would use actual text embeddings
-                news_embeddings = np.array([
-                    [avg_sentiment] * 256  # Repeat for embedding dim
-                ])
+                # FIX 12: Generate better news embeddings using sentiment + keyword features
+                # instead of simple repetition
+                news_embeddings = self._generate_news_embeddings(day_articles, avg_sentiment)
 
                 samples.append(NewsTrainingSample(
                     news_embeddings=news_embeddings,
@@ -479,6 +503,63 @@ class NewsTrainer:
                 continue
 
         return samples
+
+    def _generate_news_embeddings(
+        self,
+        articles: list[NewsArticle],
+        avg_sentiment: float,
+        embed_dim: int = 256,
+    ) -> np.ndarray:
+        """Generate news embeddings from articles.
+
+        FIX 12: Creates more meaningful embeddings using sentiment distribution
+        and article features instead of simple sentiment repetition.
+
+        Args:
+            articles: List of news articles
+            avg_sentiment: Average sentiment score
+            embed_dim: Embedding dimension (default 256)
+
+        Returns:
+            News embeddings array [seq_len, embed_dim]
+        """
+        if not articles:
+            return np.zeros((1, embed_dim), dtype=np.float32)
+
+        # Create feature vector for each article
+        article_embeddings = []
+        for article in articles[:10]:  # Limit to 10 most recent articles
+            # Sentiment features
+            sentiment = float(getattr(article, 'sentiment_score', 0.0))
+
+            # Category encoding (one-hot)
+            categories = ["policy", "market", "company", "economic", "regulatory"]
+            cat_idx = categories.index(article.category.lower()) if article.category.lower() in categories else -1
+            cat_onehot = [1.0 if i == cat_idx else 0.0 for i in range(len(categories))]
+
+            # Relevance and recency
+            relevance = float(getattr(article, 'relevance_score', 0.5))
+
+            # Language indicator
+            language = getattr(article, 'language', 'en')
+            is_zh = 1.0 if language == 'zh' else 0.0
+
+            # Combine features
+            features = [sentiment, relevance, is_zh] + cat_onehot
+
+            # Pad to embed_dim
+            while len(features) < embed_dim:
+                features.append(0.0)
+
+            article_embeddings.append(features[:embed_dim])
+
+        # Convert to numpy array
+        if article_embeddings:
+            embeddings = np.array(article_embeddings, dtype=np.float32)
+        else:
+            embeddings = np.zeros((1, embed_dim), dtype=np.float32)
+
+        return embeddings
 
     def _extract_price_features(self, price_data: Any) -> np.ndarray:
         """Extract features from price DataFrame."""
@@ -521,13 +602,38 @@ class NewsTrainer:
         batch_size: int = 32,
         learning_rate: float = 1e-3,
         validation_split: float = 0.2,
+        lookback_days: int = 5,
+        horizon_days: int = 3,
+        early_stopping_patience: int = 10,
+        gradient_clip_value: float = 1.0,
     ) -> dict[str, Any]:
-        """Train the news-based prediction model."""
+        """Train the news-based prediction model.
+
+        Args:
+            symbols: List of stock symbols
+            epochs: Number of training epochs
+            batch_size: Batch size for training
+            learning_rate: Learning rate for optimizer
+            validation_split: Fraction of data for validation
+            lookback_days: Days of price history (configurable, default 5)
+            horizon_days: Prediction horizon in days (configurable, default 3)
+            early_stopping_patience: Patience for early stopping (default 10)
+            gradient_clip_value: Gradient clipping value (default 1.0)
+
+        Returns:
+            Training report with metrics
+        """
         log.info(f"Starting news-based training for {len(symbols)} symbols...")
         start_time = time.time()
 
-        # Prepare data
-        samples = self.prepare_training_data(symbols, days_back=90)
+        # Prepare data with configurable lookback and horizon
+        samples = self.prepare_training_data(
+            symbols,
+            days_back=90,
+            min_articles_per_day=5,
+            lookback=lookback_days,
+            horizon=horizon_days,
+        )
 
         if not samples:
             log.error("No training samples generated")
@@ -583,13 +689,20 @@ class NewsTrainer:
             eta_min=1e-5,
         )
 
-        # Training loop
+        # FIX 15: Early stopping
         best_val_acc = 0.0
+        best_val_loss = float('inf')
+        patience_counter = 0
         training_history = []
+        early_stop_triggered = False
 
+        # Training loop
         for epoch in range(epochs):
             # Train
-            train_loss, train_acc = self._train_epoch(train_loader)
+            train_loss, train_acc = self._train_epoch(
+                train_loader,
+                gradient_clip_value=gradient_clip_value,  # FIX 14: Gradient clipping
+            )
             val_loss, val_acc = self._validate(val_loader)
 
             scheduler.step()
@@ -610,10 +723,19 @@ class NewsTrainer:
                 f"Val Loss: {val_loss:.4f}, Acc: {val_acc:.2%}"
             )
 
-            # Save best model
+            # FIX 15: Early stopping check
             if val_acc > best_val_acc:
                 best_val_acc = val_acc
+                best_val_loss = val_loss
+                patience_counter = 0
                 self.save_model("news_model_best.pt")
+                log.info(f"New best model saved (val_acc={val_acc:.2%})")
+            else:
+                patience_counter += 1
+                if patience_counter >= early_stopping_patience:
+                    log.info(f"Early stopping triggered at epoch {epoch + 1} (no improvement for {early_stopping_patience} epochs)")
+                    early_stop_triggered = True
+                    break
 
         # Save final model
         self.training_history = list(training_history)
@@ -624,19 +746,33 @@ class NewsTrainer:
 
         return {
             "status": "success",
-            "epochs": epochs,
+            "epochs_completed": len(training_history),
+            "epochs_requested": epochs,
+            "early_stopping_triggered": early_stop_triggered,
             "train_samples": len(train_samples),
             "val_samples": len(val_samples),
-            "best_val_acc": best_val_acc,
-            "training_time_seconds": elapsed,
+            "best_val_acc": float(best_val_acc),
+            "best_val_loss": float(best_val_loss),
+            "final_train_acc": float(training_history[-1]["train_acc"]) if training_history else 0.0,
+            "final_val_acc": float(training_history[-1]["val_acc"]) if training_history else 0.0,
+            "training_time_seconds": float(elapsed),
             "history": training_history,
         }
 
     def _train_epoch(
         self,
         loader: DataLoader,
+        gradient_clip_value: float = 1.0,
     ) -> tuple[float, float]:
-        """Train for one epoch."""
+        """Train for one epoch.
+
+        Args:
+            loader: Training data loader
+            gradient_clip_value: Gradient clipping value (default 1.0)
+
+        Returns:
+            Tuple of (average loss, accuracy)
+        """
         self.model.train()
 
         total_loss = 0.0
@@ -655,7 +791,13 @@ class NewsTrainer:
             loss = self.criterion(outputs["signal_logits"], labels)
 
             loss.backward()
-            torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
+
+            # FIX 14: Gradient clipping
+            torch.nn.utils.clip_grad_norm_(
+                self.model.parameters(),
+                max_norm=gradient_clip_value,
+            )
+
             self.optimizer.step()
 
             total_loss += loss.item()

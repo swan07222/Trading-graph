@@ -20,19 +20,20 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import html
 import json
 import re
 import time
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime
 from enum import Enum, auto
 from pathlib import Path
 from typing import Any
+from urllib.parse import parse_qs, urlparse
 
 import aiohttp
-from aiohttp import ClientTimeout
 
-from config.runtime_env import env_text, env_int
+from config.runtime_env import env_text
 from config.settings import CONFIG
 from utils.async_http import AsyncHttpClient, HttpClientConfig
 from utils.logger import get_logger
@@ -67,6 +68,7 @@ class SearchResult:
     content: str = ""  # Full content if fetched
 
     def to_dict(self) -> dict[str, Any]:
+        """Convert to dictionary for JSON serialization."""
         return {
             "id": self.id,
             "title": self.title,
@@ -82,7 +84,8 @@ class SearchResult:
         }
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "SearchResult":
+    def from_dict(cls, data: dict[str, Any]) -> SearchResult:
+        """Create SearchResult from dictionary."""
         published = None
         if data.get("published_at"):
             try:
@@ -90,18 +93,28 @@ class SearchResult:
             except (ValueError, TypeError):
                 pass
         return cls(
-            id=data["id"],
-            title=data["title"],
-            snippet=data["snippet"],
-            url=data["url"],
-            source=data["source"],
-            engine=SearchEngine[data["engine"]],
-            rank=data["rank"],
+            id=data.get("id", hashlib.md5(data.get("url", "").encode()).hexdigest()),
+            title=data.get("title", ""),
+            snippet=data.get("snippet", ""),
+            url=data.get("url", ""),
+            source=data.get("source", ""),
+            engine=SearchEngine[data.get("engine", "BING_CN")],
+            rank=data.get("rank", 0),
             published_at=published,
             language=data.get("language", "zh"),
             quality_score=float(data.get("quality_score", 0.0)),
             content=data.get("content", ""),
         )
+
+    def __hash__(self) -> int:
+        """Hash based on URL for deduplication."""
+        return hash(self.url)
+
+    def __eq__(self, other: object) -> bool:
+        """Equality based on URL."""
+        if not isinstance(other, SearchResult):
+            return NotImplemented
+        return self.url == other.url
 
 
 @dataclass
@@ -158,6 +171,9 @@ class SearchEngineManager:
         self._last_check: dict[SearchEngine, float] = {}
         self._cooldown: dict[SearchEngine, float] = {}
         self._lock = asyncio.Lock()
+        self._failure_counts: dict[SearchEngine, int] = {
+            engine: 0 for engine in list(self.CHINA_ENGINES) + list(self.INTERNATIONAL_ENGINES)
+        }
 
     def is_vpn_mode(self) -> bool:
         """Check if VPN mode is enabled."""
@@ -182,19 +198,29 @@ class SearchEngineManager:
     async def record_success(self, engine: SearchEngine) -> None:
         """Record successful search operation."""
         async with self._lock:
-            self._health_scores[engine] = min(1.0, self._health_scores.get(engine, 0.5) + 0.1)
+            # Gradually increase health on success
+            current_health = self._health_scores.get(engine, 0.5)
+            self._health_scores[engine] = min(1.0, current_health + 0.05)
             self._last_check[engine] = time.time()
             self._cooldown.pop(engine, None)
+            # Reset failure count on success
+            self._failure_counts[engine] = 0
 
     async def record_failure(self, engine: SearchEngine, error: str) -> None:
         """Record failed search operation."""
         async with self._lock:
-            self._health_scores[engine] = max(0.0, self._health_scores.get(engine, 0.5) - 0.2)
+            # Decrease health more aggressively on failure
+            current_health = self._health_scores.get(engine, 0.5)
+            self._health_scores[engine] = max(0.0, current_health - 0.1)
             self._last_check[engine] = time.time()
+            self._failure_counts[engine] = self._failure_counts.get(engine, 0) + 1
+            
             # Add cooldown for repeated failures
-            if self._health_scores[engine] < 0.3:
+            if self._health_scores[engine] < 0.3 or self._failure_counts[engine] >= 3:
                 self._cooldown[engine] = time.time() + 300  # 5 min cooldown
-            log.warning(f"Search engine {engine.name} failed: {error}")
+                log.warning(f"Search engine {engine.name} entered cooldown: {error}")
+            else:
+                log.warning(f"Search engine {engine.name} failed: {error}")
 
     async def is_available(self, engine: SearchEngine) -> bool:
         """Check if engine is available (not in cooldown)."""
@@ -218,6 +244,8 @@ class SearchResultCache:
         self.ttl_hours = ttl_hours
         self._memory_cache: dict[str, tuple[list[dict], float]] = {}
         self._memory_ttl = 300  # 5 minutes for memory cache
+        self._lock = asyncio.Lock()
+        self._max_memory_cache_size = 100  # Limit memory cache size
 
     def _get_cache_key(self, query: str, engines: list[SearchEngine], limit: int) -> str:
         """Generate cache key for query."""
@@ -232,16 +260,17 @@ class SearchResultCache:
         """Get cached results if available and not expired."""
         key = self._get_cache_key(query, engines, limit)
 
-        # Check memory cache first
-        if key in self._memory_cache:
-            data, timestamp = self._memory_cache[key]
-            if time.time() - timestamp < self._memory_ttl:
-                log.debug(f"Cache hit (memory) for query: {query[:50]}")
-                return [SearchResult.from_dict(item) for item in data]
-            else:
-                del self._memory_cache[key]
+        async with self._lock:
+            # Check memory cache first
+            if key in self._memory_cache:
+                data, timestamp = self._memory_cache[key]
+                if time.time() - timestamp < self._memory_ttl:
+                    log.debug(f"Cache hit (memory) for query: {query[:50]}")
+                    return [SearchResult.from_dict(item) for item in data]
+                else:
+                    del self._memory_cache[key]
 
-        # Check disk cache
+        # Check disk cache (outside lock to avoid blocking)
         cache_file = self._get_cache_file(key)
         if cache_file.exists():
             try:
@@ -251,13 +280,16 @@ class SearchResultCache:
                     content = cache_file.read_text(encoding="utf-8")
                     data = json.loads(content)
                     # Store in memory cache
-                    self._memory_cache[key] = (data, time.time())
+                    async with self._lock:
+                        self._memory_cache[key] = (data, time.time())
+                        # Evict oldest entries if cache is too large
+                        self._evict_memory_cache_if_needed()
                     log.debug(f"Cache hit (disk) for query: {query[:50]}")
                     return [SearchResult.from_dict(item) for item in data]
                 else:
                     cache_file.unlink()
-            except (json.JSONDecodeError, OSError) as e:
-                log.warning(f"Cache file corrupted: {e}")
+            except (json.JSONDecodeError, OSError, UnicodeDecodeError) as e:
+                log.warning(f"Cache file corrupted or unreadable: {e}")
                 cache_file.unlink(missing_ok=True)
 
         return None
@@ -268,20 +300,37 @@ class SearchResultCache:
         key = self._get_cache_key(query, engines, limit)
         data = [r.to_dict() for r in results]
 
-        # Store in memory cache
-        self._memory_cache[key] = (data, time.time())
+        async with self._lock:
+            # Store in memory cache
+            self._memory_cache[key] = (data, time.time())
+            self._evict_memory_cache_if_needed()
 
-        # Store in disk cache
+        # Store in disk cache (outside lock)
         cache_file = self._get_cache_file(key)
         try:
             content = json.dumps(data, ensure_ascii=False, indent=2)
             cache_file.write_text(content, encoding="utf-8")
-        except OSError as e:
+        except (OSError, UnicodeEncodeError) as e:
             log.warning(f"Failed to write cache: {e}")
+
+    def _evict_memory_cache_if_needed(self) -> None:
+        """Evict oldest entries from memory cache if it exceeds size limit."""
+        if len(self._memory_cache) > self._max_memory_cache_size:
+            # Remove oldest 20% of entries
+            sorted_items = sorted(
+                self._memory_cache.items(),
+                key=lambda x: x[1][1]  # Sort by timestamp
+            )
+            evict_count = len(self._memory_cache) // 5
+            for key, _ in sorted_items[:evict_count]:
+                del self._memory_cache[key]
 
     async def clear(self) -> None:
         """Clear all cached results."""
-        self._memory_cache.clear()
+        async with self._lock:
+            self._memory_cache.clear()
+        
+        # Clear disk cache
         for cache_file in self.cache_dir.glob("*.json"):
             try:
                 cache_file.unlink()
@@ -388,7 +437,7 @@ class WebSearchEngine:
         self.max_concurrent = max_concurrent
         self._semaphore = asyncio.Semaphore(max_concurrent)
 
-        # Rate limiting per engine
+        # Rate limiting per engine (thread-safe with locks)
         self._rate_limits: dict[SearchEngine, float] = {
             SearchEngine.BING_CN: 2.0,  # 2 seconds between requests
             SearchEngine.BAIDU: 3.0,
@@ -399,11 +448,22 @@ class WebSearchEngine:
             SearchEngine.SINA_SEARCH: 2.0,
         }
         self._last_request: dict[SearchEngine, float] = {}
-        self._rate_limit_lock = asyncio.Lock()
+        self._rate_limit_locks: dict[SearchEngine, asyncio.Lock] = {
+            engine: asyncio.Lock() for engine in SearchEngine
+        }
+
+        # Content hash for deduplication
+        self._content_hashes: dict[str, float] = {}
+        self._hash_lock = asyncio.Lock()
 
     async def _wait_rate_limit(self, engine: SearchEngine) -> None:
-        """Wait for rate limit to be satisfied."""
-        async with self._rate_limit_lock:
+        """Wait for rate limit to be satisfied (thread-safe)."""
+        lock = self._rate_limit_locks.get(engine)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._rate_limit_locks[engine] = lock
+            
+        async with lock:
             last = self._last_request.get(engine, 0)
             min_interval = self._rate_limits.get(engine, 2.0)
             elapsed = time.time() - last
@@ -416,19 +476,31 @@ class WebSearchEngine:
         result: SearchResult,
         query: str,
     ) -> float:
-        """Calculate quality score for search result."""
+        """Calculate quality score for search result.
+        
+        Args:
+            result: Search result to score
+            query: Original search query
+            
+        Returns:
+            Quality score between 0.0 and 1.0
+        """
         score = 0.0
 
-        # Title relevance (keyword match)
+        # Safely split query terms
         query_terms = query.lower().split()
+        if not query_terms:
+            query_terms = [query.lower()]
+
+        # Title relevance (keyword match)
         title_lower = result.title.lower()
         title_matches = sum(1 for term in query_terms if term in title_lower)
-        title_score = title_matches / max(len(query_terms), 1)
+        title_score = title_matches / len(query_terms) if query_terms else 0.0
 
         # Snippet relevance
         snippet_lower = result.snippet.lower()
         snippet_matches = sum(1 for term in query_terms if term in snippet_lower)
-        snippet_score = snippet_matches / max(len(query_terms), 1)
+        snippet_score = snippet_matches / len(query_terms) if query_terms else 0.0
 
         # Source quality
         source_score = 0.5
@@ -453,7 +525,7 @@ class WebSearchEngine:
         # Rank score (higher rank = better)
         rank_score = 1.0 / (1.0 + result.rank * 0.1)
 
-        # Weighted sum
+        # Weighted sum with bounds checking
         score = (
             title_score * self.TITLE_WEIGHT +
             snippet_score * self.SNIPPET_WEIGHT +
@@ -464,43 +536,131 @@ class WebSearchEngine:
 
         return min(1.0, max(0.0, score))
 
+    def _strip_html_tags(self, html_text: str) -> str:
+        """Safely strip HTML tags from text.
+        
+        Args:
+            html_text: Text with HTML tags
+            
+        Returns:
+            Plain text with tags removed
+        """
+        if not html_text:
+            return ""
+        # Remove script and style tags
+        text = re.sub(r'<(script|style)[^>]*>.*?</\1>', '', html_text, flags=re.DOTALL | re.IGNORECASE)
+        # Remove all other tags
+        text = re.sub(r'<[^>]+>', '', text)
+        # Decode HTML entities
+        text = html.unescape(text)
+        # Normalize whitespace
+        text = re.sub(r'\s+', ' ', text).strip()
+        return text
+
+    async def _search_with_retry(
+        self,
+        search_func: callable,
+        engine: SearchEngine,
+        *args: Any,
+    ) -> list[SearchResult]:
+        """Execute search with retry logic.
+        
+        Args:
+            search_func: Async search function to call
+            engine: Search engine being used
+            *args: Arguments to pass to search function
+            
+        Returns:
+            List of search results
+        """
+        max_retries = 3
+        base_delay = 1.0
+        
+        for attempt in range(max_retries):
+            try:
+                return await search_func(*args)
+            except TimeoutError as e:
+                log.warning(f"{engine.name} timeout (attempt {attempt + 1}/{max_retries}): {e}")
+                if attempt < max_retries - 1:
+                    delay = base_delay * (2 ** attempt)
+                    await asyncio.sleep(delay)
+            except aiohttp.ClientError as e:
+                log.warning(f"{engine.name} client error (attempt {attempt + 1}/{max_retries}): {e}")
+                if attempt < max_retries - 1:
+                    delay = base_delay * (2 ** attempt)
+                    await asyncio.sleep(delay)
+            except Exception as e:
+                log.warning(f"{engine.name} unexpected error (attempt {attempt + 1}/{max_retries}): {e}")
+                if attempt < max_retries - 1:
+                    delay = base_delay * (2 ** attempt)
+                    await asyncio.sleep(delay)
+        
+        return []
+
     async def _search_bing_cn(self, query: str, limit: int) -> list[SearchResult]:
         """Search Bing China."""
         await self._wait_rate_limit(SearchEngine.BING_CN)
 
         url = "https://cn.bing.com/search"
-        params = {"q": query, "count": limit}
+        params = {"q": query, "count": str(limit)}
 
         async with self._semaphore:
             client = AsyncHttpClient()
             try:
-                response = await client.get(url, params=params)
-                html = response.text()
-                return self._parse_bing_results(html, query, limit)
+                async with client:
+                    response = await client.get(url, params=params)
+                    html_content = await response.text()
+                    return self._parse_bing_results(html_content, query, limit)
+            except TimeoutError:
+                log.warning(f"Bing CN search timed out for query: {query[:50]}")
+                return []
             except Exception as e:
                 log.warning(f"Bing CN search failed: {e}")
                 return []
 
-    def _parse_bing_results(self, html: str, query: str, limit: int) -> list[SearchResult]:
-        """Parse Bing search results from HTML."""
+    def _parse_bing_results(self, html_content: str, query: str, limit: int) -> list[SearchResult]:
+        """Parse Bing search results from HTML.
+        
+        Args:
+            html_content: Raw HTML from Bing search
+            query: Original search query
+            limit: Maximum results to return
+            
+        Returns:
+            List of parsed search results
+        """
         results = []
-        # Simple regex-based parsing (production should use BeautifulSoup)
-        pattern = r'<li class="b_algo"(.*?)</li>'
-        matches = re.findall(pattern, html, re.DOTALL | re.IGNORECASE)
+        # More robust pattern for Bing results
+        pattern = r'<li\s+class="b_algo"[^>]*>(.*?)</li>'
+        matches = re.findall(pattern, html_content, re.DOTALL | re.IGNORECASE)
 
         for i, match in enumerate(matches[:limit]):
             try:
                 # Extract title
-                title_match = re.search(r'<h2.*?>.*?<a.*?>(.*?)</a>', match, re.DOTALL)
-                title = re.sub(r'<.*?>', '', title_match.group(1) or "") if title_match else ""
+                title_match = re.search(
+                    r'<h2[^>]*>.*?<a[^>]*>(.*?)</a>',
+                    match,
+                    re.DOTALL
+                )
+                title = self._strip_html_tags(title_match.group(1) or "") if title_match else ""
 
                 # Extract URL
-                url_match = re.search(r'<a href="(.*?)"', match)
+                url_match = re.search(r'<a\s+href="([^"]+)"', match)
                 url = url_match.group(1) if url_match else ""
+                # Clean URL (remove tracking parameters)
+                if url.startswith('/') and 'cn.bing.com' in html_content:
+                    # Relative URL, try to extract from redirect
+                    parsed = urlparse(url)
+                    if not parsed.netloc:
+                        url = f"https://cn.bing.com{url}"
 
                 # Extract snippet
-                snippet_match = re.search(r'<div class="b_caption".*?>(.*?)</div>', match, re.DOTALL)
-                snippet = re.sub(r'<.*?>', '', snippet_match.group(1) or "") if snippet_match else ""
+                snippet_match = re.search(
+                    r'<div\s+class="b_caption"[^>]*>(.*?)</div>',
+                    match,
+                    re.DOTALL
+                )
+                snippet = self._strip_html_tags(snippet_match.group(1) or "") if snippet_match else ""
 
                 if title and url:
                     result = SearchResult(
@@ -525,38 +685,65 @@ class WebSearchEngine:
         await self._wait_rate_limit(SearchEngine.BAIDU)
 
         url = "https://www.baidu.com/s"
-        params = {"wd": query, "rn": limit}
+        params = {"wd": query, "rn": str(limit)}
 
         async with self._semaphore:
             client = AsyncHttpClient()
             try:
-                response = await client.get(url, params=params)
-                html = response.text()
-                return self._parse_baidu_results(html, query, limit)
+                async with client:
+                    response = await client.get(url, params=params)
+                    html_content = await response.text()
+                    return self._parse_baidu_results(html_content, query, limit)
+            except TimeoutError:
+                log.warning(f"Baidu search timed out for query: {query[:50]}")
+                return []
             except Exception as e:
                 log.warning(f"Baidu search failed: {e}")
                 return []
 
-    def _parse_baidu_results(self, html: str, query: str, limit: int) -> list[SearchResult]:
-        """Parse Baidu search results from HTML."""
+    def _parse_baidu_results(self, html_content: str, query: str, limit: int) -> list[SearchResult]:
+        """Parse Baidu search results from HTML.
+        
+        Args:
+            html_content: Raw HTML from Baidu search
+            query: Original search query
+            limit: Maximum results to return
+            
+        Returns:
+            List of parsed search results
+        """
         results = []
-        # Baidu result containers
-        pattern = r'<div class="result c-container"(.*?)</div>'
-        matches = re.findall(pattern, html, re.DOTALL)
+        # Baidu result containers - multiple patterns
+        patterns = [
+            r'<div\s+class="result\s+c-container"[^>]*>(.*?)</div>',
+            r'<div\s+class="c-container"[^>]*>.*?</div>',
+        ]
+        
+        matches = []
+        for pattern in patterns:
+            matches.extend(re.findall(pattern, html_content, re.DOTALL))
 
         for i, match in enumerate(matches[:limit]):
             try:
                 # Extract title
-                title_match = re.search(r'<h3 class="t".*?>.*?<a.*?>(.*?)</a>', match, re.DOTALL)
-                title = re.sub(r'<.*?>', '', title_match.group(1) or "") if title_match else ""
+                title_match = re.search(
+                    r'<h3\s+class="t"[^>]*>.*?<a[^>]*>(.*?)</a>',
+                    match,
+                    re.DOTALL
+                )
+                title = self._strip_html_tags(title_match.group(1) or "") if title_match else ""
 
                 # Extract URL
-                url_match = re.search(r'<a href="(.*?)"', match)
+                url_match = re.search(r'<a\s+href="([^"]+)"', match)
                 url = url_match.group(1) if url_match else ""
 
                 # Extract snippet
-                snippet_match = re.search(r'<div class="c-abstract">(.*?)</div>', match, re.DOTALL)
-                snippet = re.sub(r'<.*?>', '', snippet_match.group(1) or "") if snippet_match else ""
+                snippet_match = re.search(
+                    r'<div\s+class="c-abstract"[^>]*>(.*?)</div>',
+                    match,
+                    re.DOTALL
+                )
+                snippet = self._strip_html_tags(snippet_match.group(1) or "") if snippet_match else ""
 
                 if title and url:
                     result = SearchResult(
@@ -581,34 +768,61 @@ class WebSearchEngine:
         await self._wait_rate_limit(SearchEngine.SOGOU)
 
         url = "https://www.sogou.com/web"
-        params = {"query": query, "num": limit}
+        params = {"query": query, "num": str(limit)}
 
         async with self._semaphore:
             client = AsyncHttpClient()
             try:
-                response = await client.get(url, params=params)
-                html = response.text()
-                return self._parse_sogou_results(html, query, limit)
+                async with client:
+                    response = await client.get(url, params=params)
+                    html_content = await response.text()
+                    return self._parse_sogou_results(html_content, query, limit)
+            except TimeoutError:
+                log.warning(f"Sogou search timed out for query: {query[:50]}")
+                return []
             except Exception as e:
                 log.warning(f"Sogou search failed: {e}")
                 return []
 
-    def _parse_sogou_results(self, html: str, query: str, limit: int) -> list[SearchResult]:
-        """Parse Sogou search results from HTML."""
+    def _parse_sogou_results(self, html_content: str, query: str, limit: int) -> list[SearchResult]:
+        """Parse Sogou search results from HTML.
+        
+        Args:
+            html_content: Raw HTML from Sogou search
+            query: Original search query
+            limit: Maximum results to return
+            
+        Returns:
+            List of parsed search results
+        """
         results = []
-        pattern = r'<div class="fb-hint"(.*?)</div>'
-        matches = re.findall(pattern, html, re.DOTALL)
+        # Multiple patterns for Sogou
+        patterns = [
+            r'<div\s+class="fb-hint"[^>]*>(.*?)</div>',
+            r'<div\s+class="vr-title"[^>]*>.*?</div>',
+        ]
+        
+        matches = []
+        for pattern in patterns:
+            matches.extend(re.findall(pattern, html_content, re.DOTALL))
 
         for i, match in enumerate(matches[:limit]):
             try:
-                title_match = re.search(r'<a.*?>(.*?)</a>', match, re.DOTALL)
-                title = re.sub(r'<.*?>', '', title_match.group(1) or "") if title_match else ""
+                # Extract title
+                title_match = re.search(r'<a[^>]*>(.*?)</a>', match, re.DOTALL)
+                title = self._strip_html_tags(title_match.group(1) or "") if title_match else ""
 
-                url_match = re.search(r'<a href="(.*?)"', match)
+                # Extract URL
+                url_match = re.search(r'<a\s+href="([^"]+)"', match)
                 url = url_match.group(1) if url_match else ""
 
-                snippet_match = re.search(r'<div class="attribute".*?>(.*?)</div>', match, re.DOTALL)
-                snippet = re.sub(r'<.*?>', '', snippet_match.group(1) or "") if snippet_match else ""
+                # Extract snippet
+                snippet_match = re.search(
+                    r'<div\s+class="attribute"[^>]*>(.*?)</div>',
+                    match,
+                    re.DOTALL
+                )
+                snippet = self._strip_html_tags(snippet_match.group(1) or "") if snippet_match else ""
 
                 if title and url:
                     result = SearchResult(
@@ -628,8 +842,231 @@ class WebSearchEngine:
 
         return results
 
+    async def _search_google(self, query: str, limit: int) -> list[SearchResult]:
+        """Search Google (requires VPN in China).
+        
+        Args:
+            query: Search query
+            limit: Maximum results to return
+            
+        Returns:
+            List of search results
+        """
+        await self._wait_rate_limit(SearchEngine.GOOGLE)
+
+        url = "https://www.google.com/search"
+        params = {"q": query, "num": str(limit)}
+
+        async with self._semaphore:
+            client = AsyncHttpClient()
+            try:
+                async with client:
+                    response = await client.get(url, params=params, allow_redirects=True)
+                    html_content = await response.text()
+                    return self._parse_google_results(html_content, query, limit)
+            except TimeoutError:
+                log.warning(f"Google search timed out for query: {query[:50]}")
+                return []
+            except Exception as e:
+                log.warning(f"Google search failed: {e}")
+                return []
+
+    def _parse_google_results(self, html_content: str, query: str, limit: int) -> list[SearchResult]:
+        """Parse Google search results from HTML.
+        
+        Args:
+            html_content: Raw HTML from Google search
+            query: Original search query
+            limit: Maximum results to return
+            
+        Returns:
+            List of parsed search results
+        """
+        results = []
+        # Google result patterns
+        patterns = [
+            r'<div\s+class="g"[^>]*>.*?<div\s+class="yuRUbf"[^>]*>.*?<a[^>]*href="([^"]+)".*?<h3[^>]*>(.*?)</h3>.*?</div>.*?<div\s+class="[a-zA-Z0-9_-]+"[^>]*>(.*?)</div>',
+            r'<a\s+href="(/url\?q=[^"]+)"[^>]*>.*?<h3[^>]*>(.*?)</h3>',
+        ]
+        
+        # Try first pattern (full result block)
+        matches = re.findall(patterns[0], html_content, re.DOTALL | re.IGNORECASE)
+        
+        for i, match in enumerate(matches[:limit]):
+            try:
+                if len(match) >= 3:
+                    url = match[0]
+                    title = self._strip_html_tags(match[1])
+                    snippet = self._strip_html_tags(match[2])
+                else:
+                    continue
+                    
+                # Clean Google redirect URL
+                if url.startswith('/url?q='):
+                    parsed = urlparse(url)
+                    query_params = parse_qs(parsed.query)
+                    if 'q' in query_params:
+                        url = query_params['q'][0]
+
+                if title and url and not url.startswith('#'):
+                    result = SearchResult(
+                        id=hashlib.md5(url.encode()).hexdigest(),
+                        title=title.strip()[:200],
+                        snippet=snippet.strip()[:500],
+                        url=url,
+                        source="Google",
+                        engine=SearchEngine.GOOGLE,
+                        rank=i,
+                        language="zh",
+                    )
+                    result.quality_score = self._calculate_quality_score(result, query)
+                    results.append(result)
+            except Exception as e:
+                log.warning(f"Failed to parse Google result: {e}")
+
+        # Try second pattern if no results
+        if not results:
+            matches = re.findall(patterns[1], html_content, re.DOTALL | re.IGNORECASE)
+            for i, match in enumerate(matches[:limit]):
+                try:
+                    url = match[0]
+                    title = self._strip_html_tags(match[1])
+                    
+                    if url.startswith('/url?q='):
+                        parsed = urlparse(url)
+                        query_params = parse_qs(parsed.query)
+                        if 'q' in query_params:
+                            url = query_params['q'][0]
+
+                    if title and url and not url.startswith('#'):
+                        result = SearchResult(
+                            id=hashlib.md5(url.encode()).hexdigest(),
+                            title=title.strip()[:200],
+                            snippet="",
+                            url=url,
+                            source="Google",
+                            engine=SearchEngine.GOOGLE,
+                            rank=i,
+                            language="zh",
+                        )
+                        result.quality_score = self._calculate_quality_score(result, query)
+                        results.append(result)
+                except Exception as e:
+                    log.warning(f"Failed to parse Google result: {e}")
+
+        return results
+
+    async def _search_duckduckgo(self, query: str, limit: int) -> list[SearchResult]:
+        """Search DuckDuckGo (requires VPN in China).
+        
+        Args:
+            query: Search query
+            limit: Maximum results to return
+            
+        Returns:
+            List of search results
+        """
+        await self._wait_rate_limit(SearchEngine.DUCKDUCKGO)
+
+        url = "https://html.duckduckgo.com/html/"
+        data = {"q": query}
+
+        async with self._semaphore:
+            client = AsyncHttpClient()
+            try:
+                async with client:
+                    response = await client.post(url, data=data)
+                    html_content = await response.text()
+                    return self._parse_duckduckgo_results(html_content, query, limit)
+            except TimeoutError:
+                log.warning(f"DuckDuckGo search timed out for query: {query[:50]}")
+                return []
+            except Exception as e:
+                log.warning(f"DuckDuckGo search failed: {e}")
+                return []
+
+    def _parse_duckduckgo_results(self, html_content: str, query: str, limit: int) -> list[SearchResult]:
+        """Parse DuckDuckGo search results from HTML.
+        
+        Args:
+            html_content: Raw HTML from DuckDuckGo search
+            query: Original search query
+            limit: Maximum results to return
+            
+        Returns:
+            List of parsed search results
+        """
+        results = []
+        # DuckDuckGo result patterns
+        patterns = [
+            r'<div\s+class="result"[^>]*>.*?<a\s+href="([^"]+)"[^>]*>.*?<a\s+class="result__a"[^>]*>(.*?)</a>.*?<a\s+class="result__snippet"[^>]*>(.*?)</a>',
+            r'<a\s+class="result__a"[^>]*href="([^"]+)"[^>]*>(.*?)</a>',
+        ]
+        
+        # Try first pattern (full result with snippet)
+        matches = re.findall(patterns[0], html_content, re.DOTALL | re.IGNORECASE)
+        
+        for i, match in enumerate(matches[:limit]):
+            try:
+                if len(match) >= 3:
+                    url = match[0]
+                    title = self._strip_html_tags(match[1])
+                    snippet = self._strip_html_tags(match[2])
+                else:
+                    continue
+
+                if title and url:
+                    result = SearchResult(
+                        id=hashlib.md5(url.encode()).hexdigest(),
+                        title=title.strip()[:200],
+                        snippet=snippet.strip()[:500],
+                        url=url,
+                        source="DuckDuckGo",
+                        engine=SearchEngine.DUCKDUCKGO,
+                        rank=i,
+                        language="zh",
+                    )
+                    result.quality_score = self._calculate_quality_score(result, query)
+                    results.append(result)
+            except Exception as e:
+                log.warning(f"Failed to parse DuckDuckGo result: {e}")
+
+        # Try second pattern if no results
+        if not results:
+            matches = re.findall(patterns[1], html_content, re.DOTALL | re.IGNORECASE)
+            for i, match in enumerate(matches[:limit]):
+                try:
+                    url = match[0]
+                    title = self._strip_html_tags(match[1])
+
+                    if title and url:
+                        result = SearchResult(
+                            id=hashlib.md5(url.encode()).hexdigest(),
+                            title=title.strip()[:200],
+                            snippet="",
+                            url=url,
+                            source="DuckDuckGo",
+                            engine=SearchEngine.DUCKDUCKGO,
+                            rank=i,
+                            language="zh",
+                        )
+                        result.quality_score = self._calculate_quality_score(result, query)
+                        results.append(result)
+                except Exception as e:
+                    log.warning(f"Failed to parse DuckDuckGo result: {e}")
+
+        return results
+
     async def _search_eastmoney(self, query: str, limit: int) -> list[SearchResult]:
-        """Search EastMoney finance news."""
+        """Search EastMoney finance news.
+        
+        Args:
+            query: Search query
+            limit: Maximum results to return
+            
+        Returns:
+            List of search results
+        """
         await self._wait_rate_limit(SearchEngine.EASTMONEY_SEARCH)
 
         url = "https://search-api-web.eastmoney.com/search/jsonp"
@@ -644,15 +1081,19 @@ class WebSearchEngine:
         async with self._semaphore:
             client = AsyncHttpClient()
             try:
-                response = await client.get(url, params=params)
-                text = response.text()
-                # EastMoney returns JSONP, extract JSON
-                json_match = re.search(r'\((.*)\)', text)
-                if json_match:
-                    data = json.loads(json_match.group(1))
-                    return self._parse_eastmoney_results(data, query, limit)
+                async with client:
+                    response = await client.get(url, params=params)
+                    text = await response.text()
+                    # EastMoney returns JSONP, extract JSON
+                    json_match = re.search(r'\((.*)\)', text)
+                    if json_match:
+                        data = json.loads(json_match.group(1))
+                        return self._parse_eastmoney_results(data, query, limit)
+                    return []
+            except TimeoutError:
+                log.warning(f"EastMoney search timed out for query: {query[:50]}")
                 return []
-            except Exception as e:
+            except (json.JSONDecodeError, Exception) as e:
                 log.warning(f"EastMoney search failed: {e}")
                 return []
 
@@ -662,22 +1103,37 @@ class WebSearchEngine:
         query: str,
         limit: int,
     ) -> list[SearchResult]:
-        """Parse EastMoney search results."""
+        """Parse EastMoney search results.
+        
+        Args:
+            data: JSON data from EastMoney API
+            query: Original search query
+            limit: Maximum results to return
+            
+        Returns:
+            List of parsed search results
+        """
         results = []
         items = data.get("Data", []) if isinstance(data, dict) else []
 
         for i, item in enumerate(items[:limit]):
             try:
-                title = item.get("Title", "")
-                url = item.get("Url", "")
-                snippet = item.get("Content", "")
+                title = str(item.get("Title", ""))
+                url = str(item.get("Url", ""))
+                snippet = str(item.get("Content", ""))
                 pub_time = item.get("ShowTime", "")
 
                 published_at = None
                 if pub_time:
                     try:
-                        published_at = datetime.fromisoformat(pub_time.replace(" ", "T"))
-                    except (ValueError, TypeError):
+                        # Try multiple formats
+                        for fmt in ["%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d"]:
+                            try:
+                                published_at = datetime.strptime(pub_time, fmt)
+                                break
+                            except ValueError:
+                                continue
+                    except Exception:
                         pass
 
                 if title and url:
@@ -700,39 +1156,63 @@ class WebSearchEngine:
         return results
 
     async def _search_sina_finance(self, query: str, limit: int) -> list[SearchResult]:
-        """Search Sina Finance."""
+        """Search Sina Finance.
+        
+        Args:
+            query: Search query
+            limit: Maximum results to return
+            
+        Returns:
+            List of search results
+        """
         await self._wait_rate_limit(SearchEngine.SINA_SEARCH)
 
         # Sina finance search uses a different API
         url = "https://search.sina.com.cn/"
-        params = {"q": query, "c": "finance", "num": limit}
+        params = {"q": query, "c": "finance", "num": str(limit)}
 
         async with self._semaphore:
             client = AsyncHttpClient()
             try:
-                response = await client.get(url, params=params)
-                html = response.text()
-                return self._parse_sina_results(html, query, limit)
+                async with client:
+                    response = await client.get(url, params=params)
+                    html_content = await response.text()
+                    return self._parse_sina_results(html_content, query, limit)
+            except TimeoutError:
+                log.warning(f"Sina Finance search timed out for query: {query[:50]}")
+                return []
             except Exception as e:
                 log.warning(f"Sina Finance search failed: {e}")
                 return []
 
-    def _parse_sina_results(self, html: str, query: str, limit: int) -> list[SearchResult]:
-        """Parse Sina Finance search results."""
+    def _parse_sina_results(self, html_content: str, query: str, limit: int) -> list[SearchResult]:
+        """Parse Sina Finance search results.
+        
+        Args:
+            html_content: Raw HTML from Sina Finance search
+            query: Original search query
+            limit: Maximum results to return
+            
+        Returns:
+            List of parsed search results
+        """
         results = []
-        pattern = r'<div class="result-block"(.*?)</div>'
-        matches = re.findall(pattern, html, re.DOTALL)
+        pattern = r'<div\s+class="result-block"[^>]*>(.*?)</div>'
+        matches = re.findall(pattern, html_content, re.DOTALL)
 
         for i, match in enumerate(matches[:limit]):
             try:
-                title_match = re.search(r'<h2.*?>.*?<a.*?>(.*?)</a>', match, re.DOTALL)
-                title = re.sub(r'<.*?>', '', title_match.group(1) or "") if title_match else ""
+                # Extract title
+                title_match = re.search(r'<h2[^>]*>.*?<a[^>]*>(.*?)</a>', match, re.DOTALL)
+                title = self._strip_html_tags(title_match.group(1) or "") if title_match else ""
 
-                url_match = re.search(r'<a href="(.*?)"', match)
+                # Extract URL
+                url_match = re.search(r'<a\s+href="([^"]+)"', match)
                 url = url_match.group(1) if url_match else ""
 
-                snippet_match = re.search(r'<p class="summary">(.*?)</p>', match, re.DOTALL)
-                snippet = re.sub(r'<.*?>', '', snippet_match.group(1) or "") if snippet_match else ""
+                # Extract snippet
+                snippet_match = re.search(r'<p\s+class="summary"[^>]*>(.*?)</p>', match, re.DOTALL)
+                snippet = self._strip_html_tags(snippet_match.group(1) or "") if snippet_match else ""
 
                 if title and url:
                     result = SearchResult(
@@ -751,6 +1231,48 @@ class WebSearchEngine:
                 log.warning(f"Failed to parse Sina result: {e}")
 
         return results
+
+    async def _deduplicate_results(
+        self,
+        results: list[SearchResult],
+    ) -> list[SearchResult]:
+        """Deduplicate results by URL and content hash.
+        
+        Args:
+            results: List of search results to deduplicate
+            
+        Returns:
+            Deduplicated list of results
+        """
+        seen_urls: set[str] = set()
+        unique_results: list[SearchResult] = []
+        current_time = time.time()
+        
+        async with self._hash_lock:
+            # Clean old hashes (older than 1 hour)
+            expired = [h for h, t in self._content_hashes.items() if current_time - t > 3600]
+            for h in expired:
+                del self._content_hashes[h]
+        
+        for result in results:
+            # Check URL
+            if result.url in seen_urls:
+                continue
+            
+            # Check content hash
+            content_hash = hashlib.md5(
+                f"{result.title}:{result.snippet}".encode()
+            ).hexdigest()
+            
+            async with self._hash_lock:
+                if content_hash in self._content_hashes:
+                    continue
+                self._content_hashes[content_hash] = current_time
+            
+            seen_urls.add(result.url)
+            unique_results.append(result)
+        
+        return unique_results
 
     async def search(
         self,
@@ -774,6 +1296,13 @@ class WebSearchEngine:
         Returns:
             List of search results sorted by quality score
         """
+        # Validate inputs
+        if not query or not query.strip():
+            log.warning("Empty search query")
+            return []
+        
+        query = query.strip()
+        
         # Check cache first
         if use_cache:
             cached = await self.cache.get(query, engines or [], limit)
@@ -785,7 +1314,7 @@ class WebSearchEngine:
             engines = self.engine_manager.get_priority_order()[:3]
 
         # Filter available engines
-        available_engines = []
+        available_engines: list[SearchEngine] = []
         for engine in engines:
             if await self.engine_manager.is_available(engine):
                 available_engines.append(engine)
@@ -797,39 +1326,41 @@ class WebSearchEngine:
             return []
 
         # Search concurrently
-        search_tasks = []
+        search_tasks: list[asyncio.Coroutine] = []
+        engine_map: dict[SearchEngine, callable] = {
+            SearchEngine.BING_CN: self._search_bing_cn,
+            SearchEngine.BAIDU: self._search_baidu,
+            SearchEngine.SOGOU: self._search_sogou,
+            SearchEngine.GOOGLE: self._search_google,
+            SearchEngine.DUCKDUCKGO: self._search_duckduckgo,
+            SearchEngine.EASTMONEY_SEARCH: self._search_eastmoney,
+            SearchEngine.SINA_SEARCH: self._search_sina_finance,
+        }
+        
         for engine in available_engines:
-            if engine == SearchEngine.BING_CN:
-                search_tasks.append(self._search_bing_cn(query, limit))
-            elif engine == SearchEngine.BAIDU:
-                search_tasks.append(self._search_baidu(query, limit))
-            elif engine == SearchEngine.SOGOU:
-                search_tasks.append(self._search_sogou(query, limit))
-            elif engine == SearchEngine.EASTMONEY_SEARCH:
-                search_tasks.append(self._search_eastmoney(query, limit))
-            elif engine == SearchEngine.SINA_SEARCH:
-                search_tasks.append(self._search_sina_finance(query, limit))
+            search_func = engine_map.get(engine)
+            if search_func:
+                search_tasks.append(self._search_with_retry(search_func, engine, query, limit))
 
-        all_results = []
+        all_results: list[SearchResult] = []
+        engines_with_results: set[SearchEngine] = set()
+        
         try:
             results_list = await asyncio.gather(*search_tasks, return_exceptions=True)
-            for results in results_list:
+            for engine, results in zip(available_engines, results_list, strict=False):
                 if isinstance(results, list):
+                    if results:
+                        engines_with_results.add(engine)
                     all_results.extend(results)
                 elif isinstance(results, Exception):
-                    log.warning(f"Search task failed: {results}")
+                    log.warning(f"Search task for {engine.name} failed: {results}")
+                    await self.engine_manager.record_failure(engine, str(results))
         except Exception as e:
-            log.error(f"Search failed: {e}")
+            log.error(f"Search failed with exception: {e}")
 
         # Deduplicate results
         if deduplicate:
-            seen_urls = set()
-            unique_results = []
-            for result in all_results:
-                if result.url not in seen_urls:
-                    seen_urls.add(result.url)
-                    unique_results.append(result)
-            all_results = unique_results
+            all_results = await self._deduplicate_results(all_results)
 
         # Filter by quality
         all_results = [r for r in all_results if r.quality_score >= min_quality]
@@ -840,13 +1371,12 @@ class WebSearchEngine:
         # Limit results
         final_results = all_results[:limit]
 
-        # Update engine health
-        if final_results:
-            for engine in available_engines:
+        # Update engine health based on results
+        for engine in available_engines:
+            if engine in engines_with_results:
                 await self.engine_manager.record_success(engine)
-        else:
-            for engine in available_engines:
-                await self.engine_manager.record_failure(engine, "No results")
+            else:
+                await self.engine_manager.record_failure(engine, "No results returned")
 
         # Cache results
         if use_cache and final_results:
@@ -878,64 +1408,76 @@ class WebSearchEngine:
             else self.LLM_TRAINING_KEYWORDS_EN
         )
 
-        all_results = []
+        all_results: list[SearchResult] = []
         queries_to_run = min(max_queries, len(keywords))
 
         log.info(f"Searching for LLM training data: {queries_to_run} queries")
 
-        for i, keyword in enumerate(keywords[:queries_to_run]):
-            try:
-                results = await self.search(
+        # Use semaphore to limit concurrent queries
+        for i in range(0, queries_to_run, self.max_concurrent):
+            batch_end = min(i + self.max_concurrent, queries_to_run)
+            batch_keywords = keywords[i:batch_end]
+            
+            tasks = []
+            for keyword in batch_keywords:
+                tasks.append(self.search(
                     query=keyword,
                     limit=limit_per_query,
                     use_cache=True,
-                )
-                all_results.extend(results)
-                log.debug(f"Query {i+1}/{queries_to_run}: '{keyword}' -> {len(results)} results")
-
-                # Small delay between queries to avoid rate limiting
-                if i < queries_to_run - 1:
-                    await asyncio.sleep(1.0)
-
+                ))
+            
+            try:
+                batch_results = await asyncio.gather(*tasks, return_exceptions=True)
+                for result in batch_results:
+                    if isinstance(result, list):
+                        all_results.extend(result)
+                    elif isinstance(result, Exception):
+                        log.warning(f"Query failed: {result}")
             except Exception as e:
-                log.warning(f"Query '{keyword}' failed: {e}")
+                log.warning(f"Batch search failed: {e}")
+
+            # Small delay between batches to avoid rate limiting
+            if batch_end < queries_to_run:
+                await asyncio.sleep(1.0)
 
         # Deduplicate and sort
-        seen_urls = set()
-        unique_results = []
-        for result in all_results:
-            if result.url not in seen_urls:
-                seen_urls.add(result.url)
-                unique_results.append(result)
-
+        unique_results = await self._deduplicate_results(all_results)
         unique_results.sort(key=lambda r: r.quality_score, reverse=True)
 
         log.info(f"Collected {len(unique_results)} unique results for LLM training")
 
         return unique_results
 
-    async def fetch_content(self, url: str) -> str | None:
+    async def fetch_content(self, url: str, timeout: float = 30.0) -> str | None:
         """Fetch full content from URL.
 
         Args:
             url: URL to fetch
+            timeout: Request timeout in seconds
 
         Returns:
             Page content or None if failed
         """
         async with self._semaphore:
-            client = AsyncHttpClient()
-            try:
-                response = await client.get(url)
-                return response.text()
-            except Exception as e:
-                log.warning(f"Failed to fetch content from {url}: {e}")
-                return None
+            config = HttpClientConfig(timeout=timeout)
+            async with AsyncHttpClient(config) as client:
+                try:
+                    response = await client.get(url)
+                    return await response.text()
+                except Exception as e:
+                    log.warning(f"Failed to fetch content from {url}: {e}")
+                    return None
 
     def clear_cache(self) -> None:
         """Clear search result cache."""
         asyncio.create_task(self.cache.clear())
         log.info("Search result cache cleared")
+
+    async def cleanup(self) -> None:
+        """Cleanup resources."""
+        self.clear_cache()
+        async with self._hash_lock:
+            self._content_hashes.clear()
 
 
 # Global instance
@@ -953,4 +1495,6 @@ def get_search_engine() -> WebSearchEngine:
 def reset_search_engine() -> None:
     """Reset global search engine instance (for testing)."""
     global _web_search
+    if _web_search is not None:
+        asyncio.create_task(_web_search.cleanup())
     _web_search = None

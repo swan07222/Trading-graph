@@ -604,21 +604,85 @@ class Trainer:
     def _combine_arrays(
         storage: dict[str, list],
     ) -> tuple[np.ndarray | None, np.ndarray | None, np.ndarray | None]:
-        """Combine arrays from multiple stocks."""
-        if not storage["X"]:
+        """Combine arrays from multiple stocks with comprehensive validation.
+        
+        FIX COMBINE: Added validation for empty/None arrays, shape consistency,
+        and NaN/Inf handling to prevent crashes and data corruption.
+        """
+        if not storage or not storage.get("X"):
             return None, None, None
-        X = np.concatenate(storage["X"])
-        y = np.concatenate(storage["y"])
-        r = np.concatenate(storage["r"]) if storage["r"] else np.zeros(len(y))
+        
+        # Filter out None and empty arrays
+        X_list = [arr for arr in storage["X"] if arr is not None and len(arr) > 0]
+        y_list = [arr for arr in storage["y"] if arr is not None and len(arr) > 0]
+        r_list = [arr for arr in storage.get("r", []) if arr is not None and len(arr) > 0]
+        
+        if not X_list or not y_list:
+            return None, None, None
+        
+        # Validate shape consistency for X arrays
+        try:
+            X = np.concatenate(X_list, axis=0)
+            y = np.concatenate(y_list, axis=0)
+        except (ValueError, IndexError) as e:
+            log.warning("Array concatenation failed: %s", e)
+            return None, None, None
+        
+        # Handle returns array
+        if r_list:
+            try:
+                r = np.concatenate(r_list, axis=0)
+            except (ValueError, IndexError):
+                r = np.zeros(len(y), dtype=np.float64)
+        else:
+            r = np.zeros(len(y), dtype=np.float64)
+        
+        # FIX NaN/Inf: Clean combined arrays
+        if len(X) > 0:
+            X = np.nan_to_num(X, nan=0.0, posinf=0.0, neginf=0.0)
+        if len(y) > 0:
+            y = np.nan_to_num(y, nan=0.0, posinf=0.0, neginf=0.0)
+        if len(r) > 0:
+            r = np.nan_to_num(r, nan=0.0, posinf=0.0, neginf=0.0)
+        
+        # Validate final shapes
+        if len(X) != len(y):
+            log.warning(
+                "Shape mismatch after concatenation: X=%d, y=%d",
+                len(X), len(y)
+            )
+            min_len = min(len(X), len(y))
+            X = X[:min_len]
+            y = y[:min_len]
+            r = r[:min_len]
+        
         return X, y, r
 
     @staticmethod
     def _to_1d_float_array(values: Any) -> np.ndarray:
-        """Convert array-like input to a finite 1D float array."""
+        """Convert array-like input to a finite 1D float array.
+        
+        FIX NUMERICAL: Added comprehensive handling for None, empty, NaN, Inf
+        inputs to prevent crashes in regime detection.
+        """
         if values is None:
             return np.zeros((0,), dtype=np.float64)
-        arr = np.asarray(values, dtype=np.float64).reshape(-1)
-        return arr[np.isfinite(arr)]
+        
+        try:
+            arr = np.asarray(values, dtype=np.float64)
+            if arr.size == 0:
+                return np.zeros((0,), dtype=np.float64)
+            
+            # Reshape to 1D
+            arr = arr.reshape(-1)
+            
+            # Replace NaN and Inf with 0.0 (safer than dropping for statistical calcs)
+            arr = np.nan_to_num(arr, nan=0.0, posinf=0.0, neginf=0.0)
+            
+            return arr
+        except (ValueError, TypeError, MemoryError) as e:
+            log.debug("Array conversion failed: %s", e)
+            return np.zeros((0,), dtype=np.float64)
 
     def _summarize_regime_shift(
         self,
@@ -627,6 +691,9 @@ class Trainer:
         test_returns: np.ndarray | None,
     ) -> dict[str, Any]:
         """Detect train/eval regime drift from return distribution changes.
+        
+        FIX REGIME: Added comprehensive numerical stability, division-by-zero
+        protection, and validation to prevent crashes and misleading signals.
 
         Returns a score and a confidence-floor boost recommendation.
         """
@@ -635,7 +702,8 @@ class Trainer:
         test = self._to_1d_float_array(test_returns)
         eval_parts = [x for x in (val, test) if len(x) > 0]
 
-        if len(train) < 40 or not eval_parts:
+        # FIX: Stricter minimum sample requirements
+        if len(train) < 50 or not eval_parts:
             return {
                 "detected": False,
                 "level": "unknown",
@@ -645,7 +713,7 @@ class Trainer:
             }
 
         eval_arr = np.concatenate(eval_parts)
-        if len(eval_arr) < 40:
+        if len(eval_arr) < 50:
             return {
                 "detected": False,
                 "level": "unknown",
@@ -654,24 +722,50 @@ class Trainer:
                 "reason": "insufficient_eval_samples",
             }
 
-        train_vol = float(np.std(train))
-        eval_vol = float(np.std(eval_arr))
-        vol_ratio = eval_vol / (train_vol + _EPS)
+        # FIX: Use robust statistics with proper error handling
+        try:
+            train_vol = float(np.std(train))
+            eval_vol = float(np.std(eval_arr))
+            
+            # FIX DIV: Protect against division by zero
+            vol_ratio = self._safe_ratio(eval_vol, train_vol, default=1.0)
+            
+            # FIX: Use median for more robust tail estimation
+            train_tail = float(np.percentile(np.abs(train), 90))
+            eval_tail = float(np.percentile(np.abs(eval_arr), 90))
+            tail_ratio = self._safe_ratio(eval_tail, train_tail, default=1.0)
+            
+            # FIX: Mean shift with proper normalization
+            mean_shift = self._safe_ratio(
+                abs(float(np.mean(eval_arr) - np.mean(train))),
+                train_vol + _EPS,
+                default=0.0
+            )
+            mean_shift = min(mean_shift, 4.0)  # Cap at 4 sigma
+        except (ValueError, TypeError, ZeroDivisionError) as e:
+            log.debug("Regime shift calculation failed: %s", e)
+            return {
+                "detected": False,
+                "level": "unknown",
+                "score": 0.0,
+                "confidence_boost": 0.0,
+                "reason": "calculation_error",
+            }
 
-        train_tail = float(np.percentile(np.abs(train), 90))
-        eval_tail = float(np.percentile(np.abs(eval_arr), 90))
-        tail_ratio = eval_tail / (train_tail + _EPS)
+        # FIX: Log-ratio calculation with proper handling
+        try:
+            log_vol_ratio = abs(float(np.log(max(vol_ratio, _EPS))))
+            log_tail_ratio = abs(float(np.log(max(tail_ratio, _EPS))))
+            
+            score = (
+                0.45 * log_vol_ratio
+                + 0.35 * log_tail_ratio
+                + 0.20 * (mean_shift / 4.0)
+            )
+        except (ValueError, TypeError, ZeroDivisionError):
+            score = 0.0
 
-        mean_shift = abs(float(np.mean(eval_arr) - np.mean(train))) / (
-            train_vol + _EPS
-        )
-
-        score = (
-            0.45 * abs(float(np.log(max(vol_ratio, _EPS))))
-            + 0.35 * abs(float(np.log(max(tail_ratio, _EPS))))
-            + 0.20 * (min(mean_shift, 4.0) / 4.0)
-        )
-
+        # FIX: More conservative threshold for regime classification
         if score >= 0.85:
             level = "high"
             confidence_boost = 0.10
@@ -685,7 +779,7 @@ class Trainer:
         return {
             "detected": bool(score >= 0.55),
             "level": level,
-            "score": float(score),
+            "score": float(np.clip(score, 0.0, 2.0)),  # Cap score at 2.0
             "confidence_boost": float(confidence_boost),
             "train_volatility": float(train_vol),
             "eval_volatility": float(eval_vol),
@@ -700,9 +794,12 @@ class Trainer:
         interval: str,
     ) -> dict[str, Any]:
         """Quick preliminary regime shift detection before full processing.
-
+        
         FIX RACE: This allows early detection of high regime shifts to avoid
         wasting resources on incremental training that will be blocked anyway.
+        
+        FIX NUMERICAL: Added comprehensive error handling and division-by-zero
+        protection.
 
         Uses raw return statistics from the data to detect volatility shifts.
         """
@@ -714,12 +811,24 @@ class Trainer:
                 continue
             if "close" not in df.columns:
                 continue
-            close = pd.to_numeric(df["close"], errors="coerce").dropna()
-            if len(close) < 20:
+            
+            try:
+                close = pd.to_numeric(df["close"], errors="coerce").dropna()
+                if len(close) < 20:
+                    continue
+                
+                # FIX: Handle constant prices (zero volatility)
+                if close.std() < 1e-10:
+                    continue
+                
+                returns = close.pct_change().dropna().to_numpy(dtype=np.float64)
+                if len(returns) > 0:
+                    # FIX: Clean NaN/Inf from returns
+                    returns = np.nan_to_num(returns, nan=0.0, posinf=0.0, neginf=0.0)
+                    all_returns.append(returns)
+            except (ValueError, TypeError, ZeroDivisionError) as e:
+                log.debug("Return calculation failed: %s", e)
                 continue
-            returns = close.pct_change().dropna().to_numpy(dtype=np.float64)
-            if len(returns) > 0:
-                all_returns.append(returns)
 
         if len(all_returns) < 2:
             return {
@@ -734,6 +843,7 @@ class Trainer:
         older_returns = np.concatenate(all_returns[:mid]) if mid > 0 else np.array([])
         newer_returns = np.concatenate(all_returns[mid:]) if mid < len(all_returns) else np.array([])
 
+        # FIX: Stricter minimum sample requirements
         if len(older_returns) < 50 or len(newer_returns) < 50:
             return {
                 "detected": False,
@@ -742,11 +852,22 @@ class Trainer:
                 "reason": "insufficient_samples",
             }
 
-        older_vol = float(np.std(older_returns))
-        newer_vol = float(np.std(newer_returns))
-        vol_ratio = newer_vol / (older_vol + _EPS)
-
-        score = 0.45 * abs(float(np.log(max(vol_ratio, _EPS))))
+        try:
+            older_vol = float(np.std(older_returns))
+            newer_vol = float(np.std(newer_returns))
+            
+            # FIX DIV: Protect against division by zero
+            vol_ratio = self._safe_ratio(newer_vol, older_vol, default=1.0)
+            
+            score = 0.45 * abs(float(np.log(max(vol_ratio, _EPS))))
+        except (ValueError, TypeError, ZeroDivisionError) as e:
+            log.debug("Preliminary regime check failed: %s", e)
+            return {
+                "detected": False,
+                "level": "unknown",
+                "score": 0.0,
+                "reason": "calculation_error",
+            }
 
         if score >= 0.85:
             level = "high"
@@ -758,14 +879,18 @@ class Trainer:
         return {
             "detected": bool(score >= 0.55),
             "level": level,
-            "score": float(score),
+            "score": float(np.clip(score, 0.0, 2.0)),
             "volatility_ratio": float(vol_ratio),
             "reason": "ok",
         }
 
     @staticmethod
     def _assess_overfitting(history: dict[str, Any] | None) -> dict[str, Any]:
-        """Detect overfitting from train/val loss divergence and late val-acc drop."""
+        """Detect overfitting from train/val loss divergence and late val-acc drop.
+        
+        FIX OVERFIT: Added comprehensive validation, trend analysis, and
+        early-warning detection to prevent deploying overfitted models.
+        """
         if not history:
             return {
                 "detected": False,
@@ -792,17 +917,40 @@ class Trainer:
             val_loss = _float_series(list(model_hist.get("val_loss", [])))
             val_acc = _float_series(list(model_hist.get("val_acc", [])))
 
-            loss_gap_ratio = 0.0
-            if train_loss and val_loss:
-                loss_gap_ratio = max(
-                    0.0,
-                    (val_loss[-1] - train_loss[-1]) / (abs(train_loss[-1]) + _EPS),
-                )
+            # FIX: Need minimum epochs for reliable detection
+            if len(train_loss) < 5 or len(val_loss) < 5:
+                per_model[name] = {
+                    "loss_gap_ratio": 0.0,
+                    "val_acc_drop": 0.0,
+                    "overfit_warning": False,
+                    "reason": "insufficient_epochs",
+                }
+                continue
 
+            # FIX: Use average of last 3 epochs for more stable estimate
+            recent_train_loss = float(np.mean(train_loss[-3:])) if len(train_loss) >= 3 else train_loss[-1]
+            recent_val_loss = float(np.mean(val_loss[-3:])) if len(val_loss) >= 3 else val_loss[-1]
+            
+            # FIX DIV: Use safe ratio
+            loss_gap_ratio = 0.0
+            if abs(recent_train_loss) > _EPS:
+                loss_gap_ratio = max(0.0, (recent_val_loss - recent_train_loss) / abs(recent_train_loss))
+
+            # FIX: Detect val accuracy drop from peak
             val_acc_drop = 0.0
             if val_acc:
-                val_acc_drop = max(0.0, max(val_acc) - val_acc[-1])
+                peak_acc = float(np.max(val_acc))
+                # FIX: Use average of last 3 epochs
+                recent_acc = float(np.mean(val_acc[-3:])) if len(val_acc) >= 3 else val_acc[-1]
+                val_acc_drop = max(0.0, peak_acc - recent_acc)
+                
+                # FIX: Also check for consistent degradation trend
+                if len(val_acc) >= 5:
+                    recent_trend = val_acc[-1] - val_acc[-3]
+                    if recent_trend < -0.03:  # 3% drop over last 3 epochs
+                        val_acc_drop = max(val_acc_drop, abs(recent_trend))
 
+            # FIX: More conservative overfitting detection
             is_overfit = bool(
                 loss_gap_ratio > _OVERFIT_LOSS_GAP_WARN
                 or val_acc_drop > _OVERFIT_VAL_ACC_DROP_WARN
@@ -812,6 +960,9 @@ class Trainer:
                 "loss_gap_ratio": float(loss_gap_ratio),
                 "val_acc_drop": float(val_acc_drop),
                 "overfit_warning": bool(is_overfit),
+                "train_loss_recent": recent_train_loss,
+                "val_loss_recent": recent_val_loss,
+                "val_acc_recent": recent_acc if val_acc else 0.0,
             }
             if is_overfit:
                 flagged.append(str(name))
@@ -820,30 +971,49 @@ class Trainer:
             "detected": bool(flagged),
             "flagged_models": flagged,
             "per_model": per_model,
+            "severity": "high" if len(flagged) > 1 else "medium" if flagged else "none",
         }
     @staticmethod
     def _risk_adjusted_score(metrics: dict[str, Any]) -> float:
-        """Compute a deployment score using risk-first metrics, not accuracy alone."""
+        """Compute a deployment score using risk-first metrics, not accuracy alone.
+        
+        FIX SCORE: Added comprehensive validation, division-by-zero protection,
+        and NaN handling to prevent scoring errors.
+        """
+        # FIX: Validate inputs with safe defaults
         accuracy = float(np.clip(metrics.get("accuracy", 0.0), 0.0, 1.0))
         trading = metrics.get("trading", {}) or {}
 
-        sharpe = float(trading.get("sharpe_ratio", 0.0))
-        profit_factor = float(trading.get("profit_factor", 0.0))
-        max_drawdown = float(np.clip(trading.get("max_drawdown", 1.0), 0.0, 1.0))
-        excess_return = float(trading.get("excess_return", 0.0)) / 100.0
-        win_rate = float(np.clip(trading.get("win_rate", 0.0), 0.0, 1.0))
-        trades = float(max(0.0, trading.get("trades", 0.0)))
-        trade_coverage = float(np.clip(trading.get("trade_coverage", 0.0), 0.0, 1.0))
-        avg_trade_conf = float(
-            np.clip(trading.get("avg_trade_confidence", 0.0), 0.0, 1.0)
-        )
+        # FIX: Safe extraction with NaN/Inf protection
+        def safe_float(val: Any, default: float = 0.0) -> float:
+            try:
+                v = float(val)
+                return float(np.clip(v, -1e6, 1e6)) if np.isfinite(v) else default
+            except (TypeError, ValueError):
+                return default
 
+        sharpe = safe_float(trading.get("sharpe_ratio"), 0.0)
+        profit_factor = safe_float(trading.get("profit_factor"), 1.0)
+        max_drawdown = float(np.clip(safe_float(trading.get("max_drawdown"), 1.0), 0.0, 1.0))
+        excess_return = safe_float(trading.get("excess_return"), 0.0) / 100.0
+        win_rate = float(np.clip(safe_float(trading.get("win_rate"), 0.5), 0.0, 1.0))
+        trades = safe_float(trading.get("trades"), 0.0)
+        trade_coverage = float(np.clip(safe_float(trading.get("trade_coverage"), 0.0), 0.0, 1.0))
+        avg_trade_conf = float(np.clip(safe_float(trading.get("avg_trade_confidence"), 0.0), 0.0, 1.0))
+
+        # FIX: Bounded scoring functions
         sharpe_score = 0.5 + (0.5 * float(np.tanh(sharpe / 2.0)))
-        pf_score = 0.5 + (0.5 * float(np.tanh(max(-1.0, profit_factor - 1.0))))
+        pf_score = 0.5 + (0.5 * float(np.tanh(max(-1.0, min(profit_factor - 1.0, 5.0)))))
         excess_score = 0.5 + (0.5 * float(np.tanh(excess_return * 3.0)))
         drawdown_score = 1.0 - max_drawdown
-        participation = (0.5 * float(np.tanh(trades / 25.0))) + (0.5 * trade_coverage)
+        
+        # FIX: Bounded participation score
+        participation = (
+            0.5 * float(np.tanh(min(trades / 25.0, 10.0)))
+            + 0.5 * trade_coverage
+        )
 
+        # Calculate weighted score
         score = (
             0.22 * accuracy
             + 0.22 * sharpe_score
@@ -855,8 +1025,11 @@ class Trainer:
             + 0.02 * avg_trade_conf
         )
 
+        # FIX: Penalize low trade count more gracefully
         if trades < 5:
             score *= 0.8
+        elif trades < 10:
+            score *= 0.9
 
         return float(np.clip(score, 0.0, 1.0))
     @staticmethod

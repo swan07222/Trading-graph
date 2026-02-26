@@ -191,6 +191,90 @@ class Predictor:
         return cfg
 
     # =========================================================================
+    # SAFETY & VALIDATION HELPERS
+    # =========================================================================
+
+    @staticmethod
+    def _safe_float(val: Any, default: float = 0.0) -> float:
+        """Safely convert value to float with NaN/Inf protection.
+        
+        FIX NUMERICAL: Prevents crashes from invalid numeric values.
+        """
+        try:
+            v = float(val)
+            return float(np.clip(v, -1e12, 1e12)) if np.isfinite(v) else default
+        except (TypeError, ValueError, ZeroDivisionError):
+            return default
+
+    @staticmethod
+    def _safe_ratio(numerator: float, denominator: float, default: float = 0.0) -> float:
+        """Safely compute ratio with division-by-zero protection.
+        
+        FIX DIV: Prevents crashes from zero or near-zero denominators.
+        """
+        try:
+            num = float(numerator) if numerator is not None else 0.0
+            denom = float(denominator) if denominator is not None else 1.0
+            
+            if not np.isfinite(num):
+                num = 0.0
+            if not np.isfinite(denom) or abs(denom) < 1e-10:
+                return default
+            
+            result = num / denom
+            return float(np.clip(result, -1e6, 1e6)) if np.isfinite(result) else default
+        except (TypeError, ValueError, ZeroDivisionError):
+            return default
+
+    @staticmethod
+    def _validate_prediction_input(
+        X: np.ndarray | None,
+        feature_cols: list[str] | None,
+        expected_features: int,
+    ) -> tuple[bool, str]:
+        """Validate prediction input data.
+        
+        FIX SHAPE: Comprehensive validation to prevent crashes.
+        """
+        if X is None:
+            return False, "Input array is None"
+        
+        if not isinstance(X, np.ndarray):
+            return False, f"Input must be numpy array, got {type(X)}"
+        
+        if X.ndim not in (2, 3):
+            return False, f"Input must be 2D or 3D array, got {X.ndim}D"
+        
+        if X.shape[-1] != expected_features:
+            return False, f"Feature dim mismatch: expected {expected_features}, got {X.shape[-1]}"
+        
+        if np.any(~np.isfinite(X)):
+            nan_count = int(np.sum(~np.isfinite(X)))
+            log.warning("Input contains %d NaN/Inf values - cleaning", nan_count)
+        
+        if feature_cols and len(feature_cols) != expected_features:
+            return False, f"Feature cols length mismatch: {len(feature_cols)} vs {expected_features}"
+        
+        return True, "OK"
+
+    @staticmethod
+    def _clean_prediction_input(X: np.ndarray) -> np.ndarray:
+        """Clean input array by replacing NaN/Inf with safe values.
+        
+        FIX NUMERICAL: Prevents propagation of invalid values.
+        """
+        if X is None or X.size == 0:
+            return X
+        
+        # Make a copy to avoid mutating original
+        X_clean = np.array(X, copy=True, dtype=np.float64)
+        
+        # Replace NaN/Inf
+        X_clean = np.nan_to_num(X_clean, nan=0.0, posinf=0.0, neginf=0.0)
+        
+        return X_clean
+
+    # =========================================================================
     # =========================================================================
 
     @staticmethod
@@ -1250,9 +1334,15 @@ class Predictor:
                 f"{code}:{interval}:{horizon}:"
                 f"{'rt' if bool(use_realtime_price) else 'hist'}"
             )
+            
+            # FIX #CACHE-001: Pass volatility to cache TTL for adaptive expiration
+            # Volatility will be computed later from data, but we can use a
+            # default estimate based on interval for initial cache lookup
+            default_vol = 0.025 if self._is_intraday_interval(interval) else 0.015
             cache_ttl = self._get_cache_ttl(
                 use_realtime=bool(use_realtime_price),
                 interval=interval,
+                volatility=default_vol,
             )
 
             if not skip_cache:
@@ -1391,7 +1481,15 @@ class Predictor:
                 pred.position = self._calculate_position(pred)
                 self._generate_reasons(pred)
 
-                self._set_cached_prediction(cache_key, pred)
+                # FIX #CACHE-001: Update cache with actual volatility-based TTL
+                actual_vol = float(getattr(pred, "atr_pct_value", default_vol))
+                actual_ttl = self._get_cache_ttl(
+                    use_realtime=bool(use_realtime_price),
+                    interval=interval,
+                    volatility=actual_vol,
+                )
+                # Manually update TTL in cache entry by re-caching
+                self._set_cached_prediction(cache_key, pred, ttl=actual_ttl)
 
             except _PREDICTOR_RECOVERABLE_EXCEPTIONS as e:
                 log.error(

@@ -33,7 +33,7 @@ Trading Graph is a comprehensive AI-driven analysis framework for China's A-shar
 | **ML Models** | Informer, TFT, N-BEATS, TSMixer architectures |
 | **Developer UX** | Full type hints, FastAPI metrics endpoint, WebSocket streaming |
 | **China Support** | VPN-aware routing, 5+ local data providers, optimized timeouts |
-| **Monitoring** | Recovery metrics, Prometheus-compatible metrics, health dashboards |
+| **Monitoring** | Prometheus-compatible metrics, health dashboards |
 
 ---
 
@@ -111,12 +111,9 @@ Live candlestick visualization with:
 - Real-time data streaming via WebSocket
 - PyQt6 high-performance rendering
 
-### 🛡️ Recovery & Monitoring
+### 🛡️ Monitoring
 
-Built-in resilience features:
-- Recovery operation metrics with disk persistence
-- Success/failure tracking per operation type
-- Performance monitoring with trend analysis
+Built-in observability features:
 - Health status dashboard
 - Prometheus-compatible metrics export
 - Institutional readiness checks
@@ -353,7 +350,7 @@ trading-graph/
 ├── strategies/        # Trading strategies
 ├── trading/           # Execution engine (disabled in analysis-only mode)
 ├── ui/                # PyQt6 desktop & web dashboard
-├── utils/             # Utilities, security, metrics, recovery
+├── utils/             # Utilities, security, metrics
 ├── tests/             # Test suite
 ├── scripts/           # Utility scripts
 ├── docs/              # Documentation
