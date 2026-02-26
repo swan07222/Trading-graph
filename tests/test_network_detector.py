@@ -28,8 +28,7 @@ def test_network_detector_get_env_uses_fresh_cache(monkeypatch) -> None:
     old_ttl = det._ttl
     try:
         cached = NetworkEnv(
-            is_china_direct=False,
-            is_vpn_active=True,
+            is_china_direct=True,
             detected_at=datetime.now(),
         )
         det._ttl = 3600.0
@@ -69,7 +68,6 @@ def test_network_detector_force_refresh_bypasses_cache(monkeypatch) -> None:
         calls = {"detect": 0}
         fresh = NetworkEnv(
             is_china_direct=True,
-            is_vpn_active=False,
             detected_at=datetime.now(),
         )
 

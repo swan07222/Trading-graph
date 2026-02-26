@@ -97,10 +97,9 @@ class RateLimitConfig:
     # Error rate thresholds
     error_rate_window: float = float(env_text("TRADING_ERROR_RATE_WINDOW", "60.0"))
     error_rate_threshold: float = float(env_text("TRADING_ERROR_RATE_THRESHOLD", "0.5"))
-    
-    # Network-aware adjustments
+
+    # Network-aware adjustments (China-only mode)
     china_direct_multiplier: float = float(env_text("TRADING_CHINA_MULTIPLIER", "0.8"))
-    vpn_multiplier: float = float(env_text("TRADING_VPN_MULTIPLIER", "1.5"))
 
 
 @dataclass(frozen=True)

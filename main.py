@@ -390,8 +390,7 @@ def main() -> int:
             from data.news_collector import get_collector
             collector = get_collector()
 
-            vpn_mode = collector.is_vpn_mode()
-            print(f"\nNetwork mode: {'VPN (International)' if vpn_mode else 'China Direct'}")
+            print(f"\nNetwork mode: China Direct")
             print(f"Active sources: {collector.get_active_sources()}")
 
             print("\nCollecting news...")

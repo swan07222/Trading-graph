@@ -1,3 +1,8 @@
+"""Tests for China-only network data paths.
+
+This module tests that all data sources work correctly in China-only mode
+(without VPN). VPN-related code has been removed from the project.
+"""
 from __future__ import annotations
 
 from data.discovery import DiscoveredStock, UniversalStockDiscovery

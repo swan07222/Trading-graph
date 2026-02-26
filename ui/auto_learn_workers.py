@@ -34,7 +34,6 @@ _LOCKED_TRAIN_INTERVAL = "1m"
 def _force_china_direct_network_mode() -> None:
     """Force discovery/training workers to run in China-direct mode."""
     os.environ["TRADING_CHINA_DIRECT"] = "1"
-    os.environ["TRADING_VPN"] = "0"
     try:
         from core.network import invalidate_network_cache
 

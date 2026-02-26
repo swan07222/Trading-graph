@@ -21,6 +21,20 @@ from utils.recoverable import JSON_RECOVERABLE_EXCEPTIONS
 
 log = get_logger(__name__)
 
+# Optional quality assessment integration
+try:
+    from models.prediction_quality import (
+        get_quality_assessor,
+        MarketRegime,
+        PredictionQualityReport,
+    )
+    QUALITY_ASSESSMENT_AVAILABLE = True
+except ImportError:
+    QUALITY_ASSESSMENT_AVAILABLE = False
+    get_quality_assessor = None  # type: ignore[assignment]
+    MarketRegime = None  # type: ignore[assignment]
+    PredictionQualityReport = None  # type: ignore[assignment]
+
 # Type alias for numpy float arrays
 # Note: While we use float64 for the type alias, actual computations may
 # use float32 for memory efficiency. This alias is for type checking only.

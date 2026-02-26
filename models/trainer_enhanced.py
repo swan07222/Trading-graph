@@ -55,7 +55,6 @@ from models.training_enhanced import (
     ModelQuantizer,
     BayesianHyperparameterOptimizer,
     HyperparameterSearchSpace,
-    PretrainedNewsEmbedder,
     DeterministicTrainingConfig,
     EnhancedEarlyStopping,
     MarketRegime,
@@ -130,11 +129,11 @@ class EnhancedTrainingConfig:
     use_hpo: bool = False
     hpo_n_trials: int = 30
     hpo_direction: str = 'maximize'
-    
-    # News embeddings
-    use_pretrained_embeddings: bool = False
-    embedding_model: str = 'bert-base-chinese'
-    
+
+    # News embeddings (self-trained, no pretrained models)
+    embedding_model: str = 'self-trained'  # Always self-trained
+    embedding_dim: int = 256  # Dimension for self-trained embeddings
+
     # Deterministic training
     deterministic_training: bool = False
     training_seed: int = 42
@@ -223,35 +222,24 @@ class EnhancedTrainer:
         )
         self.model_pruner = ModelPruner()
         self.model_quantizer = ModelQuantizer(bits=self.config.quantization_bits)
-        
-        # News embedder (lazy loading)
-        self._news_embedder: Optional[PretrainedNewsEmbedder] = None
-        
+
         # Training state
         self.model: Optional[nn.Module] = None
         self.metrics = TrainingMetrics()
         self.training_history: List[Dict[str, Any]] = []
-        
+
         # Deterministic training
         self.deterministic_config = DeterministicTrainingConfig(
             enabled=self.config.deterministic_training,
             seed=self.config.training_seed,
         )
-        
+
         # Incremental training state
         self._reference_features: Optional[np.ndarray] = None
         self._skip_scaler_fit: bool = False
-        
+
         log.info("EnhancedTrainer initialized with config: %s", self.config)
-        
-    def _get_news_embedder(self) -> PretrainedNewsEmbedder:
-        """Lazy load news embedder."""
-        if self._news_embedder is None:
-            self._news_embedder = PretrainedNewsEmbedder(
-                model_name=self.config.embedding_model,
-            )
-        return self._news_embedder
-        
+
     def train(
         self,
         stocks: List[str],

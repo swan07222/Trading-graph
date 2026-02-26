@@ -139,19 +139,13 @@ class SentimentAnalyzer:
         hf_model: str = "IDEA-CCNL/Erlangshen-Roberta-110M-Sentiment",
     ) -> None:
         self.keyword_analyzer = KeywordSentimentAnalyzer()
-        self._use_bert = bool(use_bert)
+        self._use_bert = False  # Removed: transformers no longer used
         self._hf = None
         self._hf_model = hf_model
 
-        if self._use_bert:
-            try:
-                from transformers import pipeline
-
-                self._hf = pipeline("sentiment-analysis", model=hf_model)
-            except Exception as e:
-                log.warning(f"Failed to load HuggingFace model: {e}")
-                self._hf = None
-                self._use_bert = False
+        # Note: HuggingFace transformers removed.
+        # Sentiment analysis now uses only rule-based keyword analysis.
+        # All advanced sentiment is self-trained from your data.
 
     def analyze(self, text: str) -> SentimentResult:
         kw = self.keyword_analyzer.analyze(text)

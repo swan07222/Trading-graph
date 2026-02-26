@@ -54,7 +54,6 @@ def create_env_file() -> bool:
 # CHINA NETWORK MODE
 # ================================================================
 TRADING_CHINA_DIRECT=1
-TRADING_VPN=0
 
 # ================================================================
 # DATA SOURCES (China-accessible)

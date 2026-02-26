@@ -6,7 +6,7 @@ This module provides comprehensive improvements to address all training disadvan
 1. Data Leakage Prevention - Strict temporal split with feature computation within splits
 2. Overfitting Prevention - Advanced regularization, dropout, weight decay
 3. Computational Optimization - Gradient checkpointing, model pruning
-4. Improved News Training - Pretrained transformer integration (BERT/FinBERT)
+4. Improved News Training - Self-trained transformer embeddings (no pretrained models)
 5. Adaptive Label Quality - Volatility-adjusted thresholds, risk-aware labels
 6. Incremental Training Safety - Proper scaler handling with drift detection
 7. Enhanced Walk-Forward Validation - More folds, regime detection
@@ -14,7 +14,7 @@ This module provides comprehensive improvements to address all training disadvan
 9. Hyperparameter Optimization - Bayesian optimization integration
 10. Model Storage Optimization - Pruning, quantization, checkpointing
 11. Deterministic Training Control - Optional mode with performance trade-offs
-12. True News Embeddings - Pretrained language model embeddings
+12. Self-Trained News Embeddings - All embeddings learned from your data
 """
 
 from __future__ import annotations
@@ -54,13 +54,6 @@ try:
 except ImportError:
     OPTUNA_AVAILABLE = False
     log.warning("Optuna not available. Install with: pip install optuna")
-
-try:
-    from transformers import BertTokenizer, BertModel
-    TRANSFORMERS_AVAILABLE = True
-except ImportError:
-    TRANSFORMERS_AVAILABLE = False
-    log.warning("Transformers not available. Install with: pip install transformers")
 
 try:
     from imblearn.over_sampling import SMOTE
@@ -1040,114 +1033,11 @@ class BayesianHyperparameterOptimizer:
 
 
 # ============================================================================
-# True News Embeddings (Pretrained Transformers)
+# Self-Trained News Embeddings
 # ============================================================================
-
-class PretrainedNewsEmbedder:
-    """Generates true embeddings using pretrained language models."""
-    
-    def __init__(
-        self,
-        model_name: str = 'bert-base-chinese',
-        max_length: int = 512,
-        device: str | None = None,
-    ):
-        if not TRANSFORMERS_AVAILABLE:
-            raise ImportError(
-                "Transformers not available. Install with: pip install transformers"
-            )
-            
-        self.model_name = model_name
-        self.max_length = max_length
-        
-        # Set device
-        if device:
-            self.device = torch.device(device)
-        else:
-            self.device = torch.device(
-                'cuda' if torch.cuda.is_available() else 'cpu'
-            )
-            
-        # Load tokenizer and model
-        self.tokenizer = BertTokenizer.from_pretrained(model_name)
-        self.model = BertModel.from_pretrained(model_name).to(self.device)
-        self.model.eval()
-        
-        log.info(f"Loaded pretrained embedder: {model_name}")
-        
-    def embed_texts(
-        self,
-        texts: List[str],
-        batch_size: int = 32,
-        pooling: str = 'mean',
-    ) -> np.ndarray:
-        """Generate embeddings for texts.
-        
-        Args:
-            texts: List of text strings
-            batch_size: Batch size for inference
-            pooling: 'mean', 'cls', or 'max'
-            
-        Returns:
-            Embedding array [n_texts, hidden_dim]
-        """
-        all_embeddings = []
-        
-        with torch.no_grad():
-            for i in range(0, len(texts), batch_size):
-                batch_texts = texts[i:i + batch_size]
-                
-                # Tokenize
-                encoded = self.tokenizer(
-                    batch_texts,
-                    padding=True,
-                    truncation=True,
-                    max_length=self.max_length,
-                    return_tensors='pt',
-                ).to(self.device)
-                
-                # Get embeddings
-                outputs = self.model(**encoded)
-                
-                if pooling == 'cls':
-                    # Use [CLS] token
-                    embeddings = outputs.last_hidden_state[:, 0, :]
-                elif pooling == 'max':
-                    # Max pooling
-                    embeddings = outputs.last_hidden_state.max(dim=1)[0]
-                else:  # mean
-                    # Mean pooling (ignore padding)
-                    attention_mask = encoded['attention_mask']
-                    mask_expanded = attention_mask.unsqueeze(-1).expand(
-                        outputs.last_hidden_state.size()
-                    ).float()
-                    sum_embeddings = (outputs.last_hidden_state * mask_expanded).sum(1)
-                    sum_mask = mask_expanded.sum(1).clamp(min=1e-9)
-                    embeddings = sum_embeddings / sum_mask
-                    
-                all_embeddings.append(embeddings.cpu().numpy())
-                
-        return np.vstack(all_embeddings)
-    
-    def embed_articles(
-        self,
-        articles: List[Any],  # NewsArticle objects
-        batch_size: int = 32,
-    ) -> np.ndarray:
-        """Embed news articles with title + content."""
-        texts = []
-        
-        for article in articles:
-            title = getattr(article, 'title', '')
-            content = getattr(article, 'content', '')
-            summary = getattr(article, 'summary', '')
-            
-            # Combine fields
-            text = f"{title}. {summary}. {content}"[:2000]  # Truncate
-            texts.append(text)
-            
-        return self.embed_texts(texts, batch_size=batch_size)
-
+# Note: All news embeddings are now learned from your data during training.
+# No pretrained models (BERT/FinBERT) are loaded.
+# See models/news_trainer.py for the self-trained NewsEncoder.
 
 # ============================================================================
 # Gradient Checkpointing for Memory Efficiency

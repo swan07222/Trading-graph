@@ -5,10 +5,14 @@ Architecture:
 - Per-cycle collect-and-train with quality gates
 - Clean NewsItem <-> NewsArticle bridge at a single point
 - Thread-safe caching with bounded eviction
+
+Note: This uses self-training only - no pretrained models (transformers/sentence-transformers) are loaded.
+All sentiment analysis and embeddings are learned from your data during training.
 """
 
 from __future__ import annotations
 
+import asyncio
 import copy
 import json
 import math
@@ -19,7 +23,7 @@ import hashlib
 import threading
 import time
 import warnings
-from collections import OrderedDict
+from collections import OrderedDict, deque
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
@@ -38,34 +42,60 @@ from .news_collector import NewsArticle, get_collector, reset_collector
 log = get_logger(__name__)
 
 # ---------------------------------------------------------------------------
+# Configuration constants for enhanced features
+# ---------------------------------------------------------------------------
+
+# Async processing
+MAX_CONCURRENT_ANALYZE_TASKS = 8
+ANALYZE_QUEUE_TIMEOUT = 300  # seconds
+
+# Retry logic
+MAX_RETRY_ATTEMPTS = 3
+RETRY_BACKOFF_BASE = 2.0
+RETRY_INITIAL_DELAY = 0.5  # seconds
+
+# Rate limiting
+RATE_LIMIT_MAX_CALLS = 100  # max calls per window
+RATE_LIMIT_WINDOW_SECONDS = 60.0
+
+# Circuit breaker
+CIRCUIT_BREAKER_FAILURE_THRESHOLD = 5
+CIRCUIT_BREAKER_SUCCESS_THRESHOLD = 3
+CIRCUIT_BREAKER_TIMEOUT_SECONDS = 60.0
+
+# Audit logging
+AUDIT_LOG_MAX_ENTRIES = 10000
+AUDIT_LOG_DIR = Path("data/audit_logs")
+
+# Prompt injection detection
+INJECTION_PATTERNS = [
+    r"ignore\s+(previous|all)\s+(instructions|rules)",
+    r"bypass\s+(security|filters|restrictions)",
+    r"act\s+as\s+(admin|system|developer)",
+    r"reveal\s+(system\s+prompt|internal\s+instructions)",
+    r"disable\s+(safety|security|filters)",
+    r"you\s+are\s+now\s+in\s+(debug|developer)\s+mode",
+    r"print\s+(all\s+)?(instructions|rules|prompt)",
+]
+
+# ---------------------------------------------------------------------------
 # Optional dependency probes
 # ---------------------------------------------------------------------------
 
-_TRANSFORMERS_AVAILABLE = False
 _SKLEARN_AVAILABLE = False
 _SKLEARN_MLP_AVAILABLE = False
-_SENTENCE_TRANSFORMERS_AVAILABLE = False
 
 try:
     from sklearn.exceptions import ConvergenceWarning as _SklearnConvergenceWarning
 except ImportError:
     _SklearnConvergenceWarning = None  # type: ignore[assignment,misc]
 
-# Suppress sklearn convergence warnings at the warnings module level
-# (they are raised via warnings.warn, NOT via raise — so except blocks
-# can never catch them).
+# Suppress sklearn convergence warnings
 try:
     if _SklearnConvergenceWarning is not None:
         warnings.filterwarnings("ignore", category=_SklearnConvergenceWarning)
 except Exception:
     pass
-
-try:
-    from transformers import pipeline
-
-    _TRANSFORMERS_AVAILABLE = True
-except Exception:
-    _TRANSFORMERS_AVAILABLE = False
 
 try:
     from sklearn.linear_model import LogisticRegression
@@ -80,13 +110,6 @@ try:
     _SKLEARN_MLP_AVAILABLE = True
 except Exception:
     _SKLEARN_MLP_AVAILABLE = False
-
-try:
-    from sentence_transformers import SentenceTransformer
-
-    _SENTENCE_TRANSFORMERS_AVAILABLE = True
-except Exception:
-    _SENTENCE_TRANSFORMERS_AVAILABLE = False
 
 
 # ---------------------------------------------------------------------------
@@ -126,6 +149,450 @@ class _BoundedCache:
     def clear(self) -> None:
         with self._lock:
             self._data.clear()
+
+
+# ---------------------------------------------------------------------------
+# Rate Limiter - Token bucket algorithm
+# ---------------------------------------------------------------------------
+
+class _RateLimiter:
+    """Thread-safe rate limiter using token bucket algorithm."""
+
+    def __init__(
+        self,
+        max_calls: int = RATE_LIMIT_MAX_CALLS,
+        window_seconds: float = RATE_LIMIT_WINDOW_SECONDS,
+    ) -> None:
+        self._max_calls = max(1, int(max_calls))
+        self._window = max(0.1, float(window_seconds))
+        self._tokens = float(self._max_calls)
+        self._last_update = time.time()
+        self._lock = threading.Lock()
+
+    def acquire(self, tokens: int = 1) -> bool:
+        """Try to acquire tokens. Returns True if successful."""
+        with self._lock:
+            now = time.time()
+            elapsed = now - self._last_update
+            self._tokens = min(
+                float(self._max_calls),
+                self._tokens + elapsed * (self._max_calls / self._window)
+            )
+            self._last_update = now
+
+            if self._tokens >= float(tokens):
+                self._tokens -= float(tokens)
+                return True
+            return False
+
+    def wait_for_token(self, tokens: int = 1, timeout: float = 30.0) -> bool:
+        """Wait until tokens are available or timeout."""
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            if self.acquire(tokens):
+                return True
+            time.sleep(0.05)  # Small sleep to avoid busy waiting
+        return False
+
+    def get_status(self) -> dict[str, Any]:
+        """Get rate limiter status."""
+        with self._lock:
+            return {
+                "tokens_available": float(self._tokens),
+                "max_tokens": self._max_calls,
+                "window_seconds": self._window,
+                "utilization": 1.0 - (self._tokens / self._max_calls),
+            }
+
+
+# ---------------------------------------------------------------------------
+# Circuit Breaker Pattern
+# ---------------------------------------------------------------------------
+
+class CircuitState(Enum):
+    CLOSED = "closed"  # Normal operation
+    OPEN = "open"  # Failing, reject calls
+    HALF_OPEN = "half_open"  # Testing if recovered
+
+
+class _CircuitBreaker:
+    """Thread-safe circuit breaker for fault tolerance."""
+
+    def __init__(
+        self,
+        failure_threshold: int = CIRCUIT_BREAKER_FAILURE_THRESHOLD,
+        success_threshold: int = CIRCUIT_BREAKER_SUCCESS_THRESHOLD,
+        timeout_seconds: float = CIRCUIT_BREAKER_TIMEOUT_SECONDS,
+    ) -> None:
+        self._failure_threshold = max(1, int(failure_threshold))
+        self._success_threshold = max(1, int(success_threshold))
+        self._timeout = max(1.0, float(timeout_seconds))
+        self._state = CircuitState.CLOSED
+        self._failure_count = 0
+        self._success_count = 0
+        self._last_failure_time: float | None = None
+        self._lock = threading.Lock()
+
+    def can_execute(self) -> bool:
+        """Check if execution is allowed."""
+        with self._lock:
+            if self._state == CircuitState.CLOSED:
+                return True
+
+            if self._state == CircuitState.OPEN:
+                if self._last_failure_time is None:
+                    self._state = CircuitState.HALF_OPEN
+                    return True
+                if time.time() - self._last_failure_time >= self._timeout:
+                    self._state = CircuitState.HALF_OPEN
+                    return True
+                return False
+
+            # HALF_OPEN - allow one attempt
+            return True
+
+    def record_success(self) -> None:
+        """Record a successful execution."""
+        with self._lock:
+            if self._state == CircuitState.HALF_OPEN:
+                self._success_count += 1
+                if self._success_count >= self._success_threshold:
+                    self._state = CircuitState.CLOSED
+                    self._failure_count = 0
+                    self._success_count = 0
+            else:
+                # Reset failure count on success in CLOSED state
+                self._failure_count = 0
+
+    def record_failure(self) -> None:
+        """Record a failed execution."""
+        with self._lock:
+            self._failure_count += 1
+            self._last_failure_time = time.time()
+
+            if self._state == CircuitState.HALF_OPEN:
+                self._state = CircuitState.OPEN
+                self._success_count = 0
+            elif self._failure_count >= self._failure_threshold:
+                self._state = CircuitState.OPEN
+
+    def get_state(self) -> dict[str, Any]:
+        """Get circuit breaker status."""
+        with self._lock:
+            return {
+                "state": self._state.value,
+                "failure_count": self._failure_count,
+                "success_count": self._success_count,
+                "failure_threshold": self._failure_threshold,
+                "last_failure_time": self._last_failure_time,
+            }
+
+    def reset(self) -> None:
+        """Reset circuit breaker to initial state."""
+        with self._lock:
+            self._state = CircuitState.CLOSED
+            self._failure_count = 0
+            self._success_count = 0
+            self._last_failure_time = None
+
+
+# ---------------------------------------------------------------------------
+# Audit Logger - Tamper-evident logging
+# ---------------------------------------------------------------------------
+
+@dataclass
+class AuditEntry:
+    """Audit log entry."""
+    timestamp: str
+    event_type: str
+    operation: str
+    details: dict[str, Any]
+    user_id: str = ""
+    hash_value: str = ""
+    previous_hash: str = ""
+
+
+class _AuditLogger:
+    """Thread-safe audit logger with hash chaining for tamper detection."""
+
+    def __init__(
+        self,
+        log_dir: Path = AUDIT_LOG_DIR,
+        max_entries: int = AUDIT_LOG_MAX_ENTRIES,
+    ) -> None:
+        self._log_dir = log_dir
+        self._max_entries = max_entries
+        self._entries: deque[AuditEntry] = deque(maxlen=max_entries)
+        self._last_hash = "genesis"
+        self._lock = threading.Lock()
+        self._enabled = env_flag("TRADING_AUDIT_ENABLED", "1")
+        self._init_log_dir()
+
+    def _init_log_dir(self) -> None:
+        """Initialize audit log directory."""
+        try:
+            self._log_dir.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            self._enabled = False
+
+    def _compute_hash(self, entry: AuditEntry) -> str:
+        """Compute hash for an entry including previous hash for chaining."""
+        data = json.dumps({
+            "timestamp": entry.timestamp,
+            "event_type": entry.event_type,
+            "operation": entry.operation,
+            "details": entry.details,
+            "user_id": entry.user_id,
+            "previous_hash": entry.previous_hash,
+        }, sort_keys=True)
+        return hashlib.sha256(data.encode("utf-8")).hexdigest()[:16]
+
+    def log(
+        self,
+        event_type: str,
+        operation: str,
+        details: dict[str, Any],
+        user_id: str = "",
+    ) -> None:
+        """Log an audit event."""
+        if not self._enabled:
+            return
+
+        timestamp = datetime.now().isoformat()
+        entry = AuditEntry(
+            timestamp=timestamp,
+            event_type=event_type,
+            operation=operation,
+            details=details,
+            user_id=user_id,
+            previous_hash=self._last_hash,
+        )
+        entry.hash_value = self._compute_hash(entry)
+
+        with self._lock:
+            self._entries.append(entry)
+            self._last_hash = entry.hash_value
+
+    def get_recent(self, limit: int = 100) -> list[dict[str, Any]]:
+        """Get recent audit entries."""
+        with self._lock:
+            entries = list(self._entries)[-limit:]
+            return [
+                {
+                    "timestamp": e.timestamp,
+                    "event_type": e.event_type,
+                    "operation": e.operation,
+                    "details": e.details,
+                    "hash": e.hash_value,
+                }
+                for e in entries
+            ]
+
+    def verify_integrity(self) -> tuple[bool, list[str]]:
+        """Verify hash chain integrity."""
+        with self._lock:
+            issues = []
+            prev_hash = "genesis"
+            for entry in self._entries:
+                if entry.previous_hash != prev_hash:
+                    issues.append(
+                        f"Hash chain broken at {entry.timestamp}: "
+                        f"expected {prev_hash}, got {entry.previous_hash}"
+                    )
+                # Recompute and verify hash
+                expected_hash = self._compute_hash(
+                    AuditEntry(
+                        timestamp=entry.timestamp,
+                        event_type=entry.event_type,
+                        operation=entry.operation,
+                        details=entry.details,
+                        user_id=entry.user_id,
+                        previous_hash=entry.previous_hash,
+                    )
+                )
+                if expected_hash != entry.hash_value:
+                    issues.append(
+                        f"Hash mismatch at {entry.timestamp}: "
+                        f"expected {expected_hash}, got {entry.hash_value}"
+                    )
+                prev_hash = entry.hash_value
+
+            return len(issues) == 0, issues
+
+    def get_status(self) -> dict[str, Any]:
+        """Get audit logger status."""
+        with self._lock:
+            return {
+                "enabled": self._enabled,
+                "entry_count": len(self._entries),
+                "max_entries": self._max_entries,
+                "last_hash": self._last_hash,
+            }
+
+
+# ---------------------------------------------------------------------------
+# Prompt Injection Detector
+# ---------------------------------------------------------------------------
+
+class _PromptInjectionDetector:
+    """Detect prompt injection attempts in user input."""
+
+    def __init__(self) -> None:
+        self._patterns = [
+            re.compile(p, re.IGNORECASE) for p in INJECTION_PATTERNS
+        ]
+
+    def analyze(self, text: str) -> dict[str, Any]:
+        """Analyze text for injection attempts."""
+        threats = []
+
+        for i, pattern in enumerate(self._patterns):
+            if pattern.search(text):
+                threats.append({
+                    "type": f"injection_pattern_{i}",
+                    "pattern": INJECTION_PATTERNS[i],
+                    "confidence": 0.9,
+                })
+
+        return {
+            "is_safe": len(threats) == 0,
+            "threats": threats,
+            "threat_count": len(threats),
+        }
+
+    def is_safe(self, text: str) -> bool:
+        """Quick check if text is safe."""
+        for pattern in self._patterns:
+            if pattern.search(text):
+                return False
+        return True
+
+
+# ---------------------------------------------------------------------------
+# Async Queue Processor for Parallel Analysis
+# ---------------------------------------------------------------------------
+
+class _AsyncAnalyzeProcessor:
+    """Async processor for parallel sentiment analysis."""
+
+    def __init__(
+        self,
+        max_concurrent: int = MAX_CONCURRENT_ANALYZE_TASKS,
+        queue_timeout: float = ANALYZE_QUEUE_TIMEOUT,
+    ) -> None:
+        self._max_concurrent = max(1, int(max_concurrent))
+        self._queue_timeout = max(60.0, float(queue_timeout))
+        self._semaphore: asyncio.Semaphore | None = None
+        self._queue: asyncio.Queue | None = None
+        self._running = False
+        self._lock = threading.Lock()
+
+    async def _init_async(self) -> None:
+        """Initialize async components."""
+        if self._semaphore is None:
+            self._semaphore = asyncio.Semaphore(self._max_concurrent)
+        if self._queue is None:
+            self._queue = asyncio.Queue()
+        self._running = True
+
+    async def analyze_single(
+        self,
+        analyze_fn: Callable[[NewsArticle], LLMSentimentResult],
+        article: NewsArticle,
+        use_cache: bool = True,
+    ) -> LLMSentimentResult:
+        """Analyze a single article with concurrency control."""
+        if self._semaphore is None:
+            await self._init_async()
+
+        assert self._semaphore is not None
+
+        async with self._semaphore:
+            loop = asyncio.get_event_loop()
+            result = await loop.run_in_executor(
+                None,
+                lambda: analyze_fn(article, use_cache=use_cache),
+            )
+            return result
+
+    async def analyze_batch(
+        self,
+        analyze_fn: Callable[[NewsArticle], LLMSentimentResult],
+        articles: list[NewsArticle],
+        use_cache: bool = True,
+        progress_callback: Callable[[dict[str, Any]], None] | None = None,
+    ) -> list[LLMSentimentResult]:
+        """Analyze a batch of articles in parallel."""
+        if self._semaphore is None:
+            await self._init_async()
+
+        assert self._semaphore is not None
+
+        async def process_with_progress(
+            article: NewsArticle,
+            index: int,
+        ) -> LLMSentimentResult:
+            async with self._semaphore:
+                loop = asyncio.get_event_loop()
+                result = await loop.run_in_executor(
+                    None,
+                    lambda: analyze_fn(article, use_cache=use_cache),
+                )
+                if progress_callback:
+                    progress_callback({
+                        "processed": index + 1,
+                        "total": len(articles),
+                        "percent": int((index + 1) / max(1, len(articles)) * 100),
+                    })
+                return result
+
+        tasks = [
+            process_with_progress(article, i)
+            for i, article in enumerate(articles)
+        ]
+
+        results = await asyncio.wait_for(
+            asyncio.gather(*tasks, return_exceptions=True),
+            timeout=self._queue_timeout,
+        )
+
+        # Filter out exceptions and return valid results
+        valid_results = []
+        for r in results:
+            if isinstance(r, LLMSentimentResult):
+                valid_results.append(r)
+            elif isinstance(r, Exception):
+                log.debug("Async analyze task failed: %s", r)
+
+        return valid_results
+
+    def analyze_batch_sync(
+        self,
+        analyze_fn: Callable[[NewsArticle], LLMSentimentResult],
+        articles: list[NewsArticle],
+        use_cache: bool = True,
+        progress_callback: Callable[[dict[str, Any]], None] | None = None,
+    ) -> list[LLMSentimentResult]:
+        """Synchronous wrapper for batch analysis."""
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                # Create a new loop in a separate thread
+                import concurrent.futures
+                with concurrent.futures.ThreadPoolExecutor() as executor:
+                    future = executor.submit(
+                        asyncio.run,
+                        self.analyze_batch(analyze_fn, articles, use_cache, progress_callback),
+                    )
+                    return future.result(timeout=self._queue_timeout)
+            else:
+                return loop.run_until_complete(
+                    self.analyze_batch(analyze_fn, articles, use_cache, progress_callback)
+                )
+        except Exception as exc:
+            log.debug("Async batch analyze failed, falling back to sync: %s", exc)
+            # Fallback to sequential processing
+            return [analyze_fn(a, use_cache=use_cache) for a in articles]
 
 
 # ---------------------------------------------------------------------------
@@ -336,6 +803,12 @@ class LLM_sentimentAnalyzer:
         cache_ttl_seconds: float | None = None,
         max_cache_entries: int = 2048,
         max_seen_articles: int | None = None,
+        # Enhanced features parameters
+        enable_rate_limiting: bool = True,
+        enable_circuit_breaker: bool = True,
+        enable_audit_logging: bool = True,
+        enable_async_processing: bool = True,
+        enable_injection_detection: bool = True,
     ) -> None:
         self.model_name = str(model_name or self.DEFAULT_MODEL)
         default_dir = getattr(
@@ -345,9 +818,9 @@ class LLM_sentimentAnalyzer:
         )
         self.cache_dir = Path(cache_dir or default_dir)
         self.cache_dir.mkdir(parents=True, exist_ok=True)
-        self._pipe: Any = None
+        self._pipe: Any = None  # Removed: transformers pipeline no longer used
         self._pipe_name = ""
-        self._emb: Any = None
+        self._emb: Any = None  # Removed: sentence-transformers no longer used
         self._calibrator: Any = None
         self._hybrid_calibrator: Any = None
         self._scaler: Any = None
@@ -367,6 +840,27 @@ class LLM_sentimentAnalyzer:
         self._cache = _BoundedCache(maxsize=max_cache_entries, ttl=ttl)
         self._lock = threading.RLock()
         self._device = self._init_device(device, use_gpu)
+        
+        # Enhanced features
+        self._rate_limiter = _RateLimiter() if enable_rate_limiting else None
+        self._circuit_breaker = _CircuitBreaker() if enable_circuit_breaker else None
+        self._audit_logger = _AuditLogger() if enable_audit_logging else None
+        self._async_processor = _AsyncAnalyzeProcessor() if enable_async_processing else None
+        self._injection_detector = _PromptInjectionDetector() if enable_injection_detection else None
+        
+        # Metrics and monitoring
+        self._metrics = {
+            "total_analyses": 0,
+            "cache_hits": 0,
+            "cache_misses": 0,
+            "errors": 0,
+            "retries": 0,
+            "circuit_breaker_trips": 0,
+            "rate_limit_delays": 0,
+            "injection_blocked": 0,
+        }
+        self._metrics_lock = threading.Lock()
+        
         self._load_calibrator()
         self._load_hybrid_calibrator()
         self._load_scaler()
@@ -418,43 +912,12 @@ class LLM_sentimentAnalyzer:
         return self._clip((p - n) / float(d), -1.0, 1.0)
 
     def _load_pipeline(self) -> None:
-        if self._pipe is not None and self._pipe_name == self.model_name:
-            return
-        if not _TRANSFORMERS_AVAILABLE:
-            return
-        try:
-            device_id: int | str = -1
-            if self._device.startswith("cuda"):
-                try:
-                    device_id = int(self._device.split(":")[1]) if ":" in self._device else 0
-                except (ValueError, IndexError):
-                    device_id = 0
-            elif self._device == "mps":
-                device_id = "mps"
-
-            self._pipe = pipeline(
-                "sentiment-analysis",
-                model=self.model_name,
-                tokenizer=self.model_name,
-                return_all_scores=True,
-                device=device_id,
-            )
-            self._pipe_name = self.model_name
-        except Exception as e:
-            log.debug("Primary model load failed: %s", e)
-            try:
-                self._pipe = pipeline(
-                    "sentiment-analysis",
-                    model=self.FALLBACK_MODEL,
-                    tokenizer=self.FALLBACK_MODEL,
-                    return_all_scores=True,
-                    device=-1,
-                )
-                self._pipe_name = self.FALLBACK_MODEL
-            except Exception as e2:
-                log.debug("Fallback model load failed: %s", e2)
-                self._pipe = None
-                self._pipe_name = ""
+        """No-op: transformers pipeline removed. Self-training only."""
+        # Sentiment analysis now uses:
+        # 1. Rule-based keyword scoring (always available)
+        # 2. Self-trained calibrator (trained from your data)
+        # No pretrained models are loaded.
+        pass
 
     def _parse_scores(self, raw: object) -> tuple[float, float, float, float, float]:
         rows: list[dict[str, Any]] = []
@@ -525,11 +988,169 @@ class LLM_sentimentAnalyzer:
         ]
 
     def analyze(self, article: NewsArticle, use_cache: bool = True) -> LLMSentimentResult:
+        """Analyze sentiment of a single article with enhanced features.
+        
+        Features:
+        - Rate limiting
+        - Circuit breaker pattern
+        - Retry with exponential backoff
+        - Audit logging
+        - Prompt injection detection
+        - Comprehensive metrics
+        """
+        # Update metrics
+        self._increment_metric("total_analyses")
+        
+        # Check circuit breaker
+        if self._circuit_breaker and not self._circuit_breaker.can_execute():
+            self._increment_metric("circuit_breaker_trips")
+            log.warning("Circuit breaker OPEN - rejecting analyze request")
+            # Return fallback result
+            return self._create_fallback_result(
+                article, 
+                error="Circuit breaker open - service temporarily unavailable"
+            )
+        
+        # Rate limiting
+        if self._rate_limiter:
+            if not self._rate_limiter.acquire():
+                self._increment_metric("rate_limit_delays")
+                # Wait for token with timeout
+                if not self._rate_limiter.wait_for_token(timeout=5.0):
+                    log.warning("Rate limit exceeded - delaying request")
+        
+        # Check for prompt injection in article text
+        if self._injection_detector:
+            text_check = f"{getattr(article, 'title', '')} {getattr(article, 'content', '')}"
+            if not self._injection_detector.is_safe(text_check):
+                self._increment_metric("injection_blocked")
+                injection_report = self._injection_detector.analyze(text_check)
+                log.warning(
+                    "Prompt injection detected in article %s: %d threats",
+                    getattr(article, 'id', 'unknown'),
+                    injection_report['threat_count'],
+                )
+                # Log to audit
+                if self._audit_logger:
+                    self._audit_logger.log(
+                        event_type="SECURITY",
+                        operation="analyze_injection_detected",
+                        details={
+                            "article_id": getattr(article, 'id', ''),
+                            "threat_count": injection_report['threat_count'],
+                            "threats": injection_report['threats'],
+                        },
+                    )
+                # Return safe fallback result
+                return self._create_fallback_result(
+                    article,
+                    error="Content filtered - potential injection detected"
+                )
+        
+        cache_key = self._cache_key(article)
+        
+        # Check cache
+        if use_cache:
+            cached = self._cache.get(cache_key)
+            if cached is not None:
+                self._increment_metric("cache_hits")
+                if self._audit_logger:
+                    self._audit_logger.log(
+                        event_type="CACHE",
+                        operation="analyze_cache_hit",
+                        details={"article_id": getattr(article, 'id', ''), "cache_key": cache_key},
+                    )
+                return cached
+        
+        self._increment_metric("cache_misses")
+        
+        # Execute with retry logic
+        result = self._analyze_with_retry(article, cache_key, use_cache)
+        
+        return result
+    
+    def _analyze_with_retry(
+        self, 
+        article: NewsArticle, 
+        cache_key: str,
+        use_cache: bool,
+    ) -> LLMSentimentResult:
+        """Execute analyze with retry logic and exponential backoff."""
+        last_error: Exception | None = None
+        
+        for attempt in range(MAX_RETRY_ATTEMPTS):
+            try:
+                result = self._analyze_core(article, cache_key, use_cache)
+                
+                # Record success in circuit breaker
+                if self._circuit_breaker:
+                    self._circuit_breaker.record_success()
+                
+                # Log to audit
+                if self._audit_logger:
+                    self._audit_logger.log(
+                        event_type="ANALYSIS",
+                        operation="analyze_completed",
+                        details={
+                            "article_id": getattr(article, 'id', ''),
+                            "cache_key": cache_key,
+                            "attempt": attempt + 1,
+                            "sentiment_score": result.overall,
+                            "confidence": result.confidence,
+                            "model_used": result.model_used,
+                        },
+                    )
+                
+                return result
+                
+            except Exception as exc:
+                last_error = exc
+                self._increment_metric("errors")
+                if self._circuit_breaker:
+                    self._circuit_breaker.record_failure()
+                
+                if attempt < MAX_RETRY_ATTEMPTS - 1:
+                    self._increment_metric("retries")
+                    delay = RETRY_INITIAL_DELAY * (RETRY_BACKOFF_BASE ** attempt)
+                    log.warning(
+                        "Analyze attempt %d failed: %s. Retrying in %.2fs...",
+                        attempt + 1, exc, delay,
+                    )
+                    time.sleep(delay)
+                else:
+                    log.error(
+                        "Analyze failed after %d attempts: %s",
+                        MAX_RETRY_ATTEMPTS, exc,
+                    )
+        
+        # All retries exhausted - return fallback
+        if self._audit_logger:
+            self._audit_logger.log(
+                event_type="ERROR",
+                operation="analyze_failed",
+                details={
+                    "article_id": getattr(article, 'id', ''),
+                    "error": str(last_error),
+                    "attempts": MAX_RETRY_ATTEMPTS,
+                },
+            )
+        
+        return self._create_fallback_result(
+            article,
+            error=f"Analysis failed after {MAX_RETRY_ATTEMPTS} attempts: {last_error}",
+        )
+    
+    def _analyze_core(
+        self, 
+        article: NewsArticle, 
+        cache_key: str,
+        use_cache: bool,
+    ) -> LLMSentimentResult:
+        """Core sentiment analysis logic (original implementation)."""
         started = time.time()
-        ck = self._cache_key(article)
 
         if use_cache:
-            cached = self._cache.get(ck)
+            cached = self._cache.get(cache_key)
             if cached is not None:
                 return cached
 
@@ -540,20 +1161,10 @@ class LLM_sentimentAnalyzer:
         )[:3200]
         language = self._detect_language(text)
 
-        self._load_pipeline()
+        # Self-training only: no pretrained transformers pipeline
+        # Use rule-based sentiment (always available)
         tf_overall, tf_pos, tf_neg, tf_neu, tf_conf = 0.0, 0.0, 0.0, 1.0, 0.38
         model_used = "rule"
-        if self._pipe is not None:
-            try:
-                tf_overall, tf_pos, tf_neg, tf_neu, tf_conf = self._parse_scores(
-                    self._pipe(text[:512])
-                )
-                model_used = self._pipe_name or self.model_name
-            except Exception as _tf_exc:
-                log.debug(
-                    "Transformer inference failed, falling back to rule-based: %s",
-                    _tf_exc,
-                )
 
         feat = self._build_features(article, tf_overall, tf_conf, language)
         rule = float(feat[1])
@@ -657,21 +1268,200 @@ class LLM_sentimentAnalyzer:
             retail_sentiment=float(overall * 0.85),
             institutional_sentiment=float(overall * 0.8),
         )
-        self._cache.put(ck, result)
+        self._cache.put(cache_key, result)
         return result
+    
+    def _create_fallback_result(
+        self, 
+        article: NewsArticle, 
+        error: str = "",
+    ) -> LLMSentimentResult:
+        """Create a safe fallback result when analysis fails."""
+        now = datetime.now()
+        return LLMSentimentResult(
+            overall=0.0,
+            label=SentimentLabel.NEUTRAL,
+            confidence=0.0,
+            positive_score=0.0,
+            negative_score=0.0,
+            neutral_score=1.0,
+            policy_impact=0.0,
+            market_sentiment=0.0,
+            entities=[],
+            keywords=[],
+            uncertainty=1.0,
+            model_used="fallback",
+            processing_time_ms=0.0,
+            trader_sentiment=0.0,
+            discussion_topics=[],
+            social_mentions=0,
+            retail_sentiment=0.0,
+            institutional_sentiment=0.0,
+        )
+
+    def _increment_metric(self, name: str, value: int = 1) -> None:
+        """Thread-safe metric increment."""
+        with self._metrics_lock:
+            if name in self._metrics:
+                self._metrics[name] += value
 
     def analyze_batch(
         self, articles: list[NewsArticle], batch_size: int = 8
     ) -> list[LLMSentimentResult]:
-        """Analyze a batch of articles.
-
-        Note: True batched transformer inference is TODO. Currently
-        processes sequentially but respects batch_size for progress chunking.
+        """Analyze a batch of articles with async parallel processing.
+        
+        Features:
+        - Parallel processing with configurable concurrency
+        - Progress callback support
+        - Graceful degradation on failures
         """
         items = list(articles or [])
         if not items:
             return []
+        
+        # Use async processor if available
+        if self._async_processor:
+            return self._async_processor.analyze_batch_sync(
+                self.analyze,
+                items,
+                use_cache=True,
+                progress_callback=None,
+            )
+        
+        # Fallback to sequential processing
         return [self.analyze(a) for a in items]
+    
+    def analyze_batch_async(
+        self,
+        articles: list[NewsArticle],
+        max_concurrent: int = MAX_CONCURRENT_ANALYZE_TASKS,
+        progress_callback: Callable[[dict[str, Any]], None] | None = None,
+    ) -> asyncio.Future[list[LLMSentimentResult]]:
+        """Analyze a batch of articles asynchronously.
+        
+        Args:
+            articles: List of articles to analyze
+            max_concurrent: Maximum concurrent tasks
+            progress_callback: Callback for progress updates
+            
+        Returns:
+            Future that resolves to list of results
+        """
+        if not self._async_processor:
+            raise RuntimeError("Async processing not enabled")
+        
+        loop = asyncio.get_event_loop()
+        return loop.create_task(
+            self._async_processor.analyze_batch(
+                self.analyze,
+                articles,
+                use_cache=True,
+                progress_callback=progress_callback,
+            )
+        )
+    
+    def get_metrics(self) -> dict[str, Any]:
+        """Get comprehensive metrics and monitoring data."""
+        with self._metrics_lock:
+            metrics = dict(self._metrics)
+        
+        # Add component status
+        metrics["components"] = {
+            "cache": {
+                "type": "bounded_lru",
+                "status": "active",
+            },
+            "rate_limiter": (
+                self._rate_limiter.get_status() if self._rate_limiter else {"enabled": False}
+            ),
+            "circuit_breaker": (
+                self._circuit_breaker.get_state() if self._circuit_breaker else {"enabled": False}
+            ),
+            "audit_logger": (
+                self._audit_logger.get_status() if self._audit_logger else {"enabled": False}
+            ),
+        }
+        
+        # Add training status
+        metrics["training"] = self.get_training_status()
+        
+        # Add corpus stats
+        metrics["corpus"] = self.get_corpus_stats()
+        
+        return metrics
+    
+    def get_system_health(self) -> dict[str, Any]:
+        """Get overall system health status."""
+        issues = []
+        warnings_list = []
+        
+        # Check circuit breaker
+        if self._circuit_breaker:
+            cb_state = self._circuit_breaker.get_state()
+            if cb_state["state"] == "open":
+                issues.append("Circuit breaker is OPEN - analysis may be limited")
+            elif cb_state["failure_count"] >= 3:
+                warnings_list.append(f"High failure count: {cb_state['failure_count']}")
+        
+        # Check rate limiter
+        if self._rate_limiter:
+            rl_status = self._rate_limiter.get_status()
+            if rl_status["utilization"] > 0.9:
+                warnings_list.append("Rate limiter near capacity")
+        
+        # Check audit logger integrity
+        if self._audit_logger:
+            is_valid, audit_issues = self._audit_logger.verify_integrity()
+            if not is_valid:
+                issues.append(f"Audit log integrity issues: {len(audit_issues)}")
+        
+        # Check training status
+        training_status = self.get_training_status()
+        if training_status.get("status") == "not_trained":
+            warnings_list.append("Models not trained - using rule-based fallback")
+        
+        # Determine overall health
+        if issues:
+            health = "unhealthy"
+        elif warnings_list:
+            health = "degraded"
+        else:
+            health = "healthy"
+        
+        return {
+            "health": health,
+            "issues": issues,
+            "warnings": warnings_list,
+            "metrics": self.get_metrics(),
+            "timestamp": datetime.now().isoformat(),
+        }
+    
+    def reset_circuit_breaker(self) -> None:
+        """Manually reset the circuit breaker."""
+        if self._circuit_breaker:
+            self._circuit_breaker.reset()
+            log.info("Circuit breaker manually reset")
+    
+    def clear_cache(self) -> None:
+        """Clear the sentiment cache."""
+        self._cache.clear()
+        log.info("Sentiment cache cleared")
+    
+    def shutdown(self) -> None:
+        """Gracefully shutdown the analyzer."""
+        log.info("Shutting down LLM sentiment analyzer...")
+        
+        # Save final metrics
+        if self._audit_logger:
+            self._audit_logger.log(
+                event_type="SYSTEM",
+                operation="shutdown",
+                details=self.get_metrics(),
+            )
+        
+        # Reset components
+        if self._circuit_breaker:
+            self._circuit_breaker.reset()
 
     # ----------------------------------------------------------------
     # Pickle load/save helpers
@@ -861,7 +1651,18 @@ class LLM_sentimentAnalyzer:
         hours_back: int,
         min_samples: int = 50,
     ) -> tuple[list[NewsArticle], dict[str, int]]:
-        """Filter articles for quality. Returns COPIES — never mutates input."""
+        """Filter articles for quality. Returns COPIES — never mutates input.
+        
+        Enhanced quality gates:
+        - Missing content detection
+        - Minimum length requirements
+        - Garbled text detection
+        - Time-based filtering
+        - Duplicate detection (title + content)
+        - Spam/clickbait detection
+        - Source reputation scoring
+        - Content quality scoring
+        """
         now_dt = datetime.now()
         cutoff = now_dt - timedelta(hours=max(12, int(hours_back)))
         stats: dict[str, int] = {
@@ -872,6 +1673,8 @@ class LLM_sentimentAnalyzer:
             "drop_time": 0,
             "drop_garbled": 0,
             "drop_duplicate": 0,
+            "drop_spam": 0,
+            "drop_low_quality": 0,
         }
         out: list[NewsArticle] = []
         seen_keys: set[str] = set()
@@ -879,6 +1682,15 @@ class LLM_sentimentAnalyzer:
 
         input_count = len(rows or [])
         relax_mode = input_count < min_samples * 2
+        
+        # Spam/clickbait patterns
+        spam_patterns = [
+            r"\b(click|CLICK|Click)\s+(here|this|now)\b",
+            r"\b(AMAZING|SHOCKING|INCREDIBLE|UNBELIEVABLE)\b",
+            r"\b(you\s+won'?t\s+believe|must\s+see|don'?t\s+miss)\b",
+            r"[\!\?]{3,}",  # Multiple exclamation/question marks
+            r"\$\$\$",  # Multiple dollar signs
+        ]
 
         for article in list(rows or []):
             title = str(getattr(article, "title", "") or "").strip()
@@ -903,6 +1715,15 @@ class LLM_sentimentAnalyzer:
             replacement_ratio = text.count("\ufffd") / max(1, len(text))
             if replacement_ratio > 0.05:
                 stats["drop_garbled"] += 1
+                continue
+
+            # Spam/clickbait detection
+            spam_score = 0
+            for pattern in spam_patterns:
+                if re.search(pattern, text, re.IGNORECASE):
+                    spam_score += 1
+            if spam_score >= 2 and not relax_mode:
+                stats["drop_spam"] += 1
                 continue
 
             published_at = getattr(article, "published_at", None)
@@ -933,6 +1754,12 @@ class LLM_sentimentAnalyzer:
                 dedup_key = f"{src_key}|{title.lower()[:120]}|{content.lower()[:240]}"
             if dedup_key in seen_keys:
                 stats["drop_duplicate"] += 1
+                continue
+
+            # Content quality scoring
+            quality_score = self._compute_content_quality_score(text, title, content)
+            if quality_score < 0.3 and not relax_mode:
+                stats["drop_low_quality"] += 1
                 continue
 
             lang = str(getattr(article, "language", "") or "").strip().lower()
@@ -972,6 +1799,63 @@ class LLM_sentimentAnalyzer:
 
         stats["kept"] = len(out)
         return out, stats
+    
+    def _compute_content_quality_score(
+        self,
+        text: str,
+        title: str,
+        content: str,
+    ) -> float:
+        """Compute a content quality score (0.0 to 1.0).
+        
+        Factors:
+        - Title-to-content ratio
+        - Sentence structure
+        - Information density
+        - Special character ratio
+        """
+        if not text:
+            return 0.0
+        
+        score = 0.5  # Base score
+        
+        # Title-to-content ratio (good articles have meaningful titles)
+        if title and content:
+            title_ratio = len(title) / max(1, len(content))
+            if 0.05 <= title_ratio <= 0.3:
+                score += 0.15
+            elif title_ratio > 0.5:  # Title too long relative to content
+                score -= 0.2
+        
+        # Information density (character diversity)
+        unique_chars = len(set(text))
+        total_chars = len(text)
+        if total_chars > 0:
+            diversity = unique_chars / min(total_chars, 1000)
+            if diversity > 0.15:
+                score += 0.15
+            elif diversity < 0.05:
+                score -= 0.2
+        
+        # Sentence structure (check for proper punctuation)
+        sentence_endings = sum(1 for c in ".!?。！？" if c in text)
+        if sentence_endings >= 2:
+            score += 0.1
+        elif sentence_endings == 0:
+            score -= 0.15
+        
+        # Special character ratio (too many is bad)
+        special_chars = len(re.findall(r"[^A-Za-z0-9\u4e00-\u9fff\s\.,!?;:，。！？；：]", text))
+        special_ratio = special_chars / max(1, len(text))
+        if special_ratio > 0.3:
+            score -= 0.2
+        
+        # URL/email ratio (too many suggests spam)
+        urls_emails = len(re.findall(r"http[s]?://|@\w+\.\w+", text))
+        if urls_emails > 3:
+            score -= 0.15
+        
+        return max(0.0, min(1.0, score))
 
     # ----------------------------------------------------------------
     # Training Corpus Persistence (FIX: Accumulate data across cycles)
@@ -1983,7 +2867,6 @@ class LLM_sentimentAnalyzer:
         """
         if force_china_direct:
             os.environ["TRADING_CHINA_DIRECT"] = "1"
-            os.environ["TRADING_VPN"] = "0"
             from core.network import invalidate_network_cache
             invalidate_network_cache()
             reset_collector()
@@ -2213,28 +3096,97 @@ class LLM_sentimentAnalyzer:
             "en_ratio": float((len(recent) - zh) / max(1.0, total)),
         }
 
-    def get_embedding(self, text: str) -> list[float]:
-        if _SENTENCE_TRANSFORMERS_AVAILABLE:
-            if self._emb is None:
-                try:
-                    self._emb = SentenceTransformer(
-                        "paraphrase-multilingual-MiniLM-L12-v2"
-                    )
-                except Exception:
-                    self._emb = None
-            if self._emb is not None:
-                try:
-                    out = self._emb.encode(str(text or ""))
-                    return [float(v) for v in np.asarray(out, dtype=float).tolist()]
-                except Exception:
-                    pass
-        vec = np.zeros(96, dtype=float)
-        for tok in re.findall(r"[a-zA-Z0-9\u4e00-\u9fff]+", str(text or "").lower()):
-            vec[hash(tok) % vec.size] += 1.0
+    def get_embedding(
+        self, 
+        text: str, 
+        dimension: int = 96,
+        sparse: bool = False,
+    ) -> list[float] | dict[int, float]:
+        """Get text embedding using rule-based hashing (self-trained).
+        
+        Features:
+        - Memory-efficient sparse representation option
+        - Configurable dimension
+        - Automatic text truncation for long inputs
+        - Character-level and token-level features
+        
+        Note: sentence-transformers removed. All embeddings are now:
+        - Rule-based hash embeddings (always available)
+        - Self-trained during your training process
+        No pretrained models are loaded.
+        
+        Args:
+            text: Input text to embed
+            dimension: Embedding dimension (default: 96)
+            sparse: If True, return sparse dict representation {index: value}
+            
+        Returns:
+            Dense list[float] or sparse dict[int, float]
+        """
+        text = str(text or "")
+        
+        # Truncate very long texts for memory efficiency
+        max_text_len = 2000
+        if len(text) > max_text_len:
+            # Keep beginning and end for context
+            text = text[:max_text_len // 2] + text[-max_text_len // 2:]
+        
+        # Use sparse representation for memory efficiency
+        sparse_vec: dict[int, float] = {}
+        
+        # Token-level features
+        tokens = re.findall(r"[a-zA-Z0-9\u4e00-\u9fff]+", text.lower())
+        for tok in tokens:
+            idx = hash(tok) % dimension
+            sparse_vec[idx] = sparse_vec.get(idx, 0.0) + 1.0
+        
+        # Character n-gram features (for better semantic capture)
+        for n in [2, 3]:
+            for i in range(len(text) - n + 1):
+                ngram = text[i:i + n]
+                idx = hash(ngram) % dimension
+                sparse_vec[idx] = sparse_vec.get(idx, 0.0) + 0.5
+        
+        # Language-specific features
+        zh_count = len(re.findall(r"[\u4e00-\u9fff]", text))
+        en_count = len(re.findall(r"[a-zA-Z]", text))
+        if zh_count > 0:
+            sparse_vec[0] = sparse_vec.get(0, 0.0) + zh_count / max(1, len(text))
+        if en_count > 0:
+            sparse_vec[1] = sparse_vec.get(1, 0.0) + en_count / max(1, len(text))
+        
+        if sparse:
+            return sparse_vec
+        
+        # Convert to dense representation
+        vec = np.zeros(dimension, dtype=float)
+        for idx, val in sparse_vec.items():
+            vec[idx] = val
+        
+        # L2 normalization
         n = float(np.linalg.norm(vec))
         if n > 0:
             vec /= n
+        
         return [float(v) for v in vec.tolist()]
+    
+    def get_embedding_batch(
+        self,
+        texts: list[str],
+        dimension: int = 96,
+        sparse: bool = False,
+    ) -> list[list[float]] | list[dict[int, float]]:
+        """Get embeddings for multiple texts efficiently.
+        
+        Args:
+            texts: List of texts to embed
+            dimension: Embedding dimension
+            sparse: Return sparse representation
+            
+        Returns:
+            List of embeddings
+        """
+        return [self.get_embedding(t, dimension, sparse) for t in texts]
 
     def find_similar_articles(
         self, query: str, articles: list[NewsArticle], top_k: int = 5

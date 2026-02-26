@@ -402,10 +402,9 @@ class DataFetcher:
                     self._all_sources.append(source)
                     log.info(
                         "Data source %s initialized "
-                        "(china_direct=%s, vpn=%s)",
+                        "(china_direct=%s)",
                         source.name,
                         source.needs_china_direct,
-                        source.needs_vpn,
                     )
             except _RECOVERABLE_FETCH_EXCEPTIONS as exc:
                 if self._strict_errors:
@@ -437,12 +436,10 @@ class DataFetcher:
         env = get_network_env()
         is_china_direct = bool(getattr(env, "is_china_direct", False))
         eastmoney_ok = bool(getattr(env, "eastmoney_ok", False))
-        yahoo_ok = bool(getattr(env, "yahoo_ok", False))
 
         net_sig = (
             bool(is_china_direct),
             bool(eastmoney_ok),
-            bool(yahoo_ok),
         )
         if self._last_network_mode is None:
             self._last_network_mode = net_sig
@@ -458,7 +455,7 @@ class DataFetcher:
             log.info(
                 "Network mode changed -> cooldowns reset "
                 "(%s)",
-                "CHINA_DIRECT" if is_china_direct else "VPN_FOREIGN",
+                "CHINA_DIRECT" if is_china_direct else "UNKNOWN",
             )
 
         active: list[DataSource] = []
@@ -470,8 +467,8 @@ class DataFetcher:
                 if not s.is_suitable_for_network():
                     log.debug(
                         "Source %s: not suitable for network "
-                        "(needs_china_direct=%s needs_vpn=%s)",
-                        s.name, s.needs_china_direct, s.needs_vpn,
+                        "(needs_china_direct=%s)",
+                        s.name, s.needs_china_direct,
                     )
                     continue
             except _RECOVERABLE_FETCH_EXCEPTIONS as exc:
@@ -482,7 +479,7 @@ class DataFetcher:
                 )
                 continue
             active.append(s)
-        
+
         ranked = sorted(
             active,
             key=lambda s: (-self._source_health_score(s, env), s.priority),

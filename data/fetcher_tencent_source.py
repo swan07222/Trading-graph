@@ -23,7 +23,6 @@ class TencentQuoteSource(DataSource):
     name = "tencent"
     priority = 0
     needs_china_direct = False
-    needs_vpn = False
     _CB_ERROR_THRESHOLD = 10
     _CB_MIN_COOLDOWN = 18
     _CB_MAX_COOLDOWN = 75

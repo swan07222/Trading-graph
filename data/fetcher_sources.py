@@ -268,7 +268,6 @@ class DataSource:
     name: str = "base"
     priority: int = 0
     needs_china_direct: bool = False
-    needs_vpn: bool = False
 
     # Circuit-breaker thresholds -> raised to avoid premature disabling
     _CB_ERROR_THRESHOLD: int = 12
@@ -315,12 +314,11 @@ class DataSource:
             return True
 
     def is_suitable_for_network(self) -> bool:
-        """Check if this source works in the current network environment."""
+        """Check if this source works in the current network environment (China-only)."""
         from core.network import get_network_env
         env = get_network_env()
+        # China-only mode: all sources must work on China direct connection
         if self.needs_china_direct and not env.is_china_direct:
-            return False
-        if self.needs_vpn and not env.is_vpn_active:
             return False
         return True
 
@@ -896,7 +894,6 @@ class SinaHistorySource(DataSource):
     name = "sina"
     priority = 2
     needs_china_direct = True
-    needs_vpn = False
     _CB_ERROR_THRESHOLD = 8
     _CB_MIN_COOLDOWN = 15
     _CB_MAX_COOLDOWN = 90
@@ -1210,11 +1207,15 @@ class SinaHistorySource(DataSource):
 
 
 class YahooSource(DataSource):
-    """Yahoo Finance -> works ONLY through VPN (foreign IP)."""
+    """Yahoo Finance - NOT AVAILABLE in China-only mode.
+
+    This source is disabled as Yahoo Finance is not accessible from mainland China
+    without VPN, and this project operates in China-only mode.
+    """
 
     name = "yahoo"
     priority = 1
-    needs_vpn = True
+    needs_china_direct = False  # Does not work on China direct
     _CB_ERROR_THRESHOLD = 20
     _CB_MIN_COOLDOWN = 20
     _CB_MAX_COOLDOWN = 90
@@ -1228,31 +1229,18 @@ class YahooSource(DataSource):
         try:
             import yfinance as yf
             self._yf = yf
-            log.info("Yahoo Finance initialized")
+            log.info("Yahoo Finance initialized (unavailable in China-only mode)")
         except ImportError:
             self.status.available = False
             log.warning("yfinance not available")
 
     def is_available(self) -> bool:
-        if not self._yf:
-            return False
-        if not self.is_suitable_for_network():
-            return False
-        return super().is_available()
+        # Yahoo Finance is not available in China-only mode
+        return False
 
     def is_suitable_for_network(self) -> bool:
-        from core.network import get_network_env
-        env = get_network_env()
-        suitable = bool(env.is_vpn_active) or (
-            bool(getattr(env, "yahoo_ok", False)) and not env.is_china_direct
-        )
-        # [DBG] VPN/Yahoo suitability check
-        log.info(
-            f"[DBG] Yahoo network check: is_vpn_active={env.is_vpn_active} "
-            f"is_china_direct={env.is_china_direct} yahoo_ok={env.yahoo_ok} "
-            f"suitable={suitable}"
-        )
-        return suitable
+        """Yahoo Finance is not suitable for China-only network mode."""
+        return False
 
     def _record_error(self, error: str) -> None:
         msg = str(error).lower()

@@ -1382,15 +1382,8 @@ class ParallelFetcher:
             delay = 0.2
             max_concurrent = 5
 
-        # VPN + Yahoo mode is sensitive to burst traffic; use gentler fetch pacing.
-        try:
-            from core.network import get_network_env
-            env = get_network_env()
-            if interval not in ("1m", "2m", "5m", "15m", "30m", "60m", "1h") and env.is_vpn_active:
-                delay = max(delay, 0.9)
-                max_concurrent = min(max_concurrent, 2)
-        except _AUTO_LEARNER_RECOVERABLE_EXCEPTIONS as e:
-            log.debug("Network-aware fetch pacing unavailable: %s", e)
+        # China-only mode: standard fetch pacing for all intervals
+        # All data sources are China-accessible endpoints
 
         semaphore = threading.Semaphore(max_concurrent)
 

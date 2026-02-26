@@ -93,19 +93,15 @@ vpn = [
   "yfinance>=0.2.40",
 ]
 # FIX China 2026-02-26: China-optimized stack (recommended for mainland users)
+# Note: transformers and sentence-transformers removed - use self-training instead
 china-full = [
   "akshare>=1.11.0",
   "beautifulsoup4>=4.12.0,<5.0.0",
-  "sentence-transformers>=2.2.0,<3.0.0",
-  "transformers>=4.36.0,<5.0.0",
   "chinesecalendar>=0.1.8",
   "cn2an>=0.5.20",
 ]
-nlp = [
-  "beautifulsoup4>=4.12.0,<5.0.0",
-  "sentence-transformers>=2.2.0,<3.0.0",
-  "transformers>=4.36.0,<5.0.0",
-]
+# NLP removed - all text embeddings are self-trained
+nlp = []
 gui = [
   "PyQt6>=6.6.0,<7.0.0",
   "pyqtgraph>=0.13.0,<1.0.0",

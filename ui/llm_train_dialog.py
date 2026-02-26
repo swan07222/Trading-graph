@@ -36,7 +36,6 @@ log = get_logger(__name__)
 
 def _force_china_direct_network_mode() -> None:
     os.environ["TRADING_CHINA_DIRECT"] = "1"
-    os.environ["TRADING_VPN"] = "0"
     from core.network import invalidate_network_cache
 
     invalidate_network_cache()

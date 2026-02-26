@@ -115,16 +115,13 @@ def test_fetch_caixin_falls_back_to_homepage_links(tmp_path: Path) -> None:
     assert "China Markets Open Higher" in out[0].title
 
 
-def test_collect_news_retries_opposite_pool_when_primary_empty(
+def test_collect_news_retries_alternative_sources_when_primary_empty(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
+    """Test that collector tries alternative China-accessible sources when primary is empty."""
     collector = NewsCollector(cache_dir=tmp_path)
     calls: list[str] = []
-    monkeypatch.setenv("TRADING_CHINA_DIRECT", "0")
-    monkeypatch.setenv("TRADING_VPN", "1")
-
-    collector.is_vpn_mode = lambda: True  # type: ignore[method-assign]
 
     def _fake_fetch(  # noqa: ANN001
         source: str,
@@ -143,15 +140,13 @@ def test_collect_news_retries_opposite_pool_when_primary_empty(
 
     assert rows
     assert rows[0].source == "sina_finance"
-    assert "reuters" in calls
     assert "sina_finance" in calls
 
 
-def test_collect_news_strict_does_not_retry_opposite_pool(tmp_path: Path) -> None:
+def test_collect_news_strict_raises_on_empty_results(tmp_path: Path) -> None:
+    """Test that strict mode raises error when no articles found."""
     collector = NewsCollector(cache_dir=tmp_path)
     calls: list[str] = []
-
-    collector.is_vpn_mode = lambda: True  # type: ignore[method-assign]
 
     def _fake_fetch(  # noqa: ANN001
         source: str,
@@ -167,19 +162,17 @@ def test_collect_news_strict_does_not_retry_opposite_pool(tmp_path: Path) -> Non
     with pytest.raises(RuntimeError, match="Strict news collection returned no articles"):
         collector.collect_news(limit=10, hours_back=24, strict=True)
 
-    assert "sina_finance" not in calls
+    assert calls
 
 
-def test_collect_news_china_direct_disables_cross_region_fallback(
+def test_collect_news_china_direct_uses_china_sources(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
+    """Test that China-direct mode uses only China-accessible sources."""
     collector = NewsCollector(cache_dir=tmp_path)
     calls: list[str] = []
     monkeypatch.setenv("TRADING_CHINA_DIRECT", "1")
-    monkeypatch.setenv("TRADING_VPN", "0")
-
-    collector.is_vpn_mode = lambda: False  # type: ignore[method-assign]
 
     def _fake_fetch(  # noqa: ANN001
         source: str,
@@ -196,6 +189,7 @@ def test_collect_news_china_direct_disables_cross_region_fallback(
 
     assert rows == []
     assert calls
+    # China-only mode should only use China-accessible sources
     assert "reuters" not in calls
     assert "yahoo_finance" not in calls
     assert "marketwatch" not in calls

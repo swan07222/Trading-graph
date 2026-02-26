@@ -6,19 +6,19 @@ from data.universe import _can_use_akshare
 
 
 def test_universe_tries_akshare_on_direct_china_even_if_probe_is_down(monkeypatch) -> None:
+    """AkShare should be tried when China direct mode is active."""
     env = SimpleNamespace(
         eastmoney_ok=False,
-        is_vpn_active=False,
         is_china_direct=True,
     )
     monkeypatch.setattr("data.universe.get_network_env", lambda: env)
     assert _can_use_akshare() is True
 
 
-def test_universe_skips_akshare_when_probe_is_down_offshore(monkeypatch) -> None:
+def test_universe_skips_akshare_when_offshore(monkeypatch) -> None:
+    """AkShare should be skipped when not on China direct network."""
     env = SimpleNamespace(
         eastmoney_ok=False,
-        is_vpn_active=False,
         is_china_direct=False,
     )
     monkeypatch.setattr("data.universe.get_network_env", lambda: env)
@@ -39,7 +39,7 @@ def test_akshare_source_suitable_on_china_direct(monkeypatch) -> None:
     monkeypatch.setattr("core.network.get_network_env", lambda: env_offshore_bad)
     assert src.is_suitable_for_network() is False
 
-    # Offshore + eastmoney probe up (e.g. VPN with eastmoney access): suitable
+    # Offshore + eastmoney probe up (e.g. with eastmoney access): suitable
     env_offshore_good = SimpleNamespace(eastmoney_ok=True, is_china_direct=False)
     monkeypatch.setattr("core.network.get_network_env", lambda: env_offshore_good)
     assert src.is_suitable_for_network() is True
@@ -60,7 +60,6 @@ def test_source_health_prefers_tencent_when_eastmoney_down() -> None:
     env = SimpleNamespace(
         is_china_direct=True,
         eastmoney_ok=False,
-        yahoo_ok=False,
     )
     tencent = _DummySource("tencent")
     akshare = _DummySource("akshare")
@@ -96,7 +95,6 @@ def test_get_active_sources_filters_network_unsuitable_source(monkeypatch) -> No
     env = SimpleNamespace(
         is_china_direct=True,
         eastmoney_ok=True,
-        yahoo_ok=False,
     )
     monkeypatch.setattr("core.network.get_network_env", lambda: env)
 

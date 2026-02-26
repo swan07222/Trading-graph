@@ -339,7 +339,7 @@ class NewsPanel(QWidget):
             env = get_network_env()
             if not env.is_china_direct and not env.tencent_ok:
                 self.mode_label.setText(
-                    "News unavailable (VPN active)"
+                    "News unavailable"
                 )
                 self._clear_news_view()
                 return

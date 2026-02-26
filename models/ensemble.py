@@ -38,6 +38,17 @@ from torch.utils.data import DataLoader, TensorDataset
 from config.settings import CONFIG
 from utils.logger import get_logger
 
+# Optional quality assessment integration
+try:
+    from .prediction_quality import (
+        PredictionQualityAssessor,
+        get_quality_assessor,
+        MarketRegime,
+    )
+    QUALITY_ASSESSMENT_AVAILABLE = True
+except ImportError:
+    QUALITY_ASSESSMENT_AVAILABLE = False
+
 log = get_logger(__name__)
 
 # Epsilon for numerical stability
@@ -453,6 +464,12 @@ class EnsemblePrediction:
     # FIX #6: Uncertainty quantification fields
     uncertainty: float = 0.0  # Epistemic uncertainty (0-1 scale)
     uncertainty_std: np.ndarray | None = None  # Per-class uncertainty
+    # Quality assessment fields
+    quality_report: Any | None = None  # PredictionQualityReport
+    market_regime: str = "normal"  # Market regime at prediction time
+    data_quality_score: float = 1.0  # Overall data quality score
+    is_reliable: bool = True  # Overall reliability flag
+    warnings: list[str] = field(default_factory=list)  # Quality warnings
 
     @property
     def prob_up(self) -> float:
@@ -475,26 +492,34 @@ class EnsemblePrediction:
     @property
     def is_confident(self) -> bool:
         return bool(self.confidence >= float(CONFIG.model.min_confidence))
-    
+
     # FIX #6: Uncertainty-based confidence modifiers
     @property
     def is_high_uncertainty(self) -> bool:
         """Check if prediction has high epistemic uncertainty."""
         threshold = getattr(CONFIG.model, "uncertainty_threshold_high", 0.3)
         return bool(self.uncertainty > threshold)
-    
+
     @property
     def is_low_uncertainty(self) -> bool:
         """Check if prediction has low epistemic uncertainty."""
         threshold = getattr(CONFIG.model, "uncertainty_threshold_low", 0.1)
         return bool(self.uncertainty < threshold)
-    
+
     @property
     def adjusted_confidence(self) -> float:
-        """Confidence adjusted for uncertainty (penalize high uncertainty)."""
-        # Reduce confidence proportionally to uncertainty
-        uncertainty_penalty = self.uncertainty * 0.3  # Max 30% penalty
-        return float(np.clip(self.confidence - uncertainty_penalty, 0.0, 1.0))
+        """Confidence adjusted for uncertainty and quality factors."""
+        # Base uncertainty penalty
+        uncertainty_penalty = self.uncertainty * 0.3
+        
+        # Data quality penalty
+        quality_penalty = (1.0 - self.data_quality_score) * 0.15
+        
+        # Agreement penalty
+        agreement_penalty = (1.0 - self.agreement) * 0.1
+        
+        total_penalty = uncertainty_penalty + quality_penalty + agreement_penalty
+        return float(np.clip(self.confidence - total_penalty, 0.0, 1.0))
 
 def _build_amp_context(device: str) -> tuple[Callable[[], Any], Any | None]:
     """Return (context_factory, GradScaler_or_None) compatible with torch >= 1.9."""
@@ -1679,14 +1704,23 @@ class EnsembleModel:
     # ------------------------------------------------------------------
     # ------------------------------------------------------------------
 
-    def predict(self, X: np.ndarray) -> EnsemblePrediction:
-        """Predict a single sample.
+    def predict(
+        self,
+        X: np.ndarray,
+        feature_names: list[str] | None = None,
+        market_data: dict[str, Any] | None = None,
+        include_quality_report: bool = True,
+    ) -> EnsemblePrediction:
+        """Predict a single sample with optional quality assessment.
 
         Args:
             X: Input array of shape (seq_len, n_features) or (1, seq_len, n_features)
+            feature_names: Names of input features for quality assessment
+            market_data: Current market context for regime detection
+            include_quality_report: Whether to include quality assessment
 
         Returns:
-            EnsemblePrediction with probabilities, class, confidence, etc.
+            EnsemblePrediction with probabilities, class, confidence, and quality metrics
 
         Raises:
             ValueError: If input shape is invalid
@@ -1699,19 +1733,36 @@ class EnsembleModel:
                 f"predict() expects a single sample, got shape {X.shape}. "
                 f"Use predict_batch() for multiple samples."
             )
-        results = self.predict_batch(X, batch_size=1)
+        
+        # Run batch prediction
+        results = self.predict_batch(
+            X,
+            batch_size=1,
+            feature_names=feature_names,
+            market_data=market_data,
+            include_quality_report=include_quality_report,
+        )
+        
         if not results:
             raise RuntimeError("Prediction failed - no models available")
         return results[0]
 
     def predict_batch(
-        self, X: np.ndarray, batch_size: int = 1024
+        self,
+        X: np.ndarray,
+        batch_size: int = 1024,
+        feature_names: list[str] | None = None,
+        market_data: dict[str, Any] | None = None,
+        include_quality_report: bool = True,
     ) -> list[EnsemblePrediction]:
-        """Batch prediction.
+        """Batch prediction with optional quality assessment.
 
         Args:
             X: Input array of shape (N, seq_len, n_features)
             batch_size: Processing batch size
+            feature_names: Names of input features for quality assessment
+            market_data: Current market context for regime detection
+            include_quality_report: Whether to include quality assessment
 
         Returns:
             List of EnsemblePrediction, one per sample
@@ -1742,6 +1793,11 @@ class EnsembleModel:
         max_entropy = float(np.log(num_classes)) if num_classes > 1 else 1.0
         results: list[EnsemblePrediction] = []
         n = len(X)
+        
+        # Initialize quality assessor if available and requested
+        quality_assessor: PredictionQualityAssessor | None = None
+        if include_quality_report and QUALITY_ASSESSMENT_AVAILABLE:
+            quality_assessor = get_quality_assessor()
 
         for start in range(0, n, batch_size):
             end = min(n, start + batch_size)
@@ -1930,6 +1986,45 @@ class EnsembleModel:
                         uncertainty_std=uncertainty_std_i,
                     )
                 )
+        
+        # Apply quality assessment to all predictions if enabled
+        if quality_assessor is not None and results:
+            # Stack individual predictions for quality assessment
+            indiv_preds = {
+                name: np.stack([pred.individual_predictions.get(name, np.zeros(3)) for pred in results])
+                for name in results[0].individual_predictions
+            }
+            indiv_confs = {
+                name: np.array([pred.individual_predictions.get(name, np.zeros(3)).max() for pred in results])
+                for name in results[0].individual_predictions
+            }
+            
+            # Assess quality for the batch
+            try:
+                # Use first sample's data for assessment (can be extended for batch)
+                quality_report = quality_assessor.assess_prediction(
+                    probabilities=np.stack([pred.probabilities for pred in results]),
+                    individual_predictions={
+                        k: v[0] if len(v) == 1 else v[i] for i, (k, v) in enumerate(indiv_preds.items())
+                    },
+                    individual_confidences={k: v[0] for k, v in indiv_confs.items()},
+                    input_data=X,
+                    feature_names=feature_names,
+                    market_data=market_data,
+                )
+                
+                # Apply quality metrics to predictions
+                market_regime_str = quality_report.market_regime.value
+                for pred in results:
+                    pred.quality_report = quality_report
+                    pred.market_regime = market_regime_str
+                    pred.data_quality_score = quality_report.data_quality.overall_score
+                    pred.is_reliable = quality_report.is_reliable
+                    pred.warnings = quality_report.warnings.copy()
+                    
+            except Exception as e:
+                log.debug(f"Quality assessment failed: {e}")
+                # Continue without quality metrics - not critical
 
         return results
 

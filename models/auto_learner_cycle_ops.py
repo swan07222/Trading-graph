@@ -281,17 +281,8 @@ def _run_cycle(
         ]
         codes = new_batch + replay_batch
 
-        # In VPN mode, large batches can overwhelm upstream providers.
-        try:
-            from core.network import get_network_env
-            env = get_network_env()
-            if env.is_vpn_active and len(codes) > 30:
-                codes = codes[:30]
-                self.progress.add_warning(
-                    "VPN mode: batch capped to 30 stocks for fetch stability"
-                )
-        except _AUTO_LEARNER_RECOVERABLE_EXCEPTIONS as e:
-            log.debug("VPN batch-cap check skipped: %s", e)
+        # China-only mode: no batch capping needed
+        # All data sources are China-accessible endpoints
 
         if not codes:
             self._update(stage="error", message="No stocks available")
@@ -376,13 +367,8 @@ def _run_cycle(
         ]
 
         batch_size = max(1, int(len(codes)))
-        min_ok = min(batch_size, max(3, int(batch_size * 0.05)))
-        try:
-            from core.network import get_network_env
-            if get_network_env().is_vpn_active:
-                min_ok = min(batch_size, max(2, int(batch_size * 0.03)))
-        except _AUTO_LEARNER_RECOVERABLE_EXCEPTIONS as e:
-            log.debug("VPN min-ok adjustment unavailable: %s", e)
+        # China-only mode: standard minimum threshold
+        min_ok = min(batch_size, max(2, int(batch_size * 0.05)))
         if len(ok_codes) < min_ok and failed_codes and not self._should_stop():
             # FIX 1M: More aggressive retry for intraday data with limited availability
             if eff_interval in ("1m", "2m", "5m"):

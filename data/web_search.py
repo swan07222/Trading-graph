@@ -47,8 +47,8 @@ log = get_logger(__name__)
 
 
 class SearchEngine(Enum):
-    """Supported search engines with China optimization.
-    
+    """Supported search engines for China-only mode.
+
     Priority order for China users (most accessible first):
     1. Baidu - Most reliable in mainland China
     2. Bing CN - Good fallback with international content
@@ -66,11 +66,6 @@ class SearchEngine(Enum):
     SINA_SEARCH = auto()        # finance.sina.com.cn
     TOUTIAO_SEARCH = auto()     # www.toutiao.com - AI recommended
     SEARCH_360 = auto()         # www.so.com - Alternative
-    
-    # International engines (VPN required)
-    GOOGLE = auto()
-    DUCKDUCKGO = auto()
-    BING_INTERNATIONAL = auto()
 
 
 @dataclass
@@ -286,7 +281,7 @@ class EngineHealth:
 
 class SearchEngineManager:
     """Manages search engine availability and health with predictive analytics.
-    
+
     China-optimized features:
     - Real-time health monitoring with latency tracking
     - Predictive failure detection based on latency spikes
@@ -305,13 +300,6 @@ class SearchEngineManager:
         SearchEngine.SEARCH_360,
     ]
 
-    # International engines (VPN required)
-    INTERNATIONAL_ENGINES = [
-        SearchEngine.GOOGLE,
-        SearchEngine.DUCKDUCKGO,
-        SearchEngine.BING_INTERNATIONAL,
-    ]
-
     # Priority for China mode
     CHINA_PRIORITY = {
         SearchEngine.BAIDU: 1,
@@ -323,44 +311,27 @@ class SearchEngineManager:
         SearchEngine.SEARCH_360: 7,
     }
 
-    # Priority for VPN mode
-    VPN_PRIORITY = {
-        SearchEngine.GOOGLE: 1,
-        SearchEngine.BING_INTERNATIONAL: 2,
-        SearchEngine.BING_CN: 3,
-        SearchEngine.BAIDU: 4,
-        SearchEngine.DUCKDUCKGO: 5,
-    }
-
     def __init__(self) -> None:
         self._health: dict[SearchEngine, EngineHealth] = {}
         self._lock = asyncio.Lock()
-        
+
         # Initialize health tracking for all engines
-        all_engines = self.CHINA_ENGINES + self.INTERNATIONAL_ENGINES
-        for engine in all_engines:
+        for engine in self.CHINA_ENGINES:
             self._health[engine] = EngineHealth(engine=engine)
-        
+
         # Predictive analytics: track latency trends
         self._latency_trends: dict[SearchEngine, list[float]] = {
-            engine: [] for engine in all_engines
+            engine: [] for engine in self.CHINA_ENGINES
         }
 
-    def is_vpn_mode(self) -> bool:
-        """Check if VPN mode is enabled."""
-        return env_text("TRADING_VPN", "0") == "1"
-
     def get_available_engines(self) -> list[SearchEngine]:
-        """Get available engines based on network mode."""
-        if self.is_vpn_mode():
-            return self.INTERNATIONAL_ENGINES + self.CHINA_ENGINES
+        """Get available engines for China-only mode."""
         return self.CHINA_ENGINES
 
     def get_priority_order(self) -> list[SearchEngine]:
         """Get engines in priority order."""
-        priority = self.VPN_PRIORITY if self.is_vpn_mode() else self.CHINA_PRIORITY
         available = self.get_available_engines()
-        return sorted(available, key=lambda e: priority.get(e, 999))
+        return sorted(available, key=lambda e: self.CHINA_PRIORITY.get(e, 999))
 
     async def record_success(self, engine: SearchEngine, latency_ms: float) -> None:
         """Record successful search operation."""

@@ -78,7 +78,6 @@ class WebSocketClient(QObject):
     - Heartbeat/ping-pong support
     - Channel subscription
     - Thread-safe signal emission
-    - Proxy support for VPN users
     """
 
     # Signals for UI updates
@@ -120,29 +119,6 @@ class WebSocketClient(QObject):
             "uptime_seconds": 0.0,
             "connect_time": None,
         }
-
-        # Setup proxy if configured
-        self._setup_proxy()
-
-    def _setup_proxy(self) -> None:
-        """Setup proxy for VPN users."""
-        proxy_url = env_text("TRADING_PROXY_URL", "")
-        if proxy_url:
-            try:
-                # Parse proxy URL
-                if "://" in proxy_url:
-                    proxy_url = proxy_url.split("://")[1]
-
-                host, port = proxy_url.split(":")
-                proxy = QNetworkProxy(
-                    QNetworkProxy.ProxyType.HttpProxy,
-                    host,
-                    int(port),
-                )
-                QNetworkProxy.setApplicationProxy(proxy)
-                log.info(f"WebSocket proxy configured: {host}:{port}")
-            except Exception as e:
-                log.warning(f"Failed to configure WebSocket proxy: {e}")
 
     @property
     def state(self) -> ConnectionState:

@@ -47,7 +47,6 @@ def create_local_database_source(db_ref: Any) -> DataSource:
         name = "localdb"
         priority = -1
         needs_china_direct = False
-        needs_vpn = False
 
         def __init__(self, db_source: Any) -> None:
             super().__init__()
@@ -82,30 +81,24 @@ def source_health_score(
     *,
     now: datetime | None = None,
 ) -> float:
-    """Score a source by network suitability + recent health."""
+    """Score a source by network suitability + recent health.
+
+    China-only mode: All sources must work on China direct connection.
+    """
     score = 0.0
 
     if source.name == "localdb":
         score += 120.0
-    elif env.is_china_direct:
+    elif source.name == "tencent":
+        score += 92.0
+    elif source.name == "akshare":
         eastmoney_ok = bool(getattr(env, "eastmoney_ok", False))
-        if source.name == "tencent":
-            score += 92.0
-        elif source.name == "akshare":
-            score += 88.0 if eastmoney_ok else 24.0
-        elif source.name == "sina":
-            score += 82.0
-        elif source.name == "yahoo":
-            score += 6.0
-    else:
-        if source.name == "yahoo":
-            score += 90.0
-        elif source.name == "tencent":
-            score += 68.0
-        elif source.name == "akshare":
-            score += 8.0
-        elif source.name == "sina":
-            score += 6.0
+        score += 88.0 if eastmoney_ok else 24.0
+    elif source.name == "sina":
+        score += 82.0
+    elif source.name == "yahoo":
+        # Yahoo is disabled in China-only mode
+        score += 0.0
 
     try:
         if source.is_suitable_for_network():

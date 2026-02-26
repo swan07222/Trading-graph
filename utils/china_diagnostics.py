@@ -89,16 +89,6 @@ class ChinaNetworkDiagnostics:
         ],
     }
 
-    # International services (test VPN status)
-    INTERNATIONAL_ENDPOINTS = {
-        "Yahoo Finance": [
-            "https://finance.yahoo.com",
-        ],
-        "Google DNS": [
-            "8.8.8.8",
-        ],
-    }
-
     # Chinese DNS servers
     CHINA_DNS = [
         ("114.114.114.114", "114DNS"),
@@ -246,7 +236,7 @@ class ChinaNetworkDiagnostics:
 
     def run_all_tests(self, proxy_url: str | None = None) -> dict[str, Any]:
         """Run comprehensive network diagnostics.
-        
+
         Returns:
             Dictionary with test results and recommendations
         """
@@ -257,13 +247,6 @@ class ChinaNetworkDiagnostics:
         for provider, urls in self.FINANCIAL_ENDPOINTS.items():
             for url in urls:
                 result = self.test_endpoint(provider, url, "financial")
-                self.results.append(result)
-
-        # Test international endpoints (VPN status)
-        log.info("Testing international endpoints...")
-        for provider, urls in self.INTERNATIONAL_ENDPOINTS.items():
-            for url in urls:
-                result = self.test_endpoint(provider, url, "international")
                 self.results.append(result)
 
         # Test DNS resolution
@@ -293,7 +276,6 @@ class ChinaNetworkDiagnostics:
     def _generate_summary(self) -> None:
         """Generate summary statistics and recommendations."""
         financial_results = [r for r in self.results if r.category == "financial"]
-        international_results = [r for r in self.results if r.category == "international"]
         dns_results = [r for r in self.results if r.category == "dns"]
         proxy_results = [r for r in self.results if r.category == "proxy"]
 
@@ -302,20 +284,8 @@ class ChinaNetworkDiagnostics:
         financial_total = len(financial_results)
         financial_rate = financial_success / financial_total if financial_total > 0 else 0
 
-        international_success = sum(1 for r in international_results if r.success)
-        international_total = len(international_results)
-        international_rate = international_success / international_total if international_total > 0 else 0
-
-        # Determine network mode
-        if financial_rate > 0.7 and international_rate < 0.3:
-            network_mode = "china_direct"
-            vpn_recommended = False
-        elif international_rate > 0.7:
-            network_mode = "vpn_active"
-            vpn_recommended = False
-        else:
-            network_mode = "mixed_or_poor"
-            vpn_recommended = True
+        # China-only mode: always assume china_direct
+        network_mode = "china_direct"
 
         # Calculate average latencies
         financial_latencies = [r.latency_ms for r in financial_results if r.success]
@@ -341,13 +311,6 @@ class ChinaNetworkDiagnostics:
                 "suggestion": "Consider using a domestic CDN or proxy service",
             })
 
-        if vpn_recommended:
-            recommendations.append({
-                "priority": "medium",
-                "issue": "Unstable network configuration",
-                "suggestion": "Enable VPN for consistent access to international data sources",
-            })
-
         if dns_results and sum(1 for r in dns_results if r.success) < len(dns_results) / 2:
             recommendations.append({
                 "priority": "high",
@@ -363,11 +326,6 @@ class ChinaNetworkDiagnostics:
                 "successful": financial_success,
                 "total": financial_total,
                 "avg_latency_ms": round(avg_financial_latency, 2),
-            },
-            "international_connectivity": {
-                "success_rate": round(international_rate, 4),
-                "successful": international_success,
-                "total": international_total,
             },
             "dns_status": {
                 "tested": len(dns_results),
@@ -406,12 +364,6 @@ class ChinaNetworkDiagnostics:
         print("FINANCIAL ENDPOINTS:")
         print(f"  Success Rate: {fin.get('success_rate', 0) * 100:.1f}%")
         print(f"  Avg Latency: {fin.get('avg_latency_ms', 0):.0f}ms")
-        print()
-
-        # International connectivity
-        intl = self.summary.get("international_connectivity", {})
-        print("INTERNATIONAL ENDPOINTS:")
-        print(f"  Success Rate: {intl.get('success_rate', 0) * 100:.1f}%")
         print()
 
         # Recommendations

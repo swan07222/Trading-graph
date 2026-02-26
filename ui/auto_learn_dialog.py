@@ -697,20 +697,17 @@ class AutoLearnDialog(QDialog):
             "incremental": True,
         }
 
-        # VPN mode may be slower for very large discovery batches.
+        # China-only mode: network check for diagnostics
         try:
             from core.network import get_network_env
             env = get_network_env()
-            if env.is_vpn_active and config["max_stocks"] > 3000:
+            if not env.is_china_direct:
                 self._log(
-                    (
-                        "VPN detected: very large stock batches may be slower; "
-                        "consider reducing max stocks if network is unstable"
-                    ),
-                    "warning",
+                    "China direct mode: ensure stable network connection for large stock batches",
+                    "info",
                 )
         except (AttributeError, ImportError, OSError, RuntimeError, TypeError, ValueError):
-            log.debug("VPN advisory check skipped", exc_info=True)
+            log.debug("Network advisory check skipped", exc_info=True)
 
         is_resume = bool(resume and self._elapsed_seconds > 0)
         self._log(

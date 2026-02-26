@@ -103,23 +103,25 @@ def test_websocket_feed_can_be_forced_off_with_env(monkeypatch) -> None:
     assert ws.connect() is False
 
 
-def test_websocket_feed_connect_blocked_on_vpn(monkeypatch) -> None:
+def test_websocket_feed_connect_allowed_on_china_direct(monkeypatch) -> None:
+    """WebSocket is allowed in China-only mode."""
     class _Env:
-        is_vpn_active = True
+        is_china_direct = True
 
     monkeypatch.setattr("core.network.peek_network_env", lambda: _Env())
 
     ws = WebSocketFeed()
     ws._ws_client_installed = True
 
-    assert ws.connect() is False
-    assert ws._running is False
-    assert ws.supports_websocket() is False
+    # In China-only mode, WebSocket is allowed (DNS check will determine actual connection)
+    # This test verifies the network check passes
+    allowed, reason = ws._network_allows_websocket()
+    assert allowed is True
 
 
 def test_websocket_feed_connect_blocked_when_ws_host_dns_fails(monkeypatch) -> None:
     class _Env:
-        is_vpn_active = False
+        is_china_direct = True
 
     monkeypatch.setattr("core.network.peek_network_env", lambda: _Env())
     monkeypatch.setattr("socket.getaddrinfo", lambda *args, **kwargs: (_ for _ in ()).throw(OSError("dns fail")))

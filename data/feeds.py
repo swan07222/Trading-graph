@@ -333,9 +333,6 @@ class WebSocketFeed(DataFeed):
             os.environ.get("TRADING_DISABLE_WEBSOCKET", "0")
         ).strip().lower() in ("1", "true", "yes", "on")
         self._ws_force_disable_logged = False
-        self._allow_ws_on_vpn = str(
-            os.environ.get("TRADING_ALLOW_WEBSOCKET_ON_VPN", "0")
-        ).strip().lower() in ("1", "true", "yes", "on")
         self._network_block_logged = False
         self._ws_host = "push.sina.cn"
         self._reconnect_delay = 1
@@ -430,21 +427,21 @@ class WebSocketFeed(DataFeed):
             )
 
     def _network_allows_websocket(self) -> tuple[bool, str]:
-        """Check whether current network mode is compatible with WS endpoint."""
-        if self._allow_ws_on_vpn:
-            return True, ""
+        """Check whether current network mode is compatible with WS endpoint.
+
+        China-only mode: WebSocket is always allowed on China direct network.
+        """
         try:
             from core.network import peek_network_env
 
             env = peek_network_env()
             if env is None:
                 return True, ""
-            if bool(getattr(env, "is_vpn_active", False)):
-                return False, "network mode VPN_FOREIGN"
+            # China-only mode: always allow WebSocket
+            return True, ""
         except _FEED_SOFT_EXCEPTIONS:
             # If detector fails, do not block WS preemptively.
             return True, ""
-        return True, ""
 
     @staticmethod
     def _resolve_host_with_timeout(host: str, timeout_s: float) -> bool | None:

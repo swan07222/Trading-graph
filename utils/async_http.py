@@ -243,13 +243,12 @@ class AsyncHttpClient:
     def _default_config(self) -> HttpClientConfig:
         """Create default configuration with China optimizations."""
         china_mode = env_text("TRADING_CHINA_DIRECT", "0") == "1"
-        vpn_mode = env_text("TRADING_VPN", "0") == "1"
         proxy_url = env_text("TRADING_PROXY_URL", "")
 
         config = HttpClientConfig(
             timeout=30.0,
             connect_timeout=10.0,
-            china_optimized=china_mode or vpn_mode,
+            china_optimized=china_mode,
         )
 
         # China-optimized settings
