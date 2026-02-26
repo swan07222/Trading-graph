@@ -37,12 +37,9 @@ log = get_logger(__name__)
 def _force_china_direct_network_mode() -> None:
     os.environ["TRADING_CHINA_DIRECT"] = "1"
     os.environ["TRADING_VPN"] = "0"
-    try:
-        from core.network import invalidate_network_cache
+    from core.network import invalidate_network_cache
 
-        invalidate_network_cache()
-    except Exception:
-        pass
+    invalidate_network_cache()
 
 
 class LLMAutoTrainWorker(QThread):
@@ -73,7 +70,9 @@ class LLMAutoTrainWorker(QThread):
             idle_seconds = max(0, int(self.config.get("idle_seconds", 3) or 3))
             cycle_index = 0
             total_collected = 0
+            total_new = 0
             total_trained = 0
+            total_reused_skipped = 0
             last_report: dict[str, Any] = {}
 
             while not self._stop_event.is_set():
@@ -99,45 +98,62 @@ class LLMAutoTrainWorker(QThread):
                         self.log_message.emit(f"[Cycle {cycle_index}] {msg}", "info")
                     self.progress.emit(pct, prefixed)
 
-                try:
-                    report = analyzer.auto_train_from_internet(
-                        hours_back=int(self.config.get("hours_back", 120) or 120),
-                        limit_per_query=int(self.config.get("limit_per_query", 220) or 220),
-                        max_samples=int(self.config.get("max_samples", 1200) or 1200),
-                        stop_flag=self._stop_event.is_set,
-                        progress_callback=_progress,
-                        force_china_direct=True,
-                    )
-                except Exception as exc:
-                    # Keep auto mode alive on transient failures; user can stop anytime.
-                    self.log_message.emit(
-                        f"Cycle {cycle_index} failed: {exc}. Retrying...",
-                        "warning",
-                    )
-                    if self._stop_event.wait(timeout=max(1, idle_seconds)):
-                        break
-                    continue
+                report = analyzer.auto_train_from_internet(
+                    hours_back=int(self.config.get("hours_back", 120) or 120),
+                    limit_per_query=int(self.config.get("limit_per_query", 220) or 220),
+                    max_samples=int(self.config.get("max_samples", 1200) or 1200),
+                    stop_flag=self._stop_event.is_set,
+                    progress_callback=_progress,
+                    force_china_direct=True,
+                    only_new=True,
+                    min_new_articles=int(self.config.get("min_new_articles", 24) or 24),
+                    seen_ttl_hours=int(self.config.get("seen_ttl_hours", 168) or 168),
+                    auto_related_search=True,
+                )
 
                 out = dict(report or {})
                 last_report = dict(out)
                 status = str(out.get("status", "") or "").strip().lower()
                 collected = int(out.get("collected_articles", 0) or 0)
+                new_count = int(out.get("new_articles", 0) or 0)
                 trained = int(out.get("trained_samples", 0) or 0)
+                reused_skipped = int(out.get("reused_articles_skipped", 0) or 0)
+                query_count = int(out.get("query_count", 0) or 0)
+                related_count = len(list(out.get("related_stock_codes", []) or []))
                 total_collected += max(0, collected)
+                total_new += max(0, new_count)
                 total_trained += max(0, trained)
+                total_reused_skipped += max(0, reused_skipped)
 
                 if self._stop_event.is_set() or status == "stopped":
                     break
+                if status == "no_new_data":
+                    self.log_message.emit(
+                        (
+                            f"Cycle {cycle_index}: no new language data found. "
+                            f"Skipped reused={reused_skipped}, "
+                            f"queries={query_count}, related_codes={related_count}. "
+                            f"Waiting {idle_seconds}s..."
+                        ),
+                        "info",
+                    )
+                    if self._stop_event.wait(timeout=max(1, idle_seconds)):
+                        break
+                    continue
                 if status in {"error", "failed"}:
                     self.log_message.emit(
-                        f"Cycle {cycle_index} reported status={status}. Continuing...",
-                        "warning",
+                        f"Cycle {cycle_index} reported status={status}. Stopping.",
+                        "error",
                     )
+                    break
                 else:
                     self.log_message.emit(
                         (
                             f"Cycle {cycle_index} complete: collected={collected}, "
-                            f"trained={trained}. Waiting {idle_seconds}s..."
+                            f"new={new_count}, trained={trained}, "
+                            f"reused_skipped={reused_skipped}, "
+                            f"queries={query_count}, related_codes={related_count}. "
+                            f"Waiting {idle_seconds}s..."
                         ),
                         "success",
                     )
@@ -146,11 +162,18 @@ class LLMAutoTrainWorker(QThread):
                 if self._stop_event.wait(timeout=idle_seconds):
                     break
 
+            final_status = str(last_report.get("status", "") or "").strip().lower()
+            if final_status in {"error", "failed"}:
+                self.finished_result.emit(dict(last_report))
+                return
+
             stopped_payload = dict(last_report)
             stopped_payload["status"] = "stopped"
             stopped_payload["cycles_completed"] = int(cycle_index)
             stopped_payload["total_collected_articles"] = int(total_collected)
+            stopped_payload["total_new_articles"] = int(total_new)
             stopped_payload["total_trained_samples"] = int(total_trained)
+            stopped_payload["total_reused_articles_skipped"] = int(total_reused_skipped)
             self.finished_result.emit(stopped_payload)
         except Exception as exc:
             self.error_occurred.emit(str(exc))

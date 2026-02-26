@@ -1,5 +1,6 @@
 import argparse
 import json
+import time
 from importlib.util import find_spec
 from pathlib import Path
 from typing import Any
@@ -17,6 +18,7 @@ def check_dependencies(
     require_gui: bool = False,
     require_ml: bool = False,
     require_security: bool = True,
+    require_websocket: bool = False,
 ) -> bool:
     """Check required dependencies.
 
@@ -34,6 +36,8 @@ def check_dependencies(
             ("pandas", "pandas"),
             ("sklearn", "scikit-learn"),
         ])
+    if require_websocket:
+        required.append(("websockets", "websockets"))
     optional = []
     if require_gui:
         required.append(("PyQt6", "PyQt6"))
@@ -274,6 +278,8 @@ def main() -> int:
     parser.add_argument('--train', action='store_true', help='Train model')
     parser.add_argument('--train-news', action='store_true', help='Train model on news/policy data')
     parser.add_argument('--collect-news', action='store_true', help='Collect news from web sources')
+    parser.add_argument('--web-search', type=str, help='Search web for LLM training data (query or "llm-data")')
+    parser.add_argument('--search-limit', type=int, default=50, help='Max search results (for --web-search)')
     parser.add_argument('--analyze-sentiment', type=str, help='Analyze sentiment for a stock')
     parser.add_argument('--auto-learn', action='store_true', help='Auto-discover and train')
     parser.add_argument('--predict', type=str, help='Predict stock')
@@ -297,6 +303,14 @@ def main() -> int:
     parser.add_argument('--opt-slippage-bps', type=str, default='8,12,18', help='Backtest optimization slippage assumptions in bps')
     parser.add_argument('--opt-commission-bps', type=str, default='2.0,2.5,3.0', help='Backtest optimization commission assumptions in bps')
     parser.add_argument('--opt-top-k', type=int, default=5, help='Backtest optimization top-k results')
+    
+    # Real-time news streaming
+    parser.add_argument('--stream-news', action='store_true', help='Start real-time news streaming')
+    parser.add_argument('--stream-port', type=int, default=8765, help='WebSocket server port for news streaming')
+    parser.add_argument('--stream-channels', type=str, default='all', help='News channels to stream (comma-separated: policy,market,company,regulatory,all)')
+    parser.add_argument('--stream-poll-interval', type=float, default=30.0, help='News poll interval in seconds')
+    parser.add_argument('--stream-sentiment', action='store_true', help='Enable real-time sentiment analysis with news streaming')
+    parser.add_argument('--sentiment-alert-threshold', type=float, default=0.3, help='Sentiment change threshold for alerts')
 
     args = parser.parse_args()
 
@@ -305,19 +319,21 @@ def main() -> int:
     if args.doctor_strict and not args.doctor:
         parser.error("--doctor-strict requires --doctor")
     require_gui = not any([
-        args.train, args.train_news, args.collect_news, args.analyze_sentiment,
+        args.train, args.train_news, args.collect_news, args.web_search, args.analyze_sentiment,
         args.auto_learn, args.predict, args.backtest, args.backtest_optimize, args.replay_file,
-        args.health, args.cli, args.doctor,
+        args.health, args.cli, args.doctor, args.stream_news,
     ])
     require_ml = any([
-        args.train, args.train_news, args.collect_news, args.analyze_sentiment,
+        args.train, args.train_news, args.collect_news, args.web_search, args.analyze_sentiment,
         args.auto_learn, args.predict, args.backtest, args.backtest_optimize, args.replay_file,
     ])
+    require_websocket = bool(args.stream_news)
 
     if not check_dependencies(
         require_gui=require_gui,
         require_ml=require_ml,
         require_security=True,
+        require_websocket=require_websocket,
     ):
         return 1
 
@@ -370,25 +386,76 @@ def main() -> int:
         elif args.collect_news:
             from data.news_collector import get_collector
             collector = get_collector()
-            
+
             vpn_mode = collector.is_vpn_mode()
             print(f"\nNetwork mode: {'VPN (International)' if vpn_mode else 'China Direct'}")
             print(f"Active sources: {collector.get_active_sources()}")
-            
+
             print("\nCollecting news...")
             articles = collector.collect_news(limit=50, hours_back=24)
             print(f"Collected {len(articles)} articles")
-            
+
             # Save to file
             saved_path = collector.save_articles(articles)
             print(f"Saved to: {saved_path}")
-            
+
             # Show summary
             if articles:
                 print("\nRecent articles:")
                 for i, article in enumerate(articles[:10]):
                     print(f"  {i+1}. [{article.category}] {article.title[:60]}...")
                     print(f"     Source: {article.source}, Language: {article.language}")
+
+        elif args.web_search:
+            import asyncio
+            from data.web_search import get_search_engine
+
+            query = args.web_search
+            limit = args.search_limit
+
+            print(f"\nWeb Search for LLM Training Data")
+            print("=" * 50)
+
+            search_engine = get_search_engine()
+
+            async def run_search():
+                if query == "llm-data":
+                    # Special mode: search for LLM training data
+                    print("\nSearching for LLM training data (multiple queries)...")
+                    results = await search_engine.search_for_llm_training(
+                        language="zh",
+                        limit_per_query=10,
+                        max_queries=10,
+                    )
+                else:
+                    # Single query search
+                    print(f"\nSearching for: {query}")
+                    results = await search_engine.search(
+                        query=query,
+                        limit=limit,
+                    )
+                return results
+
+            results = asyncio.run(run_search())
+
+            print(f"\nFound {len(results)} results:")
+            print("-" * 50)
+
+            for i, result in enumerate(results[:20], 1):
+                print(f"{i:2}. [{result.engine.name}] {result.source}")
+                print(f"    {result.title}")
+                print(f"    {result.url}")
+                print(f"    Quality: {result.quality_score:.2f}")
+                print()
+
+            # Save results to file
+            output_file = CONFIG.cache_dir / "web_search" / f"search_results_{int(time.time())}.json"
+            output_file.parent.mkdir(parents=True, exist_ok=True)
+
+            with open(output_file, "w", encoding="utf-8") as f:
+                json.dump([r.to_dict() for r in results], f, ensure_ascii=False, indent=2)
+
+            print(f"Results saved to: {output_file}")
 
         elif args.analyze_sentiment:
             from data.news_collector import get_collector
@@ -549,6 +616,79 @@ def main() -> int:
                         f"| last={bar.symbol} {bar.ts.isoformat()} close={bar.close:.2f}"
                     )
             print(f"[REPLAY] Done. bars={seen}, symbols={len(symbols)}")
+
+        elif args.stream_news:
+            import asyncio
+            from data.news_streamer import NewsStreamer
+            from data.news_websocket_server import NewsWebSocketServer
+            from data.news_sentiment_stream import SentimentStreamProcessor
+            
+            channels = [c.strip() for c in args.stream_channels.split(",")]
+            
+            print("\n" + "=" * 60)
+            print("REAL-TIME NEWS STREAMING SERVICE")
+            print("=" * 60)
+            print(f"  WebSocket Port: {args.stream_port}")
+            print(f"  Channels: {channels}")
+            print(f"  Poll Interval: {args.stream_poll_interval}s")
+            print(f"  Sentiment Analysis: {'Enabled' if args.stream_sentiment else 'Disabled'}")
+            if args.stream_sentiment:
+                print(f"  Alert Threshold: {args.sentiment_alert_threshold}")
+            print("=" * 60)
+            
+            async def run_streaming():
+                # Initialize components
+                streamer = NewsStreamer(
+                    poll_interval=args.stream_poll_interval,
+                    categories=channels if "all" not in channels else None,
+                )
+                
+                server = NewsWebSocketServer(port=args.stream_port)
+                server.set_streamer(streamer)
+                
+                sentiment_processor = None
+                if args.stream_sentiment:
+                    sentiment_processor = SentimentStreamProcessor(
+                        alert_threshold=args.sentiment_alert_threshold,
+                    )
+                    
+                    # Connect streamer to sentiment processor
+                    async def process_for_sentiment(article):
+                        await sentiment_processor.process_article(article)
+                    
+                    streamer.subscribe("all", process_for_sentiment)
+                    
+                    # Setup sentiment alerts
+                    def on_alert(stock_code, alert_type, data):
+                        print(f"\n🚨 SENTIMENT ALERT: {stock_code} - {alert_type}")
+                        print(f"   Sentiment: {data.get('sentiment', 0):.2f}")
+                        print(f"   Trend: {data.get('trend', 0):.2f}")
+                    
+                    sentiment_processor.on_alert(on_alert)
+                    await sentiment_processor.start()
+                
+                # Start streamer
+                await streamer.start()
+                
+                print(f"\n✅ News streaming started on ws://localhost:{args.stream_port}")
+                print("Press Ctrl+C to stop\n")
+                
+                # Start server (runs until cancelled)
+                try:
+                    await server.start()
+                except asyncio.CancelledError:
+                    pass
+                finally:
+                    # Cleanup
+                    await streamer.stop()
+                    if sentiment_processor:
+                        await sentiment_processor.stop()
+                    await server.stop()
+            
+            try:
+                asyncio.run(run_streaming())
+            except KeyboardInterrupt:
+                print("\nStreaming stopped by user")
 
         else:
             from ui.app import run_app

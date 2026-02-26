@@ -956,17 +956,19 @@ class EarningsAnnouncementStrategy(BaseStrategy):
         bars = data.get("bars", [])
         if len(bars) < self.params["momentum_period"] + 5:
             return None
-        
+
         # Calculate post-earnings momentum
         closes = [b["close"] for b in bars[-self.params["momentum_period"]:]]
-        momentum = (closes[-1] - closes[0]) / closes[0] if closes[0] > 0 else 0
-        
+        # FIX: Prevent division by zero
+        base_price = closes[0] if closes[0] > 0 else 1e-8
+        momentum = (closes[-1] - closes[0]) / base_price if base_price > 0 else 0
+
         # Get sentiment score if available
         sentiment = data.get("sentiment_score", 0)
-        
+
         # Combined score
         combined_score = momentum * 0.7 + sentiment * self.params["sentiment_weight"]
-        
+
         current_price = closes[-1]
         
         if combined_score > 0.03:  # 3% threshold
@@ -1206,19 +1208,21 @@ class SentimentMomentumStrategy(BaseStrategy):
     def generate_signal(self, data: dict[str, Any]) -> Signal | None:
         sentiment_score = data.get("sentiment_score", 0)
         bars = data.get("bars", [])
-        
+
         if len(bars) < self.params["momentum_period"] + 5:
             return None
-        
+
         closes = [b["close"] for b in bars[-self.params["momentum_period"]:]]
-        momentum = (closes[-1] - closes[0]) / closes[0] if closes[0] > 0 else 0
-        
+        # FIX: Prevent division by zero
+        base_price = closes[0] if closes[0] > 0 else 1e-8
+        momentum = (closes[-1] - closes[0]) / base_price if base_price > 0 else 0
+
         # Combined score
         combined = (
             sentiment_score * self.params["sentiment_weight"] +
             momentum * (1 - self.params["sentiment_weight"])
         )
-        
+
         current_price = closes[-1]
         
         if combined > self.params["sentiment_threshold"]:

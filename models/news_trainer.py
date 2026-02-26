@@ -16,6 +16,7 @@ Architecture:
 """
 
 import time
+import warnings
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -32,6 +33,14 @@ from data.sentiment_analyzer import get_analyzer
 from utils.logger import get_logger
 
 log = get_logger(__name__)
+
+# FIX: Define ConvergenceWarning for compatibility
+try:
+    from sklearn.exceptions import ConvergenceWarning
+except ImportError:
+    class ConvergenceWarning(Exception):
+        """Dummy ConvergenceWarning for sklearn compatibility."""
+        pass
 
 
 @dataclass
@@ -428,9 +437,18 @@ class NewsTrainer:
                 price_features = self._extract_price_features(price_data)
 
                 # Label: price movement over horizon
-                current_price = float(prices["close"].iloc[i])
-                future_price = float(prices["close"].iloc[i + horizon])
-                future_return = (future_price - current_price) / current_price if current_price != 0 else 0.0
+                # FIX: Add bounds checking for iloc access
+                if i >= len(prices) or i + horizon >= len(prices):
+                    log.debug(f"Index out of bounds at i={i}, horizon={horizon}, len(prices)={len(prices)}")
+                    continue
+
+                try:
+                    current_price = float(prices["close"].iloc[i])
+                    future_price = float(prices["close"].iloc[i + horizon])
+                    future_return = (future_price - current_price) / current_price if current_price != 0 else 0.0
+                except (IndexError, KeyError, TypeError, ValueError) as e:
+                    log.debug(f"Failed to get price data at index {i}: {e}")
+                    continue
 
                 # Convert to class
                 if future_return > 0.03:
@@ -481,8 +499,8 @@ class NewsTrainer:
                 ]
                 features.append(row_features)
             except (TypeError, ValueError, ZeroDivisionError):
-                # Skip malformed rows
-                continue
+                # Keep fixed lookback width for batch collation.
+                features.append([0.0, 0.0, 0.0, 1.0])
 
         if not features:
             # Return default features if no valid data
@@ -518,6 +536,10 @@ class NewsTrainer:
         # Split train/validation
         np.random.shuffle(samples)
         split_idx = int(len(samples) * (1 - validation_split))
+        if len(samples) < 2:
+            log.error("Need at least 2 samples for train/validation split")
+            return {"error": "Insufficient samples for split"}
+        split_idx = max(1, min(len(samples) - 1, split_idx))
         train_samples = samples[:split_idx]
         val_samples = samples[split_idx:]
 
@@ -594,6 +616,7 @@ class NewsTrainer:
                 self.save_model("news_model_best.pt")
 
         # Save final model
+        self.training_history = list(training_history)
         self.save_model("news_model.pt")
 
         elapsed = time.time() - start_time
@@ -640,6 +663,8 @@ class NewsTrainer:
             correct += (predictions == labels).sum().item()
             total += labels.size(0)
 
+        if len(loader) == 0 or total <= 0:
+            return 0.0, 0.0
         return total_loss / len(loader), correct / total
 
     def _validate(self, loader: DataLoader) -> tuple[float, float]:
@@ -665,6 +690,8 @@ class NewsTrainer:
                 correct += (predictions == labels).sum().item()
                 total += labels.size(0)
 
+        if len(loader) == 0 or total <= 0:
+            return 0.0, 0.0
         return total_loss / len(loader), correct / total
 
     def save_model(self, filename: str = "news_model.pt") -> Path:

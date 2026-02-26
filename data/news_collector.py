@@ -112,9 +112,22 @@ class NewsCollector:
 
     # Search keywords for policy/regulatory news
     POLICY_KEYWORDS_ZH = [
-        "政策", "规定", "监管", "证监会", "央行", "财政部",
-        "货币政策", "财政政策", "产业政策", "法规", "条例",
-        "新股", "IPO", "退市", "交易规则", "印花税",
+        "政策",
+        "规定",
+        "监管",
+        "证监会",
+        "央行",
+        "财政部",
+        "货币政策",
+        "财政政策",
+        "产业政策",
+        "法规",
+        "条例",
+        "新股",
+        "IPO",
+        "退市",
+        "交易规则",
+        "印花税",
     ]
 
     POLICY_KEYWORDS_EN = [
@@ -124,8 +137,17 @@ class NewsCollector:
     ]
 
     MARKET_KEYWORDS_ZH = [
-        "股票", "股市", "A 股", "上证", "深证", "创业板",
-        "成交量", "涨停", "跌停", "牛市", "熊市",
+        "股票",
+        "股市",
+        "A股",
+        "上证",
+        "深证",
+        "创业板",
+        "成交量",
+        "涨停",
+        "跌停",
+        "牛市",
+        "熊市",
     ]
 
     MARKET_KEYWORDS_EN = [
@@ -151,6 +173,7 @@ class NewsCollector:
         self._source_health: dict[str, float] = {}  # source -> health score (0-1)
         self._last_health_check: dict[str, float] = {}  # source -> last check timestamp
         self._source_failures: dict[str, int] = {}  # source -> consecutive failure count
+        self._strict_mode: bool = False
 
     def _setup_proxy(self) -> None:
         """Configure proxy based on VPN status."""
@@ -240,6 +263,7 @@ class NewsCollector:
         categories: list[str] | None = None,
         limit: int = 100,
         hours_back: int = 24,
+        strict: bool = False,
     ) -> list[NewsArticle]:
         """Collect news from active sources.
 
@@ -248,6 +272,7 @@ class NewsCollector:
             categories: Categories to collect ('policy', 'market', 'company', etc.)
             limit: Maximum number of articles to return
             hours_back: How many hours back to collect
+            strict: Fail-fast mode (no cooldown skip, no degraded recovery)
 
         Returns:
             List of collected news articles
@@ -255,32 +280,43 @@ class NewsCollector:
         start_time = datetime.now() - timedelta(hours=hours_back)
         articles: list[NewsArticle] = []
         seen_ids: set[str] = set()
+        previous_strict_mode = bool(self._strict_mode)
+        self._strict_mode = bool(strict)
+        strict_mode = bool(strict)
 
         active_sources = self.get_active_sources()
         log.info(f"Collecting news from {len(active_sources)} sources (VPN mode: {self.is_vpn_mode()})")
 
-        for source in active_sources:
-            if len(articles) >= limit:
-                break
-            if self._is_source_temporarily_disabled(source):
-                continue
+        try:
+            for source in active_sources:
+                if len(articles) >= limit:
+                    break
+                if (not strict_mode) and self._is_source_temporarily_disabled(source):
+                    continue
 
-            try:
-                source_articles = self._fetch_from_source(
-                    source=source,
-                    keywords=keywords,
-                    start_time=start_time,
-                    limit=max(10, limit // len(active_sources)),
-                )
+                try:
+                    remaining = max(10, limit - len(articles))
+                    source_articles = self._fetch_from_source(
+                        source=source,
+                        keywords=keywords,
+                        start_time=start_time,
+                        limit=remaining,
+                    )
 
-                for article in source_articles:
-                    if article.id not in seen_ids:
-                        seen_ids.add(article.id)
-                        articles.append(article)
+                    for article in source_articles:
+                        if article.id not in seen_ids:
+                            seen_ids.add(article.id)
+                            articles.append(article)
 
-            except Exception as e:
-                log.warning(f"Failed to fetch from {source}: {e}")
-                self._update_source_health(source, success=False)
+                except Exception as e:
+                    self._update_source_health(source, success=False)
+                    if strict_mode:
+                        raise RuntimeError(
+                            f"Strict news collection failed for source={source}: {e}"
+                        ) from e
+                    log.warning(f"Failed to fetch from {source}: {e}")
+        finally:
+            self._strict_mode = previous_strict_mode
 
         # Sort by published date (newest first)
         articles.sort(key=lambda x: x.published_at, reverse=True)
@@ -290,6 +326,8 @@ class NewsCollector:
             self._categorize_article(article)
             self._calculate_relevance(article, keywords)
 
+        if strict_mode and not articles:
+            raise RuntimeError("Strict news collection returned no articles")
         log.info(f"Collected {len(articles)} unique articles")
         return articles
 
@@ -308,6 +346,8 @@ class NewsCollector:
 
     def _is_source_temporarily_disabled(self, source: str) -> bool:
         """Skip repeatedly failing sources for a short cooldown window."""
+        if bool(self._strict_mode):
+            return False
         health = float(self._source_health.get(source, 0.5) or 0.5)
         if health >= self._MIN_HEALTH_FOR_IMMEDIATE_RETRY:
             return False
@@ -444,7 +484,7 @@ class NewsCollector:
         start_time: datetime,
         limit: int,
     ) -> list[NewsArticle]:
-        """Fetch from Jin10 (财经快讯)."""
+        """Fetch from Jin10 (璐㈢粡蹇)."""
         articles = []
         url = "https://api.jin10.com/v1/flash"
 
@@ -487,6 +527,8 @@ class NewsCollector:
             self._update_source_health("jin10", success=True)
 
         except Exception as e:
+            if self._strict_mode:
+                raise
             log.debug(f"Jin10 fetch failed (paid API, may not be accessible): {e}")
             self._update_source_health("jin10", success=False)
 
@@ -619,7 +661,7 @@ class NewsCollector:
                 if len(articles) >= int(limit):
                     break
 
-            if len(articles) < int(limit):
+            if (not self._strict_mode) and len(articles) < int(limit):
                 html_resp = self._session.get(
                     "https://finance.eastmoney.com/",
                     timeout=8,
@@ -662,6 +704,8 @@ class NewsCollector:
             self._update_source_health("eastmoney", success=bool(articles))
 
         except Exception as e:
+            if self._strict_mode:
+                raise
             log.debug("EastMoney fetch degraded: %s", e)
             self._update_source_health("eastmoney", success=False)
 
@@ -722,6 +766,8 @@ class NewsCollector:
             self._update_source_health("sina_finance", success=True)
 
         except Exception as e:
+            if self._strict_mode:
+                raise
             log.error(f"Sina Finance fetch failed: {e}")
             self._update_source_health("sina_finance", success=False)
 
@@ -733,7 +779,7 @@ class NewsCollector:
         start_time: datetime,
         limit: int,
     ) -> list[NewsArticle]:
-        """Fetch from Xueqiu (雪球)."""
+        """Fetch from Xueqiu (闆悆)."""
         # Xueqiu requires authentication for API access
         # This is a simplified implementation
         articles = []
@@ -857,6 +903,8 @@ class NewsCollector:
             self._update_source_health("caixin", success=bool(articles))
 
         except Exception as e:
+            if self._strict_mode:
+                raise
             log.debug("Caixin fetch degraded: %s", e)
             self._update_source_health("caixin", success=False)
 
@@ -868,7 +916,7 @@ class NewsCollector:
         start_time: datetime,
         limit: int,
     ) -> list[NewsArticle]:
-        """Fetch from CSRC (中国证监会)."""
+        """Fetch from CSRC (涓浗璇佺洃浼?."""
         articles = []
 
         # CSRC website scraping would require more complex handling
@@ -932,6 +980,8 @@ class NewsCollector:
             self._update_source_health("reuters", success=True)
 
         except Exception as e:
+            if self._strict_mode:
+                raise
             log.error(f"Reuters fetch failed: {e}")
             self._update_source_health("reuters", success=False)
 
@@ -1004,6 +1054,8 @@ class NewsCollector:
             self._update_source_health("yahoo_finance", success=True)
 
         except Exception as e:
+            if self._strict_mode:
+                raise
             log.error(f"Yahoo Finance fetch failed: {e}")
             self._update_source_health("yahoo_finance", success=False)
 
@@ -1136,3 +1188,4 @@ def reset_collector() -> None:
     """Reset collector instance."""
     global _collector
     _collector = None
+

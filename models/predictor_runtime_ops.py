@@ -725,9 +725,51 @@ def _generate_forecast(
                 try:
                     rets = np.diff(np.log(prices_arr[-min(90, prices_arr.size):]))
                     if rets.size > 0:
-                        recent_mu_pct = float(
-                            np.clip(np.mean(rets) * 100.0, -0.25, 0.25)
-                        )
+                        # FIX: Robust return estimation - detect and handle outlier candles
+                        # A single large green/red candle can skew the mean significantly
+                        rets_clean = np.nan_to_num(rets, nan=0.0, posinf=0.0, neginf=0.0)
+                        
+                        # Detect outliers using median absolute deviation (MAD)
+                        median_ret = float(np.median(rets_clean))
+                        mad = float(np.median(np.abs(rets_clean - median_ret)))
+                        mad_scale = max(mad * 1.4826, 1e-6)  # Scale MAD to be comparable to std
+                        
+                        # Flag outliers beyond 3 MAD-scaled deviations
+                        outlier_threshold = 3.0 * mad_scale
+                        outlier_mask = np.abs(rets_clean - median_ret) > outlier_threshold
+                        
+                        # If outliers detected, use robust estimation
+                        if np.any(outlier_mask):
+                            # Clip outliers to the threshold boundary
+                            rets_clipped = np.clip(
+                                rets_clean,
+                                median_ret - outlier_threshold,
+                                median_ret + outlier_threshold,
+                            )
+                            # Use trimmed mean (exclude extreme outliers entirely)
+                            rets_trimmed = rets_clean[~outlier_mask]
+                            if rets_trimmed.size >= 3:
+                                recent_mu_pct = float(
+                                    np.clip(np.mean(rets_trimmed) * 100.0, -0.25, 0.25)
+                                )
+                            else:
+                                # Fall back to median if too many outliers
+                                recent_mu_pct = float(
+                                    np.clip(median_ret * 100.0, -0.25, 0.25)
+                                )
+                            log.debug(
+                                "Outlier candles detected in recent history: %d/%d rows clipped, "
+                                "using robust return estimate (%.4f%% vs raw %.4f%%)",
+                                int(np.sum(outlier_mask)),
+                                rets_clean.size,
+                                recent_mu_pct,
+                                np.clip(np.mean(rets_clean) * 100.0, -0.25, 0.25),
+                            )
+                        else:
+                            # No outliers - use standard mean
+                            recent_mu_pct = float(
+                                np.clip(np.mean(rets_clean) * 100.0, -0.25, 0.25)
+                            )
                 except (ValueError, FloatingPointError):
                     recent_mu_pct = 0.0
 
@@ -768,8 +810,23 @@ def _generate_forecast(
             rng = np.random.RandomState(seed)
 
             tail_window = returns_arr[-min(10, returns_arr.size):]
-            tail_mu = float(np.mean(tail_window)) if tail_window.size > 0 else 0.0
-            tail_sigma = float(np.std(tail_window)) if tail_window.size > 0 else 0.0
+            tail_mu = 0.0
+            tail_sigma = 0.0
+            if tail_window.size > 0:
+                # FIX: Robust tail estimation - prevent single outlier returns from distorting forecast
+                tail_clean = np.nan_to_num(tail_window, nan=0.0, posinf=0.0, neginf=0.0)
+                
+                # Use median-based estimators for robustness
+                tail_mu = float(np.median(tail_clean))
+                
+                # MAD-based volatility estimate (more robust than std)
+                mad = float(np.median(np.abs(tail_clean - tail_mu)))
+                tail_sigma = mad * 1.4826  # Scale MAD to be comparable to std
+                
+                # Fallback to std if MAD is zero (all values identical)
+                if tail_sigma < 1e-8:
+                    tail_sigma = float(np.std(tail_clean))
+            
             tail_sigma_floor = step_cap_pct * (0.05 if neutral_mode else 0.10)
             tail_sigma = float(
                 np.clip(

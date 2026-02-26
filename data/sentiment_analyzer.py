@@ -274,8 +274,10 @@ class SentimentAnalyzer:
         denom = total_weight if total_weight > 0 else float(count)
         confidence = (total_confidence / denom) if denom > 0 else 0.0
         if count > 1:
+            # FIX: Add safety check for log1p input
             # Increase confidence as article sample-size grows.
-            confidence *= (0.75 + min(0.35, math.log1p(float(count)) / 4.0))
+            safe_count = max(0.0, float(count))
+            confidence *= (0.75 + min(0.35, math.log1p(safe_count) / 4.0))
         return SentimentScore(
             overall=total_sentiment / denom if denom > 0 else 0.0,
             policy_impact=total_policy / denom if denom > 0 else 0.0,

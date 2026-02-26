@@ -18,6 +18,12 @@ def __getattr__(name: str):
         'FeatureValidator', 'OrderValidator',
         'validate_stock_code', 'validate_ohlcv', 'validate_features',
     }
+    _SEARCH = {
+        'WebSearchEngine', 'SearchResult', 'SearchEngine',
+        'SearchQuery', 'get_search_engine',
+    }
+    _NEWS = {'NewsCollector', 'NewsArticle', 'get_collector'}
+    _SENTIMENT = {'LLM_sentimentAnalyzer', 'get_analyzer'}
 
     if name in _CACHE:
         from . import cache as _cache
@@ -55,6 +61,18 @@ def __getattr__(name: str):
         from . import validators as _validators
         return getattr(_validators, name)
 
+    if name in _SEARCH:
+        from . import web_search as _web_search
+        return getattr(_web_search, name)
+
+    if name in _NEWS:
+        from . import news_collector as _news_collector
+        return getattr(_news_collector, name)
+
+    if name in _SENTIMENT:
+        from . import llm_sentiment as _llm_sentiment
+        return getattr(_llm_sentiment, name)
+
     raise AttributeError(f"module 'data' has no attribute {name!r}")
 
 __all__ = [
@@ -86,4 +104,16 @@ __all__ = [
     'validate_stock_code',
     'validate_ohlcv',
     'validate_features',
+    # Web search
+    'WebSearchEngine',
+    'SearchResult',
+    'SearchEngine',
+    'SearchQuery',
+    'get_search_engine',
+    # News and sentiment
+    'NewsCollector',
+    'NewsArticle',
+    'get_collector',
+    'LLM_sentimentAnalyzer',
+    'get_analyzer',
 ]
