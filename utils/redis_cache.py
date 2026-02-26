@@ -633,12 +633,23 @@ class RedisCache:
                     try:
                         data = json.loads(data)
                     except (json.JSONDecodeError, TypeError):
-                        pass
-                    handler(channel, data)
+                        log.debug("Failed to parse Redis message data: %s", data)
+                        continue
+                    try:
+                        handler(channel, data)
+                    except Exception as e:
+                        log.error("Handler error for channel %s: %s", channel, e)
+                else:
+                    log.debug("Received non-message event from Redis: %s", message.get("type"))
         except asyncio.CancelledError:
-            pass
+            log.debug("Redis listen loop cancelled")
+            raise
         except RedisError as e:
-            log.error(f"Listen loop error: {e}")
+            log.error("Listen loop error: %s", e)
+            raise
+        except Exception as e:
+            log.error("Unexpected error in Redis listen loop: %s", e)
+            raise
 
     # Cache management
     async def clear_pattern(self, pattern: str) -> int:

@@ -40,10 +40,13 @@ from .exceptions import (
     RateLimitError,
     RiskError,
     RiskLimitBreachedError,
-    SecurityError_,  # FIXED: Added underscore to match actual class name
+    TradingSecurityError,
     TradingError,
     TradingSystemError,
 )
+
+# Backward compatibility alias
+SecurityError_ = TradingSecurityError
 from .types import (
     Account,
     Fill,
@@ -112,5 +115,6 @@ __all__ = [
     'AuthenticationError',
     'AuthorizationError',
     'RateLimitError',
-    'SecurityError_',  # FIXED: Added underscore to match actual class name
+    'TradingSecurityError',
+    'SecurityError_',  # Backward compatibility alias
 ]

@@ -396,9 +396,11 @@ class LLM_sentimentAnalyzer:
         if not self._calibrator_path.exists():
             return
         try:
+            from utils.safe_pickle import safe_pickle_load
             with self._calibrator_path.open("rb") as f:
-                self._calibrator = pickle.load(f)
-        except Exception:
+                self._calibrator = safe_pickle_load(f)
+        except Exception as e:
+            log.warning("Failed to load calibrator: %s", e)
             self._calibrator = None
 
     def _save_calibrator(self) -> None:
@@ -415,9 +417,11 @@ class LLM_sentimentAnalyzer:
         if not self._hybrid_calibrator_path.exists():
             return
         try:
+            from utils.safe_pickle import safe_pickle_load
             with self._hybrid_calibrator_path.open("rb") as f:
-                self._hybrid_calibrator = pickle.load(f)
-        except Exception:
+                self._hybrid_calibrator = safe_pickle_load(f)
+        except Exception as e:
+            log.warning("Failed to load hybrid calibrator: %s", e)
             self._hybrid_calibrator = None
 
     def _save_hybrid_calibrator(self) -> None:

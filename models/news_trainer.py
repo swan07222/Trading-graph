@@ -673,7 +673,9 @@ class NewsTrainer:
         if not path.exists():
             raise FileNotFoundError(f"Model not found: {path}")
 
-        checkpoint = torch.load(path, map_location=self.device)
+        # FIX: Use weights_only=True for security (PyTorch 2.6+)
+        # This prevents arbitrary code execution from malicious model files
+        checkpoint = torch.load(path, map_location=self.device, weights_only=True)
 
         if self.model is None:
             self.model = NewsPriceFusionModel()
