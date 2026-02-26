@@ -70,32 +70,88 @@ class LLMAutoTrainWorker(QThread):
             from data.llm_sentiment import get_llm_analyzer
 
             analyzer = get_llm_analyzer()
+            idle_seconds = max(0, int(self.config.get("idle_seconds", 3) or 3))
+            cycle_index = 0
+            total_collected = 0
+            total_trained = 0
+            last_report: dict[str, Any] = {}
 
-            if self._stop_event.is_set():
-                self.finished_result.emit({"status": "stopped"})
-                return
+            while not self._stop_event.is_set():
+                cycle_index += 1
+                self.progress.emit(0, f"Cycle {cycle_index}: starting")
+                self.log_message.emit(
+                    f"Starting auto-train cycle #{cycle_index}...",
+                    "info",
+                )
 
-            def _progress(payload: dict[str, Any]) -> None:
-                if self._stop_event.is_set():
-                    return
-                pct = int(max(0, min(100, int(payload.get("percent", 0) or 0))))
-                msg = str(payload.get("message", "") or "")
-                if msg:
-                    self.log_message.emit(msg, "info")
-                self.progress.emit(pct, msg)
+                def _progress(payload: dict[str, Any]) -> None:
+                    if self._stop_event.is_set():
+                        return
+                    pct = int(max(0, min(100, int(payload.get("percent", 0) or 0))))
+                    msg = str(payload.get("message", "") or "").strip()
+                    stage = str(payload.get("stage", "") or "").strip()
+                    prefixed = (
+                        f"Cycle {cycle_index}: {msg}"
+                        if msg
+                        else f"Cycle {cycle_index}: {stage}"
+                    ).strip()
+                    if msg:
+                        self.log_message.emit(f"[Cycle {cycle_index}] {msg}", "info")
+                    self.progress.emit(pct, prefixed)
 
-            report = analyzer.auto_train_from_internet(
-                hours_back=int(self.config.get("hours_back", 120) or 120),
-                limit_per_query=int(self.config.get("limit_per_query", 220) or 220),
-                max_samples=int(self.config.get("max_samples", 1200) or 1200),
-                stop_flag=self._stop_event.is_set,
-                progress_callback=_progress,
-                force_china_direct=True,
-            )
-            out = dict(report or {})
-            if self._stop_event.is_set() and str(out.get("status", "")).lower() not in {"error", "failed"}:
-                out["status"] = "stopped"
-            self.finished_result.emit(out)
+                try:
+                    report = analyzer.auto_train_from_internet(
+                        hours_back=int(self.config.get("hours_back", 120) or 120),
+                        limit_per_query=int(self.config.get("limit_per_query", 220) or 220),
+                        max_samples=int(self.config.get("max_samples", 1200) or 1200),
+                        stop_flag=self._stop_event.is_set,
+                        progress_callback=_progress,
+                        force_china_direct=True,
+                    )
+                except Exception as exc:
+                    # Keep auto mode alive on transient failures; user can stop anytime.
+                    self.log_message.emit(
+                        f"Cycle {cycle_index} failed: {exc}. Retrying...",
+                        "warning",
+                    )
+                    if self._stop_event.wait(timeout=max(1, idle_seconds)):
+                        break
+                    continue
+
+                out = dict(report or {})
+                last_report = dict(out)
+                status = str(out.get("status", "") or "").strip().lower()
+                collected = int(out.get("collected_articles", 0) or 0)
+                trained = int(out.get("trained_samples", 0) or 0)
+                total_collected += max(0, collected)
+                total_trained += max(0, trained)
+
+                if self._stop_event.is_set() or status == "stopped":
+                    break
+                if status in {"error", "failed"}:
+                    self.log_message.emit(
+                        f"Cycle {cycle_index} reported status={status}. Continuing...",
+                        "warning",
+                    )
+                else:
+                    self.log_message.emit(
+                        (
+                            f"Cycle {cycle_index} complete: collected={collected}, "
+                            f"trained={trained}. Waiting {idle_seconds}s..."
+                        ),
+                        "success",
+                    )
+                    self.progress.emit(100, f"Cycle {cycle_index}: complete")
+
+                if self._stop_event.wait(timeout=idle_seconds):
+                    break
+
+            stopped_payload = dict(last_report)
+            stopped_payload["status"] = "stopped"
+            stopped_payload["cycles_completed"] = int(cycle_index)
+            stopped_payload["total_collected_articles"] = int(total_collected)
+            stopped_payload["total_trained_samples"] = int(total_trained)
+            self.finished_result.emit(stopped_payload)
         except Exception as exc:
             self.error_occurred.emit(str(exc))
 
@@ -134,7 +190,7 @@ class LLMTrainDialog(QDialog):
 
         hint = QLabel(
             "Collects internet data automatically in China-direct mode and trains the LLM "
-            "hybrid model. LLM training runs separately by default."
+            "hybrid model continuously until you press Stop."
         )
         hint.setObjectName("dialogHint")
         hint.setWordWrap(True)
@@ -339,8 +395,6 @@ class LLMTrainDialog(QDialog):
 
     def _on_progress(self, percent: int, message: str) -> None:
         p = int(max(0, min(100, int(percent))))
-        if p < self._last_progress_percent:
-            p = self._last_progress_percent
         self._last_progress_percent = p
         self.progress_bar.setValue(p)
         self.progress_bar.setFormat(f"{p}%")
