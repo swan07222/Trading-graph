@@ -80,15 +80,27 @@ def test_health_gate_violations_for_unhealthy_report() -> None:
     violations = main._health_gate_violations(
         {
             "status": "degraded",
+            "execution_enabled": False,
             "can_trade": False,
             "degraded_mode": True,
             "slo_pass": False,
         }
     )
     assert "status=degraded" in violations
-    assert "can_trade=false" in violations
+    assert "can_trade=false" not in violations
     assert "degraded_mode=true" in violations
     assert "slo_pass=false" in violations
+
+
+def test_health_gate_violations_enforce_can_trade_when_execution_enabled() -> None:
+    violations = main._health_gate_violations(
+        {
+            "status": "healthy",
+            "execution_enabled": True,
+            "can_trade": False,
+        }
+    )
+    assert "can_trade=false" in violations
 
 
 def test_ensure_health_gate_from_json_rejects_invalid_payload() -> None:

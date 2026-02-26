@@ -177,12 +177,6 @@ def _close_event(self: Any, event: Any) -> None:
         except Exception as exc:
             _LOGGER.debug("Suppressed exception in ui/app.py", exc_info=exc)
 
-    if self.executor and self.executor.auto_trader:
-        try:
-            self.executor.auto_trader.stop()
-        except Exception as exc:
-            _LOGGER.debug("Suppressed exception in ui/app.py", exc_info=exc)
-
     all_workers = set(self._active_workers) | set(self.workers.values())
     for worker in list(all_workers):
         try:
@@ -195,13 +189,6 @@ def _close_event(self: Any, event: Any) -> None:
             _LOGGER.debug("Suppressed exception in ui/app.py", exc_info=exc)
     self._active_workers.clear()
     self.workers.clear()
-
-    if self.executor:
-        try:
-            self.executor.stop()
-        except Exception as exc:
-            _LOGGER.debug("Suppressed exception in ui/app.py", exc_info=exc)
-        self.executor = None
 
     for timer_name in (
         "clock_timer",

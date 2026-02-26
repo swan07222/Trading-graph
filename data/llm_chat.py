@@ -1,4 +1,4 @@
-"""Local LLM chat assistant with internet retrieval (no API required).
+﻿"""Local LLM chat assistant with internet retrieval (no API required).
 
 This module provides ChatGPT-like chat behavior using:
 - A local instruction model via transformers (CPU/GPU)
@@ -63,20 +63,49 @@ class LLMChatAssistant:
         "please",
     }
     _STOPWORDS_ZH = {
-        "什么",
-        "怎么",
-        "如何",
-        "为什么",
-        "一下",
-        "可以",
-        "帮我",
-        "请问",
-        "今天",
-        "现在",
-        "最新",
-        "市场",
-        "股票",
+        "\u4ec0\u4e48",
+        "\u600e\u4e48",
+        "\u5982\u4f55",
+        "\u4e3a\u4ec0\u4e48",
+        "\u4e00\u4e0b",
+        "\u53ef\u4ee5",
+        "\u5e2e\u6211",
+        "\u8bf7\u95ee",
+        "\u4eca\u5929",
+        "\u73b0\u5728",
+        "\u6700\u65b0",
+        "\u5e02\u573a",
+        "\u80a1\u7968",
     }
+    _CANONICAL_ACTION_PATTERNS = (
+        re.compile(r"^analyze\s+\d{6}$", re.IGNORECASE),
+        re.compile(r"^start monitoring$", re.IGNORECASE),
+        re.compile(r"^stop monitoring$", re.IGNORECASE),
+        re.compile(r"^scan market$", re.IGNORECASE),
+        re.compile(r"^refresh sentiment$", re.IGNORECASE),
+        re.compile(r"^set interval\s+(1m|5m|15m|30m|60m|1d)$", re.IGNORECASE),
+        re.compile(r"^set forecast\s+\d+$", re.IGNORECASE),
+        re.compile(r"^set lookback\s+\d+$", re.IGNORECASE),
+        re.compile(r"^add watchlist\s+\d{6}$", re.IGNORECASE),
+        re.compile(r"^remove watchlist\s+\d{6}$", re.IGNORECASE),
+        re.compile(r"^train gm$", re.IGNORECASE),
+        re.compile(r"^auto train gm$", re.IGNORECASE),
+        re.compile(r"^train llm$", re.IGNORECASE),
+        re.compile(r"^auto train llm$", re.IGNORECASE),
+    )
+    _ANALYZE_ACTION_RE = re.compile(r"(?:analy[sz]e|analysis|analyze stock)\D*(\d{6})", re.IGNORECASE)
+    _WATCHLIST_ACTION_RE = re.compile(
+        r"(?:watchlist\s*(?:add|remove)|(?:add|remove)\s*watchlist)\D*(\d{6})",
+        re.IGNORECASE,
+    )
+    _INTERVAL_ACTION_RE = re.compile(
+        r"(?:set\s*interval|interval)\s*(?:to\s*)?(\d+)\s*(m|min|mins|minute|minutes|h|hr|hour|hours|d|day|days)\b",
+        re.IGNORECASE,
+    )
+    _BARS_ACTION_RE = re.compile(
+        r"(?:set\s*)?(forecast|lookback)\s*(?:to\s*)?(\d+)\b",
+        re.IGNORECASE,
+    )
 
     def __init__(self) -> None:
         # Local model settings (no remote API required).
@@ -181,6 +210,145 @@ class LLMChatAssistant:
         return ""
 
     @staticmethod
+    def _is_canonical_action(action: str) -> bool:
+        raw = str(action or "").strip()
+        if not raw:
+            return False
+        return any(bool(p.match(raw)) for p in LLMChatAssistant._CANONICAL_ACTION_PATTERNS)
+
+    @staticmethod
+    def _normalize_whitespace(text: str) -> str:
+        return re.sub(r"\s+", " ", str(text or "").strip())
+
+    @staticmethod
+    def _coerce_interval(value: int, unit: str) -> str:
+        u = str(unit or "").strip().lower()
+        if u in {"m", "min", "mins", "minute", "minutes"}:
+            minutes = int(value)
+        elif u in {"h", "hr", "hour", "hours"}:
+            minutes = int(value) * 60
+        elif u in {"d", "day", "days"}:
+            if int(value) == 1:
+                return "1d"
+            return ""
+        else:
+            return ""
+        if minutes in {1, 5, 15, 30, 60}:
+            return f"{minutes}m"
+        return ""
+
+    @classmethod
+    def _canonicalize_action(cls, action: str) -> str:
+        candidate = cls._normalize_whitespace(str(action or "")).lower()
+        candidate = candidate.strip(" .;,:!?\t\r\n")
+        if candidate in {"", "none", "n/a", "no action", "null"}:
+            return ""
+
+        if cls._is_canonical_action(candidate):
+            return candidate
+
+        m = cls._WATCHLIST_ACTION_RE.search(candidate)
+        if m:
+            code = str(m.group(1))
+            if "remove" in candidate:
+                return f"remove watchlist {code}"
+            return f"add watchlist {code}"
+
+        m = cls._ANALYZE_ACTION_RE.search(candidate)
+        if m:
+            return f"analyze {m.group(1)}"
+
+        m = cls._INTERVAL_ACTION_RE.search(candidate)
+        if m:
+            interval = cls._coerce_interval(int(m.group(1)), str(m.group(2)))
+            if interval:
+                return f"set interval {interval}"
+
+        m = cls._BARS_ACTION_RE.search(candidate)
+        if m:
+            field = str(m.group(1)).strip().lower()
+            bars = int(m.group(2))
+            if bars > 0 and field in {"forecast", "lookback"}:
+                return f"set {field} {bars}"
+
+        alias_map = {
+            "start monitor": "start monitoring",
+            "start monitoring": "start monitoring",
+            "monitor start": "start monitoring",
+            "stop monitor": "stop monitoring",
+            "stop monitoring": "stop monitoring",
+            "monitor stop": "stop monitoring",
+            "scan market": "scan market",
+            "scan markets": "scan market",
+            "market scan": "scan market",
+            "scan": "scan market",
+            "refresh sentiment": "refresh sentiment",
+            "update sentiment": "refresh sentiment",
+            "refresh news sentiment": "refresh sentiment",
+            "train gm": "train gm",
+            "auto train gm": "auto train gm",
+            "train llm": "train llm",
+            "auto train llm": "auto train llm",
+        }
+        mapped = alias_map.get(candidate, "")
+        if mapped and cls._is_canonical_action(mapped):
+            return mapped
+        return ""
+
+    @classmethod
+    def _infer_action_from_prompt(cls, prompt: str) -> str:
+        text = cls._normalize_whitespace(prompt).lower()
+        if not text:
+            return ""
+
+        m = re.search(r"(?:add|watch|track|follow)\D*(\d{6})", text)
+        if m and any(w in text for w in ("watch", "track", "follow", "add")):
+            return f"add watchlist {m.group(1)}"
+
+        m = re.search(r"(?:remove|unwatch|delete)\D*(\d{6})", text)
+        if m and any(w in text for w in ("remove", "unwatch", "delete")):
+            return f"remove watchlist {m.group(1)}"
+
+        if any(k in text for k in ("start monitoring", "start monitor", "begin monitoring", "monitor this")):
+            return "start monitoring"
+
+        if any(k in text for k in ("stop monitoring", "stop monitor", "pause monitoring")):
+            return "stop monitoring"
+
+        if any(k in text for k in ("scan market", "market scan")):
+            return "scan market"
+
+        if any(k in text for k in ("refresh sentiment", "update sentiment", "sentiment refresh")):
+            return "refresh sentiment"
+
+        m = cls._ANALYZE_ACTION_RE.search(text)
+        if m:
+            return f"analyze {m.group(1)}"
+
+        m = cls._INTERVAL_ACTION_RE.search(text)
+        if m:
+            interval = cls._coerce_interval(int(m.group(1)), str(m.group(2)))
+            if interval:
+                return f"set interval {interval}"
+
+        m = cls._BARS_ACTION_RE.search(text)
+        if m:
+            field = str(m.group(1)).strip().lower()
+            bars = int(m.group(2))
+            if bars > 0 and field in {"forecast", "lookback"}:
+                return f"set {field} {bars}"
+
+        if "auto train gm" in text:
+            return "auto train gm"
+        if "auto train llm" in text:
+            return "auto train llm"
+        if "train gm" in text:
+            return "train gm"
+        if "train llm" in text:
+            return "train llm"
+        return ""
+
+    @staticmethod
     def _strip_action_line(text: str) -> str:
         lines = []
         for line in str(text or "").splitlines():
@@ -277,7 +445,7 @@ class LLMChatAssistant:
 
         generated = output_ids[0][model_inputs.shape[-1] :]
         content = tok.decode(generated, skip_special_tokens=True).strip()
-        action = self._extract_action_from_text(content)
+        action = self._canonicalize_action(self._extract_action_from_text(content))
         answer = self._strip_action_line(content)
         return answer, action
 
@@ -476,6 +644,9 @@ class LLMChatAssistant:
                 context=context,
                 app_state=app_state,
             )
+        action = self._canonicalize_action(action)
+        if not action:
+            action = self._infer_action_from_prompt(prompt)
 
         return {
             "answer": str(answer or "").strip(),
@@ -509,3 +680,4 @@ def get_chat_assistant() -> LLMChatAssistant:
 def reset_chat_assistant() -> None:
     global _assistant
     _assistant = None
+

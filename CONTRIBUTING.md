@@ -102,30 +102,25 @@ Use Google-style docstrings:
 
 ```python
 def submit_order(
-    self,
     symbol: str,
-    side: OrderSide,
-    quantity: int,
-    price: float | None = None,
-) -> Order:
+    horizon: int,
+) -> Prediction:
     """
     Submit an order to the market.
 
     Args:
         symbol: Stock symbol (e.g., "600519")
-        side: Order side (BUY or SELL)
-        quantity: Number of shares
-        price: Limit price (None for market orders)
+        horizon: Forecast bars (e.g., 30 for intraday)
 
     Returns:
-        Order object with assigned ID
+        Prediction object with signal and confidence
 
     Raises:
-        OrderError: If validation fails
-        RiskError: If risk limits violated
+        ValueError: If input validation fails
+        RuntimeError: If model artifacts are unavailable
 
     Example:
-        >>> order = oms.submit_order("600519", OrderSide.BUY, 100, 50.0)
+        >>> pred = predictor.predict("600519", forecast_minutes=30)
     """
 ```
 
@@ -196,25 +191,22 @@ except:
 import pytest
 from unittest.mock import Mock
 
-from core.types import Order, OrderSide
-from trading.oms import OrderManagementSystem
+from models.predictor import Predictor
 
 
-class TestOrderManagement:
-    """Test suite for OMS."""
+class TestPredictor:
+    """Test suite for prediction runtime."""
 
     @pytest.fixture
-    def oms(self) -> OrderManagementSystem:
-        """Create OMS for testing."""
-        return OrderManagementSystem(initial_capital=100000)
+    def predictor(self) -> Predictor:
+        """Create predictor for testing."""
+        return Predictor()
 
-    def test_submit_order_success(self, oms: OrderManagementSystem) -> None:
-        """Test successful order submission."""
-        order = Order(symbol="600519", side=OrderSide.BUY, quantity=100, price=50.0)
-        result = oms.submit_order(order)
-        
-        assert result.status == OrderStatus.SUBMITTED
-        assert result.id is not None
+    def test_predict_success(self, predictor: Predictor) -> None:
+        """Test successful prediction call."""
+        out = predictor.predict("600519")
+        assert out.stock_code == "600519"
+        assert 0.0 <= out.confidence <= 1.0
 ```
 
 ### Coverage Requirements
@@ -222,7 +214,7 @@ class TestOrderManagement:
 | Module Type | Minimum Coverage |
 |-------------|------------------|
 | Overall | 85% |
-| Critical (OMS, Risk, Security) | 95% |
+| Critical (Data, Models, Security) | 95% |
 | UI Components | 70% |
 
 ### Running Tests
@@ -235,10 +227,10 @@ pytest
 pytest --cov=trading_graph --cov-report=html
 
 # Specific file
-pytest tests/test_oms.py
+pytest tests/test_predictor_forecast.py
 
 # Specific function
-pytest tests/test_oms.py::TestOrderManagement::test_submit_order
+pytest tests/test_predictor_forecast.py::test_generate_forecast_forecaster_path_matches_requested_horizon
 
 # Verbose output
 pytest -v

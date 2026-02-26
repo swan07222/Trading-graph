@@ -189,7 +189,8 @@ def _health_gate_violations(report: dict[str, Any]) -> list[str]:
     status = str(report.get("status", "")).strip().lower()
     if status != "healthy":
         violations.append(f"status={status or 'unknown'}")
-    if not bool(report.get("can_trade", False)):
+    execution_enabled = bool(report.get("execution_enabled", True))
+    if execution_enabled and not bool(report.get("can_trade", False)):
         violations.append("can_trade=false")
     if bool(report.get("degraded_mode", False)):
         violations.append("degraded_mode=true")
@@ -355,7 +356,11 @@ def main() -> int:
     try:
         if args.health:
             # Health check removed - trading components no longer available
-            print('{"status": "healthy", "can_trade": false, "note": "Trading execution disabled"}')
+            print(
+                '{"status": "healthy", "execution_enabled": false, '
+                '"can_trade": false, "analysis_ready": true, '
+                '"note": "Trading execution disabled"}'
+            )
 
         elif args.doctor:
             report = run_system_doctor()

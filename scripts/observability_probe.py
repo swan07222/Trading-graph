@@ -90,7 +90,9 @@ def main() -> int:
         ("/healthz", False),
         ("/metrics", False),
         ("/api/v1/health", True),
-        ("/api/v1/execution", True),
+        ("/api/v1/sentiment?hours=24", True),
+        ("/api/v1/governance/policy", True),
+        ("/api/v1/learning/status", True),
         ("/api/v1/dashboard/full?limit=5", True),
     ]
 

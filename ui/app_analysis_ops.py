@@ -189,10 +189,6 @@ def _add_to_watchlist(self) -> None:
         self._update_watchlist()
         self.log(f"Added {normalized} to watchlist", "info")
         self._ensure_feed_subscription(normalized)
-
-        # Sync with auto-trader
-        if self.executor and self.executor.auto_trader:
-            self.executor.auto_trader.update_watchlist(self.watch_list)
     else:
         self.log(f"{normalized} already in watchlist", "info")
 
@@ -207,12 +203,6 @@ def _remove_from_watchlist(self) -> None:
                 self.watch_list.remove(code)
                 self._update_watchlist()
                 self.log(f"Removed {code} from watchlist", "info")
-
-                # Sync with auto-trader
-                if self.executor and self.executor.auto_trader:
-                    self.executor.auto_trader.update_watchlist(
-                        self.watch_list
-                    )
 
 def _analyze_stock(self) -> None:
     """Analyze stock with validation."""

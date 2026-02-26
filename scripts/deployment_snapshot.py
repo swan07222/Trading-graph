@@ -19,10 +19,6 @@ DEFAULT_RUNTIME_PATHS: tuple[str, ...] = (
     "data_storage/orders.db",
     "data_storage/orders.db-wal",
     "data_storage/orders.db-shm",
-    "data_storage/execution_runtime_state.json",
-    "data_storage/synthetic_exits_state.json",
-    "data_storage/execution_runtime_lease.json",
-    "data_storage/execution_runtime_lease.db",
 )
 MANIFEST_MEMBER_NAME = ".snapshot_manifest.json"
 

@@ -265,6 +265,19 @@ def main() -> int:
                 [py, str(repo_root / "scripts/module_size_gate.py")],
             )
         )
+        steps.append(
+            _run_step(
+                "feature_score_gate",
+                [
+                    py,
+                    str(repo_root / "scripts/feature_score_gate.py"),
+                    "--min-overall",
+                    "9.5",
+                    "--min-feature",
+                    "9.5",
+                ],
+            )
+        )
     if not args.skip_regulatory:
         steps.append(
             _run_step(

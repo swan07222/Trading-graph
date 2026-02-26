@@ -164,6 +164,7 @@ def test_release_preflight_includes_policy_gates_when_typecheck_enabled(monkeypa
     assert "typecheck_strict_gate" in captured_steps
     assert "exception_policy_gate" in captured_steps
     assert "module_size_gate" in captured_steps
+    assert "feature_score_gate" in captured_steps
 
 
 def test_release_preflight_quick_profile_skips_slow_steps(monkeypatch) -> None:

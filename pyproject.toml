@@ -109,9 +109,7 @@ gui = [
   "bokeh>=3.3.0,<4.0.0",
 ]
 security = []
-live = [
-  "easytrader>=0.23.0",
-]
+live = []
 explainability = [
   "shap>=0.44.0",
   "lime>=0.2.0",

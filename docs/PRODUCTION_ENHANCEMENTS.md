@@ -1,5 +1,9 @@
 # Production Trading Enhancements
 
+> Deprecated for this build: this document describes legacy live-execution modules
+> that are not part of the current analysis-only product scope.
+> Use `docs/OPERATIONS_PLAYBOOK.md` and `README.md` for current workflows.
+
 This document describes the production-grade enhancements added to address the disadvantages of using this project for real-time trading.
 
 ## Overview
