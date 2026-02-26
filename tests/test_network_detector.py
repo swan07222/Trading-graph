@@ -119,17 +119,17 @@ def test_network_detector_detect_does_not_depend_on_requests_session(monkeypatch
                 self.status_code = int(status_code)
 
         def _fake_get(url, timeout=0, headers=None):
-            if "yahoo" in str(url):
-                return _Resp(200)
             if "eastmoney" in str(url):
-                return _Resp(500)
+                return _Resp(200)
+            if "tencent" in str(url):
+                return _Resp(200)
             return _Resp(200)
 
         monkeypatch.setattr("core.network.requests.get", _fake_get)
         env = det.get_env(force_refresh=True)
 
         assert isinstance(env, NetworkEnv)
-        assert env.yahoo_ok is True
+        assert env.eastmoney_ok is True
     finally:
         det._env = old_env
         det._env_time = old_time

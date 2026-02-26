@@ -1,0 +1,50 @@
+{
+  "messages": [
+    {
+      "timestamp": "11:21:33",
+      "sender": "AI",
+      "role": "assistant",
+      "text": "AI message feed ready.",
+      "level": "info",
+      "intent": "",
+      "entities": {}
+    },
+    {
+      "timestamp": "11:21:33",
+      "sender": "System",
+      "role": "system",
+      "text": "No trained GM model found. Please train GM.",
+      "level": "warning",
+      "intent": "",
+      "entities": {}
+    },
+    {
+      "timestamp": "11:21:33",
+      "sender": "System",
+      "role": "system",
+      "text": "System initialized - Ready for analysis",
+      "level": "info",
+      "intent": "",
+      "entities": {}
+    },
+    {
+      "timestamp": "11:21:40",
+      "sender": "System",
+      "role": "system",
+      "text": "Starting optimized LLM training (max 200 articles)...",
+      "level": "info",
+      "intent": "",
+      "entities": {}
+    },
+    {
+      "timestamp": "11:21:40",
+      "sender": "System",
+      "role": "system",
+      "text": "Starting optimized LLM hybrid training...",
+      "level": "info",
+      "intent": "",
+      "entities": {}
+    }
+  ],
+  "saved_at": "2026-02-26T11:21:40.719387"
+}

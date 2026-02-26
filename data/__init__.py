@@ -112,6 +112,11 @@ def __getattr__(name: str):
         from . import llm_sentiment as _llm_sentiment
         return getattr(_llm_sentiment, name)
 
+    # Social sentiment (enhanced features)
+    if name == 'SocialSentimentAnalyzer' or name == 'get_social_sentiment_analyzer':
+        from . import social_sentiment as _social_sentiment
+        return getattr(_social_sentiment, name)
+
     raise AttributeError(f"module 'data' has no attribute {name!r}")
 
 __all__ = [
@@ -185,4 +190,7 @@ __all__ = [
     'get_collector',
     'LLM_sentimentAnalyzer',
     'get_analyzer',
+    # Enhanced social sentiment
+    'SocialSentimentAnalyzer',
+    'get_social_sentiment_analyzer',
 ]

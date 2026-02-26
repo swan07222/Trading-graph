@@ -824,6 +824,15 @@ def _show_llm_train_dialog(self: Any, auto_start: bool = False) -> Any | None:
     dialog.show()
     dialog.raise_()
     dialog.activateWindow()
+    # Force to front on Windows where activateWindow() alone is unreliable
+    try:
+        from PyQt6.QtCore import Qt
+        dialog.setWindowState(
+            (dialog.windowState() & ~Qt.WindowState.WindowMinimized)
+            | Qt.WindowState.WindowActive
+        )
+    except Exception:
+        pass
     if auto_start and hasattr(dialog, "start_or_resume_auto_train"):
         dialog.start_or_resume_auto_train()
     return dialog
@@ -831,9 +840,19 @@ def _show_llm_train_dialog(self: Any, auto_start: bool = False) -> Any | None:
 
 def _auto_train_llm(self: Any) -> None:
     """Open Auto Train LLM control panel (non-modal)."""
-    self._show_llm_train_dialog(auto_start=False)
-    if hasattr(self, "log"):
-        self.log("Auto Train LLM panel opened.", "info")
+    dialog = self._show_llm_train_dialog(auto_start=False)
+    if dialog is not None:
+        # Ensure dialog is visible and on top on Windows
+        from PyQt6.QtCore import Qt
+        dialog.setWindowFlags(dialog.windowFlags() | Qt.WindowType.WindowStaysOnTopHint)
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
+        if hasattr(self, "log"):
+            self.log("Auto Train LLM panel opened.", "info")
+    else:
+        if hasattr(self, "log"):
+            self.log("Failed to open Auto Train LLM panel — check log for errors.", "error")
 
 
 def _set_news_policy_signal(self: Any, symbol: str, payload: dict[str, Any]) -> None:

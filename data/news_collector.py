@@ -164,7 +164,7 @@ class NewsCollector:
         strict_mode = bool(strict)
 
         active_sources = list(self.CHINA_SOURCES)
-        log.info("Collecting news from %s China sources", len(active_sources))
+        log.debug("Collecting news from %s China sources", len(active_sources))
 
         for source in active_sources:
             if len(articles) >= limit:
@@ -217,7 +217,10 @@ class NewsCollector:
 
         if strict_mode and not articles:
             raise RuntimeError("Strict news collection returned no articles")
-        log.info(f"Collected {len(articles)} unique articles")
+        if articles:
+            log.info(f"Collected {len(articles)} unique articles")
+        else:
+            log.debug(f"Collected 0 unique articles")
         return articles
 
     def _source_cooldown_seconds(self, source: str) -> float:
@@ -661,7 +664,7 @@ class NewsCollector:
         """Save articles to cache file."""
         if filename is None:
             filename = f"news_{int(time.time())}.json"
-        
+
         output_file = self.cache_dir / filename
         with open(output_file, "w", encoding="utf-8") as f:
             json.dump({
@@ -669,5 +672,23 @@ class NewsCollector:
                 "count": len(articles),
                 "articles": [a.to_dict() for a in articles],
             }, f, ensure_ascii=False, indent=2)
-        
+
         return output_file
+
+
+# Module-level singleton
+_collector: NewsCollector | None = None
+
+
+def get_collector() -> NewsCollector:
+    """Get the news collector singleton."""
+    global _collector
+    if _collector is None:
+        _collector = NewsCollector()
+    return _collector
+
+
+def reset_collector() -> None:
+    """Reset the news collector singleton (for testing)."""
+    global _collector
+    _collector = None

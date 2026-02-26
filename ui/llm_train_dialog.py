@@ -141,16 +141,18 @@ class LLMAutoTrainWorker(QThread):
                 if self._stop_event.is_set() or status == "stopped":
                     break
                 if status == "no_new_data":
+                    # Use longer cooldown when sources are down to avoid log spam
+                    wait_secs = max(30, idle_seconds) if collected == 0 else max(1, idle_seconds)
                     self.log_message.emit(
                         (
                             f"Cycle {cycle_index}: no new language data found. "
                             f"Skipped reused={reused_skipped}, "
                             f"queries={query_count}, related_codes={related_count}. "
-                            f"Waiting {idle_seconds}s..."
+                            f"Waiting {wait_secs}s..."
                         ),
                         "info",
                     )
-                    if self._stop_event.wait(timeout=max(1, idle_seconds)):
+                    if self._stop_event.wait(timeout=wait_secs):
                         break
                     continue
                 if status in {"error", "failed"}:

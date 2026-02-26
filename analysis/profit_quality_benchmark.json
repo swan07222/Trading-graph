@@ -1,0 +1,101 @@
+{
+  "meta": {
+    "samples": 1800,
+    "seed": 42,
+    "sequence_length": 60,
+    "prediction_horizon": 5,
+    "note": "Synthetic benchmark for calibration + walk-forward quality pass."
+  },
+  "calibration_report": {
+    "enabled": true,
+    "source": "validation",
+    "reason": "ok",
+    "sample_count": 360,
+    "bin_count": 12,
+    "min_bin_samples": 8,
+    "used_bins": 2,
+    "x_points": [
+      0.0,
+      0.8207973250938853,
+      0.861902652000019,
+      1.0
+    ],
+    "y_points": [
+      0.6923076923076923,
+      0.6923076923076923,
+      0.6923076923076923,
+      0.6923076923076923
+    ],
+    "mapping_points": [
+      {
+        "raw_confidence": 0.0,
+        "calibrated_confidence": 0.6923076923076923,
+        "samples": 0
+      },
+      {
+        "raw_confidence": 0.8207973250938853,
+        "calibrated_confidence": 0.6923076923076923,
+        "samples": 39
+      },
+      {
+        "raw_confidence": 0.861902652000019,
+        "calibrated_confidence": 0.6923076923076923,
+        "samples": 321
+      },
+      {
+        "raw_confidence": 1.0,
+        "calibrated_confidence": 0.6923076923076923,
+        "samples": 0
+      }
+    ],
+    "ece_before": 0.360227352696299,
+    "ece_after": 0.19508547008547017,
+    "brier_before": 0.38342417108072396,
+    "brier_after": 0.28805062458908615,
+    "ece_improvement": 0.16514188261082885,
+    "brier_improvement": 0.09537354649163782
+  },
+  "before": {
+    "accuracy": 0.5,
+    "risk_adjusted_score": 0.3012923822355605,
+    "profit_factor": 0.290603905916214,
+    "sharpe_ratio": -4.178396420796562,
+    "max_drawdown": 0.008004322648048401,
+    "excess_return": -1.194596290588379,
+    "trades": 3,
+    "trade_coverage": 0.016853932584269662,
+    "ece": 0.3589202086220957,
+    "brier": 0.3804770333246983,
+    "walk_stability": 0.8978876365273589,
+    "walk_selection_score": 0.34248030606325963,
+    "walk_downside_stability": 0.8943863511329823
+  },
+  "after": {
+    "accuracy": 0.5,
+    "risk_adjusted_score": 0.34808992556287915,
+    "profit_factor": 0.0,
+    "sharpe_ratio": 0.0,
+    "max_drawdown": 0.0,
+    "excess_return": 0.605696439743042,
+    "trades": 0,
+    "trade_coverage": 0.0,
+    "ece": 0.1923076923076924,
+    "brier": 0.2869822485207101,
+    "walk_stability": 0.9746683784520987,
+    "walk_selection_score": 0.31812935962514033,
+    "walk_downside_stability": 0.9963638207803952
+  },
+  "deltas": {
+    "risk_adjusted_score_delta": 0.04679754332731867,
+    "accuracy_delta": 0.0,
+    "profit_factor_delta": -0.290603905916214,
+    "sharpe_ratio_delta": 4.178396420796562,
+    "excess_return_delta": 1.800292730331421,
+    "trade_coverage_delta": -0.016853932584269662,
+    "walk_selection_score_delta": -0.024350946438119303,
+    "walk_stability_delta": 0.07678074192473983,
+    "max_drawdown_improvement": 0.008004322648048401,
+    "ece_improvement": 0.16661251631440332,
+    "brier_improvement": 0.0934947848039882
+  }
+}

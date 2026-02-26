@@ -804,10 +804,8 @@ class WebSearchEngine:
             SearchEngine.SINA_SEARCH: 3.0 if self._china_mode else 2.0,
             SearchEngine.TOUTIAO_SEARCH: 4.0,
             SearchEngine.SEARCH_360: 4.0,
-            SearchEngine.GOOGLE: 1.0,
-            SearchEngine.DUCKDUCKGO: 1.0,
         }
-        
+
         self._last_request: dict[SearchEngine, float] = {
             engine: 0.0 for engine in SearchEngine
         }
@@ -1523,6 +1521,279 @@ class WebSearchEngine:
             await self.cache.set(query, engines or [], limit, final_results)
 
         return final_results
+
+    async def search_for_llm_training(
+        self,
+        language: str = "zh",
+        limit_per_query: int = 10,
+        max_queries: int = 10,
+        hours_back: int = 720,
+    ) -> list[SearchResult]:
+        """Search for LLM training data across multiple diverse sources.
+
+        This method collects diverse training data for LLM fine-tuning from China-accessible sources:
+        - General web text (encyclopedias, educational content)
+        - Books & literature (classics, modern literature)
+        - Academic papers (research, scientific content)
+        - News articles (current events, journalism)
+        - Social media & forums (conversational data)
+        - Specialized domains (finance, law, medicine, technology)
+
+        Args:
+            language: Language preference ('zh' for Chinese, 'en' for English, 'all' for both)
+            limit_per_query: Maximum results per search query
+            max_queries: Maximum number of queries to execute
+            hours_back: Time window for search (default 30 days = 720 hours)
+
+        Returns:
+            List of search results optimized for LLM training
+        """
+        # Diverse query templates for comprehensive LLM training data (Bilingual: Chinese + English)
+        query_templates = {
+            # ===== CATEGORY 1: General Web Text / Educational Content =====
+            "general": [
+                # Chinese queries
+                "百科全书 知识 科普",
+                "教育 学习资料 教程",
+                "科学 技术 发现 创新",
+                "历史 文化 传统 文明",
+                "地理 自然 环境 生态",
+                "教程 学习 方法 技巧",
+                "指南 手册 说明 介绍",
+                "百科 常识 知识点",
+                "公开课 在线课程 教育平台",
+                # English queries
+                "encyclopedia knowledge education learning",
+                "science technology innovation discovery",
+                "world history culture civilization heritage",
+                "geography nature environment ecology",
+                "tutorial guide howto instructions manual",
+                "online course free education platform",
+                "study materials educational resources",
+                "general knowledge facts information",
+            ],
+            # ===== CATEGORY 2: Books & Literature =====
+            "literature": [
+                # Chinese queries
+                "小说 文学 作品 作家",
+                "诗歌 散文 文学 经典",
+                "名著 经典 文学 阅读",
+                "现代文学 当代 作家 创作",
+                "儿童文学 故事 童话 寓言",
+                "科幻 奇幻 小说 文学",
+                "武侠小说 金庸 古龙",
+                "历史小说 历史故事 古代",
+                "言情小说 爱情 情感 都市",
+                "悬疑小说 推理 侦探 犯罪",
+                # English queries
+                "classic literature famous novels literary works authors",
+                "poetry collection prose literary analysis poems",
+                "modern fiction contemporary literature bestselling books",
+                "children books fairy tales picture books young adult",
+                "science fiction fantasy novels speculative fiction",
+                "mystery thriller detective stories crime fiction",
+                "romance novels love stories relationship fiction",
+                "historical fiction period novels biography memoir",
+                "self help books personal development motivation",
+                "business books management leadership entrepreneurship",
+            ],
+            # ===== CATEGORY 3: Academic & Scientific Papers =====
+            "academic": [
+                # Chinese queries
+                "学术论文 研究 期刊 科学",
+                "大学 论文 学位 研究",
+                "学术会议 报告 研讨 专业",
+                "学科 专业 领域 前沿",
+                "人工智能 机器学习 科技 研究",
+                "生物 医学 科学 实验",
+                "物理 化学 数学 科学",
+                "工程技术 计算机科学 软件工程",
+                "社会科学 心理学 社会学 研究",
+                "经济学 金融学 管理 研究",
+                "环境科学 生态学 气候变化",
+                "材料科学 纳米技术 新材料",
+                # English queries
+                "academic paper research journal scientific study peer review",
+                "university research thesis dissertation graduate study",
+                "academic conference research presentation symposium",
+                "artificial intelligence machine learning deep learning neural network",
+                "biology research medical science clinical trial healthcare",
+                "physics research chemistry study mathematics quantum",
+                "computer science software engineering algorithm data structure",
+                "social science psychology research sociology study",
+                "economics research finance study business management",
+                "environmental science ecology research sustainability",
+                "materials science nanotechnology biotechnology",
+                "data science big data analytics statistics",
+            ],
+            # ===== CATEGORY 4: News Articles & Current Events =====
+            "news": [
+                # Chinese queries
+                "新闻报道 时事 热点",
+                "财经 经济 新闻 金融",
+                "国际 新闻 全球 世界",
+                "社会 民生 新闻 生活",
+                "科技 产业 新闻 互联网",
+                "体育 新闻 赛事 运动",
+                "娱乐 明星 影视 音乐",
+                "健康 医疗 新闻 养生",
+                "教育 考试 学校 培训",
+                "房地产 楼市 房价 市场",
+                # English queries
+                "news current events breaking news headlines",
+                "financial news economy market business",
+                "international news world affairs global",
+                "technology news tech industry innovation",
+                "sports news games athletes competition",
+                "entertainment news celebrities movies music",
+                "health news medical healthcare wellness",
+                "education news schools universities learning",
+                "politics news government policy legislation",
+                "environment news climate change sustainability",
+            ],
+            # ===== CATEGORY 5: Social Media & Forums =====
+            "social": [
+                # Chinese queries
+                "知乎 问答 讨论 观点",
+                "微博 社交 媒体 热点",
+                "论坛 帖子 交流 分享",
+                "博客 文章 随笔 心得",
+                "评论 看法 观点 意见",
+                "网友 热议 话题 讨论",
+                "小红书 种草 分享 推荐",
+                "豆瓣 书评 影评 评分",
+                "贴吧 社区 讨论区 帖子",
+                "微信公众号 文章 订阅",
+                # English queries
+                "reddit discussion forum thread community opinion",
+                "twitter trends social media viral content hashtags",
+                "blog post personal essay opinion commentary",
+                "youtube video content creator vlog tutorial",
+                "instagram post photo sharing influencer lifestyle",
+                "linkedin article professional network career advice",
+                "quora answers Q&A expert opinion knowledge",
+                "medium article long form storytelling writing",
+                "tiktok content short video trending entertainment",
+                "discord community chat group online discussion",
+            ],
+            # ===== CATEGORY 6: Specialized Domain Data =====
+            "specialized": [
+                # Chinese - Finance
+                "金融 投资 股票 基金",
+                "银行 保险 证券 期货",
+                "经济 贸易 商业 市场",
+                "理财 资产配置 投资组合",
+                "外汇 汇率 国际收支",
+                # English - Finance
+                "finance investment stock market mutual fund ETF",
+                "banking insurance securities futures trading",
+                "economics trade business market commerce",
+                "wealth management asset allocation portfolio",
+                "foreign exchange currency rate forex trading",
+                # Chinese - Law
+                "法律 法规 案例 司法",
+                "合同 协议 权利 义务",
+                # English - Law
+                "law regulation legal case justice system",
+                "contract agreement legal rights obligations",
+                # Chinese - Medicine
+                "医学 健康 医疗 疾病",
+                "医院 医生 治疗 药物",
+                "营养 健身 养生 心理健康",
+                # English - Medicine
+                "medical health healthcare disease treatment",
+                "hospital doctor therapy pharmaceutical",
+                "nutrition fitness wellness mental health",
+                # Chinese - Technology
+                "IT 编程 软件 技术",
+                "互联网 科技 数码 电子",
+                "云计算 网络安全 运维",
+                "手机应用 网站开发 数据库",
+                # English - Technology
+                "IT programming software development technology",
+                "internet tech digital electronics gadgets",
+                "cloud computing cybersecurity devops",
+                "mobile app web development API database",
+                # Chinese - Education
+                "教育 心理 学习 发展",
+                "儿童 青少年 成长 辅导",
+                "认知科学 行为心理学 神经科学",
+                # English - Education
+                "education psychology learning development",
+                "children teenager growth counseling",
+                "cognitive science behavioral psychology neuroscience",
+            ],
+        }
+
+        # Filter queries based on language (support bilingual: Chinese + English)
+        all_queries: list[str] = []
+        for category, queries in query_templates.items():
+            if language in ["zh", "zh-CN", "chinese", "all"]:
+                # Add Chinese queries
+                all_queries.extend([q for q in queries if any('一' <= c <= '鿿' for c in q)])
+            if language in ["en", "english", "all"]:
+                # Add English queries
+                all_queries.extend([q for q in queries if any(c.isalpha() for c in q) and not any('一' <= c <= '鿿' for c in q)])
+            if language in ["both", "bilingual"]:
+                # Add all queries (both Chinese and English)
+                all_queries.extend(queries)
+
+        # Limit total queries
+        all_queries = all_queries[:max_queries]
+
+        log.info(
+            "Searching for LLM training data: %d queries, language=%s",
+            len(all_queries),
+            language,
+        )
+
+        all_results: list[SearchResult] = []
+        seen_urls: set[str] = set()
+
+        for idx, query in enumerate(all_queries):
+            if idx > 0 and idx % 3 == 0:
+                # Rate limiting: pause every 3 queries
+                await asyncio.sleep(2.0)
+
+            try:
+                results = await self.search(
+                    query=query,
+                    limit=limit_per_query,
+                    use_cache=True,
+                    deduplicate=True,
+                    diversify=True,
+                    min_quality=0.4,
+                    timeout=45.0,
+                )
+
+                # Deduplicate across queries
+                for result in results:
+                    if result.url not in seen_urls:
+                        seen_urls.add(result.url)
+                        # Tag with category for training
+                        result.metadata["training_category"] = "llm_corpus"
+                        result.metadata["language"] = language
+                        all_results.append(result)
+
+                log.debug(
+                    "Query %d/%d '%s': found %d results",
+                    idx + 1,
+                    len(all_queries),
+                    query[:20],
+                    len(results),
+                )
+
+            except Exception as e:
+                log.warning(f"Query '{query[:30]}' failed: {e}")
+                continue
+
+        log.info(
+            "LLM training data collection complete: %d unique results from %d queries",
+            len(all_results),
+            len(all_queries),
+        )
+
+        return all_results
 
     def get_engine_health_report(self) -> dict[str, Any]:
         """Get comprehensive health report for all search engines."""

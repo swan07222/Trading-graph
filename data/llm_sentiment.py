@@ -2617,6 +2617,7 @@ class LLM_sentimentAnalyzer:
         skipped_seen = 0
         source_counts: dict[str, int] = {}
 
+        consecutive_empty = 0
         for i, kw in enumerate(queries):
             if _stopped():
                 break
@@ -2633,6 +2634,19 @@ class LLM_sentimentAnalyzer:
                 )
             except Exception as exc:
                 log.debug("Query %d failed: %s", i + 1, exc)
+
+            if not batch:
+                consecutive_empty += 1
+                # After 3 consecutive empty queries, back off to avoid log spam
+                if consecutive_empty >= 3:
+                    import time as _time
+                    _time.sleep(0.5)
+                    # After 10 consecutive empty, stop querying — sources are down
+                    if consecutive_empty >= 10:
+                        log.debug("All news sources returning empty, stopping query loop early")
+                        break
+            else:
+                consecutive_empty = 0
 
             for article in batch:
                 aid = str(getattr(article, "id", "") or "").strip()
@@ -2728,25 +2742,201 @@ class LLM_sentimentAnalyzer:
     def _build_corpus_queries(date_token: str) -> list[list[str]]:
         """Build diverse query set for broad LLM corpus coverage.
 
-        Ethical: Only uses publicly available news search terms.
-        Diverse: Covers policy, market, economic, company, regulatory topics.
+        Enhanced to collect diverse training data types:
+        1. Web Text/Crawled Data - General knowledge, language patterns
+        2. Books & Literature - Long-form coherence, narrative structure
+        3. Academic & Scientific Papers - Technical knowledge, research
+        4. News Articles - Current events, journalistic writing
+        5. Social Media & Forums - Conversational language, contemporary slang
+        6. Specialized Domain Data - Expert knowledge (finance, law, medicine, tech)
+
+        Bilingual: Includes both Chinese and English queries for comprehensive coverage.
+        Ethical: Only uses publicly available search terms.
+        Diverse: Covers multiple knowledge domains and writing styles.
+        China-optimized: All queries work with China-accessible sources.
         """
         queries = [
-            # Policy & regulatory
-            ["A股", "政策", "监管", "证监会", date_token],
+            # =====================================================================
+            # CATEGORY 1: News Articles & Journalism (Chinese + English)
+            # =====================================================================
+            # Policy & Regulatory (Chinese)
+            ["A 股", "政策", "监管", "证监会", date_token],
             ["央行", "人民币", "降准", "降息", date_token],
             ["财政政策", "货币政策", "宏观经济", date_token],
-            # Market & sectors
             ["沪深", "板块", "资金", "产业链", date_token],
             ["北向资金", "行业政策", "中国经济", date_token],
             ["科技股", "新能源", "消费", "医药", date_token],
-            # Company & earnings
             ["上市公司", "业绩", "增持", "回购", date_token],
             ["财报", "盈利", "营收", "公告", date_token],
-            # International context
             ["全球市场", "美联储", "地缘政治", date_token],
+            ["贸易战", "关税", "进出口", date_token],
+            ["GDP", "CPI", "PPI", "经济数据", date_token],
+            
+            # Financial News (English)
+            ["stock market news", "financial analysis", date_token],
+            ["economic policy", "central bank", "interest rates", date_token],
+            ["corporate earnings", "quarterly report", "revenue", date_token],
+            ["market analysis", "investment strategy", date_token],
+            ["global economy", "trade relations", date_token],
+            ["technology sector", "healthcare stocks", date_token],
+            ["energy market", "oil prices", "renewable energy", date_token],
+            ["real estate market", "housing data", date_token],
+            ["cryptocurrency", "bitcoin", "blockchain news", date_token],
+            ["merger acquisition", "IPO", "stock split", date_token],
+
+            # =====================================================================
+            # CATEGORY 2: Web Text / General Knowledge (Chinese + English)
+            # =====================================================================
+            # Educational Content (Chinese)
+            ["百科全书", "知识", "科普", "教育"],
+            ["科学", "技术", "发现", "创新"],
+            ["历史", "文化", "传统", "文明"],
+            ["地理", "自然", "环境", "生态"],
+            ["教程", "学习", "方法", "技巧"],
+            ["指南", "手册", "说明", "介绍"],
+            ["百科", "常识", "知识点", "学习资料"],
+            ["公开课", "在线课程", "教育平台"],
+            
+            # General Knowledge (English)
+            ["encyclopedia knowledge", "educational content", "learning resources"],
+            ["science technology", "innovation discovery", "research findings"],
+            ["world history", "cultural heritage", "ancient civilization"],
+            ["geography nature", "environment ecology", "climate change"],
+            ["tutorial guide", "how to", "step by step", "instructions"],
+            ["general knowledge", "facts information", "reference material"],
+            ["online course", "free education", "learning platform"],
+            ["study materials", "educational resources", "academic content"],
+
+            # =====================================================================
+            # CATEGORY 3: Books & Literature (Chinese + English)
+            # =====================================================================
+            # Classical Literature (Chinese)
+            ["小说", "文学", "作品", "作家"],
+            ["诗歌", "散文", "文学", "经典"],
+            ["名著", "经典", "文学", "阅读"],
+            ["现代文学", "当代", "作家", "创作"],
+            ["儿童文学", "故事", "童话", "寓言"],
+            ["科幻", "奇幻", "小说", "文学"],
+            ["武侠小说", "金庸", "古龙", "武侠"],
+            ["历史小说", "历史故事", "古代"],
+            ["言情小说", "爱情", "情感", "都市"],
+            ["悬疑小说", "推理", "侦探", "犯罪"],
+            
+            # Literature (English)
+            ["classic literature", "famous novels", "literary works", "authors"],
+            ["poetry collection", "prose", "literary analysis", "poems"],
+            ["modern fiction", "contemporary literature", "bestselling books"],
+            ["children books", "fairy tales", "picture books", "young adult"],
+            ["science fiction", "fantasy novels", "speculative fiction"],
+            ["mystery thriller", "detective stories", "crime fiction"],
+            ["romance novels", "love stories", "relationship fiction"],
+            ["historical fiction", "period novels", "biography"],
+            ["self help books", "personal development", "motivation"],
+            ["business books", "management", "leadership", "entrepreneurship"],
+
+            # =====================================================================
+            # CATEGORY 4: Academic & Scientific Papers (Chinese + English)
+            # =====================================================================
+            # Research & Academia (Chinese)
+            ["学术论文", "研究", "期刊", "科学"],
+            ["大学", "论文", "学位", "研究"],
+            ["学术会议", "报告", "研讨", "专业"],
+            ["学科", "专业", "领域", "前沿"],
+            ["人工智能", "机器学习", "科技", "研究"],
+            ["生物", "医学", "科学", "实验"],
+            ["物理", "化学", "数学", "科学"],
+            ["工程技术", "计算机科学", "软件工程"],
+            ["社会科学", "心理学", "社会学", "研究"],
+            ["经济学", "金融学", "管理", "研究"],
+            ["环境科学", "生态学", "气候变化", "研究"],
+            ["材料科学", "纳米技术", "新材料"],
+            
+            # Academic Papers (English)
+            ["academic paper", "research journal", "scientific study", "peer review"],
+            ["university research", "thesis dissertation", "graduate study"],
+            ["academic conference", "research presentation", "symposium"],
+            ["artificial intelligence", "machine learning", "deep learning", "neural network"],
+            ["biology research", "medical science", "clinical trial", "healthcare"],
+            ["physics research", "chemistry study", "mathematics", "quantum"],
+            ["computer science", "software engineering", "algorithm", "data structure"],
+            ["social science", "psychology research", "sociology study"],
+            ["economics research", "finance study", "business management"],
+            ["environmental science", "ecology research", "sustainability"],
+            ["materials science", "nanotechnology", "biotechnology"],
+            ["data science", "big data", "analytics", "statistics"],
+
+            # =====================================================================
+            # CATEGORY 5: Social Media & Forums (Chinese + English)
+            # =====================================================================
+            # Social Platforms (Chinese)
+            ["知乎", "问答", "讨论", "观点"],
+            ["微博", "社交", "媒体", "热点"],
+            ["论坛", "帖子", "交流", "分享"],
+            ["博客", "文章", "随笔", "心得"],
+            ["评论", "看法", "观点", "意见"],
+            ["网友", "热议", "话题", "讨论"],
+            ["小红书", "种草", "分享", "推荐"],
+            ["豆瓣", "书评", "影评", "评分"],
+            ["贴吧", "社区", "讨论区", "帖子"],
+            ["微信公众号", "文章", "订阅", "推送"],
+            
+            # Social Media (English)
+            ["reddit discussion", "forum thread", "community opinion", "AMA"],
+            ["twitter trends", "social media", "viral content", "hashtags"],
+            ["blog post", "personal essay", "opinion piece", "commentary"],
+            ["youtube video", "content creator", "vlog", "tutorial video"],
+            ["instagram post", "photo sharing", "influencer", "lifestyle"],
+            ["linkedin article", "professional network", "career advice"],
+            ["quora answers", "Q&A", "expert opinion", "knowledge sharing"],
+            ["medium article", "long form", "storytelling", "writing"],
+            ["tiktok content", "short video", "trending", "entertainment"],
+            ["discord community", "chat group", "online discussion"],
+
+            # =====================================================================
+            # CATEGORY 6: Specialized Domain Data (Chinese + English)
+            # =====================================================================
+            # Finance & Economics (Chinese)
+            ["金融", "投资", "股票", "基金"],
+            ["银行", "保险", "证券", "期货"],
+            ["经济", "贸易", "商业", "市场"],
+            ["理财", "资产配置", "投资组合"],
+            ["外汇", "汇率", "国际收支"],
+            
+            # Finance (English)
+            ["finance investment", "stock market", "mutual fund", "ETF"],
+            ["banking insurance", "securities", "futures trading"],
+            ["economics trade", "business market", "commerce"],
+            ["wealth management", "asset allocation", "portfolio"],
+            ["foreign exchange", "currency rate", "forex trading"],
+            
+            # Law & Regulations (Chinese + English)
+            ["法律", "法规", "案例", "司法"],
+            ["合同", "协议", "权利", "义务"],
+            ["law regulation", "legal case", "justice system"],
+            ["contract agreement", "legal rights", "obligations"],
+            
+            # Medicine & Health (Chinese + English)
+            ["医学", "健康", "医疗", "疾病"],
+            ["医院", "医生", "治疗", "药物"],
+            ["medical health", "healthcare", "disease treatment"],
+            ["hospital doctor", "therapy", "pharmaceutical"],
+            ["nutrition", "fitness", "wellness", "mental health"],
+            
+            # Technology & IT (Chinese + English)
+            ["IT", "编程", "软件", "技术"],
+            ["互联网", "科技", "数码", "电子"],
+            ["IT programming", "software development", "technology"],
+            ["internet tech", "digital electronics", "gadgets"],
+            ["cloud computing", "cybersecurity", "devops"],
+            ["mobile app", "web development", "API", "database"],
+            
+            # Education & Psychology (Chinese + English)
+            ["教育", "心理", "学习", "发展"],
+            ["儿童", "青少年", "成长", "辅导"],
+            ["education psychology", "learning development"],
+            ["children teenager", "growth", "counseling"],
+            ["cognitive science", "behavioral psychology", "neuroscience"],
         ]
-        # Deduplicate
         seen: set[tuple[str, ...]] = set()
         deduped: list[list[str]] = []
         for row in queries:

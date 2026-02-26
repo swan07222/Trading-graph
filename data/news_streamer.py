@@ -202,10 +202,7 @@ class NewsStreamer:
             except asyncio.CancelledError:
                 pass
             self._task = None
-        
-        # Close collector
-        self._collector.close()
-        
+
         log.info("News streamer stopped")
     
     async def _stream_loop(self) -> None:
