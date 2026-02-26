@@ -323,6 +323,7 @@ def _fetch_raw_data(
     """Fetch raw OHLCV data for all stocks."""
     raw_data: dict[str, pd.DataFrame] = {}
     short_1m_codes: list[str] = []
+    cache_fallback_hits = 0
     quality_reports: dict[str, dict[str, Any]] = {}
     reject_counts: dict[str, int] = {}
     consistency_guard: dict[str, Any] = {
@@ -379,11 +380,16 @@ def _fetch_raw_data(
             if not code_clean:
                 digits = "".join(ch for ch in str(code).strip() if ch.isdigit())
                 code_clean = digits if len(digits) == 6 else ""
+            code_key = str(code_clean or code).strip()
+            code_query = str(code_clean or code).strip()
+            if not code_query:
+                log.warning("Skipping empty stock code entry: %s", code)
+                continue
 
             if code_clean and code_clean in pending_codes:
                 reason = "pending_reconcile_consistency"
                 reject_counts[reason] = int(reject_counts.get(reason, 0)) + 1
-                quality_reports[str(code)] = {
+                quality_reports[code_key] = {
                     "passed": False,
                     "reasons": [reason],
                 }
@@ -395,7 +401,7 @@ def _fetch_raw_data(
 
             try:
                 df = self.fetcher.get_history(
-                    code,
+                    code_query,
                     bars=bars,
                     interval=interval,
                     use_cache=False,
@@ -405,12 +411,43 @@ def _fetch_raw_data(
                 )
             except TypeError:
                 df = self.fetcher.get_history(
-                    code,
+                    code_query,
                     bars=bars,
                     interval=interval,
                     use_cache=False,
                     update_db=True,
                 )
+            if df is None or df.empty:
+                # Resilience fallback: allow stale/local cache when online sources fail.
+                # This prevents hard-fail training cycles in unstable networks.
+                try:
+                    try:
+                        df = self.fetcher.get_history(
+                            code_query,
+                            bars=bars,
+                            interval=interval,
+                            use_cache=True,
+                            update_db=False,
+                            allow_online=False,
+                            refresh_intraday_after_close=False,
+                        )
+                    except TypeError:
+                        df = self.fetcher.get_history(
+                            code_query,
+                            bars=bars,
+                            interval=interval,
+                            use_cache=True,
+                            update_db=False,
+                        )
+                    if isinstance(df, pd.DataFrame) and not df.empty:
+                        cache_fallback_hits += 1
+                        log.info(
+                            "Using cached/local history fallback for %s (%s).",
+                            code_query,
+                            interval,
+                        )
+                except _TRAINER_DATA_RECOVERABLE_EXCEPTIONS:
+                    df = pd.DataFrame()
             if df is None or df.empty:
                 log.warning("No data for %s", code)
                 continue
@@ -461,7 +498,7 @@ def _fetch_raw_data(
                         reasons.append("invalid_ohlc_relations")
                     q_report["reasons"] = reasons
                     q_report["passed"] = False
-            quality_reports[str(code)] = q_report
+            quality_reports[code_key] = q_report
             if not bool(q_report.get("passed", False)):
                 for reason in list(q_report.get("reasons", []) or []):
                     key = str(reason).strip().lower() or "unknown"
@@ -489,9 +526,9 @@ def _fetch_raw_data(
                 str(interval).strip().lower() == _TRAINING_INTERVAL_LOCK
                 and len(df) < _MIN_1M_LOOKBACK_BARS
             ):
-                short_1m_codes.append(str(code))
+                short_1m_codes.append(code_key)
 
-            raw_data[code] = df
+            raw_data[code_key] = df
 
         except _TRAINER_DATA_RECOVERABLE_EXCEPTIONS as e:
             log.warning(f"Error fetching {code}: {e}")
@@ -522,11 +559,13 @@ def _fetch_raw_data(
     ]
 
     self._last_data_quality_summary = {
+        "symbols_requested": int(len(list(stocks or []))),
         "symbols_checked": symbols_checked,
         "symbols_passed": symbols_passed,
         "symbols_rejected": symbols_rejected,
         "valid_symbol_ratio": float(valid_ratio),
         "top_reject_reasons": top_reject_reasons,
+        "cache_fallback_hits": int(cache_fallback_hits),
         "consistency_guard": dict(self._last_consistency_guard or {}),
     }
 
@@ -542,6 +581,11 @@ def _fetch_raw_data(
                 "Data quality rejects: %s symbol(s), top reason(s): %s",
                 symbols_rejected,
                 ", ".join(top_reject_reasons) if top_reject_reasons else "n/a",
+            )
+        if cache_fallback_hits > 0:
+            log.info(
+                "Training data source fallback: %s symbol(s) loaded from cache/local history.",
+                int(cache_fallback_hits),
             )
 
     return raw_data

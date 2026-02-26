@@ -664,7 +664,26 @@ def _start_llm_training(self: Any) -> None:
         analyzer = get_llm_analyzer()
         collector = get_collector()
         articles = collector.collect_news(limit=450, hours_back=120)
-        return analyzer.train(articles, max_samples=1000)
+        if articles:
+            report = dict(analyzer.train(articles, max_samples=1000) or {})
+            report.setdefault("collected_articles", int(len(articles)))
+            report.setdefault("new_articles", int(len(articles)))
+            report.setdefault("collection_mode", "direct_news")
+            return report
+
+        report = analyzer.auto_train_from_internet(
+            hours_back=120,
+            limit_per_query=120,
+            max_samples=1000,
+            force_china_direct=False,
+            only_new=False,
+            min_new_articles=1,
+            auto_related_search=True,
+            allow_gm_bootstrap=False,
+        )
+        out = dict(report or {})
+        out.setdefault("collection_mode", "auto_internet_fallback")
+        return out
 
     worker = WorkerThread(_work, timeout_seconds=1200)
     self._track_worker(worker)
@@ -676,15 +695,28 @@ def _start_llm_training(self: Any) -> None:
             if hasattr(self, "_refresh_model_training_statuses"):
                 self._refresh_model_training_statuses()
             return
+        status_text = str(payload.get("status", "unknown") or "unknown").strip()
+        status = status_text.lower()
+        if status in {"trained", "complete", "ok"}:
+            level = "success"
+        elif status in {"error", "failed"}:
+            level = "error"
+        else:
+            level = "warning"
         msg = (
-            f"LLM training complete: status={payload.get('status', 'unknown')}, "
+            f"LLM training complete: status={status_text}, "
             f"samples={payload.get('trained_samples', 0)}, "
             f"zh={payload.get('zh_samples', 0)}, en={payload.get('en_samples', 0)}, "
-            f"arch={payload.get('training_architecture', 'hybrid_neural_network')}."
+            f"arch={payload.get('training_architecture', 'hybrid_neural_network')}, "
+            f"collected={payload.get('collected_articles', payload.get('new_articles', 0))}, "
+            f"mode={payload.get('collection_mode', 'unknown')}."
         )
-        self._append_ai_chat_message("System", msg, role="system", level="success")
+        notes = str(payload.get("notes", "") or "").strip()
+        if notes:
+            msg = f"{msg} notes={notes[:200]}"
+        self._append_ai_chat_message("System", msg, role="system", level=level)
         if hasattr(self, "log"):
-            self.log(msg, "success")
+            self.log(msg, level)
         if hasattr(self, "_refresh_model_training_statuses"):
             self._refresh_model_training_statuses()
 

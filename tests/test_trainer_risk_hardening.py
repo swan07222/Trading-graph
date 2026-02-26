@@ -6,6 +6,7 @@ from types import SimpleNamespace
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from config.settings import CONFIG
 from models.trainer import Trainer
@@ -145,6 +146,86 @@ def test_fetch_raw_data_skips_codes_with_pending_reconcile() -> None:
     assert "pending_reconcile_consistency" in set(summary["top_reject_reasons"])
     guard = dict(summary.get("consistency_guard", {}) or {})
     assert int(guard.get("pending_count", 0)) == 1
+
+
+def test_fetch_raw_data_uses_cache_fallback_when_online_empty() -> None:
+    trainer = Trainer()
+    idx = pd.date_range("2026-02-18 09:30:00", periods=300, freq="min")
+    good_df = pd.DataFrame(
+        {
+            "open": [10.0] * len(idx),
+            "high": [10.1] * len(idx),
+            "low": [9.9] * len(idx),
+            "close": [10.0] * len(idx),
+            "volume": [100] * len(idx),
+            "amount": [1000.0] * len(idx),
+        },
+        index=idx,
+    )
+
+    class _Fetcher:
+        def __init__(self) -> None:
+            self.calls: list[dict[str, object]] = []
+
+        @staticmethod
+        def clean_code(code):  # noqa: ANN001
+            return str(code).zfill(6)
+
+        def get_history(self, code, **kwargs):  # noqa: ANN001
+            _ = code
+            self.calls.append(dict(kwargs))
+            if bool(kwargs.get("use_cache", False)):
+                return good_df
+            return pd.DataFrame()
+
+    fetcher = _Fetcher()
+    trainer.fetcher = fetcher
+
+    out = trainer._fetch_raw_data(
+        stocks=["000001"],
+        interval="1m",
+        bars=300,
+        verbose=False,
+    )
+
+    assert "000001" in out
+    assert any(bool(c.get("use_cache", False)) for c in fetcher.calls)
+    summary = dict(trainer._last_data_quality_summary or {})
+    assert int(summary.get("cache_fallback_hits", 0)) >= 1
+
+
+def test_train_empty_raw_data_error_includes_quality_context(monkeypatch) -> None:
+    trainer = Trainer()
+
+    monkeypatch.setattr(
+        trainer.feature_engine,
+        "get_feature_columns",
+        lambda: ["f1", "f2"],
+    )
+    monkeypatch.setattr(
+        trainer,
+        "_fetch_raw_data",
+        lambda *_a, **_k: {},
+    )
+    trainer._last_data_quality_summary = {
+        "symbols_checked": 7,
+        "symbols_passed": 0,
+        "cache_fallback_hits": 0,
+        "top_reject_reasons": ["pending_reconcile_consistency"],
+    }
+
+    with pytest.raises(ValueError) as exc_info:
+        trainer.train(
+            stock_codes=["000001"],
+            epochs=1,
+            save_model=False,
+            interval="1m",
+            prediction_horizon=5,
+        )
+
+    msg = str(exc_info.value)
+    assert "quality_passed=0/7" in msg
+    assert "pending_reconcile_consistency" in msg
 
 
 def test_quality_gate_blocks_tail_stress_failure_only() -> None:

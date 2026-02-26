@@ -224,7 +224,17 @@ def _analyze_stock(self) -> None:
         level="info",
     )
 
-    if not self._predictor_runtime_ready():
+    forecast_ready = False
+    try:
+        forecast_ready_fn = getattr(self, "_predictor_forecast_ready", None)
+        if callable(forecast_ready_fn):
+            forecast_ready = bool(forecast_ready_fn())
+        else:
+            forecast_ready = bool(self._predictor_runtime_ready())
+    except _UI_RECOVERABLE_EXCEPTIONS:
+        forecast_ready = bool(self._predictor_runtime_ready())
+
+    if not forecast_ready:
         if hasattr(self.signal_panel, "reset"):
             self.signal_panel.reset()
         selected = self._ui_norm(code)

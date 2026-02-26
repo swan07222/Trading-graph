@@ -554,18 +554,22 @@ def _on_price_updated(self: Any, code: str, price: float) -> None:
 
     models_ready = False
     try:
-        ready_fn = getattr(self.predictor, "_models_ready_for_runtime", None)
-        if callable(ready_fn):
-            models_ready = bool(ready_fn())
+        ui_ready_fn = getattr(self, "_predictor_forecast_ready", None)
+        if callable(ui_ready_fn):
+            models_ready = bool(ui_ready_fn())
         else:
-            models_ready = bool(
-                getattr(self.predictor, "ensemble", None) is not None
-                or getattr(self.predictor, "forecaster", None) is not None
-            )
+            ready_fn = getattr(self.predictor, "_forecast_ready_for_runtime", None)
+            if callable(ready_fn):
+                models_ready = bool(ready_fn())
+            else:
+                processor = getattr(self.predictor, "processor", None)
+                models_ready = bool(
+                    processor is not None and getattr(processor, "is_fitted", True)
+                )
     except _APP_CHART_RECOVERABLE_EXCEPTIONS:
+        processor = getattr(self.predictor, "processor", None)
         models_ready = bool(
-            getattr(self.predictor, "ensemble", None) is not None
-            or getattr(self.predictor, "forecaster", None) is not None
+            processor is not None and getattr(processor, "is_fitted", True)
         )
 
     if not models_ready:

@@ -152,7 +152,29 @@ def train(
         return {"status": "cancelled"}
 
     if not raw_data:
-        raise ValueError("No valid stock data available for training")
+        quality = dict(self._last_data_quality_summary or {})
+        checked = int(quality.get("symbols_checked", 0) or 0)
+        passed = int(quality.get("symbols_passed", 0) or 0)
+        reasons = [
+            str(x).strip()
+            for x in list(quality.get("top_reject_reasons", []) or [])
+            if str(x).strip()
+        ]
+        cache_hits = int(quality.get("cache_fallback_hits", 0) or 0)
+        msg = "No valid stock data available for training."
+        if checked > 0:
+            msg = (
+                f"{msg} quality_passed={passed}/{checked}, "
+                f"cache_fallback_hits={cache_hits}."
+            )
+        if reasons:
+            msg = f"{msg} top_reject_reasons={','.join(reasons[:5])}."
+        if checked <= 0:
+            msg = (
+                f"{msg} No history rows were returned by configured data sources for "
+                f"interval={interval}. Check network mode/proxy and stock code format."
+            )
+        raise ValueError(msg)
 
     log.info(f"Loaded {len(raw_data)} stocks successfully")
 
@@ -342,7 +364,7 @@ def train(
                 )
             else:
                 log.warning(
-                    "Failed to load existing ensemble 閳?"
+                    "Failed to load existing ensemble — "
                     "training from scratch"
                 )
                 self.ensemble = ensemble_cls(
@@ -697,4 +719,3 @@ def _train_forecaster(
 
     log.info("TCN forecaster training skipped - TCNModel is no longer supported")
     return False
-

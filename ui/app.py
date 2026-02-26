@@ -820,6 +820,21 @@ class MainApp(MainAppCommonMixin, QMainWindow):
                     requested_horizon=horizon,
                 )
                 self.log("GM model loaded successfully", "success")
+            elif bool(summary.get("forecast_ready", False)):
+                self.model_status.setText("GM Model: Forecast-only")
+                self.model_status.setStyleSheet(
+
+                        f"color: {ModernColors.ACCENT_WARNING}; "
+                        f"font-weight: {ModernFonts.WEIGHT_BOLD};"
+
+                )
+                self.model_info.setText(
+                    "Guessed graph enabled (fallback mode). Train GM for stronger signals."
+                )
+                self.log(
+                    "Fallback forecast runtime loaded (no ensemble/forecaster checkpoint).",
+                    "warning",
+                )
             else:
                 self.model_status.setText("GM Model: Not trained")
                 self.model_status.setStyleSheet(

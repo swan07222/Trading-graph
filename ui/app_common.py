@@ -128,12 +128,31 @@ class MainAppCommonMixin:
         forecaster_ready = bool(getattr(predictor, "forecaster", None) is not None)
         return bool(scaler_ready and (ensemble_ready or forecaster_ready))
 
+    def _predictor_forecast_ready(self) -> bool:
+        """Whether predictor can render guessed curve in fallback mode."""
+        predictor = getattr(self, "predictor", None)
+        if predictor is None:
+            return False
+
+        ready_fn = getattr(predictor, "_forecast_ready_for_runtime", None)
+        if callable(ready_fn):
+            try:
+                return bool(ready_fn())
+            except (AttributeError, RuntimeError, TypeError, ValueError):
+                pass
+
+        processor = getattr(predictor, "processor", None)
+        return bool(
+            processor is not None and getattr(processor, "is_fitted", True)
+        )
+
     def _predictor_model_summary(self) -> dict[str, object]:
         """Best-effort predictor capability summary for UI status text."""
         predictor = getattr(self, "predictor", None)
         if predictor is None:
             return {
                 "runtime_ready": False,
+                "forecast_ready": False,
                 "has_ensemble": False,
                 "has_forecaster": False,
                 "ensemble_models": 0,
@@ -151,6 +170,7 @@ class MainAppCommonMixin:
 
         return {
             "runtime_ready": bool(self._predictor_runtime_ready()),
+            "forecast_ready": bool(self._predictor_forecast_ready()),
             "has_ensemble": bool(has_ensemble),
             "has_forecaster": bool(has_forecaster),
             "ensemble_models": int(max(0, ensemble_models)),

@@ -68,6 +68,11 @@ class LLMAutoTrainWorker(QThread):
 
             analyzer = get_llm_analyzer()
             idle_seconds = max(0, int(self.config.get("idle_seconds", 3) or 3))
+            train_every_cycle = bool(self.config.get("train_every_cycle", True))
+            only_new_mode = not train_every_cycle
+            min_cycle_samples = 1 if train_every_cycle else int(
+                self.config.get("min_new_articles", 24) or 24
+            )
             cycle_index = 0
             total_collected = 0
             total_new = 0
@@ -105,8 +110,8 @@ class LLMAutoTrainWorker(QThread):
                     stop_flag=self._stop_event.is_set,
                     progress_callback=_progress,
                     force_china_direct=True,
-                    only_new=True,
-                    min_new_articles=int(self.config.get("min_new_articles", 24) or 24),
+                    only_new=bool(only_new_mode),
+                    min_new_articles=int(max(1, min_cycle_samples)),
                     seen_ttl_hours=int(self.config.get("seen_ttl_hours", 168) or 168),
                     auto_related_search=True,
                     allow_gm_bootstrap=False,
@@ -153,6 +158,7 @@ class LLMAutoTrainWorker(QThread):
                             f"Cycle {cycle_index} complete: collected={collected}, "
                             f"new={new_count}, trained={trained}, "
                             f"reused_skipped={reused_skipped}, "
+                            f"only_new={int(only_new_mode)}, "
                             f"queries={query_count}, related_codes={related_count}. "
                             f"Waiting {idle_seconds}s..."
                         ),
@@ -214,7 +220,7 @@ class LLMTrainDialog(QDialog):
 
         hint = QLabel(
             "Collects internet data automatically in China-direct mode and trains the LLM "
-            "hybrid model continuously until you press Stop."
+            "hybrid model on every cycle until you press Stop."
         )
         hint.setObjectName("dialogHint")
         hint.setWordWrap(True)
@@ -369,6 +375,8 @@ class LLMTrainDialog(QDialog):
             "hours_back": int(self.hours_back_spin.value()),
             "limit_per_query": int(self.limit_spin.value()),
             "max_samples": int(self.max_samples_spin.value()),
+            "train_every_cycle": True,
+            "min_new_articles": 1,
         }
 
         self.status_label.setText("Resuming..." if is_resume else "Starting...")

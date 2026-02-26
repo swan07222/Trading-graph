@@ -17,8 +17,9 @@ import html
 import json
 import re
 import time
+import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -68,6 +69,16 @@ class NewsArticle:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "NewsArticle":
+        # FIX: Guard datetime parsing so a malformed timestamp in cache doesn't discard
+        # the entire cache file — fall back to datetime.now() on parse failure.
+        try:
+            published_at = datetime.fromisoformat(data["published_at"])
+        except (KeyError, ValueError, TypeError):
+            published_at = datetime.now()
+        try:
+            collected_at = datetime.fromisoformat(data["collected_at"])
+        except (KeyError, ValueError, TypeError):
+            collected_at = datetime.now()
         return cls(
             id=data["id"],
             title=data["title"],
@@ -75,8 +86,8 @@ class NewsArticle:
             summary=data["summary"],
             source=data["source"],
             url=data["url"],
-            published_at=datetime.fromisoformat(data["published_at"]),
-            collected_at=datetime.fromisoformat(data["collected_at"]),
+            published_at=published_at,
+            collected_at=collected_at,
             language=data["language"],
             category=data["category"],
             sentiment_score=float(data.get("sentiment_score", 0.0)),
@@ -90,14 +101,18 @@ class NewsCollector:
     """Multi-source news collector with VPN-aware routing."""
 
     # Chinese sources (VPN off)
-    # Note: jin10 requires a paid API subscription and is not publicly accessible
+    # FIX #10: Removed dead/unavailable sources that poisoned health scores every cycle:
+    #   - jin10: requires paid API subscription (always fails → health death-spiral)
+    #   - xueqiu: requires authentication (always returns [] → unnecessary health penalty)
+    #   - csrc: placeholder, never implemented (always returns [] → unnecessary health penalty)
     CHINESE_SOURCES = [
         "eastmoney",
         "sina_finance",
-        "xueqiu",
         "caixin",
-        "csrc",  # China Securities Regulatory Commission
     ]
+
+    # Sources excluded from active rotation because they require credentials or paid access
+    _UNAVAILABLE_SOURCES = ["jin10", "xueqiu", "csrc", "bloomberg"]
 
     # International sources (VPN on)
     INTERNATIONAL_SOURCES = [
@@ -155,6 +170,9 @@ class NewsCollector:
         "volume", "limit up", "limit down", "bull market", "bear market",
     ]
 
+    # FIX #8: VPN detection cache TTL (5 minutes)
+    _VPN_DETECTION_CACHE_TTL = 300.0
+
     def __init__(self, cache_dir: Path | None = None) -> None:
         self.cache_dir = cache_dir or CONFIG.cache_dir / "news"
         self.cache_dir.mkdir(parents=True, exist_ok=True)
@@ -174,6 +192,9 @@ class NewsCollector:
         self._last_health_check: dict[str, float] = {}  # source -> last check timestamp
         self._source_failures: dict[str, int] = {}  # source -> consecutive failure count
         self._strict_mode: bool = False
+        # FIX #8: Cache VPN detection result to avoid 3 HTTP calls per collect_news() call
+        self._vpn_mode_cache: bool | None = None
+        self._vpn_mode_cache_time: float = 0.0
 
     def _setup_proxy(self) -> None:
         """Configure proxy based on VPN status."""
@@ -197,14 +218,25 @@ class NewsCollector:
         """Detect if VPN mode is active."""
         from config.runtime_env import env_flag
 
-        # Explicit configuration
+        # Explicit configuration overrides cache
         if env_flag("TRADING_VPN", False):
             return True
         if env_flag("TRADING_CHINA_DIRECT", False):
             return False
 
+        # FIX #8: Return cached result if still fresh (avoids up to 12s of HTTP overhead per call)
+        now = time.time()
+        if (
+            self._vpn_mode_cache is not None
+            and (now - self._vpn_mode_cache_time) < self._VPN_DETECTION_CACHE_TTL
+        ):
+            return self._vpn_mode_cache
+
         # Auto-detect by testing access to Chinese vs international sites
-        return self._detect_network_environment()
+        result = self._detect_network_environment()
+        self._vpn_mode_cache = result
+        self._vpn_mode_cache_time = now
+        return result
 
     def _detect_network_environment(self) -> bool:
         """Auto-detect network environment by testing connectivity.
@@ -297,18 +329,31 @@ class NewsCollector:
         Returns:
             List of collected news articles
         """
-        start_time = datetime.now() - timedelta(hours=hours_back)
+        start_time = self._normalize_datetime(datetime.now() - timedelta(hours=hours_back))
         articles: list[NewsArticle] = []
         seen_ids: set[str] = set()
         previous_strict_mode = bool(self._strict_mode)
         self._strict_mode = bool(strict)
         strict_mode = bool(strict)
+        from config.runtime_env import env_flag
+        force_china_direct = bool(env_flag("TRADING_CHINA_DIRECT", "0"))
+        allow_cross_region_fallback = not force_china_direct
 
-        active_sources = self.get_active_sources()
-        log.info(f"Collecting news from {len(active_sources)} sources (VPN mode: {self.is_vpn_mode()})")
+        vpn_mode = bool(self.is_vpn_mode())
+        active_sources = list(
+            self.INTERNATIONAL_SOURCES if vpn_mode else self.CHINESE_SOURCES
+        )
+        fallback_sources = list(
+            self.CHINESE_SOURCES if vpn_mode else self.INTERNATIONAL_SOURCES
+        )
+        log.info(
+            "Collecting news from %s sources (VPN mode: %s)",
+            len(active_sources),
+            vpn_mode,
+        )
 
-        try:
-            for source in active_sources:
+        def _collect_from_sources(sources: list[str]) -> None:
+            for source in sources:
                 if len(articles) >= limit:
                     break
                 if (not strict_mode) and self._is_source_temporarily_disabled(source):
@@ -335,6 +380,47 @@ class NewsCollector:
                             f"Strict news collection failed for source={source}: {e}"
                         ) from e
                     log.warning(f"Failed to fetch from {source}: {e}")
+
+        try:
+            _collect_from_sources(active_sources)
+
+            if (
+                (not strict_mode)
+                and (not articles)
+                and allow_cross_region_fallback
+            ):
+                fallback_pool = [
+                    source
+                    for source in fallback_sources
+                    if source not in active_sources
+                ]
+                if fallback_pool:
+                    log.info(
+                        "Primary source pool returned 0 articles; retrying fallback pool (%s mode).",
+                        "VPN" if not vpn_mode else "China-direct",
+                    )
+                    _collect_from_sources(fallback_pool)
+            elif (not strict_mode) and (not articles) and (not allow_cross_region_fallback):
+                log.info(
+                    "Cross-region fallback disabled (TRADING_CHINA_DIRECT=1); "
+                    "staying on China-direct source pool.",
+                )
+
+            if (not strict_mode) and (not articles):
+                cached = self._load_recent_cached_articles(
+                    start_time=start_time,
+                    limit=max(1, int(limit)),
+                    keywords=keywords,
+                )
+                if cached:
+                    for article in cached:
+                        if article.id not in seen_ids:
+                            seen_ids.add(article.id)
+                            articles.append(article)
+                    log.info(
+                        "Recovered %s articles from cache fallback.",
+                        len(articles),
+                    )
         finally:
             self._strict_mode = previous_strict_mode
 
@@ -389,6 +475,23 @@ class NewsCollector:
         return True
 
     @staticmethod
+    def _normalize_datetime(value: datetime) -> datetime:
+        """Normalize datetimes to naive UTC for safe comparisons."""
+        if not isinstance(value, datetime):
+            return datetime.now()
+        if value.tzinfo is None:
+            return value
+        return value.astimezone(timezone.utc).replace(tzinfo=None)
+
+    @classmethod
+    def _is_recent_enough(cls, published_at: datetime, start_time: datetime) -> bool:
+        """Timezone-safe comparison helper."""
+        try:
+            return cls._normalize_datetime(published_at) >= cls._normalize_datetime(start_time)
+        except Exception:
+            return True
+
+    @staticmethod
     def _clean_text(value: object) -> str:
         """Normalize text payload from mixed HTML/JSON content."""
         text = str(value or "")
@@ -405,7 +508,7 @@ class NewsCollector:
         if value is None:
             return None
         if isinstance(value, datetime):
-            return value
+            return NewsCollector._normalize_datetime(value)
         raw = str(value).strip()
         if not raw:
             return None
@@ -413,9 +516,9 @@ class NewsCollector:
             try:
                 iv = int(raw)
                 if iv > 2_000_000_000_000:
-                    return datetime.fromtimestamp(iv / 1000.0)
+                    return NewsCollector._normalize_datetime(datetime.fromtimestamp(iv / 1000.0))
                 if iv > 0:
-                    return datetime.fromtimestamp(iv)
+                    return NewsCollector._normalize_datetime(datetime.fromtimestamp(iv))
             except Exception:
                 pass
         for fmt in (
@@ -426,13 +529,54 @@ class NewsCollector:
             "%Y-%m-%d",
         ):
             try:
-                return datetime.strptime(raw[:19], fmt)
+                parsed = datetime.strptime(raw[:19], fmt)
+                return NewsCollector._normalize_datetime(parsed)
+            except ValueError:
+                continue
+        for fmt in (
+            "%a, %d %b %Y %H:%M:%S %z",
+            "%a, %d %b %Y %H:%M:%S GMT",
+        ):
+            try:
+                parsed = datetime.strptime(raw, fmt)
+                return NewsCollector._normalize_datetime(parsed)
             except ValueError:
                 continue
         try:
-            return datetime.fromisoformat(raw.replace("Z", "+00:00"))
+            parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+            return NewsCollector._normalize_datetime(parsed)
         except Exception:
             return None
+
+    @staticmethod
+    def _xml_text(node: ET.Element, tag_name: str) -> str:
+        """Extract first matching XML node text ignoring namespaces."""
+        wanted = str(tag_name or "").strip().lower()
+        if not wanted:
+            return ""
+        for child in node.iter():
+            raw_tag = str(getattr(child, "tag", "") or "")
+            if raw_tag.split("}")[-1].lower() != wanted:
+                continue
+            text = str(getattr(child, "text", "") or "").strip()
+            if text:
+                return text
+        return ""
+
+    @staticmethod
+    def _xml_link(node: ET.Element) -> str:
+        """Extract link text/href from RSS/Atom item entry."""
+        for child in node.iter():
+            raw_tag = str(getattr(child, "tag", "") or "")
+            if raw_tag.split("}")[-1].lower() != "link":
+                continue
+            href = str(getattr(child, "attrib", {}).get("href", "") or "").strip()
+            if href:
+                return href
+            text = str(getattr(child, "text", "") or "").strip()
+            if text:
+                return text
+        return ""
 
     @staticmethod
     def _decode_json_payload(payload: object) -> object | None:
@@ -495,6 +639,10 @@ class NewsCollector:
             return self._fetch_bloomberg(keywords, start_time, limit)
         elif source == "yahoo_finance":
             return self._fetch_yahoo_finance(keywords, start_time, limit)
+        elif source == "marketwatch":
+            return self._fetch_marketwatch(keywords, start_time, limit)
+        elif source == "cnbc":
+            return self._fetch_cnbc(keywords, start_time, limit)
         else:
             return []
 
@@ -526,7 +674,7 @@ class NewsCollector:
                 except Exception:
                     published_at = datetime.now()
 
-                if published_at < start_time:
+                if not self._is_recent_enough(published_at, start_time):
                     continue
 
                 article_id = self._generate_id(f"jin10_{item.get('id', title)}")
@@ -537,7 +685,7 @@ class NewsCollector:
                     summary=content[:200],
                     source="jin10",
                     url=item.get("url", f"https://flash.jin10.com/detail/{item.get('id', '')}"),
-                    published_at=published_at,
+                    published_at=self._normalize_datetime(published_at),
                     collected_at=datetime.now(),
                     language="zh",
                     category="market",
@@ -645,7 +793,7 @@ class NewsCollector:
                     )
                     or datetime.now()
                 )
-                if published_at < start_time:
+                if not self._is_recent_enough(published_at, start_time):
                     continue
 
                 content = self._clean_text(
@@ -671,7 +819,7 @@ class NewsCollector:
                         summary=(content or title)[:200],
                         source="eastmoney",
                         url=article_url,
-                        published_at=published_at,
+                        published_at=self._normalize_datetime(published_at),
                         collected_at=datetime.now(),
                         language="zh",
                         category="market",
@@ -703,6 +851,9 @@ class NewsCollector:
                     if article_url.startswith("/"):
                         article_url = f"https://finance.eastmoney.com{article_url}"
                     article_id = self._generate_id(f"eastmoney_html_{title}")
+                    # FIX #7: Use start_time as published_at for scraped links (no known publish date).
+                    # This prevents injecting arbitrarily old content by assigning datetime.now()
+                    # to every scraped link, which would always pass the recency check.
                     articles.append(
                         NewsArticle(
                             id=article_id,
@@ -711,7 +862,7 @@ class NewsCollector:
                             summary=title[:200],
                             source="eastmoney",
                             url=article_url,
-                            published_at=datetime.now(),
+                            published_at=start_time,
                             collected_at=datetime.now(),
                             language="zh",
                             category="market",
@@ -765,7 +916,7 @@ class NewsCollector:
                 except Exception:
                     published_at = datetime.now()
 
-                if published_at < start_time:
+                if not self._is_recent_enough(published_at, start_time):
                     continue
 
                 article_id = self._generate_id(f"sina_{title}")
@@ -776,7 +927,7 @@ class NewsCollector:
                     summary=title[:200],
                     source="sina_finance",
                     url=url,
-                    published_at=published_at,
+                    published_at=self._normalize_datetime(published_at),
                     collected_at=datetime.now(),
                     language="zh",
                     category="market",
@@ -846,7 +997,7 @@ class NewsCollector:
                             continue
                         seen_titles.add(title_key)
                         published_at = self._parse_datetime(item.get("time")) or datetime.now()
-                        if published_at < start_time:
+                        if not self._is_recent_enough(published_at, start_time):
                             continue
                         content = self._clean_text(item.get("content") or title)
                         article_url = str(item.get("url", "") or "").strip()
@@ -858,7 +1009,7 @@ class NewsCollector:
                                 summary=content[:200],
                                 source="caixin",
                                 url=article_url,
-                                published_at=published_at,
+                                published_at=self._normalize_datetime(published_at),
                                 collected_at=datetime.now(),
                                 language="zh",
                                 category="market",
@@ -898,7 +1049,7 @@ class NewsCollector:
                         published_at = datetime.strptime(raw_date, "%Y-%m-%d")
                     except Exception:
                         published_at = datetime.now()
-                    if published_at < start_time:
+                    if not self._is_recent_enough(published_at, start_time):
                         continue
 
                     article_url = str(match.group("url") or "").strip()
@@ -910,7 +1061,7 @@ class NewsCollector:
                             summary=title[:200],
                             source="caixin",
                             url=article_url,
-                            published_at=published_at,
+                            published_at=self._normalize_datetime(published_at),
                             collected_at=datetime.now(),
                             language="en",
                             category="market",
@@ -979,7 +1130,7 @@ class NewsCollector:
                 except Exception:
                     published_at = datetime.now()
 
-                if published_at < start_time:
+                if not self._is_recent_enough(published_at, start_time):
                     continue
 
                 article_id = self._generate_id(f"reuters_{title}")
@@ -990,7 +1141,7 @@ class NewsCollector:
                     summary=title[:200],
                     source="reuters",
                     url=f"https://www.reuters.com{url}" if url and not url.startswith("http") else url,
-                    published_at=published_at,
+                    published_at=self._normalize_datetime(published_at),
                     collected_at=datetime.now(),
                     language="en",
                     category="market",
@@ -1053,7 +1204,7 @@ class NewsCollector:
                 except Exception:
                     published_at = datetime.now()
 
-                if published_at < start_time:
+                if not self._is_recent_enough(published_at, start_time):
                     continue
 
                 article_id = self._generate_id(f"yahoo_{title}")
@@ -1064,7 +1215,7 @@ class NewsCollector:
                     summary=title[:200],
                     source="yahoo_finance",
                     url=url,
-                    published_at=published_at,
+                    published_at=self._normalize_datetime(published_at),
                     collected_at=datetime.now(),
                     language="en",
                     category="market",
@@ -1080,6 +1231,135 @@ class NewsCollector:
             self._update_source_health("yahoo_finance", success=False)
 
         return articles
+
+    def _fetch_rss_feed(
+        self,
+        *,
+        source: str,
+        feed_urls: list[str],
+        keywords: list[str] | None,
+        start_time: datetime,
+        limit: int,
+    ) -> list[NewsArticle]:
+        """Fetch RSS/Atom feed entries and normalize into NewsArticle rows."""
+        articles: list[NewsArticle] = []
+        seen_ids: set[str] = set()
+        keyword_set = [
+            str(token).strip().lower()
+            for token in (keywords or [])
+            if str(token).strip()
+        ]
+
+        try:
+            for feed_url in list(feed_urls):
+                if len(articles) >= int(limit):
+                    break
+                resp = self._session.get(
+                    feed_url,
+                    timeout=10,
+                    headers={"Accept": "application/rss+xml, application/xml;q=0.9, */*;q=0.8"},
+                )
+                resp.raise_for_status()
+                payload = str(resp.text or "").strip()
+                if not payload:
+                    continue
+
+                root = ET.fromstring(payload)
+                entries = list(root.findall(".//item"))
+                if not entries:
+                    entries = list(root.findall(".//{http://www.w3.org/2005/Atom}entry"))
+
+                for entry in entries:
+                    title = self._clean_text(self._xml_text(entry, "title"))
+                    if not title:
+                        continue
+                    summary = self._clean_text(
+                        self._xml_text(entry, "description")
+                        or self._xml_text(entry, "summary")
+                        or self._xml_text(entry, "content")
+                    )
+                    article_url = self._xml_link(entry)
+                    published_at = (
+                        self._parse_datetime(
+                            self._xml_text(entry, "pubDate")
+                            or self._xml_text(entry, "published")
+                            or self._xml_text(entry, "updated")
+                        )
+                        or datetime.now()
+                    )
+                    if not self._is_recent_enough(published_at, start_time):
+                        continue
+                    if keyword_set:
+                        lookup_text = f"{title} {summary}".lower()
+                        if not any(token in lookup_text for token in keyword_set):
+                            continue
+
+                    article_id = self._generate_id(f"{source}_{title}_{article_url}")
+                    if article_id in seen_ids:
+                        continue
+                    seen_ids.add(article_id)
+                    articles.append(
+                        NewsArticle(
+                            id=article_id,
+                            title=title,
+                            content=summary or title,
+                            summary=(summary or title)[:200],
+                            source=source,
+                            url=article_url,
+                            published_at=self._normalize_datetime(published_at),
+                            collected_at=datetime.now(),
+                            language="en",
+                            category="market",
+                            tags=[source, "rss"],
+                        )
+                    )
+                    if len(articles) >= int(limit):
+                        break
+
+            self._update_source_health(source, success=bool(articles))
+        except Exception as e:
+            if self._strict_mode:
+                raise
+            log.error("%s fetch failed: %s", source, e)
+            self._update_source_health(source, success=False)
+
+        return articles[: int(limit)]
+
+    def _fetch_marketwatch(
+        self,
+        keywords: list[str] | None,
+        start_time: datetime,
+        limit: int,
+    ) -> list[NewsArticle]:
+        """Fetch from MarketWatch RSS feeds."""
+        return self._fetch_rss_feed(
+            source="marketwatch",
+            feed_urls=[
+                "https://feeds.content.dowjones.io/public/rss/mw_topstories",
+                "https://feeds.content.dowjones.io/public/rss/mw_markets",
+            ],
+            keywords=keywords,
+            start_time=start_time,
+            limit=limit,
+        )
+
+    def _fetch_cnbc(
+        self,
+        keywords: list[str] | None,
+        start_time: datetime,
+        limit: int,
+    ) -> list[NewsArticle]:
+        """Fetch from CNBC RSS feeds."""
+        return self._fetch_rss_feed(
+            source="cnbc",
+            feed_urls=[
+                "https://www.cnbc.com/id/100003114/device/rss/rss.html",
+                "https://www.cnbc.com/id/10000664/device/rss/rss.html",
+            ],
+            keywords=keywords,
+            start_time=start_time,
+            limit=limit,
+        )
 
     def _generate_id(self, text: str) -> str:
         """Generate unique ID from text."""
@@ -1166,6 +1446,71 @@ class NewsCollector:
         log.info(f"Saved {len(articles)} articles to {filepath}")
         return filepath
 
+    def _load_recent_cached_articles(
+        self,
+        *,
+        start_time: datetime,
+        limit: int,
+        keywords: list[str] | None,
+    ) -> list[NewsArticle]:
+        """Load recent cached news files when online fetchers return no data."""
+        keyword_set = [
+            str(token).strip().lower()
+            for token in (keywords or [])
+            if str(token).strip()
+        ]
+        seen_ids: set[str] = set()
+        out: list[NewsArticle] = []
+
+        def _mtime(path: Path) -> float:
+            try:
+                return float(path.stat().st_mtime)
+            except OSError:
+                return 0.0
+
+        cache_files = sorted(
+            self.cache_dir.glob("news_*.json"),
+            key=_mtime,
+            reverse=True,
+        )
+        for path in cache_files[:12]:
+            if len(out) >= int(limit):
+                break
+            try:
+                cached_rows = self.load_articles(path)
+            except Exception as exc:
+                log.debug("Ignoring unreadable cache file %s: %s", path, exc)
+                continue
+            for article in cached_rows:
+                if len(out) >= int(limit):
+                    break
+                published_at = getattr(article, "published_at", None)
+                if not isinstance(published_at, datetime):
+                    continue
+                if not self._is_recent_enough(published_at, start_time):
+                    continue
+                title = str(getattr(article, "title", "") or "")
+                content = str(getattr(article, "content", "") or "")
+                if keyword_set:
+                    lookup = f"{title} {content}".lower()
+                    if not any(token in lookup for token in keyword_set):
+                        continue
+                aid = str(getattr(article, "id", "") or "").strip()
+                if not aid:
+                    aid = self._generate_id(
+                        f"cache_{getattr(article, 'source', '')}_{title}_{getattr(article, 'url', '')}"
+                    )
+                    article.id = aid
+                if aid in seen_ids:
+                    continue
+                seen_ids.add(aid)
+                article.published_at = self._normalize_datetime(published_at)
+                article.collected_at = self._normalize_datetime(
+                    getattr(article, "collected_at", datetime.now())
+                )
+                out.append(article)
+        return out[: int(limit)]
+
     def load_articles(self, filepath: Path) -> list[NewsArticle]:
         """Load articles from JSON file."""
         with open(filepath, encoding="utf-8") as f:
@@ -1194,18 +1539,23 @@ class NewsCollector:
 
 # Singleton instance
 _collector: NewsCollector | None = None
+# FIX #4: Lock for thread-safe singleton creation
+import threading as _threading
+_collector_lock = _threading.Lock()
 
 
 def get_collector() -> NewsCollector:
     """Get or create news collector instance."""
     global _collector
     if _collector is None:
-        _collector = NewsCollector()
+        with _collector_lock:
+            if _collector is None:  # double-checked locking
+                _collector = NewsCollector()
     return _collector
 
 
 def reset_collector() -> None:
     """Reset collector instance."""
     global _collector
-    _collector = None
-
+    with _collector_lock:
+        _collector = None

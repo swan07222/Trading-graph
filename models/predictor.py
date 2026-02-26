@@ -944,13 +944,26 @@ class Predictor:
 
     def _models_ready_for_runtime(self) -> bool:
         """Whether runtime has enough loaded artifacts for stable inference."""
-        processor = getattr(self, "processor", None)
         ensemble = getattr(self, "ensemble", None)
         forecaster = getattr(self, "forecaster", None)
+        return bool(
+            self._forecast_ready_for_runtime()
+            and (ensemble is not None or forecaster is not None)
+        )
+
+    def _forecast_ready_for_runtime(self) -> bool:
+        """Whether forecast-only inference can run (guessed curve fallback)."""
+        processor = getattr(self, "processor", None)
+        feature_engine = getattr(self, "feature_engine", None)
+        fetcher = getattr(self, "fetcher", None)
         scaler_ready = bool(
             processor is not None and getattr(processor, "is_fitted", True)
         )
-        return scaler_ready and (ensemble is not None or forecaster is not None)
+        return bool(
+            scaler_ready
+            and feature_engine is not None
+            and fetcher is not None
+        )
 
     def _maybe_reload_models(self, *, reason: str = "", force: bool = False) -> bool:
         """Opportunistically reload models when artifacts appear/rotate on disk.
