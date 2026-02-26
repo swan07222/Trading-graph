@@ -15,6 +15,7 @@ from typing import Any
 
 from config.runtime_env import env_flag, env_text
 from utils.logger import get_logger
+from utils.recoverable import COMMON_RECOVERABLE_EXCEPTIONS
 
 from .news_aggregator import get_news_aggregator
 from .news_collector import NewsArticle, get_collector
@@ -23,19 +24,20 @@ log = get_logger(__name__)
 
 _TRANSFORMERS_AVAILABLE = False
 _TORCH_AVAILABLE = False
+_LLM_CHAT_RECOVERABLE_EXCEPTIONS = COMMON_RECOVERABLE_EXCEPTIONS
 
 try:
     import torch
 
     _TORCH_AVAILABLE = True
-except Exception:
+except (ImportError, OSError, RuntimeError):
     _TORCH_AVAILABLE = False
 
 try:
     from transformers import AutoModelForCausalLM, AutoTokenizer
 
     _TRANSFORMERS_AVAILABLE = True
-except Exception:
+except (ImportError, OSError, RuntimeError):
     _TRANSFORMERS_AVAILABLE = False
 
 
@@ -162,7 +164,7 @@ class LLMChatAssistant:
             self._local_load_error = ""
             log.info("Local chat model loaded: source=%s device=%s", source, device)
             return True
-        except Exception as exc:
+        except _LLM_CHAT_RECOVERABLE_EXCEPTIONS as exc:
             self._local_load_error = str(exc)
             self._local_ready = False
             self._tokenizer = None
@@ -229,7 +231,7 @@ class LLMChatAssistant:
             "ACTION: analyze <code> | start monitoring | stop monitoring | scan market | "
             "refresh sentiment | set interval <1m|5m|15m|30m|60m|1d> | "
             "set forecast <bars> | set lookback <bars> | add watchlist <code> | "
-            "remove watchlist <code> | train model | train llm | auto train llm. "
+            "remove watchlist <code> | train gm | auto train gm | train llm | auto train llm. "
             "If no action is needed, append ACTION: ."
         )
         user_prompt = (
@@ -448,7 +450,7 @@ class LLMChatAssistant:
         if allow_search:
             try:
                 context = self.search_internet(prompt, symbol=symbol)
-            except Exception as exc:
+            except _LLM_CHAT_RECOVERABLE_EXCEPTIONS as exc:
                 log.warning("chat search failed: %s", exc)
 
         answer = ""
@@ -461,7 +463,7 @@ class LLMChatAssistant:
                     app_state=app_state,
                     history=list(history or []),
                 )
-            except Exception as exc:
+            except _LLM_CHAT_RECOVERABLE_EXCEPTIONS as exc:
                 log.warning("Local LLM failed, using fallback answer: %s", exc)
                 answer, action = self._fallback_answer(
                     prompt=prompt,

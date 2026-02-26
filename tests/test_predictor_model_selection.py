@@ -158,3 +158,69 @@ def test_get_trained_stock_last_train_returns_copy() -> None:
     assert out == {"600519": "2026-02-19T10:00:00"}
     out["600519"] = "tampered"
     assert predictor._trained_stock_last_train["600519"] == "2026-02-19T10:00:00"
+
+
+def test_load_models_torch_dll_failure_falls_back_cleanly(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    class DummyFeatureEngine:
+        MIN_ROWS = 60
+
+        @staticmethod
+        def get_feature_columns() -> list[str]:
+            return ["feature_1"]
+
+    class DummyProcessor:
+        n_features = 1
+        is_fitted = True
+
+        @staticmethod
+        def load_scaler(_path: str) -> bool:
+            return True
+
+        @staticmethod
+        def _verify_artifact_checksum(_path) -> bool:
+            return True
+
+    import data.features as features_module
+    import data.fetcher as fetcher_module
+    import data.processor as processor_module
+
+    monkeypatch.setattr(features_module, "FeatureEngine", DummyFeatureEngine)
+    monkeypatch.setattr(processor_module, "DataProcessor", DummyProcessor)
+    monkeypatch.setattr(fetcher_module, "get_fetcher", lambda: object())
+
+    predictor = Predictor.__new__(Predictor)
+    predictor.interval = "1m"
+    predictor.horizon = 30
+    predictor._requested_interval = "1m"
+    predictor._requested_horizon = 30
+    predictor._loaded_model_interval = "1m"
+    predictor._loaded_model_horizon = 30
+    predictor._feature_cols = []
+    predictor.ensemble = None
+    predictor.forecaster = None
+    predictor._forecaster_horizon = 0
+    predictor.processor = None
+    predictor.feature_engine = None
+    predictor.fetcher = None
+    predictor._loaded_ensemble_path = None
+    predictor._trained_stock_codes = []
+    predictor._trained_stock_last_train = {}
+
+    monkeypatch.setattr(
+        predictor,
+        "_import_ensemble_model_class",
+        lambda: (_ for _ in ()).throw(OSError("WinError 1114: c10.dll")),
+    )
+    monkeypatch.setattr(predictor, "_candidate_model_dirs", lambda: [tmp_path])
+    monkeypatch.setattr(predictor, "_load_forecaster", lambda model_dir=None: None)
+
+    ok = predictor._load_models()
+
+    assert ok is True
+    assert predictor.processor is not None
+    assert predictor.feature_engine is not None
+    assert predictor.fetcher is not None
+    assert predictor.ensemble is None

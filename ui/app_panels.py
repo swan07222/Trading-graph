@@ -306,7 +306,22 @@ def _create_right_panel(self: Any) -> QWidget:
         self.ai_chat_view.setMaximumHeight(16777215)
     chat_layout.addWidget(self.ai_chat_view)
 
-    chat_hint = QLabel("Showing AI-only messages.")
+    chat_input_row = QHBoxLayout()
+    chat_input_row.setSpacing(8)
+
+    self.ai_chat_input = QLineEdit()
+    self.ai_chat_input.setPlaceholderText("Type a question or command...")
+    chat_input_row.addWidget(self.ai_chat_input, 1)
+
+    self.ai_chat_send_btn = QPushButton("Send")
+    chat_input_row.addWidget(self.ai_chat_send_btn)
+    chat_layout.addLayout(chat_input_row)
+
+    if hasattr(self, "_on_ai_chat_send"):
+        self.ai_chat_send_btn.clicked.connect(self._on_ai_chat_send)
+        self.ai_chat_input.returnPressed.connect(self._on_ai_chat_send)
+
+    chat_hint = QLabel("Type below. Feed shows AI messages.")
     chat_hint.setObjectName("metaLabel")
     chat_layout.addWidget(chat_hint)
 

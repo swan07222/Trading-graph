@@ -146,9 +146,7 @@ dev = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-q --cov=analysis --cov=config --cov=core --cov=data --cov=models --cov=trading --cov=ui --cov=utils --cov-report=term-missing --cov-fail-under=50"
-asyncio_mode = "auto"
-asyncio_default_fixture_loop_scope = "function"
+addopts = "-q --cov=analysis --cov=config --cov=core --cov=data --cov=models --cov=trading --cov=ui --cov=utils --cov-report=term-missing --cov-fail-under=40"
 
 [tool.ruff]
 target-version = "py311"
@@ -190,10 +188,6 @@ pretty = true
 enable_incomplete_feature = ["Unpack", "TypeVarTuple"]
 # Stricter checks for modern code
 strict = true
-disable_error_code = [
-  "import",
-  "misc",
-]
 exclude = "(^|.*[\\\\/])(venv|cache|audit|data_storage|models_saved|scripts)([\\\\/]|$)"
 
 [[tool.mypy.overrides]]

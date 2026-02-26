@@ -34,8 +34,8 @@ from PyQt6.QtNetwork import (
     QAbstractSocket,
     QNetworkProxy,
     QSslConfiguration,
-    QWebSocket,
 )
+from PyQt6.QtWebSockets import QWebSocket
 
 from config.runtime_env import env_int, env_text
 from utils.logger import get_logger
@@ -139,7 +139,7 @@ class WebSocketClient(QObject):
                     host,
                     int(port),
                 )
-                QWebSocket.setProxy(proxy)
+                QNetworkProxy.setApplicationProxy(proxy)
                 log.info(f"WebSocket proxy configured: {host}:{port}")
             except Exception as e:
                 log.warning(f"Failed to configure WebSocket proxy: {e}")

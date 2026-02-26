@@ -26,6 +26,7 @@ from ui.modern_theme import (
     get_progress_bar_style,
 )
 from utils.logger import get_logger
+from utils.recoverable import COMMON_RECOVERABLE_EXCEPTIONS
 from utils.type_utils import (
     safe_float_attr,
     safe_int_attr,
@@ -33,6 +34,7 @@ from utils.type_utils import (
 )
 
 log = get_logger(__name__)
+_WIDGET_RECOVERABLE_EXCEPTIONS = COMMON_RECOVERABLE_EXCEPTIONS
 
 
 def _get_signal_enum():
@@ -340,7 +342,7 @@ class SignalPanel(QFrame):
         tgt2 = safe_float_attr(levels, "target_2") if levels else 0.0
 
         if model_missing and prediction_unavailable:
-            self.action_label.setText("Model unavailable - train model to enable guessing")
+            self.action_label.setText("Model unavailable - train GM to enable guessing")
         elif data_not_ready and prediction_unavailable:
             self.action_label.setText("Data warming up - waiting for enough valid candles")
         elif Signal is not None and shares > 0:
@@ -632,7 +634,7 @@ class LogWidget(QTextEdit):
                 scrollbar.setValue(scrollbar.maximum())
             
             self._line_count = len(lines_to_keep)
-        except Exception as e:
+        except _WIDGET_RECOVERABLE_EXCEPTIONS as e:
             try:
                 log.debug(f"Log trim failed, clearing: {e}")
                 # FIX: Instead of clearing, just truncate to last MAX_LINES
@@ -649,8 +651,8 @@ class LogWidget(QTextEdit):
                     lines_to_keep = lines[-self.MAX_LINES:]
                     self.setPlainText('\n'.join(lines_to_keep))
                     self._line_count = len(lines_to_keep)
-            except Exception:
-                pass
+            except _WIDGET_RECOVERABLE_EXCEPTIONS as fallback_exc:
+                log.debug("Fallback log trim failed: %s", fallback_exc)
 
     def clear_log(self) -> None:
         """Clear all log messages."""

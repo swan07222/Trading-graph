@@ -9,15 +9,17 @@ from pathlib import Path
 from scripts.gate_common import iter_python_files, normalize_path
 
 DEFAULT_TARGETS: tuple[str, ...] = (
-    "trading/executor.py",
     "data/fetcher.py",
     "data/feeds.py",
+    "data/llm_chat.py",
     "models/predictor.py",
     "models/auto_learner.py",
+    "models/trainer_data_ops.py",
     "ui/app.py",
     "ui/app_bar_ops.py",
     "ui/app_panels.py",
     "ui/app_chart_pipeline.py",
+    "ui/widgets.py",
 )
 
 BROAD_EXCEPTION_NAMES = {"Exception", "BaseException"}

@@ -226,8 +226,8 @@ class Predictor:
                     Path(sys.base_prefix).resolve() / "DLLs",
                 ]
             )
-        except Exception:
-            pass
+        except _PREDICTOR_RECOVERABLE_EXCEPTIONS as exc:
+            log.debug("PyTorch runtime prep skipped executable path discovery: %s", exc)
 
         try:
             spec = find_spec("torch")
@@ -239,15 +239,15 @@ class Predictor:
                         torch_pkg / "lib",
                     ]
                 )
-        except Exception:
-            pass
+        except _PREDICTOR_RECOVERABLE_EXCEPTIONS as exc:
+            log.debug("PyTorch runtime prep skipped torch package discovery: %s", exc)
 
         unique_dirs: list[str] = []
         seen: set[str] = set()
         for path_obj in candidates:
             try:
                 p = Path(path_obj).resolve()
-            except Exception:
+            except _PREDICTOR_RECOVERABLE_EXCEPTIONS:
                 continue
             if not p.exists():
                 continue
@@ -283,7 +283,7 @@ class Predictor:
             from models.ensemble import EnsembleModel
 
             return EnsembleModel
-        except Exception as exc:
+        except _PREDICTOR_RECOVERABLE_EXCEPTIONS as exc:
             if not cls._is_torch_dll_error(exc):
                 raise
 
@@ -294,8 +294,8 @@ class Predictor:
                 from models.ensemble import EnsembleModel
 
                 return EnsembleModel
-            except Exception:
-                raise exc
+            except _PREDICTOR_RECOVERABLE_EXCEPTIONS:
+                raise exc from None
 
     def _candidate_model_dirs(self) -> list[Path]:
         primary = Path(CONFIG.MODEL_DIR)
@@ -311,12 +311,25 @@ class Predictor:
             from data.features import FeatureEngine
             from data.fetcher import get_fetcher
             from data.processor import DataProcessor
-            EnsembleModel = self._import_ensemble_model_class()
 
             self.processor = DataProcessor()
             self.feature_engine = FeatureEngine()
             self.fetcher = get_fetcher()
             self._feature_cols = self.feature_engine.get_feature_columns()
+
+            ensemble_model_cls: Any | None = None
+            try:
+                ensemble_model_cls = self._import_ensemble_model_class()
+            except _PREDICTOR_RECOVERABLE_EXCEPTIONS as exc:
+                if self._is_torch_dll_error(exc):
+                    log.warning(
+                        "PyTorch runtime unavailable on Windows (%s). "
+                        "Continuing without GM ensemble; install Visual C++ "
+                        "Redistributable and reinstall torch to enable neural models.",
+                        exc,
+                    )
+                else:
+                    raise
 
             model_dir = Path(CONFIG.MODEL_DIR)
             chosen_ens: Path | None = None
@@ -352,72 +365,78 @@ class Predictor:
             self._trained_stock_last_train = {}
             if chosen_ens and chosen_ens.exists():
                 self._loaded_ensemble_path = Path(chosen_ens)
-                input_size = (
-                    self.processor.n_features or len(self._feature_cols)
-                )
-                ens = EnsembleModel(input_size=input_size)
-                if ens.load(str(chosen_ens)) and ens.models:
-                    self.ensemble = ens
-
-                    loaded_interval = str(
-                        getattr(self.ensemble, "interval", self.interval)
-                    )
-                    loaded_horizon = int(
-                        getattr(
-                            self.ensemble, "prediction_horizon",
-                            self.horizon
-                        )
-                    )
-
-                    if (
-                        loaded_interval != self._requested_interval
-                        or loaded_horizon != self._requested_horizon
-                    ):
-                        log.info(
-                            f"Model metadata overrides constructor: "
-                            f"interval {self._requested_interval}"
-                            f"->{loaded_interval}, "
-                            f"horizon {self._requested_horizon}"
-                            f"->{loaded_horizon}"
-                        )
-
-                    # Keep runtime interval/horizon aligned to constructor
-                    # (UI/requested settings). Loaded model metadata is tracked
-                    # separately for diagnostics and compatibility checks.
-                    self._loaded_model_interval = str(loaded_interval).lower()
-                    self._loaded_model_horizon = int(loaded_horizon)
-                    self._trained_stock_codes = (
-                        self._extract_trained_stocks_from_ensemble()
-                        or self._load_trained_stocks_from_manifest(chosen_ens)
-                        or self._load_trained_stocks_from_learner_state(
-                            loaded_interval,
-                            loaded_horizon,
-                        )
-                    )
-                    self._trained_stock_last_train = (
-                        self._extract_trained_stock_last_train_from_ensemble()
-                        or self._load_trained_stock_last_train_from_manifest(chosen_ens)
-                    )
-                    if self._trained_stock_last_train and self._trained_stock_codes:
-                        allowed = {
-                            self._normalize_stock_code(x)
-                            for x in list(self._trained_stock_codes or [])
-                        }
-                        allowed = {x for x in allowed if x}
-                        if allowed:
-                            self._trained_stock_last_train = {
-                                c: ts
-                                for c, ts in self._trained_stock_last_train.items()
-                                if c in allowed
-                            }
-
-                    log.info(
-                        f"Ensemble loaded from {chosen_ens.name} "
-                        f"(interval={self.interval}, "
-                        f"horizon={self.horizon})"
+                if ensemble_model_cls is None:
+                    log.warning(
+                        "Skipping GM ensemble load (%s) because PyTorch is unavailable.",
+                        chosen_ens.name,
                     )
                 else:
-                    log.warning(f"Failed to load ensemble: {chosen_ens}")
+                    input_size = (
+                        self.processor.n_features or len(self._feature_cols)
+                    )
+                    ens = ensemble_model_cls(input_size=input_size)
+                    if ens.load(str(chosen_ens)) and ens.models:
+                        self.ensemble = ens
+
+                        loaded_interval = str(
+                            getattr(self.ensemble, "interval", self.interval)
+                        )
+                        loaded_horizon = int(
+                            getattr(
+                                self.ensemble, "prediction_horizon",
+                                self.horizon
+                            )
+                        )
+
+                        if (
+                            loaded_interval != self._requested_interval
+                            or loaded_horizon != self._requested_horizon
+                        ):
+                            log.info(
+                                f"Model metadata overrides constructor: "
+                                f"interval {self._requested_interval}"
+                                f"->{loaded_interval}, "
+                                f"horizon {self._requested_horizon}"
+                                f"->{loaded_horizon}"
+                            )
+
+                        # Keep runtime interval/horizon aligned to constructor
+                        # (UI/requested settings). Loaded model metadata is tracked
+                        # separately for diagnostics and compatibility checks.
+                        self._loaded_model_interval = str(loaded_interval).lower()
+                        self._loaded_model_horizon = int(loaded_horizon)
+                        self._trained_stock_codes = (
+                            self._extract_trained_stocks_from_ensemble()
+                            or self._load_trained_stocks_from_manifest(chosen_ens)
+                            or self._load_trained_stocks_from_learner_state(
+                                loaded_interval,
+                                loaded_horizon,
+                            )
+                        )
+                        self._trained_stock_last_train = (
+                            self._extract_trained_stock_last_train_from_ensemble()
+                            or self._load_trained_stock_last_train_from_manifest(chosen_ens)
+                        )
+                        if self._trained_stock_last_train and self._trained_stock_codes:
+                            allowed = {
+                                self._normalize_stock_code(x)
+                                for x in list(self._trained_stock_codes or [])
+                            }
+                            allowed = {x for x in allowed if x}
+                            if allowed:
+                                self._trained_stock_last_train = {
+                                    c: ts
+                                    for c, ts in self._trained_stock_last_train.items()
+                                    if c in allowed
+                                }
+
+                        log.info(
+                            f"Ensemble loaded from {chosen_ens.name} "
+                            f"(interval={self.interval}, "
+                            f"horizon={self.horizon})"
+                        )
+                    else:
+                        log.warning(f"Failed to load ensemble: {chosen_ens}")
             else:
                 log.warning("No ensemble model found")
 

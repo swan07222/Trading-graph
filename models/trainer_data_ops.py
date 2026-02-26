@@ -8,8 +8,10 @@ from tqdm import tqdm
 
 from config.settings import CONFIG
 from utils.logger import get_logger
+from utils.recoverable import COMMON_RECOVERABLE_EXCEPTIONS
 
 log = get_logger(__name__)
+_TRAINER_DATA_RECOVERABLE_EXCEPTIONS = COMMON_RECOVERABLE_EXCEPTIONS
 
 _SEED = 42
 _EPS = 1e-8
@@ -109,7 +111,7 @@ def _assess_raw_data_quality(self, df: pd.DataFrame) -> dict[str, Any]:
         high_s = pd.to_numeric(df[col_map["high"]], errors="coerce")
         low_s = pd.to_numeric(df[col_map["low"]], errors="coerce")
         close_s = pd.to_numeric(df[col_map["close"]], errors="coerce")
-    except Exception as e:
+    except _TRAINER_DATA_RECOVERABLE_EXCEPTIONS as e:
         log.debug("OHLC numeric coercion failed: %s", e)
         report["reasons"] = ["ohlc_numeric_coercion_failed"]
         return report
@@ -354,7 +356,7 @@ def _fetch_raw_data(
             }
             consistency_guard["pending_count"] = int(len(pending_codes))
             consistency_guard["pending_codes"] = sorted(list(pending_codes))
-    except Exception as exc:
+    except _TRAINER_DATA_RECOVERABLE_EXCEPTIONS as exc:
         consistency_guard["error"] = str(exc)
         log.warning("Consistency preflight failed: %s", exc)
 
@@ -491,7 +493,7 @@ def _fetch_raw_data(
 
             raw_data[code] = df
 
-        except Exception as e:
+        except _TRAINER_DATA_RECOVERABLE_EXCEPTIONS as e:
             log.warning(f"Error fetching {code}: {e}")
 
     if short_1m_codes:
@@ -647,12 +649,27 @@ def _validate_temporal_split_integrity(
             severe_leakage_detected = False
             for col in feature_cols[:5]:  # Check first 5 features for efficiency
                 if col in train_df.columns and col in val_df.columns:
-                    train_end = train_df[col].tail(20).mean()
-                    val_start = val_df[col].head(20).mean()
+                    train_window = pd.to_numeric(
+                        train_df[col].tail(20), errors="coerce"
+                    ).dropna()
+                    val_window = pd.to_numeric(
+                        val_df[col].head(20), errors="coerce"
+                    ).dropna()
+                    if len(train_window) < 5 or len(val_window) < 5:
+                        continue
+                    train_end = float(train_window.mean())
+                    val_start = float(val_window.mean())
 
                     # Large jumps might indicate leakage or regime shift
-                    if abs(train_end) > _EPS:
-                        jump = abs(val_start - train_end) / abs(train_end)
+                    # Use a stable denominator so near-zero means do not trigger
+                    # false leakage alarms on normalized features.
+                    scale = max(
+                        abs(train_end),
+                        float(train_window.std(ddof=0)),
+                        1e-3,
+                    )
+                    if scale > _EPS:
+                        jump = abs(val_start - train_end) / scale
                         if jump > 2.0:  # More than 200% jump
                             report["warnings"].append(
                                 f"feature_jump_at_boundary:{col}:{jump:.2f}"
@@ -729,7 +746,7 @@ def _validate_temporal_split_integrity(
         report["checks"]["total_warnings"] = len(report["warnings"])
         report["checks"]["total_errors"] = len(report["errors"])
         
-    except Exception as e:
+    except _TRAINER_DATA_RECOVERABLE_EXCEPTIONS as e:
         report["errors"].append(f"validation_exception:{str(e)}")
         report["passed"] = False
     
@@ -798,7 +815,7 @@ def _create_sequences_from_splits(
                         storage[split_name]["y"].append(y)
                         if include_returns:
                             storage[split_name]["r"].append(r)
-                except Exception as e:
+                except _TRAINER_DATA_RECOVERABLE_EXCEPTIONS as e:
                     log.warning(
                         "Sequence creation failed for %s/%s: %s",
                         code,

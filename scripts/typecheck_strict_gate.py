@@ -38,6 +38,18 @@ DEFAULT_FLAGS: tuple[str, ...] = (
 )
 
 
+def _resolve_existing_targets(targets: tuple[str, ...]) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    existing: list[str] = []
+    missing: list[str] = []
+    for target in targets:
+        p = Path(target)
+        if p.exists():
+            existing.append(target)
+        else:
+            missing.append(target)
+    return tuple(existing), tuple(missing)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="Strict typecheck gate with baseline support."
@@ -69,6 +81,16 @@ def main() -> int:
 
     baseline_path = Path(args.baseline)
     targets = tuple(DEFAULT_TARGETS) + tuple(str(t).strip() for t in args.target if str(t).strip())
+    targets, missing_targets = _resolve_existing_targets(targets)
+    if missing_targets:
+        print(f"Skipping missing strict-mypy targets: {len(missing_targets)}")
+        for row in missing_targets[:20]:
+            print(f"  MISSING {row}")
+        if len(missing_targets) > 20:
+            print(f"  ... and {len(missing_targets) - 20} more")
+    if not targets:
+        print("No existing strict-mypy targets to check.")
+        return 2
     return_code, output, issues_now = run_mypy(targets, DEFAULT_FLAGS)
 
     if return_code not in (0, 1):

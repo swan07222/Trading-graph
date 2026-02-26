@@ -1220,7 +1220,7 @@ class DataFetcher:
         # FIX #10: Wrap cache write in try-except
         try:
             self._cache.set(cache_key, cache_df)
-        except Exception as exc:
+        except _RECOVERABLE_FETCH_EXCEPTIONS as exc:
             log.warning("Cache write failed for %s: %s", cache_key, exc)
         
         return out
