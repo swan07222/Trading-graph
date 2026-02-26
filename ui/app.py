@@ -148,7 +148,7 @@ class MainApp(MainAppCommonMixin, QMainWindow):
     - AI-generated price forecast curves with uncertainty bands
     """
     MAX_WATCHLIST_SIZE = 50
-    
+
     # Dynamic forecast horizon based on interval (configurable via env)
     # Format: interval=steps pairs, e.g., "1m=60,5m=40,15m=30,1h=24,1d=30"
     GUESS_FORECAST_BARS_CONFIG = {
@@ -163,6 +163,15 @@ class MainApp(MainAppCommonMixin, QMainWindow):
         "1d": 30,   # ~30 trading days forecast
     }
     
+    # FIX #7: Adaptive forecast horizon configuration
+    # Volatility-based adjustment factors for forecast length
+    ADAPTIVE_FORECAST_CONFIG = {
+        "min_horizon_factor": 0.5,    # Minimum 50% of base horizon
+        "max_horizon_factor": 1.5,    # Maximum 150% of base horizon
+        "volatility_lookback_bars": 20,  # Bars to use for volatility calculation
+        "confidence_adjustment": 0.2,   # Horizon adjustment per confidence point
+    }
+
     STARTUP_INTERVAL = "1m"
 
     bar_received = pyqtSignal(str, dict)
@@ -1201,15 +1210,18 @@ class MainApp(MainAppCommonMixin, QMainWindow):
 
     def _get_forecast_horizon_for_interval(self, interval: str) -> int:
         """Get dynamic forecast horizon based on interval.
-        
+
         Args:
             interval: Time interval string (e.g., '1m', '5m', '1h', '1d')
-            
+
         Returns:
             Number of forecast bars appropriate for the interval
+            
+        FIX #7: Adaptive forecast horizon based on market volatility
+        and prediction confidence for optimal forecast length.
         """
         interval = str(interval).strip().lower()
-        
+
         # Normalize interval aliases
         interval_aliases = {
             "1h": "60m",
@@ -1220,9 +1232,80 @@ class MainApp(MainAppCommonMixin, QMainWindow):
             "day": "1d",
         }
         interval = interval_aliases.get(interval, interval)
-        
-        # Get from config or default to 30
-        return int(self.GUESS_FORECAST_BARS_CONFIG.get(interval, 30))
+
+        # Get base horizon from config
+        base_horizon = int(self.GUESS_FORECAST_BARS_CONFIG.get(interval, 30))
+
+        # FIX #7: Apply adaptive horizon adjustment if enabled
+        if getattr(CONFIG.model, "adaptive_horizon_enabled", True):
+            # Calculate volatility-based adjustment
+            current_symbol = self._ui_norm(self.stock_input.text())
+            bars = self._bars_by_symbol.get(current_symbol, [])
+
+            # Get prediction confidence if available
+            confidence = 0.5  # Default neutral confidence
+            try:
+                if self.current_prediction and self.current_prediction.stock_code == current_symbol:
+                    confidence = float(getattr(self.current_prediction, "confidence", 0.5))
+            except Exception:
+                pass
+
+            if bars and len(bars) >= 20:
+                closes = [b.get("close", 0.0) for b in bars[-30:] if b.get("close", 0) > 0]
+                if len(closes) >= 10:
+                    # Calculate recent volatility
+                    returns = [(closes[i] - closes[i-1]) / max(closes[i-1], 1e-8)
+                               for i in range(1, len(closes))]
+                    volatility = float(np.std(returns)) if returns else 0.02
+
+                    # High volatility = shorter horizon (less predictable)
+                    # Low volatility = longer horizon (more predictable)
+                    vol_scale = getattr(CONFIG.model, "horizon_volatility_scale", 0.5)
+                    base_vol = 0.02  # Baseline volatility
+
+                    vol_factor = 1.0 - vol_scale * (volatility - base_vol) / base_vol
+                    vol_factor = float(np.clip(vol_factor, 0.5, 1.5))
+
+                    # FIX #7: Add confidence-based adjustment
+                    # Higher confidence = can extend horizon
+                    # Lower confidence = shorten horizon for reliability
+                    conf_adjustment = getattr(self, "ADAPTIVE_FORECAST_CONFIG", {}).get(
+                        "confidence_adjustment", 0.2
+                    )
+                    conf_factor = 1.0 + conf_adjustment * (confidence - 0.5) * 2
+                    conf_factor = float(np.clip(conf_factor, 0.7, 1.3))
+
+                    # Combine volatility and confidence factors
+                    combined_factor = vol_factor * conf_factor
+                    
+                    # Apply min/max bounds from config
+                    min_factor = getattr(self, "ADAPTIVE_FORECAST_CONFIG", {}).get(
+                        "min_horizon_factor", 0.5
+                    )
+                    max_factor = getattr(self, "ADAPTIVE_FORECAST_CONFIG", {}).get(
+                        "max_horizon_factor", 1.5
+                    )
+                    combined_factor = float(np.clip(combined_factor, min_factor, max_factor))
+
+                    # Adjust horizon
+                    min_horizon = getattr(CONFIG.model, "min_prediction_horizon", 3)
+                    max_horizon = getattr(CONFIG.model, "max_prediction_horizon", 60)
+
+                    adjusted_horizon = int(base_horizon * combined_factor)
+                    adjusted_horizon = max(min_horizon, min(max_horizon, adjusted_horizon))
+
+                    # Log adjustment for debugging
+                    if hasattr(self, "_debug_console_enabled") and self._debug_console_enabled:
+                        self._debug_console(
+                            f"adaptive_horizon:{current_symbol}:{interval}",
+                            f"Adaptive horizon: {base_horizon} -> {adjusted_horizon} (vol={volatility:.3f}, conf={confidence:.2f})",
+                            min_gap_seconds=5.0,
+                            level="info",
+                        )
+
+                    return adjusted_horizon
+
+        return base_horizon
 
     def _refresh_all(self) -> None:
         self._update_watchlist()

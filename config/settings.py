@@ -126,6 +126,19 @@ class ModelConfig:
     buy_threshold: float = 0.60
     sell_threshold: float = 0.60
     strong_sell_threshold: float = 0.72
+    
+    # FIX #7: Adaptive forecast horizon configuration
+    # Dynamic horizon adjustment based on market conditions
+    adaptive_horizon_enabled: bool = True
+    min_prediction_horizon: int = 3  # Minimum forecast steps
+    max_prediction_horizon: int = 60  # Maximum forecast steps
+    horizon_volatility_scale: float = 0.5  # Volatility scaling factor
+    
+    # FIX #6: Uncertainty quantification settings
+    uncertainty_quantification_enabled: bool = True
+    monte_carlo_dropout_samples: int = 10  # MC dropout samples for uncertainty
+    uncertainty_threshold_high: float = 0.3  # High uncertainty threshold
+    uncertainty_threshold_low: float = 0.1  # Low uncertainty threshold
 
 
 @dataclass

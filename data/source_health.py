@@ -21,7 +21,7 @@ from datetime import datetime, timedelta
 from enum import Enum
 from typing import Any, Callable
 
-from config.runtime_env import env_flag, env_float, env_int
+from config.runtime_env import env_flag, env_float, env_int, env_text
 from utils.logger import get_logger
 
 log = get_logger(__name__)

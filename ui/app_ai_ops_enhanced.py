@@ -1275,57 +1275,51 @@ def _generate_ai_chat_reply_enhanced(
     memory_context: str = "",
     intent_match: IntentMatch | None = None,
 ) -> dict[str, Any]:
-    """Enhanced reply generation with memory context and retry."""
+    """Enhanced reply generation with memory context and retry.
+    
+    Note: This uses your self-trained model from llm_sentiment.py.
+    No pre-trained models (llama/ollama/transformers) are used.
+    """
     try:
-        from data.llm_chat import get_chat_assistant
+        from data.llm_sentiment import get_llm_analyzer
 
-        assistant = get_chat_assistant()
-        
-        # Build enhanced context
+        analyzer = get_llm_analyzer()
+
+        # Build enhanced state
         enhanced_state = {
             **app_state,
             'memory_context': memory_context,
             'intent': intent_match.intent if intent_match else '',
             'intent_confidence': intent_match.confidence if intent_match else 0.0,
         }
-        
-        payload = assistant.answer(
+
+        # Use self-trained LLM for generation
+        payload = analyzer.generate_response(
             prompt=str(prompt or ""),
             symbol=str(symbol or "") or None,
             app_state=enhanced_state,
             history=history,
-            allow_search=True,
         )
-        
-        answer = str(payload.get("answer", "") or "").strip()
-        local_ready = bool(payload.get("local_model_ready", False))
-        
-        if not local_ready:
-            answer = (
-                f"{answer}\n\n"
-                "Tip: Set `TRADING_LOCAL_LLM_MODEL_PATH` to enable full on-device chat. "
-                "Recommended: `Qwen/Qwen2.5-7B-Instruct`."
-            ).strip()
-        
+
         return {
-            "answer": answer,
+            "answer": str(payload.get("answer", "") or "").strip(),
             "action": str(payload.get("action", "") or "").strip(),
-            "local_model_ready": local_ready,
+            "local_model_ready": True,  # Self-trained model
         }
     except Exception as exc:
-        log.warning("AI chat LLM path failed: %s", exc)
-        
+        log.warning("Self-trained LLM chat failed: %s", exc)
+
         # Fallback with intent-based response
         if intent_match:
             fallback_response = (
-                f"Local AI fallback: {exc}. "
+                f"Chat not available: {exc}. "
                 f"Detected intent: {intent_match.intent} (confidence: {intent_match.confidence:.2f}). "
-                "You can still control the app via commands (type 'help')."
+                "Train the LLM first using 'Auto Train LLM' command."
             )
         else:
             fallback_response = (
-                f"Local AI fallback: {exc}. "
-                "You can still control the app via commands (type 'help')."
+                f"Chat not available: {exc}. "
+                "Train the LLM first using 'Auto Train LLM' command."
             )
         
         return {

@@ -602,38 +602,34 @@ def _generate_ai_chat_reply(
     app_state: dict[str, Any],
     history: list[dict[str, Any]],
 ) -> dict[str, Any]:
+    """Generate AI chat reply using self-trained LLM.
+    
+    Note: This uses your self-trained model from llm_sentiment.py.
+    No pre-trained models (llama/ollama/transformers) are used.
+    """
     try:
-        from data.llm_chat import get_chat_assistant
+        from data.llm_sentiment import get_llm_analyzer
 
-        assistant = get_chat_assistant()
-        payload = assistant.answer(
+        analyzer = get_llm_analyzer()
+        
+        # Use self-trained LLM for generation
+        payload = analyzer.generate_response(
             prompt=str(prompt or ""),
             symbol=str(symbol or "") or None,
             app_state=dict(app_state or {}),
             history=list(history or []),
-            allow_search=True,
         )
-        answer = str(payload.get("answer", "") or "").strip()
-        local_ready = bool(payload.get("local_model_ready", False))
-        if not local_ready:
-            answer = (
-                f"{answer}\n\n"
-                "Tip: no external API is used. "
-                "Set `TRADING_LOCAL_LLM_MODEL_PATH` (or `TRADING_LOCAL_LLM_MODEL`) "
-                "to enable full on-device chat generation. "
-                "Recommended: `Qwen/Qwen2.5-7B-Instruct`."
-            ).strip()
         return {
-            "answer": answer,
+            "answer": str(payload.get("answer", "") or "").strip(),
             "action": str(payload.get("action", "") or "").strip(),
-            "local_model_ready": local_ready,
+            "local_model_ready": True,  # Self-trained model
         }
     except Exception as exc:
-        log.warning("AI chat LLM path failed: %s", exc)
+        log.warning("Self-trained LLM chat failed: %s", exc)
         return {
             "answer": (
-                f"Local AI fallback: {exc}. "
-                "You can still control the app via commands (type 'help')."
+                f"Chat not available: {exc}. "
+                "Train the LLM first using 'Auto Train LLM' command."
             ),
             "action": "",
             "local_model_ready": False,
