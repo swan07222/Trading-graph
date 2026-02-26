@@ -884,13 +884,21 @@ def _set_cached_prediction(
     pred_copy = copy.deepcopy(pred)
 
     with self._cache_lock:
-        # Store version with prediction for invalidation checking
-        self._pred_cache[cache_key] = (
-            time.time(),
-            pred_copy,
-            cache_version,
-            ttl,  # Store per-entry TTL
-        )
+        # Store version with prediction for invalidation checking.
+        # Keep legacy 3-tuple format when no per-entry TTL override is used.
+        if ttl is None:
+            self._pred_cache[cache_key] = (
+                time.time(),
+                pred_copy,
+                cache_version,
+            )
+        else:
+            self._pred_cache[cache_key] = (
+                time.time(),
+                pred_copy,
+                cache_version,
+                ttl,  # Store per-entry TTL
+            )
 
         if len(self._pred_cache) > self._MAX_CACHE_SIZE:
             now = time.time()

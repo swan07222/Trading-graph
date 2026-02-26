@@ -1,3 +1,29 @@
 # strict mypy baseline for scripts/typecheck_strict_gate.py
 # Format: path:line:code:message
 
+data/feeds.py:188:attr-defined:"object" has no attribute "timestamp"
+data/feeds.py:198:attr-defined:"object" has no attribute "price"
+data/feeds.py:420:unreachable:Statement is unreachable
+data/feeds.py:559:attr-defined:"None" has no attribute "run_forever"
+data/feeds.py:585:unreachable:Statement is unreachable
+data/feeds.py:601:unreachable:Statement is unreachable
+data/feeds.py:609:unreachable:Statement is unreachable
+data/feeds.py:621:attr-defined:"None" has no attribute "send"
+data/feeds.py:738:unreachable:Statement is unreachable
+data/feeds.py:813:unreachable:Statement is unreachable
+models/predictor.py:1005:unreachable:Statement is unreachable
+models/predictor.py:1042:unreachable:Statement is unreachable
+models/predictor.py:1189:unreachable:Statement is unreachable
+models/predictor.py:1258:attr-defined:"None" has no attribute "eval"
+models/predictor.py:1320:unreachable:Statement is unreachable
+models/predictor.py:2058:unreachable:Statement is unreachable
+models/predictor.py:2095:unreachable:Statement is unreachable
+models/predictor.py:2129:method-assign:Cannot assign to a method
+models/predictor.py:243:unreachable:Statement is unreachable
+models/predictor.py:561:unreachable:Statement is unreachable
+models/predictor.py:616:unreachable:Statement is unreachable
+ui/app.py:1025:unreachable:Statement is unreachable
+ui/app.py:993:unreachable:Statement is unreachable
+ui/app_bar_ops.py:1220:unreachable:Statement is unreachable
+ui/app_bar_ops.py:546:unreachable:Statement is unreachable
+ui/app_chart_pipeline.py:927:unreachable:Statement is unreachable

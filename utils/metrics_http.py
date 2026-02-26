@@ -125,6 +125,31 @@ def _build_policy_snapshot() -> dict[str, Any]:
         return {"status": "unavailable", "reason": str(exc)}
 
 
+def _build_strategy_marketplace_snapshot() -> dict[str, Any]:
+    """Best-effort strategy marketplace snapshot."""
+    provider = None
+    with _SNAPSHOT_LOCK:
+        provider = _SNAPSHOT_PROVIDERS.get("strategy_marketplace")
+    if provider is None:
+        return {
+            "status": "unavailable",
+            "reason": "provider_not_registered",
+            "provider": "strategy_marketplace",
+        }
+    try:
+        return {
+            "status": "ok",
+            "provider": "strategy_marketplace",
+            "snapshot": _normalize_json(provider()),
+        }
+    except Exception as exc:
+        return {
+            "status": "unavailable",
+            "reason": str(exc),
+            "provider": "strategy_marketplace",
+        }
+
+
 def _build_execution_engine_snapshot() -> dict[str, Any]:
     """Best-effort execution engine snapshot via registered provider."""
     provider = None
@@ -541,6 +566,16 @@ class MetricsHandler(BaseHTTPRequestHandler):
                 200,
                 {
                     "snapshot": _build_alert_snapshot(limit=limit),
+                    "generated_at": datetime.now(UTC).isoformat(),
+                },
+            )
+            return
+
+        if path == "/api/v1/strategy/marketplace":
+            self._send_json(
+                200,
+                {
+                    "snapshot": _build_strategy_marketplace_snapshot(),
                     "generated_at": datetime.now(UTC).isoformat(),
                 },
             )

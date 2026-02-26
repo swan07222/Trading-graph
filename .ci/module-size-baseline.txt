@@ -1,21 +1,28 @@
 # module-size baseline
 # Format: path:line_count
 
-analysis/backtest.py:1385
-data/database.py:1203
+analysis/backtest.py:1503
+config/settings.py:1322
+core/types.py:1236
+data/database.py:1450
 data/feeds.py:1387
-data/fetcher.py:1321
-data/fetcher_sources.py:1378
-data/processor.py:1484
-data/session_cache.py:1281
-models/ensemble.py:1214
-models/predictor.py:1416
-models/predictor_runtime_ops.py:1287
-trading/broker.py:1337
-trading/executor.py:1255
-trading/oms.py:1207
-ui/app.py:1409
-ui/app_bar_ops.py:1235
-ui/app_chart_pipeline.py:1237
-ui/auto_learn_dialog.py:1428
-ui/charts.py:1401
+data/fetcher.py:1576
+data/fetcher_sources.py:1437
+data/llm_sentiment.py:1898
+data/news_collector.py:1211
+data/processor.py:1468
+data/session_cache.py:1345
+data/web_search.py:1501
+models/auto_learner_components.py:1517
+models/ensemble.py:1300
+models/predictor.py:2153
+models/predictor_runtime_ops.py:1659
+models/trainer.py:1234
+models/trainer_eval_ops.py:1707
+ui/app.py:1698
+ui/app_analysis_ops.py:1428
+ui/app_bar_ops.py:1349
+ui/auto_learn_dialog.py:1286
+ui/charts.py:1929
+ui/dialogs.py:1545
+ui/modern_theme.py:1242

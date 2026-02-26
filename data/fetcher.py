@@ -506,7 +506,7 @@ class DataFetcher:
                 if wait_time > 0:
                     time.sleep(wait_time)
                 return
-            except Exception as exc:
+            except _RECOVERABLE_FETCH_EXCEPTIONS as exc:
                 log.debug("Enhanced rate limiter failed, using fallback: %s", exc)
 
         # Fallback to basic rate limiting
@@ -669,7 +669,7 @@ class DataFetcher:
                             "Data validation warnings for %s (%s): %s",
                             inst.get("symbol"), interval, validation.warnings
                         )
-            except Exception as exc:
+            except _RECOVERABLE_FETCH_EXCEPTIONS as exc:
                 log.debug("Data validation failed: %s", exc)
         
         return result
@@ -1516,7 +1516,7 @@ class DataFetcher:
                 metrics["http_client"] = enhanced.get("http_client", {})
                 metrics["cache"] = enhanced.get("cache", {})
                 metrics["circuit_breakers"] = enhanced.get("circuit_breakers", {})
-            except Exception as exc:
+            except _RECOVERABLE_FETCH_EXCEPTIONS as exc:
                 log.debug("Failed to get enhanced metrics: %s", exc)
         
         # Rate limiter metrics
@@ -1524,7 +1524,7 @@ class DataFetcher:
             try:
                 limiter = _get_rate_limiter()
                 metrics["rate_limiter"] = limiter.get_stats()
-            except Exception as exc:
+            except _RECOVERABLE_FETCH_EXCEPTIONS as exc:
                 log.debug("Failed to get rate limiter metrics: %s", exc)
         
         return metrics

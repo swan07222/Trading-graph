@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import threading
 import time
 from collections.abc import Callable, Coroutine
 from dataclasses import dataclass, field
@@ -97,11 +98,11 @@ class NewsStreamer:
         self._task: asyncio.Task | None = None
         self._seen_ids: set[str] = set()
         self._backlog: list[Any] = []  # List of NewsArticle
-        self._backlog_lock = asyncio.Lock()
+        self._backlog_lock = threading.RLock()
         
         # Subscriptions: channel -> list of callbacks
         self._subscriptions: dict[str, list[Callable[[Any], Coroutine[Any, Any, None]]]] = {}
-        self._sub_lock = asyncio.Lock()
+        self._sub_lock = threading.RLock()
         
         # WebSocket clients
         self._ws_clients: set[Any] = set()  # Set of WebSocket connections
@@ -145,18 +146,12 @@ class NewsStreamer:
             channel: Channel name (policy, market, company, regulatory, all)
             callback: Async callback function receiving NewsArticle
         """
-        async def register():
-            async with self._sub_lock:
-                if channel not in self._subscriptions:
-                    self._subscriptions[channel] = []
-                if callback not in self._subscriptions[channel]:
-                    self._subscriptions[channel].append(callback)
-                log.info(f"Registered subscription for channel: {channel}")
-        
-        if asyncio.get_event_loop().is_running():
-            asyncio.create_task(register())
-        else:
-            asyncio.run(register())
+        with self._sub_lock:
+            if channel not in self._subscriptions:
+                self._subscriptions[channel] = []
+            if callback not in self._subscriptions[channel]:
+                self._subscriptions[channel].append(callback)
+        log.info(f"Registered subscription for channel: {channel}")
     
     def unsubscribe(
         self,
@@ -169,19 +164,14 @@ class NewsStreamer:
             channel: Channel name
             callback: Optional specific callback to remove
         """
-        async def unregister():
-            async with self._sub_lock:
-                if channel in self._subscriptions:
-                    if callback:
+        with self._sub_lock:
+            if channel in self._subscriptions:
+                if callback:
+                    if callback in self._subscriptions[channel]:
                         self._subscriptions[channel].remove(callback)
-                    else:
-                        self._subscriptions[channel].clear()
-                    log.info(f"Unsubscribed from channel: {channel}")
-        
-        if asyncio.get_event_loop().is_running():
-            asyncio.create_task(unregister())
-        else:
-            asyncio.run(unregister())
+                else:
+                    self._subscriptions[channel].clear()
+        log.info(f"Unsubscribed from channel: {channel}")
     
     async def start(self) -> None:
         """Start news streaming."""
@@ -295,7 +285,7 @@ class NewsStreamer:
         self._seen_ids.add(article.id)
         
         # Add to backlog
-        async with self._backlog_lock:
+        with self._backlog_lock:
             self._backlog.append(article)
             # Trim backlog
             if len(self._backlog) > self.max_backlog:
@@ -319,17 +309,16 @@ class NewsStreamer:
         Args:
             article: NewsArticle object
         """
-        async with self._sub_lock:
-            # Get subscribers for this category
-            subscribers = self._subscriptions.get(article.category, [])
-            all_subscribers = self._subscriptions.get("all", [])
-            
-            # Call all callbacks
-            for callback in subscribers + all_subscribers:
-                try:
-                    await callback(article)
-                except Exception as e:
-                    log.error(f"News callback error: {e}")
+        with self._sub_lock:
+            # Snapshot callbacks before awaiting to avoid lock contention.
+            subscribers = list(self._subscriptions.get(article.category, []))
+            all_subscribers = list(self._subscriptions.get("all", []))
+
+        for callback in subscribers + all_subscribers:
+            try:
+                await callback(article)
+            except Exception as e:
+                log.error(f"News callback error: {e}")
     
     async def _broadcast_ws(self, article: Any) -> None:
         """Broadcast to WebSocket clients.
@@ -388,15 +377,8 @@ class NewsStreamer:
         Returns:
             List of NewsArticle objects
         """
-        import asyncio
-        
-        async def get():
-            async with self._backlog_lock:
-                return self._backlog[-limit:]
-        
-        if asyncio.get_event_loop().is_running():
-            return asyncio.run(get())
-        return asyncio.run(get())
+        with self._backlog_lock:
+            return list(self._backlog[-limit:])
     
     def get_recent(self, category: str | None = None, limit: int = 50) -> list[Any]:
         """Get recent articles, optionally filtered by category.
@@ -408,18 +390,11 @@ class NewsStreamer:
         Returns:
             List of NewsArticle objects
         """
-        import asyncio
-        
-        async def get():
-            async with self._backlog_lock:
-                articles = self._backlog.copy()
-                if category:
-                    articles = [a for a in articles if a.category == category]
-                return articles[-limit:]
-        
-        if asyncio.get_event_loop().is_running():
-            return asyncio.run(get())
-        return asyncio.run(get())
+        with self._backlog_lock:
+            articles = self._backlog.copy()
+        if category:
+            articles = [a for a in articles if a.category == category]
+        return list(articles[-limit:])
 
 
 # Singleton instance
@@ -438,5 +413,10 @@ def reset_streamer() -> None:
     """Reset streamer instance."""
     global _streamer
     if _streamer:
-        asyncio.run(_streamer.stop())
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            asyncio.run(_streamer.stop())
+        else:
+            loop.create_task(_streamer.stop())
     _streamer = None

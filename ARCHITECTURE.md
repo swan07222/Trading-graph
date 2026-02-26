@@ -466,9 +466,9 @@ python main.py --doctor --doctor-strict
 ## Future Enhancements
 
 - [ ] Enhanced NLP for Chinese policy documents
-- [ ] Real-time news streaming
+- [x] Real-time news streaming (WebSocket service + desktop realtime panel)
 - [ ] Multi-modal sentiment (text + social)
 - [ ] Cloud backup integration
-- [ ] Model explainability dashboard (SHAP/LIME)
+- [ ] Model explainability dashboard UI (SHAP/LIME backend already implemented)
 - [ ] 2FA authentication
 - [ ] Distributed training support (Ray, DeepSpeed)

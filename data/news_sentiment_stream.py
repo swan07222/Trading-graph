@@ -424,9 +424,26 @@ class SentimentStreamProcessor:
         match = re.match(r'^(\d{6})\.(SZ|SH|SS)$', entity, re.IGNORECASE)
         if match:
             return match.group(1)
-        
-        # TODO: Add company name to code mapping
-        # For now, return None for non-code entities
+
+        # Match alternate exchange-prefix forms: SH600000, SZ000001.
+        match = re.match(r'^(SH|SZ|SS)(\d{6})$', entity, re.IGNORECASE)
+        if match:
+            return match.group(2)
+
+        # Minimal company/entity fallback map for common aliases.
+        # This is intentionally small and deterministic to avoid false mapping.
+        alias_map = {
+            "PINGAN BANK": "000001",
+            "PING AN BANK": "000001",
+            "平安银行": "000001",
+            "贵州茅台": "600519",
+            "KWEICHOW MOUTAI": "600519",
+            "浦发银行": "600000",
+            "SHANGHAI PUDONG DEVELOPMENT BANK": "600000",
+        }
+        mapped = alias_map.get(entity.upper())
+        if mapped:
+            return mapped
         
         return None
     
@@ -439,17 +456,10 @@ class SentimentStreamProcessor:
         Returns:
             Sentiment data dictionary or None
         """
-        import asyncio
-        
-        async def get():
-            async with self._sentiments_lock:
-                if stock_code not in self._stock_sentiments:
-                    return None
-                return self._stock_sentiments[stock_code].to_dict()
-        
-        if asyncio.get_event_loop().is_running():
-            return asyncio.run(get())
-        return asyncio.run(get())
+        rec = self._stock_sentiments.get(stock_code)
+        if rec is None:
+            return None
+        return rec.to_dict()
     
     def get_market_sentiment(self) -> dict[str, Any]:
         """Get current market-wide sentiment.
@@ -457,20 +467,12 @@ class SentimentStreamProcessor:
         Returns:
             Market sentiment data
         """
-        import asyncio
-        
-        async def get():
-            async with self._sentiments_lock:
-                return {
-                    "market_sentiment": self._market_window.get_weighted_average(self.decay_half_life),
-                    "market_trend": self._market_window.get_trend(),
-                    "policy_sentiment": self._policy_window.get_weighted_average(self.decay_half_life),
-                    "policy_trend": self._policy_window.get_trend(),
-                }
-        
-        if asyncio.get_event_loop().is_running():
-            return asyncio.run(get())
-        return asyncio.run(get())
+        return {
+            "market_sentiment": self._market_window.get_weighted_average(self.decay_half_life),
+            "market_trend": self._market_window.get_trend(),
+            "policy_sentiment": self._policy_window.get_weighted_average(self.decay_half_life),
+            "policy_trend": self._policy_window.get_trend(),
+        }
     
     def get_top_sentiment(self, limit: int = 10, descending: bool = True) -> list[dict[str, Any]]:
         """Get stocks with top sentiment scores.
@@ -482,20 +484,12 @@ class SentimentStreamProcessor:
         Returns:
             List of (stock_code, sentiment_data) tuples
         """
-        import asyncio
-        
-        async def get():
-            async with self._sentiments_lock:
-                stocks = list(self._stock_sentiments.values())
-                stocks.sort(
-                    key=lambda s: s.window.get_weighted_average(self.decay_half_life),
-                    reverse=descending,
-                )
-                return [s.to_dict() for s in stocks[:limit]]
-        
-        if asyncio.get_event_loop().is_running():
-            return asyncio.run(get())
-        return asyncio.run(get())
+        stocks = list(self._stock_sentiments.values())
+        stocks.sort(
+            key=lambda s: s.window.get_weighted_average(self.decay_half_life),
+            reverse=descending,
+        )
+        return [s.to_dict() for s in stocks[:limit]]
 
 
 # Singleton instance
@@ -514,5 +508,10 @@ def reset_sentiment_processor() -> None:
     """Reset processor instance."""
     global _processor
     if _processor:
-        asyncio.run(_processor.stop())
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            asyncio.run(_processor.stop())
+        else:
+            loop.create_task(_processor.stop())
     _processor = None

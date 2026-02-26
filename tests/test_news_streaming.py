@@ -134,7 +134,7 @@ class TestSentimentStreamProcessor:
         # Valid codes
         assert processor._normalize_stock_code("000001") == "000001"
         assert processor._normalize_stock_code("000001.SZ") == "000001"
-        assert processor._normalize_stock_code("600000.SH") == "000001"
+        assert processor._normalize_stock_code("600000.SH") == "600000"
         
         # Invalid codes
         assert processor._normalize_stock_code("AAPL") is None

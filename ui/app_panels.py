@@ -261,13 +261,30 @@ def _create_right_panel(self: Any) -> QWidget:
     news_layout = QVBoxLayout(news_tab)
     news_layout.setContentsMargins(8, 8, 8, 8)
     try:
-        NewsPanel = _lazy_get("ui.news_widget", "NewsPanel")
-        self.news_panel = NewsPanel()
+        RealTimeNewsWidget = _lazy_get("ui.news_realtime_widget", "RealTimeNewsWidget")
+        self.news_panel = RealTimeNewsWidget()
+        try:
+            get_ws_client = _lazy_get("ui.websocket_client", "get_websocket_client")
+            ws_client = get_ws_client()
+            if hasattr(self.news_panel, "set_websocket_client"):
+                self.news_panel.set_websocket_client(ws_client)
+            if hasattr(ws_client, "connect"):
+                ws_client.connect()
+            if hasattr(self.news_panel, "subscribe_to_channel"):
+                self.news_panel.subscribe_to_channel("all")
+        except _APP_PANELS_RECOVERABLE_EXCEPTIONS as e:
+            log.warning(f"Realtime news websocket unavailable, using local widget mode: {e}")
         news_layout.addWidget(self.news_panel)
     except _APP_PANELS_RECOVERABLE_EXCEPTIONS as e:
-        log.warning(f"News panel not available: {e}")
-        self.news_panel = QLabel("News panel unavailable")
-        news_layout.addWidget(self.news_panel)
+        log.warning(f"Realtime news panel not available, falling back: {e}")
+        try:
+            NewsPanel = _lazy_get("ui.news_widget", "NewsPanel")
+            self.news_panel = NewsPanel()
+            news_layout.addWidget(self.news_panel)
+        except _APP_PANELS_RECOVERABLE_EXCEPTIONS as inner:
+            log.warning(f"News panel not available: {inner}")
+            self.news_panel = QLabel("News panel unavailable")
+            news_layout.addWidget(self.news_panel)
     tabs.addTab(news_tab, "News and Policy")
 
     # Live Signals Tab

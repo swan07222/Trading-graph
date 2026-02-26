@@ -5,6 +5,8 @@ from importlib.util import find_spec
 from pathlib import Path
 from typing import Any
 
+from config.settings import CONFIG
+
 
 def _module_exists(module: str) -> bool:
     """Fast dependency probe without importing heavy modules."""
@@ -418,7 +420,7 @@ def main() -> int:
 
             search_engine = get_search_engine()
 
-            async def run_search():
+            async def run_search() -> list[Any]:
                 if query == "llm-data":
                     # Special mode: search for LLM training data
                     print("\nSearching for LLM training data (multiple queries)...")
@@ -636,7 +638,7 @@ def main() -> int:
                 print(f"  Alert Threshold: {args.sentiment_alert_threshold}")
             print("=" * 60)
             
-            async def run_streaming():
+            async def run_streaming() -> None:
                 # Initialize components
                 streamer = NewsStreamer(
                     poll_interval=args.stream_poll_interval,
@@ -653,13 +655,17 @@ def main() -> int:
                     )
                     
                     # Connect streamer to sentiment processor
-                    async def process_for_sentiment(article):
+                    async def process_for_sentiment(article: Any) -> None:
                         await sentiment_processor.process_article(article)
                     
                     streamer.subscribe("all", process_for_sentiment)
                     
                     # Setup sentiment alerts
-                    def on_alert(stock_code, alert_type, data):
+                    def on_alert(
+                        stock_code: str,
+                        alert_type: str,
+                        data: dict[str, Any],
+                    ) -> None:
                         print(f"\n🚨 SENTIMENT ALERT: {stock_code} - {alert_type}")
                         print(f"   Sentiment: {data.get('sentiment', 0):.2f}")
                         print(f"   Trend: {data.get('trend', 0):.2f}")
