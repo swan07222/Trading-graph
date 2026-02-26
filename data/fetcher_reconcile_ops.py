@@ -22,6 +22,10 @@ _RECOVERABLE_FETCH_EXCEPTIONS = (
     TypeError,
     ValueError,
     json.JSONDecodeError,
+    ConnectionError,
+    ConnectionResetError,
+    ConnectionAbortedError,
+    ConnectionRefusedError,
 )
 
 def _now_shanghai_naive() -> datetime:

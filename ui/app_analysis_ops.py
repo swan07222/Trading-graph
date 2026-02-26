@@ -1003,22 +1003,32 @@ def _compute_guess_profit(
         Net P&L after transaction costs (positive = correct guess)
 
     FIX: Realistic China A-share transaction cost modeling.
+    FIX Bug #6: Handle edge cases for shares calculation and invalid prices.
     """
-    entry = float(entry_price or 0.0)
-    mark = float(mark_price or 0.0)
+    try:
+        entry = float(entry_price or 0.0)
+        mark = float(mark_price or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
 
     if entry <= 0 or mark <= 0:
         return 0.0
 
     # Calculate shares based on notional value if not provided.
     if shares is None or int(shares) <= 0:
-        lot_size = int(getattr(CONFIG, "LOT_SIZE", 100) or 100)
-        # Calculate shares to match notional value (10,000 CNY)
-        raw_shares = _GUESS_PROFIT_NOTIONAL_VALUE / entry
-        shares = int(raw_shares / lot_size) * lot_size  # Round to lot size
-        shares = max(lot_size, shares)  # Minimum 1 lot (100 shares)
+        try:
+            lot_size = int(getattr(CONFIG, "LOT_SIZE", 100) or 100)
+            # Calculate shares to match notional value (10,000 CNY)
+            raw_shares = _GUESS_PROFIT_NOTIONAL_VALUE / entry
+            shares = int(raw_shares / lot_size) * lot_size  # Round to lot size
+            shares = max(lot_size, shares)  # Minimum 1 lot (100 shares)
+        except (TypeError, ValueError, ZeroDivisionError):
+            return 0.0
 
-    qty = max(1, int(shares))
+    try:
+        qty = max(1, int(shares))
+    except (TypeError, ValueError):
+        return 0.0
 
     # Calculate gross P&L
     if direction == "UP":
@@ -1035,89 +1045,101 @@ def _compute_guess_profit(
 
     # Calculate transaction costs (China A-share market)
     # Commission: charged on both entry and exit (min CNY 5 each)
-    commission_entry = max(
-        notional_buy * _TRANSACTION_COSTS["commission_rate"],
-        _TRANSACTION_COSTS["commission_min"]
-    )
-    commission_exit = max(
-        notional_sell * _TRANSACTION_COSTS["commission_rate"],
-        _TRANSACTION_COSTS["commission_min"]
-    )
-    commission = commission_entry + commission_exit
+    try:
+        commission_entry = max(
+            notional_buy * _TRANSACTION_COSTS["commission_rate"],
+            _TRANSACTION_COSTS["commission_min"]
+        )
+        commission_exit = max(
+            notional_sell * _TRANSACTION_COSTS["commission_rate"],
+            _TRANSACTION_COSTS["commission_min"]
+        )
+        commission = commission_entry + commission_exit
 
-    # Stamp duty: charged on sell side only.
-    stamp_duty = notional_sell * _TRANSACTION_COSTS["stamp_duty"]
+        # Stamp duty: charged on sell side only.
+        stamp_duty = notional_sell * _TRANSACTION_COSTS["stamp_duty"]
 
-    # Transfer fee: charged on both sides
-    turnover = notional_buy + notional_sell
-    transfer_fee = turnover * _TRANSACTION_COSTS["transfer_fee"]
+        # Transfer fee: charged on both sides
+        turnover = notional_buy + notional_sell
+        transfer_fee = turnover * _TRANSACTION_COSTS["transfer_fee"]
 
-    # Slippage: estimated market impact
-    slippage = turnover * (_TRANSACTION_COSTS["slippage_bps"] / 10000)
+        # Slippage: estimated market impact
+        slippage = turnover * (_TRANSACTION_COSTS["slippage_bps"] / 10000)
 
-    total_costs = commission + stamp_duty + transfer_fee + slippage
+        total_costs = commission + stamp_duty + transfer_fee + slippage
 
-    # Net P&L after costs
-    net_pnl = gross_pnl - total_costs
-    
-    return net_pnl
+        # Net P&L after costs
+        net_pnl = gross_pnl - total_costs
+
+        return net_pnl
+    except (TypeError, ValueError, KeyError, ZeroDivisionError):
+        return 0.0
 
 def _refresh_guess_rows_for_symbol(self, code: str, price: float) -> None:
     """Update history result for this symbol using latest real-time price.
 
     FIX: Uses improved profit calculation with transaction costs.
+    FIX Bug #5: Add proper error handling to prevent race conditions and UI crashes.
     """
-    symbol = self._ui_norm(code)
-    mark_price = float(price or 0.0)
-    if not symbol or mark_price <= 0:
-        return
-
-    # FIX: Batch update for performance
-    self.history_table.setUpdatesEnabled(False)
     try:
-        for row in range(self.history_table.rowCount()):
-            code_item = self.history_table.item(row, 1)
-            result_item = self.history_table.item(row, 5)
-            if not code_item or not result_item:
-                continue
-            if self._ui_norm(code_item.text()) != symbol:
-                continue
+        symbol = self._ui_norm(code)
+        mark_price = float(price or 0.0)
+        if not symbol or mark_price <= 0:
+            return
 
-            meta = result_item.data(Qt.ItemDataRole.UserRole) or {}
-            direction = str(meta.get("direction", "NONE"))
-            entry = float(meta.get("entry_price", 0.0) or 0.0)
-            shares = int(meta.get("shares", 0) or 0)  # Will use notional if 0
-            pnl = self._compute_guess_profit(direction, entry, mark_price, shares)
-            raw_ret_pct = ((mark_price / entry - 1.0) * 100.0) if entry > 0 else 0.0
-            signed_ret_pct = (
-                raw_ret_pct
-                if direction == "UP"
-                else (-raw_ret_pct if direction == "DOWN" else 0.0)
-            )
+        # FIX: Batch update for performance
+        self.history_table.setUpdatesEnabled(False)
+        try:
+            for row in range(self.history_table.rowCount()):
+                try:
+                    code_item = self.history_table.item(row, 1)
+                    result_item = self.history_table.item(row, 5)
+                    if not code_item or not result_item:
+                        continue
+                    if self._ui_norm(code_item.text()) != symbol:
+                        continue
 
-            if direction == "NONE":
-                result_item.setText("--")
-                result_item.setForeground(QColor(ModernColors.TEXT_SECONDARY))
-            elif pnl > 0:
-                result_item.setText(
-                    f"CORRECT CNY {pnl:+,.2f} ({signed_ret_pct:+.2f}%)"
-                )
-                result_item.setForeground(QColor(ModernColors.ACCENT_SUCCESS))
-            elif pnl < 0:
-                result_item.setText(
-                    f"WRONG CNY {pnl:,.2f} ({signed_ret_pct:+.2f}%)"
-                )
-                result_item.setForeground(QColor(ModernColors.ACCENT_DANGER))
-            else:
-                result_item.setText("FLAT CNY 0.00 (+0.00%)")
-                result_item.setForeground(QColor(ModernColors.TEXT_SECONDARY))
+                    meta = result_item.data(Qt.ItemDataRole.UserRole) or {}
+                    direction = str(meta.get("direction", "NONE"))
+                    entry = float(meta.get("entry_price", 0.0) or 0.0)
+                    shares = int(meta.get("shares", 0) or 0)  # Will use notional if 0
+                    pnl = self._compute_guess_profit(direction, entry, mark_price, shares)
+                    raw_ret_pct = ((mark_price / entry - 1.0) * 100.0) if entry > 0 else 0.0
+                    signed_ret_pct = (
+                        raw_ret_pct
+                        if direction == "UP"
+                        else (-raw_ret_pct if direction == "DOWN" else 0.0)
+                    )
 
-            meta["mark_price"] = mark_price
-            result_item.setData(Qt.ItemDataRole.UserRole, meta)
-    finally:
-        self.history_table.setUpdatesEnabled(True)
+                    if direction == "NONE":
+                        result_item.setText("--")
+                        result_item.setForeground(QColor(ModernColors.TEXT_SECONDARY))
+                    elif pnl > 0:
+                        result_item.setText(
+                            f"CORRECT CNY {pnl:+,.2f} ({signed_ret_pct:+.2f}%)"
+                        )
+                        result_item.setForeground(QColor(ModernColors.ACCENT_SUCCESS))
+                    elif pnl < 0:
+                        result_item.setText(
+                            f"WRONG CNY {pnl:,.2f} ({signed_ret_pct:+.2f}%)"
+                        )
+                        result_item.setForeground(QColor(ModernColors.ACCENT_DANGER))
+                    else:
+                        result_item.setText("FLAT CNY 0.00 (+0.00%)")
+                        result_item.setForeground(QColor(ModernColors.TEXT_SECONDARY))
 
-    self._update_correct_guess_profit_ui()
+                    meta["mark_price"] = mark_price
+                    result_item.setData(Qt.ItemDataRole.UserRole, meta)
+                except (TypeError, ValueError, AttributeError):
+                    # Skip problematic rows
+                    continue
+        finally:
+            self.history_table.setUpdatesEnabled(True)
+
+        self._update_correct_guess_profit_ui()
+    except (TypeError, ValueError, AttributeError, RuntimeError) as e:
+        # FIX: Catch UI thread errors and log without crashing
+        log.debug(f"_refresh_guess_rows_for_symbol failed: {e}")
 
 def _calculate_realtime_correct_guess_profit(self) -> dict[str, float]:
     """Aggregate real-time guess quality across history rows.
@@ -1343,7 +1365,7 @@ def _scan_stocks(self) -> None:
         from analysis.screener import get_active_screener_profile_name
 
         profile_name = str(get_active_screener_profile_name() or profile_name)
-    except Exception:
+    except (ImportError, AttributeError, TypeError, ValueError):
         profile_name = "balanced"
 
     self.log(

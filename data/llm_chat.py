@@ -432,7 +432,13 @@ class LLMChatAssistant:
             model_inputs = model_inputs.to("cuda")
 
         do_sample = bool(self.temperature > 0.0)
-        with torch.no_grad() if _TORCH_AVAILABLE else _null_context():
+        # FIX: Use proper context manager for both torch and non-torch environments
+        if _TORCH_AVAILABLE:
+            context_mgr = torch.no_grad()
+        else:
+            context_mgr = _null_context()
+        
+        with context_mgr:
             output_ids = model.generate(
                 model_inputs,
                 max_new_tokens=max(64, int(self.max_new_tokens)),
@@ -659,12 +665,16 @@ class LLMChatAssistant:
 class _null_context:
     """Minimal context manager for non-torch environments."""
 
-    def __enter__(self) -> None:
-        return None
+    def __enter__(self) -> "_null_context":
+        return self
 
-    def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: object,
+    ) -> None:
         _ = (exc_type, exc, tb)
-        return None
 
 
 _assistant: LLMChatAssistant | None = None

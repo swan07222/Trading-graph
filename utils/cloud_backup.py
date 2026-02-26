@@ -14,9 +14,11 @@ Supported providers:
 """
 from __future__ import annotations
 
+import getpass
 import hashlib
 import json
 import os
+import socket
 import tarfile
 import tempfile
 from dataclasses import dataclass, field
@@ -36,32 +38,67 @@ class BackupConfig:
     provider: str = "s3"  # s3, azure, gcs
     bucket_name: str = ""
     region: str = "us-east-1"
-    
+
     # Authentication
     access_key: str = ""
     secret_key: str = ""
     endpoint_url: str | None = None  # For S3-compatible services
-    
+
     # Azure-specific
     connection_string: str = ""
-    
+
     # GCP-specific
     credentials_path: str = ""
     project_id: str = ""
-    
+
     # Backup settings
     backup_prefix: str = "trading-graph"
     retention_days: int = 30
     compression: bool = True
     encryption: bool = True
-    
+
     # Schedule
     auto_backup: bool = False
     backup_frequency: str = "daily"  # hourly, daily, weekly
-    
+
     # Last backup
     last_backup_time: datetime | None = None
     last_backup_status: str = ""
+
+    def validate(self) -> list[str]:
+        """Validate configuration.
+
+        Returns:
+            List of validation errors (empty if valid)
+        """
+        errors: list[str] = []
+
+        if not self.provider.lower() in ("s3", "azure", "gcs"):
+            errors.append(f"Invalid provider: {self.provider}. Must be s3, azure, or gcs")
+
+        if not self.bucket_name:
+            errors.append("bucket_name is required")
+
+        if self.provider.lower() == "s3":
+            if not self.access_key:
+                errors.append("access_key is required for S3")
+            if not self.secret_key:
+                errors.append("secret_key is required for S3")
+
+        elif self.provider.lower() == "azure":
+            if not self.connection_string:
+                errors.append("connection_string is required for Azure")
+
+        elif self.provider.lower() == "gcs":
+            if not self.credentials_path:
+                errors.append("credentials_path is required for GCS")
+            if not self.project_id:
+                errors.append("project_id is required for GCS")
+
+        if self.retention_days <= 0:
+            errors.append("retention_days must be positive")
+
+        return errors
 
 
 @dataclass
@@ -69,26 +106,33 @@ class BackupManifest:
     """Backup manifest tracking."""
     backup_id: str = ""
     created_at: datetime | None = None
-    
+
     # Contents
     files: list[dict[str, Any]] = field(default_factory=list)
     total_size: int = 0
     checksum: str = ""
-    
+
     # Metadata
     hostname: str = ""
     username: str = ""
     version: str = "0.1.0"
-    
+
     # Retention
     expires_at: datetime | None = None
-    
+
     def __post_init__(self) -> None:
         if not self.backup_id:
             self.backup_id = f"BACKUP_{datetime.now().strftime('%Y%m%d%H%M%S')}"
         if self.created_at is None:
             self.created_at = datetime.now()
-    
+        if not self.hostname:
+            self.hostname = socket.gethostname()
+        if not self.username:
+            try:
+                self.username = getpass.getuser()
+            except Exception:
+                self.username = "unknown"
+
     def to_dict(self) -> dict[str, Any]:
         """Serialize to dictionary."""
         return {
@@ -106,26 +150,34 @@ class BackupManifest:
 
 class CloudBackup:
     """Cloud backup manager for trading system data.
-    
+
     Usage:
         backup = CloudBackup(config)
-        
+
         # Manual backup
         backup.create_backup()
-        
+
         # Restore from backup
         backup.restore(backup_id)
-        
+
         # List available backups
         backups = backup.list_backups()
     """
-    
+
     def __init__(self, config: BackupConfig) -> None:
         """Initialize cloud backup.
-        
+
         Args:
             config: Backup configuration
+
+        Raises:
+            ValueError: If configuration is invalid
         """
+        # Validate configuration
+        errors = config.validate()
+        if errors:
+            raise ValueError(f"Invalid backup configuration: {'; '.join(errors)}")
+
         self.config = config
         self._client: Any = None
         self._initialized = False
@@ -213,15 +265,21 @@ class CloudBackup:
         """Ensure bucket exists (S3)."""
         if self.config.provider.lower() != "s3":
             return
-        
+
         try:
             self._client.head_bucket(Bucket=self.config.bucket_name)
         except Exception:
             # Create bucket
-            self._client.create_bucket(
-                Bucket=self.config.bucket_name,
-                CreateBucketConfiguration={'LocationConstraint': self.config.region}
-            )
+            # Special handling for us-east-1 - don't specify LocationConstraint
+            if self.config.region == "us-east-1":
+                self._client.create_bucket(
+                    Bucket=self.config.bucket_name,
+                )
+            else:
+                self._client.create_bucket(
+                    Bucket=self.config.bucket_name,
+                    CreateBucketConfiguration={'LocationConstraint': self.config.region},
+                )
             log.info(f"Created bucket: {self.config.bucket_name}")
     
     def create_backup(

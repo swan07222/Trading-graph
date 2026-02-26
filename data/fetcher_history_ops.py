@@ -1,4 +1,5 @@
 # data/fetcher_history_ops.py
+import json
 from typing import Any
 
 import pandas as pd
@@ -17,6 +18,11 @@ _RECOVERABLE_FETCH_EXCEPTIONS = (
     TimeoutError,
     TypeError,
     ValueError,
+    json.JSONDecodeError,
+    ConnectionError,
+    ConnectionResetError,
+    ConnectionAbortedError,
+    ConnectionRefusedError,
 )
 
 def _fetch_from_sources_instrument(

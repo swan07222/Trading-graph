@@ -20,6 +20,11 @@ _MONITOR_RECOVERABLE_EXCEPTIONS = (
     RuntimeError,
     TypeError,
     ValueError,
+    TimeoutError,
+    ConnectionError,
+    ConnectionResetError,
+    ConnectionAbortedError,
+    ConnectionRefusedError,
 )
 
 

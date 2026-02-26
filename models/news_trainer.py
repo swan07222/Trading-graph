@@ -314,7 +314,7 @@ class NewsTrainer:
         log.info(f"Preparing training data for {len(symbols)} symbols...")
 
         samples = []
-        datetime.now() - timedelta(days=days_back)
+        cutoff_date = datetime.now() - timedelta(days=days_back)
 
         for symbol in symbols:
             try:
@@ -392,8 +392,12 @@ class NewsTrainer:
         # Iterate through price data
         for i in range(lookback, len(prices) - horizon):
             try:
-                current_date = prices.index[i] if hasattr(prices.index[i], 'strftime') else datetime.now()
-                date_str = current_date.strftime("%Y-%m-%d")
+                current_date = prices.index[i]
+                if hasattr(current_date, 'strftime'):
+                    date_str = current_date.strftime("%Y-%m-%d")
+                else:
+                    # Handle non-datetime index
+                    continue
 
                 # Get news for this day
                 day_articles = articles_by_date.get(date_str, [])
@@ -402,20 +406,20 @@ class NewsTrainer:
 
                 # Aggregate sentiment
                 sentiment_scores = [a.sentiment_score for a in day_articles]
-                avg_sentiment = np.mean(sentiment_scores)
-                sentiment_std = np.std(sentiment_scores) if len(sentiment_scores) > 1 else 0
+                avg_sentiment = float(np.mean(sentiment_scores)) if sentiment_scores else 0.0
+                sentiment_std = float(np.std(sentiment_scores)) if len(sentiment_scores) > 1 else 0.0
 
                 # Sentiment features
                 sentiment_features = np.array([
                     avg_sentiment,
                     sentiment_std,
-                    len(day_articles),
-                    max(sentiment_scores) if sentiment_scores else 0,
-                    min(sentiment_scores) if sentiment_scores else 0,
-                    sum(1 for s in sentiment_scores if s > 0.3),  # Positive count
-                    sum(1 for s in sentiment_scores if s < -0.3),  # Negative count
-                    sum(1 for a in day_articles if a.category == "policy"),  # Policy count
-                    np.mean([a.relevance_score for a in day_articles]),
+                    float(len(day_articles)),
+                    float(max(sentiment_scores)) if sentiment_scores else 0.0,
+                    float(min(sentiment_scores)) if sentiment_scores else 0.0,
+                    float(sum(1 for s in sentiment_scores if s > 0.3)),  # Positive count
+                    float(sum(1 for s in sentiment_scores if s < -0.3)),  # Negative count
+                    float(sum(1 for a in day_articles if a.category == "policy")),  # Policy count
+                    float(np.mean([a.relevance_score for a in day_articles])) if day_articles else 0.0,
                     0.0,  # Placeholder for future features
                 ])
 
@@ -424,9 +428,9 @@ class NewsTrainer:
                 price_features = self._extract_price_features(price_data)
 
                 # Label: price movement over horizon
-                current_price = prices["close"].iloc[i]
-                future_price = prices["close"].iloc[i + horizon]
-                future_return = (future_price - current_price) / current_price
+                current_price = float(prices["close"].iloc[i])
+                future_price = float(prices["close"].iloc[i + horizon])
+                future_return = (future_price - current_price) / current_price if current_price != 0 else 0.0
 
                 # Convert to class
                 if future_return > 0.03:
@@ -449,7 +453,7 @@ class NewsTrainer:
                     label=label,
                     label_return=future_return,
                     symbol=symbol,
-                    timestamp=current_date,
+                    timestamp=current_date if isinstance(current_date, datetime) else datetime.now(),
                 ))
 
             except Exception as e:
@@ -463,19 +467,31 @@ class NewsTrainer:
         features = []
 
         for _, row in price_data.iterrows():
-            # OHLCV + returns
-            row_features = [
-                row.get("open", 0) / row.get("close", 1) - 1,  # Intraday return
-                row.get("high", 0) / row.get("low", 1) - 1,  # Daily range
-                row.get("volume", 0) / 1e6,  # Volume (millions)
-                row.get("close", 0),  # Close price (will be normalized)
-            ]
-            features.append(row_features)
+            try:
+                close_price = float(row.get("close", 1.0))
+                if close_price <= 0:
+                    close_price = 1.0  # Prevent division by zero
+                
+                # OHLCV + returns
+                row_features = [
+                    float(row.get("open", close_price)) / close_price - 1.0,  # Intraday return
+                    float(row.get("high", close_price)) / max(float(row.get("low", close_price)), 1e-8) - 1.0,  # Daily range
+                    float(row.get("volume", 0)) / 1e6,  # Volume (millions)
+                    close_price,  # Close price (will be normalized)
+                ]
+                features.append(row_features)
+            except (TypeError, ValueError, ZeroDivisionError):
+                # Skip malformed rows
+                continue
+
+        if not features:
+            # Return default features if no valid data
+            return np.zeros((len(price_data), 4), dtype=np.float32)
 
         result = np.array(features, dtype=np.float32)
 
         # Normalize
-        if len(result) > 0:
+        if len(result) > 0 and result[:, 3].max() > 0:
             result[:, 3] = result[:, 3] / result[:, 3].max()  # Normalize price
 
         return result
@@ -675,7 +691,12 @@ class NewsTrainer:
 
         # FIX: Use weights_only=True for security (PyTorch 2.6+)
         # This prevents arbitrary code execution from malicious model files
-        checkpoint = torch.load(path, map_location=self.device, weights_only=True)
+        try:
+            checkpoint = torch.load(path, map_location=self.device, weights_only=True)
+        except TypeError:
+            # Fallback for older PyTorch versions that don't support weights_only
+            log.warning("PyTorch version doesn't support weights_only, using legacy load")
+            checkpoint = torch.load(path, map_location=self.device)
 
         if self.model is None:
             self.model = NewsPriceFusionModel()

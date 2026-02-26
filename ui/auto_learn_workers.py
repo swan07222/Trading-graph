@@ -19,6 +19,11 @@ _WORKER_RECOVERABLE_EXCEPTIONS = (
     RuntimeError,
     TypeError,
     ValueError,
+    TimeoutError,
+    ConnectionError,
+    ConnectionResetError,
+    ConnectionAbortedError,
+    ConnectionRefusedError,
 )
 _SUPPORTED_TRAIN_INTERVALS = frozenset(
     {"1m", "2m", "3m", "5m", "15m", "30m", "60m", "1h", "1d"}
@@ -34,7 +39,7 @@ def _force_china_direct_network_mode() -> None:
         from core.network import invalidate_network_cache
 
         invalidate_network_cache()
-    except Exception:
+    except (ImportError, AttributeError, TypeError):
         # Keep worker startup resilient even if network module is unavailable.
         pass
 
@@ -363,7 +368,10 @@ class TargetedLearnWorker(_BaseLearnWorker):
         except _WORKER_RECOVERABLE_EXCEPTIONS as exc:
             error_msg = str(exc)
             log.error("TargetedLearnWorker error: %s", error_msg)
-            log.debug(traceback.format_exc())
+            try:
+                log.debug(traceback.format_exc())
+            except (AttributeError, TypeError, ValueError):
+                pass
             if self.running:
                 self.error_occurred.emit(error_msg)
 

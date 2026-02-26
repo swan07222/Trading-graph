@@ -514,7 +514,7 @@ class ContinuousLearner:
         return eff_interval, eff_horizon, eff_lookback, min_bars
 
     def _ensure_holdout(self, interval, lookback, min_bars, cycle_number) -> None:
-        """FIX: Adaptive holdout size based on pool size."""
+        """FIX: Adaptive holdout size based on pool size with data quality validation."""
         min_required = max(1, int(self._MIN_HOLDOUT_PREDICTIONS))
         with self._lock:
             current_holdout_size = len(self._holdout_codes)
@@ -566,7 +566,41 @@ class ContinuousLearner:
                     df = fetcher.get_history(
                         code, interval=interval, bars=lookback, use_cache=False,
                     )
+                
+                # FIX: Validate data quality, not just quantity
                 if df is not None and len(df) >= min_bars:
+                    # Check for constant prices (flat lines)
+                    if 'close' in df.columns:
+                        close_std = df['close'].std()
+                        if close_std <= 1e-6:
+                            log.debug("Holdout candidate %s rejected: constant prices", code)
+                            continue
+                    
+                    # Check for NaN columns
+                    if df.isnull().all().any():
+                        nan_cols = df.columns[df.isnull().all()].tolist()
+                        log.debug("Holdout candidate %s rejected: all-NaN columns: %s", code, nan_cols)
+                        continue
+                    
+                    # Check for non-positive prices
+                    if 'close' in df.columns and (df['close'] <= 0).any():
+                        log.debug("Holdout candidate %s rejected: non-positive prices", code)
+                        continue
+                    
+                    # Check for OHLC violations
+                    if all(col in df.columns for col in ['open', 'high', 'low', 'close']):
+                        ohlc_violations = (
+                            (df['high'] < df['low']) |
+                            (df['high'] < df['open']) |
+                            (df['high'] < df['close']) |
+                            (df['low'] > df['open']) |
+                            (df['low'] > df['close'])
+                        ).sum()
+                        if ohlc_violations > len(df) * 0.05:  # More than 5% violations
+                            log.debug("Holdout candidate %s rejected: too many OHLC violations (%.1f%%)", 
+                                     code, 100.0 * ohlc_violations / len(df))
+                            continue
+                    
                     new_holdout.append(code)
             except _AUTO_LEARNER_RECOVERABLE_EXCEPTIONS as e:
                 log.debug("Holdout candidate fetch failed for %s: %s", code, e)

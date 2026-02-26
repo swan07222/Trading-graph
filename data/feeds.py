@@ -31,6 +31,10 @@ _FEED_SOFT_EXCEPTIONS = (
     TypeError,
     ValueError,
     json.JSONDecodeError,
+    ConnectionError,
+    ConnectionResetError,
+    ConnectionAbortedError,
+    ConnectionRefusedError,
 )
 
 # Enums / dataclasses

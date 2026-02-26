@@ -598,11 +598,11 @@ class Predictor:
         """Get recent prediction accuracy for a stock."""
         if stock_code not in self._stock_accuracy_history:
             return 0.5  # Neutral default
-        
+
         history = self._stock_accuracy_history[stock_code]
         if not history:
             return 0.5
-        
+
         # Weight recent predictions more heavily
         weights = []
         for i in range(len(history)):
@@ -614,28 +614,85 @@ class Predictor:
 
         return weighted_sum / weight_total if weight_total > 0 else 0.5
 
-    def _calibrate_confidence(self, confidence: float, stock_code: str, entropy: float) -> float:
-        """Calibrate confidence based on historical accuracy and uncertainty.
-        
-        This improves prediction reliability by adjusting confidence based on:
+    def _calibrate_confidence(
+        self,
+        confidence: float,
+        stock_code: str,
+        entropy: float,
+        model_agreement: float = 0.5,
+        data_quality: float = 1.0,
+        market_regime: str = "",
+    ) -> float:
+        """Calibrate confidence based on multiple factors.
+
+        IMPROVEMENTS: Enhanced confidence calibration using:
         1. Historical accuracy for this stock
         2. Prediction entropy (uncertainty)
-        3. Model agreement
+        3. Model agreement level
+        4. Data quality score
+        5. Market regime awareness
+        6. Sample size awareness (more history = more reliable)
         """
         if not self._confidence_calibration_enabled:
             return confidence
-        
+
         # Get historical accuracy
         historical_acc = self._get_stock_accuracy(stock_code)
         
-        # Adjust confidence based on historical performance
+        # Get sample size for reliability adjustment
+        sample_count = len(self._stock_accuracy_history.get(stock_code, []))
+        sample_reliability = min(1.0, sample_count / 30.0)  # Full reliability at 30+ samples
+
+        # Base confidence adjustment from historical accuracy
         if historical_acc > 0.6:
-            # Good history: boost confidence slightly
-            confidence = min(0.95, confidence * (1.0 + (historical_acc - 0.5) * 0.2))
+            # Good history: boost confidence
+            boost_factor = 1.0 + ((historical_acc - 0.5) * 0.2 * sample_reliability)
+            confidence = min(0.95, confidence * boost_factor)
         elif historical_acc < 0.45:
             # Poor history: reduce confidence
-            confidence = max(0.3, confidence * (1.0 - (0.5 - historical_acc) * 0.3))
-        
+            reduction_factor = 1.0 - ((0.5 - historical_acc) * 0.3 * sample_reliability)
+            confidence = max(0.3, confidence * reduction_factor)
+
+        # IMPROVEMENT: Model agreement adjustment
+        # High agreement between models increases confidence
+        if model_agreement > 0.7:
+            agreement_boost = (model_agreement - 0.7) * 0.15
+            confidence = min(0.95, confidence + agreement_boost)
+        elif model_agreement < 0.4:
+            agreement_penalty = (0.4 - model_agreement) * 0.2
+            confidence = max(0.3, confidence - agreement_penalty)
+
+        # IMPROVEMENT: Entropy-based adjustment (uncertainty penalty)
+        # High entropy = more uncertainty = lower confidence
+        if entropy > 0.6:
+            entropy_penalty = (entropy - 0.6) * 0.25
+            confidence = max(0.3, confidence - entropy_penalty)
+        elif entropy < 0.3:
+            entropy_boost = (0.3 - entropy) * 0.15
+            confidence = min(0.95, confidence + entropy_boost)
+
+        # IMPROVEMENT: Data quality adjustment
+        # Poor data quality reduces confidence
+        if data_quality < 0.7:
+            quality_penalty = (0.7 - data_quality) * 0.3
+            confidence = max(0.3, confidence - quality_penalty)
+        elif data_quality > 0.9:
+            quality_boost = (data_quality - 0.9) * 0.1
+            confidence = min(0.95, confidence + quality_boost)
+
+        # IMPROVEMENT: Market regime awareness
+        # Certain regimes have historically lower prediction accuracy
+        regime_adjustments = {
+            "HIGH_VOLATILITY": -0.08,
+            "CRASH": -0.15,
+            "BUBBLE": -0.10,
+            "LOW_LIQUIDITY": -0.12,
+            "STRONG_UPTREND": 0.05,
+            "STRONG_DOWNTREND": 0.03,
+        }
+        regime_adj = regime_adjustments.get(market_regime.upper(), 0.0)
+        confidence = float(np.clip(confidence + regime_adj, 0.3, 0.95))
+
         return float(np.clip(confidence, 0.3, 0.95))
 
     def _find_best_model_pair(self, model_dir: Path) -> tuple[Path | None, Path | None]:
@@ -1275,12 +1332,23 @@ class Predictor:
                 if self.ensemble:
                     self._apply_ensemble_prediction(X, pred)
 
-                # Enhanced accuracy: Calibrate confidence based on historical performance
+                # IMPROVEMENT: Enhanced confidence calibration with multiple factors
                 if self._confidence_calibration_enabled:
+                    # Calculate data quality score based on data completeness and freshness
+                    data_len = len(df) if df is not None else 0
+                    expected_len = self._default_lookback_bars(pred.interval)
+                    data_quality = min(1.0, data_len / max(1, expected_len))
+                    
+                    # Get market regime info if available
+                    market_regime = getattr(pred, 'regime', '')
+                    
                     pred.confidence = self._calibrate_confidence(
                         pred.confidence,
                         pred.stock_code,
                         pred.entropy,
+                        model_agreement=getattr(pred, 'model_agreement', 0.5),
+                        data_quality=data_quality,
+                        market_regime=market_regime,
                     )
                 
                 # Enhanced accuracy: Apply regime-aware adjustments

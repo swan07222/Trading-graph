@@ -25,6 +25,11 @@ _SECURITY_SOFT_EXCEPTIONS = (
     RuntimeError,
     TypeError,
     ValueError,
+    TimeoutError,
+    ConnectionError,
+    ConnectionResetError,
+    ConnectionAbortedError,
+    ConnectionRefusedError,
 )
 _ENV_SECURE_STORAGE_PATH = "TRADING_SECURE_STORAGE_PATH"
 _ENV_SECURE_KEY_PATH = "TRADING_SECURE_KEY_PATH"

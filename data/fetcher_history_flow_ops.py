@@ -322,7 +322,11 @@ def _fetch_history_with_depth_retry(
     base_fetch_days: int,
     return_meta: bool = False,
 ) -> pd.DataFrame | tuple[pd.DataFrame, dict[str, Any]]:
-    """Fetch history with adaptive depth retries."""
+    """Fetch history with adaptive depth retries.
+    
+    FIX 2026-02-25: Added comprehensive error handling for all network
+    operations and improved logging for debugging.
+    """
     iv = str(interval or "1d").lower()
     max_days = int(INTERVAL_MAX_DAYS.get(iv, 10_000))
     base = max(1, int(base_fetch_days))
@@ -349,9 +353,20 @@ def _fetch_history_with_depth_retry(
                 return_meta=True,
             )
         except TypeError:
-            raw_out = self._fetch_from_sources_instrument(
-                inst, days=d, interval=iv,
-            )
+            # Fallback for sources that don't support return_meta
+            try:
+                raw_out = self._fetch_from_sources_instrument(
+                    inst, days=d, interval=iv,
+                )
+            except Exception as exc:
+                log.debug("History fetch failed for %s (%s, %dd): %s", 
+                         inst.get("symbol"), iv, d, exc)
+                continue
+        except Exception as exc:
+            log.debug("History fetch failed for %s (%s, %dd): %s", 
+                     inst.get("symbol"), iv, d, exc)
+            continue
+            
         if (
             isinstance(raw_out, tuple)
             and len(raw_out) == 2
@@ -370,20 +385,35 @@ def _fetch_history_with_depth_retry(
                 else pd.DataFrame()
             )
             meta = {}
-        df = self._clean_dataframe(raw_df, interval=iv)
+        
+        try:
+            df = self._clean_dataframe(raw_df, interval=iv)
+        except Exception as exc:
+            log.debug("DataFrame cleaning failed for %s (%s): %s",
+                     inst.get("symbol"), iv, exc)
+            continue
+            
         if df.empty:
             continue
 
         if is_intraday:
-            q = self._intraday_frame_quality(df, iv)
-            score = float(q.get("score", 0.0))
-            if (
-                score > best_score + 0.02
-                or (abs(score - best_score) <= 0.02 and len(df) > len(best))
-            ):
-                best = df
-                best_meta = dict(meta)
-                best_score = score
+            try:
+                q = self._intraday_frame_quality(df, iv)
+                score = float(q.get("score", 0.0))
+                if (
+                    score > best_score + 0.02
+                    or (abs(score - best_score) <= 0.02 and len(df) > len(best))
+                ):
+                    best = df
+                    best_meta = dict(meta)
+                    best_score = score
+            except Exception as exc:
+                log.debug("Intraday quality check failed for %s (%s): %s",
+                         inst.get("symbol"), iv, exc)
+                # Still consider the data if quality check fails
+                if len(df) > len(best):
+                    best = df
+                    best_meta = dict(meta)
         else:
             if len(df) > len(best):
                 best = df

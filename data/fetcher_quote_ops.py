@@ -42,6 +42,10 @@ _RECOVERABLE_FETCH_EXCEPTIONS = (
     TypeError,
     ValueError,
     json.JSONDecodeError,
+    ConnectionError,
+    ConnectionResetError,
+    ConnectionAbortedError,
+    ConnectionRefusedError,
 )
 
 
@@ -90,7 +94,11 @@ def _quote_quality_score(
     *,
     source_rank: float = 0.0,
 ) -> float:
-    """Compute quote quality score; higher means more reliable."""
+    """Compute quote quality score; higher means more reliable.
+    
+    FIX 2026-02-25: Added comprehensive validation for edge cases
+    including NaN, Inf, and type conversion errors.
+    """
     if not _quote_sanity_ok(quote):
         return float("-inf")
     if quote is None:
@@ -100,21 +108,32 @@ def _quote_quality_score(
     score += _source_reliability_bonus(getattr(quote, "source", ""))
 
     # Freshness is the strongest factor.
-    age_s = float(self._quote_age_seconds(quote))
-    if not math.isfinite(age_s):
-        score -= 20.0
-    else:
-        score += max(-35.0, 18.0 - min(35.0, age_s * 1.8))
+    try:
+        age_s = float(self._quote_age_seconds(quote))
+        if not math.isfinite(age_s):
+            score -= 20.0
+        else:
+            score += max(-35.0, 18.0 - min(35.0, age_s * 1.8))
+    except (TypeError, ValueError, AttributeError):
+        # If we can't determine age, penalize but don't reject
+        score -= 15.0
 
     # Prefer realtime/non-delayed quotes.
-    if bool(getattr(quote, "is_delayed", False)):
-        score -= 8.0
-    else:
+    try:
+        is_delayed = bool(getattr(quote, "is_delayed", False))
+        if is_delayed:
+            score -= 8.0
+        else:
+            score += 4.0
+    except (TypeError, ValueError):
+        # Default to non-delayed if attribute is malformed
         score += 4.0
 
     # Lower reported latency is better.
     try:
         latency_ms = float(getattr(quote, "latency_ms", 0.0) or 0.0)
+        if not math.isfinite(latency_ms):
+            latency_ms = 0.0
     except (TypeError, ValueError):
         latency_ms = 0.0
     score += max(-10.0, 4.0 - min(10.0, latency_ms / 180.0))
@@ -122,6 +141,8 @@ def _quote_quality_score(
     # Higher volume snapshots are usually more reliable.
     try:
         volume = float(getattr(quote, "volume", 0.0) or 0.0)
+        if not math.isfinite(volume):
+            volume = 0.0
     except (TypeError, ValueError):
         volume = 0.0
     if volume > 0:
@@ -130,13 +151,20 @@ def _quote_quality_score(
     # Penalize suspicious OHLC relationships if present.
     try:
         px = float(getattr(quote, "price", 0.0) or 0.0)
+        if not math.isfinite(px) or px <= 0:
+            px = 1e-9  # Use small positive value for ratio calculation
         high = float(getattr(quote, "high", px) or px)
         low = float(getattr(quote, "low", px) or px)
+        if not math.isfinite(high):
+            high = px
+        if not math.isfinite(low):
+            low = px
         if high > 0.0 and low > 0.0:
             span = abs(high - low) / max(px, 1e-9)
             if span > 0.25:
                 score -= 10.0
     except (TypeError, ValueError):
+        # Can't validate OHLC - don't penalize but don't reward
         pass
 
     return float(score)

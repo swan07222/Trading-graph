@@ -900,7 +900,7 @@ class AutoLearnDialog(QDialog):
         """Handle progress update from either worker."""
         try:
             p_raw = int(float(percent))
-        except Exception:
+        except (TypeError, ValueError, OverflowError):
             p_raw = self._last_progress_percent
         p = int(max(0, min(100, p_raw)))
         msg = str(message or "").strip()

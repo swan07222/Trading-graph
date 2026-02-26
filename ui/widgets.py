@@ -595,8 +595,7 @@ class LogWidget(QTextEdit):
 
     def _trim_old_lines(self) -> None:
         """Remove oldest lines to keep log bounded.
-        Uses document-level block removal instead of fragile cursor manipulation.
-        FIX: Improved trim logic to prevent text corruption.
+        Uses QTextDocument block removal for reliable trimming without text corruption.
         """
         try:
             doc = self.document()
@@ -607,37 +606,41 @@ class LogWidget(QTextEdit):
             if block_count <= self.MAX_LINES:
                 return
 
+            # Calculate how many blocks to remove
             remove_count = min(self._TRIM_BATCH, block_count - self.MAX_LINES)
+            if remove_count <= 0:
+                return
 
-            # FIX: Use simpler and more reliable trim approach
-            # Get all text, split into lines, remove old ones, restore
+            # Use QTextCursor to remove blocks from the beginning
             cursor = self.textCursor()
-            cursor.movePosition(cursor.MoveOperation.Start)
-            cursor.movePosition(
-                cursor.MoveOperation.End,
-                cursor.MoveMode.KeepAnchor,
-            )
-            all_text = cursor.selectedText()
-            
-            # Split by line separator (Qt uses \u2029 paragraph separator)
-            lines = all_text.split('\u2029')
-            
-            # Keep only the last MAX_LINES
-            lines_to_keep = lines[remove_count:]
-            
-            # Restore text
-            self.setPlainText('\n'.join(lines_to_keep))
-            
+            cursor.beginEditBlock()
+            try:
+                # Move to start and select blocks to remove
+                cursor.setPosition(0)
+                for _ in range(remove_count):
+                    cursor.movePosition(
+                        cursor.MoveOperation.NextBlock,
+                        cursor.MoveMode.KeepAnchor,
+                    )
+                cursor.removeSelectedText()
+                # Remove the extra block separator if present
+                if cursor.position() < doc.characterCount():
+                    cursor.deleteChar()
+            finally:
+                cursor.endEditBlock()
+
+            # Update line count
+            self._line_count = max(0, self._line_count - remove_count)
+
             # Scroll to bottom
             scrollbar = self.verticalScrollBar()
             if scrollbar:
                 scrollbar.setValue(scrollbar.maximum())
-            
-            self._line_count = len(lines_to_keep)
+
         except _WIDGET_RECOVERABLE_EXCEPTIONS as e:
+            log.debug("Log trim failed: %s", e)
+            # Fallback: use the simpler approach only if document-based fails
             try:
-                log.debug(f"Log trim failed, clearing: {e}")
-                # FIX: Instead of clearing, just truncate to last MAX_LINES
                 doc = self.document()
                 if doc:
                     cursor = self.textCursor()

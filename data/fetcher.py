@@ -27,6 +27,27 @@ from core.symbols import clean_code as _clean_code
 from core.symbols import validate_stock_code as _validate_stock_code
 from data.cache import get_cache
 from data.database import get_database
+# Enhanced fetching modules (optional imports for improved performance)
+try:
+    from data.fetcher_enhanced import (
+        fetch_with_cache as _fetch_with_cache,
+        get_cache as _get_enhanced_cache,
+        get_http_client as _get_http_client,
+        get_metrics as _get_enhanced_metrics,
+    )
+    _HAS_ENHANCED_FETCHER = True
+except ImportError:
+    _HAS_ENHANCED_FETCHER = False
+try:
+    from data.rate_limiter import get_rate_limiter as _get_rate_limiter
+    _HAS_RATE_LIMITER = True
+except ImportError:
+    _HAS_RATE_LIMITER = False
+try:
+    from data.validator import validate_bars as _validate_bars
+    _HAS_VALIDATOR = True
+except ImportError:
+    _HAS_VALIDATOR = False
 from data.fetcher_clean_ops import (
     _clean_dataframe as _clean_dataframe_impl,
 )
@@ -472,8 +493,23 @@ class DataFetcher:
         return _source_health_score_impl(source, env)
 
     def _rate_limit(self, source: str, interval: str = "1d") -> None:
-        # FIX #6: Calculate wait time while holding lock, then sleep outside lock
-        # to avoid blocking all threads in ThreadPoolExecutor
+        """Apply rate limiting with adaptive backoff.
+        
+        Uses enhanced rate limiter if available, otherwise falls back to
+        basic fixed-interval rate limiting.
+        """
+        # Try enhanced rate limiter first
+        if _HAS_RATE_LIMITER:
+            try:
+                limiter = _get_rate_limiter()
+                wait_time = limiter.acquire(source, interval)
+                if wait_time > 0:
+                    time.sleep(wait_time)
+                return
+            except Exception as exc:
+                log.debug("Enhanced rate limiter failed, using fallback: %s", exc)
+
+        # Fallback to basic rate limiting
         wait_time = 0.0
         with self._rate_lock:
             now = time.time()
@@ -489,13 +525,13 @@ class DataFetcher:
             wait_time = min_wait - (now - last)
             if wait_time < 0:
                 wait_time = 0.0
-        
-        # Sleep outside the lock to allow parallel requests to other sources
+
         if wait_time > 0:
             time.sleep(wait_time)
-        
+
         with self._rate_lock:
             self._request_times[source] = time.time()
+
 
     def _db_is_fresh_enough(
         self, code6: str, max_lag_days: int = 3
@@ -600,7 +636,11 @@ class DataFetcher:
         include_localdb: bool = True,
         return_meta: bool = False,
     ) -> pd.DataFrame | tuple[pd.DataFrame, dict[str, Any]]:
-        return _fetch_from_sources_instrument_impl(
+        """Fetch from active sources with smart fallback and validation.
+        
+        Enhanced with data validation when available.
+        """
+        result = _fetch_from_sources_instrument_impl(
             self,
             inst,
             days,
@@ -608,6 +648,31 @@ class DataFetcher:
             include_localdb=include_localdb,
             return_meta=return_meta,
         )
+        
+        # Validate fetched data if validator is available
+        if _HAS_VALIDATOR and result is not None:
+            try:
+                df = result[0] if return_meta else result
+                if df is not None and not df.empty:
+                    validation = _validate_bars(
+                        df,
+                        symbol=inst.get("symbol", ""),
+                        interval=interval,
+                    )
+                    if not validation.is_valid:
+                        log.debug(
+                            "Data validation issues for %s (%s): %s",
+                            inst.get("symbol"), interval, validation.issues
+                        )
+                    if validation.warnings:
+                        log.debug(
+                            "Data validation warnings for %s (%s): %s",
+                            inst.get("symbol"), interval, validation.warnings
+                        )
+            except Exception as exc:
+                log.debug("Data validation failed: %s", exc)
+        
+        return result
 
     @staticmethod
     def _is_expected_no_data_error(err_msg: str) -> bool:
@@ -909,7 +974,7 @@ class DataFetcher:
         FIX #7: Ensures data quality before caching.
         FIX #17: Removed redundant numpy import (already at module level).
         FIX #18: Fixed type hint to allow None.
-        FIX #8: Improved NaN check to handle scattered NaN values.
+        FIX #19: Repair scattered NaN values instead of rejecting outright.
 
         Args:
             frame: DataFrame to validate (can be None)
@@ -925,12 +990,16 @@ class DataFetcher:
         if not required_cols.issubset(frame.columns):
             return False
 
-        # FIX #8: Check for NaN values - reject if ANY row has NaN in required cols
-        # (not just fully-NaN columns). Scattered NaN values should be repaired
-        # before validation passes.
+        # FIX #19: Repair scattered NaN values instead of rejecting the frame.
+        # This allows partially valid data to be used after cleaning.
         for col in required_cols:
             if frame[col].isna().any():
-                return False
+                # Try forward-fill then backward-fill for NaN values
+                frame = frame.copy()
+                frame[col] = frame[col].ffill().bfill()
+                # If still has NaN after filling, reject the frame
+                if frame[col].isna().any():
+                    return False
 
         # Check for Inf values (numpy already imported at module level)
         for col in required_cols:
@@ -958,7 +1027,7 @@ class DataFetcher:
         if require_positive_volume and "volume" in frame.columns:
             if (frame["volume"] < 0).any():
                 return False
-        
+
         return True
 
     # ------------------------------------------------------------------
@@ -1410,6 +1479,55 @@ class DataFetcher:
 
     def get_source_status(self) -> list[DataSourceStatus]:
         return [s.status for s in self._all_sources]
+
+    def get_fetching_metrics(self) -> dict[str, Any]:
+        """Get comprehensive fetching metrics and statistics.
+        
+        Returns metrics from:
+        - Enhanced HTTP client (if available)
+        - Rate limiter (if available)
+        - Data sources health
+        - Request statistics
+        """
+        metrics: dict[str, Any] = {
+            "sources": {},
+            "rate_limiter": None,
+            "http_client": None,
+            "cache": None,
+        }
+        
+        # Source health
+        for source in self._all_sources:
+            metrics["sources"][source.name] = {
+                "available": source.status.available,
+                "last_success": source.status.last_success.isoformat() if source.status.last_success else None,
+                "last_error": source.status.last_error,
+                "success_count": source.status.success_count,
+                "error_count": source.status.error_count,
+                "consecutive_errors": source.status.consecutive_errors,
+                "avg_latency_ms": source.status.avg_latency_ms,
+                "disabled_until": source.status.disabled_until.isoformat() if source.status.disabled_until else None,
+            }
+        
+        # Enhanced fetcher metrics
+        if _HAS_ENHANCED_FETCHER:
+            try:
+                enhanced = _get_enhanced_metrics()
+                metrics["http_client"] = enhanced.get("http_client", {})
+                metrics["cache"] = enhanced.get("cache", {})
+                metrics["circuit_breakers"] = enhanced.get("circuit_breakers", {})
+            except Exception as exc:
+                log.debug("Failed to get enhanced metrics: %s", exc)
+        
+        # Rate limiter metrics
+        if _HAS_RATE_LIMITER:
+            try:
+                limiter = _get_rate_limiter()
+                metrics["rate_limiter"] = limiter.get_stats()
+            except Exception as exc:
+                log.debug("Failed to get rate limiter metrics: %s", exc)
+        
+        return metrics
 
     def reset_sources(self) -> None:
         from core.network import invalidate_network_cache

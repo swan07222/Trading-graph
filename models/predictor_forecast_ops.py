@@ -243,6 +243,28 @@ def get_realtime_forecast_curve(
                     seed_context=f"{code}:{interval}",
                     recent_prices=actual,
                 )
+            
+            # FIX Bug #8: Handle None/empty predictions properly
+            if not predicted or not isinstance(predicted, (list, tuple)):
+                log.debug(
+                    "Forecast generated empty prediction for %s/%s, using actuals only",
+                    code,
+                    interval,
+                )
+                return actual, []
+            
+            # Filter out invalid values from prediction
+            try:
+                predicted = [
+                    float(p) for p in predicted
+                    if p is not None and np.isfinite(float(p)) and float(p) > 0
+                ]
+            except (TypeError, ValueError):
+                return actual, []
+            
+            if not predicted:
+                return actual, []
+            
             predicted = self._stabilize_forecast_curve(
                 predicted,
                 current_price=current_price,

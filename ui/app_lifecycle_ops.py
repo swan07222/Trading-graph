@@ -293,7 +293,7 @@ def _load_state(self: Any) -> None:
                     self._selected_chart_date = str(
                         parsed.toString("yyyy-MM-dd")
                     )
-            except Exception:
+            except (AttributeError, TypeError, ValueError):
                 pass
         if "auto_trade_mode" in state:
             try:
@@ -304,5 +304,5 @@ def _load_state(self: Any) -> None:
                 self._auto_trade_mode = AutoTradeMode.MANUAL
 
         _LOGGER.debug("Application state restored")
-    except Exception as exc:
+    except (AttributeError, TypeError, ValueError, KeyError) as exc:
         _LOGGER.debug("Failed to load state: %s", exc)

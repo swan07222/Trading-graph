@@ -456,11 +456,13 @@ class ExperienceReplayBuffer:
             log.debug("Stale cache cleanup failed: %s", e)
 
 class ModelGuardian:
-    """Protects best model from degradation.
+    """Protects best model from degradation with versioned backups and automatic rollback.
 
     FIX C2: validate_model() loads exact model path instead of using discovery.
     FIX GUARD: validate_model() handles individual stock errors without
     aborting the entire validation.
+    
+    ENHANCED: Versioned backup system with automatic rollback on degradation detection.
     """
 
     def __init__(self, model_dir: Path = None, max_backups: int = 5) -> None:
@@ -469,6 +471,35 @@ class ModelGuardian:
         self._max_backups = max_backups
         self._lock = threading.Lock()
         self._holdout_codes: list[str] = []
+        self._version_history: dict[str, list[dict]] = {}
+        self._degradation_threshold = 0.02  # 2% degradation triggers rollback
+        self._rollback_count: dict[str, int] = {}
+        
+        self._load_version_history()
+
+    def _load_version_history(self) -> None:
+        """Load version history from disk."""
+        history_path = self.model_dir / "model_versions.json"
+        if history_path.exists():
+            try:
+                with open(history_path) as f:
+                    self._version_history = json.load(f)
+                log.debug("Loaded version history for %d models", len(self._version_history))
+            except _AUTO_LEARNER_RECOVERABLE_EXCEPTIONS as e:
+                log.debug("Failed to load version history: %s", e)
+
+    def _save_version_history(self) -> None:
+        """Save version history to disk."""
+        history_path = self.model_dir / "model_versions.json"
+        try:
+            from utils.atomic_io import atomic_write_json
+            atomic_write_json(history_path, self._version_history)
+        except _AUTO_LEARNER_RECOVERABLE_EXCEPTIONS as e:
+            log.debug("Failed to save version history: %s", e)
+
+    def _make_version_key(self, interval: str, horizon: int) -> str:
+        """Create version key for model identification."""
+        return f"{interval}_{horizon}"
 
     def set_holdout(self, codes: list[str]) -> None:
         with self._lock:
@@ -478,47 +509,281 @@ class ModelGuardian:
         with self._lock:
             return list(self._holdout_codes)
 
-    def backup_current(self, interval: str, horizon: int) -> bool:
+    def backup_current(
+        self, 
+        interval: str, 
+        horizon: int,
+        version_label: str | None = None,
+        metrics: dict | None = None,
+    ) -> str | None:
+        """Create a versioned backup of current model.
+        
+        Args:
+            interval: Data interval
+            horizon: Prediction horizon
+            version_label: Optional label for this version
+            metrics: Optional metrics to store with version
+        
+        Returns:
+            Version ID if successful, None otherwise
+        """
         with self._lock:
             try:
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                backup_dir = self.model_dir / "backups" / timestamp
+                version_id = f"{timestamp}_{interval}_{horizon}"
+                backup_dir = self.model_dir / "backups" / version_id
                 backup_dir.mkdir(parents=True, exist_ok=True)
+                
                 files = self._model_files(interval, horizon)
-                copied_any = False
+                backed_up_files = []
+                
                 for filename in files:
                     src = self.model_dir / filename
                     if src.exists():
-                        shutil.copy2(src, backup_dir / filename)
+                        dst = backup_dir / filename
+                        shutil.copy2(src, dst)
+                        backed_up_files.append(filename)
+                        
+                        # Also create quick restore backup
                         shutil.copy2(src, self.model_dir / f"{filename}.backup")
-                        copied_any = True
+                
+                if not backed_up_files:
+                    log.warning("No model files found to backup for %s_%s", interval, horizon)
+                    return None
+                
+                # Calculate checksums
+                checksums = {}
+                for filename in backed_up_files:
+                    file_path = backup_dir / filename
+                    try:
+                        import hashlib
+                        with open(file_path, 'rb') as f:
+                            checksums[filename] = hashlib.sha256(f.read()).hexdigest()
+                    except _AUTO_LEARNER_RECOVERABLE_EXCEPTIONS:
+                        pass
+                
+                # Record version
+                version_key = self._make_version_key(interval, horizon)
+                version_record = {
+                    "version_id": version_id,
+                    "timestamp": datetime.now().isoformat(),
+                    "label": version_label or "",
+                    "files": backed_up_files,
+                    "checksums": checksums,
+                    "metrics": metrics or {},
+                    "backup_path": str(backup_dir),
+                }
+                
+                if version_key not in self._version_history:
+                    self._version_history[version_key] = []
+                self._version_history[version_key].append(version_record)
+                
+                # Keep only last N versions
+                self._version_history[version_key] = self._version_history[version_key][-self._max_backups:]
+                
+                self._save_version_history()
                 self._prune_backups()
-                return copied_any
+                
+                log.info("Created versioned backup %s for %s_%s", version_id, interval, horizon)
+                return version_id
+                
             except _AUTO_LEARNER_RECOVERABLE_EXCEPTIONS as e:
                 log.warning(f"Backup failed: {e}")
-                return False
+                return None
 
     def restore_backup(self, interval: str, horizon: int) -> bool:
+        """Restore from the most recent backup.
+        
+        Args:
+            interval: Data interval
+            horizon: Prediction horizon
+        
+        Returns:
+            True if restored successfully
+        """
         with self._lock:
             try:
+                # Try quick restore first
                 files = self._model_files(interval, horizon)
                 restored = False
+                
                 for filename in files:
                     src = self.model_dir / f"{filename}.backup"
                     dst = self.model_dir / filename
                     if src.exists():
                         shutil.copy2(src, dst)
                         restored = True
+                
                 if restored:
-                    log.info("Model restored from backup")
+                    log.info("Model restored from quick backup for %s_%s", interval, horizon)
+                    return True
+                
+                # Try versioned restore
+                version_key = self._make_version_key(interval, horizon)
+                versions = self._version_history.get(version_key, [])
+                
+                if not versions:
+                    log.warning("No backup available for %s_%s", interval, horizon)
+                    return False
+                
+                # Use most recent version
+                latest = versions[-1]
+                backup_path = Path(latest["backup_path"])
+                
+                if not backup_path.exists():
+                    log.warning("Backup path not found: %s", backup_path)
+                    return False
+                
+                for filename in latest.get("files", []):
+                    src = backup_path / filename
+                    dst = self.model_dir / filename
+                    if src.exists():
+                        shutil.copy2(src, dst)
+                        # Update quick backup
+                        shutil.copy2(dst, self.model_dir / f"{filename}.backup")
+                        restored = True
+                
+                if restored:
+                    log.info("Model restored from version %s for %s_%s", latest["version_id"], interval, horizon)
+                
                 return restored
+                
             except _AUTO_LEARNER_RECOVERABLE_EXCEPTIONS as e:
                 log.error(f"Restore failed: {e}")
                 return False
 
+    def restore_specific_version(
+        self, 
+        interval: str, 
+        horizon: int, 
+        version_id: str,
+    ) -> bool:
+        """Restore a specific version.
+        
+        Args:
+            interval: Data interval
+            horizon: Prediction horizon
+            version_id: Version ID to restore
+        
+        Returns:
+            True if restored successfully
+        """
+        with self._lock:
+            try:
+                version_key = self._make_version_key(interval, horizon)
+                versions = self._version_history.get(version_key, [])
+                
+                version_record = None
+                for v in versions:
+                    if v["version_id"] == version_id:
+                        version_record = v
+                        break
+                
+                if not version_record:
+                    log.warning("Version %s not found for %s_%s", version_id, interval, horizon)
+                    return False
+                
+                backup_path = Path(version_record["backup_path"])
+                if not backup_path.exists():
+                    log.warning("Backup path not found: %s", backup_path)
+                    return False
+                
+                files = version_record.get("files", [])
+                restored = False
+                
+                for filename in files:
+                    src = backup_path / filename
+                    dst = self.model_dir / filename
+                    if src.exists():
+                        shutil.copy2(src, dst)
+                        shutil.copy2(dst, self.model_dir / f"{filename}.backup")
+                        restored = True
+                
+                if restored:
+                    log.info("Restored version %s for %s_%s", version_id, interval, horizon)
+                
+                return restored
+                
+            except _AUTO_LEARNER_RECOVERABLE_EXCEPTIONS as e:
+                log.error(f"Version restore failed: {e}")
+                return False
+
+    def list_versions(self, interval: str, horizon: int) -> list[dict]:
+        """List all versions for a model.
+        
+        Args:
+            interval: Data interval
+            horizon: Prediction horizon
+        
+        Returns:
+            List of version records
+        """
+        version_key = self._make_version_key(interval, horizon)
+        return self._version_history.get(version_key, [])
+
+    def rollback_if_degraded(
+        self, 
+        interval: str, 
+        horizon: int, 
+        current_metrics: dict,
+    ) -> bool:
+        """Automatically rollback if model performance degraded.
+        
+        Args:
+            interval: Data interval
+            horizon: Prediction horizon
+            current_metrics: Current model metrics
+        
+        Returns:
+            True if rollback was performed
+        """
+        with self._lock:
+            version_key = self._make_version_key(interval, horizon)
+            versions = self._version_history.get(version_key, [])
+            
+            if not versions:
+                return False
+            
+            # Get best previous metrics
+            best_accuracy = 0.0
+            for v in versions:
+                metrics = v.get("metrics", {})
+                acc = metrics.get("accuracy", 0.0)
+                if acc > best_accuracy:
+                    best_accuracy = acc
+            
+            current_accuracy = current_metrics.get("accuracy", 0.0)
+            
+            # Check for degradation
+            if best_accuracy - current_accuracy > self._degradation_threshold:
+                log.warning(
+                    "Model degradation detected: %.2f%% -> %.2f%% (threshold: %.2f%%)",
+                    best_accuracy * 100,
+                    current_accuracy * 100,
+                    self._degradation_threshold * 100,
+                )
+                
+                # Track rollback count
+                if version_key not in self._rollback_count:
+                    self._rollback_count[version_key] = 0
+                self._rollback_count[version_key] += 1
+                
+                # Perform rollback
+                if self.restore_backup(interval, horizon):
+                    log.info(
+                        "Automatic rollback performed for %s_%s (rollback #%d)",
+                        interval, horizon, self._rollback_count[version_key]
+                    )
+                    return True
+            
+            return False
+
     def save_as_best(self, interval: str, horizon: int, metrics: dict) -> bool:
         with self._lock:
             try:
+                # Create versioned backup before saving as best
+                self.backup_current(interval, horizon, version_label="pre_best", metrics=metrics)
+                
                 for filename in self._model_files(interval, horizon):
                     src = self.model_dir / filename
                     dst = self.model_dir / f"{filename}.best"

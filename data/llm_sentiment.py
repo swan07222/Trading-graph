@@ -24,10 +24,35 @@ from .news_collector import NewsArticle, get_collector
 
 log = get_logger(__name__)
 
+# FIX: Define recoverable exceptions for LLM operations
+_LLM_CHAT_RECOVERABLE_EXCEPTIONS = (
+    ImportError,
+    OSError,
+    RuntimeError,
+    ValueError,
+    TypeError,
+    KeyError,
+    IndexError,
+    AttributeError,
+    json.JSONDecodeError,
+    TimeoutError,
+    ConnectionError,
+    ConnectionResetError,
+    ConnectionAbortedError,
+    ConnectionRefusedError,
+)
+
 _TRANSFORMERS_AVAILABLE = False
 _SKLEARN_AVAILABLE = False
 _SKLEARN_MLP_AVAILABLE = False
 _SENTENCE_TRANSFORMERS_AVAILABLE = False
+
+try:
+    from sklearn.exceptions import ConvergenceWarning
+    import warnings
+    warnings.filterwarnings('ignore', category=ConvergenceWarning)
+except Exception:
+    pass
 
 try:
     from transformers import pipeline
@@ -538,11 +563,24 @@ class LLM_sentimentAnalyzer:
                     batch_size=min(128, max(16, len(rows) // 8)),
                     max_iter=320,
                     random_state=42,
+                    early_stopping=True,
+                    validation_fraction=0.1,
+                    n_iter_no_change=15,
                 )
                 nn.fit(x_arr, y_arr)
                 self._hybrid_calibrator = nn
                 self._save_hybrid_calibrator()
                 hybrid_nn_ready = True
+            except (ConvergenceWarning, UserWarning) as exc:
+                # Handle convergence warnings gracefully - model may still be usable
+                log.debug("MLP convergence warning: %s", exc)
+                if hasattr(nn, 'classes_') and nn.classes_ is not None:
+                    self._hybrid_calibrator = nn
+                    self._save_hybrid_calibrator()
+                    hybrid_nn_ready = True
+                    notes.append(f"Hybrid NN fit with convergence warning: {exc}")
+                else:
+                    notes.append(f"Hybrid NN fit failed due to convergence: {exc}")
             except Exception as exc:
                 notes.append(f"Hybrid NN fit failed: {exc}")
         elif not _SKLEARN_MLP_AVAILABLE:
@@ -646,7 +684,11 @@ class LLM_sentimentAnalyzer:
                     limit=max(20, int(limit_per_query)),
                     hours_back=max(12, int(hours_back)),
                 )
-            except Exception:
+            except _LLM_CHAT_RECOVERABLE_EXCEPTIONS as exc:
+                log.warning("LLM sentiment collection failed for query %d: %s", i + 1, exc)
+                batch = []
+            except Exception as exc:
+                log.error("LLM sentiment collection unexpected error for query %d: %s", i + 1, exc)
                 batch = []
             _emit(
                 8 + int(((i + 1) / max(1, len(queries))) * 62),

@@ -17,6 +17,23 @@ from data.features import FeatureEngine
 from data.fetcher import get_fetcher
 from data.processor import DataProcessor
 from models.ensemble import EnsembleModel
+from models.enhanced_evaluation import (
+    calculate_classification_metrics,
+    calculate_trading_metrics,
+    walk_forward_analysis,
+)
+from models.training_utils import (
+    AdvancedEarlyStopping,
+    EarlyStoppingMode,
+    GradientClipper,
+    LearningRateScheduler,
+    TrainingCheckpoint,
+    TrainingMetrics,
+    count_parameters,
+    enable_deterministic_training,
+    get_memory_usage,
+    get_gradient_stats,
+)
 from models.trainer_data_ops import _assess_raw_data_quality as _assess_raw_data_quality_impl
 from models.trainer_data_ops import (
     _create_sequences_from_splits as _create_sequences_from_splits_impl,

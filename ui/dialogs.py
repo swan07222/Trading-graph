@@ -727,7 +727,7 @@ class TrainTrainedStocksDialog(QDialog):
             if dt.tzinfo is not None:
                 dt = dt.astimezone().replace(tzinfo=None)
             return dt
-        except Exception:
+        except (ValueError, TypeError, OverflowError):
             return None
 
     def _build_ordered_codes(self, trained_codes: list[str]) -> list[str]:
@@ -1058,7 +1058,7 @@ class BacktestDialog(QDialog):
                 self.logs.append(result.summary())
             else:
                 self.logs.append(str(result))
-        except Exception:
+        except (AttributeError, TypeError, ValueError):
             self.logs.append(str(result))
 
     def _on_failed(self, err: str) -> None:
@@ -1108,7 +1108,7 @@ class BrokerSettingsDialog(QDialog):
         self.mode_combo.addItems(["simulation", "live"])
         try:
             current_mode = CONFIG.trading_mode.value
-        except Exception:
+        except (AttributeError, TypeError, ValueError):
             current_mode = "simulation"
         self.mode_combo.setCurrentText(current_mode)
         form.addRow("Trading mode:", self.mode_combo)
@@ -1116,7 +1116,7 @@ class BrokerSettingsDialog(QDialog):
         self.path_edit = QLineEdit()
         try:
             current_path = CONFIG.broker_path or ""
-        except Exception:
+        except (AttributeError, TypeError, ValueError):
             current_path = ""
         self.path_edit.setText(current_path)
         form.addRow("THS broker executable path:", self.path_edit)
@@ -1539,7 +1539,7 @@ class ScreenerProfileDialog(QDialog):
             from analysis.screener import set_active_screener_profile
 
             set_active_screener_profile(profile.name)
-        except Exception as e:
+        except (ImportError, AttributeError, TypeError, ValueError) as e:
             log.debug("Failed to refresh screener singletons after activation: %s", e)
         self.selected_profile_name = str(profile.name)
         self.accept()

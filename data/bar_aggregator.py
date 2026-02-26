@@ -21,6 +21,10 @@ _BAR_SOFT_EXCEPTIONS = (
     TimeoutError,
     TypeError,
     ValueError,
+    ConnectionError,
+    ConnectionResetError,
+    ConnectionAbortedError,
+    ConnectionRefusedError,
 )
 class VolumeMode(Enum):
     """Volume interpretation mode."""

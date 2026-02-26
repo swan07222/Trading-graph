@@ -504,30 +504,36 @@ def _forecast_seed(
     seed_context: str = "",
     recent_prices: list[float] | None = None,
     volatility_context: float = 0.0,
+    news_sentiment: float = 0.0,
+    market_regime: str = "",
 ) -> int:
     """Deterministic seed for forecast noise.
-    
+
     Includes symbol/interval context to avoid repeated template curves
     when feature signatures are similar across symbols.
-    
-    FIX DIVERSITY: Enhanced with volatility context and time-based
-    decorrelation to prevent template-like forecasts across stocks.
+
+    IMPROVEMENTS:
+    - Enhanced with news sentiment for event-driven differentiation
+    - Market regime awareness for regime-specific trajectories
+    - Time-based decorrelation to prevent stale patterns
+    - Multi-scale price pattern capture for better symbol uniqueness
     """
     # Context hash from symbol/interval
     ctx_hash = 0
     context_str = str(seed_context or "")
     for ch in context_str:
         ctx_hash = ((ctx_hash * 131) + ord(ch)) & 0x7FFFFFFF
-    
+
     # Add price-level invariant hash (avoids similar seeds for similar-priced stocks)
     price_log_hash = 0
     if current_price > 0:
         # Use log price to make seed invariant to price scale
         price_normalized = int(abs(np.log(max(current_price, 1.0)) * 1000)) & 0x7FFFFFFF
         price_log_hash = price_normalized
-    
+
     # Recent price pattern hash (captures recent volatility pattern)
     recent_hash = 0
+    recent_skew_hash = 0
     if recent_prices is not None:
         try:
             rp = np.array(
@@ -540,9 +546,13 @@ def _forecast_seed(
                     returns = np.diff(np.log(rp))
                     # Quantize returns to reduce sensitivity to small changes
                     returns_quant = np.round(returns * 100).astype(np.int64)
-                    # Hash the return pattern
+                    # Hash the return pattern (recent 20)
                     for _i, val in enumerate(returns_quant[-min(20, len(returns_quant)):]):
                         recent_hash = ((recent_hash * 137) + int(val)) & 0x7FFFFFFF
+                    # Add skewness capture for asymmetry detection
+                    if returns.size >= 10:
+                        recent_skew = float(np.mean(((returns - np.mean(returns)) / (np.std(returns) + 1e-9)) ** 3))
+                        recent_skew_hash = int(abs(recent_skew) * 10000) & 0x7FFFFFFF
                 else:
                     # Fallback for single price
                     tail = rp[-min(12, rp.size):]
@@ -552,15 +562,33 @@ def _forecast_seed(
                     ) & 0x7FFFFFFF
         except (TypeError, ValueError):
             recent_hash = 0
-    
+            recent_skew_hash = 0
+
     # Volatility context adds regime-specific variation
     vol_hash = 0
     if volatility_context > 0:
         vol_hash = int(abs(volatility_context) * 10000) & 0x7FFFFFFF
-    
+
     # Direction hint contribution (ensures different seeds for different biases)
     dir_hash = int((float(np.clip(direction_hint, -1.0, 1.0)) + 1.0) * 500000) & 0x7FFFFFFF
-    
+
+    # News sentiment hash - adds event-driven differentiation
+    news_hash = 0
+    if abs(news_sentiment) > 1e-6:
+        news_hash = int((float(np.clip(news_sentiment, -1.0, 1.0)) + 1.0) * 250000) & 0x7FFFFFFF
+
+    # Market regime hash - regime-specific trajectory shaping
+    regime_hash = 0
+    if market_regime:
+        regime_str = str(market_regime).strip().upper()
+        for ch in regime_str:
+            regime_hash = ((regime_hash * 149) + ord(ch)) & 0x7FFFFFFF
+
+    # Time-based decorrelation - prevents stale patterns across days
+    # Changes every 6 hours to provide fresh randomness while maintaining intraday consistency
+    time_slot = int(time.time() // (6 * 3600)) & 0xFFFF
+    time_hash = (time_slot * 271) & 0x7FFFFFFF
+
     # Combine all components with different prime multipliers for mixing
     seed = (
         (int(abs(float(sequence_signature)) * 1000) * 17)
@@ -568,16 +596,20 @@ def _forecast_seed(
         ^ (ctx_hash * 31)
         ^ (price_log_hash * 37)
         ^ (recent_hash * 41)
+        ^ (recent_skew_hash * 47)
         ^ (vol_hash * 43)
-        ^ dir_hash
+        ^ (dir_hash * 53)
+        ^ (news_hash * 59)
+        ^ (regime_hash * 61)
+        ^ time_hash
     ) % (2**31 - 1)
-    
+
     # Ensure non-zero seed with better distribution
     if seed == 0:
-        seed = (ctx_hash + price_log_hash + recent_hash) % (2**31 - 1)
+        seed = (ctx_hash + price_log_hash + recent_hash + vol_hash) % (2**31 - 1)
         if seed == 0:
             seed = 42  # Fallback constant
-    
+
     return int(seed)
 
 def _generate_forecast(
@@ -717,8 +749,11 @@ def _generate_forecast(
                 * (0.14 if neutral_mode else 0.28)
             )
 
+            # Determine market regime for regime-aware forecasting
+            market_regime = getattr(self, '_current_market_regime', '')
+            
             # Deterministic symbol-specific residual to avoid template-like tails.
-            # FIX DIVERSITY: Pass volatility context for better seed differentiation
+            # IMPROVEMENT: Pass news sentiment and market regime for better differentiation
             seed = self._forecast_seed(
                 current_price=current_price,
                 sequence_signature=sequence_signature,
@@ -727,6 +762,8 @@ def _generate_forecast(
                 seed_context=seed_context,
                 recent_prices=recent_prices,
                 volatility_context=float(atr_pct),
+                news_sentiment=float(news_bias),
+                market_regime=market_regime,
             )
             rng = np.random.RandomState(seed)
 
@@ -742,6 +779,15 @@ def _generate_forecast(
                 )
             )
 
+            # IMPROVEMENT: Volatility-adaptive news impact scaling
+            # Higher volatility = news has less immediate impact (market noise drowns signal)
+            # Lower volatility = news has more sustained impact
+            vol_regime = min(1.0, float(atr_pct) / 0.05)  # Normalize to 0-1 range
+            news_impact_scale = 1.0 - (0.4 * vol_regime)  # 0.6 to 1.0 range
+            
+            # IMPROVEMENT: Asymmetric news impact (bad news hits harder than good news)
+            news_asymmetry = 1.0 if news_bias >= 0 else 1.25  # Bad news has 25% more impact
+            
             prev_eps = 0.0
             prev_ret = 0.0
             prev_model_ret = 0.0
@@ -782,19 +828,40 @@ def _generate_forecast(
                 else:
                     r_val = (r_val * 0.84) + (recent_mu_pct * 0.16)
 
+                # IMPROVEMENT: Enhanced news bias integration
+                # - Front-loaded decay for event-driven moves
+                # - Volatility-adaptive scaling
+                # - Asymmetric impact for positive/negative news
                 if abs(news_drift_pct) > 1e-9:
-                    news_decay = max(
-                        0.35,
-                        1.0 - (float(i) / max(3.0, float(horizon) * 1.25)),
+                    # IMPROVEMENT: Multi-phase news decay
+                    # Phase 1 (early bars): Strong immediate impact
+                    # Phase 2 (later bars): Gradual fade to background
+                    early_phase = max(0.0, 1.0 - (float(i) / max(1.0, float(horizon) * 0.35)))
+                    late_phase = max(0.0, 1.0 - (float(i) / max(3.0, float(horizon) * 1.25)))
+                    news_decay = (0.65 * early_phase) + (0.35 * late_phase)
+                    
+                    # Apply volatility-adaptive and asymmetric scaling
+                    effective_news = (
+                        float(news_drift_pct) 
+                        * news_decay 
+                        * news_impact_scale 
+                        * news_asymmetry
                     )
-                    r_val += float(news_drift_pct * news_decay)
+                    r_val += effective_news
 
+                # IMPROVEMENT: Volatility-adaptive noise scaling
+                # Add heteroskedasticity: noise scales with both quality and volatility regime
                 noise_scale = 0.55 + (0.45 * quality_scale)
-                eps_scale = step_cap_pct * (0.06 if neutral_mode else 0.10) * noise_scale
+                vol_adjusted_noise = noise_scale * (0.8 + 0.4 * vol_regime)  # Higher vol = more noise
+                eps_scale = step_cap_pct * (0.06 if neutral_mode else 0.10) * vol_adjusted_noise
                 eps = (0.62 * prev_eps) + float(rng.normal(0.0, eps_scale))
                 prev_eps = eps
                 r_val += eps
-                r_val = (0.78 * r_val) + (0.22 * prev_ret)
+                
+                # IMPROVEMENT: Adaptive momentum with volatility damping
+                # In high vol regimes, reduce momentum to avoid runaway predictions
+                momentum_retain = 0.78 - (0.15 * vol_regime)  # 0.63 to 0.78 range
+                r_val = (momentum_retain * r_val) + ((1.0 - momentum_retain) * prev_ret)
                 r_val = float(np.clip(r_val, -step_cap_pct, step_cap_pct))
                 prev_ret = r_val
                 next_price = prices[-1] * (1 + r_val / 100)
@@ -862,6 +929,8 @@ def _generate_forecast(
             )
             neutral_mode = abs(direction) < 0.10
 
+            # IMPROVEMENT: Volatility regime detection for adaptive forecasting
+            vol_regime = min(1.0, float(atr_pct) / 0.05)  # Normalize to 0-1 range
             volatility = max(float(atr_pct), 0.005) * quality_scale
             if neutral_mode:
                 volatility = min(volatility, 0.012)
@@ -892,8 +961,15 @@ def _generate_forecast(
             prices = []
             price = current_price
 
+            # IMPROVEMENT: Volatility-adaptive news impact for ensemble path
+            news_impact_scale = 1.0 - (0.4 * vol_regime)
+            news_asymmetry = 1.0 if news_bias >= 0 else 1.25
+
+            # Determine market regime for regime-aware forecasting
+            market_regime = getattr(self, '_current_market_regime', '')
+
             # Deterministic seed using sequence signature to keep each symbol distinct.
-            # FIX DIVERSITY: Pass volatility context for better seed differentiation
+            # IMPROVEMENT: Pass news sentiment and market regime for better differentiation
             seed = self._forecast_seed(
                 current_price=current_price,
                 sequence_signature=sequence_signature,
@@ -902,6 +978,8 @@ def _generate_forecast(
                 seed_context=seed_context,
                 recent_prices=recent_prices,
                 volatility_context=float(atr_pct),
+                news_sentiment=float(news_bias),
+                market_regime=market_regime,
             )
             rng = np.random.RandomState(seed)
 
@@ -910,19 +988,26 @@ def _generate_forecast(
                 drift_scale = 0.10 if neutral_mode else 0.20
                 mu_scale = 0.20 if neutral_mode else 0.35
                 drift = (direction * volatility * drift_scale) + (ret_mu * mu_scale)
+                
+                # IMPROVEMENT: Enhanced news integration with multi-phase decay
                 if abs(news_bias) > 1e-8:
-                    drift += (
+                    early_phase = max(0.0, 1.0 - (float(i) / max(1.0, float(horizon) * 0.35)))
+                    late_phase = max(0.0, 1.0 - (float(i) / max(3.0, float(horizon) * 1.25)))
+                    news_decay = (0.65 * early_phase) + (0.35 * late_phase)
+                    
+                    effective_news = (
                         news_bias
                         * volatility
-                        * (0.10 if neutral_mode else 0.22)
-                        * decay
+                        * ((0.10 if neutral_mode else 0.22) * news_decay)
+                        * news_impact_scale
+                        * news_asymmetry
                     )
-                noise = float(
-                    rng.normal(
-                        0.0,
-                        ret_sigma * ((0.35 if neutral_mode else 0.55) + (0.45 * decay)),
-                    )
-                )
+                    drift += effective_news
+                    
+                # IMPROVEMENT: Volatility-adaptive noise scaling
+                vol_adjusted_noise = ((0.35 if neutral_mode else 0.55) + (0.45 * decay)) * (0.8 + 0.4 * vol_regime)
+                noise = float(rng.normal(0.0, ret_sigma * vol_adjusted_noise))
+                
                 mean_revert = (-(0.18 if neutral_mode else 0.10)) * (
                     (price / current_price) - 1.0
                 )
@@ -982,8 +1067,19 @@ def _generate_forecast(
         ret_sigma = float(max(float(atr_pct) * 0.05, 0.0006))
 
     max_step = float(max(float(atr_pct) * 0.22, 0.0012))
-    drift = float(np.clip(ret_mu + (news_bias * 0.0012), -max_step * 0.45, max_step * 0.45))
-    # FIX DIVERSITY: Pass volatility context for better seed differentiation
+    
+    # IMPROVEMENT: Volatility-adaptive news impact for fallback path
+    vol_regime = min(1.0, float(atr_pct) / 0.05)
+    news_impact_scale = 1.0 - (0.4 * vol_regime)
+    news_asymmetry = 1.0 if news_bias >= 0 else 1.25
+    effective_news_drift = news_bias * 0.0012 * news_impact_scale * news_asymmetry
+    
+    drift = float(np.clip(ret_mu + effective_news_drift, -max_step * 0.45, max_step * 0.45))
+
+    # Determine market regime for regime-aware forecasting
+    market_regime = getattr(self, '_current_market_regime', '')
+
+    # IMPROVEMENT: Pass news sentiment and market regime for better differentiation
     seed = self._forecast_seed(
         current_price=current_price,
         sequence_signature=sequence_signature,
@@ -992,16 +1088,22 @@ def _generate_forecast(
         seed_context=seed_context,
         recent_prices=recent_prices,
         volatility_context=float(atr_pct),
+        news_sentiment=float(news_bias),
+        market_regime=market_regime,
     )
     rng = np.random.RandomState(seed)
 
     fallback_prices: list[float] = []
     price = float(current_price)
     prev_eps = 0.0
+    
+    # IMPROVEMENT: Volatility-adaptive decay and noise scaling
+    vol_adjusted_noise_scale = 0.45 + (0.55 * (0.8 + 0.4 * vol_regime))
+    
     for i in range(horizon):
         decay = max(0.25, 1.0 - (float(i) / float(max(horizon, 1))) * 0.65)
         eps = (0.55 * prev_eps) + float(
-            rng.normal(0.0, ret_sigma * (0.45 + (0.55 * decay)))
+            rng.normal(0.0, ret_sigma * (decay * vol_adjusted_noise_scale))
         )
         prev_eps = eps
         mean_revert = -0.08 * ((price / max(float(current_price), 1e-8)) - 1.0)

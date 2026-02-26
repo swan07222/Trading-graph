@@ -1011,9 +1011,24 @@ def _render_chart_state(
     allow_legacy_candles: bool = False,
     reset_view_on_symbol_switch: bool = False,
 ) -> list[dict[str, Any]]:
-    """Unified chart rendering path used by bar/tick/analysis updates."""
+    """Unified chart rendering path used by bar/tick/analysis updates.
+    
+    FIX Bug #7: Clear stale forecast data when symbol switches.
+    """
     iv = self._normalize_interval_token(interval)
     arr = self._safe_list(bars)
+
+    # FIX Bug #7: Clear stale prediction data when switching symbols
+    old_symbol = getattr(self, "_chart_symbol", "")
+    if old_symbol and old_symbol != symbol:
+        try:
+            if self.current_prediction and getattr(self.current_prediction, "stock_code", "") == old_symbol:
+                # Clear prediction data for the old symbol
+                self.current_prediction.predicted_prices = []
+                self.current_prediction.predicted_prices_low = []
+                self.current_prediction.predicted_prices_high = []
+        except _UI_RECOVERABLE_EXCEPTIONS:
+            pass
 
     anchor_input: float | None = None
     if current_price is not None:

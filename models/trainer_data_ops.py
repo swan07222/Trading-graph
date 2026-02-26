@@ -728,7 +728,8 @@ def _validate_temporal_split_integrity(
                                 report["errors"].append(
                                     f"extreme_leakage:{col}:{corr:.3f}"
                                 )
-                        except (ValueError, FloatingPointError):
+                        except (ValueError, FloatingPointError, IndexError, TypeError):
+                            # Correlation calculation failed - likely due to constant features or insufficient variance
                             pass
                 if severe_leakage_detected:
                     report["passed"] = False

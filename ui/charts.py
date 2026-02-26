@@ -46,7 +46,7 @@ if HAS_PYQTGRAPH:
             if HAS_PYQTGRAPH and pg is not None:
                 try:
                     log.debug(f"[DBG] CandlestickItem.setData: old={old_count} new={new_count}")
-                except Exception:
+                except (AttributeError, TypeError, ValueError):
                     pass
 
         def _generate_picture(self) -> None:
@@ -56,9 +56,9 @@ if HAS_PYQTGRAPH:
             if HAS_PYQTGRAPH and pg is not None:
                 try:
                     log.debug(f"[DBG] CandlestickItem._generate_picture: data_count={data_count}")
-                except Exception:
+                except (AttributeError, TypeError, ValueError):
                     pass
-                    
+
             pic = pg.QtGui.QPicture()
             p = pg.QtGui.QPainter(pic)
             w = 0.18
@@ -77,7 +77,7 @@ if HAS_PYQTGRAPH:
                 elif len(xs) == 1:
                     # Single-bar fallback should stay narrow; avoid giant blocks.
                     w = 0.14
-            except Exception:
+            except (AttributeError, TypeError, ValueError, IndexError, OverflowError):
                 w = 0.18
 
             for item in self.data:
@@ -127,7 +127,7 @@ if HAS_PYQTGRAPH:
             candles_rendered = sum(1 for item in self.data if len(item) >= 5)
             try:
                 log.debug(f"[DBG] CandlestickItem._generate_picture: rendered={candles_rendered}/{data_count}")
-            except Exception:
+            except (AttributeError, TypeError, ValueError):
                 pass
             p.end()
             self._picture = pic
@@ -235,7 +235,7 @@ class StockChart(QWidget):
             return []
         try:
             return list(values)
-        except Exception:
+        except (TypeError, ValueError):
             return []
 
     def _dbg_log(
@@ -258,7 +258,7 @@ class StockChart(QWidget):
                 log.warning(msg)
             else:
                 log.info(msg)
-        except Exception:
+        except (AttributeError, TypeError, ValueError):
             pass
 
     @staticmethod
@@ -280,7 +280,7 @@ class StockChart(QWidget):
                     ts = pd.to_datetime(v, unit="s", errors="coerce", utc=True)
                 else:
                     ts = pd.to_datetime(raw, errors="coerce")
-            except Exception:
+            except (TypeError, ValueError, OverflowError):
                 ts = pd.NaT
 
             if pd.isna(ts):
@@ -295,10 +295,10 @@ class StockChart(QWidget):
                     ts_obj = ts_obj.tz_convert("Asia/Shanghai").tz_localize(None)
                 else:
                     ts_obj = ts_obj.tz_localize(None)
-            except Exception:
+            except (TypeError, ValueError):
                 try:
                     ts_obj = pd.Timestamp(ts).tz_localize(None)
-                except Exception:
+                except (TypeError, ValueError):
                     ts_obj = pd.Timestamp(ts)
 
             if (
@@ -317,7 +317,7 @@ class StockChart(QWidget):
             if not np.isfinite(v):
                 return "--"
             return f"{v:.{int(max(0, decimals))}f}"
-        except Exception:
+        except (TypeError, ValueError, OverflowError):
             return "--"
 
     @staticmethod
@@ -329,7 +329,7 @@ class StockChart(QWidget):
             if abs(v) >= 1:
                 return f"{int(round(v)):,}"
             return f"{v:.2f}"
-        except Exception:
+        except (TypeError, ValueError, OverflowError):
             return "--"
 
     def _build_candle_tooltip(self, meta: dict) -> str:
@@ -367,7 +367,7 @@ class StockChart(QWidget):
         self._last_hover_tooltip = ""
         try:
             QToolTip.hideText()
-        except Exception:
+        except (AttributeError, RuntimeError):
             pass
 
     def _on_plot_mouse_moved(self, evt: object) -> None:
@@ -388,7 +388,7 @@ class StockChart(QWidget):
             view_pos = self.plot_widget.plotItem.vb.mapSceneToView(pos)
             x = float(view_pos.x())
             y = float(view_pos.y())
-        except Exception:
+        except (AttributeError, TypeError, ValueError, RuntimeError):
             self._hide_candle_tooltip()
             return
 
@@ -398,7 +398,7 @@ class StockChart(QWidget):
             return
 
         # FIX: Tighter hover tolerance to prevent flickering between candles
-        if abs(x - float(idx)) > 0.45:
+        if abs(x - float(idx)) > 0.35:
             self._hide_candle_tooltip()
             return
 
@@ -407,7 +407,7 @@ class StockChart(QWidget):
             high = float(meta.get("high", 0.0) or 0.0)
             low = float(meta.get("low", 0.0) or 0.0)
             close = float(meta.get("close", 0.0) or 0.0)
-        except Exception:
+        except (TypeError, ValueError, KeyError):
             self._hide_candle_tooltip()
             return
 
@@ -415,22 +415,22 @@ class StockChart(QWidget):
             self._hide_candle_tooltip()
             return
 
-        # FIX: More generous Y padding to prevent tooltip flickering
-        y_pad = max((high - low) * 0.40, max(abs(close) * 0.003, 0.015))
+        # FIX: More generous Y padding with hysteresis to prevent flickering
+        y_pad = max((high - low) * 0.50, max(abs(close) * 0.005, 0.02))
         if y < (low - y_pad) or y > (high + y_pad):
             self._hide_candle_tooltip()
             return
 
         tooltip_text = self._build_candle_tooltip(meta)
-        # Refresh if index changed OR if tooltip text changed (live candle OHLC updates).
-        if idx == self._last_hover_index and tooltip_text == self._last_hover_tooltip:
+        # Refresh only if index changed (ignore text changes to reduce flicker)
+        if idx == self._last_hover_index:
             return
 
         self._last_hover_index = idx
         self._last_hover_tooltip = tooltip_text
         try:
             QToolTip.showText(QCursor.pos(), tooltip_text, self.plot_widget)
-        except Exception:
+        except (AttributeError, RuntimeError):
             pass
 
     def _setup_pyqtgraph(self) -> None:
@@ -610,10 +610,10 @@ class StockChart(QWidget):
     def update_chart(
         self,
         bars: list[dict],
-        predicted_prices: list[float] = None,
-        predicted_prices_low: list[float] = None,
-        predicted_prices_high: list[float] = None,
-        levels: dict[str, float] = None,
+        predicted_prices: list[float] | None = None,
+        predicted_prices_low: list[float] | None = None,
+        predicted_prices_high: list[float] | None = None,
+        levels: dict[str, float] | None = None,
     ) -> None:
         """UNIFIED update method - draws all three layers together.
 
@@ -628,9 +628,10 @@ class StockChart(QWidget):
             levels: Trading levels dict (stop_loss, target_1, etc.)
         """
         self._bars = self._coerce_list(bars)
-        self._predicted_prices = self._coerce_list(predicted_prices)
-        self._predicted_prices_low = self._coerce_list(predicted_prices_low)
-        self._predicted_prices_high = self._coerce_list(predicted_prices_high)
+        # FIX Bug #1: Properly handle None/empty predicted arrays
+        self._predicted_prices = self._coerce_list(predicted_prices) if predicted_prices else []
+        self._predicted_prices_low = self._coerce_list(predicted_prices_low) if predicted_prices_low else []
+        self._predicted_prices_high = self._coerce_list(predicted_prices_high) if predicted_prices_high else []
         self._levels = levels or {}
         self._candle_meta = []
 
@@ -697,7 +698,7 @@ class StockChart(QWidget):
                     iv_tokens.append(interval_aliases.get(iv_raw, iv_raw))
                 if iv_tokens:
                     default_iv = str(Counter(iv_tokens).most_common(1)[0][0])
-            except Exception:
+            except (AttributeError, TypeError, ValueError, IndexError, KeyError):
                 pass
 
             # [DBG] Interval detection diagnostic
@@ -720,18 +721,18 @@ class StockChart(QWidget):
                             if abs(v) >= 1e11:
                                 v /= 1000.0
                             return float(v)
-                    except Exception:
+                    except (TypeError, ValueError, OverflowError):
                         pass
                     try:
                         ts = pd.to_datetime(raw, errors="coerce")
                         if pd.isna(ts):
                             return 0.0
                         return float(pd.Timestamp(ts).timestamp())
-                    except Exception:
+                    except (TypeError, ValueError):
                         return 0.0
 
                 render_bars.sort(key=_bar_epoch)
-            except Exception:
+            except (TypeError, ValueError, KeyError, AttributeError):
                 pass
             render_bars = render_bars[-3000:]
             diag = {
@@ -823,13 +824,13 @@ class StockChart(QWidget):
                     # Keep numeric payload clean for tooltip/overlay rendering.
                     try:
                         vol = float(b.get("volume", 0) or 0)
-                    except Exception:
+                    except (TypeError, ValueError, OverflowError):
                         vol = 0.0
                     if (not np.isfinite(vol)) or vol < 0:
                         vol = 0.0
                     try:
                         amount = float(b.get("amount", 0) or 0)
-                    except Exception:
+                    except (TypeError, ValueError, OverflowError):
                         amount = 0.0
                     if not np.isfinite(amount):
                         amount = 0.0
@@ -1077,69 +1078,89 @@ class StockChart(QWidget):
 
             # === Layer 1 (BOTTOM): Prediction line (guessed graph) ===
             if self.predicted_line is not None:
-                if closes and self._predicted_prices:
-                    # Start forecast one bar AFTER the last candle so
-                    # the prediction line does not overlap the last candle.
-                    start_x = float(len(closes)) + float(self._forecast_x_gap)
-                    x_pred = start_x + np.arange(
-                        len(self._predicted_prices), dtype=float
-                    )
-                    y_pred = np.array(
-                        list(self._predicted_prices),
-                        dtype=float
-                    )
-                    # Avoid drawing a long artificial connector when the first
-                    # forecast point is too far from the last real close.
-                    last_close = float(closes[-1]) if closes else 0.0
-                    first_pred = float(self._predicted_prices[0])
-                    attach_cap = 0.035 if default_iv in {"1d", "1wk", "1mo"} else 0.018
-                    connect_forecast = bool(
-                        last_close > 0
-                        and abs(first_pred / max(last_close, 1e-8) - 1.0) <= attach_cap
-                    )
-                    if connect_forecast:
-                        x_conn = np.array(
-                            [len(closes) - 1, start_x], dtype=float
+                # FIX Bug #3: Add proper error handling for empty/invalid data
+                if not closes or not self._predicted_prices:
+                    self.predicted_line.clear()
+                else:
+                    try:
+                        # Start forecast one bar AFTER the last candle so
+                        # the prediction line does not overlap the last candle.
+                        start_x = float(len(closes)) + float(self._forecast_x_gap)
+                        x_pred = start_x + np.arange(
+                            len(self._predicted_prices), dtype=float
                         )
-                        y_conn = np.array(
-                            [last_close, first_pred], dtype=float
+                        y_pred = np.array(
+                            list(self._predicted_prices),
+                            dtype=float
                         )
-                        x_full = np.concatenate([x_conn, x_pred])
-                        y_full = np.concatenate([y_conn, y_pred])
-                        self.predicted_line.setData(x_full, y_full)
-                    else:
-                        self.predicted_line.setData(x_pred, y_pred)
-                    
-                    # FIX: Ensure uncertainty bands are rendered
-                    if (
-                        self.predicted_low_line is not None
-                        and self.predicted_high_line is not None
-                        and self._predicted_prices_low
-                        and self._predicted_prices_high
-                        and len(self._predicted_prices_low) == len(self._predicted_prices)
-                        and len(self._predicted_prices_high) == len(self._predicted_prices)
-                    ):
-                        y_low = np.array(
-                            list(self._predicted_prices_low),
-                            dtype=float,
-                        )
-                        y_high = np.array(
-                            list(self._predicted_prices_high),
-                            dtype=float,
-                        )
-                        # Do not connect uncertainty bands to last real close:
-                        # that creates an artificial long vertical band jump at
-                        # forecast start when band width is wide.
-                        self.predicted_low_line.setData(x_pred, y_low)
-                        self.predicted_high_line.setData(x_pred, y_high)
-                    else:
-                        # FIX: Clear bands only if data is truly missing
-                        if self.predicted_low_line is not None:
-                            if not self._predicted_prices_low or len(self._predicted_prices_low) != len(self._predicted_prices):
+                        # Avoid drawing a long artificial connector when the first
+                        # forecast point is too far from the last real close.
+                        last_close = float(closes[-1]) if closes else 0.0
+                        first_pred = float(self._predicted_prices[0]) if self._predicted_prices else 0.0
+                        
+                        # FIX: Guard against invalid price values
+                        if last_close <= 0 or first_pred <= 0:
+                            connect_forecast = False
+                        else:
+                            attach_cap = 0.035 if default_iv in {"1d", "1wk", "1mo"} else 0.018
+                            connect_forecast = bool(
+                                abs(first_pred / max(last_close, 1e-8) - 1.0) <= attach_cap
+                            )
+                        
+                        if connect_forecast:
+                            x_conn = np.array(
+                                [len(closes) - 1, start_x], dtype=float
+                            )
+                            y_conn = np.array(
+                                [last_close, first_pred], dtype=float
+                            )
+                            x_full = np.concatenate([x_conn, x_pred])
+                            y_full = np.concatenate([y_conn, y_pred])
+                            self.predicted_line.setData(x_full, y_full)
+                        else:
+                            self.predicted_line.setData(x_pred, y_pred)
+                    except (TypeError, ValueError, IndexError, ZeroDivisionError) as e:
+                        log.debug(f"Forecast line render failed: {e}")
+                        self.predicted_line.clear()
+
+                    # FIX Bug #4: Ensure uncertainty bands are properly handled
+                    try:
+                        if (
+                            self.predicted_low_line is not None
+                            and self.predicted_high_line is not None
+                            and self._predicted_prices_low
+                            and self._predicted_prices_high
+                            and len(self._predicted_prices_low) == len(self._predicted_prices)
+                            and len(self._predicted_prices_high) == len(self._predicted_prices)
+                            and len(self._predicted_prices) > 0
+                        ):
+                            y_low = np.array(
+                                list(self._predicted_prices_low),
+                                dtype=float,
+                            )
+                            y_high = np.array(
+                                list(self._predicted_prices_high),
+                                dtype=float,
+                            )
+                            # Do not connect uncertainty bands to last real close:
+                            # that creates an artificial long vertical band jump at
+                            # forecast start when band width is wide.
+                            self.predicted_low_line.setData(x_pred, y_low)
+                            self.predicted_high_line.setData(x_pred, y_high)
+                        else:
+                            # FIX: Clear bands when data is missing or mismatched
+                            if self.predicted_low_line is not None:
                                 self.predicted_low_line.clear()
-                        if self.predicted_high_line is not None:
-                            if not self._predicted_prices_high or len(self._predicted_prices_high) != len(self._predicted_prices):
+                            if self.predicted_high_line is not None:
                                 self.predicted_high_line.clear()
+                    except (TypeError, ValueError, IndexError) as e:
+                        log.debug(f"Uncertainty bands render failed: {e}")
+                        if self.predicted_low_line is not None:
+                            self.predicted_low_line.clear()
+                        if self.predicted_high_line is not None:
+                            self.predicted_high_line.clear()
+                    
+                    # FIX: Forecast shape diagnostics
                     try:
                         p = y_pred
                         if p.size > 0:
@@ -1207,12 +1228,6 @@ class StockChart(QWidget):
                                 )
                     except Exception:
                         pass
-                else:
-                    self.predicted_line.clear()
-                    if self.predicted_low_line is not None:
-                        self.predicted_low_line.clear()
-                    if self.predicted_high_line is not None:
-                        self.predicted_high_line.clear()
 
             self._actual_prices = closes
 
@@ -1303,10 +1318,10 @@ class StockChart(QWidget):
     def update_candles(
         self,
         bars: list[dict],
-        predicted_prices: list[float] = None,
-        predicted_prices_low: list[float] = None,
-        predicted_prices_high: list[float] = None,
-        levels: dict[str, float] = None,
+        predicted_prices: list[float] | None = None,
+        predicted_prices_low: list[float] | None = None,
+        predicted_prices_high: list[float] | None = None,
+        levels: dict[str, float] | None = None,
     ) -> None:
         """Update chart with candlestick bar data.
 
@@ -1324,10 +1339,10 @@ class StockChart(QWidget):
     def update_data(
         self,
         actual_prices: list[float],
-        predicted_prices: list[float] = None,
-        predicted_prices_low: list[float] = None,
-        predicted_prices_high: list[float] = None,
-        levels: dict[str, float] = None
+        predicted_prices: list[float] | None = None,
+        predicted_prices_low: list[float] | None = None,
+        predicted_prices_high: list[float] | None = None,
+        levels: dict[str, float] | None = None
     ) -> None:
         """Update chart with line data.
 

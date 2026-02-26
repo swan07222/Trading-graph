@@ -401,7 +401,7 @@ class NewsPanel(QWidget):
             try:
                 if thread.isRunning():
                     thread.wait(2000)
-            except RuntimeError:
+            except (RuntimeError, AttributeError):
                 pass
 
             try:

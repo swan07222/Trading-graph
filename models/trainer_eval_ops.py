@@ -53,7 +53,9 @@ _CALIBRATION_MIN_BIN_SAMPLES = 8
 
 
 def _clip_confidences(values: np.ndarray | list[float] | tuple[float, ...]) -> np.ndarray:
+    """Clip confidence values to valid [0, 1] range with NaN/inf protection."""
     arr = np.asarray(values, dtype=np.float64).reshape(-1)
+    # Replace NaN and inf with safe defaults before clipping
     arr = np.nan_to_num(arr, nan=0.5, posinf=1.0, neginf=0.0)
     return np.clip(arr, 0.0, 1.0)
 
@@ -63,6 +65,7 @@ def _expected_calibration_error(
     outcomes: np.ndarray,
     bins: int = 10,
 ) -> float:
+    """Compute Expected Calibration Error with robust edge case handling."""
     conf = _clip_confidences(confidences)
     y = np.asarray(outcomes, dtype=np.float64).reshape(-1)
     n = int(min(len(conf), len(y)))
@@ -95,6 +98,7 @@ def _apply_calibration_map(
     confidences: np.ndarray,
     calibration_map: dict[str, Any] | None,
 ) -> tuple[np.ndarray, bool, str]:
+    """Apply calibration map to confidences with robust edge case handling."""
     conf = _clip_confidences(confidences)
     if not isinstance(calibration_map, dict):
         return conf, False, "missing_map"
@@ -125,6 +129,7 @@ def _apply_calibration_map(
     if len(uniq_x) < 2:
         return conf, False, "degenerate_map"
 
+    # Ensure map covers full [0, 1] range
     if uniq_x[0] > 0.0:
         uniq_x.insert(0, 0.0)
         uniq_y.insert(0, float(uniq_y[0]))
@@ -132,13 +137,18 @@ def _apply_calibration_map(
         uniq_x.append(1.0)
         uniq_y.append(float(uniq_y[-1]))
 
-    calibrated = np.interp(
-        conf,
-        np.asarray(uniq_x, dtype=np.float64),
-        np.asarray(uniq_y, dtype=np.float64),
-    )
-    calibrated = _clip_confidences(calibrated)
-    return calibrated, True, "ok"
+    # Apply interpolation with bounds checking
+    try:
+        calibrated = np.interp(
+            conf,
+            np.asarray(uniq_x, dtype=np.float64),
+            np.asarray(uniq_y, dtype=np.float64),
+        )
+        calibrated = _clip_confidences(calibrated)
+        return calibrated, True, "ok"
+    except (ValueError, TypeError, FloatingPointError):
+        # Interpolation failed - return original confidences
+        return conf, False, "interpolation_failed"
 
 
 def _build_confidence_calibration(

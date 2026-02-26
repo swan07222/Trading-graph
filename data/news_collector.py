@@ -185,10 +185,12 @@ class NewsCollector:
 
     def _detect_network_environment(self) -> bool:
         """Auto-detect network environment by testing connectivity.
-        
+
         FIX 2026-02-25: Replaced bare except Exception with specific
         requests.RequestException to avoid swallowing KeyboardInterrupt
         and other critical exceptions.
+        FIX 2026-02-25 #2: Added proper exception handling for all network
+        operations to prevent unexpected crashes.
         """
         # Test access to Chinese site
         chinese_test = "https://www.baidu.com"
@@ -207,12 +209,19 @@ class NewsCollector:
                 except requests.RequestException:
                     # Can't access international - China direct mode
                     return False
+                except Exception as e:
+                    # Log unexpected errors but don't crash
+                    log.debug("International site test failed with unexpected error: %s", e)
+                    return False
         except requests.RequestException:
             # Network error - default to VPN mode
             pass
-        except Exception:
+        except KeyboardInterrupt:
+            # Don't swallow keyboard interrupts
+            raise
+        except Exception as e:
             # Other unexpected errors - log and default to VPN mode
-            log.warning("Unexpected error during network detection", exc_info=True)
+            log.warning("Unexpected error during network detection: %s", e, exc_info=True)
             pass
 
         # Default to VPN mode (international sources)

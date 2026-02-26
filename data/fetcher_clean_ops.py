@@ -37,7 +37,7 @@ def _to_shanghai_naive_ts(cls: Any, value: object) -> pd.Timestamp:
                 ts = pd.to_datetime(num, unit="s", errors="coerce", utc=True)
             else:
                 ts = pd.to_datetime(value, errors="coerce")
-    except Exception:
+    except (TypeError, ValueError, OverflowError):
         return pd.NaT
 
     if pd.isna(ts):
@@ -45,16 +45,16 @@ def _to_shanghai_naive_ts(cls: Any, value: object) -> pd.Timestamp:
 
     try:
         ts_obj = pd.Timestamp(ts)
-    except Exception:
+    except (TypeError, ValueError):
         return pd.NaT
 
     try:
         if ts_obj.tzinfo is not None:
             ts_obj = ts_obj.tz_convert("Asia/Shanghai").tz_localize(None)
-    except Exception:
+    except (ValueError, OverflowError):
         try:
             ts_obj = ts_obj.tz_localize(None)
-        except Exception:
+        except (ValueError, OverflowError):
             return pd.NaT
     return ts_obj
 
@@ -70,10 +70,10 @@ def _normalize_datetime_index(
         try:
             if out.tz is not None:
                 out = out.tz_convert("Asia/Shanghai").tz_localize(None)
-        except Exception:
+        except (ValueError, OverflowError):
             try:
                 out = out.tz_localize(None)
-            except Exception as exc:
+            except (ValueError, OverflowError) as exc:
                 log.debug("DatetimeIndex tz normalization failed: %s", exc)
         return pd.DatetimeIndex(out)
 
@@ -161,7 +161,7 @@ def _clean_dataframe(
                     float(idx_num.notna().sum()) / float(len(idx_num))
                     if len(idx_num) > 0 else 0.0
                 )
-            except Exception:
+            except (TypeError, ValueError):
                 numeric_ratio = 0.0
 
             if numeric_ratio < 0.60:
@@ -238,13 +238,19 @@ def _clean_dataframe(
 
     # 9) high >= low (FIX: repair instead of dropping to prevent candle damage).
     if "high" in out.columns and "low" in out.columns:
-        # FIX: Repair invalid high/low instead of dropping rows
+        # FIX 2026-02-25 #4: Repair invalid high/low values more carefully
+        # to preserve valid price data while fixing genuine errors.
         invalid_mask = out["high"].fillna(0) < out["low"].fillna(0)
         if invalid_mask.any():
-            # Repair by setting high = max(high, low) and low = min(high, low)
+            # For invalid rows, use the proper high/low relationship
             invalid_idx = out.index[invalid_mask]
-            out.loc[invalid_idx, "high"] = out.loc[invalid_idx, ["high", "low"]].max(axis=1)
-            out.loc[invalid_idx, "low"] = out.loc[invalid_idx, ["high", "low"]].min(axis=1)
+            # Get the valid high/low values for these rows
+            high_vals = out.loc[invalid_idx, "high"]
+            low_vals = out.loc[invalid_idx, "low"]
+            # Repair by taking max for high and min for low
+            # This preserves the extreme values while fixing the relationship
+            out.loc[invalid_idx, "high"] = pd.concat([high_vals, low_vals], axis=1).max(axis=1)
+            out.loc[invalid_idx, "low"] = pd.concat([high_vals, low_vals], axis=1).min(axis=1)
 
     # 10) Derive amount if missing.
     if (

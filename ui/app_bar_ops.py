@@ -24,6 +24,10 @@ _APP_SOFT_EXCEPTIONS = (
     TypeError,
     ValueError,
     ZeroDivisionError,
+    ConnectionError,
+    ConnectionResetError,
+    ConnectionAbortedError,
+    ConnectionRefusedError,
 )
 
 
