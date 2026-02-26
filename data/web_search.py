@@ -132,25 +132,26 @@ class SearchQuery:
 class SearchEngineManager:
     """Manages search engine availability and health."""
 
-    # China-compatible engines (no VPN required)
+    # China-compatible engines (no VPN required) - UPDATED 2026-02-26
+    # Priority order for China users (most accessible first)
     CHINA_ENGINES = [
-        SearchEngine.BING_CN,
-        SearchEngine.BAIDU,
-        SearchEngine.SOGOU,
-        SearchEngine.EASTMONEY_SEARCH,
-        SearchEngine.SINA_SEARCH,
+        SearchEngine.BAIDU,         # Best for Chinese content
+        SearchEngine.BING_CN,       # Good alternative
+        SearchEngine.SOGOU,         # WeChat content
+        SearchEngine.EASTMONEY_SEARCH,  # Financial news
+        SearchEngine.SINA_SEARCH,   # Finance news
     ]
 
     # International engines (VPN required)
     INTERNATIONAL_ENGINES = [
-        SearchEngine.GOOGLE,
-        SearchEngine.DUCKDUCKGO,
+        SearchEngine.GOOGLE,        # Best overall (VPN required)
+        SearchEngine.DUCKDUCKGO,    # Privacy-focused (VPN required)
     ]
 
-    # Engine priorities for China mode
+    # Engine priorities for China mode (lower = higher priority)
     CHINA_PRIORITY = {
-        SearchEngine.BING_CN: 1,
-        SearchEngine.BAIDU: 2,
+        SearchEngine.BAIDU: 1,
+        SearchEngine.BING_CN: 2,
         SearchEngine.SOGOU: 3,
         SearchEngine.EASTMONEY_SEARCH: 4,
         SearchEngine.SINA_SEARCH: 5,
@@ -160,8 +161,8 @@ class SearchEngineManager:
     VPN_PRIORITY = {
         SearchEngine.GOOGLE: 1,
         SearchEngine.BING_CN: 2,
-        SearchEngine.DUCKDUCKGO: 3,
-        SearchEngine.BAIDU: 4,
+        SearchEngine.BAIDU: 3,
+        SearchEngine.DUCKDUCKGO: 4,
     }
 
     def __init__(self) -> None:

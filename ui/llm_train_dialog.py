@@ -109,6 +109,7 @@ class LLMAutoTrainWorker(QThread):
                     min_new_articles=int(self.config.get("min_new_articles", 24) or 24),
                     seen_ttl_hours=int(self.config.get("seen_ttl_hours", 168) or 168),
                     auto_related_search=True,
+                    allow_gm_bootstrap=False,
                 )
 
                 out = dict(report or {})

@@ -3,6 +3,18 @@ name = "trading-graph"
 version = "2.0.0"
 description = "AI-assisted stock analysis workstation with backtest and UI - Modernized Edition"
 requires-python = ">=3.11"
+# FIX China 2026-02-26: Added note about Chinese mirrors in description
+readme = "README.md"
+keywords = ["stock", "trading", "china", "a-share", "ai", "machine-learning"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Financial and Insurance Industry",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Office/Business :: Financial :: Investment",
+]
+
 dependencies = [
   # Core numerical stack - updated for 2025
   "numpy>=1.26.0,<3.0.0",
@@ -34,6 +46,8 @@ dependencies = [
   # Modern Python utilities
   "pydantic>=2.5.0,<3.0.0",
   "pydantic-settings>=2.1.0,<3.0.0",
+  # FIX China 2026-02-26: Added akshare as optional dependency for China users
+  "akshare>=1.11.0; extra == \"china\"",
 ]
 
 [tool.setuptools.packages.find]
@@ -69,11 +83,23 @@ backtest = [
   "vectorbt>=0.26.0,<1.0.0",
   "backtesting>=0.3.3,<1.0.0",
 ]
+# FIX China 2026-02-26: Enhanced China dependencies
 china = [
   "akshare>=1.11.0",
+  "chinesecalendar>=0.1.8",  # Chinese trading calendar
+  "cn2an>=0.5.20",  # Chinese numerals conversion
 ]
 vpn = [
   "yfinance>=0.2.40",
+]
+# FIX China 2026-02-26: China-optimized stack (recommended for mainland users)
+china-full = [
+  "akshare>=1.11.0",
+  "beautifulsoup4>=4.12.0,<5.0.0",
+  "sentence-transformers>=2.2.0,<3.0.0",
+  "transformers>=4.36.0,<5.0.0",
+  "chinesecalendar>=0.1.8",
+  "cn2an>=0.5.20",
 ]
 nlp = [
   "beautifulsoup4>=4.12.0,<5.0.0",
@@ -101,7 +127,7 @@ dev = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-q --cov=analysis --cov=config --cov=core --cov=data --cov=models --cov=trading --cov=ui --cov=utils --cov-report=term-missing --cov-fail-under=40"
+addopts = "-q --cov=analysis --cov=config --cov=core --cov=data --cov=models --cov=ui --cov=utils --cov-report=term-missing --cov-fail-under=40"
 
 [tool.ruff]
 target-version = "py311"
@@ -119,7 +145,7 @@ select = ["E", "F", "I", "B", "UP"]
 ignore = ["E501"]
 
 [tool.ruff.lint.isort]
-known-first-party = ["analysis", "config", "core", "data", "models", "trading", "ui", "utils"]
+known-first-party = ["analysis", "config", "core", "data", "models", "ui", "utils"]
 
 [tool.ruff.lint.pydocstyle]
 convention = "google"
@@ -157,7 +183,7 @@ module = [
 ignore_missing_imports = true
 
 [tool.coverage.run]
-source = ["analysis", "config", "core", "data", "models", "trading", "ui", "utils"]
+source = ["analysis", "config", "core", "data", "models", "ui", "utils"]
 omit = [
   "tests/*",
   "venv/*",

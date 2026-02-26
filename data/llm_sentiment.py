@@ -7,6 +7,7 @@ import math
 import os
 import pickle
 import re
+import hashlib
 import threading
 import time
 from collections.abc import Callable
@@ -19,6 +20,7 @@ from typing import Any
 import numpy as np
 
 from config.settings import CONFIG
+from config.runtime_env import env_flag
 from utils.logger import get_logger
 
 from .news_collector import NewsArticle, get_collector, reset_collector
@@ -679,6 +681,430 @@ class LLM_sentimentAnalyzer:
             deduped.append(normalized)
         return deduped
 
+    @staticmethod
+    def _stable_article_id(*parts: object) -> str:
+        raw = "|".join(str(p or "").strip() for p in parts if str(p or "").strip())
+        if not raw:
+            raw = f"fallback:{time.time():.6f}"
+        return hashlib.md5(raw.encode("utf-8", errors="ignore")).hexdigest()[:20]
+
+    @staticmethod
+    def _extract_stock_codes_from_text(
+        text: str,
+        *,
+        max_codes: int = 12,
+    ) -> list[str]:
+        out: list[str] = []
+        seen: set[str] = set()
+        for raw in re.findall(r"\b(\d{6})\b", str(text or "")):
+            code = str(raw).strip()
+            if len(code) != 6 or code in seen:
+                continue
+            seen.add(code)
+            out.append(code)
+            if len(out) >= int(max(1, max_codes)):
+                break
+        return out
+
+    def _load_related_codes_from_china_news(
+        self,
+        *,
+        max_codes: int = 12,
+    ) -> list[str]:
+        """Extract candidate stock codes from China market/news context."""
+        try:
+            from data.news_aggregator import get_news_aggregator
+
+            agg = get_news_aggregator()
+            news = agg.get_market_news(
+                count=max(36, int(max_codes) * 8),
+                force_refresh=False,
+            )
+        except Exception as exc:
+            log.debug("Related-code discovery via China news failed: %s", exc)
+            return []
+
+        out: list[str] = []
+        seen: set[str] = set()
+        for item in list(news or []):
+            code_candidates: list[str] = []
+            for raw in list(getattr(item, "stock_codes", []) or []):
+                code = self._normalize_stock_code(raw)
+                if code:
+                    code_candidates.append(code)
+            if not code_candidates:
+                text = f"{getattr(item, 'title', '')} {getattr(item, 'content', '')}"
+                code_candidates = self._extract_stock_codes_from_text(
+                    text,
+                    max_codes=max_codes,
+                )
+            for code in code_candidates:
+                if code in seen:
+                    continue
+                seen.add(code)
+                out.append(code)
+                if len(out) >= int(max(1, max_codes)):
+                    return out
+        return out
+
+    def _news_item_to_article(
+        self,
+        item: Any,
+        *,
+        corpus_tag: str,
+        default_category: str = "market",
+        bound_code: str | None = None,
+    ) -> NewsArticle:
+        """Convert NewsItem-like payload into normalized NewsArticle."""
+        now_dt = datetime.now()
+        title = str(getattr(item, "title", "") or "").strip()
+        content = str(getattr(item, "content", "") or "").strip()
+        if not content:
+            content = title
+        summary = str(content[:220] or title[:220]).strip()
+        source = str(getattr(item, "source", "") or "china_news").strip()
+        url = str(getattr(item, "url", "") or "").strip()
+
+        published_at = getattr(item, "publish_time", None)
+        if not isinstance(published_at, datetime):
+            published_at = now_dt
+
+        text = f"{title} {content}".strip()
+        language = self._detect_language(text)
+        category = str(getattr(item, "category", "") or default_category).strip().lower()
+        if category not in {"policy", "market", "company", "economic", "regulatory", "instruction"}:
+            category = str(default_category or "market")
+
+        entities: list[str] = []
+        if bound_code:
+            ncode = self._normalize_stock_code(bound_code)
+            if ncode:
+                entities.append(ncode)
+        for raw in list(getattr(item, "stock_codes", []) or []):
+            code = self._normalize_stock_code(raw)
+            if code and code not in entities:
+                entities.append(code)
+
+        tags = [
+            str(corpus_tag or "").strip().lower(),
+            "china_network",
+            str(source or "").strip().lower(),
+        ]
+        tags = [t for t in tags if t]
+        if category:
+            tags.append(str(category).strip().lower())
+
+        article_id = self._stable_article_id(
+            corpus_tag,
+            source,
+            title,
+            url,
+            published_at.isoformat() if isinstance(published_at, datetime) else "",
+            ",".join(entities),
+        )
+        return NewsArticle(
+            id=article_id,
+            title=title,
+            content=content,
+            summary=summary,
+            source=source,
+            url=url,
+            published_at=published_at,
+            collected_at=now_dt,
+            language=language,
+            category=category,
+            sentiment_score=self._safe_float(getattr(item, "sentiment_score", 0.0), 0.0),
+            relevance_score=self._clip(
+                self._safe_float(getattr(item, "importance", 0.6), 0.6),
+                0.0,
+                1.0,
+            ),
+            entities=entities,
+            tags=tags,
+        )
+
+    def _build_instruction_conversation_corpus(
+        self,
+        base_articles: list[NewsArticle],
+        *,
+        max_items: int,
+    ) -> list[NewsArticle]:
+        """Create instruction/chat-style corpus from real China news text."""
+        out: list[NewsArticle] = []
+        now_dt = datetime.now()
+        for idx, article in enumerate(list(base_articles or [])[: int(max(1, max_items))]):
+            title = str(getattr(article, "title", "") or "").strip()
+            content = str(getattr(article, "content", "") or "").strip()
+            if len(title) < 6:
+                continue
+            lang = str(getattr(article, "language", "") or "").strip().lower()
+            if lang not in {"zh", "en"}:
+                lang = self._detect_language(f"{title} {content}")
+
+            snippet = str(content[:280] or title)
+            if lang == "zh":
+                prompt = f"请根据以下A股资讯判断市场情绪并给出风险提示：{title}"
+                answer = (
+                    "结论：请结合政策方向、行业景气与资金面进行综合判断。"
+                    f"要点：{snippet}"
+                )
+                convo = f"用户：{prompt}\n助手：{answer}"
+            else:
+                prompt = f"Assess sentiment and risk for this China market update: {title}"
+                answer = (
+                    "Conclusion: evaluate policy tone, sector momentum, and capital flows together. "
+                    f"Key points: {snippet}"
+                )
+                convo = f"User: {prompt}\nAssistant: {answer}"
+
+            article_id = self._stable_article_id(
+                "instruction_conversation",
+                article.id,
+                idx,
+            )
+            tags = list(getattr(article, "tags", []) or [])
+            tags.extend(["instruction_conversation", "china_network"])
+
+            out.append(
+                NewsArticle(
+                    id=article_id,
+                    title=f"Instruction sample: {title}"[:220],
+                    content=convo,
+                    summary=answer[:220],
+                    source="china_instruction_corpus",
+                    url=str(getattr(article, "url", "") or ""),
+                    published_at=getattr(article, "published_at", now_dt)
+                    if isinstance(getattr(article, "published_at", None), datetime)
+                    else now_dt,
+                    collected_at=now_dt,
+                    language=lang,
+                    category="instruction",
+                    sentiment_score=self._safe_float(getattr(article, "sentiment_score", 0.0), 0.0),
+                    relevance_score=max(0.70, self._safe_float(getattr(article, "relevance_score", 0.65), 0.65)),
+                    entities=list(getattr(article, "entities", []) or []),
+                    tags=tags,
+                )
+            )
+        return out
+
+    def _collect_china_corpus_segments(
+        self,
+        *,
+        related_codes: list[str],
+        limit_per_query: int,
+        max_related_codes: int,
+        stop_flag: Callable[[], bool] | None = None,
+    ) -> tuple[dict[str, list[NewsArticle]], list[str]]:
+        """Collect segmented China corpus for LLM training."""
+        buckets: dict[str, list[NewsArticle]] = {
+            "general_text": [],
+            "policy_news": [],
+            "stock_specific": [],
+            "instruction_conversation": [],
+        }
+        discovered_codes: list[str] = []
+
+        def _stopped() -> bool:
+            if stop_flag is None:
+                return False
+            try:
+                return bool(stop_flag())
+            except Exception:
+                return False
+
+        try:
+            from data.news_aggregator import get_news_aggregator
+
+            agg = get_news_aggregator()
+        except Exception as exc:
+            log.warning("China corpus aggregation unavailable: %s", exc)
+            return buckets, discovered_codes
+
+        market_count = int(max(30, min(220, int(limit_per_query))))
+        policy_count = int(max(16, min(120, int(limit_per_query // 2))))
+        stock_count = int(max(12, min(80, int(limit_per_query // 3))))
+
+        try:
+            market_items = agg.get_market_news(
+                count=market_count,
+                force_refresh=True,
+            )
+        except Exception as exc:
+            log.debug("China general-text corpus fetch failed: %s", exc)
+            market_items = []
+        for item in list(market_items or []):
+            if _stopped():
+                break
+            article = self._news_item_to_article(
+                item,
+                corpus_tag="general_text",
+                default_category="market",
+            )
+            buckets["general_text"].append(article)
+            if len(discovered_codes) < int(max(1, max_related_codes)):
+                text = f"{article.title} {article.content}"
+                for code in self._extract_stock_codes_from_text(
+                    text,
+                    max_codes=max_related_codes,
+                ):
+                    if code not in discovered_codes:
+                        discovered_codes.append(code)
+                        if len(discovered_codes) >= int(max(1, max_related_codes)):
+                            break
+
+        try:
+            policy_items = agg.get_policy_news(count=policy_count)
+        except Exception as exc:
+            log.debug("China policy corpus fetch failed: %s", exc)
+            policy_items = []
+        for item in list(policy_items or []):
+            if _stopped():
+                break
+            buckets["policy_news"].append(
+                self._news_item_to_article(
+                    item,
+                    corpus_tag="policy_news",
+                    default_category="policy",
+                )
+            )
+
+        code_candidates: list[str] = []
+        seen_codes: set[str] = set()
+        for code in list(related_codes or []) + list(discovered_codes or []):
+            norm = self._normalize_stock_code(code)
+            if not norm or norm in seen_codes:
+                continue
+            seen_codes.add(norm)
+            code_candidates.append(norm)
+            if len(code_candidates) >= int(max(1, max_related_codes)):
+                break
+
+        for code in code_candidates:
+            if _stopped():
+                break
+            try:
+                stock_items = agg.get_stock_news(
+                    code,
+                    count=stock_count,
+                    force_refresh=True,
+                )
+            except Exception as exc:
+                log.debug("China stock-specific corpus fetch failed for %s: %s", code, exc)
+                stock_items = []
+            for item in list(stock_items or []):
+                buckets["stock_specific"].append(
+                    self._news_item_to_article(
+                        item,
+                        corpus_tag="stock_specific",
+                        default_category="company",
+                        bound_code=code,
+                    )
+                )
+
+        base_for_instruction = (
+            list(buckets["stock_specific"])
+            + list(buckets["policy_news"])
+            + list(buckets["general_text"])
+        )
+        buckets["instruction_conversation"] = self._build_instruction_conversation_corpus(
+            base_for_instruction,
+            max_items=max(18, int(limit_per_query // 2)),
+        )
+        return buckets, code_candidates
+
+    def _filter_high_quality_articles(
+        self,
+        rows: list[NewsArticle],
+        *,
+        hours_back: int,
+    ) -> tuple[list[NewsArticle], dict[str, int]]:
+        """High-quality filter for LLM training corpus."""
+        now_dt = datetime.now()
+        cutoff = now_dt - timedelta(hours=max(12, int(hours_back)))
+        stats = {
+            "input": int(len(rows or [])),
+            "kept": 0,
+            "drop_missing": 0,
+            "drop_length": 0,
+            "drop_time": 0,
+            "drop_garbled": 0,
+            "drop_duplicate": 0,
+        }
+        out: list[NewsArticle] = []
+        seen_keys: set[tuple[str, str, str]] = set()
+        seen_ids: set[str] = set()
+
+        for article in list(rows or []):
+            title = str(getattr(article, "title", "") or "").strip()
+            content = str(getattr(article, "content", "") or "").strip()
+            if not content:
+                content = title
+                article.content = content
+            if not title:
+                title = content[:160]
+                article.title = title
+            if not title and not content:
+                stats["drop_missing"] += 1
+                continue
+
+            text = f"{title} {content}".strip()
+            token_chars = len(re.findall(r"[A-Za-z0-9\u4e00-\u9fff]", text))
+            if len(title) < 6 or token_chars < 18:
+                stats["drop_length"] += 1
+                continue
+
+            replacement = text.count("\ufffd")
+            if replacement > 0:
+                stats["drop_garbled"] += 1
+                continue
+
+            published_at = getattr(article, "published_at", None)
+            if not isinstance(published_at, datetime):
+                published_at = now_dt
+                article.published_at = published_at
+            if published_at < cutoff or published_at > (now_dt + timedelta(minutes=30)):
+                stats["drop_time"] += 1
+                continue
+
+            aid = str(getattr(article, "id", "") or "").strip()
+            if not aid:
+                aid = self._stable_article_id(
+                    getattr(article, "source", ""),
+                    title,
+                    published_at.isoformat(),
+                    getattr(article, "url", ""),
+                )
+                article.id = aid
+            if aid in seen_ids:
+                stats["drop_duplicate"] += 1
+                continue
+
+            dedup_key = (
+                str(getattr(article, "source", "") or "").strip().lower(),
+                title.lower()[:120],
+                content.lower()[:240],
+            )
+            if dedup_key in seen_keys:
+                stats["drop_duplicate"] += 1
+                continue
+
+            lang = str(getattr(article, "language", "") or "").strip().lower()
+            if lang not in {"zh", "en"}:
+                article.language = self._detect_language(text)
+            category = str(getattr(article, "category", "") or "").strip().lower()
+            if category not in {"policy", "market", "company", "economic", "regulatory", "instruction"}:
+                article.category = "market"
+            summary = str(getattr(article, "summary", "") or "").strip()
+            if not summary:
+                article.summary = content[:220]
+
+            seen_ids.add(aid)
+            seen_keys.add(dedup_key)
+            out.append(article)
+
+        stats["kept"] = int(len(out))
+        return out, stats
+
     def get_training_status(self) -> dict[str, Any]:
         calibrator_ready = bool(self._calibrator is not None)
         hybrid_nn_ready = bool(self._hybrid_calibrator is not None)
@@ -1004,6 +1430,7 @@ class LLM_sentimentAnalyzer:
         auto_related_search: bool = True,
         related_keywords: list[str] | None = None,
         max_related_codes: int = 12,
+        allow_gm_bootstrap: bool = False,
     ) -> dict[str, Any]:
         """Auto-train from internet news with robust error handling.
 
@@ -1020,6 +1447,7 @@ class LLM_sentimentAnalyzer:
             auto_related_search: Enable auto-related search
             related_keywords: Optional related keywords
             max_related_codes: Max related stock codes to include
+            allow_gm_bootstrap: Allow fallback to GM cycle-history stocks
 
         Returns:
             Training report with status and metrics
@@ -1080,15 +1508,32 @@ class LLM_sentimentAnalyzer:
 
         date_token = datetime.now().strftime("%Y-%m-%d")
         related_codes: list[str] = []
+        related_codes_source = "none"
         if bool(auto_related_search):
             try:
-                related_codes = self._load_recent_cycle_stock_codes(
+                related_codes = self._load_related_codes_from_china_news(
                     max_codes=max_related_codes,
-                    max_files=40,
                 )
+                if related_codes:
+                    related_codes_source = "china_news"
             except Exception as exc:
-                log.debug("Failed to load related codes: %s", exc)
+                log.debug("Failed to load related codes from China news: %s", exc)
                 related_codes = []
+
+            allow_gm_bootstrap_effective = bool(allow_gm_bootstrap) or bool(
+                env_flag("TRADING_LLM_ALLOW_GM_BOOTSTRAP", "0")
+            )
+            if (not related_codes) and allow_gm_bootstrap_effective:
+                try:
+                    related_codes = self._load_recent_cycle_stock_codes(
+                        max_codes=max_related_codes,
+                        max_files=40,
+                    )
+                    if related_codes:
+                        related_codes_source = "gm_cycle_history"
+                except Exception as exc:
+                    log.debug("GM bootstrap related-code load failed: %s", exc)
+                    related_codes = []
 
         queries = self._build_auto_search_queries(
             date_token=date_token,
@@ -1099,7 +1544,7 @@ class LLM_sentimentAnalyzer:
             4,
             (
                 f"Auto search prepared {len(queries)} query groups "
-                f"(related_codes={len(related_codes)})"
+                f"(related_codes={len(related_codes)}, source={related_codes_source})"
             ),
             "query_build",
         )
@@ -1108,28 +1553,71 @@ class LLM_sentimentAnalyzer:
         skipped_seen = 0
         strict_batch_failures = 0
         strict_batch_recoveries = 0
+        corpus_breakdown: dict[str, int] = {
+            "search_news": 0,
+            "general_text": 0,
+            "policy_news": 0,
+            "stock_specific": 0,
+            "instruction_conversation": 0,
+        }
         _emit(2, "Starting internet collection...", "start")
+
+        def _build_stopped_payload() -> dict[str, Any]:
+            return {
+                "status": "stopped",
+                "collected_articles": int(len(rows)),
+                "new_articles": int(len(rows)),
+                "reused_articles_skipped": int(skipped_seen),
+                "hours_back": int(hours_back),
+                "limit_per_query": int(limit_per_query),
+                "query_count": int(len(queries)),
+                "related_stock_codes": list(related_codes),
+                "related_codes_source": str(related_codes_source),
+                "china_direct_mode": bool(env_flag("TRADING_CHINA_DIRECT", "0")),
+                "corpus_breakdown": dict(corpus_breakdown),
+                "training_architecture": "hybrid_neural_network",
+            }
+
+        def _append_batch(
+            batch: list[NewsArticle],
+            *,
+            bucket: str,
+        ) -> tuple[int, bool]:
+            nonlocal skipped_seen
+            added = 0
+            for article in list(batch or []):
+                if _is_stopped():
+                    return added, True
+                aid = str(getattr(article, "id", "") or "").strip()
+                if not aid:
+                    aid = self._stable_article_id(
+                        bucket,
+                        getattr(article, "source", ""),
+                        getattr(article, "title", ""),
+                        getattr(article, "url", ""),
+                        getattr(article, "published_at", ""),
+                    )
+                    article.id = aid
+                if aid in seen:
+                    continue
+                if bool(only_new) and aid in self._seen_articles:
+                    skipped_seen += 1
+                    continue
+                seen.add(aid)
+                rows.append(article)
+                added += 1
+            corpus_breakdown[bucket] = int(corpus_breakdown.get(bucket, 0) + added)
+            return added, False
 
         for i, kw in enumerate(queries):
             if _is_stopped():
-                stopped = {
-                    "status": "stopped",
-                    "collected_articles": int(len(rows)),
-                    "new_articles": int(len(rows)),
-                    "reused_articles_skipped": int(skipped_seen),
-                    "hours_back": int(hours_back),
-                    "limit_per_query": int(limit_per_query),
-                    "query_count": int(len(queries)),
-                    "related_stock_codes": list(related_codes),
-                    "training_architecture": "hybrid_neural_network",
-                }
+                stopped = _build_stopped_payload()
                 self._write_training_status(stopped)
                 return stopped
 
             query_keywords = list(kw)
             batch: list[NewsArticle]
 
-            # FIX 7: Robust batch collection with error handling
             try:
                 batch = collector.collect_news(
                     keywords=query_keywords,
@@ -1169,36 +1657,54 @@ class LLM_sentimentAnalyzer:
                     )
                     batch = []
 
+            added_rows, stopped = _append_batch(batch, bucket="search_news")
             _emit(
                 8 + int(((i + 1) / max(1, len(queries))) * 62),
-                f"Collected batch {i + 1}/{len(queries)} ({len(batch)} rows)",
+                (
+                    f"Collected batch {i + 1}/{len(queries)} "
+                    f"(raw={len(batch)} new={added_rows})"
+                ),
                 "collect",
             )
+            if stopped:
+                stopped_payload = _build_stopped_payload()
+                self._write_training_status(stopped_payload)
+                return stopped_payload
 
-            for a in batch:
-                aid = str(getattr(a, "id", "") or "")
-                if not aid or aid in seen:
-                    continue
-                if bool(only_new) and aid in self._seen_articles:
-                    skipped_seen += 1
-                    continue
-                seen.add(aid)
-                rows.append(a)
-                if _is_stopped():
-                    stopped = {
-                        "status": "stopped",
-                        "collected_articles": int(len(rows)),
-                        "new_articles": int(len(rows)),
-                        "reused_articles_skipped": int(skipped_seen),
-                        "hours_back": int(hours_back),
-                        "limit_per_query": int(limit_per_query),
-                        "query_count": int(len(queries)),
-                        "related_stock_codes": list(related_codes),
-                        "training_architecture": "hybrid_neural_network",
-                    }
-                    self._write_training_status(stopped)
-                    return stopped
+        _emit(70, "Collecting China corpus segments (general/policy/stock/instruction)...", "collect")
+        china_buckets, discovered_codes = self._collect_china_corpus_segments(
+            related_codes=related_codes,
+            limit_per_query=max(20, int(limit_per_query)),
+            max_related_codes=max_related_codes,
+            stop_flag=stop_flag,
+        )
+        if not related_codes and discovered_codes:
+            related_codes = list(discovered_codes)
+            related_codes_source = "china_corpus_discovery"
 
+        extra_keys = [
+            "general_text",
+            "policy_news",
+            "stock_specific",
+            "instruction_conversation",
+        ]
+        for idx, key in enumerate(extra_keys, start=1):
+            batch_rows = list(china_buckets.get(key, []) or [])
+            added_rows, stopped = _append_batch(batch_rows, bucket=key)
+            _emit(
+                70 + int((idx / max(1, len(extra_keys))) * 6),
+                f"China corpus {key}: raw={len(batch_rows)} new={added_rows}",
+                "collect",
+            )
+            if stopped:
+                stopped_payload = _build_stopped_payload()
+                self._write_training_status(stopped_payload)
+                return stopped_payload
+
+        rows, quality_stats = self._filter_high_quality_articles(
+            rows,
+            hours_back=max(12, int(hours_back)),
+        )
         rows.sort(key=lambda a: getattr(a, "published_at", datetime.min), reverse=True)
         rows = rows[: max(80, int(max_samples))]
 
@@ -1214,6 +1720,10 @@ class LLM_sentimentAnalyzer:
                 "limit_per_query": int(limit_per_query),
                 "query_count": int(len(queries)),
                 "related_stock_codes": list(related_codes),
+                "related_codes_source": str(related_codes_source),
+                "china_direct_mode": bool(env_flag("TRADING_CHINA_DIRECT", "0")),
+                "corpus_breakdown": dict(corpus_breakdown),
+                "quality_filter": dict(quality_stats),
                 "training_architecture": "hybrid_neural_network",
                 "strict_batch_failures": int(strict_batch_failures),
                 "strict_batch_recoveries": int(strict_batch_recoveries),
@@ -1244,6 +1754,10 @@ class LLM_sentimentAnalyzer:
                 "limit_per_query": int(limit_per_query),
                 "query_count": int(len(queries)),
                 "related_stock_codes": list(related_codes),
+                "related_codes_source": str(related_codes_source),
+                "china_direct_mode": bool(env_flag("TRADING_CHINA_DIRECT", "0")),
+                "corpus_breakdown": dict(corpus_breakdown),
+                "quality_filter": dict(quality_stats),
                 "training_architecture": "hybrid_neural_network",
                 "strict_batch_failures": int(strict_batch_failures),
                 "strict_batch_recoveries": int(strict_batch_recoveries),
@@ -1255,7 +1769,11 @@ class LLM_sentimentAnalyzer:
 
         _emit(
             78,
-            f"Collected {len(rows)} new rows; starting hybrid training.",
+            (
+                f"Collected {len(rows)} high-quality rows "
+                f"(dropped={max(0, int(quality_stats.get('input', 0)) - int(quality_stats.get('kept', 0)))}); "
+                "starting hybrid training."
+            ),
             "train",
         )
         report = self.train(rows, max_samples=max_samples)
@@ -1280,6 +1798,10 @@ class LLM_sentimentAnalyzer:
         report["only_new_mode"] = bool(only_new)
         report["query_count"] = int(len(queries))
         report["related_stock_codes"] = list(related_codes)
+        report["related_codes_source"] = str(related_codes_source)
+        report["china_direct_mode"] = bool(env_flag("TRADING_CHINA_DIRECT", "0"))
+        report["corpus_breakdown"] = dict(corpus_breakdown)
+        report["quality_filter"] = dict(quality_stats)
         report["hours_back"] = int(hours_back)
         report["limit_per_query"] = int(limit_per_query)
         report["strict_batch_failures"] = int(strict_batch_failures)

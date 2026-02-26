@@ -38,8 +38,6 @@ DEFAULT_TARGETS: tuple[str, ...] = (
     "utils/atomic_io.py",
     "utils/policy.py",
     "utils/security.py",
-    "utils/two_factor_auth.py",
-    "utils/metrics_prometheus.py",
     "scripts/feature_score_gate.py",
     "scripts/release_preflight.py",
     "scripts/typecheck_gate.py",

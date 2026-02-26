@@ -20,10 +20,6 @@ _LAZY_EXPORTS = {
     "BacktestDialog": (".dialogs", "BacktestDialog"),
     "ScreenerProfileDialog": (".dialogs", "ScreenerProfileDialog"),
     "NewsPanel": (".news_widget", "NewsPanel"),
-    "StrategyMarketplaceDialog": (
-        ".strategy_marketplace_dialog",
-        "StrategyMarketplaceDialog",
-    ),
 }
 
 __all__ = list(_LAZY_EXPORTS.keys())

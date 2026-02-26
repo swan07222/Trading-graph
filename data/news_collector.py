@@ -209,35 +209,55 @@ class NewsCollector:
     def _detect_network_environment(self) -> bool:
         """Auto-detect network environment by testing connectivity.
 
+        FIX 2026-02-26 China Network:
+        - Replaced Google test with Baidu (Google blocked in China)
+        - Added Sina Finance as secondary China endpoint
+        - Improved error handling for GFW scenarios
+        - Reduced timeouts for faster detection
+        
         FIX 2026-02-25: Replaced bare except Exception with specific
         requests.RequestException to avoid swallowing KeyboardInterrupt
         and other critical exceptions.
         FIX 2026-02-25 #2: Added proper exception handling for all network
         operations to prevent unexpected crashes.
         """
-        # Test access to Chinese site
+        # FIX China: Test access to Chinese sites (always accessible in China)
         chinese_test = "https://www.baidu.com"
-        international_test = "https://www.google.com"
+        chinese_test_2 = "https://finance.sina.com.cn"
+        # FIX China: Google is blocked, use Bing international as foreign test
+        international_test = "https://www.bing.com"
 
         try:
-            # Try Chinese site first
-            resp = self._session.get(chinese_test, timeout=5)
+            # Try Chinese site first (Baidu)
+            resp = self._session.get(chinese_test, timeout=4)
             if resp.status_code == 200:
-                # Can access Chinese sites, now test international
+                # Can access Chinese sites, now test second Chinese endpoint
                 try:
-                    resp_int = self._session.get(international_test, timeout=5)
-                    if resp_int.status_code == 200:
-                        # Can access both - likely VPN or good international connection
-                        return True
+                    resp2 = self._session.get(chinese_test_2, timeout=4)
+                    if resp2.status_code == 200:
+                        # Both Chinese sites accessible - China direct mode
+                        # Now test if international sites are also accessible (VPN mode)
+                        try:
+                            resp_int = self._session.get(international_test, timeout=4)
+                            if resp_int.status_code == 200:
+                                # Can access both Chinese and international - VPN mode
+                                return True
+                        except requests.RequestException:
+                            # Can't access international - China direct mode
+                            return False
+                        except Exception as e:
+                            # Log unexpected errors but don't crash
+                            log.debug("International site test failed: %s", e)
+                            return False
                 except requests.RequestException:
-                    # Can't access international - China direct mode
+                    # Second Chinese site failed, but first succeeded - likely China direct
                     return False
                 except Exception as e:
-                    # Log unexpected errors but don't crash
-                    log.debug("International site test failed with unexpected error: %s", e)
+                    log.debug("Second Chinese site test failed: %s", e)
                     return False
         except requests.RequestException:
-            # Network error - default to VPN mode
+            # Network error on Chinese sites - unusual, default to VPN mode
+            log.warning("Chinese site test failed, defaulting to VPN mode")
             pass
         except KeyboardInterrupt:
             # Don't swallow keyboard interrupts
@@ -247,7 +267,7 @@ class NewsCollector:
             log.warning("Unexpected error during network detection: %s", e, exc_info=True)
             pass
 
-        # Default to VPN mode (international sources)
+        # Default to VPN mode (international sources) for safety
         return True
 
     def get_active_sources(self) -> list[str]:

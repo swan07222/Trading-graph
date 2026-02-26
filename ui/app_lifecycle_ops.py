@@ -89,21 +89,6 @@ def _show_auto_learn(self: Any, auto_start: bool = False) -> Any | None:
     return dialog
 
 
-def _show_strategy_marketplace(self: Any) -> None:
-    """Show strategy marketplace manager."""
-    try:
-        from .strategy_marketplace_dialog import StrategyMarketplaceDialog
-    except ImportError as exc:
-        self.log(f"Strategy marketplace unavailable: {exc}", "error")
-        return
-
-    try:
-        dialog = StrategyMarketplaceDialog(self)
-        dialog.exec()
-    except Exception as exc:
-        self.log(f"Strategy marketplace unavailable: {exc}", "error")
-
-
 def _show_backtest(self: Any) -> None:
     """Show backtest dialog."""
     try:

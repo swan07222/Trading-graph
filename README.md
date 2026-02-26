@@ -129,6 +129,22 @@ Built-in observability features:
 
 ### Installation
 
+#### For Users in Mainland China (Recommended)
+
+```bash
+# Use Chinese PyPI mirrors for faster installation
+pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
+
+# Or use the provided pip configuration
+# Copy .pip/pip.ini to %APPDATA%\pip\pip.ini (Windows) or ~/.config/pip/pip.conf (Linux/Mac)
+pip install -r requirements.txt
+
+# Install AkShare for China A-share data (recommended)
+pip install akshare -i https://pypi.tuna.tsinghua.edu.cn/simple
+```
+
+#### For International Users
+
 ```bash
 # Core dependencies (minimum installation)
 pip install -r requirements.txt
@@ -308,16 +324,41 @@ TRADING_METRICS_HOST=127.0.0.1
 
 ### China Direct Mode
 
-For users within mainland China:
+**Quick Setup for China Users:**
+
+For users within mainland China, we provide a pre-configured `.env.china` file:
+
+```bash
+# Copy the China configuration
+cp .env.china .env
+```
+
+Or manually configure:
 
 ```bash
 export TRADING_CHINA_DIRECT=1
+export TRADING_VPN=0
+export TRADING_CONNECTION_TIMEOUT=15
+export TRADING_RETRY_ATTEMPTS=5
 ```
 
 This enables:
-- Direct access to Chinese data sources
-- Optimized routing for mainland networks
-- Reduced latency
+- ✅ Direct access to Chinese data sources (EastMoney, Sina, Tencent)
+- ✅ Optimized routing for mainland networks (Great Firewall compatible)
+- ✅ Reduced timeouts for faster failure detection
+- ✅ Automatic retry with exponential backoff
+- ✅ China-accessible search engines (Baidu, Bing CN, Sogou)
+- ✅ Local PyPI mirrors for faster package installation
+
+**Network Diagnostics:**
+
+```bash
+# Test your network configuration
+python -m utils.china_diagnostics
+
+# Check system health
+python main.py --health
+```
 
 ### VPN Mode (International)
 

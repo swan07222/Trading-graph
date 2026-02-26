@@ -972,6 +972,7 @@ def _resolve_chart_prediction_series(
     source_interval: str | None = None,
 ) -> tuple[list[float], str]:
     """Resolve prediction series/source interval for chart rendering."""
+    sym = self._ui_norm(symbol)
     iv_fallback = self._normalize_interval_token(fallback_interval)
     iv_source = self._normalize_interval_token(
         source_interval,
@@ -982,7 +983,7 @@ def _resolve_chart_prediction_series(
 
     if (
         self.current_prediction
-        and getattr(self.current_prediction, "stock_code", "") == symbol
+        and self._ui_norm(getattr(self.current_prediction, "stock_code", "")) == sym
     ):
         vals = (
             getattr(self.current_prediction, "predicted_prices", [])
@@ -1016,13 +1017,19 @@ def _render_chart_state(
     FIX Bug #7: Clear stale forecast data when symbol switches.
     """
     iv = self._normalize_interval_token(interval)
+    sym = self._ui_norm(symbol)
+    if not sym:
+        sym = str(symbol or "").strip()
     arr = self._safe_list(bars)
 
     # FIX Bug #7: Clear stale prediction data when switching symbols
-    old_symbol = getattr(self, "_chart_symbol", "")
-    if old_symbol and old_symbol != symbol:
+    old_symbol = self._ui_norm(getattr(self, "_chart_symbol", ""))
+    if old_symbol and old_symbol != sym:
         try:
-            if self.current_prediction and getattr(self.current_prediction, "stock_code", "") == old_symbol:
+            if (
+                self.current_prediction
+                and self._ui_norm(getattr(self.current_prediction, "stock_code", "")) == old_symbol
+            ):
                 # Clear prediction data for the old symbol
                 self.current_prediction.predicted_prices = []
                 self.current_prediction.predicted_prices_low = []
@@ -1043,20 +1050,20 @@ def _render_chart_state(
     arr = self._scrub_chart_bars(
         arr,
         iv,
-        symbol=symbol,
+        symbol=sym,
         anchor_price=chart_anchor if chart_anchor > 0 else None,
     )
-    arr = self._stabilize_chart_depth(symbol, iv, arr)
-    self._bars_by_symbol[symbol] = arr
+    arr = self._stabilize_chart_depth(sym, iv, arr)
+    self._bars_by_symbol[sym] = arr
     self._debug_candle_quality(
-        symbol=symbol,
+        symbol=sym,
         interval=iv,
         bars=arr,
         context=context,
     )
 
     pred_vals, pred_source_iv = self._resolve_chart_prediction_series(
-        symbol=symbol,
+        symbol=sym,
         fallback_interval=iv,
         predicted_prices=predicted_prices,
         source_interval=source_interval,
@@ -1085,7 +1092,7 @@ def _render_chart_state(
         chart_predicted = list(pred_vals)
     else:
         chart_predicted = self._prepare_chart_predicted_prices(
-            symbol=symbol,
+            symbol=sym,
             chart_interval=iv,
             predicted_prices=pred_vals,
             source_interval=pred_source_iv,
@@ -1093,13 +1100,13 @@ def _render_chart_state(
             target_steps=steps,
         )
     chart_predicted_low, chart_predicted_high = self._build_chart_prediction_bands(
-        symbol=symbol,
+        symbol=sym,
         predicted_prices=chart_predicted,
         anchor_price=anchor_for_pred,
         chart_interval=iv,
     )
     self._debug_forecast_quality(
-        symbol=symbol,
+        symbol=sym,
         chart_interval=iv,
         source_interval=pred_source_iv,
         predicted_prices=chart_predicted,
@@ -1110,7 +1117,7 @@ def _render_chart_state(
     if (
         reset_view_on_symbol_switch
         and self._chart_symbol
-        and self._chart_symbol != symbol
+        and self._ui_norm(self._chart_symbol) != sym
     ):
         try:
             self.chart.reset_view()
@@ -1127,13 +1134,13 @@ def _render_chart_state(
             levels=self._get_levels_dict(),
         )
         self._debug_chart_state(
-            symbol=symbol,
+            symbol=sym,
             interval=iv,
             bars=arr,
             predicted_prices=chart_predicted,
             context=context,
         )
-        self._chart_symbol = symbol
+        self._chart_symbol = sym
         rendered = True
     elif allow_legacy_candles and hasattr(self.chart, "update_candles"):
         self.chart.update_candles(
@@ -1143,7 +1150,7 @@ def _render_chart_state(
             predicted_prices_high=chart_predicted_high,
             levels=self._get_levels_dict(),
         )
-        self._chart_symbol = symbol
+        self._chart_symbol = sym
         rendered = True
 
     if update_latest_label:
@@ -1151,7 +1158,7 @@ def _render_chart_state(
         if anchor_input is not None:
             label_price = anchor_input
         self._update_chart_latest_label(
-            symbol,
+            sym,
             bar=arr[-1] if arr else None,
             price=label_price,
         )
@@ -1159,4 +1166,3 @@ def _render_chart_state(
         # Keep the return side-effect free when no renderer is available.
         return arr
     return arr
-

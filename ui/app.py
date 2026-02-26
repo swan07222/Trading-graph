@@ -84,9 +84,6 @@ from ui.app_lifecycle_ops import (
     _show_backtest as _show_backtest_impl,
 )
 from ui.app_lifecycle_ops import (
-    _show_strategy_marketplace as _show_strategy_marketplace_impl,
-)
-from ui.app_lifecycle_ops import (
     _start_training as _start_training_impl,
 )
 from ui.app_monitoring_ops import (
@@ -303,10 +300,6 @@ class MainApp(MainAppCommonMixin, QMainWindow):
         auto_train_llm_action = QAction("&Auto Train LLM", self)
         auto_train_llm_action.triggered.connect(self._auto_train_llm)
         ai_menu.addAction(auto_train_llm_action)
-
-        strategy_market_action = QAction("&Strategy Marketplace", self)
-        strategy_market_action.triggered.connect(self._show_strategy_marketplace)
-        ai_menu.addAction(strategy_market_action)
 
         ai_menu.addSeparator()
 
@@ -1407,9 +1400,6 @@ class MainApp(MainAppCommonMixin, QMainWindow):
 
     def _show_auto_learn(self, auto_start: bool = False) -> Any | None:
         return _show_auto_learn_impl(self, auto_start=auto_start)
-
-    def _show_strategy_marketplace(self) -> None:
-        _show_strategy_marketplace_impl(self)
 
     def _show_backtest(self) -> None:
         _show_backtest_impl(self)

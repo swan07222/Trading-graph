@@ -125,25 +125,6 @@ def _build_policy_snapshot() -> dict[str, Any]:
         return {"status": "unavailable", "reason": str(exc)}
 
 
-def _build_strategy_marketplace_snapshot() -> dict[str, Any]:
-    """Best-effort strategy marketplace status."""
-    try:
-        from analysis.strategy_marketplace import StrategyMarketplace
-
-        marketplace = StrategyMarketplace()
-        entries = marketplace.list_entries()
-        enabled = marketplace.get_enabled_ids()
-        summary = marketplace.get_integrity_summary()
-        return {
-            "status": "ok",
-            "entries": _normalize_json(entries),
-            "enabled_ids": _normalize_json(enabled),
-            "integrity": _normalize_json(summary),
-        }
-    except Exception as exc:
-        return {"status": "unavailable", "reason": str(exc)}
-
-
 def _build_execution_engine_snapshot() -> dict[str, Any]:
     """Best-effort execution engine snapshot via registered provider."""
     provider = None
@@ -536,7 +517,6 @@ class MetricsHandler(BaseHTTPRequestHandler):
                         "runtime": _build_runtime_snapshot(limit=limit),
                         "alerts": _build_alert_snapshot(limit=limit),
                         "policy": _build_policy_snapshot(),
-                        "strategy_marketplace": _build_strategy_marketplace_snapshot(),
                         "execution": _build_execution_engine_snapshot(),
                         "execution_quality": _build_execution_quality_snapshot(),
                         "risk": _build_risk_snapshot(),
@@ -672,16 +652,6 @@ class MetricsHandler(BaseHTTPRequestHandler):
                 200,
                 {
                     "snapshot": _build_policy_snapshot(),
-                    "generated_at": datetime.now(UTC).isoformat(),
-                },
-            )
-            return
-
-        if path == "/api/v1/strategy/marketplace":
-            self._send_json(
-                200,
-                {
-                    "snapshot": _build_strategy_marketplace_snapshot(),
                     "generated_at": datetime.now(UTC).isoformat(),
                 },
             )

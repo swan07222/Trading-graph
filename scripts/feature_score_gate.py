@@ -84,19 +84,9 @@ FEATURE_DEFINITIONS: tuple[FeatureDefinition, ...] = (
         test_paths=("tests/test_screener.py",),
     ),
     FeatureDefinition(
-        name="Strategy scripting extensibility",
-        evidence_paths=("analysis/strategy_engine.py", "strategies/__init__.py"),
-        test_paths=("tests/test_strategy_engine.py",),
-    ),
-    FeatureDefinition(
-        name="Strategy marketplace governance",
-        evidence_paths=("analysis/strategy_marketplace.py",),
-        test_paths=("tests/test_strategy_marketplace.py",),
-    ),
-    FeatureDefinition(
         name="Backtesting realism",
         evidence_paths=("analysis/realistic_backtest.py", "analysis/backtest.py"),
-        test_paths=("tests/test_backtest_realism.py", "tests/test_backtest_order_execution.py"),
+        test_paths=("tests/test_backtest_order_execution.py",),
     ),
     FeatureDefinition(
         name="Replay + walk-forward tooling",
@@ -129,19 +119,14 @@ FEATURE_DEFINITIONS: tuple[FeatureDefinition, ...] = (
         test_paths=("tests/test_auto_learner.py",),
     ),
     FeatureDefinition(
-        name="Access control + 2FA",
-        evidence_paths=("utils/two_factor_auth.py", "utils/security.py"),
-        test_paths=("tests/test_security.py", "tests/test_two_factor_auth.py"),
-    ),
-    FeatureDefinition(
         name="Policy governance engine",
         evidence_paths=("utils/policy.py",),
         test_paths=("tests/test_policy.py",),
     ),
     FeatureDefinition(
         name="Observability/metrics",
-        evidence_paths=("utils/metrics_http.py", "utils/metrics_prometheus.py"),
-        test_paths=("tests/test_metrics_http.py", "tests/test_metrics_prometheus.py"),
+        evidence_paths=("utils/metrics_http.py",),
+        test_paths=("tests/test_metrics_http.py",),
     ),
     FeatureDefinition(
         name="CI quality gates",

@@ -396,74 +396,12 @@ class TestAdaptiveLearningRate:
         
         predictor._update_model_weights("600519", was_correct=True)
         perf_on_mixed = predictor._last_model_performance["lstm"]
-        
+
         # Streak should have larger update (higher learning rate)
         change_on_streak = abs(perf_on_streak - 0.5)
         change_on_mixed = abs(perf_on_mixed - 0.5)
-        
+
         assert change_on_streak > change_on_mixed
-
-
-class TestRegimeAwareConfidence:
-    """Test regime-aware confidence adjustment in strategies."""
-    
-    def test_detect_market_regime(self):
-        """Test market regime detection."""
-        from strategies import BaseStrategy
-        
-        # Create mock strategy
-        class TestStrategy(BaseStrategy):
-            name = "test"
-            def generate_signal(self, data):
-                return None
-        
-        strategy = TestStrategy()
-        
-        # Create uptrend data with low volatility
-        bars_uptrend = [
-            {"close": 100.0 * (1.001 ** i), "high": 101, "low": 99, "open": 100, "volume": 1000}
-            for i in range(100)
-        ]
-        
-        regime = strategy._detect_market_regime({"bars": bars_uptrend})
-        assert regime == "bull_low_vol"
-        
-        # Create sideways data
-        bars_sideways = [
-            {"close": 100.0 + np.sin(i * 0.1), "high": 101, "low": 99, "open": 100, "volume": 1000}
-            for i in range(100)
-        ]
-        
-        regime = strategy._detect_market_regime({"bars": bars_sideways})
-        assert regime == "sideways"
-    
-    def test_apply_regime_adjustment(self):
-        """Test regime-based confidence adjustment."""
-        from strategies import BaseStrategy
-        
-        class TestStrategy(BaseStrategy):
-            name = "test"
-            def generate_signal(self, data):
-                return None
-        
-        strategy = TestStrategy()
-        
-        # Bull low vol should boost confidence
-        adjusted_bull = strategy._apply_regime_adjustment(0.70, "bull_low_vol")
-        assert adjusted_bull > 0.70
-        
-        # Bear high vol should reduce confidence
-        adjusted_bear = strategy._apply_regime_adjustment(0.70, "bear_high_vol")
-        assert adjusted_bear < 0.70
-        
-        # Crisis should significantly reduce confidence
-        adjusted_crisis = strategy._apply_regime_adjustment(0.70, "crisis")
-        assert adjusted_crisis < 0.60
-        
-        # All adjustments should stay in valid range
-        assert 0.0 <= adjusted_bull <= 1.0
-        assert 0.0 <= adjusted_bear <= 1.0
-        assert 0.0 <= adjusted_crisis <= 1.0
 
 
 if __name__ == "__main__":

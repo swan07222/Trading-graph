@@ -22,8 +22,11 @@ class NetworkEnv:
     # Endpoint reachability (cached)
     eastmoney_ok: bool = False            # AkShare backend
     tencent_ok: bool = False              # Tencent quotes
-    yahoo_ok: bool = False                # Yahoo Finance
-    csindex_ok: bool = False              # CSIndex constituents
+    # FIX China 2026-02-26: Replaced yahoo_ok with baidu_ok for China compatibility
+    yahoo_ok: bool = False                # Backward compat (mapped to baidu_ok)
+    baidu_ok: bool = False                # Baidu accessibility (China network indicator)
+    sina_ok: bool = False                 # Sina Finance accessibility
+    csindex_ok: bool = False              # Backward compat (mapped to sina_ok)
 
     detected_at: datetime | None = None
     detection_method: str = ""
@@ -130,9 +133,16 @@ class NetworkDetector:
 
         Args:
             prev_env: Previous environment snapshot for fallback logic.
-            
+
         FIX #12: Added overall timeout for network detection to prevent
         application startup hangs if ThreadPoolExecutor doesn't clean up properly.
+        
+        FIX China Network 2026-02-26: 
+        - Removed Yahoo Finance probe (blocked in China)
+        - Added Baidu probe for China direct detection
+        - Added Sina Finance probe as secondary China endpoint
+        - Reduced timeouts for faster detection in China network
+        - Added more China-friendly fallback logic
         """
         from concurrent.futures import ThreadPoolExecutor, as_completed
         from concurrent.futures import TimeoutError as FuturesTimeoutError
@@ -145,18 +155,25 @@ class NetworkDetector:
         force_vpn = env_flag("TRADING_VPN")
         force_china_direct = env_flag("TRADING_CHINA_DIRECT")
 
+        # FIX China Network: Use China-accessible endpoints for probing
+        # Yahoo Finance removed (blocked in China), added Baidu and Sina
         probes = {
-            "tencent_ok": ("https://qt.gtimg.cn/q=sh600519", 5),
+            "tencent_ok": ("https://qt.gtimg.cn/q=sh600519", 4),
             "eastmoney_ok": (
                 "https://82.push2.eastmoney.com/api/qt/clist/get"
                 "?pn=1&pz=1&fields=f2&fid=f3&fs=m:0+t:6",
-                5,
+                4,
             ),
-            "yahoo_ok": (
-                "https://query1.finance.yahoo.com/v8/finance/chart/AAPL?range=1d",
-                6,
+            # FIX China: Replace Yahoo with Baidu for foreign IP detection
+            "baidu_ok": (
+                "https://www.baidu.com",
+                4,
             ),
-            "csindex_ok": ("https://www.csindex.com.cn/", 5),
+            # FIX China: Add Sina Finance as secondary probe
+            "sina_ok": (
+                "https://finance.sina.com.cn",
+                4,
+            ),
         }
 
         # Avoid sharing requests.Session across threads.
@@ -164,33 +181,42 @@ class NetworkDetector:
         default_headers = {
             "User-Agent": (
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36"
-            )
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/120.0.0.0 Safari/537.36"
+            ),
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
         }
 
         def run_probe(url: str, timeout: float | int) -> bool:
             try:
-                # FIX #13: Add per-probe timeout cap to prevent single slow probe from delaying detection
-                effective_timeout = min(timeout, 5.0)  # Max 5 seconds per probe
+                # FIX #13 + China: Add per-probe timeout cap
+                effective_timeout = min(timeout, 4.0)  # Max 4 seconds per probe for China
                 r = requests.get(url, timeout=effective_timeout, headers=default_headers)
                 return r.status_code == 200
             except requests.Timeout:
                 # Explicitly handle timeout for better logging
+                log.debug("Probe timeout: %s", url)
                 return False
-            except Exception:
+            except requests.ConnectionError:
+                # FIX China: Common in GFW scenarios
+                log.debug("Probe connection error: %s", url)
+                return False
+            except Exception as e:
+                log.debug("Probe failed %s: %s", url, type(e).__name__)
                 return False
 
-        # FIX #12: Add overall timeout for network detection
-        OVERALL_TIMEOUT = 20  # seconds
+        # FIX China: Reduce overall timeout for faster startup
+        OVERALL_TIMEOUT = 12  # seconds (reduced from 20s for China network)
         futures = []
         try:
-            with ThreadPoolExecutor(max_workers=4) as ex:
+            with ThreadPoolExecutor(max_workers=4, thread_name_prefix="network_probe") as ex:
                 fut_map = {
                     ex.submit(run_probe, url, to): k
                     for k, (url, to) in probes.items()
                 }
                 futures = list(fut_map.keys())
-                # FIX #12: Use overall timeout to prevent hangs
+                # FIX #12 + China: Use overall timeout
                 for fut in as_completed(fut_map, timeout=OVERALL_TIMEOUT):
                     k = fut_map[fut]
                     try:
@@ -198,7 +224,7 @@ class NetworkDetector:
                     except Exception:
                         setattr(env, k, False)
         except FuturesTimeoutError:
-            # FIX #10: Log timeout and continue with partial results
+            # FIX #10 + China: Log timeout and continue with partial results
             log.warning(
                 f"Network detection timed out after {OVERALL_TIMEOUT}s. "
                 "Using partial results."
@@ -208,46 +234,62 @@ class NetworkDetector:
                 if not fut.done():
                     fut.cancel()
         except Exception as e:
-            # FIX #10: Catch all exceptions to prevent application crash
+            # FIX #10 + China: Catch all exceptions
             log.error(f"Network detection failed: {e}")
             # Cancel pending futures to clean up resources
             for fut in futures:
                 if not fut.done():
                     fut.cancel()
 
+        # FIX China: Map baidu_ok/sina_ok to yahoo_ok/csindex_ok for backward compatibility
+        # This allows existing code to work without changes
+        env.yahoo_ok = env.baidu_ok  # Treat Baidu access as "foreign IP OK" proxy
+        env.csindex_ok = env.sina_ok  # Treat Sina as secondary China probe
+
         # Handle case where all probes failed
-        if not any([env.tencent_ok, env.eastmoney_ok, env.yahoo_ok, env.csindex_ok]):
+        china_endpoints_ok = env.eastmoney_ok or env.tencent_ok or env.sina_ok
+        if not any([china_endpoints_ok, env.baidu_ok]):
             log.warning(
                 "All network probes failed. Using fallback logic."
             )
 
-        if env.eastmoney_ok and not env.yahoo_ok:
+        # FIX China: Updated detection logic for China network reality
+        # China direct: Can access EastMoney/Tencent/Sina but NOT Baidu (via GFW)
+        # VPN mode: Can access Baidu AND China endpoints (via foreign routing)
+        if china_endpoints_ok and not env.baidu_ok:
             env.is_china_direct = True
             env.is_vpn_active = False
-            env.detection_method = "eastmoney_ok+yahoo_blocked"
-        elif env.yahoo_ok and not env.eastmoney_ok:
+            env.detection_method = "china_endpoints_ok+baidu_blocked"
+        elif env.baidu_ok and china_endpoints_ok:
+            # Both accessible - likely VPN or good international connection
             env.is_china_direct = False
             env.is_vpn_active = True
-            env.detection_method = "yahoo_ok+eastmoney_blocked"
-        elif env.eastmoney_ok and env.yahoo_ok:
-            env.is_china_direct = True
-            env.is_vpn_active = False
-            env.detection_method = "both_ok_prefer_domestic"
+            env.detection_method = "both_ok_vpn_mode"
+        elif env.baidu_ok and not china_endpoints_ok:
+            # Only Baidu accessible - unusual, treat as VPN with China endpoint issues
+            env.is_china_direct = False
+            env.is_vpn_active = True
+            env.detection_method = "baidu_ok+china_endpoints_blocked"
         else:
-            # Both major probes failed (often transient/rate-limit).
-            # Keep previous mode if available to avoid flip-flopping.
+            # All China endpoints failed
+            # Keep previous mode if available to avoid flip-flopping
             if prev_env is not None:
                 env.is_china_direct = bool(prev_env.is_china_direct)
                 env.is_vpn_active = bool(prev_env.is_vpn_active)
-                env.detection_method = "both_failed_keep_previous"
+                env.detection_method = "all_failed_keep_previous"
             else:
-                # First detection fallback: Tencent is a weak China hint.
-                env.is_china_direct = bool(env.tencent_ok)
-                env.is_vpn_active = False
-                env.detection_method = (
-                    "both_failed_tencent_ok" if env.tencent_ok
-                    else "both_failed_all_down"
-                )
+                # First detection fallback: Use environment variables or default to China direct
+                if force_vpn:
+                    env.is_china_direct = False
+                    env.is_vpn_active = True
+                elif force_china_direct:
+                    env.is_china_direct = True
+                    env.is_vpn_active = False
+                else:
+                    # Default to China direct for mainland users
+                    env.is_china_direct = True
+                    env.is_vpn_active = False
+                env.detection_method = "env_override_or_default_china"
 
         # Environment overrides (useful for China + VPN)
         if force_vpn is True:
