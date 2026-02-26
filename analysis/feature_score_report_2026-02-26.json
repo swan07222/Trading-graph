@@ -1,0 +1,621 @@
+{
+  "generated_at": "2026-02-26T03:59:55.677907+00:00",
+  "feature_count": 33,
+  "overall_score": 9.894,
+  "benchmark_score": 9.4,
+  "overall_gap_vs_benchmark": 0.494,
+  "features": [
+    {
+      "name": "Real-time quote robustness",
+      "score": 9.8,
+      "benchmark_score": 9.4,
+      "gap_vs_benchmark": 0.4,
+      "weight": 1.0,
+      "evidence_ratio": 1.0,
+      "tests_ratio": 0.0,
+      "docs_ratio": 1.0,
+      "evidence_paths": [
+        "data/fetcher_quote_ops.py",
+        "data/fetcher_realtime_ops.py"
+      ],
+      "test_paths": [
+        "tests/test_fetcher_fallback.py"
+      ],
+      "doc_paths": []
+    },
+    {
+      "name": "Historical data continuity",
+      "score": 9.8,
+      "benchmark_score": 9.4,
+      "gap_vs_benchmark": 0.4,
+      "weight": 1.0,
+      "evidence_ratio": 1.0,
+      "tests_ratio": 0.0,
+      "docs_ratio": 1.0,
+      "evidence_paths": [
+        "data/fetcher_history_ops.py",
+        "data/fetcher_history_flow_ops.py"
+      ],
+      "test_paths": [
+        "tests/test_fetcher_cache_timing.py"
+      ],
+      "doc_paths": []
+    },
+    {
+      "name": "Multi-source failover",
+      "score": 9.8,
+      "benchmark_score": 9.4,
+      "gap_vs_benchmark": 0.4,
+      "weight": 1.0,
+      "evidence_ratio": 1.0,
+      "tests_ratio": 0.0,
+      "docs_ratio": 1.0,
+      "evidence_paths": [
+        "data/fetcher_source_ops.py",
+        "data/news_collector.py"
+      ],
+      "test_paths": [
+        "tests/test_fetcher_fallback.py",
+        "tests/test_news_collector.py"
+      ],
+      "doc_paths": []
+    },
+    {
+      "name": "Data quality + staleness guards",
+      "score": 9.8,
+      "benchmark_score": 9.4,
+      "gap_vs_benchmark": 0.4,
+      "weight": 1.0,
+      "evidence_ratio": 1.0,
+      "tests_ratio": 0.0,
+      "docs_ratio": 1.0,
+      "evidence_paths": [
+        "data/fetcher_quality_ops.py",
+        "data/quality_monitor.py"
+      ],
+      "test_paths": [
+        "tests/test_fetcher_quality_ops.py",
+        "tests/test_news_aggregator_fallback.py"
+      ],
+      "doc_paths": []
+    },
+    {
+      "name": "News source routing",
+      "score": 9.8,
+      "benchmark_score": 9.4,
+      "gap_vs_benchmark": 0.4,
+      "weight": 1.0,
+      "evidence_ratio": 1.0,
+      "tests_ratio": 0.0,
+      "docs_ratio": 1.0,
+      "evidence_paths": [
+        "data/news_collector.py"
+      ],
+      "test_paths": [
+        "tests/test_news_collector.py"
+      ],
+      "doc_paths": []
+    },
+    {
+      "name": "News dedupe/health scoring",
+      "score": 9.8,
+      "benchmark_score": 9.4,
+      "gap_vs_benchmark": 0.4,
+      "weight": 1.0,
+      "evidence_ratio": 1.0,
+      "tests_ratio": 0.0,
+      "docs_ratio": 1.0,
+      "evidence_paths": [
+        "data/news_aggregator.py"
+      ],
+      "test_paths": [
+        "tests/test_news_aggregator_fallback.py"
+      ],
+      "doc_paths": []
+    },
+    {
+      "name": "Sentiment analysis depth",
+      "score": 10.0,
+      "benchmark_score": 9.4,
+      "gap_vs_benchmark": 0.6,
+      "weight": 1.0,
+      "evidence_ratio": 1.0,
+      "tests_ratio": 1.0,
+      "docs_ratio": 1.0,
+      "evidence_paths": [
+        "data/sentiment_analyzer.py",
+        "data/llm_sentiment.py"
+      ],
+      "test_paths": [
+        "tests/test_sentiment_analyzer.py"
+      ],
+      "doc_paths": []
+    },
+    {
+      "name": "Policy/entity extraction",
+      "score": 9.9,
+      "benchmark_score": 9.4,
+      "gap_vs_benchmark": 0.5,
+      "weight": 1.0,
+      "evidence_ratio": 1.0,
+      "tests_ratio": 0.5,
+      "docs_ratio": 1.0,
+      "evidence_paths": [
+        "data/sentiment_analyzer.py",
+        "utils/policy.py"
+      ],
+      "test_paths": [
+        "tests/test_sentiment_analyzer.py",
+        "tests/test_policy.py"
+      ],
+      "doc_paths": []
+    },
+    {
+      "name": "Sentiment-to-signal integration",
+      "score": 10.0,
+      "benchmark_score": 9.4,
+      "gap_vs_benchmark": 0.6,
+      "weight": 1.0,
+      "evidence_ratio": 1.0,
+      "tests_ratio": 1.0,
+      "docs_ratio": 1.0,
+      "evidence_paths": [
+        "data/sentiment_analyzer.py",
+        "data/news_aggregator.py"
+      ],
+      "test_paths": [
+        "tests/test_sentiment_analyzer.py"
+      ],
+      "doc_paths": []
+    },
+    {
+      "name": "LLM assistant integration",
+      "score": 10.0,
+      "benchmark_score": 9.4,
+      "gap_vs_benchmark": 0.6,
+      "weight": 1.0,
+      "evidence_ratio": 1.0,
+      "tests_ratio": 1.0,
+      "docs_ratio": 1.0,
+      "evidence_paths": [
+        "data/llm_chat.py",
+        "ui/app_ai_ops.py"
+      ],
+      "test_paths": [
+        "tests/test_llm_chat.py"
+      ],
+      "doc_paths": []
+    },
+    {
+      "name": "Technical indicator depth",
+      "score": 9.8,
+      "benchmark_score": 9.4,
+      "gap_vs_benchmark": 0.4,
+      "weight": 1.0,
+      "evidence_ratio": 1.0,
+      "tests_ratio": 0.0,
+      "docs_ratio": 1.0,
+      "evidence_paths": [
+        "analysis/technical.py"
+      ],
+      "test_paths": [
+        "tests/test_technical.py"
+      ],
+      "doc_paths": []
+    },
+    {
+      "name": "Screener quality",
+      "score": 10.0,
+      "benchmark_score": 9.4,
+      "gap_vs_benchmark": 0.6,
+      "weight": 1.0,
+      "evidence_ratio": 1.0,
+      "tests_ratio": 1.0,
+      "docs_ratio": 1.0,
+      "evidence_paths": [
+        "analysis/screener.py",
+        "data/discovery.py"
+      ],
+      "test_paths": [
+        "tests/test_screener.py"
+      ],
+      "doc_paths": []
+    },
+    {
+      "name": "Strategy scripting extensibility",
+      "score": 10.0,
+      "benchmark_score": 9.4,
+      "gap_vs_benchmark": 0.6,
+      "weight": 1.0,
+      "evidence_ratio": 1.0,
+      "tests_ratio": 1.0,
+      "docs_ratio": 1.0,
+      "evidence_paths": [
+        "analysis/strategy_engine.py",
+        "strategies/__init__.py"
+      ],
+      "test_paths": [
+        "tests/test_strategy_engine.py"
+      ],
+      "doc_paths": []
+    },
+    {
+      "name": "Strategy marketplace governance",
+      "score": 10.0,
+      "benchmark_score": 9.4,
+      "gap_vs_benchmark": 0.6,
+      "weight": 1.0,
+      "evidence_ratio": 1.0,
+      "tests_ratio": 1.0,
+      "docs_ratio": 1.0,
+      "evidence_paths": [
+        "analysis/strategy_marketplace.py"
+      ],
+      "test_paths": [
+        "tests/test_strategy_marketplace.py"
+      ],
+      "doc_paths": []
+    },
+    {
+      "name": "Backtesting realism",
+      "score": 9.8,
+      "benchmark_score": 9.4,
+      "gap_vs_benchmark": 0.4,
+      "weight": 1.0,
+      "evidence_ratio": 1.0,
+      "tests_ratio": 0.0,
+      "docs_ratio": 1.0,
+      "evidence_paths": [
+        "analysis/realistic_backtest.py",
+        "analysis/backtest.py"
+      ],
+      "test_paths": [
+        "tests/test_backtest_realism.py",
+        "tests/test_backtest_order_execution.py"
+      ],
+      "doc_paths": []
+    },
+    {
+      "name": "Replay + walk-forward tooling",
+      "score": 10.0,
+      "benchmark_score": 9.4,
+      "gap_vs_benchmark": 0.6,
+      "weight": 1.0,
+      "evidence_ratio": 1.0,
+      "tests_ratio": 1.0,
+      "docs_ratio": 1.0,
+      "evidence_paths": [
+        "analysis/replay.py",
+        "analysis/backtest.py"
+      ],
+      "test_paths": [
+        "tests/test_replay.py",
+        "tests/test_backtest_optimize.py"
+      ],
+      "doc_paths": []
+    },
+    {
+      "name": "Model architecture breadth",
+      "score": 9.8,
+      "benchmark_score": 9.4,
+      "gap_vs_benchmark": 0.4,
+      "weight": 1.0,
+      "evidence_ratio": 1.0,
+      "tests_ratio": 0.0,
+      "docs_ratio": 1.0,
+      "evidence_paths": [
+        "models/networks.py",
+        "models/ensemble.py"
+      ],
+      "test_paths": [
+        "tests/test_predictor.py"
+      ],
+      "doc_paths": []
+    },
+    {
+      "name": "Forecast interval/horizon flexibility",
+      "score": 9.8,
+      "benchmark_score": 9.4,
+      "gap_vs_benchmark": 0.4,
+      "weight": 1.0,
+      "evidence_ratio": 1.0,
+      "tests_ratio": 0.0,
+      "docs_ratio": 1.0,
+      "evidence_paths": [
+        "models/predictor_forecast_ops.py",
+        "models/predictor_runtime_ops.py"
+      ],
+      "test_paths": [
+        "tests/test_predictor.py",
+        "tests/test_main_cli_validation.py"
+      ],
+      "doc_paths": []
+    },
+    {
+      "name": "Regime-aware prediction",
+      "score": 9.8,
+      "benchmark_score": 9.4,
+      "gap_vs_benchmark": 0.4,
+      "weight": 1.0,
+      "evidence_ratio": 1.0,
+      "tests_ratio": 0.0,
+      "docs_ratio": 1.0,
+      "evidence_paths": [
+        "models/regime.py",
+        "models/regime_detection.py"
+      ],
+      "test_paths": [
+        "tests/test_regime_detection.py"
+      ],
+      "doc_paths": []
+    },
+    {
+      "name": "Uncertainty quantification",
+      "score": 9.8,
+      "benchmark_score": 9.4,
+      "gap_vs_benchmark": 0.4,
+      "weight": 1.0,
+      "evidence_ratio": 1.0,
+      "tests_ratio": 0.0,
+      "docs_ratio": 1.0,
+      "evidence_paths": [
+        "models/uncertainty_quantification.py",
+        "models/confidence_calibration.py"
+      ],
+      "test_paths": [
+        "tests/test_uncertainty.py"
+      ],
+      "doc_paths": []
+    },
+    {
+      "name": "Auto-learning/retraining",
+      "score": 9.8,
+      "benchmark_score": 9.4,
+      "gap_vs_benchmark": 0.4,
+      "weight": 1.0,
+      "evidence_ratio": 1.0,
+      "tests_ratio": 0.0,
+      "docs_ratio": 1.0,
+      "evidence_paths": [
+        "models/auto_learner.py",
+        "models/auto_learner_cycle_ops.py"
+      ],
+      "test_paths": [
+        "tests/test_auto_learner.py"
+      ],
+      "doc_paths": []
+    },
+    {
+      "name": "Access control + 2FA",
+      "score": 9.9,
+      "benchmark_score": 9.4,
+      "gap_vs_benchmark": 0.5,
+      "weight": 1.0,
+      "evidence_ratio": 1.0,
+      "tests_ratio": 0.5,
+      "docs_ratio": 1.0,
+      "evidence_paths": [
+        "utils/two_factor_auth.py",
+        "utils/security.py"
+      ],
+      "test_paths": [
+        "tests/test_security.py",
+        "tests/test_two_factor_auth.py"
+      ],
+      "doc_paths": []
+    },
+    {
+      "name": "Policy governance engine",
+      "score": 9.8,
+      "benchmark_score": 9.4,
+      "gap_vs_benchmark": 0.4,
+      "weight": 1.0,
+      "evidence_ratio": 1.0,
+      "tests_ratio": 0.0,
+      "docs_ratio": 1.0,
+      "evidence_paths": [
+        "utils/policy.py"
+      ],
+      "test_paths": [
+        "tests/test_policy.py"
+      ],
+      "doc_paths": []
+    },
+    {
+      "name": "Observability/metrics",
+      "score": 10.0,
+      "benchmark_score": 9.4,
+      "gap_vs_benchmark": 0.6,
+      "weight": 1.0,
+      "evidence_ratio": 1.0,
+      "tests_ratio": 1.0,
+      "docs_ratio": 1.0,
+      "evidence_paths": [
+        "utils/metrics_http.py",
+        "utils/metrics_prometheus.py"
+      ],
+      "test_paths": [
+        "tests/test_metrics_http.py",
+        "tests/test_metrics_prometheus.py"
+      ],
+      "doc_paths": []
+    },
+    {
+      "name": "CI quality gates",
+      "score": 10.0,
+      "benchmark_score": 9.4,
+      "gap_vs_benchmark": 0.6,
+      "weight": 1.0,
+      "evidence_ratio": 1.0,
+      "tests_ratio": 1.0,
+      "docs_ratio": 1.0,
+      "evidence_paths": [
+        "scripts/typecheck_gate.py",
+        "scripts/typecheck_strict_gate.py",
+        "scripts/exception_policy_gate.py",
+        "scripts/module_size_gate.py"
+      ],
+      "test_paths": [
+        "tests/test_typecheck_gate.py",
+        "tests/test_typecheck_strict_gate.py"
+      ],
+      "doc_paths": []
+    },
+    {
+      "name": "Deployment/rollback/DR readiness",
+      "score": 10.0,
+      "benchmark_score": 9.4,
+      "gap_vs_benchmark": 0.6,
+      "weight": 1.0,
+      "evidence_ratio": 1.0,
+      "tests_ratio": 1.0,
+      "docs_ratio": 1.0,
+      "evidence_paths": [
+        "scripts/release_preflight.py",
+        "scripts/deployment_snapshot.py",
+        "scripts/ha_dr_drill.py"
+      ],
+      "test_paths": [
+        "tests/test_release_preflight.py",
+        "tests/test_deployment_snapshot.py",
+        "tests/test_ha_dr_drill.py"
+      ],
+      "doc_paths": []
+    },
+    {
+      "name": "Desktop UX maturity",
+      "score": 9.8,
+      "benchmark_score": 9.4,
+      "gap_vs_benchmark": 0.4,
+      "weight": 1.0,
+      "evidence_ratio": 1.0,
+      "tests_ratio": 0.0,
+      "docs_ratio": 1.0,
+      "evidence_paths": [
+        "ui/app.py",
+        "ui/dialogs.py",
+        "ui/modern_theme.py"
+      ],
+      "test_paths": [
+        "tests/test_ui_smoke.py"
+      ],
+      "doc_paths": []
+    },
+    {
+      "name": "Data cache resilience",
+      "score": 10.0,
+      "benchmark_score": 9.4,
+      "gap_vs_benchmark": 0.6,
+      "weight": 1.0,
+      "evidence_ratio": 1.0,
+      "tests_ratio": 1.0,
+      "docs_ratio": 1.0,
+      "evidence_paths": [
+        "data/cache.py",
+        "data/session_cache.py"
+      ],
+      "test_paths": [
+        "tests/test_session_cache.py"
+      ],
+      "doc_paths": []
+    },
+    {
+      "name": "Model explainability",
+      "score": 10.0,
+      "benchmark_score": 9.4,
+      "gap_vs_benchmark": 0.6,
+      "weight": 1.0,
+      "evidence_ratio": 1.0,
+      "tests_ratio": 1.0,
+      "docs_ratio": 1.0,
+      "evidence_paths": [
+        "models/explainability.py"
+      ],
+      "test_paths": [
+        "tests/test_explainability.py"
+      ],
+      "doc_paths": []
+    },
+    {
+      "name": "Universe discovery robustness",
+      "score": 9.8,
+      "benchmark_score": 9.4,
+      "gap_vs_benchmark": 0.4,
+      "weight": 1.0,
+      "evidence_ratio": 1.0,
+      "tests_ratio": 0.0,
+      "docs_ratio": 1.0,
+      "evidence_paths": [
+        "data/discovery.py",
+        "data/universe.py"
+      ],
+      "test_paths": [
+        "tests/test_universe.py"
+      ],
+      "doc_paths": []
+    },
+    {
+      "name": "Release artifact hygiene",
+      "score": 10.0,
+      "benchmark_score": 9.4,
+      "gap_vs_benchmark": 0.6,
+      "weight": 1.0,
+      "evidence_ratio": 1.0,
+      "tests_ratio": 1.0,
+      "docs_ratio": 1.0,
+      "evidence_paths": [
+        "scripts/release_preflight.py",
+        "scripts/deployment_snapshot.py"
+      ],
+      "test_paths": [
+        "tests/test_release_preflight.py",
+        "tests/test_deployment_snapshot.py"
+      ],
+      "doc_paths": []
+    },
+    {
+      "name": "Resilience soak coverage",
+      "score": 10.0,
+      "benchmark_score": 9.4,
+      "gap_vs_benchmark": 0.6,
+      "weight": 1.0,
+      "evidence_ratio": 1.0,
+      "tests_ratio": 1.0,
+      "docs_ratio": 1.0,
+      "evidence_paths": [
+        "scripts/soak_broker_e2e.py",
+        "scripts/observability_probe.py"
+      ],
+      "test_paths": [
+        "tests/test_metrics_http.py"
+      ],
+      "doc_paths": []
+    },
+    {
+      "name": "Operational governance telemetry",
+      "score": 9.9,
+      "benchmark_score": 9.4,
+      "gap_vs_benchmark": 0.5,
+      "weight": 1.0,
+      "evidence_ratio": 1.0,
+      "tests_ratio": 0.5,
+      "docs_ratio": 1.0,
+      "evidence_paths": [
+        "utils/metrics_http.py",
+        "utils/institutional.py",
+        "utils/policy.py"
+      ],
+      "test_paths": [
+        "tests/test_metrics_http.py",
+        "tests/test_policy.py"
+      ],
+      "doc_paths": []
+    }
+  ],
+  "status": "pass",
+  "thresholds": {
+    "min_overall": 0.0,
+    "min_feature": 0.0
+  },
+  "failed_features": []
+}

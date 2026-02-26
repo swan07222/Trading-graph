@@ -152,6 +152,10 @@ class FetchSession:
     
     def to_dict(self) -> dict[str, Any]:
         """Serialize to dictionary."""
+        progress_percent = self.progress_percent
+        if self.total_symbols > 0:
+            progress_percent = round((self.completed_count / self.total_symbols) * 100, 2)
+
         return {
             "session_id": self.session_id,
             "operation": self.operation,
@@ -166,7 +170,7 @@ class FetchSession:
             "horizon": self.horizon,
             "lookback_bars": self.lookback_bars,
             "extra_params": self.extra_params,
-            "progress_percent": self.progress_percent,
+            "progress_percent": progress_percent,
             "last_symbol": self.last_symbol,
             "last_error": self.last_error,
             "retry_counts": self.retry_counts,
@@ -409,7 +413,11 @@ class FetchStateRecovery:
     def has_pending_session(self) -> bool:
         """Check if there's a pending session."""
         session = self.get_active_session()
-        return session is not None and session.status in ("running", "paused") and session.pending_symbols
+        return (
+            session is not None
+            and session.status in ("running", "paused")
+            and bool(session.pending_symbols)
+        )
     
     def load_pending_session(self) -> FetchSession | None:
         """Load the pending session for resume."""

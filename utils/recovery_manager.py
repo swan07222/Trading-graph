@@ -36,7 +36,7 @@ import os
 import shutil
 import threading
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Callable
@@ -164,6 +164,21 @@ class RecoveryState:
         }
 
 
+_RECOVERY_STATE_KEYS = {f.name for f in fields(RecoveryState)}
+
+
+def _build_recovery_state(data: dict[str, Any]) -> RecoveryState:
+    """Build RecoveryState from persisted payload while ignoring derived keys."""
+    payload = dict(data)
+    if payload.get("last_checkpoint_time"):
+        payload["last_checkpoint_time"] = datetime.fromisoformat(payload["last_checkpoint_time"])
+    if payload.get("last_recovery_time"):
+        payload["last_recovery_time"] = datetime.fromisoformat(payload["last_recovery_time"])
+
+    state_payload = {k: v for k, v in payload.items() if k in _RECOVERY_STATE_KEYS}
+    return RecoveryState(**state_payload)
+
+
 class RecoveryManager:
     """Centralized recovery manager for the trading system.
     
@@ -232,11 +247,7 @@ class RecoveryManager:
         if state_path.exists():
             try:
                 data = read_json(state_path)
-                if data.get("last_checkpoint_time"):
-                    data["last_checkpoint_time"] = datetime.fromisoformat(data["last_checkpoint_time"])
-                if data.get("last_recovery_time"):
-                    data["last_recovery_time"] = datetime.fromisoformat(data["last_recovery_time"])
-                self._state = RecoveryState(**data)
+                self._state = _build_recovery_state(data)
                 log.debug("Recovery state loaded: %d operations, %.1f%% success", 
                          self._state.total_operations, self._state.success_rate * 100)
             except Exception as e:
@@ -690,11 +701,7 @@ class RecoveryManager:
             with self._lock:
                 state_data = data.get("state", {})
                 if state_data:
-                    if state_data.get("last_checkpoint_time"):
-                        state_data["last_checkpoint_time"] = datetime.fromisoformat(state_data["last_checkpoint_time"])
-                    if state_data.get("last_recovery_time"):
-                        state_data["last_recovery_time"] = datetime.fromisoformat(state_data["last_recovery_time"])
-                    self._state = RecoveryState(**state_data)
+                    self._state = _build_recovery_state(state_data)
                 
                 checkpoints_data = data.get("checkpoints", [])
                 for cp_data in checkpoints_data:

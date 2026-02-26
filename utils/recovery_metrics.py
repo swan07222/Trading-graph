@@ -167,6 +167,7 @@ class RecoveryHealth:
     """Overall recovery health status."""
     status: Literal["healthy", "degraded", "unhealthy"] = "healthy"
     success_rate_24h: float = 1.0
+    fallback_rate: float = 0.0
     avg_recovery_time_seconds: float = 0.0
     consecutive_failures: int = 0
     total_operations_24h: int = 0
@@ -177,6 +178,7 @@ class RecoveryHealth:
         return {
             "status": self.status,
             "success_rate_24h": round(self.success_rate_24h, 4),
+            "fallback_rate": round(self.fallback_rate, 4),
             "avg_recovery_time_seconds": round(self.avg_recovery_time_seconds, 2),
             "consecutive_failures": self.consecutive_failures,
             "total_operations_24h": self.total_operations_24h,
@@ -218,7 +220,9 @@ class RecoveryMetrics:
         self.retention_hours = retention_hours
         self.max_records = max_records
         
-        self._lock = threading.Lock()
+        # Re-entrant lock is required because export/read APIs call other
+        # methods that also synchronize on the same lock.
+        self._lock = threading.RLock()
         self._operations: dict[str, OperationMetrics] = {}
         self._recent_records: deque[OperationRecord] = deque(maxlen=max_records)
         self._consecutive_failures = 0
@@ -366,6 +370,8 @@ class RecoveryMetrics:
             if recent_ops:
                 successes = sum(1 for r in recent_ops if r.success)
                 health.success_rate_24h = successes / len(recent_ops)
+                fallbacks = sum(1 for r in recent_ops if r.fallback_used)
+                health.fallback_rate = fallbacks / len(recent_ops)
                 
                 # Average recovery time (for operations with multiple attempts)
                 recovery_ops = [r for r in recent_ops if r.attempts > 1]
