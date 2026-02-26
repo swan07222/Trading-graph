@@ -1,6 +1,6 @@
 # Architecture Overview
 
-Trading Graph is a desktop AI analysis system for China A-shares with multi-source data, news/sentiment analysis, and model training.
+Trading Graph is a desktop AI analysis system for China A-shares with multi-source data, LLM-powered sentiment analysis, and modern deep learning models (Informer, TFT, N-BEATS, TSMixer).
 
 ---
 
@@ -8,22 +8,29 @@ Trading Graph is a desktop AI analysis system for China A-shares with multi-sour
 
 | Metric | Value |
 |--------|-------|
-| Python Files | 246 |
-| Lines of Code | ~100,000 |
-| Test Coverage | 85%+ |
+| Python Files | ~200 |
+| Lines of Code | ~80,000 |
+| Test Coverage | 40%+ |
 
 ### Module Breakdown
 
 | Module | Files | Lines | Purpose |
 |--------|-------|-------|---------|
-| `data/` | 30 | ~25,000 | Data fetching, news, sentiment |
-| `models/` | 22 | ~20,000 | ML models, training, prediction |
-| `tests/` | 80+ | ~25,000 | Test suite |
-| `ui/` | 18 | ~15,000 | PyQt6 application |
-| `analysis/` | 8 | ~6,000 | Backtest, replay, strategy |
-| `utils/` | 20 | ~8,000 | Utilities, security, metrics |
-| `core/` | 9 | ~4,000 | Types, events, constants |
-| `config/` | 4 | ~1,800 | Settings, environment |
+| `data/` | ~40 | ~20,000 | Data fetching, news collection, LLM sentiment |
+| `models/` | ~25 | ~18,000 | GM ensemble (Informer, TFT, N-BEATS, TSMixer), LLM trainer |
+| `ui/` | ~20 | ~15,000 | PyQt6 application |
+| `tests/` | ~20 | ~10,000 | Test suite |
+| `utils/` | ~25 | ~8,000 | Utilities, security, metrics, recovery |
+| `analysis/` | ~10 | ~6,000 | Backtest, replay, strategy |
+| `core/` | ~10 | ~4,000 | Types, events, constants, symbols |
+| `config/` | ~4 | ~2,000 | Settings, environment |
+
+### Model Storage
+
+| Directory | Contents |
+|-----------|----------|
+| `models_saved/GM/` | Guessing Model artifacts (ensemble weights, forecasters, scalers) |
+| `models_saved/LLM/` | LLM sentiment models (transformer weights, embeddings, classifiers) |
 
 ---
 
@@ -51,10 +58,12 @@ Trading Graph is a desktop AI analysis system for China A-shares with multi-sour
 ┌──────────────────┐ ┌──────────────────┐ ┌──────────────────┐
 │   Data Layer     │ │   Model Layer    │ │  Sentiment Layer │
 │ ┌──────────────┐ │ │ ┌──────────────┐ │ │ ┌──────────────┐ │
-│ │ DataFetcher  │ │ │ │ Trainer      │ │ │ │ Collector    │ │
-│ │ NewsCollector│ │ │ │ Predictor    │ │ │ │ Analyzer     │ │
-│ │ Cache        │ │ │ │ NewsTrainer  │ │ │ │ EntityExtract│ │
-│ │ Database     │ │ │ │ Ensemble     │ │ │ │ SignalGen    │ │
+│ │ DataFetcher  │ │ │ │ GM Trainer   │ │ │ │ LLM Analyzer │ │
+│ │ NewsCollector│ │ │ │ (Informer,   │ │ │ │ (Transformer)│ │
+│ │ Cache        │ │ │ │  TFT, N-BEATS,│ │ │ │ Sentiment    │ │
+│ │ Database     │ │ │ │  TSMixer)    │ │ │ │ Collector    │ │
+│ │              │ │ │ │ Predictor    │ │ │ │ EntityExtract│ │
+│ │              │ │ │ │ Ensemble     │ │ │ │ SignalGen    │ │
 │ └──────────────┘ │ │ └──────────────┘ │ │ └──────────────┘ │
 └──────────────────┘ └──────────────────┘ └──────────────────┘
           │                   │                   │
@@ -75,6 +84,10 @@ Trading Graph is a desktop AI analysis system for China A-shares with multi-sour
 │  │ SQLite       │  │ File System  │  │ Security         │   │
 │  │ (Persistence)│  │ (Cache)      │  │ (Encryption)     │   │
 │  └──────────────┘  └──────────────┘  └──────────────────┘   │
+│  ┌──────────────┐  ┌──────────────┐                         │
+│  │ Redis        │  │ Prometheus   │                         │
+│  │ (Optional)   │  │ Metrics      │                         │
+│  └──────────────┘  └──────────────┘                         │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -128,12 +141,11 @@ Trading Graph is a desktop AI analysis system for China A-shares with multi-sour
     ┌──────────────┐  ┌──────────────┐  ┌──────────────┐
     │ China Sources│  │International │  │   Fallback   │
     │   (VPN Off)  │  │Sources (VPN) │  │   Sources    │
-    │ • Jin10      │  │ • Reuters    │  │ • Cache      │
-    │ • EastMoney  │  │ • Bloomberg  │  │ • Local DB   │
-    │ • Sina       │  │ • Yahoo      │  │              │
-    │ • Xueqiu     │  │ • MarketWatch│  │              │
-    │ • Caixin     │  │ • CNBC       │  │              │
-    │ • CSRC       │  │              │  │              │
+    │ • EastMoney  │  │ • Reuters    │  │ • Cache      │
+    │ • Sina       │  │ • Bloomberg  │  │ • Local DB   │
+    │ • Xueqiu     │  │ • Yahoo      │  │              │
+    │ • Caixin     │  │ • MarketWatch│  │              │
+    │ • CSRC       │  │ • CNBC       │  │              │
     └──────┬───────┘  └──────┬───────┘  └──────────────┘
            │                 │
            └────────┬────────┘
@@ -145,7 +157,7 @@ Trading Graph is a desktop AI analysis system for China A-shares with multi-sour
            └────────┬───────┘
                     ▼
            ┌────────────────┐
-           │ Sentiment      │
+           │ LLM Sentiment  │
            │ Analysis       │
            └────────┬───────┘
                     ▼
@@ -159,20 +171,31 @@ Trading Graph is a desktop AI analysis system for China A-shares with multi-sour
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│              Traditional Training Pipeline                  │
+│         Hybrid Model Training Pipeline                      │
 │                                                             │
-│  Historical Data → Feature Engineering → LSTM/GRU/TCN       │
-│                                              ↓              │
-│                                      Prediction Output      │
-└─────────────────────────────────────────────────────────────┘
-
-┌─────────────────────────────────────────────────────────────┐
-│              News-Based Training Pipeline                   │
-│                                                             │
-│  News Articles ──→ Transformer Encoder ──┐                  │
-│  Sentiment Scores → MLP Encoder ─────────┼→ Fusion Layer    │
-│  Price Data ─────→ LSTM Encoder ─────────┘     ↓            │
-│                                      Prediction + Confidence│
+│  ┌─────────────────┐    ┌─────────────────┐                │
+│  │  GM Training    │    │  LLM Training   │                │
+│  │  (Price)        │    │  (Sentiment)    │                │
+│  │                 │    │                 │                │
+│  │  Historical     │    │  News Articles  │                │
+│  │  Data → Features│    │  → Embeddings   │                │
+│  │                 │    │                 │                │
+│  │  Ensemble:      │    │  Transformer +  │                │
+│  │  - Informer     │    │  MLP Classifier │                │
+│  │  - TFT          │    │                 │                │
+│  │  - N-BEATS      │    │  Bilingual      │                │
+│  │  - TSMixer      │    │  (zh/en)        │                │
+│  │                 │    │                 │                │
+│  │  models_saved/  │    │  models_saved/  │                │
+│  │  GM/            │    │  LLM/           │                │
+│  └─────────────────┘    └─────────────────┘                │
+│           │                      │                          │
+│           └──────────┬───────────┘                          │
+│                      ▼                                      │
+│           ┌───────────────────┐                             │
+│           │   Prediction      │                             │
+│           │   (GM + LLM)      │                             │
+│           └───────────────────┘                             │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -182,13 +205,20 @@ Trading Graph is a desktop AI analysis system for China A-shares with multi-sour
 
 ### DataFetcher (`data/fetcher.py`)
 
-Multi-source data fetcher with automatic failover.
+Multi-source data fetcher with automatic failover and quality validation.
 
 | Priority | Source | Use Case |
 |----------|--------|----------|
 | Primary | Tencent | Real-time quotes |
 | Secondary | AkShare | Intraday history |
 | Tertiary | Sina, Yahoo | Fallback |
+
+**Features:**
+- VPN-aware routing
+- Multi-source reconciliation
+- Data quality validation
+- Session caching with compaction
+- History flow with depth retry
 
 ### NewsCollector (`data/news_collector.py`)
 
@@ -199,29 +229,52 @@ VPN-aware news collection with auto source selection.
 - Multi-source aggregation
 - Content normalization and deduplication
 - Health scoring and failover
+- Category classification (policy, market, company, economic, regulatory)
 
-### SentimentAnalyzer (`data/sentiment_analyzer.py`)
+### LLM Sentiment Analyzer (`data/llm_sentiment.py`)
 
-Multi-factor sentiment analysis engine.
+Bilingual (Chinese/English) LLM sentiment analyzer with auto-training capability.
 
 **Capabilities:**
-- General sentiment scoring (-1.0 to 1.0)
+- Transformer-based sentiment classification
+- Auto-training on collected news data
 - Policy impact assessment
 - Market sentiment detection
-- Entity extraction (companies, policies, people)
+- Entity extraction (companies, policies, people, sectors)
 - Trading signal generation
+- Hybrid fallback: sklearn MLP when transformer unavailable
+- Model storage: `models_saved/LLM/`
 
-### NewsTrainer (`models/news_trainer.py`)
+### Guessing Model Ensemble (`models/ensemble.py`)
 
-News-based model training with multi-modal fusion.
+Ensemble of modern architectures for price prediction with calibrated weighted voting.
 
-| Component | Architecture | Purpose |
-|-----------|--------------|---------|
-| NewsEncoder | Transformer | Text encoding |
-| SentimentFusion | MLP | Sentiment integration |
-| PriceEncoder | LSTM | Price pattern learning |
-| FusionLayer | Attention | Multi-modal fusion |
-| PredictionHead | Dense | Signal + confidence |
+| Model | Architecture | Purpose |
+|-------|--------------|---------|
+| **Informer** | Probabilistic attention | O(L log L) complexity for long sequences |
+| **TFT** | Temporal Fusion Transformer | Interpretable multi-horizon predictions |
+| **N-BEATS** | Neural basis expansion | Trend and seasonality decomposition |
+| **TSMixer** | All-MLP | Efficient time series mixing |
+
+**Features:**
+- Weighted voting based on validation performance
+- Uncertainty quantification
+- Prediction calibration
+- Walk-forward validation
+- Drift detection
+- Model storage: `models_saved/GM/`
+
+### Predictor (`models/predictor.py`)
+
+Real-time prediction engine with multi-interval support combining GM and LLM outputs.
+
+**Features:**
+- Multi-interval support (1m, 5m, 15m, 30m, 1h, 1d)
+- Prediction caching with configurable TTL
+- News sentiment integration from LLM
+- Position sizing based on Kelly criterion
+- Trading levels (support/resistance)
+- Forecast horizon prediction
 
 ---
 
@@ -233,10 +286,15 @@ Event-driven architecture via `core/events.py`.
 
 | Event | Description |
 |-------|-------------|
+| `EVENT_QUOTE_UPDATE` | Real-time quote received |
+| `EVENT_BAR_COMPLETE` | Candlestick bar completed |
 | `EVENT_SIGNAL_GENERATED` | Trading signal created |
+| `EVENT_PREDICTION_READY` | Prediction ready for display |
 | `EVENT_NEWS_COLLECTED` | News articles collected |
 | `EVENT_SENTIMENT_UPDATED` | Sentiment scores updated |
 | `EVENT_MODEL_TRAINED` | Model training completed |
+| `EVENT_SYSTEM_START` | System started |
+| `EVENT_SYSTEM_STOP` | System stopped |
 
 ### Usage Example
 
@@ -248,6 +306,10 @@ EVENT_BUS.emit(EVENT_SIGNAL_GENERATED, signal=signal)
 
 # Subscribe to event
 EVENT_BUS.on(EVENT_SIGNAL_GENERATED, handler=on_signal)
+
+# Start/Stop event bus
+EVENT_BUS.start()
+EVENT_BUS.stop()
 ```
 
 ---
@@ -262,6 +324,7 @@ Environment-based configuration via `config/settings.py`.
 TRADING_VPN=1                              # Enable VPN mode
 TRADING_PROXY_URL=http://127.0.0.1:7890   # Proxy URL
 TRADING_CHINA_DIRECT=1                     # China direct mode
+TRADING_CONNECTION_TIMEOUT=30              # Connection timeout (seconds)
 ```
 
 ### News Collection
@@ -283,6 +346,15 @@ TRADING_SENTIMENT_REFRESH_INTERVAL=30
 ```bash
 TRADING_TRAINING_EPOCHS=100
 TRADING_BATCH_SIZE=32
+TRADING_SEQUENCE_LENGTH=60
+```
+
+### Metrics & Monitoring
+
+```bash
+TRADING_METRICS_ENABLED=1                  # Enable metrics server
+TRADING_METRICS_PORT=8000                  # Metrics server port
+TRADING_METRICS_HOST=127.0.0.1             # Metrics server host
 ```
 
 ---
@@ -305,7 +377,7 @@ audit = get_audit_log()
 audit.log(
     event="MODEL_TRAIN",
     user="analyst_001",
-    details={"model": "news_model", "epochs": 50},
+    details={"model": "ensemble", "epochs": 100},
 )
 ```
 
@@ -317,16 +389,51 @@ audit.log(
 
 | Cache Type | Storage | TTL |
 |------------|---------|-----|
-| Session | In-memory LRU | Session lifetime |
-| News | SQLite | 24 hours |
+| Session | SQLite (per-symbol CSV) | 45 days |
+| Real-time quotes | In-memory LRU | 5 seconds |
+| Predictions | In-memory | 5 seconds (1.2s realtime) |
+| News sentiment | In-memory | 45-180 seconds |
 | Models | In-memory | Until retrain |
-| Sentiment | SQLite + Memory | 1 hour |
 
 ### Database Optimization
 
 - WAL mode for concurrent reads
 - Indexed queries on symbol/timestamp
 - Periodic vacuum and cleanup
+- Session cache compaction
+
+---
+
+## Monitoring
+
+### Recovery Metrics (`utils/recovery_metrics.py`)
+
+- Recovery operation metrics collection
+- Success/failure tracking per operation type
+- Performance monitoring with trend analysis
+- Health status dashboard
+- Alerting support
+- Disk persistence for metrics
+
+### Prometheus Metrics (`utils/metrics.py`)
+
+- Counters, gauges, histograms
+- Latency tracking
+- Error rate monitoring
+- Resource utilization
+
+### Health Checks
+
+```bash
+# Basic health check
+python main.py --health
+
+# Full diagnostics
+python main.py --doctor
+
+# Strict mode (fails on any issue)
+python main.py --doctor --doctor-strict
+```
 
 ---
 
@@ -346,7 +453,7 @@ audit.log(
 
 ### Adding ML Models
 
-1. Create model class in `models/`
+1. Create model class in `models/networks.py`
 2. Implement `train()` and `predict()`
 3. Register in `models/ensemble.py`
 
@@ -357,10 +464,11 @@ audit.log(
 | Decision | Rationale |
 |----------|-----------|
 | SQLite | Simple, embedded, no external dependencies |
-| PyQt6 | Mature desktop framework, rich widgets |
-| PyTorch | Flexible ML framework, active community |
-| Event-driven | Loose coupling, extensibility |
-| Single-node | Personal/small-team use case |
+| PyQt6 | Mature desktop framework, rich widgets, high-performance charts |
+| PyTorch | Flexible ML framework, GPU acceleration, active community |
+| Event-driven | Loose coupling, extensibility, natural fit for trading |
+| Single-node | Personal/small-team use case, simple deployment |
+| Modern architectures | Informer/TFT/N-BEATS/TSMixer outperform legacy LSTM/GRU/TCN |
 
 ---
 
@@ -370,5 +478,6 @@ audit.log(
 - [ ] Real-time news streaming
 - [ ] Multi-modal sentiment (text + social)
 - [ ] Cloud backup integration
-- [ ] Model explainability (SHAP/LIME)
+- [ ] Model explainability dashboard (SHAP/LIME)
 - [ ] 2FA authentication
+- [ ] Distributed training support (Ray, DeepSpeed)

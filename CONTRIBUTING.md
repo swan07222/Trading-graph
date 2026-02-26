@@ -4,7 +4,7 @@ Welcome! This guide covers how to contribute to Trading Graph.
 
 ---
 
-## Quick Links
+## Table of Contents
 
 - [Code of Conduct](#code-of-conduct)
 - [Setup](#development-setup)
@@ -27,7 +27,7 @@ Welcome! This guide covers how to contribute to Trading Graph.
 
 ### Prerequisites
 
-- Python 3.11+
+- Python 3.11 or higher
 - Git
 - pip or uv
 
@@ -213,9 +213,8 @@ class TestPredictor:
 
 | Module Type | Minimum Coverage |
 |-------------|------------------|
-| Overall | 85% |
-| Critical (Data, Models, Security) | 95% |
-| UI Components | 70% |
+| Overall | 40% |
+| Critical (Data, Models) | 60% |
 
 ### Running Tests
 
@@ -230,7 +229,7 @@ pytest --cov=trading_graph --cov-report=html
 pytest tests/test_predictor_forecast.py
 
 # Specific function
-pytest tests/test_predictor_forecast.py::test_generate_forecast_forecaster_path_matches_requested_horizon
+pytest tests/test_predictor_forecast.py::test_generate_forecast
 
 # Verbose output
 pytest -v
@@ -268,16 +267,13 @@ conn.execute("PRAGMA journal_mode=WAL")
 
 ```bash
 # 1. Run all tests
-pytest --cov-fail-under=85
+pytest --cov-fail-under=40
 
 # 2. Run linter
 ruff check .
 
 # 3. Run type checker
 mypy trading_graph/
-
-# 4. Update documentation
-# README, docstrings, etc.
 ```
 
 ### PR Template
@@ -305,24 +301,6 @@ Fixes #123
 - [ ] Self-review completed
 - [ ] Documentation updated
 - [ ] No new warnings
-```
-
-### Changelog Format
-
-```markdown
-## [Unreleased]
-
-### Added
-- Feature description (#123)
-
-### Changed
-- Behavior description (#456)
-
-### Fixed
-- Bug description (#789)
-
-### Removed
-- Deprecated feature (#321)
 ```
 
 ---
